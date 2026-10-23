@@ -8,7 +8,7 @@ status: Draft
 feature: policy-sandbox
 doc_role: vision
 tags: ["policy-sandbox"]
-last_validated: 2026-10-09
+last_validated: 2026-10-21
 ---
 
 # Policy & Sandboxing — Vision
@@ -21,7 +21,7 @@ This document captures the questions Orbit must answer before policy and sandbox
 
 1. **How far should Linux sandboxing go after the first backend?** §1.1 records the shipped Bubblewrap write-confinement boundary. Full read-policy parity, network policy, seccomp, and generic `run_process` adoption remain separate decisions.
 2. **Should enforcement move below the tool layer?** The in-process `fs.*` helper is gone ([ORB-10833]). A revived harness, or any future tool that performs filesystem work, is unguarded unless Orbit adds a `PolicyAwareFs` trait, syscall interception, or linting.
-3. **Should process controls move into `PolicyDef`?** `proc.spawn` applies activity program allowlists, while its child inherits the enclosing CLI worker's operating-system sandbox. It does not separately check path arguments or apply a Linux Landlock read boundary. The program allowlist is not part of `PolicyDef`; future shapes include `allowExec` / `denyExec` or env access tied to `fsProfile`.
+3. **Should process controls move into `PolicyDef`?** `proc.spawn` applies activity program allowlists or denylists, while its child inherits the enclosing CLI worker's operating-system sandbox. It does not evaluate arbitrary path arguments against `FsProfile` or apply a Linux Landlock read boundary. The program policy is not part of `PolicyDef`; future shapes include `allowExec` / `denyExec` or env access tied to `fsProfile`.
 4. **What is the symlink contract?** `PolicyEngine::check_resolved` follows symlinks and denies resolved paths outside the workspace; TOCTOU between that check and filesystem access remains an OS-level concern.
 5. **Should glob syntax grow?** Character classes, braces, and broader `**` forms would reduce user surprise but may re-evaluate existing profiles differently.
 6. **Should `PolicyDecision` and `FsPolicyEvaluation` converge?** A unified outcome could serve future network, exec, and env policy checks.
@@ -29,7 +29,7 @@ This document captures the questions Orbit must answer before policy and sandbox
 8. **Should empty rule lists warn?** `read: []` / `modify: []` safely denies everything, but a load-time warning would catch likely mistakes earlier.
 9. **What is the dry-run / explain story?** A command like `orbit policy explain --profile <name> --op modify --path <path>` would shorten policy authoring loops.
 10. **Should all denials share one audit shape?** Fs denials, task-lock denials, program allowlists, and future exec denials still report through different channels; auditability asks the same question.
-11. **How should concurrent exec handle signals?** Answered: refcounted SIGINT/SIGTERM install with a lock-free live-pgid table. The handler `killpg`s every registered group; each waiter polls a generation counter. The install mutex is not held across the child's lifetime.
+11. **How should concurrent exec handle signals?** Answered: refcounted SIGINT/SIGTERM install with a lock-free live-pgid table. The handler `killpg`s every registered group; each waiter observes the shared pending signal until the last waiter restores and forwards it. The install mutex is not held across the child's lifetime.
 12. **How far should CLI policy coverage go?** macOS `sandbox-exec` narrows writes, but alternatives include trapping CLI fs calls or moving more work to HTTP-backed activities.
 
 ### 1.1 Shipped answer: a `linux-bwrap` CLI backend
@@ -80,7 +80,7 @@ The wrapper constructs a deterministic Bubblewrap argv with these properties:
 3. Canonicalize every host path before it becomes a mount argument. Reject missing positive
    mount roots unless the root is an Orbit-owned state directory that Orbit creates before spawn.
    Handle missing deny roots as described below. Preserve the active-worktree and narrow
-   inherited-Orbit write allowances already appended by the v2 host.
+   inherited-Orbit write allowances already appended by the engine host.
 4. Apply existing exact-path and subtree `denyModify` roots as later read-only mounts so they
    override a broader writable parent. Expand non-subtree deny globs over the pre-spawn filesystem
    snapshot and mount every existing match read-only. Record that snapshot-bound enforcement in

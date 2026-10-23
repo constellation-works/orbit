@@ -1,0 +1,41 @@
+Define and manage recurring auto-task templates
+
+Usage: orbit auto-task [OPTIONS] <COMMAND>
+
+Commands:
+  add      Create a new auto-task definition
+  list     List every auto-task definition in this workspace
+  show     Show a single definition by name
+  update   Update an existing definition (present fields only)
+  toggle   Enable or disable a definition (the kill-switch; not a delete)
+  delete   Delete a definition with its scheduler cursor and delivery consumer state; a deleted shipped default stays out of later reseeds
+  restore  Reinstate a deleted shipped default with its shipped content
+  mint     Mint a task from a definition now (ignores schedule, dedupe, and `enabled`; leaves the scheduler cursor untouched)
+  recover  Preview or apply the audited recovery for a delivery consumer stalled by a settings change (retains all coverage debt)
+  reset    Preview or apply the audited reset of a delivery consumer: forget its coverage debt and re-baseline at the branch head
+
+Options:
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')

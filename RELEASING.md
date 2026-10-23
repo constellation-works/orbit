@@ -12,7 +12,8 @@ How to cut an Orbit release. Follow the checklist top to bottom. Plugin, npm, si
 
 You need:
 
-- Actions secrets `ORBIT_RELEASE_SIGNING_KEY_PEM` (signs the checksum manifest) and `TAP_GITHUB_TOKEN` (pushes to `constellation-works/homebrew-tap`).
+- Actions secrets `ORBIT_RELEASE_SIGNING_KEY_PEM` (signs the checksum manifests) and `TAP_GITHUB_TOKEN` (pushes to `constellation-works/homebrew-tap`).
+- For the macOS desktop app: the six Apple signing and notarization secrets listed in [desktop/README.md](desktop/README.md#one-time-setup). Without all six, a release still ships the Linux desktop bundles and skips only macOS. The Linux bundles need no extra secret. Setting the repository variable `ORBIT_DESKTOP_RELEASE` to `false` turns the desktop jobs off for tag pushes. Unset or any other value leaves them on.
 - npm publish rights on `@orbit-tools` with your OTP. The npm package is published by hand.
 - Permission to create GitHub Releases and admin-merge on `constellation-works/orbit`.
 
@@ -110,7 +111,7 @@ Bullet shape:
 - Migration steps, rationale, and test inventories stay in the cited task or commit. The task ID is the pointer.
 - A breaking bullet gets at most one extra line, with the migration as a phrase (`x removed → use y`).
 
-The style check lints only `## Unreleased`, so you can iterate there before moving bullets into the version section. Released sections are frozen and never reflowed. The style check does not enforce the task/release boundary. When before-PR review is enabled (`review.before_pr = true`), the reviewer must treat any diff touching `CHANGELOG.md` for a non-release task as an open finding, return `reject` without fixing it, and let the settle step block PR publication. The release exception requires an explicitly authorized task tagged `release` and titled `Prepare v<X.Y.Z> release`; listing `CHANGELOG.md` as a context file alone does not authorize an edit. Deliveries without before-PR review rely on the repository rule in [AGENTS.md](AGENTS.md) and after-landing review. Universal deterministic enforcement is out of scope.
+The style check lints only `## Unreleased`, so you can iterate there before moving bullets into the version section. Released sections are frozen and never reflowed. The style check does not enforce the task/release boundary. When before-PR review is enabled (`review.timing = "before_pr"`), the reviewer must treat any diff touching `CHANGELOG.md` for a non-release task as an open finding, return `reject` without fixing it, and let the settle step block PR publication. The release exception requires an explicitly authorized task tagged `release` and titled `Prepare v<X.Y.Z> release`; listing `CHANGELOG.md` as a context file alone does not authorize an edit. Deliveries without before-PR review rely on the repository rule in [AGENTS.md](AGENTS.md) and after-landing review. Universal deterministic enforcement is out of scope.
 
 ### 3. Confirm breaking changes with the human
 
@@ -122,6 +123,8 @@ Show each candidate with its task ID, title, and why it was flagged. The human a
 |---|---|
 | `Cargo.toml` | `[workspace.package].version` |
 | `Cargo.lock` | `cargo update --workspace` (no third-party drift) |
+| `desktop/Cargo.toml` | `[package].version` |
+| `desktop/Cargo.lock` | `cargo update --workspace --manifest-path desktop/Cargo.toml` (no third-party drift) |
 | `npm/package.json` | `version` |
 | `server.json` | `version` and `packages[0].version` |
 | `plugin/.claude-plugin/plugin.json` | `version` |
@@ -141,12 +144,16 @@ make build
 make release-check
 ./scripts/smoke-plugin-install.sh
 ./scripts/smoke-npm-install.sh --dry-run-version-assertion
+./scripts/smoke-npm-install.sh --local-package-check
+./scripts/smoke-npm-install.sh --local-binary-check target/debug/orbit
 ```
 
 - `make build` must be clean. `cargo update --workspace` should re-lock only Orbit crates. Investigate any third-party movement.
 - `make release-check` ([what it checks](docs/runbooks/release.md#what-make-release-check-enforces)) fails on any local version drift. Before npm and the GitHub Release exist, drift against the previous remote version is expected.
 - If this cycle changed a CLI the npm smoke drives (`orbit init`, `workspace init`, `mcp serve`), update `scripts/smoke-npm-install.sh` in the release commit. The tag-triggered smoke runs the tag's copy of the script, so a later fix can't turn it green.
+- Before publication, the local package check packs and inspects the candidate without lifecycle scripts; the local binary check exercises isolated init, credential-origin rejection, explicit `ORBIT_ROOT` discovery and agent authority refusals against `make build`'s output. Neither proves the published download/signature chain. Run the default smoke after npm publication for that proof.
 - If `install.sh` changed, test it locally. The release smoke fetches it from the tag.
+- If this cycle changed `desktop/` or the desktop jobs, prove the Linux desktop legs before tagging: Actions → `Desktop App` → **Run workflow** on the branch you will tag. Its `Release bundle` jobs run `build-desktop`'s Linux legs (`ubuntu-22.04` x86_64 and `ubuntu-22.04-arm` arm64, the same `cargo tauri build --ci --target … -- --locked` command) and check for exactly one `.deb` and one `.AppImage` each. They upload unsigned workflow artifacts and publish nothing.
 
 ### 6. Create the Orbit task
 
@@ -158,6 +165,8 @@ context_files:
   - file:CHANGELOG.md
   - file:Cargo.toml
   - file:Cargo.lock
+  - file:desktop/Cargo.toml
+  - file:desktop/Cargo.lock
   - file:npm/package.json
   - file:server.json
   - file:plugin/.claude-plugin/plugin.json
@@ -169,7 +178,7 @@ context_files:
   - file:scripts/smoke-plugin-install.sh
 ```
 
-Acceptance criteria: Cargo, npm, `server.json`, and all three plugin manifests report the new version. `Cargo.lock` is refreshed without third-party drift. The CHANGELOG section is in place. The npm and plugin install smokes pass.
+Acceptance criteria: Cargo (including `desktop/Cargo.toml`), npm, `server.json`, and all three plugin manifests report the new version. `Cargo.lock` and `desktop/Cargo.lock` are refreshed without third-party drift. The CHANGELOG section is in place. The npm and plugin install smokes pass.
 
 ### 7. Get human approval
 
@@ -249,7 +258,7 @@ git merge-base --is-ancestor origin/main origin/agent-main && echo in-sync
 
 `in-sync` means `main` is the release commit or another ancestor of `agent-main`, so the next promotion is again a fast-forward. `agent-main` may be ahead of `main` by development commits landed since the tag; that is expected. If it prints nothing, `main` holds commits `agent-main` lacks. Follow the [hotfix back-merge](#hotfix-flow), and never force-push either branch to make them match.
 
-The `agent-main` ruleset is a repository ruleset (Settings → Rules), not classic branch protection. It blocks deletion and merge commits and doesn't gate on CI. The `qa-sweep` auto-task picks up CI failures. Read it with `gh api repos/constellation-works/orbit/rules/branches/agent-main`. If `agent-main` goes missing from origin, an admin restores it with `git push origin origin/main:refs/heads/agent-main` and checks the ruleset again.
+The `agent-main` ruleset is a repository ruleset (Settings → Rules), not classic branch protection. It blocks deletion and merge commits and requires the `Check / Clippy / Test` and `Test shard 1/3`, `Test shard 2/3`, and `Test shard 3/3` checks before merge. The `qa-sweep` auto-task picks up CI failures. Read it with `gh api repos/constellation-works/orbit/rules/branches/agent-main`. If `agent-main` goes missing from origin, an admin restores it with `git push origin origin/main:refs/heads/agent-main` and checks the ruleset again.
 
 ### 11. Mark the Orbit task done
 
@@ -271,8 +280,13 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`:
 |---|---|
 | `build-release` | `cargo build -p orbit-cli --release --locked` for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, and `aarch64-unknown-linux-gnu` |
 | `publish-release` | Writes `orbit-checksums.txt`, signs it as `orbit-checksums.txt.sig`, and creates the GitHub Release with auto-generated notes |
+| `desktop-preflight` | Checks the six Apple secrets and plans the desktop build. Linux is always in the plan. macOS is added only when every secret is present; otherwise the run shows a warning naming the missing ones. Turns the desktop jobs off when `ORBIT_DESKTOP_RELEASE` is `false` |
+| `build-desktop` | Runs `cargo tauri build` in `desktop/` at the tag to make the `.deb` and `.AppImage` for Linux x86_64 and arm64, and, when the secrets are present, a signed, notarized universal macOS `.dmg` |
+| `publish-desktop` | Once `publish-release` has created the release and every planned desktop leg has succeeded, writes `orbit-desktop-version.txt`, signs `orbit-desktop-checksums.txt` over it and exactly the bundles built, and attaches them. A failed Linux leg stops it; a macOS leg the preflight left out does not. Tag pushes, manual backfills, and reruns for the same tag attach one at a time: the publisher already uploading finishes, and a different tag stays independent |
 | `bump-homebrew-tap` | Updates `Formula/orbit.rb` in `constellation-works/homebrew-tap` (macOS only; Linux uses `install.sh`) |
 | `smoke-install-macos` / `smoke-install-ubuntu` | Installs from the tag's `install.sh` and runs `orbit --version` |
+
+A release that shipped without desktop bundles, such as v0.29.0, can get its missing desktop assets afterwards from the workflow's manual run: Actions → `release` → **Run workflow**, with `tag` set to the existing release tag. It runs only the desktop jobs, builds the tag's source with the current workflow, and attaches missing assets under the same rules. It refuses a tag without a GitHub Release, and it ignores `ORBIT_DESKTOP_RELEASE`. See the [runbook](docs/runbooks/release.md#desktop-backfill).
 
 npm isn't published from CI. The separate `smoke-npm-install.yml` workflow runs weekly, on every tag, and on demand.
 
@@ -280,6 +294,7 @@ Common failures:
 
 - **`--locked` build fails:** `Cargo.lock` wasn't refreshed. Fix it in the next patch.
 - **Homebrew step fails:** `TAP_GITHUB_TOKEN` expired, or tap branch protection rejected the push.
+- **Desktop job fails:** the CLI release has already published, so nothing is blocked. A missing Apple secret skips only the macOS leg, and the preflight's warning names it. An expired certificate or a revoked app-specific password shows up as a signing or notarization error. Fix a broken secret and re-run the failed jobs: `publish-desktop` adds only missing assets, hashing downloaded published bundles even if a rebuild differs. It uploads the checksum manifest and signature last; a complete retry verifies them without uploading again. Conflicting metadata from an older partial upload requires a new release rather than replacement assets. A release that published a Linux-only manifest can't gain a macOS bundle later, because that is a manifest conflict by design: macOS ships in the next release. Tag pushes, backfills, and reruns of the same tag share one queue, so a later attempt waits for the publisher already uploading and then applies that conflict check before it adds a disk image. A version mismatch means `desktop/Cargo.toml` wasn't bumped, so fix it in the next patch.
 - **Installer smoke fails:** there's a regression in the tagged `install.sh`.
 - **npm smoke red after publish:** either the tagged script speaks an old CLI contract, or the published artifact is bad. Triage with the [runbook](docs/runbooks/release.md#npm-install-smoke-two-artifacts). Fix a script-only problem on `agent-main` without a patch release, and don't re-dispatch the old tag after the script has moved on.
 

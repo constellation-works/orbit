@@ -5,7 +5,7 @@ use super::final_recovery::MAX_DECISION_TEXT_CHARS;
 use super::review::{
     REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT,
     REVIEW_REPORT_HISTORY_ARTIFACT, REVIEW_REPORT_HISTORY_LIMIT, REVIEW_REPORT_HISTORY_VERSION,
-    RecordGap, ValidationOutcome,
+    REVIEW_REQUEST_KEY, RecordGap, ValidationOutcome,
 };
 use super::{JobRunState, RunEvent};
 
@@ -189,4 +189,48 @@ pub enum ReviewAdmissionError {
         REVIEW_CONTRACT_VERSION
     )]
     UnsupportedContractVersion { found: u32 },
+    #[error(
+        "invalid `{}` run input: expected before-pr or before-landing, got {found}",
+        REVIEW_REQUEST_KEY
+    )]
+    MalformedRequest { found: String },
+}
+
+/// Why a tag's instructions could not be given to an activity. Each message
+/// leads with a reason token, so a refused dispatch names its cause.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum TagInstructionError {
+    /// The instruction file is missing, unreadable, not UTF-8 or empty.
+    #[error("tag_instruction_unreadable: tag `{tag}` ({role}) file {origin}: {reason}")]
+    Unreadable {
+        tag: String,
+        role: &'static str,
+        origin: String,
+        reason: String,
+    },
+    /// The instruction file is larger than the per-file cap.
+    #[error(
+        "tag_instruction_too_large: tag `{tag}` ({role}) file {origin} is {bytes} bytes; \
+         the limit is {limit}"
+    )]
+    FileTooLarge {
+        tag: String,
+        role: &'static str,
+        origin: String,
+        bytes: usize,
+        limit: usize,
+    },
+    /// The instructions one prompt would receive exceed the per-prompt cap.
+    #[error(
+        "tag_instructions_too_large: the {role} prompt's tag instructions total {bytes} bytes; \
+         the limit is {limit}"
+    )]
+    PromptTooLarge {
+        role: &'static str,
+        bytes: usize,
+        limit: usize,
+    },
+    /// A captured refusal or an unreadable capture, carried as recorded.
+    #[error("{0}")]
+    Capture(String),
 }

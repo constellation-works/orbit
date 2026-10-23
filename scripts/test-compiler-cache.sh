@@ -618,6 +618,109 @@ assert_ns_not_applicable "cache forced off inside an agent lane"
 grep -Fq 'host compiler cache is disabled' "$ns_out" \
   || fail "cache forced off inside an agent lane should report the disabled cache"
 
+# 13. Drive participant failures through the public namespace entrypoint. These
+# transport fixtures do not claim live namespace/cache coverage: they let the
+# entrypoint reach each stage without compiling, then return exact statuses and
+# oversized logs. No production test-only switch or private helper is invoked.
+ns_diagnostic_bin="$TMP/ns-diagnostic-bin"
+mkdir -p "$ns_diagnostic_bin"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$ns_diagnostic_bin/cargo"
+cat > "$ns_diagnostic_bin/bwrap" <<'EOF'
+#!/usr/bin/env python3
+import os
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+if args[-1] == "/bin/true":
+    sys.exit(0)
+env = {}
+for i, arg in enumerate(args):
+    if arg == "--setenv":
+        env[args[i + 1]] = args[i + 2]
+target = Path(env["CARGO_TARGET_DIR"])
+root = target.parent
+participant = target.name[-1].upper()
+stage = ("client-side-shared-tcp" if env.get("SCCACHE_CLIENT_SIDE") == "1"
+         else "warm-identical-source" if participant == "E" else "isolated-daemon")
+with open(os.environ["NS_DIAGNOSTIC_EVENTS"], "a") as events:
+    events.write(f"{os.getpid()} {root}\n")
+if stage == os.environ["NS_FAIL_STAGE"]:
+    # Keep both ends recognizable, including stats at the end of long stdout.
+    sys.stdout.write(f"stdout-{participant}-begin\n" + "o" * 12000
+                     + f"\n__SCCACHE_STATS__\nstdout-{participant}-end\n")
+    sys.stderr.write(f"stderr-{participant}-begin\n" + "e" * 12000
+                     + f"\nstderr-{participant}-end\n")
+    sys.exit(int(os.environ.get("NS_EXIT_" + participant, "0")))
+# Earlier successful controls need the same observable artifacts/results as
+# the real transport. The live sibling separately verifies real compilation.
+(target / "debug/deps").mkdir(parents=True)
+binary = target / "debug/orbit_cache_probe"
+binary.touch()
+binary.chmod(0o700)
+(target / "debug/deps/liborbit_cache_probe-fixture.rlib").touch()
+print("6" if participant == "D" else "3")
+print("__SCCACHE_STATS__\nCache hits (Rust) 1")
+EOF
+chmod +x "$ns_diagnostic_bin/bwrap" "$ns_diagnostic_bin/cargo"
+
+assert_ns_diagnostics() {
+  local stage="$1" c_status="$2" d_status="$3" e_status="$4"
+  local fixture="$TMP/ns-diagnostics-$stage-$c_status-$d_status"
+  mkdir -p "$fixture/scratch"
+  set +e
+  env -i HOME="$ns_home" PATH="$ns_diagnostic_bin:/usr/bin:/bin" \
+    TMPDIR="$fixture/scratch" ORBIT_COMPILER_CACHE_BIN="$ns_sccache" \
+    ORBIT_COMPILER_CACHE_REQUIRE_NS=1 NS_DIAGNOSTIC_EVENTS="$fixture/events" \
+    NS_FAIL_STAGE="$stage" NS_EXIT_C="$c_status" NS_EXIT_D="$d_status" NS_EXIT_E="$e_status" \
+    "$ROOT/scripts/test-compiler-cache-namespaces.sh" >"$fixture/out" 2>"$fixture/err"
+  local status=$?
+  set -e
+  assert_eq "$status" 1 "$stage must fail"
+  python3 - "$fixture" "$stage" "$c_status" "$d_status" "$e_status" <<'PYTEST'
+import os
+from pathlib import Path
+import re
+import sys
+
+fixture = Path(sys.argv[1])
+stage = sys.argv[2]
+statuses = dict(zip("CDE", map(int, sys.argv[3:])))
+participants = "E" if stage == "warm-identical-source" else "CD"
+output = (fixture / "err").read_text()
+assert len(output.encode()) < 18000, "failure diagnostics must stay bounded"
+for participant in participants:
+    header = (f"stage={stage} participant={participant} "
+              f"exit_status={statuses[participant]}\n")
+    assert header in output, f"missing exact participant result: {header}"
+    block = output.split(header, 1)[1].split("test-compiler-cache-namespaces:", 1)[0]
+    for stream in ("stdout", "stderr"):
+        assert re.search(rf"{stream} bytes=\d+ limit=4096\n", block), block[:200]
+        assert f"{stream}-{participant}-begin\n" in block, "log head lost"
+        assert f"{stream}-{participant}-end\n" in block, "log tail lost"
+    assert block.count("[truncated: ") == 2, "both oversized streams must name truncation"
+    assert "__SCCACHE_STATS__" in block, "retain stdout statistics even for successful peer"
+# The script must report before removing logs, and leave neither fixture roots
+# nor live/zombie transport children behind after its exit trap completes.
+assert not list((fixture / "scratch").iterdir()), "namespace scratch leaked"
+for line in (fixture / "events").read_text().splitlines():
+    pid, root = line.split(" ", 1)
+    assert not Path(root).exists(), "fixture root survived cleanup"
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        pass
+    else:
+        raise AssertionError(f"owned transport child {pid} was not reaped")
+PYTEST
+}
+
+assert_ns_diagnostics isolated-daemon 37 0 0
+assert_ns_diagnostics warm-identical-source 0 0 23
+assert_ns_diagnostics client-side-shared-tcp 37 0 0
+assert_ns_diagnostics client-side-shared-tcp 0 41 0
+assert_ns_diagnostics client-side-shared-tcp 37 41 0
+
 # Live mount-namespace compile lives in the sibling script and is invoked as
 # a separate CI process after this unit process exits.
 

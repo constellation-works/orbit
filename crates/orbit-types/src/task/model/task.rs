@@ -62,6 +62,20 @@ pub struct Task {
     /// attribution metadata only; execution resolution continues to use `crew`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orchestrator: Option<String>,
+    /// The orchestrator's model, snapshotted when the task was created with
+    /// an orchestrator: an explicit creation input, else that crew's
+    /// configured model. Never rewritten afterwards, so a later orchestrator
+    /// change or crew-config edit leaves it as recorded. Absent on tasks
+    /// created without an orchestrator and on tasks filed before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_model: Option<String>,
+    /// Which rule supplied `orchestrator_model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_model_source: Option<OrchestratorModelSource>,
+    /// Why the task was filed. Absent on tasks filed before origins were
+    /// recorded and on interactive filings that did not state one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<TaskOrigin>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -150,6 +164,9 @@ impl Task {
             crew: envelope.crew,
             crew_source: envelope.crew_source,
             orchestrator: envelope.orchestrator,
+            orchestrator_model: envelope.orchestrator_model,
+            orchestrator_model_source: envelope.orchestrator_model_source,
+            origin: envelope.origin,
             created_at: envelope.created_at,
             updated_at: envelope.updated_at,
         }
@@ -366,6 +383,7 @@ pub fn resolve_task_relations_with_index(
         .map(|relation| ResolvedTaskRelation {
             relation_type: relation.relation_type,
             target: relation.target.clone(),
+            regression: relation.regression,
             verification: reference_index
                 .is_not_verifiable_here(task, &relation.target, status_by_id)
                 .then(|| TASK_REFERENCE_NOT_VERIFIABLE_HERE.to_string()),
@@ -422,11 +440,6 @@ impl TaskReferenceIndex {
         }
         !self.known_prefixes.contains(target_prefix)
     }
-}
-
-pub fn task_dependencies_ready(task: &Task, status_by_id: &BTreeMap<OrbitId, TaskStatus>) -> bool {
-    let reference_index = TaskReferenceIndex::from_status_index(status_by_id);
-    task_dependencies_ready_with_index(task, status_by_id, &reference_index)
 }
 
 /// Check readiness using prefix knowledge derived from one status projection.
@@ -560,19 +573,6 @@ pub fn satisfy_completed_archived_dependencies<E>(
     Ok(())
 }
 
-pub fn validate_task_dependencies(
-    tasks: &[Task],
-    current_task_id: Option<&str>,
-    dependencies: &[OrbitId],
-) -> Result<(), TaskError> {
-    validate_task_dependencies_with(current_task_id, dependencies, |id| {
-        Ok(tasks
-            .iter()
-            .find(|task| task.id == id)
-            .map(Task::dependencies))
-    })
-}
-
 /// Cycle-check new dependency edges using an on-demand adjacency lookup.
 ///
 /// `lookup(id)` returns that task's current dependency IDs, or `None` when the
@@ -677,22 +677,70 @@ pub fn automatic_dispatch_cmp_with_expiry(
     right: &Task,
     right_expiring: bool,
 ) -> std::cmp::Ordering {
-    automatic_dispatch_cmp_for_host(left, left_expiring, right, right_expiring, None, None)
+    automatic_dispatch_cmp_with_affinity(
+        (left, left_expiring, DispatchAffinity::default()),
+        (right, right_expiring, DispatchAffinity::default()),
+        AdmissionAffinityReach::Off,
+    )
 }
 
-/// Automatic dispatch order for an executor pulling from an owner.
+/// How far work only the requesting executor can run reaches in automatic
+/// dispatch order [ORB-17304]: the `workflow.admission_affinity` setting.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdmissionAffinityReach {
+    /// Exclusive work leads its band, ahead of higher-priority work other
+    /// executors can run. Critical and corrective work still leads.
+    #[default]
+    Band,
+    /// Exclusive work leads only among tasks of its own priority.
+    Priority,
+    /// No affinity: the canonical band, priority, expiry, age and ID order.
+    Off,
+}
+
+impl AdmissionAffinityReach {
+    /// Every accepted spelling, in declaration order.
+    pub const CHOICES: [&'static str; 3] = ["band", "priority", "off"];
+
+    /// The reach a setting spells, or `None` for any other value.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "band" => Some(Self::Band),
+            "priority" => Some(Self::Priority),
+            "off" => Some(Self::Off),
+            _ => None,
+        }
+    }
+}
+
+/// One candidate's standing against the live executor census, as the
+/// requesting executor sees it [ORB-17304]. The default is the standing every
+/// candidate shares when no census applies, so it never reorders.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DispatchAffinity {
+    /// The requester is the only live executor that can run the task.
+    pub exclusive: bool,
+    /// How many live executors can run the task; fewer sorts first. A task
+    /// the requester itself cannot run carries `usize::MAX`, so it sorts
+    /// after every task the requester can.
+    pub eligible: usize,
+}
+
+/// Automatic dispatch order for one requesting executor against the live
+/// executor census [ORB-17304].
 ///
-/// After band, priority and frozen-batch expiry, prefer tasks whose OS
-/// requirement the executor satisfies but the owner does not. Age and task
-/// ID settle the remaining ties. Equal host OSes preserve local dispatch
-/// order; an owner outside the OS namespace can run only unrestricted tasks.
-pub fn automatic_dispatch_cmp_for_host(
-    left: &Task,
-    left_expiring: bool,
-    right: &Task,
-    right_expiring: bool,
-    owner_os: Option<crate::task::HostOs>,
-    executor_os: Option<crate::task::HostOs>,
+/// `band → exclusive → priority → expiry → fewer eligible executors → age →
+/// ID` under [`AdmissionAffinityReach::Band`]; exclusivity moves after
+/// priority under [`AdmissionAffinityReach::Priority`], and
+/// [`AdmissionAffinityReach::Off`] ignores both affinity keys. Each side is a
+/// task, whether its frozen batch is expiring, and its affinity. Exclusivity
+/// never crosses a band, so critical and corrective work still leads.
+pub fn automatic_dispatch_cmp_with_affinity(
+    left: (&Task, bool, DispatchAffinity),
+    right: (&Task, bool, DispatchAffinity),
+    reach: AdmissionAffinityReach,
 ) -> std::cmp::Ordering {
     let band = |task: &Task, expiring: bool| {
         if task.priority == TaskPriority::Critical {
@@ -715,15 +763,26 @@ pub fn automatic_dispatch_cmp_for_host(
         TaskPriority::Medium => 2,
         TaskPriority::Low => 3,
     };
-    let affinity = |task: &Task| {
-        let requirement = crate::task::TaskOsRequirement::from_tags(&task.tags);
-        requirement.satisfied_by(executor_os) && !requirement.satisfied_by(owner_os)
+    let (left, left_expiring, left_affinity) = left;
+    let (right, right_expiring, right_affinity) = right;
+    let (left_affinity, right_affinity) = match reach {
+        AdmissionAffinityReach::Off => (DispatchAffinity::default(), DispatchAffinity::default()),
+        _ => (left_affinity, right_affinity),
+    };
+    let exclusive_at = |at: AdmissionAffinityReach| {
+        if reach == at {
+            right_affinity.exclusive.cmp(&left_affinity.exclusive)
+        } else {
+            std::cmp::Ordering::Equal
+        }
     };
     band(left, left_expiring)
         .cmp(&band(right, right_expiring))
+        .then(exclusive_at(AdmissionAffinityReach::Band))
         .then(priority(left.priority).cmp(&priority(right.priority)))
+        .then(exclusive_at(AdmissionAffinityReach::Priority))
         .then(right_expiring.cmp(&left_expiring))
-        .then_with(|| affinity(right).cmp(&affinity(left)))
+        .then(left_affinity.eligible.cmp(&right_affinity.eligible))
         .then(left.created_at.cmp(&right.created_at))
         .then(left.id.cmp(&right.id))
 }

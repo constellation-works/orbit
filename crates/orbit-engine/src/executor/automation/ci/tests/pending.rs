@@ -252,6 +252,7 @@ const CI_STEP: &str = "Run CI guardrails";
 fn guardrails_log(at: &str, diagnostic: &str, location: &str) -> String {
     [
         "##[group]Run ./scripts/ci-guardrails.sh",
+        "##[endgroup]",
         diagnostic,
         location,
         "##[error]Process completed with exit code 101.",

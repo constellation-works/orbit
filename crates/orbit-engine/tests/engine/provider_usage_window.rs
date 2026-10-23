@@ -24,7 +24,7 @@ use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource, Toke
 use orbit_types::workflow::activity_job::{ActivityV2Spec, Provider};
 use serde_json::{Value, json};
 
-use super::provider_capacity::{CapacityHost, FakeProvider, agent_spec, writer};
+use super::provider_capacity::{CapacityHost, FakeProvider, agent_spec, outcome_writer};
 
 const CODEX_STDOUT: &str = include_str!("fixtures/provider_usage/codex_exec_stdout.jsonl");
 const CODEX_ROLLOUT: &str = include_str!("fixtures/provider_usage/codex_rollout.jsonl");
@@ -53,7 +53,7 @@ fn dispatch(
         spec: &ActivityV2Spec::AgentLoop(spec),
         fs_profile: None,
         input: json!({ "prompt": "implement", "crew": "fixture-crew" }),
-        audit: writer(audit.path(), "usage-run"),
+        audit: outcome_writer("usage-run"),
         run_id: "usage-run",
         host: Some(&host),
     })
@@ -96,7 +96,6 @@ fn rollout_without_rate_limits() -> String {
         .join("\n")
 }
 
-#[test]
 fn a_codex_run_records_the_window_its_own_rollout_reports() {
     let home = codex_home(CODEX_THREAD, Some(CODEX_ROLLOUT));
     let (outcome, limits) = dispatch(
@@ -176,7 +175,6 @@ fn projected(outcome: &DispatchOutcome) -> (Value, TokenUsage) {
     (response, usage)
 }
 
-#[test]
 fn a_claude_stream_records_both_windows_and_projects_as_its_result_alone() {
     let (outcome, limits) = dispatch("claude", Provider::Claude, CLAUDE_STREAM, &[]);
     assert!(outcome.success, "{:?}", outcome.message);
@@ -236,7 +234,6 @@ fn a_claude_stream_records_both_windows_and_projects_as_its_result_alone() {
 /// A rejected window is exhausted. An overage window is recorded but does
 /// not gate, and the top-level window adds a reading only for a window
 /// `unifiedWindows` lacks, with its model scope.
-#[test]
 fn a_claude_rate_limit_event_marks_rejected_and_overage_windows() {
     let event = json!({
         "type": "rate_limit_event",
@@ -273,4 +270,25 @@ fn a_claude_rate_limit_event_marks_rejected_and_overage_windows() {
             ("seven_day_sonnet", Some("sonnet"), Some(102.0), true, true),
         ]
     );
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn usage_window_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "usage_window_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_codex_run_records_the_window_its_own_rollout_reports",
+                a_codex_run_records_the_window_its_own_rollout_reports,
+            ),
+            (
+                "a_claude_stream_records_both_windows_and_projects_as_its_result_alone",
+                a_claude_stream_records_both_windows_and_projects_as_its_result_alone,
+            ),
+            (
+                "a_claude_rate_limit_event_marks_rejected_and_overage_windows",
+                a_claude_rate_limit_event_marks_rejected_and_overage_windows,
+            ),
+        ]);
+    });
 }

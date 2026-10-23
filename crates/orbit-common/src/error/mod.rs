@@ -3,10 +3,11 @@ mod conversions;
 mod kinds;
 mod orbit_error;
 
-pub use classification::LOCK_BUSY_ERROR_CODE;
+pub use classification::{LOCK_BUSY_ERROR_CODE, is_lock_busy_message};
 pub use kinds::{
-    ArtifactOrigin, ArtifactOriginMode, ClaimRefusalKind, DependencyNotDelivered, FrictionNotLocal,
-    HostRegistryCode, NotFoundKind, RecoverableVcsConflict, SqliteContention, StorageLayer,
+    ArtifactOrigin, ArtifactOriginMode, CandidateAbsorbed, ClaimRefusalKind, ConflictedFile,
+    DependencyNotDelivered, FrictionNotLocal, HostRegistryCode, NotFoundKind, PrivateVcsFailure,
+    PrivateVcsFailureClass, RecoverableVcsConflict, SqliteContention, StorageLayer,
     WorkspaceClaimHeld,
 };
 pub use orbit_error::OrbitError;

@@ -10,12 +10,14 @@
 //! changes through them.
 
 use orbit_common::OrbitError;
+use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::JobRunState;
 use std::collections::HashSet;
 
 use crate::OrbitRuntime;
 use crate::application::job::running_run_has_verified_owner;
+use crate::runtime::run_input::recorded_task_ids;
 
 use super::params::TaskUpdateParams;
 
@@ -25,6 +27,46 @@ const UNAUTHORED_TASK_PLAN_PLACEHOLDER: &str = "To be authored by executing agen
 /// bare CLI or the dashboard, so an audit can tell a governed transition from
 /// an override.
 pub(crate) const FORCED_STATUS_EVENT: &str = "forced";
+
+/// Status event recorded when Orbit settles a task to `done` from its delivery
+/// pull request merged outside Orbit (`external_merge`). Like the delivery
+/// pipeline's own completion, the settlement is not an edge of the table
+/// below: the forge's merge, not a caller's claim, is its evidence.
+pub use orbit_types::workflow::handoff::EXTERNAL_MERGE_SETTLED_EVENT;
+
+/// Refuse an ordinary surface's status change while a local run owns the
+/// task. Call under the task write lock, before recording any field edits.
+/// The run's submitted selection is authoritative even when admission has
+/// not yet bound `task.job_run_id`, and local runs need no execution claim.
+pub(crate) fn ensure_status_change_not_run_owned(
+    runtime: &OrbitRuntime,
+    id: &str,
+) -> Result<(), OrbitError> {
+    // Observe stored state without orphan reconciliation or step hydration.
+    // Do not cap history: a newer terminal (or singular-task) run must not
+    // hide an older non-terminal run whose task_ids includes this task.
+    let runs = runtime
+        .stores()
+        .jobs()
+        .list_job_runs_filtered(&JobRunQuery {
+            task_id: Some(id.to_string()),
+            include_steps: false,
+            ..Default::default()
+        })?;
+    if let Some(run) = runs.into_iter().find(|run| {
+        !run.state.is_terminal()
+            && run
+                .input
+                .as_ref()
+                .is_some_and(|input| recorded_task_ids(input).contains(&id))
+    }) {
+        return Err(OrbitError::InvalidInput(format!(
+            "status change refused: local run '{}' still owns this task ({}); stop the run first or use --force to override",
+            run.run_id, run.state
+        )));
+    }
+    Ok(())
+}
 
 /// Whether `from -> to` is a legal lifecycle edge.
 ///
@@ -120,15 +162,12 @@ pub(crate) fn ensure_status_change_allowed(
         return Ok(());
     }
     if !task_status_transition_allowed(from, target) {
-        return Err(refused(
-            &task.id,
-            from,
-            target,
-            unreachable_reason(from, target),
-        ));
+        let reason = unreachable_reason(from, target);
+        return Err(refused(&task.id, from, target, &reason));
     }
 
     if target == TaskStatus::Done {
+        ensure_post_deploy_criteria_met(runtime, task)?;
         ensure_completion_run_stopped(
             runtime,
             task,
@@ -180,6 +219,28 @@ pub(crate) fn ensure_status_change_allowed(
     }
 }
 
+/// Every ordinary completion writer checks the same persisted measurement
+/// record under the task lock. A successful run or review cannot substitute
+/// for an operator's post-deploy result, including on a reused candidate.
+/// Only the explicitly audited human force path may bypass this precondition.
+pub(crate) fn ensure_post_deploy_criteria_met(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Result<(), OrbitError> {
+    let owed = runtime.outstanding_owed_criteria(&task.id, None)?;
+    if owed.is_empty() {
+        return Ok(());
+    }
+    Err(OrbitError::PolicyDenied(format!(
+        "completion requires an operator's post-deploy met record for criteria {}; \
+         owed or failed measurements cannot complete",
+        owed.iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )))
+}
+
 /// Refuse completion while a linked implementation run (or a recorded child)
 /// still has its original owner. The trusted delivery activity exempts only
 /// its own run: that run necessarily remains Running until its last step exits.
@@ -229,17 +290,26 @@ pub(crate) fn ensure_completion_run_stopped(
 
 /// The precondition a refused edge is missing, in the terms of the pair that
 /// was asked for rather than of the table that refused it.
-fn unreachable_reason(from: TaskStatus, to: TaskStatus) -> &'static str {
+fn unreachable_reason(from: TaskStatus, to: TaskStatus) -> String {
     match (from, to) {
-        (_, TaskStatus::Done) => "'done' is reachable only from 'review'",
+        (_, TaskStatus::Done) => "'done' is reachable only from 'review'".to_string(),
         (TaskStatus::Done | TaskStatus::Archived, _) => {
             "delivered and archived work does not reopen; file a new task with a \
              'regression_from' relation instead"
+                .to_string()
         }
         (TaskStatus::Rejected, _) => {
-            "a rejection is only reconsidered back to 'backlog' or 'in-progress'"
+            "a rejection is only reconsidered back to 'backlog' or 'in-progress'".to_string()
         }
-        _ => "the lifecycle has no edge between these statuses",
+        _ => {
+            let reachable_statuses = TaskStatus::ALL
+                .into_iter()
+                .filter(|status| *status != from && task_status_transition_allowed(from, *status))
+                .map(|status| format!("'{status}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("you can move it to: {reachable_statuses}")
+        }
     }
 }
 

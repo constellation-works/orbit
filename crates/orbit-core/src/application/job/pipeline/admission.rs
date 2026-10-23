@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::application::job::crew_pools;
+use crate::application::job::{crew_pools, delivery};
 use orbit_common::fs::io::open_read_only_no_follow;
 
 impl OrbitRuntime {
@@ -97,12 +97,50 @@ impl OrbitRuntime {
         if !reconciliation && run_input_declares_review_reconciliation(&input) {
             return Err(reserved_reconciliation_key_error(job_name));
         }
+        let source_repair = resume.is_some_and(|plan| {
+            // The explicit operator path authenticates a successful unmerged
+            // publication and reserves fresh rework before constructing a plan.
+            // Generic resume never admits success or carries this reserved key.
+            matches!(
+                plan.source.state,
+                JobRunState::Cancelled | JobRunState::Failed | JobRunState::Success
+            ) && plan
+                .input
+                .get(orbit_types::workflow::SOURCE_REPAIR_KEY)
+                .is_some()
+        });
+        if input
+            .get(orbit_types::workflow::SOURCE_REPAIR_KEY)
+            .is_some()
+            && !source_repair
+        {
+            return Err(OrbitError::CapabilityDenied(
+                "source repair input is reserved for explicit operator admission".into(),
+            ));
+        }
+        // Resolve cardinality before reclamation, policy capture, run insertion
+        // or resume seeding. Refusal must leave retained candidates untouched.
+        let spec = match &definition {
+            SubmittedDefinition::Catalog => self
+                .load_v2_job_asset_by_name(job_name)
+                .map(|(_, spec)| spec),
+            SubmittedDefinition::Snapshot { spec, .. } => Ok((*spec).clone()),
+        };
+        let mut input = input;
+        if let Ok(spec) = &spec {
+            delivery::normalize_delivery_input(spec, &mut input)?;
+        }
+        let reuse_admission = resume.is_some() && !source_repair;
+        self.capture_auto_concurrency(
+            job_name,
+            &mut input,
+            reuse_admission || replay_source_run_id.is_some(),
+        )?;
         self.reclaim_worktrees_on_admission();
         // [ORB-11333] The review admission follows the same discipline: a
         // child inherits its parent's snapshot, an ordinary delivery
         // submission captures the effective policy once, and ordinary input
         // naming the key is refused.
-        let mut input = input;
         crate::application::review::install_review_admission(
             self,
             job_name,
@@ -114,14 +152,19 @@ impl OrbitRuntime {
             job_name,
             &mut input,
             admission.map(|admission| admission.parent_run_id.as_str()),
-            resume.is_some(),
+            reuse_admission,
             &mut crew_pools::random_crew_ticket,
         )?;
+        self.install_resource_class_admission(
+            job_name,
+            &mut input,
+            admission.map(|admission| admission.parent_run_id.as_str()),
+            reuse_admission || replay_source_run_id.is_some(),
+        );
         let result = (|| {
-            let spec = match &definition {
-                SubmittedDefinition::Catalog => self.load_v2_job_asset_by_name(job_name)?.1,
-                SubmittedDefinition::Snapshot { spec, .. } => (*spec).clone(),
-            };
+            // Preserve policy refusals for unavailable definitions while every
+            // resolved PR leaf was already checked before those policies ran.
+            let spec = spec?;
             if spec.state != JobScheduleState::Enabled {
                 return Err(OrbitError::InvalidInput(format!(
                     "job '{job_name}' is disabled"
@@ -480,18 +523,21 @@ impl OrbitRuntime {
         Ok(())
     }
 
-    /// [ORB-14777] Record which pass-listed variables this submitting process
-    /// does not hold, so `run show` and the dashboard explain a worker that
-    /// fell back to another login. Writes nothing when none are unset.
+    /// [ORB-14777] Record which pass-listed variables and crew `env` sources
+    /// this submitting process does not hold, so `run show` and the dashboard
+    /// explain a worker that fell back to another login or a crew that was
+    /// excluded. Writes nothing when none are unset.
     fn record_run_env_pass_unset(&self, run_id: &str) -> Result<(), OrbitError> {
         let unset = self.unset_env_pass_names();
-        if unset.is_empty() {
+        let crew_unset = self.unset_crew_env();
+        if unset.is_empty() && crew_unset.is_empty() {
             return Ok(());
         }
         self.stores()
             .jobs()
             .update_run_state(run_id, &mut |_, state| {
                 state.env_pass_unset = unset.clone();
+                state.crew_env_unset = crew_unset.clone();
                 Ok(())
             })?;
         Ok(())
@@ -510,7 +556,7 @@ pub(super) fn pipeline_run_is_runnable(
 /// The run's one-based place among those waiting for the job's
 /// `max_active_runs`, or `None` when it may execute now. A ceiling of `0` is
 /// no ceiling: nothing ever waits.
-fn pipeline_run_queue_position(
+pub(crate) fn pipeline_run_queue_position(
     runs: &[JobRun],
     run_id: &str,
     max_active_runs: u32,

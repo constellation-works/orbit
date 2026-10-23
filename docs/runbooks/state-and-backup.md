@@ -5,7 +5,7 @@ tags: [operations, backup, restore, state, sqlite, task-publication]
 paths: ["crates/orbit-cli/src/command/workspace/source_remote.rs", "crates/orbit-common/src/types/workspace.rs", "crates/orbit-config/src/**", "crates/orbit-registry/**", "crates/orbit-store/**", "crates/orbit-web/src/state/**"]
 related_features: [orbit-core, remote-access, task-publication]
 related_artifacts: [ORB-10014, ORB-10294, ORB-10473, ORB-11077, ORB-11376, ORB-11426]
-last_validated: 2026-10-08
+last_validated: 2026-10-19
 ---
 
 # Inventory and Protect Orbit State
@@ -31,7 +31,7 @@ registry sweeps, and MCP setup use this same path interpretation.
 ### Workspace `.orbit/`
 
 `orbit workspace init` scaffolds `.orbit/resources/` plus
-`.orbit/state/{audit,job-runs,logs,scoreboard,worktrees}`. It does not create
+`.orbit/state/{audit,job-runs,logs,worktrees}`. It does not create
 `.orbit/knowledge` or `.orbit/state/diagnostics`; leftover empty copies from
 older inits are unused and may be `rmdir`'d. Init tolerates both absence and
 presence. Path fields live on `WorkspacePaths` in
@@ -47,7 +47,7 @@ presence. Path fields live on `WorkspacePaths` in
 | `state/layout.version` | plain-text workspace layout version marker | regenerable marker (see [upgrades](./upgrades.md)) |
 | `state/layout.lock` | advisory lock taken during layout upgrades | transient |
 | `state/semantic.db` | lexical task index (FTS5 chunks) | regenerable (`orbit search reindex`) |
-| `state/scoreboard/` | rolling counters (`pr.json`, `task_review.json`, `tokens.json`, …) | mostly regenerable |
+| `state/scoreboard/` | retired scoreboard counters left by older Orbit versions; nothing reads or writes them | non-authoritative; safe to delete |
 | `state/job-runs/` | run-definition snapshots (`jrun-*.job.yaml`); new run history lives in SQLite | retain if old run evidence matters |
 | `state/audit/blobs/` | redacted content-addressed blobs referenced by global `v2_audit_events` | preserve with audit history when detailed output matters |
 | `state/logs/`, `state/worktrees/` | workspace-local worker stdio logs and linked worktrees | regenerable |
@@ -68,16 +68,55 @@ presence. Path fields live on `WorkspacePaths` in
 | `state/logs/orbit.jsonl`, `state/logs/orbit-agent.jsonl` (+ rotated archives) | Operational and separately budgeted agent relay JSONL feeds | disposable |
 | `state/task-publication/` | private Git object/work-tree caches plus pending-push reconciliation records | regenerable after a cleanly recorded success; retain during push-success/local-record recovery |
 | `embed/` | retired search downloads | removable after stopping older binaries; see upgrades |
-| `bin/` | installed Orbit binary (when installed via `install.sh`) | reinstallable |
+| `bin/` | installed Orbit binary (when installed via `install.sh`), its `orbit.previous` rollback copy, and any older copies a deploy left | reinstallable; keep `orbit.previous` until the upgrade is verified, then `orbit gc deployments` removes older copies past its retention ([upgrades](./upgrades.md#reclaim-old-deployments-and-backups)) |
+| `deployments/`, `orbit.db.bak*` | build directories and store copies left by deploys | disposable once the deploy is verified; `orbit gc deployments` keeps the newest and anything that built the installed or rollback executable |
 
 Store retention can remove old history from this database. `retention.audit_days` and
 `retention.runs_days` default to 60 days; they define eligibility but do not delete data
-by themselves. `orbit gc audit --apply` prunes old command-audit rows, this workspace's
-run-audit rows, and audit blobs no remaining row or pending write references.
-`orbit gc runs --apply` drops pipeline state for terminal runs past the run window while
-keeping their run and step rows. The seeded `store_gc` routine is disabled by default,
+by themselves. On a large store, `retention.runs_days = 30` can reclaim more terminal
+run state than the default. Values below 30, including the `--older-than-days` override,
+are refused: Reliability > Pipeline echo dedupe and forecast-accuracy per-drain limiter
+shares still read 30 days of run state. Audit retention can stay at 60.
+`orbit gc audit --apply` prunes old
+command-audit rows, this workspace's run-audit rows, run-audit rows whose workspace id is
+no longer registered, and audit blobs no remaining row or pending write references.
+Another registered workspace keeps its own window. `orbit gc runs --apply` drops pipeline
+state for terminal runs past the run window, including those unregistered ids, while
+keeping their run and step rows, and prunes the per-minute run and host resource history
+(`run_resource_minutes`, `host_resource_minutes`) and the admission forecasts checked
+against it (`admission_forecasts`) older than 30 days. `orbit gc journal --apply` deletes
+applied rows of the task commit journal (`task_commit_journal`) older than
+`retention.journal_days` (default 14), for this workspace and unregistered ids. Recovery
+replays only prepared and committed rows, so those, aborted rows and each task's newest
+applied row stay. The journal grows fastest, at about 600 rows of about 80 KB a day, which
+is why its window is shorter than the others; the `store_gc` routine does not run it. The
+seeded `store_gc` routine is disabled by default,
 so cleanup happens only after an operator applies a GC command or enables that routine.
+`orbit doctor` warns when the store file exceeds `retention.store_warn_bytes` (default
+1 GiB) and that routine is not enabled. Freed pages stay in the file until `VACUUM`.
 See [runtime configuration](../CONFIG.md) for the retention settings.
+
+The cost of each retention setting:
+
+- `retention.audit_days`: Health > Events, Incidents, Denials, `orbit audit` and the
+  diagnostics friction view lose raw history older than the cutoff. There are no
+  rollups for those views. Lock contention keeps durable requester/path/time denial
+  facts alongside reservation history. Upgrade backfills the denials still present;
+  audit history deleted before the upgrade cannot be recovered.
+- `retention.runs_days`: archived runs lose raw pipeline checkpoints. Run rows, steps,
+  summaries and commit outcomes stay, so implement_one duration with outcome=succeeded
+  still includes committed candidates and excludes runs that did not commit. Upgrade
+  backfills outcomes from existing state before pruning. Already-pruned state cannot
+  supply an unknown outcome. Resource minutes and admission forecasts have a separate
+  fixed 30-day window, so older raw samples disappear; auto-concurrency profiles and
+  forecast accuracy keep working within that supported window.
+- `retention.journal_days`: older applied transition diagnostics disappear, while
+  published task history and recovery inputs stay.
+- `retention.store_warn_bytes`: only controls a doctor warning; it prunes nothing.
+
+Across these settings, Cost, the task-store Codebase rankings, `orbit task flow` and
+friction stats keep working. These read retained invocation, task, reservation and
+friction records rather than the deleted audit payloads or checkpoints.
 
 Policy definitions under global or workspace `resources/policies/` may use
 `.yaml` or `.yml`. Named lookup, listing, and updates use the same file for a
@@ -315,7 +354,7 @@ from the captured settings only after the old source identity is restored.
   (canonical bundles and the `index.sqlite` task-id allocator), `orbit.db`, `frictions/`, and `resources/` whenever it contains operator-authored YAML or
   `.retired-managed/` recovery copies. The database holds non-derivable audit and run history.
 - **Safe to lose or regenerate:** retired `graph/` and `knowledge/graph/`, `state/semantic.db`,
-  `~/.orbit/embed/`, `~/.orbit/state/logs/`, scoreboard counters.
+  `~/.orbit/embed/`, `~/.orbit/state/logs/`, retired `state/scoreboard/` counters.
 
 ### Preserve SQLite consistency
 
@@ -336,6 +375,13 @@ orbit task export --all -o tasks-backup.tar.zst
 
 Both `VACUUM INTO` and `.backup` produce a checkpointed, sidecar-free file. If you must
 file-copy a live DB, copy `*.db`, `*.db-wal`, and `*.db-shm` together.
+
+For a store copy named `~/.orbit/orbit.db.bak-<date>`, keep the corresponding sidecars
+as `orbit.db.bak-<date>-wal` and `orbit.db.bak-<date>-shm` beside it. Deployment GC
+counts these files as one backup for `--keep`, ordered by the newest modification
+time in the set, and keeps or removes them together. It still reports each path and
+its bytes separately. Keep recovery copies outside `~/.orbit` to exclude them from
+deployment GC.
 
 Task export builds a temporary archive beside the output, finishes compression,
 and syncs the file before atomically replacing the destination. A failed export

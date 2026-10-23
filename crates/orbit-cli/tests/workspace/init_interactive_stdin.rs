@@ -105,7 +105,6 @@ fn names_identity_flags(output: &str) -> bool {
 /// asks nothing about crews and hits the host-name prompt first; the crew
 /// prompts (`StdinPrompter`) share the same guarded read, so a silent open
 /// pipe covers both.
-#[test]
 fn silent_open_stdin_pipe_exits_instead_of_hanging() {
     let fixture = IsolatedHome::new();
     let mut child = orbit_init(&fixture.home, &fixture.work, &fixture.empty_path)
@@ -132,7 +131,6 @@ fn silent_open_stdin_pipe_exits_instead_of_hanging() {
     );
 }
 
-#[test]
 fn drip_writing_without_newline_expires_one_prompt_budget() {
     let fixture = IsolatedHome::new();
     let mut child = orbit_init(&fixture.home, &fixture.work, &fixture.empty_path)
@@ -160,7 +158,6 @@ fn drip_writing_without_newline_expires_one_prompt_budget() {
     assert!(names_identity_flags(&output), "{output}");
 }
 
-#[test]
 fn invalid_piped_machine_name_is_asked_again_before_the_root_is_seeded() {
     let fixture = IsolatedHome::new();
     let mut child = orbit_init(&fixture.home, &fixture.work, &fixture.empty_path)
@@ -193,7 +190,6 @@ fn invalid_piped_machine_name_is_asked_again_before_the_root_is_seeded() {
     assert!(!config.contains("dk/server"), "{config}");
 }
 
-#[test]
 fn oversized_unterminated_pipe_answer_is_rejected() {
     let fixture = IsolatedHome::new();
     let mut child = orbit_init(&fixture.home, &fixture.work, &fixture.empty_path)
@@ -216,7 +212,6 @@ fn oversized_unterminated_pipe_answer_is_rejected() {
     assert!(output.contains(LINE_TOO_LONG_MESSAGE), "{output}");
 }
 
-#[test]
 fn closed_stdin_keeps_the_existing_message() {
     let fixture = IsolatedHome::new();
     let mut child = orbit_init(&fixture.home, &fixture.work, &fixture.empty_path)
@@ -240,7 +235,6 @@ fn closed_stdin_keeps_the_existing_message() {
     );
 }
 
-#[test]
 fn piped_machine_name_and_task_prefix_still_complete_interactive_init() {
     let fixture = IsolatedHome::new();
     let mut child = orbit_init(&fixture.home, &fixture.work, &fixture.empty_path)
@@ -311,4 +305,46 @@ fn skipped_host_prerequisites_complete_init_without_preparing_the_host() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
     assert!(stderr.contains("host preparation skipped"), "{stderr}");
+}
+
+#[test]
+fn init_stdin_contracts_0() {
+    for (name, check) in [
+        (
+            "silent_open_stdin_pipe_exits_instead_of_hanging",
+            silent_open_stdin_pipe_exits_instead_of_hanging as fn(),
+        ),
+        (
+            "drip_writing_without_newline_expires_one_prompt_budget",
+            drip_writing_without_newline_expires_one_prompt_budget as fn(),
+        ),
+        (
+            "invalid_piped_machine_name_is_asked_again_before_the_root_is_seeded",
+            invalid_piped_machine_name_is_asked_again_before_the_root_is_seeded as fn(),
+        ),
+        (
+            "oversized_unterminated_pipe_answer_is_rejected",
+            oversized_unterminated_pipe_answer_is_rejected as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn init_stdin_contracts_1() {
+    for (name, check) in [
+        (
+            "closed_stdin_keeps_the_existing_message",
+            closed_stdin_keeps_the_existing_message as fn(),
+        ),
+        (
+            "piped_machine_name_and_task_prefix_still_complete_interactive_init",
+            piped_machine_name_and_task_prefix_still_complete_interactive_init as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

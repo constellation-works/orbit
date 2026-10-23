@@ -68,7 +68,6 @@ impl Fixture {
     }
 }
 
-#[test]
 fn sweep_honors_explicit_root_over_uninitialized_home() {
     let fixture = Fixture::initialized();
     let root_arg = fixture.root.to_string_lossy().into_owned();
@@ -91,7 +90,6 @@ fn sweep_honors_explicit_root_over_uninitialized_home() {
     assert_home_empty(&fixture.home);
 }
 
-#[test]
 fn sweep_honors_orbit_root_over_uninitialized_home() {
     let fixture = Fixture::initialized();
 
@@ -106,7 +104,6 @@ fn sweep_honors_orbit_root_over_uninitialized_home() {
     assert_home_empty(&fixture.home);
 }
 
-#[test]
 fn sweep_alias_and_clock_tick_have_identical_json_output() {
     let fixture = Fixture::initialized();
     let root_arg = fixture.root.to_string_lossy().into_owned();
@@ -132,7 +129,6 @@ fn sweep_alias_and_clock_tick_have_identical_json_output() {
     assert_eq!(sweep, tick);
 }
 
-#[test]
 fn routine_clock_is_not_a_compatibility_alias() {
     let fixture = Fixture::initialized();
 
@@ -143,7 +139,6 @@ fn routine_clock_is_not_a_compatibility_alias() {
 }
 
 #[cfg(target_os = "linux")]
-#[test]
 fn doctor_flags_an_installed_clock_without_deadline_or_descendant_cleanup() {
     let fixture = Fixture::initialized();
     let unit_dir = fixture.home.join(".config/systemd/user");
@@ -262,4 +257,40 @@ fn assert_home_empty(home: &Path) {
         "sweep touched isolated HOME at {}",
         home.display()
     );
+}
+
+#[test]
+fn sweep_command_contracts_0() {
+    for (name, check) in [
+        (
+            "sweep_honors_explicit_root_over_uninitialized_home",
+            sweep_honors_explicit_root_over_uninitialized_home as fn(),
+        ),
+        (
+            "sweep_honors_orbit_root_over_uninitialized_home",
+            sweep_honors_orbit_root_over_uninitialized_home as fn(),
+        ),
+        (
+            "sweep_alias_and_clock_tick_have_identical_json_output",
+            sweep_alias_and_clock_tick_have_identical_json_output as fn(),
+        ),
+        (
+            "routine_clock_is_not_a_compatibility_alias",
+            routine_clock_is_not_a_compatibility_alias as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn sweep_command_contracts_1() {
+    tracing::info!(
+        case = "doctor_flags_an_installed_clock_without_deadline_or_descendant_cleanup",
+        "CLI contract row"
+    );
+    doctor_flags_an_installed_clock_without_deadline_or_descendant_cleanup();
 }

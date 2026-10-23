@@ -8,7 +8,7 @@ use orbit_types::tool::{
     McpToolAnnotations, McpToolDefinition, McpToolDefinitionError, McpToolScope, ToolParam,
     ToolSchema, validate_mcp_tool_definitions,
 };
-use orbit_types::workspace::{Workspace, WorkspaceRegistry, WorkspaceStatus};
+use orbit_types::workspace::{Workspace, WorkspaceRegistry, WorkspaceStatus, redact_git_remote};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -42,6 +42,13 @@ pub struct HostFacts {
     /// The destination's distributed-drain pull-protocol fingerprint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocol_fingerprint: Option<String>,
+    /// The destination's host operating system. Additive like the fields
+    /// above: a destination built before it omits it and readers treat the
+    /// OS as unknown, never guessed. An owner records it at registration
+    /// so creation-time crew draws know which OS a host that serves its
+    /// workspace runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_os: Option<orbit_types::task::HostOs>,
 }
 
 impl HostFacts {
@@ -55,15 +62,29 @@ impl HostFacts {
             task_prefix: text("task_prefix"),
             binary_version: text("binary_version"),
             protocol_fingerprint: text("protocol_fingerprint"),
+            host_os: text("host_os").and_then(|value| orbit_types::task::HostOs::parse(&value)),
         })
     }
 
     fn envelope(&self, workspaces: Vec<&Workspace>) -> Value {
         let mut envelope = serde_json::to_value(self).unwrap_or_else(|_| json!({}));
         envelope["machine_id"] = json!(self.machine_id);
-        envelope["workspaces"] = json!(workspaces);
+        envelope["workspaces"] = json!(
+            workspaces
+                .into_iter()
+                .cloned()
+                .map(workspace_for_discovery)
+                .collect::<Vec<_>>()
+        );
         envelope
     }
+}
+
+/// Preserve the workspace wire shape while keeping stored remote credentials
+/// out of discovery, including records supplied by older destinations.
+pub(crate) fn workspace_for_discovery(mut workspace: Workspace) -> Workspace {
+    workspace.git_remote = workspace.git_remote.as_deref().map(redact_git_remote);
+    workspace
 }
 
 /// `include` value that attaches each workspace's effective crews to its row.

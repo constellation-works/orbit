@@ -102,6 +102,27 @@ impl Commands {
                     dispatch_host,
                 )
             }
+            Commands::BrowserKit(command) => {
+                use super::super::browser_kit::BrowserKitSubcommand;
+                let subcommand = match &command.command {
+                    BrowserKitSubcommand::Status(_) => "status",
+                    BrowserKitSubcommand::Install(_) => "install",
+                    BrowserKitSubcommand::Verify(_) => "verify",
+                    BrowserKitSubcommand::Remove(_) => "remove",
+                };
+                CommandOperation::new(
+                    // The kit belongs to the host user; no workspace is opened.
+                    RuntimeNeed::Forbidden,
+                    Some(admin_meta(
+                        "browser-kit",
+                        Some(subcommand),
+                        Some("installation"),
+                        None,
+                    )),
+                    None,
+                    dispatch_browser_kit,
+                )
+            }
             Commands::Migrate(command) => CommandOperation::new(
                 if command.confirm {
                     RuntimeNeed::Required
@@ -142,12 +163,6 @@ impl Commands {
                         Some("ship"),
                         RuntimeNeed::Required,
                     ),
-                    RunSubcommand::ShipLocal(_) => (
-                        "ship-local",
-                        Some("workflow"),
-                        Some("ship-local"),
-                        RuntimeNeed::Required,
-                    ),
                     RunSubcommand::ShipSweep(_) => (
                         "ship-sweep",
                         Some("workflow"),
@@ -164,6 +179,12 @@ impl Commands {
                         "readiness",
                         Some("workspace"),
                         Some("auto_readiness"),
+                        RuntimeNeed::ReadOnly,
+                    ),
+                    RunSubcommand::Profiles(_) => (
+                        "profiles",
+                        Some("host"),
+                        Some("resource_profiles"),
                         RuntimeNeed::ReadOnly,
                     ),
                     RunSubcommand::History(args) => (
@@ -241,8 +262,13 @@ impl Commands {
                     // Tmp GC must observe pending/running/retrying rows without bootstrap
                     // reconciliation turning stale owners into terminal runs.
                     GcTarget::Tmp(args) => ("tmp", args.confirm, RuntimeNeed::ReadOnly),
+                    // Host-level leftovers outside any run; nothing to reconcile.
+                    GcTarget::Deployments(args) => {
+                        ("deployments", args.confirm, RuntimeNeed::ReadOnly)
+                    }
                     GcTarget::Audit(args) => ("audit", args.apply, RuntimeNeed::Required),
                     GcTarget::Runs(args) => ("runs", args.apply, RuntimeNeed::Required),
+                    GcTarget::Journal(args) => ("journal", args.apply, RuntimeNeed::Required),
                 };
                 CommandOperation::new(
                     runtime_need,
@@ -312,38 +338,19 @@ impl Commands {
                 )
             }
             Commands::Task(command) => {
-                use super::super::locks::LocksSubcommand;
+                use super::super::task::TaskInvocation;
                 use super::super::task::TaskPublicationSubcommand;
                 use super::super::task::TaskSubcommand;
-                use super::super::task::artifact::TaskArtifactSubcommand;
                 let (subcommand, target_type, target_id) = match &command.command {
-                    TaskSubcommand::Add(_) => ("add", Some("task"), None),
-                    TaskSubcommand::Artifact(command) => match &command.command {
-                        TaskArtifactSubcommand::Put(args) => {
-                            ("artifact-put", Some("task"), Some(args.id.as_str()))
-                        }
-                        TaskArtifactSubcommand::Get(args) => {
-                            ("artifact-get", Some("task"), Some(args.id.as_str()))
-                        }
-                    },
-                    TaskSubcommand::Locks(command) => match &command.command {
-                        LocksSubcommand::List(_) => ("locks-list", None, None),
-                        LocksSubcommand::Contention(_) => ("locks-contention", None, None),
-                        LocksSubcommand::Reserve(_) => ("locks-reserve", None, None),
-                        LocksSubcommand::Release(args) => (
-                            "locks-release",
-                            Some("reservation"),
-                            Some(args.reservation_id.as_str()),
-                        ),
-                    },
-                    TaskSubcommand::List(_) => ("list", None, None),
-                    TaskSubcommand::Eligible(_) => ("eligible", None, None),
-                    TaskSubcommand::Flow(_) => ("flow", None, None),
-                    TaskSubcommand::Show(args) => ("show", Some("task"), Some(args.id.as_str())),
-                    TaskSubcommand::Lint(args) => ("lint", Some("task"), args.id.as_deref()),
-                    TaskSubcommand::Update(args) => {
-                        ("update", Some("task"), Some(args.id.as_str()))
+                    // The registry-derived task verbs take their runtime need,
+                    // audit metadata and id routing from the spec.
+                    TaskSubcommand::Operation(TaskInvocation::Registry(invocation)) => {
+                        return task_operation(invocation, boxed_runtime_dispatch!(Task));
                     }
+                    TaskSubcommand::Operation(TaskInvocation::Contention(_)) => {
+                        ("locks-contention", None, None)
+                    }
+                    TaskSubcommand::Flow(_) => ("flow", None, None),
                     TaskSubcommand::Archive(args) => {
                         ("archive", Some("task"), Some(args.id.as_str()))
                     }
@@ -367,40 +374,16 @@ impl Commands {
                             ("publication-restore", Some("workspace"), None)
                         }
                     },
-                    TaskSubcommand::ReviewReset(args) => {
-                        ("review-reset", Some("task"), Some(args.id.as_str()))
-                    }
-                    TaskSubcommand::ReconcileReview(command) => (
-                        "reconcile-review",
-                        Some("task"),
-                        Some(command.command.task_id()),
-                    ),
                     TaskSubcommand::RecheckBlocked(_) => ("recheck-blocked", None, None),
+                    TaskSubcommand::SettleMerged(args) => (
+                        "settle-merged",
+                        args.id.as_ref().map(|_| "task"),
+                        args.id.as_deref(),
+                    ),
                     TaskSubcommand::Reindex(_) => ("reindex", None, None),
                 };
-                let task_owner_id = match &command.command {
-                    TaskSubcommand::Show(args) => Some(args.id.clone()),
-                    _ => None,
-                };
                 let runtime_need = match &command.command {
-                    TaskSubcommand::Show(_) => RuntimeNeed::ReadOnly,
-                    // `orbit.task.artifact.get` shares `orbit.task.show`'s
-                    // resolved-globally-by-default schema wording, so `orbit
-                    // task artifact get` must resolve the same way rather than
-                    // reporting a routing refusal as `task_not_found`
-                    // [ORB-12263].
-                    TaskSubcommand::Artifact(command) => match &command.command {
-                        TaskArtifactSubcommand::Get(args) => RuntimeNeed::TaskOwner {
-                            task_id: args.id.clone(),
-                        },
-                        TaskArtifactSubcommand::Put(_) => RuntimeNeed::Required,
-                    },
-                    // `eligible` promises to reconcile nothing, so it opens
-                    // without the stale-run reconciliation a required runtime runs.
-                    TaskSubcommand::List(_)
-                    | TaskSubcommand::Eligible(_)
-                    | TaskSubcommand::Flow(_) => RuntimeNeed::ReadOnly,
-                    TaskSubcommand::Lint(args) if !args.restore_pruned => RuntimeNeed::ReadOnly,
+                    TaskSubcommand::Flow(_) => RuntimeNeed::ReadOnly,
                     TaskSubcommand::RecheckBlocked(args) if !args.confirm => RuntimeNeed::ReadOnly,
                     // Every other task verb keeps cwd (or `--workspace`) as its
                     // binding: only a read addressed by a globally unique ID can
@@ -413,7 +396,6 @@ impl Commands {
                     None,
                     boxed_runtime_dispatch!(Task),
                 )
-                .with_task_owner_id(task_owner_id)
                 .governed_when(
                     matches!(
                         &command.command,
@@ -428,43 +410,21 @@ impl Commands {
                     subcommand,
                 )
             }
-            Commands::Search(command) => CommandOperation::new(
+            Commands::Search(command) => {
+                let mut operation = registry_operation(&command.query, runtime_dispatch!(Search));
                 if command.command.is_some() {
-                    RuntimeNeed::Required
-                } else {
-                    RuntimeNeed::ReadOnly
-                },
-                Some(admin_meta(
-                    "search",
-                    Some(&command.audit_subcommand()),
-                    Some("search"),
-                    None,
-                )),
-                None,
-                runtime_dispatch!(Search),
-            ),
+                    operation.runtime_need = RuntimeNeed::Required;
+                }
+                if let Some(meta) = &mut operation.audit_meta {
+                    meta.subcommand = Some(command.audit_subcommand());
+                }
+                operation
+            }
             // ADR-0209 bearing 1 [ORB-10358]: friction is registry-driven, so
-            // this arm reads the invocation instead of matching verb by verb.
-            // A new friction verb needs no edit here.
+            // runtime need and audit metadata derive from its spec. A new
+            // friction verb needs no edit here.
             Commands::Friction(command) => {
-                use orbit_common::governance::friction::FrictionVerb;
-                let invocation = &command.command;
-                let runtime_need = if invocation.spec.verb == FrictionVerb::List {
-                    RuntimeNeed::ReadOnly
-                } else {
-                    RuntimeNeed::Required
-                };
-                CommandOperation::new(
-                    runtime_need,
-                    Some(admin_meta(
-                        "friction",
-                        Some(invocation.spec.name),
-                        Some("friction"),
-                        invocation.target_id(),
-                    )),
-                    None,
-                    runtime_dispatch!(Friction),
-                )
+                registry_operation(&command.command, runtime_dispatch!(Friction))
             }
             Commands::Audit(command) => {
                 use super::super::audit::AuditSubcommand;
@@ -475,6 +435,18 @@ impl Commands {
                     matches!(&command.command, AuditSubcommand::Prune(args) if args.confirm);
                 CommandOperation::new(RuntimeNeed::Required, None, None, runtime_dispatch!(Audit))
                     .governed_when(prunes, "audit", "prune")
+            }
+            // Codebase analytics is registry-driven like friction.
+            Commands::Codebase(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Codebase))
+            }
+            // The agent scorecards are registry-driven like codebase.
+            Commands::Agents(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Agents))
+            }
+            // The deprecated orchestrator aliases are registry-driven too.
+            Commands::Orchestrator(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Orchestrator))
             }
             Commands::Log(_) => CommandOperation::new(
                 RuntimeNeed::Required,
@@ -512,38 +484,7 @@ impl Commands {
                 )
             }
             Commands::AutoTask(command) => {
-                use super::super::auto_task::AutoTaskSubcommand;
-                let runtime_need = if matches!(
-                    &command.command,
-                    AutoTaskSubcommand::List(_) | AutoTaskSubcommand::Show(_)
-                ) {
-                    RuntimeNeed::ReadOnly
-                } else {
-                    RuntimeNeed::Required
-                };
-                let (subcommand, target_id) = match &command.command {
-                    AutoTaskSubcommand::Add(args) => ("add", Some(args.name.as_str())),
-                    AutoTaskSubcommand::List(_) => ("list", None),
-                    AutoTaskSubcommand::Show(args) => ("show", Some(args.name.as_str())),
-                    AutoTaskSubcommand::Update(args) => ("update", Some(args.name.as_str())),
-                    AutoTaskSubcommand::Toggle(args) => ("toggle", Some(args.name.as_str())),
-                    AutoTaskSubcommand::Mint(args) => ("mint", Some(args.name.as_str())),
-                    AutoTaskSubcommand::Recover(args) => ("recover", Some(args.name.as_str())),
-                    AutoTaskSubcommand::Reset(args) => ("reset", Some(args.name.as_str())),
-                    AutoTaskSubcommand::Delete(args) => ("delete", Some(args.name.as_str())),
-                    AutoTaskSubcommand::Restore(args) => ("restore", Some(args.name.as_str())),
-                };
-                CommandOperation::new(
-                    runtime_need,
-                    Some(admin_meta(
-                        "auto-task",
-                        Some(subcommand),
-                        Some("auto_task"),
-                        target_id,
-                    )),
-                    None,
-                    runtime_dispatch!(AutoTask),
-                )
+                registry_operation(&command.command, runtime_dispatch!(AutoTask))
             }
             Commands::Job(command) => {
                 use super::super::job::JobSubcommand;
@@ -729,17 +670,6 @@ impl Commands {
                     runtime_dispatch!(Skill),
                 )
             }
-            Commands::Logs(command) => CommandOperation::new(
-                RuntimeNeed::Required,
-                Some(admin_meta(
-                    "logs",
-                    None,
-                    Some("job_run"),
-                    Some(&command.run_id),
-                )),
-                None,
-                runtime_dispatch!(Logs),
-            ),
             Commands::Artifacts(command) => CommandOperation::new(
                 RuntimeNeed::Required,
                 Some(admin_meta(

@@ -34,6 +34,13 @@ The package downloads the matching native binary and puts `orbit` on your
 your agent CLIs, links Orbit's skills into your agents, and on Linux prepares
 the sandbox.
 
+Releases also attach a desktop app, a native window for the dashboard, to the
+[GitHub release](https://github.com/constellation-works/orbit/releases): `.deb`
+and `.AppImage` bundles for Linux on x64 and arm64. The app starts
+`orbit web serve` from your installed `orbit`, so it needs the CLI install
+above. macOS bundles are attached only when the release was built with Apple
+signing credentials, so a release may have none.
+
 ## Install as an agent plugin
 
 To give a single agent Orbit's MCP tools and skills without installing the CLI
@@ -93,6 +100,11 @@ For an unattended setup, pass both:
 orbit init --non-interactive --machine-name build-01 --task-prefix ABC
 ```
 
+On Linux, an unattended `orbit init` never waits for a password, so it prepares
+the sandbox only as root or with passwordless `sudo`. Otherwise it warns and
+still seeds Orbit, and agent runs stay blocked until `orbit doctor providers`
+reports the sandbox ready.
+
 `orbit workspace init` registers the repository and keeps its state under
 `.orbit/`. `--mcp` connects your agent clients with **operator** authority,
 which lets them ship tasks and run governed operations. Plain `orbit mcp init`
@@ -127,12 +139,14 @@ the fix for each failure.
 
 ### Configure and check
 
-`orbit init` writes a working `~/.orbit/config.toml` with a crew for each agent
-CLI it found, and picks a default crew. To pick a different one, set
-`workflow.default_crew`. Then check the workspace:
+`orbit init` writes `~/.orbit/config.toml` with the built-in crews, enabling
+those whose agent CLI it detects. It picks a default from those available;
+with none detected, enable a crew before dispatching. To pick a different
+default, choose an enabled crew and set `workflow.default_crew`. Seed the
+workspace config on its first edit, then check the workspace:
 
 ```bash
-orbit config set workflow.default_crew opus
+orbit config set --seed-from-global workflow.default_crew opus
 orbit doctor
 ```
 
@@ -153,4 +167,6 @@ npm install -g @orbit-tools/cli@latest
 `orbit update --check` tells you whether a newer release is out. npm owns this
 install, so `orbit update` prints the npm command instead of replacing the
 binary. Pending state migrations apply the next time Orbit opens the
-workspace.
+workspace. Upgrade every host together for distributed work, and restart
+long-lived MCP servers too: older clients cannot write after the current
+handoff-storage migration.

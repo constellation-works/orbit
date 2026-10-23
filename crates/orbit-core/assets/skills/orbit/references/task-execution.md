@@ -1,7 +1,10 @@
 # Executing a task
 
 Carry a task from intent to verified implementation with explicit lifecycle
-tracking. Every `orbit.task.*` call needs `model` — your agent family.
+tracking. Every `orbit.task.*` call needs `model` — your agent family. The
+operator close of a rescued blocked task omits `model`, so the write is not
+attributed to an agent; see
+[Close a rescued blocked task](../../orbit-orchestrate/references/recovery.md#close-a-rescued-blocked-task).
 
 No task ID yet? Use the authorized intent, clarify only missing requirements,
 then use
@@ -71,19 +74,19 @@ and repository policy authorize it; a technical lifecycle transition is not a
 substitute for human approval.
 
 For authorized direct pickup (not an already-started managed activity), use `orbit.task.update` with
-`status: "in-progress"` and a `note`. It moves `proposed`, `backlog`, `someday`,
-or `blocked` → `in-progress`; the transition records existing authorization, not
-a new grant. Supply a real plan when starting from `proposed`, `someday` or
-`blocked`:
+`status: "in-progress"` and a `note`. Legal sources are `proposed`, `backlog`,
+`someday`, `blocked`, `rejected`, and `review`. The transition records existing
+authorization, not a new grant. Supply a real plan from every source except
+`backlog`:
 
 ```bash
 orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"in-progress","plan":"<implementation and validation steps>","note":"<authorized pickup>","model":"<agent-family>"}'
 ```
 
-`rejected` is not a pickup state. Reconsider it only when a reviewer or other
-authorized decision explicitly requests a revision; first use
-`orbit.task.update` to move the task to `backlog`, recording that authorization,
-then take it from the backlog in a separate update:
+Reconsider `rejected` only when a reviewer or other authorized decision
+explicitly requests a revision. The table allows `backlog` or `in-progress`.
+`in-progress` needs a plan on that write. Returning to `backlog` does not, and
+a later pickup from `backlog` is a separate update:
 
 ```bash
 orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"backlog","comment":"Authorized revision: <reviewer decision>","model":"<agent-family>"}'
@@ -94,10 +97,21 @@ orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"backlog","
 Follow the plan, inspecting files with the provider-native file-read tool.
 Verify transitive impact with `rg` or by reading callers directly. Run the
 repo-approved verification commands, honoring repo instructions if tests are
-forbidden.
+forbidden. When the envelope lists `task.final_validation_commands`, the
+delivery pipeline runs those on the final candidate after base
+synchronization; for a diff, leave them to it and run focused checks plus every
+required check the list omits. A clean no-op or already-landed handoff skips
+that validation, so it still runs every required check. For a task tagged `no-diff-expected`, in owner or claimed mode,
+run no workspace gates or required validation commands and attach no
+`no-diff.json`, `already-landed.json`, or workspace validation logs. Run only
+commands the task's own brief requires: a QA sweep may build and run the
+product, and a review may reproduce a finding when its brief asks for it.
+Keep the brief's evidence artifacts, persist the execution summary, and leave
+the worktree clean; the pipeline hands off on the tag.
 
-When a clean task checkout is already covered by this task's or a sibling
-task's landed commit, verify the current acceptance criteria and attach
+For tasks without `no-diff-expected`, when a clean task checkout is already
+covered by this task's or a sibling task's landed commit, verify the current
+acceptance criteria and attach
 `already-landed.json` plus captured validation logs with `orbit.task.artifact.put`
 in the current run, including the first attempt. The artifact names the current
 task and the covering task separately. `git_commit` checks the pinned HEAD,
@@ -106,6 +120,11 @@ required validation logs. A success summary alone does not satisfy that gate.
 `already-landed.json` has `schema_version` 1, `task_id`, `run_id`,
 `tested_head`, `covering_commit`, `covering_task_id`, `scope`,
 `required_commands`, `validation` and `criteria_evidence`; unknown fields are
+refused. `scope` must equal the task's current scope exactly: `title`,
+`description`, `acceptance_criteria`, `plan`, `context_files`, `tags`,
+`relations`, `required_tools`, `type` and `comments`, where each comment is
+reduced to `at`, `by` and `message`. Drop the receipt ids (`operation_id`)
+that `orbit.task.show` adds to comments; a comment with any extra field is
 refused. `criteria_evidence` is an array of non-empty strings, one per
 acceptance criterion in order, never objects. Each `validation[]` entry
 flattens `command`, `outcome`, `role` and `log_artifact` as siblings; every
@@ -113,6 +132,14 @@ required command's entry carries `outcome: "passed"` and `role: "required"`.
 The role vocabulary is `required`, `expected_failure`, `excluded`,
 `superseded` and `diagnostic`; other values such as `acceptance` or `gate` are
 refused.
+The already-landed verifier requires exactly one passed `required` entry per
+`required_commands` command and refuses extra required commands. It also accepts
+additional `expected_failure` and `diagnostic` entries, without counting them
+as required coverage. Every accepted entry must reference a JSON log carrying
+the report's exact `run_id`, `tested_head`, and `command`, an integer `exit_code`,
+and string `output`. Required checks must exit zero; expected failures must exit
+nonzero. Diagnostic outcomes and exit status do not determine acceptance.
+`excluded` and `superseded` entries are not accepted in already-landed evidence.
 If a required check or covering evidence is unavailable, record the blocker;
 do not claim a verified already-landed result.
 
@@ -121,9 +148,60 @@ blocker when the task owns that outcome. A real authority refusal, unavailable
 prerequisite or unresolved product decision is: record the specific evidence and
 what is needed to proceed. A clean baseline check is not feature validation.
 
+### Checking a UI in a browser
+
+When the host has a verified headless browser kit, your environment carries
+`PLAYWRIGHT_BROWSERS_PATH`, `PLAYWRIGHT_MODULE` and `ORBIT_BROWSER_KIT_ENV`.
+Check a changed page by serving it on loopback and scripting headless
+Chromium. In the same shell, source the kit first, then import `chromium`
+from the module:
+
+```bash
+. "$ORBIT_BROWSER_KIT_ENV" && node --input-type=module -e '
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE);
+// launch, goto http://127.0.0.1:<port>/, assert, screenshot to .orbit/tmp/
+'
+```
+
+Save screenshots under `.orbit/tmp/` and open them to look at the result.
+Don't install Playwright, download a browser or run `sudo` yourself. When the
+variables are absent, the host has no verified kit: record the browser check
+as unavailable, naming `orbit browser-kit install` as the host fix. A missing
+`lib*.so`, a Skia/FontConfig crash or `Executable doesn't exist` is a host kit
+defect, not a defect in the code under test.
+
+### Screenshots of a UI change
+
+A diff that changes something a user sees (dashboard, web pages, docs site,
+desktop app UI) owes screenshots of each changed view as task artifacts. The
+diff decides this, not the tag: an untagged UI change still owes them.
+`.orbit/tmp/` is cleared with the worktree, so a screenshot left only there is
+lost evidence.
+
+- Capture every theme the view supports (light and dark where both exist),
+  plus a 375px phone width when the layout is responsive.
+- Add a before shot from the base revision when it is practical and it shows
+  the change.
+- Write each under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`) and give it a stable
+  stored path such as `screenshots/<view>-<theme>-<width>.png`. Owner mode
+  attaches screenshots with `orbit.task.artifact.put`. A claimed implementer
+  returns each screenshot in `task_artifacts`, setting `path` to its stable
+  stored path and `source_path` to its file under `.orbit/tmp/`, for
+  deterministic attachment. Use this task-artifact channel for diff and
+  no-diff candidates, including `no-diff-expected` tasks; keep
+  `no_diff_artifacts` for a clean-tree report and its declared validation logs
+  only.
+- Keep each under the 1 MiB per-artifact limit: prefer a viewport capture to a
+  full-page one, or JPEG or WebP when a PNG is too large.
+- List the artifact paths in the execution summary.
+
+When the host has no browser kit or the view cannot render, say so in the
+handoff instead of claiming visual verification.
+
 ### Verified no-change implementation
 
-When the implementation correctly needs no file changes, and all required
+This section applies only to tasks without `no-diff-expected`. When the
+implementation correctly needs no file changes, and all required
 validation passes, attach `no-diff.json` and one captured validation log per
 check with `orbit.task.artifact.put`. This is only for a genuine validated
 no-op; never use it to bypass failed validation or pending worktree changes.
@@ -152,6 +230,39 @@ Each referenced validation log is JSON with `run_id`, `tested_head`,
 non-empty and unique. The commit verifier also requires a clean worktree and
 the current HEAD to equal `tested_head`; otherwise reconcile the changes and
 rerun validation before attaching the evidence.
+
+### Criteria owed after deploy
+
+A criterion the task's latest task-pilot assessment lists in `post_deploy` can
+be evidenced only by the deployed build on the host it names, so no candidate
+meets it before merge. Do not fail the run or return a blocker for it. Gather
+what the candidate can show and return the criterion in the implementer output:
+
+```json
+{"owed_criteria": [{"criterion": 1, "host": "<host>", "command": "<measurement command>",
+  "target": "p95 <= 150 ms", "candidate_evidence": "<what the candidate showed>"}]}
+```
+
+The implement step admits each entry against the pilot's finding, with the
+host it names, and fails the step for an owed criterion the pilot did not type.
+Every other unmet criterion fails as before. An owner run records the admitted
+entries as a `post_deploy_owed` history event; a claimed leaf carries them in
+its typed handoff, which the owner checks again before it accepts it. The
+delivery proceeds through PR, review and landing, then settles in `review`
+instead of `done`. Reusing that candidate in a fresh delivery run preserves
+its unresolved owed criteria even when implementation is skipped.
+`orbit task show` and the dashboard task detail list each
+owed criterion with its host, command, target and state; external-merge
+settlement leaves the task in `review` too.
+
+Measuring afterwards is the operator's job; nothing re-measures on its own. A
+human task comment whose first line is `post-deploy: met <N>` or
+`post-deploy: failed <N>`, with the measurement's evidence on the lines after
+it, records `post_deploy_recorded`. An agent comment of that shape records
+nothing. Once every owed criterion is recorded met, the operator approves the
+task to `done` (`orbit task update <id> --approve`); a failed one is repaired
+through an ordinary new task. In the execution summary mark each owed criterion `not_run`
+(owed after deploy), never passed.
 
 **Keep `context_files` current.** You may declare newly identified modification targets
 through the task tools before editing, within the approved scope and activity
@@ -249,11 +360,17 @@ it — see [friction.md](friction.md). Then:
   through the run's coordinator. Return the summary as the output's
   `execution_summary` (with `context_files_added` and `comment` for anything
   you would have written to the task); the pipeline's handoff carries it to
-  the owner. An owner-routed tool that answers unreachable is not a task
+  the owner. When the task asks you to record a `regression_from` relation,
+  return the culprit task IDs as `regression_from` and name the culprit commit
+  in the summary; the owner checks and records the relation at handoff. That
+  output carries IDs only, so state the nature and escape you would have set
+  in the summary. An owner-routed tool that answers unreachable is not a task
   failure. A task you file must be `spawned_from` the claimed task; a claimed
   `delivery-code-review` or `code-review` task may also give each finding a
-  `regression_from` relation to its culprit. `orbit.search` does not reach the
-  owner, so skip the duplicate search and say so; the owner's triage dedupes.
+  `regression_from` relation to its culprit, classified with its `regression`
+  nature and escape ([task-fields.md](task-fields.md#behavior-affecting-optional-fields)). `orbit.search` and `orbit.task.list` reach the
+  owner's authoritative records in the claimed workspace through the coordinator;
+  use them for duplicate checks. Federated search scopes are refused.
   Return a finding the owner still refuses in `unfiled_findings` as
   `{title, description}` objects (plain strings fail the implement step before
   anything is committed or pushed); the handoff attaches it to the claimed task
@@ -281,13 +398,13 @@ Justification), `Recommended follow-ups:`.
 One task per activity invocation — no multiplexing. Ask clarifying questions
 before implementing if material ambiguity remains. If approval for `proposed`
 work can't be obtained, stop after recording that state. Use `orbit.task.update`
-with `status: "in-progress"` only for `proposed`, `backlog`, `someday`, or
-`blocked` pickup; an authorized `rejected` revision must return to `backlog`
-first. Direct
+with `status: "in-progress"` for `proposed`, `backlog`, `someday`, `blocked`,
+`rejected`, or `review`. A plan is required except from `backlog`. An
+authorized `rejected` revision may instead return to `backlog` first. Direct
 execution must persist a non-empty `execution_summary` before or with the
 review transition.
 
-Exit: eligible work started via `orbit.task.update`, or an authorized rejected
-revision returned to `backlog` before pickup; execution summary
+Exit: eligible work started via `orbit.task.update`, including an authorized
+`rejected` revision moved to `backlog` or `in-progress`; execution summary
 persisted; friction checkpoint considered; direct execution advanced to
 `review`.

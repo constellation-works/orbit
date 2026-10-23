@@ -146,12 +146,19 @@ impl OrbitRuntime {
             .input
             .clone()
             .unwrap_or_else(|| Value::Object(Default::default()));
+        // Telemetry only. Linux samples the worker scope and skips a worker
+        // with none; macOS samples the process tree and skips a sample it
+        // cannot read. Either way the sampler never touches the run's
+        // outcome. Stopped before the run is finalized, so its last minute
+        // is recorded first.
+        let sampler = self.start_resource_sampler(run, !announce_start);
         // Once Start succeeds, every later error belongs to this run. Keep the
         // whole setup path inside the outcome finalized below so crew
         // validation, event persistence, and resume-state reads cannot escape
         // with a durable `running` projection.
         let outcome = (|| {
-            self.record_run_crew_for_job(&run.run_id, &input, yaml_path)?;
+            let bundle = crate::application::automation::members::bundle_crews(self, run, &input);
+            self.record_run_crew_for_job(&run.run_id, &input, yaml_path, bundle)?;
 
             if announce_start {
                 self.record_event(OrbitEvent::JobRunStarted {
@@ -181,6 +188,7 @@ impl OrbitRuntime {
                 resume.as_ref(),
             )
         })();
+        drop(sampler);
         let finished_at = Utc::now();
         self.record_worker_resource_limit(run, started_at, finished_at, outcome.as_ref());
         self.finalize_v2_pipeline_run(

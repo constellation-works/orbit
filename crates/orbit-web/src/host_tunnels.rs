@@ -73,13 +73,33 @@ pub(crate) struct TunnelConfig {
     pub(crate) identity_timeout: Duration,
 }
 
+/// Debug-build fixture only. Milliseconds to wait for an already-running remote
+/// dashboard. Release builds keep the five-second budget whatever this says.
+/// Unset, zero, unparsable, or larger values keep that budget too.
+const TEST_ATTACH_TIMEOUT_ENV: &str = "ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS";
+
+fn attach_timeout_from_env(value: Option<&str>, debug_build: bool) -> Duration {
+    const PRODUCTION: Duration = Duration::from_secs(5);
+    if !debug_build {
+        return PRODUCTION;
+    }
+    value
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|milliseconds| (1..=5_000).contains(milliseconds))
+        .map(Duration::from_millis)
+        .unwrap_or(PRODUCTION)
+}
+
 impl Default for TunnelConfig {
     fn default() -> Self {
         Self {
             ssh_program: "ssh".to_string(),
             remote_port: DEFAULT_DASHBOARD_PORT,
             idle_timeout: Duration::from_secs(5 * 60),
-            attach_timeout: Duration::from_secs(5),
+            attach_timeout: attach_timeout_from_env(
+                std::env::var(TEST_ATTACH_TIMEOUT_ENV).ok().as_deref(),
+                cfg!(debug_assertions),
+            ),
             ready_timeout: Duration::from_secs(30),
             bind_timeout: Duration::from_secs(CONNECT_TIMEOUT_SECS + 10),
             identity_timeout: Duration::from_secs(10),
@@ -327,28 +347,66 @@ impl HostTunnels {
     }
 
     fn establish(&self, target: &HostTarget, operator: bool) -> Result<LiveTunnel, ForwardError> {
-        let local_port = ssh_tunnel::ephemeral_port()
-            .map_err(|error| ForwardError::from_establish(target, &error))?;
-        let spec = TunnelSpec {
-            ssh_host: target.ssh.clone(),
-            local_port,
-            remote_port: self.config.remote_port,
-            remote_command: remote_serve_command(operator, self.config.remote_port),
-            remote_description: "orbit web serve".to_string(),
-            readiness_target: format!("the dashboard on host '{}'", target.name),
-            attach_timeout: self.config.attach_timeout,
-            ready_timeout: self.config.ready_timeout,
-            ssh_program: self.config.ssh_program.clone(),
-            unattended: Some(Unattended {
-                ssh_options: unattended_ssh_options(),
-                bind_timeout: self.config.bind_timeout,
-                cancel: Arc::clone(&self.closing),
-            }),
-        };
-        // Every error return below drops `tunnel`, which stops the child.
-        let (mut tunnel, origin) =
-            ssh_tunnel::establish(&spec, |limit| crate::connect::healthz_ok(local_port, limit))
+        // F363: selection cannot reserve an SSH listener. Only a proven
+        // initial bind collision gets another allocation, never a connection
+        // failure or a replay of a remote command. All allocations share the
+        // original connect/authentication deadline and single-flight lock.
+        let bind_deadline = Instant::now() + self.config.bind_timeout;
+        let mut allocations = 0;
+        let (spec, mut tunnel, origin) = loop {
+            if self.closing.load(Ordering::Relaxed) {
+                return Err(ForwardError::shutting_down());
+            }
+            if Instant::now() >= bind_deadline {
+                return Err(ForwardError::from_establish(
+                    target,
+                    &OrbitError::ProcessTimeout {
+                        timeout_ms: u64::try_from(self.config.bind_timeout.as_millis())
+                            .unwrap_or(u64::MAX),
+                        detail: format!("allocating the local forward to {}", target.ssh),
+                    },
+                ));
+            }
+            let local_port = ssh_tunnel::ephemeral_port()
                 .map_err(|error| ForwardError::from_establish(target, &error))?;
+            allocations += 1;
+            let spec = TunnelSpec {
+                ssh_host: target.ssh.clone(),
+                local_port,
+                remote_port: self.config.remote_port,
+                remote_command: remote_serve_command(operator, self.config.remote_port),
+                remote_description: "orbit web serve".to_string(),
+                readiness_target: format!("the dashboard on host '{}'", target.name),
+                attach_timeout: self.config.attach_timeout,
+                ready_timeout: self.config.ready_timeout,
+                ssh_program: self.config.ssh_program.clone(),
+                unattended: Some(Unattended {
+                    ssh_options: unattended_ssh_options(),
+                    bind_timeout: bind_deadline.saturating_duration_since(Instant::now()),
+                    cancel: Arc::clone(&self.closing),
+                }),
+            };
+            match ssh_tunnel::establish(&spec, |limit| {
+                crate::connect::healthz_ok(local_port, limit)
+            }) {
+                Ok((tunnel, origin)) => break (spec, tunnel, origin),
+                Err(failure)
+                    if failure.local_port_conflict
+                        && allocations < 3
+                        && Instant::now() < bind_deadline =>
+                {
+                    // establish has already dropped and reaped the failed child.
+                    tracing::debug!(
+                        local_port,
+                        allocations,
+                        "reallocating a collided host-forward port"
+                    );
+                }
+                Err(failure) => return Err(ForwardError::from_establish(target, &failure.error)),
+            }
+        };
+        let local_port = spec.local_port;
+        // Every error return below drops `tunnel`, which stops the child.
         let identity = read_identity(
             target,
             local_port,

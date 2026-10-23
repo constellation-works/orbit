@@ -290,8 +290,7 @@ pub use compatibility::compiled_compatibility;
 /// Legacy cursor file persistence, retained for rollback compatibility.
 pub mod auto_task {
     pub use crate::driver::file::auto_task::{
-        CursorSession, cursor_lock_path, cursor_state_path, load_cursor_state, upsert_cursor,
-        with_cursor_lock,
+        CursorSession, cursor_state_path, load_cursor_state, upsert_cursor, with_cursor_lock,
     };
 }
 
@@ -299,7 +298,6 @@ pub mod auto_task {
 pub fn automation_store(
     store: Store,
 ) -> Result<Arc<dyn crate::contracts::AutomationStoreBackend>, orbit_common::OrbitError> {
-    crate::driver::sqlite::automation::initialize(&store)?;
     Ok(Arc::new(store))
 }
 
@@ -307,6 +305,5 @@ pub fn automation_store(
 pub fn review_store(
     store: Store,
 ) -> Result<Arc<dyn crate::contracts::ReviewStoreBackend>, orbit_common::OrbitError> {
-    crate::driver::sqlite::review::initialize(&store)?;
     Ok(Arc::new(store))
 }

@@ -38,6 +38,23 @@ pub const AUTO_WORKFLOW_ALIAS: &str = "auto";
 /// own window check and every submission surface read this one value.
 pub(crate) const MAX_DRAIN_WINDOW_SECONDS: u64 = 86_400;
 
+/// Validate the submission limit before a drain run or owner probe exists.
+/// Omitted and zero windows remain the CLI's single-pass shorthand; bounded
+/// surfaces enforce their own positive minimum while parsing.
+pub(crate) fn validate_drain_window(for_seconds: Option<u64>) -> Result<(), OrbitError> {
+    if for_seconds.is_some_and(|seconds| seconds > MAX_DRAIN_WINDOW_SECONDS) {
+        return Err(drain_window_input_error());
+    }
+    Ok(())
+}
+
+/// Preserve the bounded-window parse diagnostic alongside the shared limit.
+pub(crate) fn drain_window_input_error() -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "for_seconds must be a whole number from 1 to {MAX_DRAIN_WINDOW_SECONDS} (24 hours)"
+    ))
+}
+
 /// Build the `task_auto_pipeline` input document for a ship run.
 ///
 /// An empty `task_ids` slice selects auto mode (the pipeline discovers

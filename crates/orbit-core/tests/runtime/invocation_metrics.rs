@@ -14,6 +14,7 @@ fn record(runtime: &OrbitRuntime, task_ids: &[String], scale: u64) {
     runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
             job_run_id: "fixture-run".to_string(),
+            account: None,
             activity_id: "fixture".to_string(),
             agent: "codex".to_string(),
             provider: None,
@@ -40,13 +41,13 @@ fn orchestrator_accounting_excludes_other_workspaces_and_keeps_local_missing_tas
     ) {
         return;
     }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let open = |name: &str| {
         let workspace = root.path().join(name).join(".orbit");
         std::fs::create_dir_all(&global).unwrap();
         std::fs::create_dir_all(&workspace).unwrap();
-        let git = std::process::Command::new("git")
+        let git = crate::git_test_support::command()
             .args(["init", "--quiet"])
             .arg(workspace.parent().unwrap())
             .output()

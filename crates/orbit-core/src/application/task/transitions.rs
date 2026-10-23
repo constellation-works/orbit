@@ -13,8 +13,12 @@ use super::helpers::{
     SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution, build_task_comments,
     crew_assigned_history, effective_actor_label, implementation_label,
 };
-use super::lifecycle::{ensure_task_has_execution_plan, in_progress_transition_requires_plan};
+use super::lifecycle::{
+    ensure_status_change_not_run_owned, ensure_task_has_execution_plan,
+    in_progress_transition_requires_plan,
+};
 use super::params::TaskUpdateParams;
+use super::update::admit_agent_artifact;
 
 /// Status event recorded when `orbit task recheck-blocked --confirm` returns a
 /// task blocked by a missing provider launcher to backlog because the launcher
@@ -62,6 +66,9 @@ impl OrbitRuntime {
         let mut result = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
             let task = self.get_task(id)?;
+            if task.status == TaskStatus::Proposed {
+                ensure_status_change_not_run_owned(self, id)?;
+            }
             result = Some(if task.status == TaskStatus::Proposed {
                 self.approve_task_with_identity(
                     id,
@@ -97,6 +104,9 @@ impl OrbitRuntime {
         })
     }
 
+    /// Trusted approval. Drain promotion calls this while its own run still
+    /// lists the task, so this path does not apply the operator ownership
+    /// guard. Operator surfaces use the guarded approval path.
     pub fn approve_task(
         &self,
         id: &str,
@@ -113,6 +123,34 @@ impl OrbitRuntime {
         comment: Option<String>,
         agent: Option<String>,
         model: Option<String>,
+    ) -> Result<Task, OrbitError> {
+        self.approve_task_locked(id, note, comment, agent, model, false)
+    }
+
+    /// Operator approval (`orbit task update --approve` and the dashboard).
+    ///
+    /// The ownership check runs under the task lock, before any comment or
+    /// history write. A non-terminal local run whose `input.task_ids` lists
+    /// the task refuses both `proposed → backlog` and `review → done`.
+    pub(crate) fn approve_task_guarding_run_ownership(
+        &self,
+        id: &str,
+        note: Option<String>,
+        comment: Option<String>,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<Task, OrbitError> {
+        self.approve_task_locked(id, note, comment, agent, model, true)
+    }
+
+    fn approve_task_locked(
+        &self,
+        id: &str,
+        note: Option<String>,
+        comment: Option<String>,
+        agent: Option<String>,
+        model: Option<String>,
+        guard_run_ownership: bool,
     ) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let note = note.map(|value| redact_all(&value));
@@ -131,9 +169,15 @@ impl OrbitRuntime {
             let task = self.get_task(id)?;
             #[cfg(test)]
             self.apply_transition_read_hook(id)?;
+            if guard_run_ownership
+                && matches!(task.status, TaskStatus::Proposed | TaskStatus::Review)
+            {
+                ensure_status_change_not_run_owned(self, id)?;
+            }
             let implemented_by =
                 implementation_label(&task, effective_label.as_str(), canonical_model.as_deref());
             if task.status == TaskStatus::Review {
+                super::lifecycle::ensure_post_deploy_criteria_met(self, &task)?;
                 super::lifecycle::ensure_completion_run_stopped(self, &task, None, None)?;
                 self.ensure_resolves_are_workspace_local(&task)?;
             }
@@ -321,6 +365,9 @@ impl OrbitRuntime {
         let mut started = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
             let task = self.get_task(id)?;
+            if actor_label_override.is_none() && task.status != TaskStatus::InProgress {
+                ensure_status_change_not_run_owned(self, id)?;
+            }
             #[cfg(test)]
             self.apply_transition_read_hook(id)?;
             // Validate status before crew resolution so a misleading
@@ -346,11 +393,23 @@ impl OrbitRuntime {
             if matches!(task.status, TaskStatus::Proposed | TaskStatus::Someday) {
                 self.ensure_finding_verified(&task)?;
             }
-            let validated = self.validate_and_normalize_task_field_edits(
-                id,
-                &task,
-                start_body_field_edits(field_edits.clone(), plan.clone()),
-            )?;
+            let mut start_edits = start_body_field_edits(field_edits.clone(), plan.clone());
+            // A start accepts the same caller-supplied artifacts as an ordinary
+            // update. Admit the whole batch before approval or record writes.
+            for artifact in &mut start_edits.upsert_artifacts {
+                admit_agent_artifact(artifact)?;
+            }
+            // A start has no operator-decision grant. An attributed agent or
+            // model, or an agent envelope, still cannot add a light-delivery
+            // tag on the way into `in-progress` [ORB-16872].
+            let writer = super::update::task_field_writer(
+                false,
+                canonical_agent.as_deref(),
+                canonical_model.as_deref(),
+                effective_label.as_str(),
+            );
+            let validated =
+                self.validate_and_normalize_task_field_edits(id, &task, start_edits, writer)?;
             let crew_assignment = validated.crew_assignment;
             let crew_source = validated.crew_source;
             let crew_redraw_history = validated.crew_redraw_history;
@@ -706,7 +765,7 @@ impl OrbitRuntime {
         self.reject_task_with_identity(id, note, comment, None, None)
     }
 
-    pub fn reject_task_with_identity(
+    pub(crate) fn reject_task_with_identity(
         &self,
         id: &str,
         note: String,
@@ -740,95 +799,46 @@ impl OrbitRuntime {
             #[cfg(test)]
             self.apply_transition_read_hook(id)?;
             previous_status = Some(task.status);
-            result = Some(match task.status {
-                TaskStatus::Proposed => self.with_mutation(|| {
+            // Persisted status event and emitted event per rejectable status.
+            // `review_rejected` selects `TaskReviewRejected`; the others emit
+            // `TaskProposalRejected`.
+            let (status_event, review_rejected) = match task.status {
+                TaskStatus::Proposed => ("proposal_rejected", false),
+                TaskStatus::Review => ("review_rejected", true),
+                TaskStatus::Backlog => ("backlog_rejected", false),
+                TaskStatus::InProgress => ("in_progress_rejected", false),
+                other => {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "task '{id}' is in status '{other}'; reject requires 'proposed', 'review', 'backlog', or 'in-progress'"
+                    )));
+                }
+            };
+            result = Some(self.with_mutation(|| {
                 let task = self.stores().task_records().update(
                     id,
                     StoreTaskUpdateParams {
                         actor: effective_label.clone(),
                         status: Some(TaskStatus::Rejected),
-                        status_event: Some("proposal_rejected".to_string()),
+                        status_event: Some(status_event.to_string()),
                         status_note: Some(reason.clone()),
                         append_comments: append_comments.clone(),
                         expected_status: Some(vec![task.status]),
                         ..Default::default()
                     },
                 )?;
-                Ok((
-                    task.clone(),
-                    OrbitEvent::TaskProposalRejected {
-                        id: id.to_string(),
-                        rejected_by: effective_label.clone(),
-                    },
-                ))
-                }),
-                TaskStatus::Review => self.with_mutation(|| {
-                let task = self.stores().task_records().update(
-                    id,
-                    StoreTaskUpdateParams {
-                        actor: effective_label.clone(),
-                        status: Some(TaskStatus::Rejected),
-                        status_event: Some("review_rejected".to_string()),
-                        status_note: Some(reason.clone()),
-                        append_comments: append_comments.clone(),
-                        expected_status: Some(vec![task.status]),
-                        ..Default::default()
-                    },
-                )?;
-                Ok((
-                    task.clone(),
+                let event = if review_rejected {
                     OrbitEvent::TaskReviewRejected {
                         id: id.to_string(),
                         rejected_by: effective_label.clone(),
-                    },
-                ))
-                }),
-                TaskStatus::Backlog => self.with_mutation(|| {
-                let task = self.stores().task_records().update(
-                    id,
-                    StoreTaskUpdateParams {
-                        actor: effective_label.clone(),
-                        status: Some(TaskStatus::Rejected),
-                        status_event: Some("backlog_rejected".to_string()),
-                        status_note: Some(reason.clone()),
-                        append_comments: append_comments.clone(),
-                        expected_status: Some(vec![task.status]),
-                        ..Default::default()
-                    },
-                )?;
-                Ok((
-                    task.clone(),
+                    }
+                } else {
                     OrbitEvent::TaskProposalRejected {
                         id: id.to_string(),
                         rejected_by: effective_label.clone(),
-                    },
-                ))
-                }),
-                TaskStatus::InProgress => self.with_mutation(|| {
-                let task = self.stores().task_records().update(
-                    id,
-                    StoreTaskUpdateParams {
-                        actor: effective_label.clone(),
-                        status: Some(TaskStatus::Rejected),
-                        status_event: Some("in_progress_rejected".to_string()),
-                        status_note: Some(reason.clone()),
-                        append_comments: append_comments.clone(),
-                        expected_status: Some(vec![task.status]),
-                        ..Default::default()
-                    },
-                )?;
-                Ok((
-                    task.clone(),
-                    OrbitEvent::TaskProposalRejected {
-                        id: id.to_string(),
-                        rejected_by: effective_label.clone(),
-                    },
-                ))
-                }),
-                other => Err(OrbitError::InvalidInput(format!(
-                    "task '{id}' is in status '{other}'; reject requires 'proposed', 'review', 'backlog', or 'in-progress'"
-                ))),
-            }?);
+                    }
+                };
+                Ok((task.clone(), event))
+            })?);
             Ok(())
         })?;
         let result = result.ok_or_else(|| {
@@ -883,7 +893,15 @@ impl OrbitRuntime {
     pub fn delete_task_guarded(&self, id: &str, force: bool) -> Result<(), OrbitError> {
         let task = self.get_task(id)?;
         ensure_task_delete_allowed(&task.id, task.status, force)?;
-        self.delete_task(id)
+        #[cfg(test)]
+        self.apply_transition_read_hook(id)?;
+        // The preflight can go stale while a transition owns the task lock.
+        // Re-read eligibility under that lock and hold it through deletion.
+        self.stores().tasks().with_task_write_lock(id, &mut || {
+            let task = self.get_task(id)?;
+            ensure_task_delete_allowed(&task.id, task.status, force)?;
+            self.delete_task(id)
+        })
     }
 }
 

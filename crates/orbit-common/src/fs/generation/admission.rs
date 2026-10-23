@@ -9,7 +9,7 @@ use fs2::FileExt;
 
 use super::admission_waiters::{self, ExclusiveWaiter};
 use super::identity::{Access, CompatibilityIdentity, Envelope};
-use super::image::process_digest;
+use super::image::{process_digest, remember_process_digest};
 use super::paths::{ADMISSION_LOCK, GENERATION_LOCK, validated_generation_root};
 use super::records::{Record, open, read_compat, read_generation, write_compat};
 use super::refusal::{
@@ -384,6 +384,9 @@ impl GenerationGuard {
             return Ok(guard);
         }
         let mut guard = Self::join(root, &participant, quiesce_bound(), store_schema)?;
+        if access == Access::Write {
+            remember_process_digest(root);
+        }
         // Nothing else holds a fresh join's hold, so its record can be read.
         let recorded = Arc::get_mut(&mut guard.hold)
             .and_then(|hold| read_generation(&mut hold.record.file).ok());

@@ -7,105 +7,74 @@
 //! `orbit_common::governance::friction::operations`, and the clap and input derivation is the
 //! noun-agnostic adapter in [`super::operation_args`].
 //!
-//! Adding a friction verb requires no edit here. What is left in this file is
-//! genuinely friction-specific: how to render a friction response as text.
+//! What is left in this file is genuinely friction-specific and CLI-only: the
+//! request shaping in [`prepare`] and the text rendering in [`render`]. Both
+//! are exhaustive matches on [`FrictionVerb`], so a new verb fails to compile
+//! here until its CLI behaviour is decided. Field presence rules live in the
+//! spec; the adapter only words their refusal in flags.
 
-use clap::{ArgMatches, Args, Command, FromArgMatches, Subcommand};
-use orbit_common::governance::friction::{
-    FRICTION_LIST_RESPONSE_MODE_WITH_NOTES, FRICTION_OPERATIONS, FrictionVerb, friction_operation,
-};
-use orbit_common::governance::operation::CliRender;
+use clap::Args;
+use orbit_common::governance::friction::{FRICTION_LIST_RESPONSE_MODE_WITH_NOTES, FrictionVerb};
 use orbit_core::OrbitRuntime;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
-use super::operation_args::{Invocation, augment_subcommands, invocation_from_matches};
+use super::operation_args::Invocation;
 use crate::command::{CommandOut, Execute, Payload};
 use crate::output::payload::Block;
 
-/// One parsed friction verb invocation.
-pub type FrictionInvocation = Invocation<FrictionVerb>;
-
 #[derive(Args)]
-#[command(about = "Report, list, and triage friction records")]
+#[command(about = orbit_common::governance::friction::FRICTION.cli_about)]
 pub struct FrictionCommand {
     #[command(subcommand)]
-    pub command: FrictionInvocation,
-}
-
-impl Subcommand for FrictionInvocation {
-    fn augment_subcommands(cmd: Command) -> Command {
-        augment_subcommands(cmd, FRICTION_OPERATIONS)
-    }
-
-    fn augment_subcommands_for_update(cmd: Command) -> Command {
-        <Self as Subcommand>::augment_subcommands(cmd)
-    }
-
-    fn has_subcommand(name: &str) -> bool {
-        friction_operation(name).is_some()
-    }
-}
-
-impl FromArgMatches for FrictionInvocation {
-    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
-        invocation_from_matches(FRICTION_OPERATIONS, "friction", matches)
-    }
-
-    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
-        *self = Self::from_arg_matches(matches)?;
-        Ok(())
-    }
+    pub command: Invocation<FrictionVerb>,
 }
 
 impl Execute for FrictionCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let FrictionInvocation { spec, mut input } = self.command;
-        if spec.verb == FrictionVerb::List
-            && let Some(object) = input.as_object_mut()
-        {
-            object.insert(
+        self.command.require_at_least_one_of()?;
+        let Invocation { spec, mut input } = self.command;
+        prepare(spec.verb, &mut input)?;
+        let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
+        render(spec.verb, &value)
+    }
+}
+
+/// Shape a friction request for the CLI before it reaches the tool.
+fn prepare(
+    verb: FrictionVerb,
+    input: &mut Map<String, Value>,
+) -> Result<(), orbit_core::OrbitError> {
+    match verb {
+        // The table renderer shows the tool's guidance notes.
+        FrictionVerb::List => {
+            input.insert(
                 "response_mode".to_string(),
                 Value::String(FRICTION_LIST_RESPONSE_MODE_WITH_NOTES.to_string()),
             );
+            Ok(())
         }
-        if spec.verb == FrictionVerb::Update {
-            require_update_field(&input)?;
-        }
-        let value = runtime.run_tool(spec.tool_name, input)?;
-        render(&value, spec.cli_render)
+        FrictionVerb::Add
+        | FrictionVerb::Show
+        | FrictionVerb::Stats
+        | FrictionVerb::Tags
+        | FrictionVerb::Update
+        | FrictionVerb::Resolve
+        | FrictionVerb::Rehome => Ok(()),
     }
 }
 
-/// Input keys `friction update` accepts, in the order its flags are named.
-const UPDATE_FIELD_KEYS: [&str; 6] = ["status", "tags", "tag", "body", "title", "rehome_to"];
-
-/// Refuse a `friction update` that changes nothing, naming the CLI's flags.
-///
-/// The tool's own refusal names its input fields, which is right for MCP and
-/// wrong for a person at a prompt.
-fn require_update_field(input: &Value) -> Result<(), orbit_core::OrbitError> {
-    let any = input.as_object().is_some_and(|object| {
-        UPDATE_FIELD_KEYS
-            .iter()
-            .any(|key| object.contains_key(*key))
-    });
-    if any {
-        return Ok(());
-    }
-    Err(orbit_core::OrbitError::InvalidInput(
-        "nothing to update; pass at least one of `--status`, `--tag`, `--body`, `--title`, or `--rehome-to`"
-            .to_string(),
-    ))
-}
-
-/// Build a friction response's payload, per the spec's declared rendering.
-fn render(value: &Value, kind: CliRender) -> CommandOut {
-    match kind {
-        CliRender::Record => record_payload(value),
-        CliRender::RecordTable => records_table_payload(value),
-        CliRender::TagList => tags_payload(value),
-        // `AlwaysJson` responses have no useful flat rendering.
-        _ => Ok(Payload::document(value.clone()).into()),
+/// Build a friction response's text payload.
+fn render(verb: FrictionVerb, value: &Value) -> CommandOut {
+    match verb {
+        FrictionVerb::Add
+        | FrictionVerb::Show
+        | FrictionVerb::Update
+        | FrictionVerb::Resolve
+        | FrictionVerb::Rehome => record_payload(value),
+        FrictionVerb::List => records_table_payload(value),
+        FrictionVerb::Tags => tags_payload(value),
+        // Aggregate rates have no useful flat rendering.
+        FrictionVerb::Stats => Ok(Payload::document(value.clone()).into()),
     }
 }
 

@@ -7,7 +7,7 @@ use orbit_types::workflow::activity_job::V2AuditEventKind;
 use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, DeterministicSpec};
 
 use crate::context::RuntimeHost;
-use orbit_common::{OrbitError, RecoverableVcsConflict};
+use orbit_common::{OrbitError, PrivateVcsFailureClass, RecoverableVcsConflict};
 use orbit_tools::{
     DeterministicStepPrograms, FsAuditLogger, FsCallEvent, FsCallEventKind, ToolCaller,
 };
@@ -140,6 +140,8 @@ pub struct DispatchOutcome {
 pub struct DispatchInvocationTrace {
     pub provider: String,
     pub model: Option<String>,
+    /// The crew account the invocation ran under, when its crew sets `env`.
+    pub account: Option<String>,
     pub trace: InvocationTrace,
 }
 
@@ -164,6 +166,22 @@ pub enum DispatchError {
     #[error("deterministic action `{action}` failed: {message}")]
     DeterministicActionFailed { action: String, message: String },
 
+    /// [ORB-16307] `pr_complete` lost only a read-only completion observation
+    /// to a transient provider failure, before any completion mutation.
+    /// Displays exactly as [`DispatchError::DeterministicActionFailed`]; final
+    /// recovery may resume the unchanged completion once the host
+    /// authenticates its prefix.
+    #[error("deterministic action `{action}` failed: {message}")]
+    CompletionObservationUnavailable { action: String, message: String },
+
+    /// A verified absorbed candidate. `message` retains the diagnostic's
+    /// deterministic-action or post-recovery context without losing its facts.
+    #[error("{message}")]
+    CandidateAbsorbed {
+        candidate: Box<orbit_common::CandidateAbsorbed>,
+        message: String,
+    },
+
     /// Pull request contracts differ. Retrying or recovery cannot repair the
     /// running binaries, so the drain must end visibly as failed.
     #[error("protocol_skew: {0}")]
@@ -175,6 +193,16 @@ pub enum DispatchError {
     /// retry nor a recovery activity runs; the failure handoff owns it.
     #[error("deterministic action `{action}` refused: {message}")]
     DeterministicActionRefused { action: String, message: String },
+
+    /// A [`DispatchError::DeterministicActionRefused`] the review gate raised
+    /// for a refusal the failure handoff decides on. The handoff receives
+    /// `refusal` as the step's `error_code`; `message` is for readers.
+    #[error("deterministic action `{action}` refused: {message}")]
+    ReviewGateRefused {
+        action: String,
+        refusal: orbit_types::workflow::ReviewGateRefusal,
+        message: String,
+    },
 
     /// A settled review needs named external evidence. End the delivery run
     /// without retry, recovery, or the failure handoff; receipt queues review.
@@ -243,16 +271,11 @@ pub enum DispatchError {
     /// recovery agent repairs the stop and the step is retried, again for each
     /// later commit of the same rebase that stops, within a fixed round bound.
     #[error(
-        "recoverable VCS conflict during '{operation}': original base '{original_base_sha}', target base '{target_base_sha}'; {diagnostic}; conflicting paths: {}",
-        conflicting_paths.join(", ")
+        "recoverable VCS conflict during '{}': original base '{}', target base '{}'; {}; conflicting paths: {}",
+        .0.operation, .0.original_base_sha, .0.target_base_sha, .0.diagnostic,
+        .0.conflicting_paths.join(", ")
     )]
-    RecoverableVcsConflict {
-        operation: String,
-        original_base_sha: String,
-        target_base_sha: String,
-        conflicting_paths: Vec<String>,
-        diagnostic: String,
-    },
+    RecoverableVcsConflict(Box<RecoverableVcsConflict>),
 
     /// Tool-allowlist denial (§6). Non-retryable — the retry wrapper must not
     /// re-attempt a denied call. Phase 2 formerly translated this to
@@ -319,14 +342,44 @@ impl DispatchError {
                 | DispatchError::InspectionToolsUnavailable { .. }
                 | DispatchError::GitTimeout { .. }
                 | DispatchError::WorktreeIntegrity { .. }
-                | DispatchError::RecoverableVcsConflict { .. }
+                | DispatchError::RecoverableVcsConflict(_)
                 | DispatchError::TaskCompletionLiveRun { .. }
                 | DispatchError::DeterministicActionRefused { .. }
+                | DispatchError::ReviewGateRefused { .. }
                 | DispatchError::ReviewEvidenceHold(_)
                 | DispatchError::ForgeUnavailableHold(_)
                 | DispatchError::ChildRunCancelled { .. }
                 | DispatchError::ProtocolSkew(_)
         )
+    }
+
+    /// The `error_code` the job's terminal failure handoff receives for this
+    /// step error. A typed error names its own code; a validation-environment,
+    /// red-base, agent-blocker, upgrade or provider failure is classified from
+    /// its text; anything else is `pipeline_step_failed`.
+    pub fn failure_code(&self) -> &'static str {
+        use orbit_types::workflow as wf;
+        let text = || self.to_string();
+        match self {
+            DispatchError::WorktreeIntegrity { code, .. } => code,
+            DispatchError::RecoverableVcsConflict(_) => "recoverable_vcs_conflict",
+            DispatchError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
+            DispatchError::ReviewGateRefused { refusal, .. } => refusal.error_code(),
+            _ if wf::is_validation_environment_failure(None, Some(&text())) => {
+                wf::VALIDATION_ENVIRONMENT_ERROR_CODE
+            }
+            _ if wf::is_baseline_red_failure(None, Some(&text())) => wf::BASELINE_RED_ERROR_CODE,
+            _ if wf::is_task_blocked_by_agent(None, Some(&text())) => {
+                wf::TASK_BLOCKED_BY_AGENT_ERROR_CODE
+            }
+            _ if wf::is_upgrade_pending(None, Some(&text())) => wf::UPGRADE_PENDING_ERROR_CODE,
+            _ if wf::failure_classification_text(&text()).contains(wf::STALLED_MARKER) => {
+                wf::STALLED_ERROR_CODE
+            }
+            // [ORB-14266] The handoff preserves the candidate for the next run.
+            _ => wf::ProviderFailureClass::of(None, Some(&text()))
+                .map_or("pipeline_step_failed", wf::ProviderFailureClass::as_str),
+        }
     }
 
     /// Whether an error that bypasses normal retry may still reach an
@@ -338,7 +391,7 @@ impl DispatchError {
     pub fn allows_recovery(&self) -> bool {
         matches!(
             self,
-            DispatchError::WorktreeIntegrity { .. } | DispatchError::RecoverableVcsConflict { .. }
+            DispatchError::WorktreeIntegrity { .. } | DispatchError::RecoverableVcsConflict(_)
         )
     }
 }
@@ -361,19 +414,9 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
         unavailable @ DispatchError::DeterministicActionUnavailable { .. } => {
             OrbitError::JobValidation(unavailable.to_string())
         }
-        DispatchError::RecoverableVcsConflict {
-            operation,
-            original_base_sha,
-            target_base_sha,
-            conflicting_paths,
-            diagnostic,
-        } => OrbitError::RecoverableVcsConflict(Box::new(RecoverableVcsConflict {
-            operation,
-            original_base_sha,
-            target_base_sha,
-            conflicting_paths,
-            diagnostic,
-        })),
+        DispatchError::RecoverableVcsConflict(conflict) => {
+            OrbitError::RecoverableVcsConflict(conflict)
+        }
         DispatchError::TaskCompletionLiveRun { task_id, run_id } => {
             OrbitError::TaskCompletionLiveRun { task_id, run_id }
         }
@@ -579,16 +622,27 @@ fn run_deterministic(
             )
             .map_err(|error| match error {
                 OrbitError::RecoverableVcsConflict(conflict) => {
-                    DispatchError::RecoverableVcsConflict {
-                        operation: conflict.operation,
-                        original_base_sha: conflict.original_base_sha,
-                        target_base_sha: conflict.target_base_sha,
-                        conflicting_paths: conflict.conflicting_paths,
-                        diagnostic: conflict.diagnostic,
-                    }
+                    DispatchError::RecoverableVcsConflict(conflict)
                 }
+                OrbitError::CandidateAbsorbed(candidate) => DispatchError::CandidateAbsorbed {
+                    message: format!(
+                        "deterministic action `{}` failed: execution failed: {candidate}",
+                        spec.action
+                    ),
+                    candidate,
+                },
                 OrbitError::TaskCompletionLiveRun { task_id, run_id } => {
                     DispatchError::TaskCompletionLiveRun { task_id, run_id }
+                }
+                error
+                    if error.private_vcs_failure().is_some_and(|failure| {
+                        failure.class == PrivateVcsFailureClass::CompletionObservationUnavailable
+                    }) =>
+                {
+                    DispatchError::CompletionObservationUnavailable {
+                        action: spec.action.clone(),
+                        message: error.to_string(),
+                    }
                 }
                 // Only the delivery push writes this hold; a refusal text
                 // that merely quotes the marker carries no parseable hold.

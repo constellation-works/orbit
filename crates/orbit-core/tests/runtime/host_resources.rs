@@ -29,19 +29,15 @@ impl HostResourceProbe for Fixture {
     }
 }
 
-#[test]
 fn runtime_injection_shares_hysteresis_and_reports_unknown_and_stale() {
-    if !super::dispatch_admission::isolated(
-        "host_resources::runtime_injection_shares_hysteresis_and_reports_unknown_and_stale",
-    ) {
-        return;
-    }
     let probe = Arc::new(Fixture(Mutex::new((
         Duration::seconds(10),
         HostResourceSample {
             sampled_at: Utc::now(),
             cpu_percent: Some(99.0),
+            cpu_utilization_percent: None,
             memory_percent: Some(25.0),
+            io_full_percent: None,
             disks: vec![],
         },
     ))));
@@ -79,7 +75,7 @@ fn runtime_injection_shares_hysteresis_and_reports_unknown_and_stale() {
 
 #[test]
 fn native_sampler_observes_the_host_and_missing_directory_filesystem() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let paths = vec![dir.path().join("not-created/worktrees")];
     let offset_ms = Arc::new(AtomicU64::new(0));
     let origin = std::time::Instant::now();
@@ -101,6 +97,16 @@ fn native_sampler_observes_the_host_and_missing_directory_filesystem() {
             sample
                 .memory_percent
                 .is_some_and(|value| (0.0..=100.0).contains(&value))
+        );
+        // The kernel's own text parses; a kernel without PSI reports nothing.
+        assert_eq!(
+            sample.io_full_percent.is_some(),
+            std::path::Path::new("/proc/pressure/io").exists()
+        );
+        assert!(
+            sample
+                .io_full_percent
+                .is_none_or(|value| (0.0..=100.0).contains(&value))
         );
     }
     #[cfg(target_os = "macos")]
@@ -135,13 +141,7 @@ fn native_sampler_observes_the_host_and_missing_directory_filesystem() {
     }
 }
 
-#[test]
 fn first_admission_in_a_fresh_process_reads_host_cpu() {
-    if !super::dispatch_admission::isolated(
-        "host_resources::first_admission_in_a_fresh_process_reads_host_cpu",
-    ) {
-        return;
-    }
     // The native probe is process-global: only a fresh child process makes
     // this runtime's first observation the host's first observation.
     let runtime = OrbitRuntime::in_memory().unwrap();
@@ -168,4 +168,124 @@ fn first_admission_in_a_fresh_process_reads_host_cpu() {
         "first admission must not report CPU unknown: {:?}",
         admission.unknown
     );
+}
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    runtime_injection_shares_hysteresis_and_reports_unknown_and_stale_scenarios,
+    runtime_injection_shares_hysteresis_and_reports_unknown_and_stale,
+    first_admission_in_a_fresh_process_reads_host_cpu
+);
+
+/// High I/O-wait load must not masquerade as busy CPU in utilization mode.
+#[cfg(target_os = "linux")]
+#[test]
+fn proc_fixture_cpu_source_changes_admission_without_bypassing_io() {
+    use orbit_config::{ConfigRoots, ResolvedConfig};
+    use orbit_core::runtime::host_resource::{
+        HostCpuTickHistory, ResourcePressureEvaluator, host_resource_probe_with_proc_root,
+    };
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("pressure")).unwrap();
+    std::fs::write(root.path().join("loadavg"), "100000.00 1 1 1/1 1\n").unwrap();
+    std::fs::write(
+        root.path().join("meminfo"),
+        "MemTotal: 1000 kB\nMemAvailable: 900 kB\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("pressure/io"),
+        "full avg10=0 avg60=0 avg300=0 total=0\n",
+    )
+    .unwrap();
+    let offset = Arc::new(AtomicU64::new(0));
+    let origin = std::time::Instant::now();
+    let clock = offset.clone();
+    let probe = host_resource_probe_with_proc_root(
+        root.path().to_path_buf(),
+        Arc::new(move || origin + std::time::Duration::from_secs(clock.load(Ordering::SeqCst))),
+    );
+    let mut history = HostCpuTickHistory::default();
+    let mut evaluator = ResourcePressureEvaluator::default();
+    let global = root.path().join("global");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&global).unwrap();
+    std::fs::create_dir(&workspace).unwrap();
+    let roots = ConfigRoots::new(&global, &workspace);
+    let mut settings = ResolvedConfig::load(&roots).unwrap().resource_throttle;
+    assert_eq!(settings.cpu_source, "load");
+    let config_path = global.join("config.toml");
+    std::fs::write(
+        &config_path,
+        "[workflow.resource_throttle]\ncpu_source = \"utilization\"\n",
+    )
+    .unwrap();
+    let utilization_settings = ResolvedConfig::load(&roots).unwrap().resource_throttle;
+    assert_eq!(utilization_settings.cpu_source, "utilization");
+    std::fs::write(
+        &config_path,
+        "[workflow.resource_throttle]\ncpu_source = \"invalid\"\n",
+    )
+    .unwrap();
+    assert!(ResolvedConfig::load(&roots).is_err());
+    let now = Utc::now();
+    for step in 0..=2 {
+        // 20% busy, 30% idle, 50% I/O wait; guest ticks are already in user.
+        std::fs::write(
+            root.path().join("stat"),
+            format!(
+                "cpu {} 0 0 {} {} 0 0 0 9999 0\ncpu0 0\n",
+                100 + step * 20,
+                100 + step * 30,
+                100 + step * 50,
+            ),
+        )
+        .unwrap();
+        offset.store(step * 5, Ordering::SeqCst);
+        // Reopen the probe at the last step using only serialized tick history,
+        // as a fresh readiness process does against the shared host cache.
+        let active_probe = if step == 2 {
+            history = serde_json::from_str(&serde_json::to_string(&history).unwrap()).unwrap();
+            host_resource_probe_with_proc_root(
+                root.path().to_path_buf(),
+                Arc::new(move || origin + std::time::Duration::from_secs(10)),
+            )
+        } else {
+            probe.clone()
+        };
+        let mut sample = active_probe.sample_with_cpu_history(&[], &mut history);
+        sample.sampled_at = now + Duration::seconds(step as i64 * 5);
+        if step == 0 {
+            assert_eq!(sample.cpu_utilization_percent, None);
+        } else {
+            assert_eq!(sample.cpu_utilization_percent, Some(20.0));
+        }
+        let at = sample.sampled_at;
+        settings.cpu_source = "load".into();
+        let load = evaluator.evaluate(sample.clone(), &settings, at);
+        assert_eq!(load.throttle, step == 2);
+        settings = utilization_settings.clone();
+        if step == 2 {
+            // Changing source cannot reuse the load hold, even when the new
+            // CPU signal is above resume; it must sustain its own high window.
+            let mut busy = sample.clone();
+            busy.cpu_utilization_percent = Some(95.0);
+            assert!(!evaluator.evaluate(busy, &settings, at).throttle);
+        }
+        let utilization = evaluator.evaluate(sample.clone(), &settings, at);
+        assert!(!utilization.throttle);
+        if step == 2 {
+            for seconds in [0, 5, 10] {
+                sample.sampled_at = at + Duration::seconds(seconds);
+                sample.cpu_utilization_percent = Some(20.0);
+                sample.io_full_percent = Some(50.0);
+                let status = evaluator.evaluate(sample.clone(), &settings, sample.sampled_at);
+                assert_eq!(status.throttle, seconds == 10);
+                if status.throttle {
+                    assert_eq!(status.pressures.len(), 1);
+                    assert_eq!(status.pressures[0].resource, "io full");
+                }
+            }
+        }
+    }
 }

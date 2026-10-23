@@ -12,16 +12,17 @@ use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use orbit_agent::loop_engine::InMemorySink;
-use orbit_common::OrbitError;
+use orbit_common::{ConflictedFile, OrbitError, RecoverableVcsConflict};
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied, JobOutcome, RuntimeHost, TaskAutomationUpdate, V2AuditWriter,
-    V2SqliteSink, execute_job_with_resume,
+    FinalRecoveryApplied, JobOutcome, TaskAutomationUpdate, V2AuditWriter, V2SqliteSink,
+    execute_job_with_resume,
 };
 use orbit_types::workflow::activity_job::{ActivityV2, JobV2, V2AuditEventKind};
 use orbit_types::workflow::{
     FinalRecoveryCheckpoint, FinalRecoveryDecision, FinalRecoveryKey, JobRunState, PipelineState,
+    TransientInfrastructure,
 };
 use serde_json::{Value, json};
 
@@ -37,11 +38,16 @@ enum Reply {
     Fail,
     Permanent,
     Diagnostic(String),
+    Conflict(RecoverableVcsConflict),
 }
 
 struct RecoveryHost {
     replies: Mutex<HashMap<String, VecDeque<Reply>>>,
     calls: Mutex<Vec<(String, Value)>>,
+    /// Success checkpoints, in call order: `(step_id, output)`.
+    checkpoints: Mutex<Vec<(String, Value)>>,
+    /// Diagnostic checkpoints, in call order: `(step_id, output)`.
+    diagnostics: Mutex<Vec<(String, Value)>>,
     admission: FinalRecoveryAdmission,
     admissions: Mutex<Vec<FinalRecoveryAdmissionRequest>>,
     applications: Mutex<Vec<FinalRecoveryApplication>>,
@@ -62,6 +68,8 @@ impl RecoveryHost {
                     .collect(),
             ),
             calls: Mutex::new(Vec::new()),
+            checkpoints: Mutex::new(Vec::new()),
+            diagnostics: Mutex::new(Vec::new()),
             admission: FinalRecoveryAdmission::Admitted,
             admissions: Mutex::new(Vec::new()),
             applications: Mutex::new(Vec::new()),
@@ -110,7 +118,7 @@ impl RecoveryHost {
     }
 }
 
-impl RuntimeHost for RecoveryHost {
+impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost {
     fn run_deterministic(
         &self,
         action: &str,
@@ -141,6 +149,9 @@ impl RuntimeHost for RecoveryHost {
             Some(Reply::Permanent) => Err(DispatchError::CliInvocationPermanent(format!(
                 "{action}: sandbox unavailable"
             ))),
+            Some(Reply::Conflict(conflict)) => {
+                Err(DispatchError::RecoverableVcsConflict(Box::new(conflict)))
+            }
             None if action == "setup" => Ok(json!({
                 "workspace_path": self.workspace_path,
                 "base_ref": "main",
@@ -148,6 +159,34 @@ impl RuntimeHost for RecoveryHost {
             })),
             None => Ok(json!({ "action": action })),
         }
+    }
+
+    fn checkpoint_step(
+        &self,
+        _: &str,
+        _: u32,
+        step_id: &str,
+        output: &Value,
+        _: &std::collections::BTreeMap<String, Value>,
+    ) -> Result<(), DispatchError> {
+        self.checkpoints
+            .lock()
+            .unwrap()
+            .push((step_id.to_string(), output.clone()));
+        Ok(())
+    }
+
+    fn checkpoint_step_diagnostic(
+        &self,
+        _: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        self.diagnostics
+            .lock()
+            .unwrap()
+            .push((step_id.to_string(), output.clone()));
+        Ok(())
     }
 
     fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
@@ -236,6 +275,11 @@ fn deterministic_activity(name: &str) -> ActivityV2 {
 /// `decide` as the final recovery activity. `work` may name `step_fix` as
 /// its step recovery.
 fn pipeline(step_recovery: bool) -> JobV2 {
+    pipeline_acting("work", step_recovery)
+}
+
+/// `setup → <middle> → deliver`, otherwise exactly [`pipeline`].
+fn pipeline_acting(middle: &str, step_recovery: bool) -> JobV2 {
     let step = |id: &str| {
         json!({
             "id": id,
@@ -249,7 +293,7 @@ fn pipeline(step_recovery: bool) -> JobV2 {
         "spec": {
             "state": "enabled",
             "kind": "workflow",
-            "steps": [step("setup"), step("work"), step("deliver")],
+            "steps": [step("setup"), step(middle), step("deliver")],
         },
     });
     let mut job = load_job_asset(&asset.to_string())
@@ -283,6 +327,22 @@ fn run_with_evidence(
     host: &RecoveryHost,
     resume: Option<&PipelineState>,
     prior_events: Vec<(&str, V2AuditEventKind)>,
+) -> Run {
+    run_with_input(
+        job,
+        host,
+        resume,
+        prior_events,
+        json!({ "task_ids": ["T-1"] }),
+    )
+}
+
+fn run_with_input(
+    job: &JobV2,
+    host: &RecoveryHost,
+    resume: Option<&PipelineState>,
+    prior_events: Vec<(&str, V2AuditEventKind)>,
+    input: Value,
 ) -> Run {
     let audit_root = tempfile::tempdir().expect("audit tempdir");
     let inner = Arc::new(InMemorySink::new(audit_root.path().join("blobs")));
@@ -318,14 +378,7 @@ fn run_with_evidence(
     for event in own_events {
         writer.emit(event).expect("persist own prior event");
     }
-    let result = execute_job_with_resume(
-        job,
-        json!({ "task_ids": ["T-1"] }),
-        RUN_ID,
-        writer.clone(),
-        host,
-        resume,
-    );
+    let result = execute_job_with_resume(job, input, RUN_ID, writer.clone(), host, resume);
     let mut attempts = Vec::new();
     let mut details = Vec::new();
     for event in writer.events_snapshot().expect("audit events") {
@@ -367,7 +420,6 @@ fn attempt(outcome: &str, decision: Option<&str>) -> (String, Option<String>) {
     (outcome.to_string(), decision.map(str::to_string))
 }
 
-#[test]
 fn a_resume_reruns_from_the_named_step_and_the_run_completes() {
     // The decision arrives the way an agent activity reports it: its own keys
     // listed in `response_result_fields`, beside Orbit's invocation metadata.
@@ -423,7 +475,6 @@ fn a_resume_reruns_from_the_named_step_and_the_run_completes() {
     }
 }
 
-#[test]
 fn resume_context_is_opaque_when_the_target_inherits_job_input() {
     let refusal = "The record contains an unresolved {{ input.missing }} template";
     let rationale = "Keep {{ input.missing }} literal while repairing the record";
@@ -458,7 +509,6 @@ fn resume_context_is_opaque_when_the_target_inherits_job_input() {
     );
 }
 
-#[test]
 fn a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart() {
     use orbit_types::workflow::FinalRecoveryResume;
 
@@ -561,7 +611,6 @@ fn a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart() {
 /// [ORB-12467] A provider refuses an oversized turn before the agent starts,
 /// so the resumed step gets the bounded refusal final recovery read. The
 /// context names the admitted step even when the decision's id is padded.
-#[test]
 fn an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id() {
     let refusal = format!("probe refused: {}", "x".repeat(512 * 1024));
     let host = RecoveryHost::new([
@@ -600,7 +649,6 @@ fn an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id()
     );
 }
 
-#[test]
 fn an_oversized_refused_output_reaches_the_resumed_implementer_bounded() {
     let summary = "y".repeat(256 * 1024);
     let host = RecoveryHost::new([
@@ -648,7 +696,6 @@ fn an_oversized_refused_output_reaches_the_resumed_implementer_bounded() {
     assert!(serde_json::to_string(refused).unwrap().len() <= 64 * 1024);
 }
 
-#[test]
 fn a_settling_decision_ends_the_run_without_the_failure_handoff() {
     let host = RecoveryHost::new([
         ("work", vec![Reply::Fail]),
@@ -676,7 +723,6 @@ fn a_settling_decision_ends_the_run_without_the_failure_handoff() {
     assert_eq!(run.attempts, [attempt("settled", Some("archive"))]);
 }
 
-#[test]
 fn an_escalation_still_runs_the_failure_handoff() {
     let host = RecoveryHost::new([("work", vec![Reply::Fail]), ("decide", vec![escalate()])]);
     let run = run(&pipeline(false), &host, None);
@@ -695,7 +741,6 @@ fn an_escalation_still_runs_the_failure_handoff() {
     assert_eq!(run.attempts, [attempt("escalated", Some("escalate"))]);
 }
 
-#[test]
 fn an_error_that_skips_step_recovery_still_reaches_final_recovery() {
     let host = RecoveryHost::new([
         ("work", vec![Reply::Permanent]),
@@ -716,7 +761,6 @@ fn an_error_that_skips_step_recovery_still_reaches_final_recovery() {
     assert_eq!(host.count("handoff"), 1);
 }
 
-#[test]
 fn step_recovery_runs_first_and_final_recovery_only_once_it_is_spent() {
     let host = RecoveryHost::new([
         ("work", vec![Reply::Fail, Reply::Fail]),
@@ -747,7 +791,6 @@ fn step_recovery_runs_first_and_final_recovery_only_once_it_is_spent() {
     assert_eq!(input["log_tail"], "this run's failure log");
 }
 
-#[test]
 fn final_recovery_runs_at_most_once_per_run() {
     // The rerun after `resume` fails again: the hook does not run twice, and
     // the run falls through to its failure handoff.
@@ -796,7 +839,6 @@ fn resumed_after(decision: FinalRecoveryDecision, outcome: Option<&str>) -> Pipe
     state
 }
 
-#[test]
 fn a_run_resumed_after_a_final_recovery_resume_never_runs_it_again() {
     let state = resumed_after(
         FinalRecoveryDecision::Resume {
@@ -815,7 +857,6 @@ fn a_run_resumed_after_a_final_recovery_resume_never_runs_it_again() {
     assert_eq!(host.count("handoff"), 1);
 }
 
-#[test]
 fn a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision() {
     // The source run recorded `archive` and crashed before recording what
     // applying it did. The resumed run fails again; it neither dispatches nor
@@ -843,7 +884,6 @@ fn a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision() {
     assert_eq!(run.attempts, [attempt("settled", Some("archive"))]);
 }
 
-#[test]
 fn a_provider_authentication_failure_skips_final_recovery() {
     let host = RecoveryHost::new([
         (
@@ -885,7 +925,91 @@ fn a_provider_authentication_failure_skips_final_recovery() {
     );
 }
 
-#[test]
+/// A delivery step that lost only to a busy lock or a locked store is blocked
+/// on that condition without an agent, so the cleared-infra requeue can
+/// bring it back; a validation failure whose output merely contains the same
+/// text is still the candidate's, and goes to the agent.
+/// `reserve_locks` stands for every delivery action: the host runs it, and
+/// the classifier lists it.
+fn transient_infrastructure_is_escalated_without_an_agent() {
+    for (message, class) in [
+        (
+            "execution failed: remote tool failed (lock_busy): task write lock is held",
+            TransientInfrastructure::LockBusy,
+        ),
+        (
+            "timed out after 30000ms acquiring task lock '/repo/.orbit/locks/T-1.lock'",
+            TransientInfrastructure::LockBusy,
+        ),
+        (
+            "store error: SQLite database '/repo/.orbit/orbit.db' remained locked during task update",
+            TransientInfrastructure::StoreLocked,
+        ),
+    ] {
+        let host = RecoveryHost::new([
+            ("reserve_locks", vec![Reply::Diagnostic(message.into())]),
+            ("decide", vec![escalate()]),
+        ]);
+        let run = run(&pipeline_acting("reserve_locks", false), &host, None);
+
+        assert!(run.result.is_err(), "{message}");
+        assert_eq!(host.count("decide"), 0, "no agent judges it: {message}");
+        let applications = host.applications();
+        assert_eq!(applications.len(), 1, "{message}");
+        assert_eq!(applications[0].infrastructure, Some(class), "{message}");
+        assert!(
+            matches!(
+                applications[0].decision,
+                FinalRecoveryDecision::Escalate { .. }
+            ),
+            "{message}"
+        );
+        assert_eq!(host.count("handoff"), 1, "the candidate is published");
+        assert_eq!(run.attempts, [attempt("escalated", Some("escalate"))]);
+    }
+
+    // Each of these goes to the recovery agent as before: a lock display a
+    // validation action's output merely quotes, a lock display quoted after
+    // other text, and a delivery step of a claimed leaf, whose task is its
+    // owner's.
+    let lock = "store error: database is locked";
+    for (case, action, message, input) in [
+        (
+            "validation output",
+            "review_reconciliation_validate",
+            lock.to_string(),
+            json!({ "task_ids": ["T-1"] }),
+        ),
+        (
+            "quoted mid-message",
+            "reserve_locks",
+            format!("required validation 'make test' did not pass on candidate head: {lock}"),
+            json!({ "task_ids": ["T-1"] }),
+        ),
+        (
+            "claimed leaf",
+            "reserve_locks",
+            "execution failed: remote tool failed (lock_busy): task write lock is held".into(),
+            json!({ "task_ids": ["T-1"], "claimed": true }),
+        ),
+    ] {
+        let host = RecoveryHost::new([
+            (action, vec![Reply::Diagnostic(message)]),
+            ("decide", vec![escalate()]),
+        ]);
+        let run = run_with_input(
+            &pipeline_acting(action, false),
+            &host,
+            None,
+            Vec::new(),
+            input,
+        );
+        assert!(run.result.is_err(), "{case}");
+        assert_eq!(host.count("decide"), 1, "{case}: the agent judges it");
+        assert_eq!(host.applications()[0].infrastructure, None, "{case}");
+    }
+}
+
 fn an_empty_crew_pool_skips_final_recovery() {
     let host = RecoveryHost::new([("work", vec![Reply::Fail]), ("decide", vec![escalate()])])
         .with_empty_pool();
@@ -898,7 +1022,6 @@ fn an_empty_crew_pool_skips_final_recovery() {
     assert_eq!(run.attempts, [attempt("skipped", None)]);
 }
 
-#[test]
 fn a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade() {
     let host = RecoveryHost::new([
         ("work", vec![Reply::Fail, Reply::Ok(json!({"built": true}))]),
@@ -939,7 +1062,6 @@ fn a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade
     assert!(update.append_comments[0].message.contains(detail));
 }
 
-#[test]
 fn a_resume_to_an_earlier_step_keeps_the_named_target() {
     let host = RecoveryHost::new([
         (
@@ -962,7 +1084,6 @@ fn a_resume_to_an_earlier_step_keeps_the_named_target() {
     assert!(host.updates.lock().unwrap().is_empty());
 }
 
-#[test]
 fn a_resume_to_an_admission_or_nonexistent_step_is_escalated() {
     for target in ["setup", "no_such_step"] {
         let host = RecoveryHost::new([
@@ -989,7 +1110,6 @@ fn a_resume_to_an_admission_or_nonexistent_step_is_escalated() {
     }
 }
 
-#[test]
 fn a_malformed_decision_is_escalated() {
     let host = RecoveryHost::new([
         ("work", vec![Reply::Fail]),
@@ -1005,7 +1125,6 @@ fn a_malformed_decision_is_escalated() {
     assert_eq!(host.count("handoff"), 1);
 }
 
-#[test]
 fn a_failure_before_the_worktree_exists_skips_final_recovery() {
     let host = RecoveryHost::new([("setup", vec![Reply::Fail]), ("decide", vec![escalate()])]);
     let run = run(&pipeline(false), &host, None);
@@ -1016,7 +1135,6 @@ fn a_failure_before_the_worktree_exists_skips_final_recovery() {
     assert_eq!(host.count("handoff"), 1);
 }
 
-#[test]
 fn failed_recovery_dispatch_is_injected_before_final_recovery() {
     let host = RecoveryHost::new([
         ("work", vec![Reply::Fail]),
@@ -1041,7 +1159,6 @@ fn failed_recovery_dispatch_is_injected_before_final_recovery() {
     assert_eq!(input["log_tail"], "this run's failure log");
 }
 
-#[test]
 fn final_recovery_injects_only_its_runs_bounded_evidence_in_order() {
     let oversized = format!("start:{}:end", "界".repeat(100_000));
     let mut host = RecoveryHost::new([
@@ -1117,7 +1234,6 @@ fn final_recovery_injects_only_its_runs_bounded_evidence_in_order() {
     assert!(!log.contains("foreign-log"));
 }
 
-#[test]
 fn final_recovery_escalates_instead_of_dropping_records_that_cannot_fit() {
     let host = RecoveryHost::new([("work", vec![Reply::Fail]), ("decide", vec![escalate()])]);
     let events = (0..500)
@@ -1152,7 +1268,6 @@ fn final_recovery_escalates_instead_of_dropping_records_that_cannot_fit() {
     assert_eq!(host.count("handoff"), 1);
 }
 
-#[test]
 fn final_recovery_keeps_post_recovery_output_when_a_later_step_fails() {
     let host = RecoveryHost::new([
         (
@@ -1171,4 +1286,345 @@ fn final_recovery_keeps_post_recovery_output_when_a_later_step_fails() {
     assert_eq!(attempts[1]["phase"], "post_recovery");
     assert_eq!(attempts[1]["outcome"], "success");
     assert_eq!(attempts[1]["output"], json!({"repaired": true}));
+}
+
+fn conflict(paths: &[&str], resolvable: bool) -> RecoverableVcsConflict {
+    RecoverableVcsConflict {
+        operation: "git_rebase".into(),
+        original_base_sha: "original".into(),
+        target_base_sha: "target".into(),
+        conflicting_paths: paths.iter().map(|path| (*path).to_string()).collect(),
+        conflicting_files: paths
+            .iter()
+            .map(|path| ConflictedFile {
+                path: (*path).to_string(),
+                deterministically_resolvable: resolvable,
+            })
+            .collect(),
+        diagnostic: "stopped rebase".into(),
+    }
+}
+
+fn conflict_resume_job() -> JobV2 {
+    let step = |id: &str| {
+        json!({
+            "id": id,
+            "spec": {"type": "deterministic", "action": id, "config": {}},
+        })
+    };
+    let asset = json!({
+        "schemaVersion": 2,
+        "kind": "Job",
+        "metadata": {"name": "conflict_diagnostic_resume"},
+        "spec": {
+            "state": "enabled",
+            "kind": "workflow",
+            "steps": [
+                step("setup"),
+                step("sync_base"),
+                step("deliver"),
+            ],
+        },
+    });
+    let mut job = load_job_asset(&asset.to_string())
+        .expect("fixture job loads")
+        .spec;
+    job.final_recovery_activity = Some("decide".to_string());
+    job.resolved_final_recovery_activity = Some(deterministic_activity("decide"));
+    let orbit_types::workflow::activity_job::JobV2StepBody::Target(target) = &mut job.steps[2].body
+    else {
+        panic!("deliver is a target step");
+    };
+    // The next step renders the success output. `failed_only` from the
+    // incomplete checkpoint must not be visible through that template.
+    target.default_input = Some(json!({"rendered": "{{ steps.sync_base.output }}"}));
+    job
+}
+
+fn old_conflict_resume() -> PipelineState {
+    let setup = json!({
+        "workspace_path": "/worktrees/run",
+        "base_ref": "main",
+        "base_sha": "0123456789abcdef0123456789abcdef01234567",
+    });
+    let mut state = PipelineState::new(
+        RUN_ID.into(),
+        "conflict_diagnostic_resume".into(),
+        json!({ "task_ids": ["T-1"] }),
+    );
+    state.record_step(0, JobRunState::Success, Some(setup.clone()), None);
+    state.record_pipeline_output("setup", setup);
+    state.record_pipeline_output(
+        "sync_base",
+        json!({
+            "conflicting_paths": ["old.rs"],
+            "conflicting_files": [{
+                "path": "old.rs",
+                "deterministically_resolvable": false,
+            }],
+            "failed_only": "discard me",
+        }),
+    );
+    state
+}
+
+/// [ORB-15889] Final recovery clears the pipeline entry a newer conflict
+/// recorded. The success checkpoint must keep that newer evidence, including
+/// an explicit empty list, and must not restore the resumed `old.rs` paths.
+///
+/// Ordinary resume and step recovery are the controls in
+/// `incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpoint`:
+/// that test also shows a diagnostic-only checkpoint does not skip `sync_base`
+/// or expose `failed_only` to a template before the step runs. This one shows
+/// the same exclusion after final-recovery invalidation, on the output the
+/// next step renders.
+fn final_recovery_resume_checkpoints_the_latest_conflict_diagnostics() {
+    enum Latest {
+        Newer(RecoverableVcsConflict),
+        Seeded,
+    }
+
+    let resume = old_conflict_resume();
+    let job = conflict_resume_job();
+    for (name, latest) in [
+        ("newer conflict", Latest::Newer(conflict(&["new.rs"], true))),
+        ("explicit empty lists", Latest::Newer(conflict(&[], false))),
+        ("no newer conflict", Latest::Seeded),
+    ] {
+        let (first, paths, files) = match &latest {
+            Latest::Newer(conflict) => (
+                Reply::Conflict(conflict.clone()),
+                serde_json::to_value(&conflict.conflicting_paths).expect("paths"),
+                serde_json::to_value(&conflict.conflicting_files).expect("files"),
+            ),
+            Latest::Seeded => (
+                Reply::Fail,
+                json!(["old.rs"]),
+                json!([{
+                    "path": "old.rs",
+                    "deterministically_resolvable": false,
+                }]),
+            ),
+        };
+        let host = RecoveryHost::new([
+            (
+                "sync_base",
+                vec![first, Reply::Ok(json!({"rebased": true}))],
+            ),
+            (
+                "decide",
+                vec![Reply::Ok(json!({
+                    "decision": "resume",
+                    "step_id": "sync_base",
+                    "rationale": "resolved the stopped rebase",
+                }))],
+            ),
+            ("deliver", vec![Reply::Ok(json!({"delivered": true}))]),
+        ]);
+        let observed = run(&job, &host, Some(&resume));
+        let outcome = observed
+            .result
+            .unwrap_or_else(|error| panic!("{name}: resumed run completes, got {error}"));
+        assert!(outcome.success, "{name}: the rerun from sync_base delivers");
+        assert_eq!(
+            host.actions(),
+            ["sync_base", "decide", "sync_base", "deliver"],
+            "{name}: an incomplete sync_base executes, final recovery resumes it, and diagnostics do not skip it"
+        );
+        assert_eq!(observed.attempts, [attempt("resume", Some("resume"))]);
+        let expected = json!({
+            "rebased": true,
+            "conflicting_paths": paths.clone(),
+            "conflicting_files": files.clone(),
+        });
+        let output = &outcome.pipeline["sync_base"];
+        assert!(
+            output.get("conflicting_paths").is_some() && output.get("conflicting_files").is_some(),
+            "{name}: both diagnostic keys stay present: {output}"
+        );
+        assert_eq!(output, &expected, "{name}");
+        assert!(
+            output.get("failed_only").is_none(),
+            "{name}: unrelated failed output stays out of the success checkpoint"
+        );
+        if matches!(latest, Latest::Newer(_)) {
+            assert_ne!(
+                output["conflicting_paths"],
+                json!(["old.rs"]),
+                "{name}: final recovery must not restore the resumed conflict"
+            );
+        }
+        let checkpoints = host.checkpoints.lock().unwrap();
+        let synced: Vec<_> = checkpoints
+            .iter()
+            .filter(|(step_id, _)| step_id == "sync_base")
+            .map(|(_, output)| output)
+            .collect();
+        assert_eq!(
+            synced,
+            vec![&expected],
+            "{name}: the success checkpoint is the output final recovery left in place"
+        );
+        drop(checkpoints);
+        let diagnostics = host.diagnostics.lock().unwrap();
+        match &latest {
+            Latest::Newer(_) => {
+                assert_eq!(diagnostics.len(), 1, "{name}");
+                assert_eq!(diagnostics[0].0, "sync_base");
+                assert_eq!(diagnostics[0].1["conflicting_paths"], paths, "{name}");
+                assert_eq!(diagnostics[0].1["conflicting_files"], files, "{name}");
+            }
+            Latest::Seeded => assert!(
+                diagnostics.is_empty(),
+                "{name}: no new conflict means no replacement diagnostic"
+            ),
+        }
+        drop(diagnostics);
+        let deliver_inputs = host.inputs("deliver");
+        let rendered = &deliver_inputs[0]["rendered"];
+        assert_eq!(
+            rendered, &expected,
+            "{name}: the next step's template sees the success output"
+        );
+        assert!(
+            rendered.get("failed_only").is_none(),
+            "{name}: the next step's template does not see the failed field"
+        );
+    }
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn recovery_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "recovery_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_resume_reruns_from_the_named_step_and_the_run_completes",
+                a_resume_reruns_from_the_named_step_and_the_run_completes,
+            ),
+            (
+                "resume_context_is_opaque_when_the_target_inherits_job_input",
+                resume_context_is_opaque_when_the_target_inherits_job_input,
+            ),
+            (
+                "a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart",
+                a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart,
+            ),
+            (
+                "an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id",
+                an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id,
+            ),
+            (
+                "an_oversized_refused_output_reaches_the_resumed_implementer_bounded",
+                an_oversized_refused_output_reaches_the_resumed_implementer_bounded,
+            ),
+            (
+                "a_settling_decision_ends_the_run_without_the_failure_handoff",
+                a_settling_decision_ends_the_run_without_the_failure_handoff,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn recovery_contracts_2() {
+    crate::git_fixture::isolated(module_path!(), "recovery_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "an_escalation_still_runs_the_failure_handoff",
+                an_escalation_still_runs_the_failure_handoff,
+            ),
+            (
+                "an_error_that_skips_step_recovery_still_reaches_final_recovery",
+                an_error_that_skips_step_recovery_still_reaches_final_recovery,
+            ),
+            (
+                "step_recovery_runs_first_and_final_recovery_only_once_it_is_spent",
+                step_recovery_runs_first_and_final_recovery_only_once_it_is_spent,
+            ),
+            (
+                "final_recovery_runs_at_most_once_per_run",
+                final_recovery_runs_at_most_once_per_run,
+            ),
+            (
+                "a_run_resumed_after_a_final_recovery_resume_never_runs_it_again",
+                a_run_resumed_after_a_final_recovery_resume_never_runs_it_again,
+            ),
+            (
+                "a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision",
+                a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn recovery_contracts_3() {
+    crate::git_fixture::isolated(module_path!(), "recovery_contracts_3", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_provider_authentication_failure_skips_final_recovery",
+                a_provider_authentication_failure_skips_final_recovery,
+            ),
+            (
+                "an_empty_crew_pool_skips_final_recovery",
+                an_empty_crew_pool_skips_final_recovery,
+            ),
+            (
+                "a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade",
+                a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade,
+            ),
+            (
+                "a_resume_to_an_earlier_step_keeps_the_named_target",
+                a_resume_to_an_earlier_step_keeps_the_named_target,
+            ),
+            (
+                "a_resume_to_an_admission_or_nonexistent_step_is_escalated",
+                a_resume_to_an_admission_or_nonexistent_step_is_escalated,
+            ),
+            (
+                "a_malformed_decision_is_escalated",
+                a_malformed_decision_is_escalated,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn recovery_contracts_4() {
+    crate::git_fixture::isolated(module_path!(), "recovery_contracts_4", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_failure_before_the_worktree_exists_skips_final_recovery",
+                a_failure_before_the_worktree_exists_skips_final_recovery,
+            ),
+            (
+                "failed_recovery_dispatch_is_injected_before_final_recovery",
+                failed_recovery_dispatch_is_injected_before_final_recovery,
+            ),
+            (
+                "final_recovery_injects_only_its_runs_bounded_evidence_in_order",
+                final_recovery_injects_only_its_runs_bounded_evidence_in_order,
+            ),
+            (
+                "final_recovery_escalates_instead_of_dropping_records_that_cannot_fit",
+                final_recovery_escalates_instead_of_dropping_records_that_cannot_fit,
+            ),
+            (
+                "final_recovery_keeps_post_recovery_output_when_a_later_step_fails",
+                final_recovery_keeps_post_recovery_output_when_a_later_step_fails,
+            ),
+            (
+                "final_recovery_resume_checkpoints_the_latest_conflict_diagnostics",
+                final_recovery_resume_checkpoints_the_latest_conflict_diagnostics,
+            ),
+            (
+                "transient_infrastructure_is_escalated_without_an_agent",
+                transient_infrastructure_is_escalated_without_an_agent,
+            ),
+        ]);
+    });
 }

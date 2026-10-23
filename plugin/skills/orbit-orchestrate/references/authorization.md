@@ -32,7 +32,10 @@ review-only run, or use a local shadow store. See
 
 - PR mode requires a verified merged PR before `done`.
 - Local mode requires merge and push before `done`.
-- Validated no-diff work may complete without a PR.
+- Completed `no-diff-expected` work may complete without a PR. It runs only
+  commands its own brief requires, with no workspace gates, required validation
+  commands, or `no-diff.json` and workspace validation logs, in owner or claimed
+  mode. No-op implementations without the tag still need validated no-diff evidence.
 - Auto completion covers every task admitted during the window, including
   tasks prepared after it starts. Do not use a whole-backlog drain when only
   named tasks were authorized.
@@ -45,6 +48,13 @@ separate, default-off authorization for that drain to approve qualifying
 the window. Use it only when the user authorized promotion as well as delivery.
 It cannot be combined with `--pull`. Tag a task `no-auto-approve` to keep it out
 of every automatic approval, the CI sweep's included.
+
+`orbit run auto --auto-fix` is the separate, default-off authorization for that
+drain to repair failed required checks and merge conflicts on the PRs its runs
+opened, using the low-complexity crew pool and a budget of three repairs per PR.
+It never merges: pair it with `--complete` only when delivery through `done` is
+also authorized. It cannot be combined with `--pull`. See
+[orchestration.md](orchestration.md#auto-fix-authorization).
 
 Use the configured base branch and ship mode unless the user requests an
 explicit override. Inspect effective inputs; `--base` and `--mode` are deliberate
@@ -63,12 +73,34 @@ when assessing provider cost and host load. Do not start a second drain merely
 to raise capacity. Discover whether the installed version supports a live
 update, and follow its advertised command and authority requirements.
 
+Read-only `orbit run profiles` and `orbit run profiles --accuracy` explain
+delivery resource use and forecast quality. `machine.auto_concurrency.mode`
+`shadow` records forecast decisions; `enforce` applies them within the existing
+worker ceiling. Neither grants authority to resize a drain or change machine
+policy. An authorized local drain may select an explicit mode with
+`--auto-concurrency`; that choice does not itself authorize submitting work or
+changing global settings. Inspect effective settings before attributing a wait
+to capacity; do not raise concurrency or forecast thresholds, disable
+forecasting, or start another drain to bypass a wait without operator
+authorization.
+
+`orbit run readiness --json` names `host_shutdown_scheduled` when a shutdown or
+reboot is within `machine.host_shutdown_hold_minutes` (default 180), holding
+new unattended admissions while leaving running work alone. Later schedules
+are reported while admissions continue. Preserve the configured window and
+schedule; diagnostics do not authorize cancelling shutdown or overriding the
+hold. See [operational-logs.md](../../orbit-setup/references/operational-logs.md#delivery-profiles-and-admission-diagnostics).
+
 Sustained host pressure throttles admissions on its own: readiness tasks read
 `resource_throttled`, and `orbit run readiness`, `orbit run show <drain>` and
 start/ship responses name the resource, value, threshold and since-when.
 Running workers continue. Report the throttle and wait for it to clear; do not
 raise `--concurrency`, start another drain, or disable
-`workflow.resource_throttle` to push work through unless the user asks. While
+`workflow.resource_throttle` to push work through unless the user asks. On
+Linux the throttle also reads disk I/O stall (`io full`, from
+`/proc/pressure/io`); a host that saturates its disk before its CPU holds
+admissions with CPU idle, so lower the drain ceiling or build slots rather
+than raising the mark. While
 CPU alone is held, `no-diff-expected` auto-tasks (marked `cpu-light`) still
 start within `workflow.resource_throttle.cpu_light_leaves`, and one waiting on
 that spent budget reads `cpu_light_budget_full`. A task whose frozen delivery

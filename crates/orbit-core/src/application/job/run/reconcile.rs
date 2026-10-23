@@ -9,6 +9,7 @@ use orbit_types::workflow::{JobRun, JobRunState};
 
 use crate::OrbitRuntime;
 use crate::application::job::log_best_effort;
+use crate::application::job::pipeline::reconciled_worker_exit_clause;
 
 use super::WORKER_TERMINATED_ERROR_CODE;
 #[cfg(unix)]
@@ -132,6 +133,12 @@ impl OrbitRuntime {
         job_id: Option<&str>,
         pass: &mut ReconcilePass,
     ) -> Result<usize, OrbitError> {
+        let _scan = tracing::debug_span!(
+            target: "orbit.core.job_run.reconcile",
+            "stale_job_run_scan",
+            job_id,
+        )
+        .entered();
         let runs = if let Some(job_id) = job_id {
             self.stores()
                 .jobs()
@@ -256,13 +263,20 @@ impl OrbitRuntime {
         // [ORB-12969] The diagnostic is handed to finalization so the coupled
         // tasks' interruption block names the error code; the step itself is
         // recorded below, only once the interrupted write has won.
+        // The same call freezes a claimed leaf's settlement. Supply the exit
+        // evidence now: enriching only the later step cannot amend the outbox.
+        let settlement_message =
+            match reconciled_worker_exit_clause(self.stores().audit_events(), &current) {
+                Some(clause) => format!("{message}; {clause}"),
+                None => message.clone(),
+            };
         let changed = self.finalize_job_run_with_reservation_cleanup_and_diagnostic(
             &current.run_id,
             JobRunState::Interrupted,
             finished_at,
             duration_ms,
             TaskReservationReleaseReason::StaleRunReconciled,
-            Some((&error_code, &message)),
+            Some((&error_code, &settlement_message)),
         )?;
         if !changed {
             return Ok(false);
@@ -275,6 +289,12 @@ impl OrbitRuntime {
             return Ok(false);
         }
 
+        // [ORB-17179] Read only now that the interrupted write has won, so an
+        // exit the worker's supervisor recorded meanwhile is still named.
+        let message = match reconciled_worker_exit_clause(self.stores().audit_events(), &current) {
+            Some(clause) => format!("{message}; {clause}"),
+            None => message,
+        };
         let step_started_at = current.started_at.unwrap_or(current.scheduled_at);
         log_best_effort(
             "record reconciliation diagnostic",

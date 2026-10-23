@@ -374,59 +374,11 @@ fn zero_worktree_gc_age_floor(home: &Path) {
 /// A terminal run naming an archived task and a clean worktree at the path
 /// scheduled GC resolves for it, matching the real worktree setup contract.
 fn seed_eligible_worktree(repo: &Path, home: &Path) -> (PathBuf, String) {
-    let task = run_json(
-        repo,
-        home,
-        &[
-            "task",
-            "add",
-            "--title",
-            "Sweep GC fixture",
-            "--complexity",
-            "low",
-            "--json",
-        ],
-    );
-    let task_id = task["id"].as_str().expect("fixture task id").to_string();
-    run_success(repo, home, &["task", "archive", &task_id]);
-    let job = repo.join("gc-fixture.yaml");
-    fs::write(
-        &job,
-        r#"schemaVersion: 2
-kind: Job
-metadata:
-  name: gc_fixture_pipeline
-spec:
-  state: enabled
-  kind: workflow
-  steps:
-    - id: finish
-      default_input:
-        seconds: 0
-      spec:
-        type: deterministic
-        action: sleep
-        config: {}
-"#,
-    )
-    .expect("write fixture job");
-    let run = run_json(
-        repo,
-        home,
-        &[
-            "run",
-            "job",
-            job.to_str().expect("fixture job path"),
-            "--input",
-            &format!("task_id={task_id}"),
-            "--input",
-            "crew=sol",
-            "--wait",
-            "--json",
-        ],
-    );
-    assert_eq!(run["state"], "success", "seed run must succeed: {run}");
-    let run_id = run["run_id"].as_str().expect("seed run id");
+    // The seed is not a worker-launch assertion. Reuse the same registered
+    // lifecycle/real-reaped-owner setup the GC CLI rows already exercise.
+    let (run_id, task_id) =
+        super::worktree_gc_routing::seed_archived_run(&repo.join(".orbit"), home, "sweep");
+
     let tree = repo
         .join(".orbit/state/worktrees")
         .join(format!("orbit-{run_id}"));

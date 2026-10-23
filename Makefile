@@ -1,4 +1,4 @@
-.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-test-affected ci-lint goldens stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench cross-revision-check-test web-memory-soak
+.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci check-ci-macos ci-guards ci-fast ci-test-affected ci-lint goldens stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench cross-revision-check-test web-memory-soak
 
 # ------------------------------------------------------------
 # Config
@@ -53,8 +53,10 @@ help:
 	@echo "  make audit        Supply-chain audit (cargo-deny: advisories + licenses)"
 	@echo "  make tree         Print dependency tree"
 	@echo "  make ci           Full CI pass (clippy + tests + doc + guardrails; also runs on PRs)"
+	@echo "  make ci-guards    Static repository guards; no build or network"
 	@echo "  make ci-fast      Format, repository guardrails, and the MSRV check; runs no Rust tests"
-	@echo "  make ci-test-affected  Full tests for changed crates and workspace dependents (CI_TEST_BASE=<commit> pins the base)"
+	@echo "  make ci-test-affected  Full tests for changed crates and workspace dependents; also checks ci-macos.yml when tests or the workflow change (CI_TEST_BASE=<commit> pins the base)"
+	@echo "  make check-ci-macos  Verify native macOS CI filters still select compiled tests"
 	@echo "  make ci-lint      Pre-handoff clippy gate for agents (compiles all workspace targets)"
 	@echo "  make goldens      Pre-handoff golden gate (CLI/MCP, CI logs, and sandbox profiles; UPDATE=1 regenerates)"
 	@echo "  make docs-index   Regenerate docs/INDEX.md"
@@ -159,23 +161,37 @@ tree:
 ci:
 	$(BUILD_BUDGET) -- ./scripts/ci-guardrails.sh
 
+# Verify that every native macOS CI filter still selects a real test.
+check-ci-macos:
+	$(BUILD_BUDGET) -- ./scripts/check-ci-macos.sh --workspace-build
+
+# File and metadata-only repository guards: no Cargo build or network.
+ci-guards:
+	./scripts/ci-guardrails.sh --static
+
 # Format and shared guardrails plus the MSRV compile check: no Rust tests.
+# The MSRV check's wall time is its own line, separate from each guardrail.
 # Full make ci runs on PRs.
 ci-fast:
 	./scripts/require-python.sh
-	$(BUILD_BUDGET) -- $(CARGO) +$(MSRV) check --workspace --locked
 	./scripts/ci-guardrails.sh --fast
+	@bash -c 'TIMEFORMAT="ci-fast: MSRV check %3R s"; time "$$@"' bash $(BUILD_BUDGET) -- $(CARGO) +$(MSRV) check --workspace --locked
 
 # Full test targets of changed crates and all reverse workspace dependents.
 # The selector includes committed and working-tree changes against the base.
 ci-test-affected:
 	CARGO="$(CARGO)" BUILD_BUDGET="$(BUILD_BUDGET)" ORBIT_VALIDATION_GATE="make ci-test-affected" python3 ./scripts/ci-test-affected.py
 
-# Compile-time pre-handoff gate for agents. Keep these passes aligned with
-# scripts/ci-guardrails.sh: production enforces bounded channels, then all
-# targets retain the other workspace lints without flagging test-only channels,
-# then rustdoc denies warnings (private intra-doc links turned agent-main red
-# twice on 2026-10-07 because no agent gate built docs).
+# Compile-time pre-handoff gate for agents. Production clippy denies
+# clippy::disallowed_methods (unbounded channels). The all-targets pass keeps
+# the other workspace lints and allows that lint, so test-only channels stay
+# legal. These two clippy commands are unchanged: this gate does not build
+# test binaries, so it cannot fold the all-targets lint into a test build.
+# The CI job does that fold inside scripts/check-ci-macos.sh --workspace-build
+# and no longer runs a second clippy-all-targets phase
+# (scripts/ci-guardrails.sh). Rustdoc then denies warnings (private intra-doc
+# links turned agent-main red twice on 2026-10-07 because no agent gate built
+# docs).
 ci-lint:
 	./scripts/require-python.sh
 	./scripts/check-dependency-direction.sh
@@ -184,8 +200,9 @@ ci-lint:
 	RUSTDOCFLAGS="-D warnings" $(BUILD_BUDGET) -- $(CARGO) doc --no-deps $(WORKSPACE)
 
 # Focused pre-review golden gate: CLI long-help text, output_goldens, the
-# MCP tools/list snapshot, CI/GitHub log fixtures, and sandbox profile goldens. Compiles orbit-cli
-# tests plus the tools, exec, and core golden binaries. UPDATE=1 regenerates.
+# MCP tools/list snapshot, CI/GitHub log fixtures, sandbox profiles, and store and
+# task-registry ledger schema prefixes. Compiles orbit-cli
+# tests plus the tools, exec, core and store golden binaries. UPDATE=1 regenerates.
 goldens:
 	$(BUILD_BUDGET) -- ./scripts/check-goldens.sh $(GOLDENS_FLAGS)
 

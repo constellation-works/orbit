@@ -52,6 +52,9 @@ spec:
     # ORB-11187: forwarded to each gate run. `review` is the default everywhere;
     # `done` is explicit per-invocation operator authorization (`--complete`).
     completion: review
+    # Forwarded to each gate run: `--auto-fix` repair authority for the PRs
+    # the leaves open (see `task_pr_pipeline`).
+    auto_fix: false
     # ORB-11242: opt-in, run-scoped crew restriction. Empty means unrestricted,
     # which is the behavior of every caller that does not pass it. Forwarded
     # unchanged so the leaf jobs this run admits inherit the same window.
@@ -96,6 +99,7 @@ spec:
               base_sync: "{{ input.base_sync }}"
               landing_branch: "{{ input.landing_branch }}"
               completion: "{{ input.completion }}"
+              auto_fix: "{{ input.auto_fix }}"
               allowed_crews: "{{ input.allowed_crews }}"
       fan_in:
         join:

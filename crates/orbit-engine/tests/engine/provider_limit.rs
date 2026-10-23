@@ -10,16 +10,17 @@
 use chrono::{DateTime, Duration, Local, TimeZone, Timelike, Utc};
 use orbit_engine::{V2DispatchInput, dispatch_v2_activity};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
+use orbit_types::workflow::activity_job::AgentLoopSpec;
 use orbit_types::workflow::activity_job::{ActivityV2Spec, Provider};
 use orbit_types::workflow::{
-    ProviderFailureClass, ProviderLimitFailure, failed_provider, is_provider_limit,
+    ProviderFailureClass, ProviderLimitFailure, failed_account, failed_provider, is_provider_limit,
     is_provider_unavailable,
 };
 use serde_json::json;
 
 use super::provider_capacity::{
     CapacityHost, FakeProvider, SUCCESS_ENVELOPE, agent_spec, failure_message, implementation_job,
-    run_job, writer,
+    outcome_writer, run_job,
 };
 
 /// What Antigravity wrote for crew `gemini-flash` (runs
@@ -80,6 +81,14 @@ const CLAUDE_LIMIT: &str = "You've hit your limit · resets 3pm (America/Los_Ang
 /// grok 1.0.46's HTTP failure, on stderr.
 const GROK_LIMIT: &str = "Error: Too Many Requests (429): rate limit exceeded for this account";
 
+/// Grok Build's billing error, on stderr.
+const GROK_BUILD_402_LIMIT: &str =
+    "API error (status 402 Payment Required): Grok Build usage balance exhausted";
+
+/// An agent's declared envelope failure quoting Grok Build's 402 error: the
+/// work's report, not the provider's.
+const GROK_BUILD_402_ENVELOPE: &str = r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"upstream_limit","message":"API error (status 402 Payment Required): Grok Build usage balance exhausted"}}"#;
+
 /// An agent's declared envelope failure that quotes a GitHub rate limit (box
 /// run jrun-20261003-0630-c2): the work's report, not the provider's.
 const GITHUB_RATE_LIMIT_ENVELOPE: &str = r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"partial_scan","message":"partial_scan: GitHub rate-limit exhaustion; Too Many Requests (429) from api.github.com; You've hit your usage limit"}}"#;
@@ -126,7 +135,7 @@ fn dispatch(
         spec: &ActivityV2Spec::AgentLoop(agent_spec(case.provider)),
         fs_profile: None,
         input: json!({ "prompt": "implement" }),
-        audit: writer(audit.path(), &run_id),
+        audit: outcome_writer(&run_id),
         run_id: &run_id,
         host: Some(&host),
     })
@@ -154,7 +163,6 @@ fn typed_limit(message: Option<&str>, provider: &str) -> ProviderLimitFailure {
 
 /// Every recorded provider limit text types the failure, and nothing the
 /// agent wrote does.
-#[test]
 fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
     let envelope_answer = format!(
         r#"{{"type":"item.completed","item":{{"type":"agent_message","text":{}}}}}"#,
@@ -163,6 +171,10 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
     let declared_failure = format!(
         r#"{{"type":"item.completed","item":{{"type":"agent_message","text":{}}}}}"#,
         serde_json::to_string(GITHUB_RATE_LIMIT_ENVELOPE).unwrap()
+    );
+    let grok_declared_failure = format!(
+        r#"{{"type":"item.completed","item":{{"type":"agent_message","text":{}}}}}"#,
+        serde_json::to_string(GROK_BUILD_402_ENVELOPE).unwrap()
     );
     let cases = vec![
         case(
@@ -201,12 +213,37 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
             true,
         ),
         case("grok", Provider::Grok, String::new(), GROK_LIMIT, 1, true),
+        case(
+            "grok",
+            Provider::Grok,
+            String::new(),
+            GROK_BUILD_402_LIMIT,
+            1,
+            true,
+        ),
         // The agent declared its own failure over a GitHub rate limit.
         case("codex", Provider::Codex, declared_failure, "", 0, false),
         case(
             "claude",
             Provider::Claude,
             GITHUB_RATE_LIMIT_ENVELOPE.to_string(),
+            "",
+            1,
+            false,
+        ),
+        // The agent declared its own failure quoting Grok Build's 402 error.
+        case(
+            "codex",
+            Provider::Codex,
+            grok_declared_failure,
+            "",
+            0,
+            false,
+        ),
+        case(
+            "claude",
+            Provider::Claude,
+            GROK_BUILD_402_ENVELOPE.to_string(),
             "",
             1,
             false,
@@ -218,6 +255,17 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
             format!(
                 r#"{{"type":"item.completed","item":{{"type":"command_execution","command":"gh api","aggregated_output":{},"exit_code":1,"status":"failed"}}}}"#,
                 serde_json::to_string(GROK_LIMIT).unwrap()
+            ),
+            "",
+            1,
+            false,
+        ),
+        case(
+            "codex",
+            Provider::Codex,
+            format!(
+                r#"{{"type":"item.completed","item":{{"type":"command_execution","command":"curl","aggregated_output":{},"exit_code":1,"status":"failed"}}}}"#,
+                serde_json::to_string(GROK_BUILD_402_LIMIT).unwrap()
             ),
             "",
             1,
@@ -313,7 +361,6 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
 /// [ORB-15102] Antigravity's quota arrives as an in-band `ERROR` result frame
 /// with exit 0. It fails the turn as the typed limit, not as a missing
 /// envelope, and records the reset; another terminal error does not.
-#[test]
 fn an_antigravity_error_result_on_exit_zero_is_a_usage_limit() {
     let before = Utc::now();
     let (success, message, limits, _) = dispatch(
@@ -369,7 +416,6 @@ fn an_antigravity_error_result_on_exit_zero_is_a_usage_limit() {
 /// Codex's same-day reset is the host's local time today; Claude's
 /// `rate_limit_info` names the window and its epoch reset, and fails the turn
 /// even on exit 0.
-#[test]
 fn reported_resets_and_windows_are_read_from_the_providers_own_words() {
     let (_, message, _, _) = dispatch(
         0,
@@ -412,7 +458,6 @@ fn reported_resets_and_windows_are_read_from_the_providers_own_words() {
 /// The incident runs spent a step recovery on a quota. Now the provider is
 /// invoked once, neither recovery runs, and the failure handoff gets the typed
 /// code with the candidate intact.
-#[test]
 fn a_usage_limit_skips_recovery_and_keeps_the_candidate() {
     let worktree = tempfile::tempdir().unwrap();
     let candidate = worktree.path().join("candidate.rs");
@@ -457,4 +502,82 @@ fn a_usage_limit_skips_recovery_and_keeps_the_candidate() {
         1,
         "the limit is recorded"
     );
+}
+
+/// [ORB-17288] A crew that sets `env` is its own account: its usage-limit
+/// failure names that account after the provider, still parses as the limit
+/// the provider reported, and its reading and invocation are attributed to
+/// it rather than to the provider's default login.
+fn a_crew_accounts_limit_names_its_account() {
+    let stdout = format!(
+        "{}\n{}",
+        r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1791561600,"rateLimitType":"five_hour"}}"#,
+        r#"{"type":"result","subtype":"success","is_error":true,"result":"You've hit your usage limit"}"#
+    );
+    let fake = FakeProvider::new("claude", &stdout, "", 0, "");
+    let audit = tempfile::tempdir().unwrap();
+    let host = CapacityHost::new(&fake.path, audit.path());
+    let spec = AgentLoopSpec {
+        crew_account: Some("opus-credits".into()),
+        ..agent_spec(Provider::Claude)
+    };
+    let outcome = dispatch_v2_activity(V2DispatchInput {
+        activity_name: "limit_fixture",
+        spec: &ActivityV2Spec::AgentLoop(spec),
+        fs_profile: None,
+        input: json!({ "prompt": "implement" }),
+        audit: outcome_writer("limit-account"),
+        run_id: "limit-account",
+        host: Some(&host),
+    })
+    .unwrap();
+    assert!(!outcome.success);
+    let message = outcome.message.as_deref();
+    let limit = typed_limit(message, "claude");
+    assert_eq!(failed_account(message.unwrap()), Some("opus-credits"));
+    assert_eq!(limit.window.as_deref(), Some("five_hour"));
+    assert_eq!(
+        limit.resets_at,
+        DateTime::from_timestamp(1_791_561_600, 0),
+        "the account token leaves the limit's own tokens readable"
+    );
+    let limits = host.limits.lock().unwrap().clone();
+    assert!(!limits.is_empty(), "the reading is recorded");
+    assert!(
+        limits
+            .iter()
+            .all(|reading| reading.account.as_deref() == Some("opus-credits")),
+        "every reading belongs to the crew account: {limits:?}"
+    );
+    let invocation = outcome.invocation.expect("the turn's invocation trace");
+    assert_eq!(invocation.account.as_deref(), Some("opus-credits"));
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn provider_limit_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "provider_limit_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "usage_limits_are_typed_only_from_text_the_failed_provider_wrote",
+                usage_limits_are_typed_only_from_text_the_failed_provider_wrote,
+            ),
+            (
+                "an_antigravity_error_result_on_exit_zero_is_a_usage_limit",
+                an_antigravity_error_result_on_exit_zero_is_a_usage_limit,
+            ),
+            (
+                "reported_resets_and_windows_are_read_from_the_providers_own_words",
+                reported_resets_and_windows_are_read_from_the_providers_own_words,
+            ),
+            (
+                "a_usage_limit_skips_recovery_and_keeps_the_candidate",
+                a_usage_limit_skips_recovery_and_keeps_the_candidate,
+            ),
+            (
+                "a_crew_accounts_limit_names_its_account",
+                a_crew_accounts_limit_names_its_account,
+            ),
+        ]);
+    });
 }

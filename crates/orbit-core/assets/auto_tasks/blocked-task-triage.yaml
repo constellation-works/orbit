@@ -1,0 +1,59 @@
+schemaVersion: 1
+name: blocked-task-triage
+description: Hourly re-read of every escalated block, once per block episode; requeue mechanical blocks within the shared final-recovery requeue bound, propose scope amendments for decision blocks, and report human-only blocks
+enabled: false
+schedule:
+  cron: 25 * * * *
+template:
+  title: Triage escalated blocked tasks
+  description: |-
+    Read every block episode awaiting triage in this workspace once, and record exactly one disposition for each through `orbit.task.block_triage`. The durable output is those task records; the execution summary is the audit trail.
+
+    ## What qualifies
+
+    Every block already got one recovery decision: final recovery in the pipeline, or the blocked-task backstop outside it. An episode (the task's latest move to `blocked`) awaits triage when that decision was an escalation, or when it has none and is older than the backstop's 72-hour limit. An episode already triaged, or touched by a human after the block (a comment, status change, artifact, or an unattributed field edit), is excluded. List them with `orbit tool run orbit.task.block_triage --input '{"action":"candidates","model":"<agent-family>"}'`. `qualifying` lists the episodes to triage; `excluded` lists the other blocked tasks and why. Zero qualifying episodes (the state changed since this task was minted) is a successful no-op.
+
+    ## Rules
+
+    - Record every decision with `orbit.task.block_triage`; it is the only write this run makes to a blocked task. It refuses an episode that no longer qualifies; report that refusal and move on.
+    - Never complete, reject, archive or delete a task; never resume, retry or cancel a run; never edit any task's description, criteria, context, tags, crew or status through `orbit.task.update` (your own task's `execution_summary` excepted); never merge or close a pull request; never use `--force` or an operator-only tool (`orbit.task.requeue`, `orbit.workflow.run.resume`, `orbit.workflow.run.show`, `orbit.task.reject`, and the like). An operator-only route is a human action: report it.
+    - Read evidence read-only: `orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>"}'` (its `block` field names the cause, run and next action), `orbit run show <run-id> --no-reconcile --json`, the escalation comment the candidate list quotes, and `orbit tool run orbit.search --input '{"query":"<one distinctive token>","all":true,"model":"<agent-family>"}'` for related tasks and frictions. Quote the escalation reason exactly.
+
+    ## Dispositions
+
+    1. **Mechanical → requeue.** The cause is Orbit state or environment, and it has a documented, supported recovery this lane can apply: a crashed or interrupted run whose task can simply run again, stale state the next admission reconciles, or a transient provider or host failure that has since cleared (a later successful run on the same provider and host shows it). Apply any repair only through tools this lane holds, then call `orbit tool run orbit.task.block_triage --input '{"action":"requeue","id":"<task-id>","blocker":"<escalation reason, quoted>","reason":"<the repair applied and the evidence it cleared>","model":"<agent-family>"}'`. The tool counts the requeue against the final-recovery requeue bound (2 per 24 hours, one count shared with final recovery) and records `requeue n of 2 per 24h` on the task. Past the bound, for a task tagged `security` or `security-review`, or for a run another machine executed, it records a refusal naming the reason and leaves the task blocked: report that outcome. When it answers that the requeue count cannot be read, nothing was requeued: report the block as unresolved and do not retry another way. When the documented recovery needs an operator-only tool, a run resume or `--force` (explicit source repair of a stopped publication is one), report it with the exact operator command instead.
+       When the cause is an Orbit defect with no supported recovery, file one friction record with `orbit tool run orbit.friction.add` (search for an existing one first), then report the block naming the friction. Never requeue it.
+    2. **Decision → propose.** The block needs a scope or requirements choice: an out-of-scope behavior difference, an ambiguous or contradictory specification, or criteria that cannot be met as written. Call `orbit tool run orbit.task.block_triage --input '{"action":"propose","id":"<task-id>","blocker":"<escalation reason, quoted>","options":[{"summary":"<what the option decides>","consequences":"<what choosing it leads to>","replacement":"<the exact replacement text for each changed description section or criterion, ready to paste>"}, ...],"recommended":<1-based index>,"model":"<agent-family>"}'` with two or three options. The tool writes one comment and changes nothing else; the task stays blocked for the operator to choose.
+    3. **Human-only → report.** Credentials or provider login; an owner sign-off the task names; a `security` or `security-review` tag; a block on a run executed on another machine whose evidence this owner cannot read (`job_run_machine` is not this host, `run_is_local` false); an OS or browser-kit requirement no reachable host meets. Call `orbit tool run orbit.task.block_triage --input '{"action":"report","id":"<task-id>","blocker":"<escalation reason, quoted>","reason":"<the specific human action>","model":"<agent-family>"}'`. Nothing else changes.
+
+    When unsure between mechanical and another disposition, do not requeue: a block that recurs on one host must stay visible.
+
+    ## Execution summary
+
+    Persist an `execution_summary` listing every blocked task the candidate list read: task, block age, the escalation reason quoted, disposition, the action taken or proposed, and for requeues the bound count the tool returned (`requeue n of 2 per 24h`). List excluded tasks with the reason the candidate list gave. Record every refusal or tool error verbatim.
+  acceptance_criteria:
+  - Every qualifying block episode in the candidate list received exactly one `orbit.task.block_triage` decision (requeue, propose or report), or its refusal or error is recorded verbatim in the execution summary.
+  - Every requeue went through `orbit.task.block_triage` and its comment records the shared bound count; no task was moved to backlog any other way, and a refused or unreadable count left the task blocked and reported.
+  - Every decision proposal quotes the blocker and gives two or three options with consequences, ready-to-apply replacement text and a recommendation; no task's description, criteria, context, tags or status was edited.
+  - Every human-only block names the specific human action, and an Orbit defect with no supported recovery has a friction record and was not requeued.
+  - No task was completed, rejected or archived, no run was resumed, retried or cancelled, no pull request was merged or closed, and no operator-only tool or force path was used.
+  - The execution summary lists every blocked task read with its age, quoted escalation reason, disposition, action and requeue count; zero qualifying episodes succeeds as a no-op.
+  task_type: chore
+  tags:
+  - blocked-task-triage
+  - no-diff-expected
+  required_tools:
+  - orbit.friction.add
+  - orbit.search
+  - orbit.task.block_triage
+  - orbit.task.list
+  - orbit.task.show
+  priority: medium
+  complexity: medium
+  status: backlog
+dedupe: skip_if_open
+skip_unless_blocked_candidates: true
+created_by: system
+created_at: 2026-10-21T00:00:00Z
+updated_by: system
+updated_at: 2026-10-21T00:00:00Z

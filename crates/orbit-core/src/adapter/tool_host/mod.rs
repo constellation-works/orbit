@@ -1,6 +1,8 @@
 mod agent_tools;
+mod agents_tools;
 mod artifact_redaction;
 mod auto_task_tools;
+mod codebase_tools;
 mod command_tools;
 mod desktop;
 mod dispatch;
@@ -10,17 +12,13 @@ mod host;
 mod hub_registry;
 mod input;
 mod json;
+mod orchestrator_tools;
 mod pipeline_tools;
 mod search_tools;
-mod task_tools;
+mod task;
 pub(crate) mod worker_tools;
 mod workflow_tools;
-
-#[cfg(test)]
-mod tests;
-
-#[cfg(test)]
-pub(crate) mod test_support;
+mod workspace_claim_tools;
 
 pub(crate) use host::build_orbit_tool_host;
 pub use hub_registry::HubCoordinationExecutor;

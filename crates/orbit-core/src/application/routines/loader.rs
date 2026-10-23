@@ -33,20 +33,34 @@ pub struct DiscoveredWorkspaces {
     pub skipped_workspaces: Vec<String>,
 }
 
-/// The one shipped job a replica checkout schedules for itself [ORB-14173].
+/// Worktree GC, the replica-local job that reclaims this host's run worktrees
+/// [ORB-14173].
 ///
-/// Worktree GC reclaims this host's own run worktrees and reads task
-/// settlement from the owner over its tool surface, so it needs no write to
-/// the owner's coordination store. Every other routine target either mints or
-/// moves owner tasks or ships work, and stays with the owner.
+/// It reads task settlement from the owner over its tool surface and writes
+/// nothing to the owner's coordination store.
 pub const REPLICA_LOCAL_ROUTINE_JOB: &str = "worktree_gc_pipeline";
 
+/// Store GC, the replica-local job that prunes this host's own store
+/// [ORB-16354].
+///
+/// It deletes command audit and resource history in the local host store, and
+/// this workspace's run audit plus rows of workspace ids that are no longer
+/// registered, unreferenced audit blobs, and old terminal runs' pipeline
+/// state. Another registered workspace keeps its own window. It never opens
+/// the owner's coordination store.
+const REPLICA_LOCAL_STORE_GC_JOB: &str = "store_gc_pipeline";
+
+/// Cron jobs a replica checkout may schedule for itself. Every other target
+/// mints or moves owner tasks or ships work, and stays with the owner.
+const REPLICA_LOCAL_ROUTINE_JOBS: &[&str] =
+    &[REPLICA_LOCAL_ROUTINE_JOB, REPLICA_LOCAL_STORE_GC_JOB];
+
 /// Whether a replica checkout may schedule `definition` on this host's clock:
-/// a cron routine targeting [`REPLICA_LOCAL_ROUTINE_JOB`]. Delivery and state
+/// a cron routine targeting worktree GC or store GC. Delivery and state
 /// triggers observe owner coordination state, so they are owner-only even for
-/// that job. Listing, toggling and the sweep all ask this one rule.
+/// those jobs. Listing, toggling and the sweep all ask this one rule.
 pub fn runs_in_replica(definition: &RoutineDefinition) -> bool {
-    definition.target.job_name() == REPLICA_LOCAL_ROUTINE_JOB
+    REPLICA_LOCAL_ROUTINE_JOBS.contains(&definition.target.job_name())
         && definition.trigger.deliveries_landed.is_none()
         && definition.trigger.state.is_none()
 }
@@ -55,9 +69,9 @@ pub fn runs_in_replica(definition: &RoutineDefinition) -> bool {
 /// whose checkout does.
 pub fn replica_owner_only_reason(definition: &RoutineDefinition, owner_machine: &str) -> String {
     format!(
-        "replica checkout schedules only host-local worktree GC (job:{REPLICA_LOCAL_ROUTINE_JOB} \
-         on a cron trigger); '{}' -> {} is owner work: enable it in the owner checkout on \
-         machine '{owner_machine}'",
+        "replica checkout schedules only host-local worktree GC (job:{REPLICA_LOCAL_ROUTINE_JOB}) \
+         and store GC (job:{REPLICA_LOCAL_STORE_GC_JOB}) on a cron trigger; '{}' -> {} is owner \
+         work: enable it in the owner checkout on machine '{owner_machine}'",
         definition.name,
         definition.target.as_ref_string(),
     )

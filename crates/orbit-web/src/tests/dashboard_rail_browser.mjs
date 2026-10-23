@@ -43,7 +43,7 @@ try {
           node.textContent = fixture.events;
         }
         for (const [id, text] of [
-          ['rail-count-audit-denials', fixture.denials],
+          ['rail-count-denials', fixture.denials],
           ['rail-count-routine-failures', fixture.routines],
         ]) {
           const node = document.getElementById(id);
@@ -79,8 +79,8 @@ try {
         if (clipped && (row.overflow === 'visible' || row.ellipsis !== 'ellipsis')) {
           failures.push(`${context}: text spills beyond its label without an ellipsis`);
         }
-        if (['audit', 'diagnostics'].includes(row.tab) && clipped) {
-          failures.push(`${context}: Audit/Health label is truncated`);
+        if (['diagnostics', 'analytics'].includes(row.tab) && clipped) {
+          failures.push(`${context}: Health/Analytics label is truncated`);
         }
         const visibleText = clipped && row.overflow !== 'visible'
           ? { ...row.text, left: Math.max(row.text.left, row.label.left), right: Math.min(row.text.right, row.label.right) }
@@ -119,7 +119,7 @@ try {
   await page.setViewportSize({ width: 1440, height: 900 });
   const indicators = await page.evaluate(async () => {
     const router = await import('/static/js/router.js');
-    const state = { diagSubtab: 'runs' };
+    const state = { diagSubtab: 'incidents' };
     router.initRouter(new Proxy({}, {
       get: (_, name) => name === 'getDiagSubtab' ? () => state.diagSubtab
         : name === 'setDiagSubtab' ? value => { state.diagSubtab = value; }
@@ -134,7 +134,7 @@ try {
     });
     const counts = [];
     for (let round = 0; round < 3; round += 1) {
-      for (const route of ['tasks', 'plugins', 'diagnostics/runs', 'diagnostics/metrics', 'diagnostics/errors', 'tasks']) {
+      for (const route of ['tasks', 'plugins', 'jobs/history', 'analytics/metrics', 'diagnostics/incidents/errors', 'tasks']) {
         router.setActiveTab(route, { refresh: false, updateHash: false });
         counts.push({ route, ...count() });
       }
@@ -152,7 +152,7 @@ try {
   }
   fs.writeFileSync(path.join(evidence, 'measurements.json'), `${JSON.stringify({ browser: browser.version(), measurements, indicators, failures }, null, 2)}\n`);
   assert.deepEqual(failures, [], 'Rail labels and counts must remain readable, separate and inside their buttons, and navigation must reuse one indicator per bar');
-  console.log(`PASS: rail label/count geometry at seven viewport widths, both two-count entries, large and cleared counts; one indicator per bar across ${indicators.length} route changes; screenshots: ${evidence}`);
+  console.log(`PASS: rail label/count geometry at seven viewport widths, Health's three counts, large and cleared counts; one indicator per bar across ${indicators.length} route changes; screenshots: ${evidence}`);
 } finally {
   if (browser) await browser.close();
   await new Promise(resolve => server.close(resolve));

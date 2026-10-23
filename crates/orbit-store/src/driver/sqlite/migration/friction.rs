@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 use super::introspect::{add_column_if_missing, table_exists};
@@ -80,7 +81,7 @@ pub(super) fn apply_friction_records_schema(conn: &Connection) -> Result<(), Orb
             );
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v29 `friction_rehome_target` migration: the workspace that owns a friction

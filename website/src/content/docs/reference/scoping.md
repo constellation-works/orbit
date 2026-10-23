@@ -18,7 +18,7 @@ keep their names (see the table).
 | Tasks | Workspace only | Each repository has its own backlog and lifecycle state. |
 | Activities and jobs | Merge by key | Workspace files add new names. A shipped default keeps its name: a workspace file with the same name is ignored when a run resolves it. |
 | Policies | Merge by key | Profiles override by name; global deny rules accumulate. |
-| Job runs | Workspace only | Run artifacts stay in the workspace. |
+| Job runs | Workspace only | Runs belong to one workspace; their records share the global database, while checkout-local logs and worktrees live under `.orbit/state/`. |
 | Skills | Merge by key | Global defaults live in `~/.orbit/skills`; workspace entries override by skill name. |
 | Audit | Global only | One authoritative event trail. |
 
@@ -47,7 +47,6 @@ database recovery, and upgrades, see the
     diagnostics/
     job-runs/
     logs/
-    scoreboard/
     worktrees/
     auto-tasks.json  # scheduler cursor
     layout.version

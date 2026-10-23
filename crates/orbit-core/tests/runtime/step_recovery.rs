@@ -24,8 +24,8 @@ use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_jo
 use orbit_engine::{
     DispatchError, ResolvedActivityTools, ResolvedCliExecutor, RuntimeHost,
     StepRecoveryDecisionRead, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
-    TaskActivityUpdate, TaskAutomationUpdate, V2AuditWriter, execute_job_with_resume,
-    resolve_job_catalog_refs_for_execution,
+    StepRecoveryVerdict, TaskActivityUpdate, TaskAutomationUpdate, V2AuditWriter,
+    execute_job_with_resume, resolve_job_catalog_refs_for_execution,
 };
 use orbit_types::task::{ContextWideningStep, ExecutionLocation};
 use orbit_types::tool::WorkerInvocation;
@@ -41,6 +41,9 @@ use super::dispatch_admission::isolated;
 mod repair_commit;
 
 const ORIGINAL_FAILURE: &str = "required validation is red on the candidate (exit 3; failing: actual_failure). Candidate log: `validation/run-observed/0.json`; base log: `validation/run-observed/0.baseline.json`. Base verdict: passed";
+/// The recovery draw's resolved model, which authors the host's repair
+/// commit [ORB-16768].
+const RECOVERY_MODEL: &str = "gpt-6.1-sol";
 const RETRY_FAILURE: &str = "required validation is still red";
 const TASK: &str = "ORB-1";
 
@@ -69,19 +72,13 @@ struct Fixture {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let mut command = std::process::Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command.args(args).current_dir(dir).output().unwrap();
     assert!(output.status.success(), "git {args:?}: {output:?}");
 }
 
 fn git_stdout(dir: &Path, args: &[&str]) -> String {
-    let mut command = std::process::Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command.args(args).current_dir(dir).output().unwrap();
     assert!(output.status.success(), "git {args:?}: {output:?}");
     String::from_utf8(output.stdout).unwrap().trim().to_string()
@@ -90,7 +87,7 @@ fn git_stdout(dir: &Path, args: &[&str]) -> String {
 /// A registered primary checkout; each case runs in its own linked worktree,
 /// as a managed recovery does.
 fn fixture() -> Fixture {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&global).unwrap();
@@ -123,6 +120,8 @@ struct Case<'a> {
     read_failure: bool,
     claimed: bool,
     change_validation_env: bool,
+    /// Withhold the recovery crew model to exercise the historical author.
+    recovery_model: Option<&'static str>,
     /// Runs on the fresh worktree before the job starts.
     prepare: fn(&Path),
     /// Steps that ran before `validate`, as `(id, recorded output)`: a
@@ -141,6 +140,7 @@ impl Default for Case<'_> {
             read_failure: false,
             claimed: false,
             change_validation_env: false,
+            recovery_model: Some(RECOVERY_MODEL),
             prepare: |_| {},
             before: Vec::new(),
         }
@@ -163,6 +163,8 @@ struct Observed {
     /// attempt.
     attempts_saw: Vec<(String, String)>,
     worktree: PathBuf,
+    /// Actual host-allocated invocation slots, retained for public-reader guards.
+    slots: Vec<StepRecoveryDecisionSlot>,
 }
 
 /// The `step.recovery_attempted` event's activity completion, failure phase
@@ -205,6 +207,8 @@ struct RecoveryHost<'a> {
     read_failure: bool,
     claimed: bool,
     change_validation_env: bool,
+    /// Withhold the recovery crew model to exercise the historical author.
+    recovery_model: Option<&'static str>,
     deliveries: AtomicUsize,
     hooks: Mutex<Vec<(String, Value)>>,
     task_writes: AtomicUsize,
@@ -222,7 +226,7 @@ impl RecoveryHost<'_> {
     }
 }
 
-impl RuntimeHost for RecoveryHost<'_> {
+impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
     fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
         RuntimeHost::final_recovery_log_tail(self.runtime, run_id)
     }
@@ -310,9 +314,27 @@ impl RuntimeHost for RecoveryHost<'_> {
 
     fn agent_crew_config_for_input(
         &self,
-        _input: &Value,
+        input: &Value,
     ) -> Result<Option<orbit_engine::CrewConfig>, DispatchError> {
-        Ok(None)
+        // The recovery draw resolves a crew model, which authors the host's
+        // repair commit [ORB-16768]. No crew exercises the historical fallback.
+        let Some(model) = self.recovery_model else {
+            return Ok(None);
+        };
+        let recovery = input
+            .get("crew_config_key")
+            .and_then(Value::as_str)
+            .is_some_and(|key| {
+                key == "workflow.purpose_crews.failure_recovery"
+                    || key == "workflow.purpose_crews.auto_fix"
+            });
+        Ok(recovery.then(|| orbit_engine::CrewConfig {
+            provider: None,
+            model: Some(model.to_string()),
+            reasoning_effort: None,
+            env: Vec::new(),
+            account: None,
+        }))
     }
 
     /// The runtime's registry, without task-store lookups: a follower holds
@@ -521,6 +543,7 @@ fn run(fixture: &Fixture, case: &Case<'_>) -> Observed {
         read_failure: case.read_failure,
         claimed: case.claimed,
         change_validation_env: case.change_validation_env,
+        recovery_model: case.recovery_model,
         deliveries: AtomicUsize::new(0),
         hooks: Mutex::new(Vec::new()),
         task_writes: AtomicUsize::new(0),
@@ -621,6 +644,7 @@ fn run(fixture: &Fixture, case: &Case<'_>) -> Observed {
             .unwrap(),
         attempts_saw: std::mem::take(&mut *host.attempts_saw.lock().unwrap()),
         worktree,
+        slots: std::mem::take(&mut *host.slots.lock().unwrap()),
     }
 }
 
@@ -649,13 +673,7 @@ fn assert_refused(observed: &Observed, case: &str, status: &str, detail: &str) {
     );
 }
 
-#[test]
 fn the_written_decision_controls_the_single_retry_whatever_the_final_response_says() {
-    if !isolated(
-        "step_recovery::the_written_decision_controls_the_single_retry_whatever_the_final_response_says",
-    ) {
-        return;
-    }
     let fixture = fixture();
 
     // The response claims recovery; the file says it could not repair.
@@ -752,11 +770,7 @@ fn the_written_decision_controls_the_single_retry_whatever_the_final_response_sa
     assert_eq!(silent.deliveries, 1);
 }
 
-#[test]
 fn without_a_decision_only_an_observed_change_admits_the_retry() {
-    if !isolated("step_recovery::without_a_decision_only_an_observed_change_admits_the_retry") {
-        return;
-    }
     let fixture = fixture();
 
     // [ORB-14268] Nothing written and nothing changed: the rerun would meet
@@ -869,59 +883,120 @@ fn without_a_decision_only_an_observed_change_admits_the_retry() {
     assert!(declared_failed.failed_with_original());
 }
 
-#[test]
 fn evidence_for_another_invocation_or_an_unsafe_path_admits_no_retry() {
-    if !isolated("step_recovery::evidence_for_another_invocation_or_an_unsafe_path_admits_no_retry")
-    {
-        return;
-    }
     let fixture = fixture();
-    let cases: &[(&str, &str, &str)] = &[
-        (
-            "literal_backslash_n_suffix",
-            r#"bound retry "x" > "$path"; printf '\\n' >> "$path""#,
-            "literal backslash-n suffix",
-        ),
-        (
-            "malformed",
-            r#"printf '{"decision":' > "$path""#,
-            "malformed",
-        ),
-        (
-            "extra_field",
-            r#"bound retry "x" | sed 's/}$/,"recovered":true}/' > "$path""#,
-            "unknown field",
-        ),
-        (
-            "unknown_verdict",
-            r#"bound maybe "x" > "$path""#,
-            "malformed",
-        ),
-        (
-            "future_schema",
-            r#"bound retry "x" | sed 's/"schema_version":1/"schema_version":2/' > "$path""#,
-            "schema_version",
-        ),
-        (
-            "stale_nonce",
-            r#"nonce=0123456789abcdef0123456789abcdef; bound retry "replayed" > "$path""#,
-            "nonce",
-        ),
-        (
-            "other_run",
-            r#"run=run-elsewhere; bound not_recovered "x" > "$path""#,
-            "run_id",
-        ),
-        (
-            "other_step",
-            r#"step=push; bound retry "x" > "$path""#,
-            "failed_step_id",
-        ),
-        (
-            "other_attempt",
-            r#"attempt=2; bound retry "x" > "$path""#,
-            "attempt",
-        ),
+
+    // One real provider supplies a valid bound decision. Each syntax/binding
+    // case below writes to a fresh public-allocated slot and calls the same
+    // public reader the engine consumes, rather than restarting an identical
+    // provider/job for every byte-level variant.
+    let captured = run(
+        &fixture,
+        &Case {
+            name: "captured_reader_source",
+            producer: r#"bound retry "reader source" > "$path""#,
+            response: SAYS_RECOVERED,
+            ..Case::default()
+        },
+    );
+    assert!(captured.attempted.recovery_succeeded);
+    assert_eq!(captured.decision().status, "verified");
+    assert_eq!(captured.decision().verdict.as_deref(), Some("retry"));
+    assert!(captured.decision().retry_admitted);
+    assert_eq!(captured.deliveries, 2);
+    assert_eq!(captured.post_recovery.len(), 1);
+    assert!(captured.result.as_ref().is_ok_and(|(success, _)| *success));
+    let [source_slot] = captured.slots.as_slice() else {
+        panic!("one real provider invocation supplies the captured slot");
+    };
+    let source: Value = serde_json::from_slice(&std::fs::read(&source_slot.path).unwrap()).unwrap();
+    assert!(matches!(
+        fixture
+            .runtime
+            .read_step_recovery_decision(source_slot)
+            .unwrap(),
+        StepRecoveryDecisionRead::Verified {
+            verdict: StepRecoveryVerdict::Retry,
+            ..
+        }
+    ));
+
+    for (name, detail) in [
+        ("literal_backslash_n_suffix", "literal backslash-n suffix"),
+        ("malformed", "malformed"),
+        ("extra_field", "unknown field"),
+        ("unknown_verdict", "malformed"),
+        ("future_schema", "schema_version"),
+        ("other_run", "run_id"),
+        ("other_step", "failed_step_id"),
+        ("other_attempt", "attempt"),
+        ("oversized", "exceeds"),
+        ("blocker_without_kind", "blocker needs a kind"),
+        ("external_blocker_without_blocker", "needs a blocker"),
+        ("retry_with_blocker", "only an external_blocker"),
+    ] {
+        let slot = fixture
+            .runtime
+            .allocate_step_recovery_decision(&StepRecoveryDecisionRequest {
+                run_id: source_slot.run_id.clone(),
+                failed_step_id: source_slot.failed_step_id.clone(),
+                attempt: source_slot.attempt,
+                workspace_path: captured.worktree.to_string_lossy().into_owned(),
+            })
+            .unwrap()
+            .expect("the public host allocator provides a fresh reader slot");
+        assert_ne!(slot.path, source_slot.path);
+        assert_ne!(slot.nonce, source_slot.nonce);
+        let mut decision = source.clone();
+        decision["nonce"] = json!(slot.nonce);
+        match name {
+            "extra_field" => decision["recovered"] = json!(true),
+            "unknown_verdict" => decision["decision"] = json!("maybe"),
+            "future_schema" => decision["schema_version"] = json!(2),
+            "other_run" => decision["run_id"] = json!("run-elsewhere"),
+            "other_step" => decision["failed_step_id"] = json!("push"),
+            "other_attempt" => decision["attempt"] = json!(slot.attempt + 1),
+            "blocker_without_kind" => {
+                decision["decision"] = json!("external_blocker");
+                decision["blocker"] = json!({"kind": "", "evidence": "y"});
+            }
+            "external_blocker_without_blocker" => {
+                decision["decision"] = json!("external_blocker");
+                decision.as_object_mut().unwrap().remove("blocker");
+            }
+            "retry_with_blocker" => {
+                decision["blocker"] = json!({"kind": "k", "evidence": "y"});
+            }
+            "literal_backslash_n_suffix" | "malformed" | "oversized" => {}
+            _ => unreachable!("every reader case names its one mutation"),
+        }
+        let mut bytes = serde_json::to_vec(&decision).unwrap();
+        match name {
+            // Literal backslash followed by n, not a JSON whitespace newline.
+            "literal_backslash_n_suffix" => bytes.extend_from_slice(&[92, 110]),
+            "malformed" => bytes = br#"{"decision":"#.to_vec(),
+            "oversized" => {
+                let mut oversized = vec![b' '; 20_000];
+                oversized.extend_from_slice(&bytes);
+                bytes = oversized;
+            }
+            _ => {}
+        }
+        std::fs::write(&slot.path, bytes).unwrap();
+        let read = fixture.runtime.read_step_recovery_decision(&slot).unwrap();
+        let StepRecoveryDecisionRead::Invalid { diagnostic } = read else {
+            panic!("{name}: hostile captured-provider bytes authorize nothing: {read:?}");
+        };
+        assert!(
+            diagnostic.contains(detail),
+            "{name}: refusal names {detail}: {diagnostic}"
+        );
+    }
+
+    // Keep the real forged-binding and provider-authored filesystem routes.
+    // These also pin the engine's shared Invalid -> no verdict/no retry path
+    // despite an advisory response claiming recovery.
+    for (name, producer, detail) in [
         (
             "symlink",
             r#"bound retry "x" > "$path.real"; ln -s "$path.real" "$path""#,
@@ -933,32 +1008,16 @@ fn evidence_for_another_invocation_or_an_unsafe_path_admits_no_retry() {
             "link or not a regular file",
         ),
         (
-            "oversized",
-            r#"head -c 20000 /dev/zero | tr '\0' ' ' > "$path"; bound retry "x" >> "$path""#,
-            "exceeds",
-        ),
-        (
-            "blocker_without_kind",
-            r#"bound external_blocker "x" | sed 's/}$/,"blocker":{"kind":"","evidence":"y"}}/' > "$path""#,
-            "blocker needs a kind",
-        ),
-        (
-            "external_blocker_without_blocker",
-            r#"bound external_blocker "x" > "$path""#,
-            "needs a blocker",
-        ),
-        (
-            "retry_with_blocker",
-            r#"bound retry "x" | sed 's/}$/,"blocker":{"kind":"k","evidence":"y"}}/' > "$path""#,
-            "only an external_blocker",
-        ),
-        (
             "redirected_slot",
             r#"bound retry "x" > "$path.real"; d=$(dirname "$path"); mv "$d" "$d.moved"; ln -s "$d.moved" "$d""#,
             "replaced by a link",
         ),
-    ];
-    for (name, producer, detail) in cases {
+        (
+            "stale_nonce",
+            r#"nonce=0123456789abcdef0123456789abcdef; bound retry "replayed" > "$path""#,
+            "nonce",
+        ),
+    ] {
         let observed = run(
             &fixture,
             &Case {
@@ -971,8 +1030,8 @@ fn evidence_for_another_invocation_or_an_unsafe_path_admits_no_retry() {
         assert_refused(&observed, name, "invalid", detail);
     }
 
-    // The same invocation's earlier, valid file elsewhere in scratch is not
-    // read: each invocation has its own path and nonce.
+    // A file elsewhere still traverses the actual provider and absent-decision
+    // fallback; run-local scratch is not a change that permits a retry.
     let observed = run(
         &fixture,
         &Case {
@@ -986,14 +1045,12 @@ fn evidence_for_another_invocation_or_an_unsafe_path_admits_no_retry() {
         observed.deliveries, 1,
         "ignored scratch is not a change to the worktree"
     );
+    assert!(!observed.decision().retry_admitted);
+    assert!(observed.post_recovery.is_empty());
+    assert!(observed.failed_with_original());
 }
 
-#[test]
 fn read_write_and_allocation_failures_are_never_a_verified_recovery() {
-    if !isolated("step_recovery::read_write_and_allocation_failures_are_never_a_verified_recovery")
-    {
-        return;
-    }
     let fixture = fixture();
 
     // The host refuses a slot directory that is a link out of the worktree,
@@ -1090,13 +1147,7 @@ fn read_write_and_allocation_failures_are_never_a_verified_recovery() {
     }
 }
 
-#[test]
 fn a_claimed_follower_decides_from_its_own_run_local_file_without_owner_task_writes() {
-    if !isolated(
-        "step_recovery::a_claimed_follower_decides_from_its_own_run_local_file_without_owner_task_writes",
-    ) {
-        return;
-    }
     let fixture = fixture();
     for (name, verdict, deliveries) in [
         ("claimed_declined", "not_recovered", 1),
@@ -1208,3 +1259,17 @@ fn an_external_blocker_decision_skips_the_retry_and_final_recovery() {
         Some("missing_credentials")
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    the_written_decision_controls_the_single_retry_whatever_the_final_response_says_scenarios,
+    the_written_decision_controls_the_single_retry_whatever_the_final_response_says,
+    without_a_decision_only_an_observed_change_admits_the_retry
+);
+
+crate::scenario_table!(
+    evidence_for_another_invocation_or_an_unsafe_path_admits_no_retry_scenarios,
+    evidence_for_another_invocation_or_an_unsafe_path_admits_no_retry,
+    read_write_and_allocation_failures_are_never_a_verified_recovery,
+    a_claimed_follower_decides_from_its_own_run_local_file_without_owner_task_writes
+);

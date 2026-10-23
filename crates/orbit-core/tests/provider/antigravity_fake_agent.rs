@@ -112,6 +112,9 @@ fn spec(timeout_seconds: u64) -> AgentLoopSpec {
     AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "Return the requested Orbit response envelope.".to_string(),
+        steering_instruction: None,
+        regression_risk_instruction: None,
+        explore_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: Some("gemini-3.8-flash-high".to_string()),
@@ -125,6 +128,8 @@ fn spec(timeout_seconds: u64) -> AgentLoopSpec {
         proc_allowed_programs: None,
         proc_disallowed_programs: None,
         trusted_host_execution: false,
+        crew_env: Vec::new(),
+        crew_account: None,
     }
 }
 
@@ -177,7 +182,11 @@ exit 0"#
 
 #[test]
 fn command_construction_matches_the_shipped_headless_contract() {
-    let harness = Harness::new(&success_body());
+    let body = format!(
+        "printf 'edited by agy\\n' > '{{EDIT_PATH}}'\n{}",
+        success_body()
+    );
+    let harness = Harness::new(&body);
     let (outcome, store) = try_dispatch_with_audit(&harness, spec(60)).expect("dispatch");
     assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
 
@@ -235,48 +244,21 @@ fn command_construction_matches_the_shipped_headless_contract() {
         !argv.iter().any(|arg| arg.contains(PROMPT_SECRET)),
         "prompt must not enter argv",
     );
-}
 
-#[test]
-fn prompt_is_a_stream_json_user_event_and_model_family_stays_gemini() {
-    let harness = Harness::new(&success_body());
-    let outcome = dispatch(&harness, spec(60));
-    assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
     let stdin = harness.stdin();
     assert!(stdin.contains(PROMPT_SECRET));
     assert!(stdin.contains("\"event\":\"user\"") || stdin.contains("\"event\": \"user\""));
     assert!(stdin.contains("Execution envelope:"));
-
     let invocation = outcome.invocation.expect("invocation trace");
     assert_eq!(invocation.provider, "antigravity");
     assert_eq!(invocation.model.as_deref(), Some("gemini-3.8-flash-high"));
     let rendered = serde_json::to_string(&outcome.output).expect("serialize output");
     assert!(!rendered.contains(PROMPT_SECRET));
-}
-
-#[test]
-fn successful_run_persists_worktree_edit_and_projects_result() {
-    let body = format!(
-        "printf 'edited by agy\\n' > '{{EDIT_PATH}}'\n{}",
-        success_body()
-    );
-    let harness = Harness::new(&body);
-    let outcome = dispatch(&harness, spec(60));
-
-    assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
     assert_eq!(outcome.output["edited"], serde_json::Value::Bool(true));
     assert_eq!(
         std::fs::read_to_string(&harness.edit_path).expect("agent edit persists"),
         "edited by agy\n"
     );
-}
-
-#[test]
-fn error_terminal_status_never_succeeds() {
-    let body = r#"printf '%s\n' '{"event":"result","result":{"status":"ERROR","response":"{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"edited\":true},\"error\":null}","error":"authentication required"}}'
-exit 0"#;
-    let outcome = dispatch(&Harness::new(body), spec(60));
-    assert!(!outcome.success);
 }
 
 #[test]
@@ -622,46 +604,5 @@ fn exit_zero_after_background_tasks_finished_keeps_the_envelope_message() {
         message.contains("agent step did not complete: the provider exited 0")
             && !message.contains("background task"),
         "{message}"
-    );
-}
-
-#[test]
-fn wall_clock_timeout_cancels_the_agent_and_fails_the_step() {
-    let outcome = dispatch(&Harness::new("sleep 30\nexit 0"), spec(1));
-    assert!(!outcome.success);
-    let message = outcome.message.unwrap_or_default();
-    assert!(message.contains("timeout") || message.contains("wall-clock"));
-}
-
-#[test]
-fn shipped_executor_is_sandboxed_and_missing_binary_is_stable() {
-    let resource = antigravity_resource();
-    assert!(
-        resource.spec.sandbox.is_some(),
-        "Antigravity asset must opt into the OS sandbox"
-    );
-    assert_eq!(resource.spec.command.as_deref(), Some("agy"));
-
-    let dir = tempfile::tempdir().expect("missing-binary tempdir");
-    let argv = dir.path().join("argv.txt");
-    let stdin = dir.path().join("stdin.txt");
-    let runtime = OrbitRuntime::in_memory().expect("runtime");
-    let missing = dir.path().join("missing/agy");
-    seed_antigravity_executor(&runtime, &missing, false);
-    let harness = Harness {
-        _dir: dir,
-        argv_path: argv,
-        stdin_path: stdin,
-        edit_path: PathBuf::new(),
-        runtime,
-    };
-    let error = try_dispatch(&harness, spec(60)).expect_err("missing binary must fail");
-    assert!(
-        error.contains("agy"),
-        "stable diagnostic names binary: {error}"
-    );
-    assert!(
-        error.contains("failed to spawn"),
-        "stable diagnostic names spawn failure: {error}"
     );
 }

@@ -1,0 +1,269 @@
+name: Desktop App
+
+# Builds the Tauri desktop shell in desktop/. It is its own Cargo workspace,
+# outside the main build, so shell, workflow and shared audit changes run here;
+# the main Check / Clippy / Test budget never pays for the webview
+# stacks. Manual runs also bundle unsigned packages for testing: a macOS
+# app and disk image, and the Linux .deb and .AppImage from the same runners,
+# targets and flags as release.yml's build-desktop legs, so those legs are
+# proven before a tag. Release bundles come from release.yml.
+
+on:
+  push:
+    branches: [main, agent-main]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+      - "deny.toml"
+      - "scripts/cargo-deny.sh"
+      - "scripts/ci-download-verified.sh"
+      - "scripts/test-desktop-advisories.py"
+  pull_request:
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+      - "deny.toml"
+      - "scripts/cargo-deny.sh"
+      - "scripts/ci-download-verified.sh"
+      - "scripts/test-desktop-advisories.py"
+  workflow_dispatch:
+
+# Superseded PR heads must not compete with their replacement. Every non-PR
+# run gets its own group, preserving independent push and manual runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Keep in step with desktop/Cargo.toml's tauri dependency line and with
+  # the build-desktop job in release.yml (release-bundles below mirrors it).
+  TAURI_CLI_VERSION: 2.12.3
+  # Keep aligned with ci.yml; verify downloaded bytes before execution.
+  CARGO_DENY_VERSION: 0.19.9
+  CARGO_DENY_LINUX_SHA256: f1f8eedc2a3ac297c540873f93785d4104b102c0079506b2a6b3221b7ec956af
+
+jobs:
+  # Read live state before allocating build runners; the PR event can be stale.
+  pr-state:
+    name: Live PR state
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      pull-requests: read
+    outputs:
+      state: ${{ steps.state.outputs.state }}
+    steps:
+      - name: Read live PR state
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          gh api --method GET 'repos/{owner}/{repo}/pulls/${{ github.event.pull_request.number }}' --jq '
+            if .merged == true then "state=merged"
+            elif .state == "open" or .state == "closed" then "state=" + .state
+            else error("Unexpected pull request state") end
+          ' >> "$GITHUB_OUTPUT"
+
+  advisories:
+    needs: pr-state
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
+    name: Desktop advisories
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      # Orchestration follows the workflow revision; the audit checks the PR head.
+      - name: Check out workflow CI helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .orbit/tmp/workflow-ci
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /scripts/ci-download-verified.sh
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
+        with:
+          toolchain: "1.98.1"
+
+      - name: Install cargo-deny
+        run: |
+          set -euo pipefail
+          cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          mkdir -p .orbit/tmp "$cargo_bin"
+          download_dir="$(mktemp -d .orbit/tmp/desktop-deny.XXXXXX)"
+          trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
+          archive="$download_dir/archive"
+          .orbit/tmp/workflow-ci/scripts/ci-download-verified.sh "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz" "$CARGO_DENY_LINUX_SHA256" "$archive"
+          tar zxf "$archive" --strip-components=1 -C "$cargo_bin" "cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl/cargo-deny"
+          cargo deny --version | awk -v expected="${CARGO_DENY_VERSION}" '{print} $1 == "cargo-deny" && $2 == expected {ok=1} END {exit !ok}'
+
+      - name: Advisory boundary regression
+        # PyYAML is required, as for the main workflow's YAML fixture checks.
+        run: python3 scripts/test-desktop-advisories.py
+
+      - name: Audit desktop lockfile
+        id: audit
+        run: scripts/cargo-deny.sh --manifest-path desktop/Cargo.toml --locked check advisories
+
+  check:
+    needs: pr-state
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
+    name: Desktop check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
+        with:
+          toolchain: "1.98.1"
+          components: clippy, rustfmt
+
+      - name: Install webview build dependencies
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev \
+            libxdo-dev libssl-dev patchelf
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: desktop
+          cache-bin: "false"
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Watcher notifications
+        run: cargo test --locked --no-default-features --test watcher_notifications
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked
+
+      # The Linux bundles come from release-bundles, on the release runners.
+      - name: Install Tauri CLI
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'macOS'
+        run: cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+
+      - name: Bundle
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'macOS'
+        run: cargo tauri build --bundles app,dmg
+
+      - name: Upload bundles
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'macOS'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: orbit-desktop-${{ runner.os }}
+          path: desktop/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+  release-bundles:
+    # Manual runs only: builds the Linux legs of release.yml's build-desktop
+    # job with the same runners, targets and bundle command, unsigned and
+    # unpublished, so a tag never runs them for the first time. Keep the legs,
+    # dependencies, command and packaging check in step with release.yml.
+    needs: pr-state
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
+    name: Release bundle (${{ matrix.slug }})
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slug: linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            runs_on: ubuntu-22.04
+          - slug: linux-arm64
+            target: aarch64-unknown-linux-gnu
+            runs_on: ubuntu-22.04-arm
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
+        with:
+          toolchain: "1.98.1"
+          targets: ${{ matrix.target }}
+
+      - name: Install webview build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev \
+            libxdo-dev libssl-dev patchelf file
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: desktop
+          key: release-${{ matrix.slug }}
+          cache-bin: "false"
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+
+      - name: Build Linux bundles
+        working-directory: desktop
+        run: cargo tauri build --ci --target "$TARGET" --bundles deb,appimage -- --locked
+
+      - name: Package desktop assets
+        run: |
+          set -euo pipefail
+          bundle="desktop/target/$TARGET/release/bundle"
+          # Exactly one bundle per format, as release.yml requires.
+          take() {
+            local pattern="$1" asset="$2" matches
+            shopt -s nullglob
+            # shellcheck disable=SC2206
+            matches=($pattern)
+            shopt -u nullglob
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "expected exactly one $pattern, found ${#matches[@]}" >&2
+              exit 1
+            fi
+            echo "bundled ${matches[0]}"
+            cp "${matches[0]}" "dist/$asset"
+          }
+          mkdir -p dist
+          take "$bundle/deb/*.deb" "orbit-desktop-$TARGET.deb"
+          take "$bundle/appimage/*.AppImage" "orbit-desktop-$TARGET.AppImage"
+          dpkg-deb --info "dist/orbit-desktop-$TARGET.deb"
+          file "dist/orbit-desktop-$TARGET.AppImage"
+          ls -lh dist
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: orbit-desktop-${{ matrix.slug }}
+          path: dist/*
+          if-no-files-found: error

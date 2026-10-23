@@ -41,7 +41,7 @@ pub(super) fn wait_for_run(
     let wait = runtime.wait_pipeline_runs(
         &[run_id.to_string()],
         timeout_seconds,
-        OrbitRuntime::normalize_pipeline_wait_poll_interval(None),
+        OrbitRuntime::normalize_pipeline_wait_poll_interval(Some(1)),
         None,
     )?;
     let mut entry = wait
@@ -132,14 +132,21 @@ pub(crate) fn dispatch_workflow(
     Ok(results)
 }
 
-/// [ORB-14777] Warn once on stderr, at a drain, ship or job start, naming each
-/// `execution.env.pass` variable this environment does not hold. Agents the
-/// run starts inherit this environment, so a missing worker token otherwise
-/// falls back to another login without a sign. Names only, never values; the
-/// same names are recorded on the run. A warning, not a refusal: optional
-/// provider keys can legitimately be absent.
+/// [ORB-14777] Warn once on stderr, at a job start, naming each
+/// `execution.env.pass` variable and crew `env` source this environment does
+/// not hold. Agents the run starts inherit this environment, so a missing
+/// worker token otherwise falls back to another login without a sign, and a
+/// crew whose source is missing has its activities refused. Names only, never
+/// values; the same names are recorded on the run. A warning, not a refusal:
+/// optional provider keys can legitimately be absent.
 pub(crate) fn warn_unset_env_pass(runtime: &OrbitRuntime) {
-    if let Some(warning) = runtime.unset_env_pass_warning() {
+    for warning in [
+        runtime.unset_env_pass_warning(),
+        runtime.unset_crew_env_warning(),
+    ]
+    .into_iter()
+    .flatten()
+    {
         eprintln!("warning: {warning}");
     }
 }
@@ -151,31 +158,37 @@ pub(crate) fn workflow_dispatch_payload(
     workflow_alias: &'static str,
     runs: &[WorkflowDispatchResult],
 ) -> CommandOut {
-    workflow_dispatch_payload_with_warning(workflow_alias, runs, Vec::new())
+    workflow_dispatch_payload_with_notices(workflow_alias, runs, Vec::new(), Vec::new())
 }
 
-/// [`workflow_dispatch_payload`] with the admission warnings the submission
-/// proceeded past, such as a host resource throttle [ORB-13901] or a
-/// validation environment that may not find the user's toolchain
-/// [ORB-13987]. The warnings are `.warning` in JSON (one per line) and one
-/// `Warning:` line each in text; the exit code is unchanged.
-pub(crate) fn workflow_dispatch_payload_with_warning(
-    workflow_alias: &'static str,
-    runs: &[WorkflowDispatchResult],
-    warnings: Vec<String>,
-) -> CommandOut {
-    workflow_dispatch_payload_with_notices(workflow_alias, runs, warnings, Vec::new())
-}
-
-/// [`workflow_dispatch_payload_with_warning`] plus informational notes about
-/// how the submission is configured, such as running no required validation.
-/// Notes are `.note` in JSON (one per line) and one `Note:` line each in
-/// text; they never change the exit code.
+/// [`workflow_dispatch_payload`] with a submission's notices: the admission
+/// warnings it proceeded past, such as a host resource throttle [ORB-13901]
+/// or a validation environment that may not find the user's toolchain
+/// [ORB-13987], and informational notes about how it is configured, such as
+/// running no required validation. Warnings are `.warning` in JSON (one per
+/// line) and one `Warning:` line each in text; notes are `.note` and `Note:`
+/// lines. Neither changes the exit code.
 pub(crate) fn workflow_dispatch_payload_with_notices(
     workflow_alias: &'static str,
     runs: &[WorkflowDispatchResult],
     warnings: Vec<String>,
     notes: Vec<String>,
+) -> CommandOut {
+    workflow_dispatch_payload_with_auto_concurrency(
+        workflow_alias,
+        runs,
+        warnings,
+        notes,
+        Value::Null,
+    )
+}
+
+pub(crate) fn workflow_dispatch_payload_with_auto_concurrency(
+    workflow_alias: &'static str,
+    runs: &[WorkflowDispatchResult],
+    warnings: Vec<String>,
+    notes: Vec<String>,
+    auto_concurrency: Value,
 ) -> CommandOut {
     let mut doc = if runs.len() == 1 {
         workflow_dispatch_result_to_json(&runs[0])
@@ -199,6 +212,14 @@ pub(crate) fn workflow_dispatch_payload_with_notices(
     if !notes.is_empty() {
         lines.extend(notes.iter().map(|note| format!("Note: {note}")));
         doc["note"] = json!(notes.join("\n"));
+    }
+    if !auto_concurrency.is_null() {
+        lines.push(format!(
+            "Auto-concurrency: {} ({}).",
+            auto_concurrency["mode"].as_str().unwrap_or("off"),
+            auto_concurrency["source"].as_str().unwrap_or("configured")
+        ));
+        doc["auto_concurrency"] = auto_concurrency;
     }
     let payload = Payload::detail(doc, lines.join("\n"));
     if runs

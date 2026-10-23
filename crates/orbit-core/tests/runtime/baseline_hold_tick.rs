@@ -202,13 +202,7 @@ fn wait_for(path: &Path) {
     }
 }
 
-#[test]
 fn a_hold_check_runs_off_the_tick_and_ticks_meanwhile_fire_routines_and_auto_tasks() {
-    if !super::dispatch_admission::isolated(
-        "baseline_hold_tick::a_hold_check_runs_off_the_tick_and_ticks_meanwhile_fire_routines_and_auto_tasks",
-    ) {
-        return;
-    }
     let (fixture, _) = held_on_red_base();
     install_refresh_job(&fixture);
     install_clock_work(&fixture);
@@ -304,13 +298,7 @@ fn a_hold_check_runs_off_the_tick_and_ticks_meanwhile_fire_routines_and_auto_tas
     assert_eq!(verdicts(&fixture).len(), 1);
 }
 
-#[test]
 fn a_checked_tip_is_judged_from_its_recorded_result_without_another_run() {
-    if !super::dispatch_admission::isolated(
-        "baseline_hold_tick::a_checked_tip_is_judged_from_its_recorded_result_without_another_run",
-    ) {
-        return;
-    }
     let (fixture, _) = held_on_red_base();
     install_refresh_job(&fixture);
     move_base(&fixture, "echo 'test suite::other ... FAILED'\nexit 1\n");
@@ -349,13 +337,7 @@ fn a_checked_tip_is_judged_from_its_recorded_result_without_another_run() {
 
 /// An inconclusive attempt is distinct from an unattempted tip: repeated
 /// sweeps keep the hold without submitting jobs until back-off or a new tip.
-#[test]
 fn an_inconclusive_tip_waits_for_backoff_or_a_new_tip_before_another_refresh() {
-    if !super::dispatch_admission::isolated(
-        "baseline_hold_tick::an_inconclusive_tip_waits_for_backoff_or_a_new_tip_before_another_refresh",
-    ) {
-        return;
-    }
     let (fixture, _) = held_on_red_base();
     install_refresh_job(&fixture);
     move_base(&fixture, "exit 127\n");
@@ -421,3 +403,11 @@ fn an_inconclusive_tip_waits_for_backoff_or_a_new_tip_before_another_refresh() {
     let recorded = verdicts(&fixture);
     assert_eq!(recorded.last().unwrap()["lifted"], true);
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_hold_check_runs_off_the_tick_and_ticks_meanwhile_fire_routines_and_auto_tasks_scenarios,
+    a_hold_check_runs_off_the_tick_and_ticks_meanwhile_fire_routines_and_auto_tasks,
+    a_checked_tip_is_judged_from_its_recorded_result_without_another_run,
+    an_inconclusive_tip_waits_for_backoff_or_a_new_tip_before_another_refresh
+);

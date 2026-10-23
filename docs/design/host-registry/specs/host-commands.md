@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: operator-registered remote hosts — the host file, orbit host add/list/show/rename/remove, dashboard Settings › Hosts, live identity probe, migration from mcp-destinations.toml"
-last_validated: 2026-10-07
+last_validated: 2026-10-20
 title: Spec — Host commands
 owner: opus
 status: Draft
@@ -16,13 +16,14 @@ related_artifacts: [ORB-14448, ORB-14449, ORB-14451, ORB-14447, ORB-14261, ORB-1
 The operator registers each remote Orbit host once, with `orbit host add`. From then on the
 CLI-owned host file is the only record of remote membership. Federated MCP, pull drains,
 replica worktree GC and task-prefix routing ([host-routing](./host-routing.md)) all read it.
-An entry stores the operator's name for the host, its SSH target, and two facts that never
-change on that host: `machine_id` and `task_prefix`. Anything that can change, such as
-reachability, Orbit version, pull protocol or workspaces, is read live from the host when
-asked and never persisted. Operators manage entries from the CLI or from the dashboard's
-Settings › Hosts view. Status: the host file, `orbit host`, the envelope fields, the doctor
-row and the migration are implemented ([ORB-14448]), and so is the dashboard view
-([ORB-14451]).
+An entry stores the operator's name for the host, its SSH target, and the host's stable
+`machine_id` and `task_prefix`. It may also store `host_os`, the operating system reported
+when the host is registered; that snapshot supports creation-time crew-pool selection. Reachability,
+Orbit version, pull protocol and workspaces are read live from the host and never persisted.
+The OS snapshot is not refreshed by probes; remove and add the host again to refresh it.
+Operators manage entries from the CLI or from the dashboard's Settings › Hosts view. Status:
+the host file, `orbit host`, the envelope fields, the doctor row and the migration are
+implemented ([ORB-14448]), and so is the dashboard view ([ORB-14451]).
 
 ## Why This Exists
 
@@ -65,12 +66,14 @@ name = "example-host"
 machine_id = "hm_0123456789abcdef"
 ssh = "example-host"
 task_prefix = "ORB"
+host_os = "macos" # optional; reported by the host during registration
 ```
 
 ### Invariants
 
-1. Every key is required. Unknown keys and an unsupported `schema_version` fail the load
-   and leave the file's bytes intact.
+1. `schema_version` and each entry's `name`, `machine_id`, `ssh` and `task_prefix` are
+   required. The top-level `hosts` array and each entry's `host_os` are optional. Unknown
+   keys and an unsupported `schema_version` fail the load and leave the file's bytes intact.
 2. `name` passes the `machine.name` validator. It is unique, compared case-insensitively,
    across all entries and the local `machine.name`.
 3. `machine_id` passes `validate_machine_id`, is unique, and is never the local machine id.
@@ -82,7 +85,11 @@ task_prefix = "ORB"
    `user@host`.
 6. No entry field records reachability, version, protocol, workspaces, last-seen time or
    health.
-7. Writes validate a clone, serialize canonically (entries sorted by `name`) and replace the
+7. When present, `host_os` is the remote's `linux`, `macos` or `windows` value at registration.
+   It supports creation-time crew-pool selection for registered hosts serving a workspace. Older
+   entries or hosts that did not report an OS remain unknown; probes do not rewrite the stored
+   value, so remove and add the host again to refresh it.
+8. Writes validate a clone, serialize canonically (entries sorted by `name`) and replace the
    file atomically. A refused mutation leaves the prior bytes. Hand edits are allowed and go
    through the same validation on load.
 
@@ -93,7 +100,7 @@ itself. They open the session federated serve already uses
 (`ssh -T -- <target> orbit mcp serve --remote-caller-machine-id <local id>`), within the
 federated probe budget, and call `orbit.workspace.list`.
 
-The v1 `orbit.workspace.list` envelope already carries `machine_id`. It gains four additive
+The v1 `orbit.workspace.list` envelope already carries `machine_id`. It gains five additive
 fields:
 
 | Field | Source on the remote |
@@ -102,6 +109,7 @@ fields:
 | `task_prefix` | `[machine] task_prefix` |
 | `binary_version` | the running binary's version (the same value the drain probe reports) |
 | `protocol_fingerprint` | `distributed_drain_protocol_fingerprint()` |
+| `host_os` | The remote host's OS (`linux`, `macos` or `windows`), when it reports one |
 
 Rules:
 
@@ -149,9 +157,10 @@ the legacy SSH target and the migration's chosen name; `--name` applies only to 
 ### `orbit host list [--no-probe]`
 
 The local host comes first, marked `local` and read in-process. Then each entry, sorted by
-name, with: name, machine_id, ssh, task_prefix, reachable, binary_version,
-protocol_fingerprint, a skew flag, and workspaces with their role on that host (`owner`, or
-`replica` of `<owner machine_id>`).
+name. Each JSON row has name, machine_id, ssh, task_prefix, reachable, binary_version,
+protocol_fingerprint, optional `host_os`, a skew flag, and workspaces with their role on that
+host (`owner`, or `replica` of `<owner machine_id>`). A probed remote row prefers the live OS
+when the remote reports it; `--no-probe` uses the stored snapshot.
 
 - Hosts are probed in parallel, each within its own probe budget.
 - An unreachable host is listed with its cached fields and the error class, never omitted.
@@ -248,10 +257,21 @@ The view is Settings › Hosts (`#config/hosts`).
 - A remove refused with `host_in_use` lists the dependents and offers an explicit force
   confirmation.
 - Keyboard and focus behave as in [user-interface 2_design §6](../../user-interface/2_design.md#6-top-level-navigation).
-- Opening the view and its Reload button probe every host, and an add shows the new host
-  as its identity probe found it. The dashboard's periodic refresh lists with `probe=false` and keeps each row's last probed
-  fields, so the view never probes in the background. A row marked not probed has not been
+- Opening the view and its Reload button first list registered hosts with `probe=false`,
+  show checking reachability for pending remote probes, then fill in live fields when the
+  probe finishes. An unreachable destination gets a plain-language explanation with a
+  network and SSH check and a Reload step; the probe diagnostic remains in the row note's
+  tooltip. An add shows the new host as its identity probe found it.
+  The dashboard's periodic refresh lists with `probe=false` and keeps each row's last probed
+  fields, so identity discovery is not repeated in the background. A row marked not probed has not been
   asked since the view opened.
+- While the view is open, each refresh separately reads host resources and each workspace's
+  drain capacity through `/api/on/<host>/host/resources` and
+  `/api/on/<host>/workflows/auto/readiness`. The serving host is answered locally. The Health
+  column shows load, memory, disk, drain state and the throttle verdict; Show switches the
+  dashboard to that host. Unreachable or unprobed hosts are not asked for health readings,
+  and a failed reading is shown without suppressing other hosts. These readings remain view
+  state and do not change the host file.
 
 ### Freshness
 
@@ -332,7 +352,8 @@ unrelated to this file.
 
 ## Non-goals
 
-- No presence heartbeat, background probe, cached health or last-seen state.
+- No presence heartbeat, cached health or last-seen state in the host file. The dashboard's
+  live health readings are separate from registry membership and identity discovery.
 - No placement, failover, leases or leader election, and no choosing between hosts.
 - No database tables. The legacy fleet-registry tables stay unread.
 - No discovery: nothing scans SSH config, the tailnet or mDNS.

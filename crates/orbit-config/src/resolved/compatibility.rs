@@ -120,6 +120,7 @@ impl CompatibilityKeys {
 }
 
 pub(crate) fn warn_compatibility_keys(document: &toml::Value, config_path: &Path) {
+    crate::unknown::warn_unknown_keys(document, config_path);
     CompatibilityKeys {
         deprecated_task_id_pattern: value_at_path(document, "knowledge.task_id_pattern").is_some(),
         retired_duel: value_at_path(document, "duel").is_some(),
@@ -136,7 +137,94 @@ pub(super) fn removed_keys_present(document: &toml::Value) -> Vec<(&'static str,
 }
 
 pub(super) fn deprecated_keys_present(document: &toml::Value) -> Vec<(&'static str, &'static str)> {
-    keys_present(registry::DEPRECATED_CONFIG_KEYS, document)
+    let mut keys = keys_present(registry::DEPRECATED_CONFIG_KEYS, document);
+    keys.extend(deprecated_value_forms_present(document));
+    keys
+}
+
+/// Registry keys `document` writes in a deprecated value form; today only a
+/// boolean `machine.worker_containment`.
+fn deprecated_value_forms_present(document: &toml::Value) -> Vec<(&'static str, &'static str)> {
+    registry::DEPRECATED_VALUE_FORMS
+        .iter()
+        .copied()
+        .filter(|_| crate::aliases::has_legacy_worker_containment(document))
+        .collect()
+}
+
+/// Whether a key load still accepts is removed (ignored) or deprecated (still read).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompatibilityConfigKeyDisposition {
+    /// Load ignores the key and warns. `orbit config get` and `set` refuse it.
+    Removed,
+    /// Load still reads the key and warns. `orbit config get` and `set` refuse it.
+    Deprecated,
+    /// A live key written in a deprecated value form: load still reads it and
+    /// warns, and the repair rewrites the value rather than deleting the key.
+    DeprecatedValue,
+}
+
+/// One retired or deprecated registry key still set in a config document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompatibilityConfigKey {
+    /// Dotted registry key, or a table name such as `semantic`.
+    pub key: &'static str,
+    /// Migration note shown when the key is warned about or refused.
+    pub note: &'static str,
+    /// Whether load ignores the key or still translates it.
+    pub disposition: CompatibilityConfigKeyDisposition,
+}
+
+/// Retired and deprecated registry keys `document` still sets.
+///
+/// Removed keys come first, then deprecated keys, then deprecated value
+/// forms, each in registry order.
+pub fn compatibility_config_keys_present(document: &toml::Value) -> Vec<CompatibilityConfigKey> {
+    let mut keys = Vec::new();
+    for (key, note) in removed_keys_present(document) {
+        keys.push(CompatibilityConfigKey {
+            key,
+            note,
+            disposition: CompatibilityConfigKeyDisposition::Removed,
+        });
+    }
+    for (key, note) in keys_present(registry::DEPRECATED_CONFIG_KEYS, document) {
+        keys.push(CompatibilityConfigKey {
+            key,
+            note,
+            disposition: CompatibilityConfigKeyDisposition::Deprecated,
+        });
+    }
+    for (key, note) in deprecated_value_forms_present(document) {
+        keys.push(CompatibilityConfigKey {
+            key,
+            note,
+            disposition: CompatibilityConfigKeyDisposition::DeprecatedValue,
+        });
+    }
+    keys
+}
+
+/// Retired and deprecated registry keys set in the config file at `path`.
+///
+/// A missing file has none. The read uses the same no-follow path check as
+/// other config loads, so a symlink is refused rather than followed.
+pub fn compatibility_config_keys_at(
+    path: &Path,
+) -> Result<Vec<CompatibilityConfigKey>, OrbitError> {
+    let Some(raw) = crate::store::read_config_file(path)? else {
+        return Ok(Vec::new());
+    };
+    if raw.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let document = toml::from_str(&raw).map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "invalid runtime config '{}': {error}",
+            redact_home_dir(&path.display().to_string())
+        ))
+    })?;
+    Ok(compatibility_config_keys_present(&document))
 }
 
 fn keys_present(
@@ -167,8 +255,9 @@ fn warn_removed_key(config_path: &Path, key: &str, note: &str) {
 }
 
 /// [ORB-13992] A deprecated key still loads — translated into its
-/// replacement when the document is parsed, or ignored where its note says
-/// so (`workflow.system_crew`, [ORB-15663]) — and is warned on every load.
+/// replacement when the document is read ([`crate::aliases`]), or ignored
+/// where its note says so (`workflow.system_crew`, [ORB-15663]) — and is
+/// warned on every load.
 /// The note names the replacement. A later release makes it an error; delete
 /// its [`registry::DEPRECATED_CONFIG_KEYS`] entry and translation then.
 pub(crate) const DEPRECATED_CONFIG_KEY_WARNING: &str = "config key is deprecated; its note says \

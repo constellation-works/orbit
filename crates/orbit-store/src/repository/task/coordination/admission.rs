@@ -16,7 +16,7 @@ use super::TaskCommitBoundary;
 use super::lifecycle::fresh_offer_history;
 use super::selection::{AdmissionSnapshot, DependencyReach, Screen};
 use crate::contracts::*;
-use crate::repository::task::v2::{TaskV2Store, task_history_from_events};
+use crate::repository::task::v2::{TaskV2Store, task_comment_from_row, task_history_from_events};
 
 /// The in-section re-check of assessment-scoped holds a caller gives
 /// [`TaskCommitBoundary::admit_task`]: the candidate with the comments and
@@ -73,21 +73,6 @@ pub(super) fn canonical_footprint(
         .collect::<Result<BTreeSet<_>, _>>()
         .map(|files| files.into_iter().collect())
 }
-/// Why `task`'s `os:` tags exclude the requesting executor, or `None` when
-/// they admit it.
-pub(super) fn os_unavailable(
-    task: &orbit_types::task::Task,
-    request: &AdmissionRequest,
-) -> Option<String> {
-    let wait = orbit_types::task::TaskOsRequirement::from_tags(&task.tags)
-        .unsatisfied_reason(request.os)?;
-    Some(format!(
-        "{wait}; the executor runs {}",
-        request
-            .os
-            .map_or("an undeclared OS", orbit_types::task::HostOs::as_str)
-    ))
-}
 pub(super) fn overlaps(left: &[String], right: &[String]) -> bool {
     left.iter()
         .any(|a| right.iter().any(|b| workspace_relative_paths_overlap(a, b)))
@@ -125,11 +110,7 @@ impl TaskCommitBoundary {
     }
 
     pub(crate) fn refuse_unscoped_claim_write(&self, task_id: &str) -> Result<(), OrbitError> {
-        if let Some(claim) = self
-            .execution_claims()?
-            .into_iter()
-            .find(|claim| claim.task_id == task_id && claim.phase.protects_footprint())
-        {
+        if let Some(claim) = self.protecting_claim_for_task(task_id)? {
             return Err(OrbitError::InvalidInput(format!(
                 "active execution claim requires a claim-scoped mutation (task {}, run {})",
                 claim.task_id, claim.run_context.run_id
@@ -178,6 +159,28 @@ impl TaskCommitBoundary {
         })
     }
 
+    /// One claim by its indexed identity, after settling any pending commit.
+    fn execution_claim(&self, claim_id: &str) -> Result<Option<ExecutionClaim>, OrbitError> {
+        self.coordination_row(CLAIM_KIND, claim_id)?
+            .map(|row| decode(&row.payload_json))
+            .transpose()
+    }
+
+    /// Narrow in SQL before decoding; keep the exact task and phase checks
+    /// because a payload may mention the task in another field as well.
+    pub(crate) fn protecting_claim_for_task(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<ExecutionClaim>, OrbitError> {
+        for row in self.coordination_rows_mentioning(CLAIM_KIND, task_id)? {
+            let claim: ExecutionClaim = decode(&row.payload_json)?;
+            if claim.task_id == task_id && claim.phase.protects_footprint() {
+                return Ok(Some(claim));
+            }
+        }
+        Ok(None)
+    }
+
     /// Reconciliation does not reapply old binary or ship compatibility checks.
     /// The caller must authenticate and authorize the identity on every call.
     ///
@@ -198,10 +201,7 @@ impl TaskCommitBoundary {
                 StoredReceipt::Full { receipt } => {
                     let current_claim = match &receipt.claim {
                         None => None,
-                        Some(original) => self
-                            .execution_claims()?
-                            .into_iter()
-                            .find(|claim| claim.claim_id == original.claim_id),
+                        Some(original) => self.execution_claim(&original.claim_id)?,
                     };
                     Ok(AdmissionLookup::Found {
                         receipt,
@@ -254,10 +254,15 @@ impl TaskCommitBoundary {
     /// the base fails the same way; it is deferred until the held command
     /// passes on a new base tip, as it would be on the owner's own drain.
     ///
-    /// `ordering` supplies the owner's OS, expiring frozen-batch tasks and the
-    /// validation gates every receipt captures [ORB-15622].
-    /// Candidates share local dispatch's band, priority and expiry order,
-    /// then prefer work this executor can run but the owner cannot.
+    /// `ordering` supplies expiring frozen-batch tasks and the validation
+    /// gates every receipt captures [ORB-15622]. With `repairs_only` it
+    /// offers a pending landing repair and no backlog task. Candidates take
+    /// local dispatch's order against `ordering.census` [ORB-17304]: within
+    /// a band (or a priority, per `ordering.affinity`), work only this
+    /// executor can run leads, and among the rest work fewer live executors
+    /// can run. A remote requester's census row is upserted in the same
+    /// commit as its receipt; the admitted receipt records the task's
+    /// affinity class and the census it was ordered against.
     #[allow(clippy::too_many_arguments)]
     pub fn admit_task(
         &self,
@@ -272,9 +277,18 @@ impl TaskCommitBoundary {
         validation_hold: &ValidationHold<'_>,
     ) -> Result<AdmissionLookup, OrbitError> {
         validate_request(identity, request, owner_version)?;
-        let snapshot = self.admission_snapshot(request, ordering)?;
+        let mut snapshot = self.admission_snapshot(ordering)?;
+        if ordering.repairs_only {
+            snapshot.backlog.clear();
+        }
         #[cfg(test)]
         super::selection::after_selection::run();
+        let census = identity.is_remote().then(|| ExecutorCensusEntry {
+            machine_id: identity.location().machine_id.clone(),
+            capability: ExecutorCapability::of_request(request),
+            run_id: request.run_context.run_id.clone(),
+            seen_at: chrono::Utc::now(),
+        });
         let admit = |reach| {
             self.admit_locked(
                 identity,
@@ -285,7 +299,8 @@ impl TaskCommitBoundary {
                 admission_holds,
                 held,
                 validation_hold,
-                ordering.gates.as_ref(),
+                ordering,
+                census.as_ref(),
                 reach,
             )
         };
@@ -307,9 +322,11 @@ impl TaskCommitBoundary {
         admission_holds: &BTreeMap<String, String>,
         held: &BTreeMap<String, String>,
         validation_hold: &ValidationHold<'_>,
-        gates: Option<&orbit_types::workflow::ValidationGates>,
+        ordering: &AdmissionOrdering,
+        census: Option<&ExecutorCensusEntry>,
         reach: DependencyReach,
     ) -> Result<Option<AdmissionLookup>, OrbitError> {
+        let executor_host_os = &ordering.executor_host_os;
         if let Some(row) = self.receipt_row(&identity.location().machine_id, &request.request_id)? {
             let previous = decode::<StoredReceipt>(&row.payload_json)?;
             let same = match previous {
@@ -343,6 +360,8 @@ impl TaskCommitBoundary {
             in_flight: &in_flight.footprints,
             reservations: &reservations,
             owner_wave: &owner_wave,
+            executor_host_os,
+            census,
         };
         let mut receipt = AdmissionReceipt {
             schema_version: 1,
@@ -354,24 +373,21 @@ impl TaskCommitBoundary {
             deferred_conflicts: Vec::new(),
             crew_unavailable: Vec::new(),
             os_unavailable: Vec::new(),
+            browser_kit_unavailable: Vec::new(),
+            capacity_unavailable: Vec::new(),
             queue_depth: snapshot
                 .backlog
                 .iter()
                 .filter(|task| screen.queued(task, &snapshot.statuses))
                 .count(),
-            gates: gates.cloned(),
+            gates: ordering.gates.clone(),
+            tag_instructions: ordering.tag_instructions.clone(),
+            affinity: None,
         };
         let key = receipt_key(&receipt.machine_id, &request.request_id)?;
         // A stopped landing's repair is nearly finished work for its task, so
         // it is offered before any backlog candidate [ORB-14261].
-        if self.admit_repair_locked(
-            identity,
-            request,
-            &key,
-            orbit_dir,
-            &in_flight.tasks,
-            &mut receipt,
-        )? {
+        if self.admit_repair_locked(&screen, &key, orbit_dir, &in_flight.tasks, &mut receipt)? {
             return self
                 .lookup_admission(identity, &request.request_id)
                 .map(Some);
@@ -395,11 +411,8 @@ impl TaskCommitBoundary {
             let comments = bundle
                 .comments
                 .iter()
-                .map(|comment| TaskComment {
-                    at: comment.at,
-                    by: comment.by.clone(),
-                    message: comment.body.clone(),
-                })
+                .cloned()
+                .map(task_comment_from_row)
                 .collect::<Vec<_>>();
             let history = task_history_from_events(bundle.events.clone());
             let task = translator.task_from_bundle(bundle)?;
@@ -472,49 +485,62 @@ impl TaskCommitBoundary {
                     row(CLAIM_KIND, &claim_id, &())?,
                 ],
             };
-            let committed = self.commit_locked_with_rows(&params, &mut |reservation| {
-                let reserved = reservation
-                    .ok_or_else(|| OrbitError::Store("admission reservation missing".into()))?;
-                let claim = ExecutionClaim {
-                    claim_id: claim_id.clone(),
-                    task_id: task.id.clone(),
-                    request_id: request.request_id.clone(),
-                    executed_on: identity.location().clone(),
-                    run_context: request.run_context.clone(),
-                    footprint: footprint.clone(),
-                    phase: ExecutionClaimPhase::Claimed,
-                    reservation_id: reserved
-                        .reservation_id
-                        .clone()
-                        .ok_or_else(|| OrbitError::Store("reservation id missing".into()))?,
-                    reservation_expires_at: reserved
-                        .expires_at
-                        .clone()
-                        .ok_or_else(|| OrbitError::Store("reservation expiry missing".into()))?,
-                    repair: None,
-                };
-                let mut admitted = receipt.clone();
-                admitted.claim = Some(claim.clone());
-                admitted.task = Some(AdmissionTaskSummary {
-                    id: task.id.clone(),
-                    title: task.title.clone(),
-                    complexity: task.complexity,
-                    crew: task.crew.clone(),
-                    context_files: footprint.clone(),
-                    resume_candidate: resume_candidate.clone(),
-                });
-                admitted.queue_depth = admitted.queue_depth.saturating_sub(1);
-                Ok(vec![
-                    row(
-                        RECEIPT_KIND,
-                        &key,
-                        &StoredReceipt::Full {
-                            receipt: Box::new(admitted),
-                        },
-                    )?,
-                    row(CLAIM_KIND, &claim_id, &claim)?,
-                ])
-            })?;
+            let effects = ClaimCommitEffects {
+                census: census.cloned(),
+                ..Default::default()
+            };
+            let committed = self.commit_locked_effects(
+                &params,
+                &mut |reservation| {
+                    let reserved = reservation
+                        .ok_or_else(|| OrbitError::Store("admission reservation missing".into()))?;
+                    let claim = ExecutionClaim {
+                        claim_id: claim_id.clone(),
+                        task_id: task.id.clone(),
+                        request_id: request.request_id.clone(),
+                        executed_on: identity.location().clone(),
+                        run_context: request.run_context.clone(),
+                        footprint: footprint.clone(),
+                        phase: ExecutionClaimPhase::Claimed,
+                        reservation_id: reserved
+                            .reservation_id
+                            .clone()
+                            .ok_or_else(|| OrbitError::Store("reservation id missing".into()))?,
+                        reservation_expires_at: reserved.expires_at.clone().ok_or_else(|| {
+                            OrbitError::Store("reservation expiry missing".into())
+                        })?,
+                        repair: None,
+                    };
+                    let mut admitted = receipt.clone();
+                    admitted.claim = Some(claim.clone());
+                    admitted.task = Some(AdmissionTaskSummary {
+                        id: task.id.clone(),
+                        title: task.title.clone(),
+                        complexity: task.complexity,
+                        crew: task.crew.clone(),
+                        context_files: footprint.clone(),
+                        resume_candidate: resume_candidate.clone(),
+                    });
+                    admitted.queue_depth = admitted.queue_depth.saturating_sub(1);
+                    admitted.affinity = ordering
+                        .census
+                        .as_ref()
+                        .map(|census| census.record(&task, executor_host_os, ordering.affinity));
+                    Ok(vec![
+                        row(
+                            RECEIPT_KIND,
+                            &key,
+                            &StoredReceipt::Full {
+                                receipt: Box::new(admitted),
+                            },
+                        )?,
+                        row(CLAIM_KIND, &claim_id, &claim)?,
+                    ])
+                },
+                &effects,
+                &Default::default(),
+                None,
+            )?;
             if !matches!(committed, TaskCoordinationCommitOutcome::Committed(_)) {
                 return Err(OrbitError::Store(
                     "admission changed inside the serialization boundary".into(),
@@ -533,9 +559,49 @@ impl TaskCommitBoundary {
                     receipt: Box::new(receipt),
                 },
             )?,
+            census,
         )?;
         self.lookup_admission(identity, &request.request_id)
             .map(Some)
+    }
+
+    /// Upsert `entry` as its machine's census row [ORB-17304].
+    pub fn record_executor_census(&self, entry: &ExecutorCensusEntry) -> Result<(), OrbitError> {
+        self.store.upsert_executor_census(&self.workspace_id, entry)
+    }
+
+    /// The census rows live at `now`: each seen within
+    /// [`EXECUTOR_CENSUS_LIVENESS_SECONDS`], or of a machine still holding a
+    /// claimed or running claim. Claims are read only when a row has gone
+    /// stale.
+    pub fn live_executor_census(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<ExecutorCensusEntry>, OrbitError> {
+        let (mut live, stale): (Vec<_>, Vec<_>) = self
+            .store
+            .executor_census_rows(&self.workspace_id)?
+            .into_iter()
+            .partition(|entry| entry.fresh(now));
+        if !stale.is_empty() {
+            let claiming = self
+                .execution_claims()?
+                .into_iter()
+                .filter(|claim| {
+                    matches!(
+                        claim.phase,
+                        ExecutionClaimPhase::Claimed | ExecutionClaimPhase::Running
+                    )
+                })
+                .map(|claim| claim.executed_on.machine_id)
+                .collect::<BTreeSet<_>>();
+            live.extend(
+                stale
+                    .into_iter()
+                    .filter(|entry| claiming.contains(&entry.machine_id)),
+            );
+        }
+        Ok(live)
     }
 
     pub fn admission_storage_usage(&self) -> Result<AdmissionStorageUsage, OrbitError> {
@@ -617,7 +683,7 @@ pub fn admission_refusal(
     {
         return Some(AdmissionRefusal::ShipModeUnsupported);
     }
-    // An owner that captured `review.before_pr` or `review.before_landing`
+    // An owner that captured a `review.timing` of `before_pr` or `before_landing`
     // admits only a leaf that runs the gate its ship contract carries, so
     // nothing is delivered unreviewed [ORB-13908] [ORB-14849]. The claim's captured contract decides: the executor's own
     // switch never gates a claimed leaf. Only the PR route runs the gate.

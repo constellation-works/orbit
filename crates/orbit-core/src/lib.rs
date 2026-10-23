@@ -39,6 +39,10 @@
 //! orbit-common, orbit-store, orbit-policy, orbit-tools, orbit-search, orbit-engine
 //! → `orbit-core` → orbit-cmd / orbit-web / orbit-cli
 
+#[cfg(test)]
+#[path = "../tests/support/git.rs"]
+mod git_test_support;
+
 // A bare `cargo test` from a managed-run shell must match one from a clean shell.
 #[cfg(test)]
 orbit_common::isolate_test_process!();
@@ -66,6 +70,10 @@ pub mod test_support {
     /// Freeze source budget time in an isolated test process and its CLI children.
     pub use crate::application::automation::source::SOURCE_ELAPSED_ENV;
     pub use crate::application::automation::source::test_support::with_delivery_source_clock;
+    pub use crate::application::automation::with_reset_probe_hook;
+    pub use crate::application::job::pipeline::pipeline_worker_observer_completed;
+    #[cfg(unix)]
+    pub use crate::application::job::pipeline::with_pipeline_worker_log_open_hook;
     /// Replaced with the run id in every argv entry of a substitute worker.
     pub use crate::application::job::pipeline::worker_command_override::RUN_ID_PLACEHOLDER;
     /// Substitute the detached pipeline worker program for this whole test
@@ -73,12 +81,26 @@ pub mod test_support {
     /// must install one: a test harness has no production entry-point marker,
     /// so an unsubstituted submission fails.
     pub use crate::application::job::pipeline::worker_command_override::install_process_wide as install_substitute_pipeline_worker;
+    /// Stop a worker's startup observer just after it reaps the worker.
+    pub use crate::application::job::pipeline::{WorkerReapPhase, install_worker_reap_hook};
+    pub use crate::application::landing::with_landing_retry_reservation_hook;
     pub use crate::application::managed_assets::test_support::with_auto_task_manifest_read_hook;
+    /// Fail the next drain pass's release of its unadmitted gap-fit reservations.
+    pub use crate::application::workspace_auto::with_reservation_release_failure;
+    pub use crate::runtime::{
+        with_host_load_sampling_wait, with_owner_read_retry_wait, with_pipeline_poll_wait,
+    };
     pub use orbit_engine::test_support::with_cli_supervision_clock;
     /// The review ledger requests that admit an attempt and record its
     /// reviewer's start and end, as the before-PR gate writes them, for tests
     /// that drive a reviewer without running the whole delivery pipeline.
     pub use orbit_store::contracts::{ReviewInvocationRecord, ReviewReserveRequest};
+    /// Treat every pending landing repair's owner fallback window as passed
+    /// on this thread, for tests of the owner drain taking a repair.
+    pub use orbit_store::test_support::with_repair_owner_fallback_elapsed;
+    /// Shorten the task-commit lock deadline of the boundary sections entered
+    /// on this thread, for tests of what follows a lock timeout.
+    pub use orbit_store::test_support::with_task_commit_lock_timeout;
 
     use crate::application::routines::{
         RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions, SweepOutcome,
@@ -117,8 +139,6 @@ pub mod test_support {
     }
 }
 
-// Store metric/scoreboard projections consumed by the dashboard's JSON API.
-pub use orbit_store::scoreboard_summary;
 pub use orbit_store::skill_store as skill_catalog;
 pub use orbit_store::{InvocationInsertParams, InvocationQuery, InvocationRecord};
 
@@ -141,6 +161,8 @@ pub use application::workspace_sync::{
     reconcile_workspace_managed_artifacts, seed_absent_workspace_managed_artifacts,
 };
 pub use context::ActorIdentity;
+/// The per-tier pool overrides `submit_workspace_auto_run_with_mode` takes.
+pub use orbit_config::ComplexityCrewPools;
 pub use runtime::workspace::catalog::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
 // Shared domain types (owned by orbit-common) that the CLI and dashboard
 // render or construct.
@@ -166,7 +188,7 @@ pub use orbit_types::workflow::{
 };
 pub use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy};
 // Failure-incident grouping over the raw audit rows [ORB-10871]; consumed by
-// the dashboard's incident, audit-summary, and scoreboard surfaces.
+// the dashboard's incident and audit-summary surfaces.
 pub use orbit_store::{
     CauseBasis, DOCTOR_FINDINGS_MESSAGE_PREFIX, FailureClass, FailureIncident,
     FailureIncidentQuery, FailureIncidentReport, IncidentCause, IncidentEventRef,

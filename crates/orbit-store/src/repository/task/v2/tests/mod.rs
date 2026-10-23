@@ -3,7 +3,7 @@ use orbit_types::task::{ExternalRef, TaskComment, TaskPriority, TaskStatus, Task
 use tempfile::TempDir;
 
 use super::*;
-use crate::contracts::{TaskCreateParams, TaskHistoryUpdateParams};
+use crate::contracts::TaskCreateParams;
 use crate::driver::sqlite::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, task_registry_path,
 };
@@ -83,15 +83,18 @@ pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams
         crew: None,
         crew_source: None,
         orchestrator: None,
+        orchestrator_model: None,
+        orchestrator_model_source: None,
+        origin: None,
         comments: vec![TaskComment {
             at: now,
             by: "daniel".to_string(),
             message: "Please build this.".to_string(),
+            operation_id: None,
         }],
         context_creation: Vec::new(),
     }
 }
 
 mod concurrency;
-mod creation_grant;
 mod repair_gate;

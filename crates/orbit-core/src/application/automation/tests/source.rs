@@ -5,8 +5,10 @@
 //! canonical pass turns that failure into an ambiguous mapping.
 
 use std::cell::Cell;
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+use std::io::{Seek, Write as _};
 use std::path::Path;
-use std::process::Command;
 
 use orbit_automation::AutomationError;
 use orbit_automation::delivery::digest;
@@ -18,7 +20,8 @@ use orbit_types::workflow::automation::recovery::{
     HistoryReplayRecord, RecoveryPreview, RecoveryRequest, refusal,
 };
 use orbit_types::workflow::automation::{
-    AutomationState, CoverageClass, DeliveryTrigger, SourcePage,
+    AutomationState, CoverageClass, Delivery, DeliveryExclusion, DeliveryTrigger, ExcludedDelivery,
+    SourcePage,
 };
 
 use super::super::source::{
@@ -42,7 +45,7 @@ struct Diverged {
 }
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args(args)
         .current_dir(repo)
         .env("GIT_AUTHOR_NAME", "replay")
@@ -65,50 +68,92 @@ fn git(repo: &Path, args: &[&str]) -> String {
 /// Two first-parent chains from one base. Step `i` on each chain uses the
 /// same tree, so the parent-relative `.orbit` patch matches and the commits
 /// themselves differ.
+///
+/// Import real Git objects in one process rather than spawning `add`,
+/// `write-tree`, and `commit-tree` thousands of times for the limit rows.
+/// Marks recover each chain in construction order without a per-commit query.
 fn diverged(orphans: usize, canonical: usize) -> Diverged {
     let root = tempfile::tempdir().expect("tempdir");
     let repo = root.path();
     git(repo, &["init"]);
-    std::fs::create_dir(repo.join(".orbit")).expect("orbit dir");
-    std::fs::write(repo.join(".orbit/n"), "0\n").expect("base file");
-    git(repo, &["add", ".orbit"]);
-    let base_tree = git(repo, &["write-tree"]);
-    let base = git(repo, &["commit-tree", &base_tree, "-m", "base"]);
-
-    let steps = orphans.max(canonical);
-    let mut trees = Vec::with_capacity(steps);
-    for step in 1..=steps {
-        std::fs::write(repo.join(".orbit/n"), format!("{step}\n")).expect("step file");
-        git(repo, &["add", ".orbit"]);
-        trees.push(git(repo, &["write-tree"]));
-    }
-
-    let commit_chain = |count: usize, message: &str| {
-        let mut parent = base.clone();
-        let mut commits = Vec::with_capacity(count);
-        for (step, tree) in trees.iter().take(count).enumerate() {
-            let commit = git(
-                repo,
-                &[
-                    "commit-tree",
-                    tree,
-                    "-p",
-                    &parent,
-                    "-m",
-                    &format!("{message} {step}"),
-                ],
-            );
-            parent = commit.clone();
-            commits.push(commit);
+    let mut stream = String::from(
+        "commit refs/heads/base\nmark :1\n\
+         committer replay <replay@example.com> 0 +0000\n\
+         data 4\nbase\nM 100644 inline .orbit/n\ndata 2\n0\n\n",
+    );
+    let mut next_mark = 2;
+    let mut commit_chain = |count: usize, name: &str| {
+        let mut parent = 1;
+        let mut marks = Vec::with_capacity(count);
+        for step in 0..count {
+            let mark = next_mark;
+            next_mark += 1;
+            let message = format!("{name} {step}");
+            let contents = format!("{}\n", step + 1);
+            write!(
+                stream,
+                "commit refs/heads/{name}\nmark :{mark}\n\
+                 committer replay <replay@example.com> 0 +0000\n\
+                 data {}\n{message}\nfrom :{parent}\n\
+                 M 100644 inline .orbit/n\ndata {}\n{contents}\n",
+                message.len(),
+                contents.len(),
+            )
+            .expect("import commit");
+            parent = mark;
+            marks.push(mark);
         }
-        commits
+        marks
     };
+    let old_marks = commit_chain(orphans, "old");
+    let new_marks = commit_chain(canonical, "new");
+    stream.push_str("done\n");
 
-    let old = commit_chain(orphans, "old");
-    let new = commit_chain(canonical, "new");
+    // File-backed input avoids a pipe-writing child that could outlive a
+    // failed fixture; output() waits for the single importer before returning.
+    let mut input = tempfile::tempfile().expect("import input");
+    input.write_all(stream.as_bytes()).expect("write import");
+    input.rewind().expect("rewind import");
+    let marks_file = tempfile::NamedTempFile::new().expect("marks file");
+    let output = crate::git_test_support::command()
+        .args(["fast-import", "--quiet", "--done"])
+        .arg(format!("--export-marks={}", marks_file.path().display()))
+        .current_dir(repo)
+        .stdin(input)
+        .output()
+        .expect("git fast-import");
+    assert!(
+        output.status.success(),
+        "git fast-import failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let marks: BTreeMap<usize, String> = std::fs::read_to_string(marks_file.path())
+        .expect("exported marks")
+        .lines()
+        .map(|line| {
+            let (mark, commit) = line.split_once(' ').expect("mark and commit");
+            (
+                mark.strip_prefix(':')
+                    .expect("mark prefix")
+                    .parse()
+                    .expect("mark number"),
+                commit.to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        marks.len(),
+        1 + orphans + canonical,
+        "every commit imported"
+    );
+    let base = &marks[&1];
+    let commits = |chain: Vec<usize>| chain.into_iter().map(|mark| marks[&mark].clone()).collect();
+    let old = commits(old_marks);
+    let new: Vec<String> = commits(new_marks);
+
     git(
         repo,
-        &["update-ref", "refs/heads/main", new.last().unwrap_or(&base)],
+        &["update-ref", "refs/heads/main", new.last().unwrap_or(base)],
     );
     git(repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
 
@@ -338,7 +383,7 @@ fn diverged_with_inserted_canonical_commit() -> Diverged {
 
     let remote = root.path().join("remote.git");
     std::fs::create_dir(&remote).expect("remote dir");
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args(["init", "--bare"])
         .current_dir(&remote)
         .output()
@@ -616,6 +661,119 @@ fn back_merge_with_a_different_first_parent_patch_is_not_mapped() {
         ),
         other => panic!("expected history_mapping_ambiguous, got {other:?}"),
     }
+}
+
+/// An unresolved commit ahead of a certificate-excluded landing, rebased: the
+/// exclusion is restated from its own record, without a provider lookup, and
+/// moves onto its canonical commit with its certificate intact.
+#[test]
+fn replay_moves_a_retained_exclusion_onto_its_canonical_commit() {
+    let history = diverged(2, 2);
+    let (source, mut state) = state_for(history.root.path(), &history.old[1]);
+    let trigger = DeliveryTrigger {
+        owner_machine: Some("fixture-machine".into()),
+        branch: "main".into(),
+        threshold: 2,
+        max_wait_minutes: 60,
+        coverage: CoverageClass::LandedCodeReviewV1,
+        max_items: 50,
+        retries: 0,
+    };
+    let landed_at = chrono::DateTime::UNIX_EPOCH;
+    let excluded = ExcludedDelivery {
+        delivery: Delivery {
+            key: "pr:example/repo:main:2".into(),
+            repository: state.repository.clone(),
+            branch: "main".into(),
+            before: source.revision(&history.old[0]).expect("before"),
+            after: source.revision(&history.old[1]).expect("after"),
+            commits: vec![history.old[1].clone()],
+            task_ids: vec!["task-e".into()],
+            unattributed: None,
+            evidence_reference: "https://github.com/example/repo/pull/2".into(),
+            evidence_digest: "evidence-2".into(),
+            landed_at,
+        },
+        exclusion: DeliveryExclusion {
+            attempt_id: "certificate-attempt".into(),
+            assurance: "reviewed".into(),
+            task_meaning_digest: "meaning".into(),
+            final_candidate_tree: "reviewed-tree".into(),
+        },
+        decided_at: landed_at,
+    };
+    state.trigger = Some(trigger.clone());
+    state.pending_commits = history.old.clone();
+    state.unresolved = [(history.old[0].clone(), "provider_identity_missing".into())].into();
+    state.excluded = vec![excluded.clone()];
+
+    let (page, record) =
+        replay(&source, &state).expect("a retained exclusion needs no fresh provider proof");
+
+    let store = compose::automation_store(Store::open_in_memory().expect("store"))
+        .expect("automation store");
+    let baseline = AutomationState {
+        observed: state.baseline.clone(),
+        generation: 0,
+        pending_commits: vec![],
+        unresolved: Default::default(),
+        excluded: vec![],
+        ..state.clone()
+    };
+    assert!(store.automation_initialize(&baseline).expect("initialize"));
+    assert!(
+        store
+            .automation_commit(&baseline, &state, None)
+            .expect("observe orphans")
+    );
+    let request = RecoveryRequest {
+        replay_history: true,
+        reason: "reconcile the content-preserving rebase".into(),
+        ..RecoveryRequest::default()
+    };
+    recovery::apply(
+        store.as_ref(),
+        &Recovery {
+            consumer: &state.consumer,
+            epoch: &state.epoch,
+            trigger: &trigger,
+            repository: &state.repository,
+            host_refusal: None,
+            request: &request,
+            by: "operator",
+            now: landed_at,
+            replay: Some(HistoryReplayInput { page, record }),
+            resolved_action_id: None,
+            expected_generation: Some(state.generation),
+            action_terminal: false,
+            action_failed_without_evidence: false,
+        },
+    )
+    .expect("the replay applies");
+
+    let checkpoint = store
+        .automation_state(&state.consumer)
+        .expect("state")
+        .expect("checkpoint");
+    assert_eq!(checkpoint.pending_commits, history.new);
+    assert_eq!(
+        checkpoint.unresolved,
+        [(history.new[0].clone(), "provider_identity_missing".into())].into()
+    );
+    let [moved] = checkpoint.excluded.as_slice() else {
+        panic!("one retained exclusion: {:?}", checkpoint.excluded);
+    };
+    assert_eq!(moved.delivery.commits, [history.new[1].clone()]);
+    assert_eq!(moved.delivery.after.commit, history.new[1]);
+    assert_eq!(moved.delivery.task_ids, excluded.delivery.task_ids);
+    assert_eq!(
+        (&moved.exclusion, moved.decided_at),
+        (&excluded.exclusion, excluded.decided_at)
+    );
+    assert!(
+        checkpoint.pending.is_empty(),
+        "an exclusion is not new debt"
+    );
 }
 
 #[test]
@@ -911,17 +1069,34 @@ fn held_fetch_lock_consumes_only_the_remaining_source_deadline() {
         FileLockOptions::default(),
     )
     .unwrap();
-    let source = Source::new(repo);
-    let started = Instant::now();
-    let result = source.head("main");
-    assert!(result.is_err(), "a held lock must defer the fetch");
-    assert!(
-        started.elapsed() < Duration::from_secs(32),
-        "lock wait renewed the full timeout"
-    );
-    assert!(
-        started.elapsed() >= Duration::from_secs(29),
-        "the fixture must exercise real lock contention rather than an earlier error"
+    use super::super::source::test_support::with_delivery_source_clock;
+    use std::{cell::Cell, rc::Rc};
+
+    let spent = Rc::new(Cell::new(Duration::ZERO));
+    let clock_spent = Rc::clone(&spent);
+    let origin = Instant::now();
+    with_delivery_source_clock(
+        move || origin + clock_spent.get(),
+        || {
+            let source = Source::new(repo);
+            spent.set(super::super::source::SOURCE_DEADLINE - Duration::from_millis(250));
+            let started = Instant::now();
+            let result = source.head("main");
+            assert!(result.is_err(), "a held lock must defer the fetch");
+            assert!(
+                matches!(&result, Err(AutomationError::Deferred(reason))
+                if reason.contains("acquiring git fetch lock")),
+                "the held fetch lock must cause the deferral: {result:?}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "lock wait renewed the full timeout"
+            );
+            assert!(
+                started.elapsed() >= Duration::from_millis(200),
+                "the fixture must exercise real lock contention rather than an earlier error"
+            );
+        },
     );
     drop(lock);
 }

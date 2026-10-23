@@ -6,8 +6,9 @@
 //! Sidecars (`comments`, `history`, `artifacts`), fields whose canonical form
 //! depends on other tasks (`resolved_dependencies`, `relations`), and the
 //! host-local crew enrichments (`resolved_crew`, `crew_model`,
-//! `crew_unresolved`) still need a runtime fetch; the remaining fields are
-//! projected from the record itself.
+//! `crew_unresolved`, `os_requirement`) still need a runtime fetch; the
+//! `pilot_warnings` enrichment reads the latest pilot audit sidecar; the
+//! remaining fields are projected from the record itself.
 
 use std::collections::BTreeMap;
 
@@ -23,7 +24,7 @@ use crate::task::{
 #[macro_export]
 macro_rules! task_show_projection_fields_csv {
     () => {
-        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, readiness, orchestrator, created_at, updated_at, comments, history, artifacts"
+        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, readiness, pilot_warnings, orchestrator, orchestrator_model, orchestrator_model_source, origin, created_at, updated_at, comments, history, artifacts"
     };
 }
 
@@ -61,7 +62,11 @@ pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
     "crew_unresolved",
     "os_requirement",
     "readiness",
+    "pilot_warnings",
     "orchestrator",
+    "orchestrator_model",
+    "orchestrator_model_source",
+    "origin",
     "created_at",
     "updated_at",
     "comments",
@@ -104,24 +109,12 @@ pub const TASK_SHOW_PUBLIC_DTO_FIELDS: &[&str] = &[
     "crew",
     "crew_source",
     "orchestrator",
+    "orchestrator_model",
+    "orchestrator_model_source",
+    "origin",
     "created_at",
     "updated_at",
 ];
-
-/// Response envelope keys that are intentionally not task-field projections.
-///
-/// These describe the read itself — who resolved it, what else was asked for —
-/// rather than the task, so a caller selecting one alone would be projecting
-/// the response rather than the record.
-///
-/// The crew enrichments are deliberately *not* here. They are host-local and
-/// conditional, but the unprojected readout emits them, and a key a reader can
-/// see is a key it must be able to ask for: rejecting `resolved_crew` while
-/// printing it was the defect in [ORB-12113].
-pub const TASK_SHOW_DERIVED_RESPONSE_FIELDS: &[(&str, &str)] = &[(
-    "workspace",
-    "lookup-owner metadata attached by the CLI, not task data",
-)];
 
 /// Comma-separated form of [`TASK_SHOW_PROJECTION_FIELDS`].
 pub const TASK_SHOW_PROJECTION_FIELDS_CSV: &str = crate::task_show_projection_fields_csv!();
@@ -152,8 +145,10 @@ pub fn refuses_implementer_writes(status: TaskStatus) -> bool {
 }
 
 /// The `os_requirement` enrichment: the host operating systems the task's
-/// `os:` tags admit, parsed. `None` for a task without an `os:` tag, which
-/// any host runs; the unprojected readout then omits the key.
+/// `os:` tags admit, parsed. Host-backed read surfaces replace this with the
+/// effective intersection with the stored crew executor and its source.
+/// `None` for a task without an `os:` tag. A host omits the key only when
+/// neither tags nor the stored crew constrain its OS.
 pub fn task_os_requirement_json(task: &Task) -> Option<Value> {
     let requirement = TaskOsRequirement::from_tags(&task.tags);
     (!requirement.is_unrestricted()).then(|| {
@@ -161,13 +156,15 @@ pub fn task_os_requirement_json(task: &Task) -> Option<Value> {
             "any_of": requirement.any_of,
             "invalid": requirement.invalid,
             "describe": requirement.describe_hosts(),
+            "source": {"tags": requirement.any_of.iter().map(|os| os.tag()).collect::<Vec<_>>()},
         })
     })
 }
 
 /// JSON for a Task-local (non-sidecar) projection field.
 ///
-/// Returns `None` for sidecar names, cross-task fields
+/// `os_requirement` here is a tags-only fallback; hosts replace it with their
+/// crew-aware readout. Returns `None` for sidecar names, cross-task fields
 /// (`resolved_dependencies`, `relations`), the crew enrichments a host resolves
 /// (`resolved_crew`, `crew_model`, `crew_unresolved`), and unknown names, so
 /// callers can keep those on their existing fetch paths.
@@ -201,6 +198,11 @@ pub fn task_show_record_field_json(task: &Task, field: &str) -> Option<Value> {
         "os_requirement" => Some(task_os_requirement_json(task).unwrap_or(Value::Null)),
         "readiness" => Some(task_readiness_json(task).unwrap_or(Value::Null)),
         "orchestrator" => Some(json!(task.orchestrator)),
+        "orchestrator_model" => Some(json!(task.orchestrator_model)),
+        "orchestrator_model_source" => Some(json!(
+            task.orchestrator_model_source.map(|source| source.as_str())
+        )),
+        "origin" => Some(json!(task.origin.map(|value| value.as_str()))),
         "created_at" => Some(json!(task.created_at.to_rfc3339())),
         "updated_at" => Some(json!(task.updated_at.to_rfc3339())),
         _ => None,
@@ -240,7 +242,8 @@ pub fn task_dependency_labels(
 /// It carries [`TASK_SHOW_PUBLIC_DTO_FIELDS`] in that order, each with the
 /// value its `--fields` projection answers, then `os_requirement` and
 /// `readiness` when the task has them. A surface adds its own sidecars and
-/// extras to the returned object and never re-lists a base key.
+/// extras to the returned object; a host specializes `os_requirement` with
+/// the stored crew executor constraint.
 pub fn task_base_json(
     task: &Task,
     status_by_id: &BTreeMap<String, TaskStatus>,

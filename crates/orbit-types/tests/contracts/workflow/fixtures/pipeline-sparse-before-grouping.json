@@ -1,0 +1,13 @@
+{
+  "run_id": "jrun-parent",
+  "job_id": "workspace_auto_pipeline",
+  "initial_input": {},
+  "pipeline": {},
+  "step_outputs": {},
+  "pipeline_patches": {},
+  "step_states": {},
+  "next_step_index": 0,
+  "previous_step_state": null,
+  "iteration": 0,
+  "updated_at": "2026-10-11T00:00:00Z"
+}

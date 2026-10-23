@@ -14,6 +14,7 @@ use orbit_types::tool::{McpTransport, ToolSessionContext};
 use orbit_types::workflow::REVIEW_CONTRACT_VERSION;
 
 use crate::application::job::crew_pools::random_crew_ticket;
+use crate::application::review::crew::pre_landing_review_crew_unset;
 
 /// Whether the mutating distributed entry points are reachable from any public
 /// surface.
@@ -57,7 +58,7 @@ pub struct DeclaredCallerContract {
 }
 
 impl crate::OrbitRuntime {
-    /// This host's `review.before_pr`. A follower declares it on every probe;
+    /// Whether this host's `review.timing` is `before_pr`. A follower declares it on every probe;
     /// a pull declares the value its drain captured at submission
     /// [ORB-13992]. After-landing review never enters the protocol.
     pub(crate) fn local_review_before_pr(&self) -> bool {
@@ -72,21 +73,22 @@ impl crate::OrbitRuntime {
     pub(crate) fn claimed_review_refusal(&self, ship: &AdmissionShipContract) -> Option<String> {
         let review = ship.review.as_ref()?;
         let key = if ship.before_landing {
-            "review.before_landing"
+            "review.timing = before_landing"
         } else {
-            "review.before_pr"
+            "review.timing = before_pr"
         };
         let Some(crew) = review.crew.as_deref() else {
             return Some(format!(
-                "before_pr_reviewer_unavailable: the owner has {key} on but no \
-                 operation.review_crew; a claimed leaf never reviews with its implementer's crew"
+                "before_pr_reviewer_unavailable: the owner has {key} but \
+                 {}; a claimed leaf never reviews with its implementer's crew",
+                pre_landing_review_crew_unset()
             ));
         };
         self.resolve_crew_for_task(Some(crew), None)
             .err()
             .map(|error| {
                 format!(
-                    "before_pr_reviewer_unavailable: the owner's {key} review crew `{crew}` \
+                    "before_pr_reviewer_unavailable: the owner's review crew `{crew}` ({key}) \
                      cannot be resolved on this executor: {error}"
                 )
             })
@@ -127,6 +129,9 @@ impl crate::OrbitRuntime {
         orbit_types::workflow::ValidationGates {
             required_validation_commands: self.workflow_required_validation_commands().to_vec(),
             baseline_commands: self.review_baseline_commands().to_vec(),
+            // [ORB-16855] The leaf judges light-delivery tags against the
+            // owner's allow-list, which acceptance judges again.
+            light_delivery_paths: Some(self.workflow_light_delivery_paths().to_vec()),
         }
     }
 
@@ -138,7 +143,7 @@ impl crate::OrbitRuntime {
     /// Ship configuration as the owner would resolve it at admission for a
     /// claim executed on `executor`.
     ///
-    /// With `review.before_pr` or `review.before_landing` on it also
+    /// With `review.timing` `before_pr` or `before_landing` it also
     /// captures the review contract a claimed leaf's gate and the owner's
     /// acceptance are held to [ORB-13895] [ORB-14849]. A machine listed in
     /// `review.before_landing_hosts` gets before-landing review although the
@@ -180,12 +185,15 @@ impl crate::OrbitRuntime {
 
     /// The one reviewer crew a claim's review contract carries
     /// [ORB-15195]: the configured crew, or a member drawn from the
-    /// configured pool, so the wire contract still names one crew. The
+    /// configured pool, so the wire contract still names one crew. The pool
+    /// is the pre-landing reviewer's:
+    /// `workflow.purpose_crews.pre_landing_review`, else
+    /// `workflow.purpose_crews.review`. The
     /// follower implements the claim, so the draw has no implementer to
     /// avoid. Each probe draws afresh; [`Self::adopt_requested_review_crew`]
     /// lets the pull that echoes it be admitted.
     fn claim_review_crew(&self) -> Option<String> {
-        let pool = self.review_crew_pool_members().ok()?;
+        let pool = self.pre_landing_review_crew_pool_members().ok()?;
         let first = pool.first().map(|member| member.name.clone());
         if pool.len() < 2 {
             return first;
@@ -221,7 +229,7 @@ impl crate::OrbitRuntime {
             return;
         };
         let drawable = self
-            .review_crew_pool_members()
+            .pre_landing_review_crew_pool_members()
             .and_then(|pool| self.review_crew_candidates(&pool))
             .is_ok_and(|candidates| {
                 candidates
@@ -261,7 +269,7 @@ impl crate::OrbitRuntime {
                 .map_or_else(|| "(unset)".to_string(), |crew| format!("`{crew}`"));
             diagnostics.push(if ship.before_landing {
                 let switch = if self.operation_policy().review_before_landing.value {
-                    "has review.before_landing on"
+                    "has review.timing = before_landing"
                 } else {
                     "lists this machine in review.before_landing_hosts"
                 };
@@ -271,7 +279,7 @@ impl crate::OrbitRuntime {
                 )
             } else {
                 format!(
-                    "owner has review.before_pr on; each claimed leaf runs the before-PR review \
+                    "owner has review.timing = before_pr; each claimed leaf runs the before-PR review \
                      with crew {crew} before it opens a pull request"
                 )
             });
@@ -283,7 +291,7 @@ impl crate::OrbitRuntime {
             // pull makes against its own values. Undeclared optional caller
             // fields are unknown, not empty: fill the owner-matching value so
             // those caller-dependent legs are skipped while owner-resolved
-            // ship mode and the owner's review.before_pr still run.
+            // ship mode and the owner's review.timing still run.
             request_id: "probe".to_string(),
             caller_version: declared
                 .caller_version
@@ -305,6 +313,8 @@ impl crate::OrbitRuntime {
             ship: ship.clone(),
             crews: None,
             os: None,
+            browser_kit: false,
+            admissible: None,
         };
         let identity = trusted_identity(&machine_id, session, None);
         let refusal = orbit_store::admission_refusal(&identity, &request, owner_binary_version());
@@ -333,12 +343,12 @@ impl crate::OrbitRuntime {
                     request.ship.mode
                 ),
                 AdmissionRefusal::BeforePrUnsupported => format!(
-                    "owner has {} on; that review runs only on the PR route, and this owner \
+                    "owner has {}; that review runs only on the PR route, and this owner \
                      ships '{}'",
                     if request.ship.before_landing {
-                        "review.before_landing"
+                        "review.timing = before_landing"
                     } else {
-                        "review.before_pr"
+                        "review.timing = before_pr"
                     },
                     request.ship.mode
                 ),

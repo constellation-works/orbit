@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::TaskStoreBackend;
 use orbit_types::task::{
-    Task, TaskEnvelopeV2, TaskReferenceIndex, TaskStatus, automatic_dispatch_cmp,
+    HostOs, Task, TaskEnvelopeV2, TaskReferenceIndex, TaskStatus, automatic_dispatch_cmp,
     task_dependencies_ready_with_index,
 };
 
@@ -23,6 +23,9 @@ pub use orbit_store::contracts::{
 pub struct TaskListQuery {
     pub filter: TaskListFilter,
     pub ready: bool,
+    /// Keep only proposed tasks with holding findings in their latest pilot audit.
+    pub pilot_warnings: bool,
+    pub runs_on: Option<HostOs>,
     pub path: Option<String>,
     pub limit: usize,
 }
@@ -32,6 +35,8 @@ impl Default for TaskListQuery {
         Self {
             filter: TaskListFilter::default(),
             ready: false,
+            pilot_warnings: false,
+            runs_on: None,
             path: None,
             limit: crate::DEFAULT_TASK_LIST_LIMIT,
         }
@@ -105,20 +110,47 @@ pub(crate) fn metadata_task(envelope: TaskEnvelopeV2) -> Task {
 /// are decided from envelope metadata, so the store applies them to every
 /// candidate before the limit and hydrates only the rows that fill the page.
 fn query_task_store(
-    store: &dyn TaskStoreBackend,
+    runtime: &OrbitRuntime,
     query: &TaskListQuery,
+    os_readout: Option<&super::TaskOsReadout>,
 ) -> Result<TaskPage, OrbitError> {
-    // The store hands every call of one query the same status projection, so
-    // the prefix knowledge readiness needs is derived from it once rather than
-    // by a scan of the whole projection for each candidate.
+    let store = runtime.stores().tasks();
+    // Only the explicit warning filter scans proposed-task audit sidecars.
+    // Resolve membership before pagination so counts and cursors stay accurate.
+    let warning_ids = if query.pilot_warnings {
+        let candidates = store.task_candidates(
+            &TaskListFilter {
+                statuses: Some(vec![TaskStatus::Proposed]),
+                ..Default::default()
+            },
+            usize::MAX,
+        )?;
+        let mut ids = BTreeSet::new();
+        for task in candidates.items {
+            let comments = runtime.get_task_comments(&task.id)?;
+            if !super::task_pilot_warnings(task.status, &comments).is_empty() {
+                ids.insert(task.id);
+            }
+        }
+        Some(ids)
+    } else {
+        None
+    };
+    // One reference index per query rather than per candidate.
     let reference_index = OnceCell::new();
     let residual = |task: &Task, statuses: &BTreeMap<String, TaskStatus>| {
-        (!query.ready
-            || task_dependencies_ready_with_index(
-                task,
-                statuses,
-                reference_index.get_or_init(|| TaskReferenceIndex::from_status_index(statuses)),
-            ))
+        warning_ids
+            .as_ref()
+            .is_none_or(|ids| ids.contains(&task.id))
+            && query
+                .runs_on
+                .is_none_or(|host| os_readout.is_some_and(|readout| readout.admits(task, host)))
+            && (!query.ready
+                || task_dependencies_ready_with_index(
+                    task,
+                    statuses,
+                    reference_index.get_or_init(|| TaskReferenceIndex::from_status_index(statuses)),
+                ))
             && query.path.as_deref().is_none_or(|path| {
                 crate::application::search::task_selectors_contain_path(&task.context_files, path)
             })
@@ -126,7 +158,8 @@ fn query_task_store(
     store.query_task_rows(
         &query.filter,
         query.limit,
-        (query.ready || query.path.is_some()).then_some(&residual),
+        (query.pilot_warnings || query.ready || query.path.is_some() || query.runs_on.is_some())
+            .then_some(&residual),
     )
 }
 
@@ -135,7 +168,11 @@ impl OrbitRuntime {
         if !self.coordination_task_reads_visible() {
             return Ok(TaskPage::default());
         }
-        query_task_store(self.stores().tasks(), query)
+        let os_readout = query
+            .runs_on
+            .map(|_| super::TaskOsReadout::new(self))
+            .transpose()?;
+        query_task_store(self, query, os_readout.as_ref())
     }
 
     /// Query every lifecycle status with active work first, preserving newest
@@ -155,6 +192,8 @@ impl OrbitRuntime {
                 ..query.filter.clone()
             },
             ready: query.ready,
+            pilot_warnings: query.pilot_warnings,
+            runs_on: query.runs_on,
             path: query.path.clone(),
             limit: query.limit,
         })
@@ -246,7 +285,8 @@ impl OrbitRuntime {
         };
         let tasks = list_task_metadata_in(self.stores().tasks())?;
         let workspace_root = self.paths().repo_root.as_path();
-        let lock_holders = active_task_lock_holders(&tasks, workspace_root);
+        let unlocked = self.unlocked_context_paths();
+        let lock_holders = active_task_lock_holders(&tasks, workspace_root, unlocked);
         let holder_index = lock_holder_index(&lock_holders);
         let mut candidates: Vec<&Task> = tasks
             .iter()
@@ -264,7 +304,7 @@ impl OrbitRuntime {
 
         let mut eligibility = TaskEligibility::default();
         for task in candidates {
-            let overlaps = task_lock_overlaps(task, &holder_index, workspace_root);
+            let overlaps = task_lock_overlaps(task, &holder_index, workspace_root, unlocked);
             if !overlaps.is_empty() {
                 eligibility.conflicting.push(TaskEligibilityConflict {
                     task: task.clone(),

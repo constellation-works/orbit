@@ -6,8 +6,9 @@
 //! key*, and *does this asset hash to the digest that manifest publishes*.
 //!
 //! This module owns the Rust answer to both, plus the trusted key set itself,
-//! so a key rotation is one edit in Rust rather than one per consumer
-//! (L-0044). It is deliberately pure: no network, no filesystem, no clock
+//! so a key rotation is one edit in the workspace rather than one per consumer
+//! (L-0044). The desktop app, a separate Cargo workspace, keeps a copy that
+//! `scripts/check-installer-pubkey.sh` holds identical. It is deliberately pure: no network, no filesystem, no clock
 //! reading. Callers supply the bytes and the date, which is also what makes
 //! expiry and revocation testable without freezing wall-clock time.
 
@@ -61,8 +62,9 @@ tT/bo0mm4TvrumxYr1xyEHrdum+ej/WYz/0BZQlwDOtXAgMBAAE=
 
 /// The release signing keys this binary trusts.
 ///
-/// Kept in lockstep with the same list in `install.sh` and
-/// `npm/scripts/install-binary.js`.
+/// Kept in lockstep with the same list in `install.sh`,
+/// `npm/scripts/install-binary.js` and the desktop app's
+/// `desktop/src/update/trust.rs`.
 pub const TRUSTED_RELEASE_KEYS: &[TrustedReleaseKey] = &[TrustedReleaseKey {
     id: "orbit-release-key-3",
     not_after: "2029-12-31",

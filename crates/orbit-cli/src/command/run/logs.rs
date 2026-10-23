@@ -31,8 +31,9 @@ pub struct RunLogsArgs {
     pub follow: bool,
 
     /// Report stored run records as-is: skip stale-run reconciliation, which
-    /// finalizes an orphaned pending or running run as interrupted and
-    /// releases its task reservations
+    /// finalizes an orphaned pending or running run as interrupted, releases
+    /// its task reservations, and settles with their owner the pull claims an
+    /// ended drain or leaf left
     #[arg(long)]
     pub no_reconcile: bool,
 }

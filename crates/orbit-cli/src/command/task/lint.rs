@@ -1,193 +1,92 @@
-use clap::Args;
-use orbit_core::application::task::TaskLintSeverity;
-use orbit_core::{OrbitError, OrbitRuntime, TaskStatus};
-use serde_json::{Value, json};
+//! `orbit task lint` rendering: one task's findings, or the context repair
+//! sweep when no task ID is given.
 
-use crate::command::{CommandOut, Execute, Payload};
+use serde_json::{Map, Value};
 
-/// Statuses swept when linting without a task ID.
-///
-/// Done / Archived / Rejected tasks are intentionally skipped — they are
-/// historical records and re-saving them would mutate audit trails for tasks
-/// nobody is going to execute again.
-const SWEEP_ACTIVE_STATUSES: &[TaskStatus] = &[
-    TaskStatus::Proposed,
-    TaskStatus::Backlog,
-    TaskStatus::Someday,
-    TaskStatus::InProgress,
-    TaskStatus::Blocked,
-    TaskStatus::Review,
-];
+use crate::command::{CommandOut, Payload};
 
-#[derive(Args)]
-#[command(
-    after_help = "Examples:\n  orbit task lint <TASK_ID>                   # findings for one task\n  orbit task lint                             # sweep active tasks for context that needs repair\n  orbit task lint <TASK_ID> --restore-pruned  # re-declare selectors an old prune recorded\n  orbit task lint --restore-pruned            # apply the restoration across the sweep\n  orbit task lint --status review"
-)]
-pub struct TaskLintArgs {
-    /// Task ID. Omit to sweep all active tasks for `context_files` that need repair.
-    pub id: Option<String>,
-    /// Re-declare `context_files` entries that an earlier prune recorded in task history
-    #[arg(long = "restore-pruned")]
-    pub restore_pruned: bool,
-    /// Restrict the sweep to specific statuses (repeatable; sweep mode only)
-    #[arg(long = "status", value_enum, conflicts_with = "id")]
-    pub statuses: Vec<TaskStatus>,
-}
-
-impl Execute for TaskLintArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        match &self.id {
-            Some(id) => lint_single_task(runtime, id, self.restore_pruned),
-            None => sweep_context_repairs(runtime, self.restore_pruned, &self.statuses),
-        }
-    }
-}
-
-fn lint_single_task(runtime: &OrbitRuntime, id: &str, restore_pruned: bool) -> CommandOut {
-    let restoration = if restore_pruned {
-        Some(runtime.restore_pruned_context_files(id)?.1)
+pub(super) fn render(input: &Map<String, Value>, value: Value) -> CommandOut {
+    let restore_pruned = input.get("restore_pruned") == Some(&Value::Bool(true));
+    let text = if input.contains_key("id") {
+        single_task_text(&value)
     } else {
-        None
+        sweep_text(&value, restore_pruned)
     };
+    Ok(Payload::detail(value, text).into())
+}
 
-    let report = runtime.lint_task(id)?;
-    let mut value = serde_json::to_value(&report).map_err(|e| OrbitError::Io(e.to_string()))?;
-    if let (Some(restoration), Value::Object(map)) = (restoration.as_ref(), &mut value) {
-        map.insert("restored".to_string(), json!(restoration.restored));
-        map.insert("unrestorable".to_string(), json!(restoration.unrestorable));
-    }
-
+fn single_task_text(report: &Value) -> String {
+    let task_id = string(report, "task_id");
+    let duration_ms = report
+        .get("duration_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
     let mut lines = Vec::new();
-    if let Some(restoration) = restoration.as_ref() {
-        if restoration.restored.is_empty() {
+    // Present only when the run restored.
+    if let Some(restored) = report.get("restored") {
+        let restored = strings(restored);
+        if restored.is_empty() {
             lines.push(format!(
-                "No pruned context_files entries recorded in the history of '{}'.",
-                report.task_id
+                "No pruned context_files entries recorded in the history of '{task_id}'."
             ));
         } else {
             lines.push(format!(
-                "Restored {} context_files entr{} on '{}': {}",
-                restoration.restored.len(),
-                if restoration.restored.len() == 1 {
-                    "y"
-                } else {
-                    "ies"
-                },
-                report.task_id,
-                restoration.restored.join(", ")
+                "Restored {} context_files entr{} on '{task_id}': {}",
+                restored.len(),
+                if restored.len() == 1 { "y" } else { "ies" },
+                restored.join(", ")
             ));
         }
-        if !restoration.unrestorable.is_empty() {
+        let unrestorable = report.get("unrestorable").map(strings).unwrap_or_default();
+        if !unrestorable.is_empty() {
             lines.push(format!(
                 "Recorded but not restorable against this workspace (repair by hand): {}",
-                restoration.unrestorable.join(", ")
+                unrestorable.join(", ")
             ));
         }
     }
 
-    if report.findings.is_empty() {
+    let findings = report
+        .get("findings")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
+    if findings.is_empty() {
         lines.push(format!(
-            "No lint findings for '{}' ({} ms).",
-            report.task_id, report.duration_ms
+            "No lint findings for '{task_id}' ({duration_ms} ms)."
         ));
-        return Ok(Payload::detail(value, lines.join("\n")).into());
+        return lines.join("\n");
     }
 
     lines.push(format!(
-        "{} finding(s) for '{}' ({} ms):",
-        report.finding_count, report.task_id, report.duration_ms
+        "{} finding(s) for '{task_id}' ({duration_ms} ms):",
+        report
+            .get("finding_count")
+            .and_then(Value::as_u64)
+            .unwrap_or_default()
     ));
-    for finding in report.findings {
-        let severity = match finding.severity {
-            TaskLintSeverity::Error => "error",
-            TaskLintSeverity::Warning => "warning",
-        };
+    for finding in findings {
         lines.push(format!(
-            "[{severity}] {}: {}",
-            finding.check, finding.message
+            "[{}] {}: {}",
+            string(finding, "severity"),
+            string(finding, "check"),
+            string(finding, "message")
         ));
-        lines.push(format!("  fix: {}", finding.fix_it));
+        lines.push(format!("  fix: {}", string(finding, "fix_it")));
     }
-    Ok(Payload::detail(value, lines.join("\n")).into())
+    lines.join("\n")
 }
 
-/// Sweep active tasks for context declarations that need repair before they
-/// can hold context locks: an empty or unusable surface, or selectors an earlier
-/// prune removed and recorded ([ORB-12490]).
-///
-/// Nothing here deletes a declaration. The sweep that used to drop selectors
-/// whose target had disappeared is retired: a missing target is a valid
-/// declaration for work that will create it, and pruning it silently shrank
-/// the footprint the task's locks protect.
-fn sweep_context_repairs(
-    runtime: &OrbitRuntime,
-    restore_pruned: bool,
-    statuses: &[TaskStatus],
-) -> CommandOut {
-    let allowed_statuses: &[TaskStatus] = if statuses.is_empty() {
-        SWEEP_ACTIVE_STATUSES
-    } else {
-        statuses
-    };
-
-    let tasks = runtime.list_tasks()?;
-    let mut report = Vec::<Value>::new();
-    let mut total_restored = 0usize;
-    let mut total_unrestorable = 0usize;
-    let mut tasks_written = 0usize;
-
-    for task in tasks {
-        if !allowed_statuses.contains(&task.status) {
-            continue;
-        }
-        let restoration = if restore_pruned {
-            runtime.restore_pruned_context_files(&task.id)?.1
-        } else {
-            runtime.plan_context_file_restore(&task.id)?
-        };
-        let declared = runtime.declared_context_surface(&task);
-        let empty_surface = declared.retained.is_empty();
-        if restoration.is_empty() && declared.invalid.is_empty() && !empty_surface {
-            continue;
-        }
-
-        total_restored += restoration.restored.len();
-        total_unrestorable += restoration.unrestorable.len();
-        if restoration.applied {
-            tasks_written += 1;
-        }
-
-        report.push(json!({
-            "id": task.id,
-            "status": task.status,
-            "empty_surface": empty_surface,
-            "invalid": declared.invalid,
-            "restorable": restoration.restored,
-            "unrestorable": restoration.unrestorable,
-            "written": restoration.applied,
-        }));
-    }
-
-    let payload = json!({
-        "tasks_needing_repair": report.len(),
-        "total_restorable": total_restored,
-        "total_unrestorable": total_unrestorable,
-        "tasks_written": tasks_written,
-        "dry_run": !restore_pruned,
-        "tasks": report,
-    });
-
-    if report.is_empty() {
-        return Ok(Payload::detail(
-            payload,
-            "No active tasks have context_files that need repair.",
-        )
-        .into());
+fn sweep_text(payload: &Value, restore_pruned: bool) -> String {
+    let tasks = payload
+        .get("tasks")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
+    if tasks.is_empty() {
+        return "No active tasks have context_files that need repair.".to_string();
     }
 
     let mut lines = Vec::new();
-    for entry in &report {
-        let id = entry.get("id").and_then(Value::as_str).unwrap_or("");
+    for entry in tasks {
         let mut notes = Vec::new();
         if entry.get("empty_surface").and_then(Value::as_bool) == Some(true) {
             notes.push("declares no usable context".to_string());
@@ -204,13 +103,17 @@ fn sweep_context_repairs(
             ),
             ("unrestorable", "unrestorable"),
         ] {
-            let listed = joined_selectors(entry, field);
+            let listed = entry.get(field).map(strings).unwrap_or_default();
             if !listed.is_empty() {
-                notes.push(format!("{label}: {listed}"));
+                notes.push(format!("{label}: {}", listed.join(", ")));
             }
         }
-        lines.push(format!("{id}: {}", notes.join("; ")));
+        lines.push(format!("{}: {}", string(entry, "id"), notes.join("; ")));
     }
+    let total_restored = payload
+        .get("total_restorable")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
     let action = if restore_pruned {
         "restored"
     } else {
@@ -219,23 +122,21 @@ fn sweep_context_repairs(
     lines.push(format!(
         "\n{action} {total_restored} recorded entr{} across {} task(s).",
         if total_restored == 1 { "y" } else { "ies" },
-        report.len()
+        tasks.len()
     ));
     if !restore_pruned {
         lines.push("Re-run with --restore-pruned to apply.".to_string());
     }
-    Ok(Payload::detail(payload, lines.join("\n")).into())
+    lines.join("\n")
 }
 
-fn joined_selectors(entry: &Value, field: &str) -> String {
-    entry
-        .get(field)
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
+fn string<'a>(value: &'a Value, key: &str) -> &'a str {
+    value.get(key).and_then(Value::as_str).unwrap_or_default()
+}
+
+fn strings(value: &Value) -> Vec<&str> {
+    value
+        .as_array()
+        .map(|items| items.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default()
 }

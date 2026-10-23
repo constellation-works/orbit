@@ -27,21 +27,48 @@ pub struct HandoffObservation {
     /// handoff reports as known red. Acceptance requires one per such log;
     /// approval and landing recheck the logs the accepted handoff pinned.
     pub known_red: Vec<KnownRedObservation>,
+    /// [ORB-16855] The owner's own judgement of the candidate for each
+    /// light-delivery tag its copy of the task carries, against its
+    /// `workflow.light_delivery_paths`. An applying `skip-review` decision
+    /// admits a handoff without review evidence, an applying
+    /// `skip-validation` one admits it without validation logs, while the
+    /// owner's task still carries the tag; acceptance records each decision
+    /// in the task's history. Empty for a task without either tag.
+    pub light_delivery: Vec<orbit_types::task::LightDeliveryDecision>,
 }
 
 /// What the owner's own run of a required command on the handed-off base
 /// showed about a leaf's known-red report [ORB-15427]. Built by trusted owner
 /// code that ran, or read its cached run of, an owner-required command; the
-/// leaf's report only names what to run.
+/// leaf's report only names what to run. When the follower was admitted on
+/// another host OS, the owner does not run the base: [`Self::accepted_across_os`]
+/// names that scope and [`Self::verdict`] carries the follower's reported
+/// failures [ORB-16432].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KnownRedObservation {
     /// The owner-required command the log reports.
     pub command: String,
-    /// The base commit the owner ran it on.
+    /// The base commit the report names. The owner ran it there only when
+    /// [`Self::accepted_across_os`] is absent.
     pub base_sha: String,
-    /// The reported failures when the owner's base run fails every one of
-    /// them, or why the owner could not establish that.
+    /// The reported failures when they stand, or why the owner could not
+    /// establish that. A cross-OS acceptance carries the follower's failures
+    /// without an owner base run.
     pub verdict: Result<std::collections::BTreeSet<String>, String>,
+    /// Set when the follower's admitted host OS differs from the owner's, so
+    /// the owner's base run is a different validation environment and was not
+    /// used. The first OS is the follower's; the second is the owner's.
+    pub accepted_across_os: Option<KnownRedOsAcceptance>,
+}
+
+/// The two host operating systems of a known-red report the owner accepted
+/// without running the base, because they differ [ORB-16432].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KnownRedOsAcceptance {
+    /// The OS the follower was admitted on, where it observed the base failures.
+    pub follower: orbit_types::task::HostOs,
+    /// The OS this owner runs. Its base run neither confirms nor contradicts.
+    pub owner: orbit_types::task::HostOs,
 }
 
 /// The owner's own reading of the facts a before-PR certificate stands on
@@ -64,7 +91,7 @@ pub struct HandoffReviewObservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HandoffReviewRefusal {
-    /// The claim captured `review.before_pr` or `review.before_landing` and
+    /// The claim captured a `review.timing` of `before_pr` or `before_landing` and
     /// the handoff carries no review evidence for that timing.
     ReviewEvidenceMissing,
     /// The claim captured no review and the handoff claims one.

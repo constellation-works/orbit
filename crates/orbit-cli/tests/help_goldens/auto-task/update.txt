@@ -1,0 +1,113 @@
+Update an existing definition (present fields only)
+
+Usage: orbit auto-task update [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          Definition name
+
+Options:
+      --description <DESCRIPTION>
+          New description
+
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --cron <CRON>
+          New 5-field cron expression (mutually exclusive with `--every-minutes`)
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --every-minutes <EVERY_MINUTES>
+          New interval in minutes (mutually exclusive with `--cron`)
+
+      --deliveries-landed <DELIVERIES_LANDED>
+          Delivery trigger JSON: branch, threshold, max_wait_minutes, coverage; optional owner_machine (defaults to this workspace's registered owner machine), max_items, retries
+
+      --dedupe <DEDUPE>
+          New dedupe policy
+
+          Possible values:
+          - skip-if-open: Skip the fire while a previously-created instance is still open, so a stalled backlog never accumulates identical tasks (the default)
+          - always:       Always fire, even if a prior instance is still open
+
+      --title <TITLE>
+          New task title
+
+      --body <BODY>
+          New task body
+
+      --criterion <CRITERIA>
+          Replace acceptance criteria. Repeat for multiple
+
+      --type <TASK_TYPE>
+          New task type
+
+          Possible values:
+          - feature
+          - bug:      An attributable defect; lineage is recorded through typed task relations
+          - refactor
+          - chore
+
+      --tag <TAGS>
+          Replace tags. Repeat for multiple
+
+      --required-tools <REQUIRED_TOOLS>
+          Replacement exact canonical tools copied to minted tasks (empty clears)
+
+      --priority <PRIORITY>
+          New priority
+          
+          [possible values: low, medium, high, critical]
+
+      --complexity <COMPLEXITY>
+          New assessed complexity for minted tasks
+
+          Possible values:
+          - low
+          - medium
+          - hard
+          - xhard:  Reserved top tier for the most capable (and most expensive) crews
+
+      --crew <CREW>
+          New crew override
+
+      --status <STATUS>
+          New minted-task status
+
+          Possible values:
+          - proposed:    Awaiting human approval before entering the backlog
+          - backlog:     Approved and queued for work; not yet started
+          - in-progress: Actively being worked on
+          - review:      Implementation complete; awaiting review/merge
+          - done:        Accepted and closed. May be reopened by an explicit status edit
+          - blocked:     Temporarily paused (waiting on a dependency or decision)
+          - archived:    Soft-deleted. Can be restored to any other status
+          - rejected:    Declined. Can be reclassified to any other status
+          - someday:     Future-scoped — wanted but not yet actionable. Agents skip someday tasks
+
+      --waive-batch <WAIVE_BATCH>
+          Waive a settled failed delivery batch, retaining its coverage gap
+
+      --waiver-reason <WAIVER_REASON>
+          Required explanation for a batch waiver
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')

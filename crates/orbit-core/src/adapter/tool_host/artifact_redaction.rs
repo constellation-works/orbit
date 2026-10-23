@@ -1,7 +1,17 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
+use orbit_common::governance::agents::AgentsVerb;
+use orbit_common::governance::auto_task::AutoTaskVerb;
+use orbit_common::governance::codebase::CodebaseVerb;
+use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
+use orbit_common::governance::operation::{OperationVerb, ParamSpec, ParamType, Redaction};
+use orbit_common::governance::orchestrator::OrchestratorVerb;
+use orbit_common::governance::search::SearchVerb;
+use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
+use orbit_common::governance::workflow::WorkflowVerb;
+use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use orbit_common::security::redaction::{
     is_high_confidence_single_token_credential, redact_all, redact_home_dir,
     redact_sensitive_env_text,
@@ -95,6 +105,33 @@ pub(super) fn sanitize_tool_input(
     };
 
     let mut report = ArtifactRedactionReport::default();
+    for param in policy.declared.iter().flat_map(|group| group.iter()) {
+        let mode = match param.redact {
+            Redaction::None => continue,
+            Redaction::FreeText => TextMode::Free,
+            Redaction::Path => TextMode::PathOnly,
+        };
+        // The tool entry renames aliases before dispatch; an alias takes its
+        // parameter's class all the same.
+        for field in std::iter::once(&param.name).chain(param.aliases) {
+            match param.param_type {
+                ParamType::StringList | ParamType::EnumList(_) => {
+                    sanitize_string_array_field(&mut object, field, field, mode, &mut report)?
+                }
+                ParamType::String
+                | ParamType::Path
+                | ParamType::Integer
+                | ParamType::UnsignedInteger
+                | ParamType::Boolean
+                | ParamType::Switch
+                | ParamType::Enum(_) => {
+                    sanitize_string_field(&mut object, field, field, mode, &mut report)?
+                }
+                // An object's free text is the action policy's `nested_objects`.
+                ParamType::Object | ParamType::Array => {}
+            }
+        }
+    }
     for field in policy.free_text_fields {
         sanitize_string_field(&mut object, field, field, TextMode::Free, &mut report)?;
     }
@@ -128,7 +165,7 @@ pub(super) fn finish_tool_response(
     if !is_covered_mutating_action(action) {
         return Ok(());
     }
-    if action == OrbitBuiltinAction::TaskReconcileReview {
+    if action == OrbitBuiltinAction::Task(TaskVerb::ReconcileReview) {
         sanitize_response_value(response, "response", report);
     }
     if let Some(object) = response.as_object_mut() {
@@ -174,6 +211,9 @@ struct NestedObjectPolicy {
 }
 
 struct ActionPolicy {
+    /// A registry operation's parameter groups; each parameter is redacted
+    /// per its declared [`Redaction`] class, in declaration order.
+    declared: &'static [&'static [ParamSpec]],
     free_text_fields: &'static [&'static str],
     free_text_arrays: &'static [&'static str],
     path_fields: &'static [&'static str],
@@ -183,6 +223,7 @@ struct ActionPolicy {
 }
 
 const NO_REDACTION: ActionPolicy = ActionPolicy {
+    declared: &[],
     free_text_fields: &[],
     free_text_arrays: &[],
     path_fields: &[],
@@ -191,32 +232,27 @@ const NO_REDACTION: ActionPolicy = ActionPolicy {
     nested_objects: &[],
 };
 
-const TASK_ADD_NESTED: &[NestedArrayPolicy] = &[
-    NestedArrayPolicy {
-        array_key: "external_refs",
-        field_key: "url",
-        field_alias: None,
-        mode: TextMode::PathOnly,
+/// The free text among `orbit task add`'s CLI options.
+const TASK_ADD_CLI_OPTIONS: &[NestedObjectPolicy] = &[NestedObjectPolicy {
+    object_key: TASK_CLI_OPTIONS_PARAM,
+    free_text_fields: &["plan"],
+    free_text_arrays: &[],
+}];
+
+/// A template replacement and a field-scoped template edit carry the same
+/// free-text fields.
+const AUTO_TASK_TEMPLATE: &[NestedObjectPolicy] = &[
+    NestedObjectPolicy {
+        object_key: "template",
+        free_text_fields: &["title", "description"],
+        free_text_arrays: &["acceptance_criteria"],
     },
-    NestedArrayPolicy {
-        array_key: "externalRefs",
-        field_key: "url",
-        field_alias: None,
-        mode: TextMode::PathOnly,
-    },
-    NestedArrayPolicy {
-        array_key: "external-refs",
-        field_key: "url",
-        field_alias: None,
-        mode: TextMode::PathOnly,
+    NestedObjectPolicy {
+        object_key: "template_patch",
+        free_text_fields: &["title", "description"],
+        free_text_arrays: &["acceptance_criteria"],
     },
 ];
-
-const AUTO_TASK_TEMPLATE: &[NestedObjectPolicy] = &[NestedObjectPolicy {
-    object_key: "template",
-    free_text_fields: &["title", "description"],
-    free_text_arrays: &["acceptance_criteria"],
-}];
 
 /// Every builtin action must make an explicit redaction decision here.
 ///
@@ -225,116 +261,124 @@ const AUTO_TASK_TEMPLATE: &[NestedObjectPolicy] = &[NestedObjectPolicy {
 /// for read-only actions and mutations that only persist structural values.
 fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
     match action {
-        OrbitBuiltinAction::TaskAdd => ActionPolicy {
-            free_text_fields: &["title", "description", "plan", "comment"],
-            free_text_arrays: &["acceptance_criteria"],
-            path_fields: &[],
-            path_arrays: &["context_files", "context"],
-            nested_arrays: TASK_ADD_NESTED,
-            nested_objects: &[],
+        // Claim-lifecycle payloads are compared against durable replay records;
+        // all parameters are structural and must stay byte-for-byte intact.
+        OrbitBuiltinAction::Drain(verb) => match verb {
+            DrainVerb::Probe
+            | DrainVerb::ReceiptLookup
+            | DrainVerb::Pull
+            | DrainVerb::ClaimBind
+            | DrainVerb::ClaimSettle
+            | DrainVerb::Claims => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
         },
-        OrbitBuiltinAction::TaskUpdate => ActionPolicy {
-            free_text_fields: &[
-                "title",
-                "description",
-                "plan",
-                "execution_summary",
-                "note",
-                "comment",
-            ],
-            free_text_arrays: &["acceptance_criteria"],
-            path_fields: &[],
-            path_arrays: &["context_files", "context"],
-            nested_arrays: &[],
-            nested_objects: &[],
+        OrbitBuiltinAction::WorkspaceClaim(verb) => match verb {
+            WorkspaceClaimVerb::Acquire
+            | WorkspaceClaimVerb::Release
+            | WorkspaceClaimVerb::Show => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
         },
-        OrbitBuiltinAction::TaskReconcileReview => ActionPolicy {
-            // `command` selects an already-authorized stored command. Preserve
-            // it byte-for-byte for exact evidence matching, then redact only
-            // serialized reports at the response boundary.
-            free_text_fields: &["reason"],
-            free_text_arrays: &[], path_fields: &[], path_arrays: &[], nested_arrays: &[], nested_objects: &[],
+        OrbitBuiltinAction::Friction(verb) => ActionPolicy {
+            declared: verb.spec().params,
+            ..NO_REDACTION
         },
-        OrbitBuiltinAction::TaskReviewReset => ActionPolicy {
-            free_text_fields: &["reason"],
-            free_text_arrays: &[], path_fields: &[], path_arrays: &[], nested_arrays: &[], nested_objects: &[],
+        OrbitBuiltinAction::Task(verb) => match verb {
+            // Artifact bytes are stored as given; the store screens their path.
+            TaskVerb::ArtifactPut => NO_REDACTION,
+            // The plan `orbit task add` carries among its CLI options is free
+            // text too.
+            TaskVerb::Add => ActionPolicy {
+                declared: verb.spec().params,
+                nested_objects: TASK_ADD_CLI_OPTIONS,
+                ..NO_REDACTION
+            },
+            // Each parameter redacts per its declared class; the task reads
+            // persist nothing, and lint writes only recorded selectors. A
+            // reconciliation's `command` selects an already-authorized stored
+            // command, so it is declared plain and kept byte-for-byte; its
+            // serialized reports are redacted at the response boundary.
+            TaskVerb::Update
+            | TaskVerb::List
+            | TaskVerb::Eligible
+            | TaskVerb::Show
+            | TaskVerb::Lint
+            | TaskVerb::ArtifactGet
+            | TaskVerb::LocksList
+            | TaskVerb::LocksReserve
+            | TaskVerb::LocksRelease
+            | TaskVerb::ReviewReset
+            | TaskVerb::Requeue
+            | TaskVerb::BlockTriage
+            | TaskVerb::ReconcileReview
+            | TaskVerb::RetryHandoff
+            | TaskVerb::Reject
+            | TaskVerb::Delete => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
         },
-        OrbitBuiltinAction::TaskReject => ActionPolicy {
-            free_text_fields: &["note", "comment"],
-            free_text_arrays: &[],
-            path_fields: &[],
-            path_arrays: &[],
-            nested_arrays: &[],
-            nested_objects: &[],
+        OrbitBuiltinAction::AutoTask(verb) => match verb {
+            AutoTaskVerb::Add | AutoTaskVerb::Update => ActionPolicy {
+                declared: verb.spec().params,
+                nested_objects: AUTO_TASK_TEMPLATE,
+                ..NO_REDACTION
+            },
+            // Delete, recover and reset reasons are operator audit notes kept
+            // verbatim; the other verbs persist only structural values.
+            AutoTaskVerb::List
+            | AutoTaskVerb::Show
+            | AutoTaskVerb::Toggle
+            | AutoTaskVerb::Delete
+            | AutoTaskVerb::Restore
+            | AutoTaskVerb::Mint
+            | AutoTaskVerb::Recover
+            | AutoTaskVerb::Reset => NO_REDACTION,
         },
-        OrbitBuiltinAction::Friction(FrictionVerb::Add) => ActionPolicy {
-            free_text_fields: &["title", "body", "description"],
-            free_text_arrays: &[],
-            path_fields: &[],
-            path_arrays: &[],
-            nested_arrays: &[],
-            nested_objects: &[],
+        // Run selectors, crews and drain settings are structural; a resize
+        // reason is an operator audit note kept verbatim.
+        OrbitBuiltinAction::Search(verb) => match verb {
+            SearchVerb::Query => ActionPolicy { declared: verb.spec().params, ..NO_REDACTION },
         },
-        OrbitBuiltinAction::Friction(FrictionVerb::Update) => ActionPolicy {
-            free_text_fields: &["title", "body"],
-            free_text_arrays: &[],
-            path_fields: &[],
-            path_arrays: &[],
-            nested_arrays: &[],
-            nested_objects: &[],
+        OrbitBuiltinAction::Codebase(verb) => match verb {
+            CodebaseVerb::Analytics | CodebaseVerb::Show | CodebaseVerb::Related => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
         },
-        OrbitBuiltinAction::AutoTaskAdd | OrbitBuiltinAction::AutoTaskUpdate => ActionPolicy {
-            free_text_fields: &["description"],
-            free_text_arrays: &[],
-            path_fields: &[],
-            path_arrays: &[],
-            nested_arrays: &[],
-            nested_objects: AUTO_TASK_TEMPLATE,
+        OrbitBuiltinAction::Agents(verb) => match verb {
+            AgentsVerb::Scorecard | AgentsVerb::Show => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
         },
-        OrbitBuiltinAction::AutoTaskList
-        | OrbitBuiltinAction::AutoTaskMint
-        | OrbitBuiltinAction::AutoTaskShow
-        | OrbitBuiltinAction::DesktopRead
-        | OrbitBuiltinAction::DesktopDrain
+        OrbitBuiltinAction::Orchestrator(verb) => match verb {
+            OrchestratorVerb::Scorecard | OrchestratorVerb::Show => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
+        },
+        OrbitBuiltinAction::Workflow(verb) => match verb {
+            WorkflowVerb::Auto
+            | WorkflowVerb::RunList
+            | WorkflowVerb::RunResume
+            | WorkflowVerb::RunShow
+            | WorkflowVerb::Ship => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
+        },
+        OrbitBuiltinAction::DesktopRead
         | OrbitBuiltinAction::DesktopAutomation
         | OrbitBuiltinAction::DesktopTaskSnapshot
         // Desktop writes redact at their transactional persistence boundary.
         | OrbitBuiltinAction::DesktopTaskWrite
         | OrbitBuiltinAction::CommandExec
-        | OrbitBuiltinAction::Friction(FrictionVerb::List)
-        | OrbitBuiltinAction::Friction(FrictionVerb::Show)
-        | OrbitBuiltinAction::Friction(FrictionVerb::Stats)
-        | OrbitBuiltinAction::Friction(FrictionVerb::Tags)
-        | OrbitBuiltinAction::Friction(FrictionVerb::Resolve)
-        | OrbitBuiltinAction::Friction(FrictionVerb::Rehome)
-        | OrbitBuiltinAction::DrainClaims
-        | OrbitBuiltinAction::DrainProbe
-        | OrbitBuiltinAction::DrainReceiptLookup
-        // [ORB-13625] Claim-lifecycle payloads are the owner's durable
-        // settlement record: the claim journal compares a replay against the
-        // exact input, so rewriting any of it would make a retry mismatch.
-        | OrbitBuiltinAction::DrainClaimBind
-        | OrbitBuiltinAction::DrainClaimSettle
-        | OrbitBuiltinAction::TaskPull
         | OrbitBuiltinAction::PipelineInvoke
         | OrbitBuiltinAction::PipelineWait
-        | OrbitBuiltinAction::Search
-        | OrbitBuiltinAction::TaskArtifactGet
-        | OrbitBuiltinAction::TaskDelete
-        | OrbitBuiltinAction::TaskEligible
-        | OrbitBuiltinAction::TaskLint
-        | OrbitBuiltinAction::TaskList
-        | OrbitBuiltinAction::TaskLocks
-        | OrbitBuiltinAction::TaskLocksRelease
-        | OrbitBuiltinAction::TaskLocksReserve
-        | OrbitBuiltinAction::TaskShow
-        | OrbitBuiltinAction::WorkflowRunList
-        | OrbitBuiltinAction::WorkflowRunResume
-        | OrbitBuiltinAction::WorkflowRunShow
-        | OrbitBuiltinAction::WorkflowShip
-        | OrbitBuiltinAction::WorkspaceClaimAcquire
-        | OrbitBuiltinAction::WorkspaceClaimRelease
-        | OrbitBuiltinAction::WorkspaceClaimShow
         // [ORB-11354] The invocation prompt is free text and *is* persisted on
         // the run record, but redacting it would change the instruction the
         // agent receives — an operator debugging an auth failure needs to name
@@ -346,17 +390,72 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
 }
 
 fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
-    matches!(
-        action,
-        OrbitBuiltinAction::TaskAdd
-            | OrbitBuiltinAction::TaskUpdate
-            | OrbitBuiltinAction::TaskReject
-            | OrbitBuiltinAction::TaskReconcileReview
-            | OrbitBuiltinAction::TaskReviewReset
-            | OrbitBuiltinAction::AutoTaskAdd
-            | OrbitBuiltinAction::AutoTaskUpdate
-            | OrbitBuiltinAction::Friction(FrictionVerb::Add | FrictionVerb::Update)
-    )
+    match action {
+        // A registry operation reports redactions when it declares a redacted
+        // parameter.
+        OrbitBuiltinAction::Friction(verb) => verb
+            .spec()
+            .params()
+            .any(|param| param.redact != Redaction::None),
+        OrbitBuiltinAction::AutoTask(verb) => {
+            !policy_for_action(OrbitBuiltinAction::AutoTask(verb))
+                .nested_objects
+                .is_empty()
+        }
+        OrbitBuiltinAction::Drain(verb) => match verb {
+            DrainVerb::Probe
+            | DrainVerb::ReceiptLookup
+            | DrainVerb::Pull
+            | DrainVerb::ClaimBind
+            | DrainVerb::ClaimSettle
+            | DrainVerb::Claims => false,
+        },
+        OrbitBuiltinAction::WorkspaceClaim(verb) => match verb {
+            WorkspaceClaimVerb::Acquire
+            | WorkspaceClaimVerb::Release
+            | WorkspaceClaimVerb::Show => false,
+        },
+        OrbitBuiltinAction::Search(verb) => match verb {
+            SearchVerb::Query => false,
+        },
+        OrbitBuiltinAction::Codebase(verb) => match verb {
+            CodebaseVerb::Analytics | CodebaseVerb::Show | CodebaseVerb::Related => false,
+        },
+        OrbitBuiltinAction::Agents(verb) => match verb {
+            AgentsVerb::Scorecard | AgentsVerb::Show => false,
+        },
+        OrbitBuiltinAction::Orchestrator(verb) => match verb {
+            OrchestratorVerb::Scorecard | OrchestratorVerb::Show => false,
+        },
+        OrbitBuiltinAction::Workflow(verb) => match verb {
+            WorkflowVerb::Auto
+            | WorkflowVerb::RunList
+            | WorkflowVerb::RunResume
+            | WorkflowVerb::RunShow
+            | WorkflowVerb::Ship => false,
+        },
+        OrbitBuiltinAction::Task(verb) => match verb {
+            TaskVerb::Add
+            | TaskVerb::Update
+            | TaskVerb::ArtifactPut
+            | TaskVerb::ReviewReset
+            | TaskVerb::Requeue
+            | TaskVerb::BlockTriage
+            | TaskVerb::ReconcileReview
+            | TaskVerb::RetryHandoff
+            | TaskVerb::Reject => true,
+            TaskVerb::List
+            | TaskVerb::Eligible
+            | TaskVerb::Show
+            | TaskVerb::Lint
+            | TaskVerb::ArtifactGet
+            | TaskVerb::LocksList
+            | TaskVerb::LocksReserve
+            | TaskVerb::LocksRelease
+            | TaskVerb::Delete => false,
+        },
+        _ => false,
+    }
 }
 
 fn sanitize_string_field(
@@ -649,34 +748,87 @@ fn artifact_target<'a>(
     persisted_task_id: Option<&'a str>,
 ) -> Result<ArtifactTarget<'a>, OrbitError> {
     match action {
-        OrbitBuiltinAction::TaskAdd
-        | OrbitBuiltinAction::TaskUpdate
-        | OrbitBuiltinAction::TaskReject
-        | OrbitBuiltinAction::TaskReconcileReview
-        | OrbitBuiltinAction::TaskReviewReset => {
-            let id = persisted_task_id.ok_or_else(|| {
-                OrbitError::Execution("redaction audit missing persisted task id".to_string())
-            })?;
-            Ok(ArtifactTarget {
-                artifact_type: "task",
-                artifact_id: id,
-                task_id: Some(id),
-            })
-        }
-        OrbitBuiltinAction::Friction(FrictionVerb::Add | FrictionVerb::Update) => {
-            Ok(ArtifactTarget {
-                artifact_type: "friction",
-                artifact_id: response_string(response, "id")?,
-                task_id: None,
-            })
-        }
-        OrbitBuiltinAction::AutoTaskAdd | OrbitBuiltinAction::AutoTaskUpdate => {
-            Ok(ArtifactTarget {
+        OrbitBuiltinAction::Task(verb) => match verb {
+            TaskVerb::Add
+            | TaskVerb::Update
+            | TaskVerb::ArtifactPut
+            | TaskVerb::ReviewReset
+            | TaskVerb::Requeue
+            | TaskVerb::BlockTriage
+            | TaskVerb::ReconcileReview
+            | TaskVerb::RetryHandoff
+            | TaskVerb::Reject => {
+                let id = persisted_task_id.ok_or_else(|| {
+                    OrbitError::Execution("redaction audit missing persisted task id".to_string())
+                })?;
+                Ok(ArtifactTarget {
+                    artifact_type: "task",
+                    artifact_id: id,
+                    task_id: Some(id),
+                })
+            }
+            TaskVerb::List
+            | TaskVerb::Eligible
+            | TaskVerb::Show
+            | TaskVerb::Lint
+            | TaskVerb::ArtifactGet
+            | TaskVerb::LocksList
+            | TaskVerb::LocksReserve
+            | TaskVerb::LocksRelease
+            | TaskVerb::Delete => Err(OrbitError::Execution(format!(
+                "unsupported redaction audit action: {action:?}"
+            ))),
+        },
+        // Every friction verb that redacts writes the record its response
+        // names.
+        OrbitBuiltinAction::Friction(
+            FrictionVerb::Add
+            | FrictionVerb::List
+            | FrictionVerb::Show
+            | FrictionVerb::Stats
+            | FrictionVerb::Tags
+            | FrictionVerb::Update
+            | FrictionVerb::Resolve
+            | FrictionVerb::Rehome,
+        ) => Ok(ArtifactTarget {
+            artifact_type: "friction",
+            artifact_id: response_string(response, "id")?,
+            task_id: None,
+        }),
+        OrbitBuiltinAction::AutoTask(verb) => match verb {
+            AutoTaskVerb::Add | AutoTaskVerb::Update => Ok(ArtifactTarget {
                 artifact_type: "auto_task",
                 artifact_id: response_string(response, "name")?,
                 task_id: None,
-            })
-        }
+            }),
+            AutoTaskVerb::List
+            | AutoTaskVerb::Show
+            | AutoTaskVerb::Toggle
+            | AutoTaskVerb::Delete
+            | AutoTaskVerb::Restore
+            | AutoTaskVerb::Mint
+            | AutoTaskVerb::Recover
+            | AutoTaskVerb::Reset => Err(OrbitError::Execution(format!(
+                "unsupported redaction audit action: {action:?}"
+            ))),
+        },
+        OrbitBuiltinAction::Drain(verb) => match verb {
+            DrainVerb::Probe
+            | DrainVerb::ReceiptLookup
+            | DrainVerb::Pull
+            | DrainVerb::ClaimBind
+            | DrainVerb::ClaimSettle
+            | DrainVerb::Claims => Err(OrbitError::Execution(format!(
+                "unsupported redaction audit action: {action:?}"
+            ))),
+        },
+        OrbitBuiltinAction::WorkspaceClaim(verb) => match verb {
+            WorkspaceClaimVerb::Acquire
+            | WorkspaceClaimVerb::Release
+            | WorkspaceClaimVerb::Show => Err(OrbitError::Execution(format!(
+                "unsupported redaction audit action: {action:?}"
+            ))),
+        },
         _ => Err(OrbitError::Execution(format!(
             "unsupported redaction audit action: {action:?}"
         ))),
@@ -691,15 +843,22 @@ fn response_string<'a>(response: &'a Value, field: &str) -> Result<&'a str, Orbi
 
 fn tool_name(action: OrbitBuiltinAction) -> &'static str {
     match action {
-        OrbitBuiltinAction::TaskAdd => "orbit.task.add",
-        OrbitBuiltinAction::TaskUpdate => "orbit.task.update",
-        OrbitBuiltinAction::TaskReject => "orbit.task.reject",
-        OrbitBuiltinAction::TaskReconcileReview => "orbit.task.reconcile_review",
-        OrbitBuiltinAction::TaskReviewReset => "orbit.task.review_reset",
-        OrbitBuiltinAction::Friction(FrictionVerb::Add) => "orbit.friction.add",
-        OrbitBuiltinAction::Friction(FrictionVerb::Update) => "orbit.friction.update",
-        OrbitBuiltinAction::AutoTaskAdd => "orbit.auto_task.add",
-        OrbitBuiltinAction::AutoTaskUpdate => "orbit.auto_task.update",
+        OrbitBuiltinAction::Task(verb) => verb.tool_name(),
+        OrbitBuiltinAction::Friction(verb) => verb.tool_name(),
+        OrbitBuiltinAction::AutoTask(verb) => verb.tool_name(),
+        OrbitBuiltinAction::Drain(verb) => match verb {
+            DrainVerb::Probe
+            | DrainVerb::ReceiptLookup
+            | DrainVerb::Pull
+            | DrainVerb::ClaimBind
+            | DrainVerb::ClaimSettle
+            | DrainVerb::Claims => verb.tool_name(),
+        },
+        OrbitBuiltinAction::WorkspaceClaim(verb) => match verb {
+            WorkspaceClaimVerb::Acquire
+            | WorkspaceClaimVerb::Release
+            | WorkspaceClaimVerb::Show => verb.tool_name(),
+        },
         _ => "orbit.unknown",
     }
 }

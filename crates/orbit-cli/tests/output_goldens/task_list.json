@@ -28,6 +28,9 @@
     "crew": null,
     "crew_source": null,
     "orchestrator": null,
+    "orchestrator_model": null,
+    "orchestrator_model_source": null,
+    "origin": null,
     "created_at": "<TIMESTAMP>",
     "updated_at": "<TIMESTAMP>",
     "readiness": {
@@ -40,7 +43,8 @@
           "fix": "add context files, run the task pilot, or tag no-diff-expected if no diff is expected"
         }
       ]
-    }
+    },
+    "pilot_warnings": []
   },
   {
     "id": "ORB-00001",
@@ -71,6 +75,9 @@
     "crew": null,
     "crew_source": null,
     "orchestrator": null,
+    "orchestrator_model": null,
+    "orchestrator_model_source": null,
+    "origin": null,
     "created_at": "<TIMESTAMP>",
     "updated_at": "<TIMESTAMP>",
     "readiness": {
@@ -83,7 +90,8 @@
           "fix": "add context files, run the task pilot, or tag no-diff-expected if no diff is expected"
         }
       ]
-    }
+    },
+    "pilot_warnings": []
   },
   {
     "id": "ORB-00000",
@@ -114,6 +122,9 @@
     "crew": null,
     "crew_source": null,
     "orchestrator": null,
+    "orchestrator_model": null,
+    "orchestrator_model_source": null,
+    "origin": null,
     "created_at": "<TIMESTAMP>",
     "updated_at": "<TIMESTAMP>",
     "readiness": {
@@ -126,6 +137,7 @@
           "fix": "add context files, run the task pilot, or tag no-diff-expected if no diff is expected"
         }
       ]
-    }
+    },
+    "pilot_warnings": []
   }
 ]

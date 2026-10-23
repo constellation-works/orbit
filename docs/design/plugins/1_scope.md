@@ -2,8 +2,8 @@
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-10-08
-last_validated: 2026-10-08
+last_updated: 2026-10-21
+last_validated: 2026-10-21
 ---
 
 # Scope: Orbit plugin standard
@@ -565,8 +565,8 @@ such as `ORBIT_OPERATOR` and `ORBIT_WORKSPACE_CLAIM_TOKEN` are excluded even if 
 manifest requests them. Orbit then sets:
 
 ```
-ORBIT_HOST_API=1  ORBIT_VERSION=0.24.0  ORBIT_PLUGIN=graph  ORBIT_PLUGIN_VERSION=…
-ORBIT_PLUGIN_ROOT=…  ORBIT_PLUGIN_STATE=…  ORBIT_PLUGIN_CALLBACK=<legacy token>
+ORBIT_HOST_API=1  ORBIT_VERSION=…  ORBIT_PLUGIN=graph  ORBIT_PLUGIN_VERSION=…
+ORBIT_PLUGIN_ROOT=…  ORBIT_PLUGIN_STATE=…  ORBIT_PLUGIN_CALLBACK=descriptor-required
 ORBIT_PLUGIN_CALLBACK_FD=3
 ORBIT_TOOL_NAME=graph.recommend  ORBIT_TOOL_CWD=…  ORBIT_WORKSPACE_ROOT=…
 ORBIT_ALLOWED_TOOLS=orbit.task.show,orbit.search  ORBIT_PROC_ALLOWED_PROGRAMS=git
@@ -574,9 +574,10 @@ ORBIT_ALLOWED_TOOLS=orbit.task.show,orbit.search  ORBIT_PROC_ALLOWED_PROGRAMS=gi
 
 `ORBIT_PLUGIN_CALLBACK_FD` names the inherited descriptor carrying this backend's host-issued
 callback credential; its value is `3`, and the value itself is not a credential. Keep descriptor
-3 open in the backend and any descendant that needs callbacks. `ORBIT_PLUGIN_CALLBACK` is a
-retired token-based identity kept for legacy compatibility; the descriptor record is the current
-callback identity.
+3 open in the backend and any descendant that needs callbacks. The host no longer issues
+an environment token as a callback credential. `ORBIT_PLUGIN_CALLBACK` carries only a
+non-secret marker: without a valid descriptor it causes refusal, including after an
+unsandboxed descendant detaches from its original process tree. It grants no authority.
 
 stdin:  `{"schema_version":1,"tool":"graph.recommend","input":{…},"context":{"workspace_root":…,"agent":…,"model":…,"config":{…},"task_id":…,"job_run_id":…,"secrets":{"<name>":{"value":…,"version":…}}}}`
 
@@ -693,8 +694,9 @@ carried too, so it also constrains the injected selector; a plugin using one mus
 tools in `permissions.orbit_tools` ∩ granted ∩ reachable by the spawning caller
 (`ORBIT_ALLOWED_TOOLS` echoes this, as information only). Identity is a host-issued session: at
 spawn the host writes a record under `{global_root}/state/plugin-callbacks/` (plugin, pid,
-start time, tool ceiling) and stamps `ORBIT_PLUGIN_CALLBACK`; both entry points resolve it and
-enforce the recorded install. `ORBIT_PLUGIN` is not the gate.
+start time, tool ceiling, token) and hands the backend an open descriptor on that record,
+normally fd 3. Both entry points authenticate the descriptor and enforce the recorded
+install. `ORBIT_PLUGIN` and the retired `ORBIT_PLUGIN_CALLBACK` token are not the current gate.
 
 **The session carries the caller's ceiling.** One plugin is reachable from callers with
 different allowlists, so a name-only gate would admit the whole manifest list [ORB-12801].
@@ -712,10 +714,11 @@ call, neither read from the child's environment:
 - The *session* half is fixed at mint and never rewritten, so nothing done to the row
   afterwards (re-grant, widening upgrade, a backend rewriting its tree) widens a live child.
 
-**Session record schema.** Records state the ceiling from `schema_version: 2`. A record with no
-ceiling or an unreadable schema is refused and counted stale: `orbit plugin doctor` reports it
-and the next session mint's sweep removes it [ORB-12879]. Incomplete JSON is left alone, since
-a record is briefly empty between open and its single write.
+**Session record schema.** Current records use `schema_version: 3`, carrying their own token
+as well as the tool ceiling introduced in version 2. A record with no ceiling or a schema this
+host cannot read is refused and counted stale: `orbit plugin doctor` reports it and the next
+session mint's sweep removes it [ORB-12879]. Incomplete JSON is left alone, since a record is
+briefly empty between open and its single write.
 
 **Every other CLI command is refused.** The CLI resolves the callback session once, before it
 pins a generation or opens a runtime. A recognized plugin child may run only `orbit tool run
@@ -733,19 +736,21 @@ a read a refused command offered requests the serving tool instead:
 Reaching another machine through a federated destination still needs a `network` grant and
 `ssh` in `requires.programs`.
 
-**Credential binding.** A token is accepted only when its record's pid is the caller, its
-parent, or its process group (backends spawn with `process_group(0)`). A token from another
-record or carried past `setsid` is a mismatch; one matching no session is missing. Both are
-refused, never resolved to another plugin or to an ordinary caller. Start time is checked only
-when a *scan* proposes a record (rejecting pid reuse): a confined child cannot read another
-process's `/proc`.
+**Credential binding.** The descriptor must hold a current session record whose token names
+the same device and inode in the host-owned session directory; a forged file is no credential.
+The descriptor survives `setsid`, `exec` and a cleared environment when the backend keeps it
+open. `ORBIT_PLUGIN_CALLBACK_FD` selects the descriptor number, defaulting to 3.
+
+The retired environment token and process ancestry never authorize a callback. A caller
+presenting only the old token, or matching a live backend session without a valid descriptor,
+is refused even when the session directory is readable. Start time is checked when a scan
+matches a record, rejecting pid reuse.
 
 **A confined child with no credential is refused, not promoted.** Backends cannot list
 `state/plugin-callbacks/` (§4.3), so a caller that cannot is inside a plugin sandbox and, with
-no token, is refused on both entry points. A backend that scrubs its child env (`env -i`)
-denies itself callbacks. Ancestry alone identifies a backend only where that directory is
-readable (unsandboxed backends, in-process dispatch). Identity never reads another process's
-`environ`.
+no valid descriptor, is refused on both entry points. Clearing the child environment
+(`env -i`) retains identity when fd 3 stays open; closing that descriptor loses the credential.
+Identity never reads another process's `environ`.
 
 ### 4.3 Sandboxing
 
@@ -1025,10 +1030,14 @@ removed. A typed task field would do the same job as the tag but change the pers
 - The tree is built at startup from the enabled `plugins` rows (SQLite opened read-only; no
   enabled row, no manifest read). Manifests are cached per process and shared by CLI, runtime
   and host-global MCP discovery; a changed `plugin.yaml` stamp re-checks the digest before the
-  symlink walk and schema resolution are repeated.
+  symlink walk and schema resolution are repeated. Definition patterns are re-expanded
+  on each load; changed membership reloads the plugin even with an unchanged manifest.
 - A running MCP server also caches the host plugin tool surface. It retains global config
   and a read-only store handle, compares plugin rows and file stamps for config, manifests
-  and admission witnesses, and rebuilds only when those inputs change. Audit writes alone
+  and admission witnesses, plus resolved definition paths and readable content digests.
+  Definition edits, read failures, wildcard additions/removals and literal-path repairs
+  refresh admission on the next request, including plugins previously refused for invalid
+  definitions. The server rebuilds only when those inputs change. Audit writes alone
   leave the surface reusable. The adapter replaces definitions, wire-name translation and
   tool-list caches together, so install, upgrade and host toggles reach the next request.
   Workspace toggles are applied to each list and enforced by workspace dispatch.

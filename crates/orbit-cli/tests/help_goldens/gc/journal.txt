@@ -1,0 +1,41 @@
+Delete applied task commit journal rows older than `retention.journal_days`, keeping each task's newest
+
+Usage: orbit gc journal [OPTIONS]
+
+Options:
+      --apply
+          Delete what the plan lists; without this flag the command only reports
+
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --older-than-days <DAYS>
+          Retention window in days, overriding `retention.journal_days` (default 14)
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Without --apply this only reports. Only applied rows of this workspace, and of workspace ids that are no longer registered, are selected; another registered workspace keeps its own window. An applied row is a commit decision already published to its task, so recovery never reads it again. Prepared and committed rows, which recovery replays, aborted rows, and each task's newest applied row are never deleted. The rows are selected by one read that holds no write lock, then deleted by key in batches of 1,000 rows, each its own write transaction. Freed pages stay in the store file; VACUUM it while Orbit is idle to return them to the filesystem.
+
+Examples:
+  orbit gc journal
+  orbit gc journal --apply --json

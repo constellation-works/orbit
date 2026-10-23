@@ -2,6 +2,7 @@
 //! transaction.
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::canonical_actor_for_role_label;
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::path::{Component, Path, PathBuf};
@@ -32,16 +33,16 @@ impl Store {
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX
                 | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
         conn.busy_timeout(Duration::from_millis(u64::from(
             orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS,
         )))
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
         // Hold the writer lock across the schema check and insert so another
         // process cannot migrate the database between them.
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let version = current_schema_version(&tx)?;
         if version != SUPPORTED_SCHEMA_VERSION {
             return Err(OrbitError::Migration(format!(
@@ -49,19 +50,16 @@ impl Store {
             )));
         }
         insert_audit_event_record_on_connection(&tx, params, invocation)?;
-        tx.commit()
-            .map_err(|error| OrbitError::Store(error.to_string()))
+        tx.commit().map_err(sqlite_store_error)
     }
 
     pub fn insert_audit_event_record(
         &self,
         params: &AuditEventInsertParams,
     ) -> Result<(), OrbitError> {
-        let conn = self
-            .conn
-            .lock()
+        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-
+        arm_audit_busy_timeout(&conn)?;
         insert_audit_event_record_on_connection(&conn, params, AuditInvocationFields::default())
     }
 
@@ -73,13 +71,25 @@ impl Store {
         params: &AuditEventInsertParams,
         invocation: AuditInvocationFields<'_>,
     ) -> Result<(), OrbitError> {
-        let conn = self
-            .conn
-            .lock()
+        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-
+        arm_audit_busy_timeout(&conn)?;
         insert_audit_event_record_on_connection(&conn, params, invocation)
     }
+}
+
+/// Wait the store's normal busy timeout before this insert reports
+/// `database is locked`.
+///
+/// The connection is shared with writers that briefly set `busy_timeout` to
+/// zero and restore it before releasing the mutex. Re-arming the default here
+/// covers a restore that did not run, so an audit insert lost to a lock waits
+/// instead of failing the moment it is attempted.
+fn arm_audit_busy_timeout(conn: &Connection) -> Result<(), OrbitError> {
+    conn.busy_timeout(Duration::from_millis(u64::from(
+        orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS,
+    )))
+    .map_err(sqlite_store_error)
 }
 
 /// Resolve the configured audit database through its existing parent and
@@ -263,7 +273,7 @@ fn insert_audit_event_record_on_connection(
             invocation.brokered_peer_pid,
         ],
     )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
     Ok(())
 }

@@ -5,12 +5,13 @@ use std::path::PathBuf;
 
 use orbit_automation::review::{combined_task_meaning_digest, task_meaning_digest};
 use orbit_common::OrbitError;
+use orbit_engine::BaseSyncMode;
 use orbit_types::task::Task;
-use orbit_types::workflow::ReviewAdmission;
+use orbit_types::workflow::{ReviewAdmission, ReviewGateAdmissionOutput, ReviewGateNotApplicable};
 use serde_json::{Value, json};
 
 use super::super::admission::run_review_admission;
-use super::super::{automation_error, lineage_key};
+use super::super::{MAX_RESUME_CHAIN, automation_error, lineage_key, resumes_owner};
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
 
@@ -25,7 +26,7 @@ pub(super) struct GateContext {
     /// The synchronized base the candidate sits on, pinned at admission.
     base_sha: Option<String>,
     base_branch: String,
-    base_sync: String,
+    base_sync: BaseSyncMode,
     pub(super) admission: Option<ReviewAdmission>,
     pub(super) workspace_id: String,
     pub(super) repository: String,
@@ -100,13 +101,7 @@ impl GateContext {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
-        let base_sync = input
-            .get("base_sync")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("remote")
-            .to_string();
+        let base_sync = BaseSyncMode::from_input(input)?;
         let base_branch = input
             .get("base")
             .and_then(Value::as_str)
@@ -115,12 +110,31 @@ impl GateContext {
             .unwrap_or_else(|| "main".to_string());
 
         let claim_id = claimed_leaf_claim(runtime, &run_id, &task_ids)?;
+        // A generic resume keeps the task bound to the run that created the
+        // reused worktree, which delivery steps name as `job_run_id`. Only a
+        // same-job retry descendant of that owner reviews on its behalf.
+        let checkpoint_owner = input
+            .get("job_run_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|owner| !owner.is_empty() && *owner != run_id);
+        let resumed_owner = match checkpoint_owner {
+            Some(owner) if claim_id.is_none() && resumes_owner(runtime, &run_id, owner)? => {
+                Some(owner)
+            }
+            _ => None,
+        };
         let mut tasks = Vec::with_capacity(task_ids.len());
         for task_id in &task_ids {
             // A claimed leaf reads the owner's task through its binding; the
             // claim, checked above, is what ties that task to this run.
             let task = runtime.get_task(task_id)?;
-            if claim_id.is_none() && task.job_run_id.as_deref() != Some(run_id.as_str()) {
+            if claim_id.is_none()
+                && (!runtime.task_run_is_local(&task)
+                    || (task.job_run_id.as_deref() != Some(run_id.as_str())
+                        && (resumed_owner.is_none()
+                            || task.job_run_id.as_deref() != resumed_owner)))
+            {
                 return Err(OrbitError::Execution(format!(
                     "review gate: task '{task_id}' no longer belongs to run '{run_id}'"
                 )));
@@ -167,7 +181,7 @@ impl GateContext {
             None => Ok(orbit_engine::review_gate::synchronized_base(
                 &self.workspace_path,
                 &self.base_branch,
-                &self.base_sync,
+                self.base_sync,
             )?
             .commit),
         }
@@ -177,10 +191,9 @@ impl GateContext {
     /// remote-tracking branch under remote sync, the local branch otherwise.
     /// A red-base hold watches it to learn when the base turns green.
     pub(super) fn base_ref(&self) -> String {
-        if self.base_sync == "local" {
-            self.base_branch.clone()
-        } else {
-            format!("origin/{}", self.base_branch)
+        match self.base_sync {
+            BaseSyncMode::Local => self.base_branch.clone(),
+            BaseSyncMode::Remote => format!("origin/{}", self.base_branch),
         }
     }
 
@@ -220,18 +233,19 @@ fn claimed_leaf_claim(
     Ok(Some(leaf.claim.claim_id))
 }
 
-/// Longest resume chain followed back to its first run; a longer chain keys
-/// the lineage on the oldest run reached.
-const MAX_RESUME_CHAIN: usize = 64;
-
 /// The first run of the resume chain `run_id` belongs to. A missing source
 /// run ends the chain at the last run found.
 fn lineage_root(runtime: &OrbitRuntime, run_id: &str) -> Result<String, OrbitError> {
     let mut root = run_id.to_string();
     for _ in 0..MAX_RESUME_CHAIN {
-        let source = runtime
-            .get_job_run_backend(&root)?
-            .and_then(|run| run.retry_source_run_id)
+        // A fresh admission carrying a published owner candidate spends the
+        // original lineage's review budget; adoption conveys no green verdict.
+        let adopted = runtime.read_owner_publication_binding(&root, false)?;
+        let source = adopted
+            .map(|binding| binding.source_run_id)
+            .or(runtime
+                .get_job_run_backend(&root)?
+                .and_then(|run| run.retry_source_run_id))
             .filter(|source| !source.trim().is_empty() && *source != root);
         match source {
             Some(source) => root = source,
@@ -284,11 +298,9 @@ pub(super) fn admitted_run_id(input: &Value) -> Result<String, OrbitError> {
     Ok(injected.unwrap_or(job_run_id))
 }
 
-pub(super) fn not_applicable(reason: &str, admission: Option<&ReviewAdmission>) -> Value {
-    json!({
-        "applies": false,
-        "reason": reason,
-        "timing": admission.map(|admission| admission.timing.as_str()),
-        "timing_source": admission.map(|admission| admission.timing_source.clone()),
-    })
+pub(super) fn not_applicable(
+    reason: &str,
+    admission: Option<&ReviewAdmission>,
+) -> ReviewGateAdmissionOutput {
+    ReviewGateAdmissionOutput::NotApplicable(ReviewGateNotApplicable::new(reason, admission))
 }

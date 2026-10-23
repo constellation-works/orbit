@@ -25,7 +25,10 @@ pub struct ClockStatus {
     /// Whether the native timer is currently active/waiting, when exposed.
     pub running: Option<bool>,
     /// Whether the native clock is active with a future trigger. A stopped
-    /// clock is intentionally not schedulable and is not unhealthy.
+    /// clock is intentionally not schedulable and is not unhealthy for
+    /// `orbit clock status`. [`doctor_clock_not_running_issue`] is the
+    /// separate signal `orbit doctor` uses, because a paused clock and a
+    /// timer that was never enabled look the same to the unit manager.
     pub schedulable: bool,
     /// Actionable detail when the manager state is inconsistent or an enabled
     /// clock cannot be shown to have a future trigger.
@@ -35,6 +38,39 @@ pub struct ClockStatus {
     /// Next native timer trigger, in the manager's display format.
     pub next_tick_at: Option<String>,
     pub platform: &'static str,
+}
+
+/// The one health classification of a [`ClockStatus`]. Each surface renders
+/// it in its own vocabulary, so the variants keep apart every state a surface
+/// labels differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClockHealth {
+    /// Enabled with a future trigger and no reported issue.
+    Healthy,
+    /// Enabled with a future trigger, but the manager reported an issue.
+    ScheduledWithIssue,
+    /// Enabled without a verified future trigger.
+    Missed,
+    /// Paused and stopped.
+    Paused,
+    /// Paused and not running, but the manager reported an issue.
+    PausedWithIssue,
+    /// Paused, yet the native timer is still running.
+    RunningWhilePaused,
+}
+
+impl ClockStatus {
+    /// Classify this status; see [`ClockHealth`].
+    pub fn health(&self) -> ClockHealth {
+        match (self.enabled, self.schedulable, self.health_issue.is_some()) {
+            (false, _, _) if self.running == Some(true) => ClockHealth::RunningWhilePaused,
+            (false, _, true) => ClockHealth::PausedWithIssue,
+            (false, _, false) => ClockHealth::Paused,
+            (true, false, _) => ClockHealth::Missed,
+            (true, true, true) => ClockHealth::ScheduledWithIssue,
+            (true, true, false) => ClockHealth::Healthy,
+        }
+    }
 }
 
 pub(super) fn manager_status_command(platform: ClockPlatform) -> ManagerCommand {
@@ -132,6 +168,7 @@ pub(super) fn clock_status_with(
         _ => status_output.success,
     };
     let mut manager_details = None;
+    let mut enabled_unschedulable_warning = false;
     let (mut schedulable, mut health_issue) = if platform == ClockPlatform::Systemd {
         match query_systemd_clock_details(runner) {
             Ok(details) => {
@@ -158,6 +195,7 @@ pub(super) fn clock_status_with(
                 } else if schedulable {
                     (true, None)
                 } else {
+                    enabled_unschedulable_warning = true;
                     (
                         false,
                         Some(
@@ -191,36 +229,20 @@ pub(super) fn clock_status_with(
         (false, None)
     };
     if platform == ClockPlatform::Systemd && (enabled || schedulable) {
-        match query_systemd_service_health(runner, now_usec) {
-            Ok(service) => {
-                if enabled
-                    && service.running
-                    && service.issue.is_none()
-                    && manager_details.as_ref().is_some_and(|details| {
-                        details.loaded == Some(true)
-                            && details.is_running()
-                            && !details.next_elapse_known
-                    })
-                {
-                    // With OnUnitActiveSec, systemd waits for the oneshot to
-                    // finish before assigning the timer's next elapse.
-                    schedulable = true;
-                    health_issue = None;
-                }
-                if let Some(issue) = service.issue {
-                    schedulable = false;
-                    health_issue = Some(match health_issue {
-                        Some(previous) => format!("{previous}; {issue}"),
-                        None => issue,
-                    });
-                }
+        let (service_schedulable, service_issue) =
+            systemd_schedulability_with_health(runner, manager_details.as_ref(), now_usec);
+        if service_schedulable {
+            schedulable = true;
+            if enabled_unschedulable_warning {
+                health_issue = None;
             }
-            Err(error) => {
-                schedulable = false;
-                health_issue = Some(format!(
-                    "systemd tick health could not be verified: {error}"
-                ));
-            }
+        }
+        if let Some(issue) = service_issue {
+            schedulable = false;
+            health_issue = Some(match health_issue {
+                Some(previous) => format!("{previous}; {issue}"),
+                None => issue,
+            });
         }
     }
     Ok(clock_status_from(
@@ -254,6 +276,40 @@ fn query_systemd_service_health(
         .stdout(&command)?
         .ok_or_else(|| manager_command_error(&command))?;
     Ok(systemd_service_health(&output, now_usec))
+}
+
+/// Apply the service health rules shared by status and activation verification.
+/// Service health can grant schedulability while a loaded timer waits for its
+/// in-flight oneshot to finish; it cannot revoke a finite next elapse.
+pub(super) fn systemd_schedulability_with_health(
+    runner: &dyn ClockCommandRunner,
+    details: Option<&SystemdClockDetails>,
+    now_usec: Option<u64>,
+) -> (bool, Option<String>) {
+    let mut schedulable = details.is_some_and(SystemdClockDetails::is_schedulable);
+    match query_systemd_service_health(runner, now_usec) {
+        Ok(service) => {
+            if service.running
+                && service.issue.is_none()
+                && details.is_some_and(|details| {
+                    details.loaded == Some(true)
+                        && details.is_running()
+                        && !details.next_elapse_known
+                })
+            {
+                // With OnUnitActiveSec, systemd waits for the oneshot to
+                // finish before assigning the timer's next elapse.
+                schedulable = true;
+            }
+            (schedulable, service.issue)
+        }
+        Err(error) => (
+            schedulable,
+            Some(format!(
+                "systemd tick health could not be verified: {error}"
+            )),
+        ),
+    }
 }
 
 struct SystemdServiceHealth {
@@ -302,7 +358,7 @@ fn systemd_service_health(output: &str, now_usec: Option<u64>) -> SystemdService
 }
 
 #[cfg(unix)]
-fn monotonic_usec() -> Option<u64> {
+pub(super) fn monotonic_usec() -> Option<u64> {
     let mut value = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
@@ -319,7 +375,7 @@ fn monotonic_usec() -> Option<u64> {
 }
 
 #[cfg(not(unix))]
-fn monotonic_usec() -> Option<u64> {
+pub(super) fn monotonic_usec() -> Option<u64> {
     None
 }
 
@@ -534,8 +590,12 @@ pub(super) struct LaunchdHealthProbe {
 
 impl LaunchdHealthProbe {
     fn current() -> Result<Self, OrbitError> {
+        Self::at(&home_dir()?)
+    }
+
+    pub(super) fn at(home: &Path) -> Result<Self, OrbitError> {
         Ok(Self {
-            home: home_dir()?,
+            home: home.to_path_buf(),
             uid: current_uid(),
             running: RunningBinary::current()?,
             version_probe: probe_program_version,
@@ -568,7 +628,7 @@ fn current_uid() -> u32 {
 ///    path mismatch names a binary that still runs, so the clock still ticks.
 /// 2. `launchctl print`, for the outcome of the runs that already happened.
 ///    `dump` is that output when the enabled decision already captured it.
-fn launchd_health_issue(
+pub(super) fn launchd_health_issue(
     probe: &LaunchdHealthProbe,
     runner: &dyn ClockCommandRunner,
     dump: Option<String>,
@@ -793,4 +853,144 @@ pub(super) fn clock_status_from(
         next_tick_at: schedulable.then_some(details.next_tick_at).flatten(),
         platform: platform.name(),
     }
+}
+
+/// Why `orbit doctor`'s `clock-unit` row must not be ok.
+///
+/// `orbit clock status` keeps an operator pause healthy. Doctor asks the
+/// narrower question the sweep timer's enabled and active state answers: on
+/// Linux the systemd user timer must be enabled and active, and on macOS the
+/// launchd agent must be loaded and `logs/sweep.log` must have been written
+/// within the configured tick interval plus one tick deadline. The text names
+/// `orbit clock enable`.
+///
+/// A disabled systemd timer that is still active is left to the existing
+/// health issue, whose fix is `orbit clock pause`.
+pub fn doctor_clock_not_running_issue(status: &ClockStatus, global_root: &Path) -> Option<String> {
+    match status.platform {
+        "systemd" => systemd_doctor_activity_issue(status),
+        "launchd" => launchd_doctor_activity_issue(status, global_root),
+        _ => None,
+    }
+}
+
+fn systemd_doctor_activity_issue(status: &ClockStatus) -> Option<String> {
+    let detail = match (status.enabled, status.running) {
+        (true, Some(true)) | (false, Some(true)) => return None,
+        (false, Some(false)) => "disabled and inactive",
+        (false, None) => "disabled",
+        (true, _) => "inactive",
+    };
+    Some(format!(
+        "systemd user timer {SYSTEMD_UNIT}.timer is {detail}; run `orbit clock enable` to enable it and verify it is active"
+    ))
+}
+
+fn launchd_doctor_activity_issue(status: &ClockStatus, global_root: &Path) -> Option<String> {
+    let mut parts = Vec::new();
+    if !status.enabled || !status.loaded {
+        parts.push(format!("launchd agent {LAUNCHD_LABEL} is not loaded"));
+    }
+    if let Some(issue) = sweep_log_tick_issue(global_root, status.configured_cadence_seconds) {
+        parts.push(issue);
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{}; run `orbit clock enable` to re-arm the sweep clock",
+        parts.join("; ")
+    ))
+}
+
+/// `None` when the sweep log was written within the tick interval and deadline.
+fn sweep_log_tick_issue(global_root: &Path, cadence_seconds: u64) -> Option<String> {
+    let path = super::install::sweep_log_path(global_root);
+    let displayed = path.display().to_string();
+    let freshness_limit = std::time::Duration::from_secs(cadence_seconds)
+        .saturating_add(orbit_automation::routines::sweep::TICK_DEADLINE);
+    let meta = match std::fs::metadata(&path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return match most_recent_rotated_sweep_log_mtime(&path) {
+                Ok(Some(modified))
+                    if std::time::SystemTime::now()
+                        .duration_since(modified)
+                        .unwrap_or_default()
+                        <= freshness_limit =>
+                {
+                    None
+                }
+                Ok(Some(_)) => Some(format!(
+                    "{displayed} was rotated and has not been recreated within the {cadence_seconds}s tick interval plus the {}s tick deadline",
+                    orbit_automation::routines::sweep::TICK_DEADLINE.as_secs()
+                )),
+                Ok(None) => Some(format!("{displayed} has not been written")),
+                Err(error) => Some(format!(
+                    "could not inspect rotated logs for {displayed}: {error}"
+                )),
+            };
+        }
+        Err(error) => return Some(format!("could not read {displayed}: {error}")),
+    };
+    if !meta.is_file() {
+        return Some(format!("{displayed} is not a regular sweep log"));
+    }
+    let modified = match meta.modified() {
+        Ok(modified) => modified,
+        Err(error) => return Some(format!("could not read {displayed} mtime: {error}")),
+    };
+    let age = std::time::SystemTime::now()
+        .duration_since(modified)
+        .unwrap_or_default();
+    if age > freshness_limit {
+        Some(format!(
+            "{displayed} is older than the {cadence_seconds}s tick interval plus the {}s tick deadline",
+            orbit_automation::routines::sweep::TICK_DEADLINE.as_secs()
+        ))
+    } else {
+        None
+    }
+}
+
+/// Find the newest retained sweep-log archive, used only while rotation has
+/// temporarily removed the active path.
+fn most_recent_rotated_sweep_log_mtime(
+    path: &Path,
+) -> Result<Option<std::time::SystemTime>, std::io::Error> {
+    let Some(parent) = path.parent() else {
+        return Ok(None);
+    };
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(None);
+    };
+    let archive_prefix = format!("{file_name}.");
+    let entries = match std::fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mut newest = None;
+    for entry in entries {
+        let entry = entry?;
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(&archive_prefix)
+        {
+            continue;
+        }
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        if metadata.is_file() {
+            let modified = metadata.modified()?;
+            newest = Some(newest.map_or(modified, |previous: std::time::SystemTime| {
+                previous.max(modified)
+            }));
+        }
+    }
+    Ok(newest)
 }

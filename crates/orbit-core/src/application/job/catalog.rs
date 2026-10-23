@@ -1,5 +1,6 @@
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::cell::{OnceCell, RefCell};
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use orbit_common::fs::git::{GIT_LOCAL_TIMEOUT, GIT_OUTPUT_LIMIT};
@@ -8,8 +9,8 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::activity_job::{
     CatalogDirectory, CatalogDirectoryList, CatalogError, V2JobCatalog, catalog_error_to_orbit,
 };
-use orbit_types::workflow::{JobKind, JobRun, JobScheduleState, JobV2};
-use serde_json::Value;
+use orbit_types::workflow::{JobKind, JobRun, JobScheduleState, JobV2, JobV2Step, JobV2StepBody};
+use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::managed_assets::{
@@ -63,6 +64,130 @@ impl JobCatalogEntry {
 
     pub fn default_input(&self) -> Option<&Value> {
         self.spec.default_input.as_ref()
+    }
+}
+
+pub fn job_catalog_to_json_with_last_run(
+    job: &JobCatalogEntry,
+    last_run: Option<&JobRun>,
+) -> Value {
+    let mut value = json!({
+        "job_id": job.job_id.clone(),
+        "kind": job.kind().to_string(),
+        "state": job.state().to_string(),
+        "default_input": job.spec.default_input,
+        "max_active_runs": job.spec.max_active_runs,
+        "steps": job.spec.steps.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
+        "path": job.path.display().to_string(),
+    });
+    value["last_run_state"] = last_run
+        .map(|r| serde_json::Value::String(r.state.to_string()))
+        .unwrap_or(serde_json::Value::Null);
+    value["last_run_at"] = last_run
+        .and_then(|r| r.finished_at.or(r.started_at).or(Some(r.scheduled_at)))
+        .map(|ts| serde_json::Value::String(ts.to_rfc3339()))
+        .unwrap_or(serde_json::Value::Null);
+    value
+}
+
+fn job_v2_step_to_json(step: &JobV2Step) -> Value {
+    let mut value = json!({
+        "id": step.id.clone(),
+        "when": step.when,
+        "retry": step.retry,
+    });
+    match &step.body {
+        JobV2StepBody::TargetRef(target) => {
+            value["body"] = json!({
+                "kind": "target_ref",
+                "target": target.target.clone(),
+                "default_input": target.default_input,
+                "timeout_seconds": target.timeout_seconds,
+                "session": target.session,
+            });
+        }
+        JobV2StepBody::Target(target) => {
+            value["body"] = json!({
+                "kind": "target",
+                "default_input": target.default_input,
+                "timeout_seconds": target.timeout_seconds,
+                "session": target.session,
+                "spec": target.spec,
+            });
+        }
+        JobV2StepBody::Parallel { parallel } => {
+            value["body"] = json!({
+                "kind": "parallel",
+                "join": parallel.join,
+                "branches": parallel.branches.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
+            });
+        }
+        JobV2StepBody::FanOut { fan_out, fan_in } => {
+            value["body"] = json!({
+                "kind": "fan_out",
+                "items": fan_out.items,
+                "max_workers": fan_out.max_workers,
+                "worker": job_v2_step_to_json(&fan_out.worker),
+                "fan_in": fan_in,
+            });
+        }
+        JobV2StepBody::Loop { loop_ } => {
+            value["body"] = json!({
+                "kind": "loop",
+                "max_iterations": loop_.max_iterations,
+                "break_when": loop_.break_when,
+                "steps": loop_.steps.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
+            });
+        }
+    }
+    value
+}
+
+/// The job catalog one multi-run read parses once; see
+/// [`OrbitRuntime::v2_job_by_name_cached`].
+#[derive(Default)]
+pub(crate) struct V2JobNameCache {
+    catalog: OnceCell<Option<LoadedV2JobCatalog>>,
+    resolved: RefCell<HashMap<String, Option<JobV2>>>,
+}
+
+/// The membership layering, which is named execution's layering for a custom
+/// job name and that layering plus the workspace directory for a default one.
+struct LoadedV2JobCatalog {
+    catalog: V2JobCatalog,
+    diagnostics: Vec<V2JobCatalogDiagnostic>,
+    dirs: Vec<CatalogDirectory<V2JobCatalogDirKind>>,
+    workspace_index: Option<usize>,
+}
+
+impl LoadedV2JobCatalog {
+    /// `Some` with what named execution resolves for `job_id`, or `None` when
+    /// this layering cannot answer for it.
+    fn resolve(&self, job_id: &str) -> Option<Option<JobV2>> {
+        let selected = self.catalog.get(job_id);
+        let selected_path = selected.map(|(path, _)| path);
+        // A shipped default never resolves from the workspace directory.
+        let skipped = is_default_job_name(job_id)
+            .then_some(self.workspace_index)
+            .flatten();
+        if skipped.is_some()
+            && selected_path.is_some_and(|path| {
+                self.dirs
+                    .iter()
+                    .position(|dir| path.starts_with(dir.path()))
+                    == skipped
+            })
+        {
+            return None;
+        }
+        let refused = self.diagnostics.iter().any(|diagnostic| {
+            Some(diagnostic.directory_index) != skipped
+                && diagnostic.applies_to_job(job_id, selected_path, &self.dirs)
+        });
+        Some(match selected {
+            Some((_, job)) if !refused => Some(job.clone()),
+            _ => None,
+        })
     }
 }
 
@@ -311,6 +436,7 @@ impl OrbitRuntime {
         &self,
         dirs: Vec<CatalogDirectory<V2JobCatalogDirKind>>,
     ) -> Result<(V2JobCatalog, Vec<V2JobCatalogDiagnostic>), OrbitError> {
+        tracing::debug!(job_catalog_load = true);
         let mut catalog = V2JobCatalog::new();
         let mut diagnostics = Vec::new();
         for (directory_index, dir) in dirs.into_iter().enumerate() {
@@ -458,6 +584,49 @@ impl OrbitRuntime {
             return Ok(resolved);
         }
         Err(OrbitError::not_found(NotFoundKind::Job, job_id.to_string()))
+    }
+
+    /// [`Self::load_v2_job_asset_by_name`] for a read that resolves many
+    /// runs by job name: every name resolves to the definition execution
+    /// would load, from one parse of the catalog for all names. Only the
+    /// definition matters to such a read, so a failed resolution is `None`.
+    pub(crate) fn v2_job_by_name_cached(
+        &self,
+        cache: &V2JobNameCache,
+        job_id: &str,
+    ) -> Option<JobV2> {
+        if let Some(resolved) = cache.resolved.borrow().get(job_id) {
+            return resolved.clone();
+        }
+        let loaded = cache.catalog.get_or_init(|| {
+            let dirs = self.v2_job_membership_dirs();
+            let (catalog, diagnostics) = self
+                .load_v2_job_catalog_with_diagnostics(dirs.clone())
+                .ok()?;
+            Some(LoadedV2JobCatalog {
+                catalog,
+                diagnostics,
+                workspace_index: dirs
+                    .iter()
+                    .position(|dir| *dir.kind() == V2JobCatalogDirKind::Workspace),
+                dirs,
+            })
+        });
+        let resolved = match loaded.as_ref().map(|loaded| loaded.resolve(job_id)) {
+            Some(Some(resolved)) => resolved,
+            // The catalog did not load, or this default name resolves to a
+            // layer named execution never reads for it: load the way
+            // execution does.
+            _ => self
+                .load_v2_job_asset_by_name(job_id)
+                .ok()
+                .map(|(_, job)| job),
+        };
+        cache
+            .resolved
+            .borrow_mut()
+            .insert(job_id.to_string(), resolved.clone());
+        resolved
     }
 
     fn v2_job_asset_dirs_for_execution(

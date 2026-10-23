@@ -1,0 +1,117 @@
+Create a new auto-task definition
+
+Usage: orbit auto-task add [OPTIONS] --name <NAME> --title <TITLE>
+
+Options:
+      --name <NAME>
+          Unique definition name (lowercase alphanumeric, `-`/`_`, starts alphanumeric)
+
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --description <DESCRIPTION>
+          Human description of the recurring chore
+          
+          [default: ""]
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --cron <CRON>
+          5-field cron expression (mutually exclusive with `--every-minutes`)
+
+      --every-minutes <EVERY_MINUTES>
+          Interval in minutes (mutually exclusive with `--cron`)
+
+      --deliveries-landed <DELIVERIES_LANDED>
+          Delivery trigger JSON: branch, threshold, max_wait_minutes, coverage; optional owner_machine (defaults to this workspace's registered owner machine), max_items, retries
+
+      --title <TITLE>
+          Title of each minted task
+
+      --body <BODY>
+          Body / instruction of each minted task
+          
+          [default: ""]
+
+      --criterion <CRITERIA>
+          Acceptance criterion. Repeat for multiple
+
+      --type <TASK_TYPE>
+          Task type (defaults to chore)
+
+          Possible values:
+          - feature
+          - bug:      An attributable defect; lineage is recorded through typed task relations
+          - refactor
+          - chore
+          
+          [default: chore]
+
+      --tag <TAGS>
+          Tag applied to each minted task (in addition to the provenance tag). Repeat
+
+      --required-tools <REQUIRED_TOOLS>
+          Exact canonical tool names copied to every minted task
+
+      --priority <PRIORITY>
+          Priority (defaults to medium)
+          
+          [default: medium]
+          [possible values: low, medium, high, critical]
+
+      --complexity <COMPLEXITY>
+          Assessed complexity copied to every minted task
+
+          Possible values:
+          - low
+          - medium
+          - hard
+          - xhard:  Reserved top tier for the most capable (and most expensive) crews
+
+      --crew <CREW>
+          Crew override for minted tasks
+
+      --status <STATUS>
+          Status each minted task enters (defaults to backlog)
+
+          Possible values:
+          - proposed:    Awaiting human approval before entering the backlog
+          - backlog:     Approved and queued for work; not yet started
+          - in-progress: Actively being worked on
+          - review:      Implementation complete; awaiting review/merge
+          - done:        Accepted and closed. May be reopened by an explicit status edit
+          - blocked:     Temporarily paused (waiting on a dependency or decision)
+          - archived:    Soft-deleted. Can be restored to any other status
+          - rejected:    Declined. Can be reclassified to any other status
+          - someday:     Future-scoped — wanted but not yet actionable. Agents skip someday tasks
+          
+          [default: backlog]
+
+      --dedupe <DEDUPE>
+          Dedupe policy (defaults to skip-if-open)
+
+          Possible values:
+          - skip-if-open: Skip the fire while a previously-created instance is still open, so a stalled backlog never accumulates identical tasks (the default)
+          - always:       Always fire, even if a prior instance is still open
+          
+          [default: skip-if-open]
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')

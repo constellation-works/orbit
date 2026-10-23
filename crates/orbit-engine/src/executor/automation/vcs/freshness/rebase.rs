@@ -12,7 +12,7 @@ use super::super::handoff::{
 use super::checkpoint::recovery_run_id;
 use super::divergence::{branch_freshness_against_ref, commit_sha, remote_branch_sha};
 use super::rebase_recovery::{
-    RecoveredRewrite, ensure_clean_for_rewrite, rebase_conflict_error,
+    RecoveredRewrite, certify_empty_rebase, ensure_clean_for_rewrite, rebase_conflict_error,
     recover_started_rebase_timeout, recovered_rewrite, refuse_or_recover_existing_rebase,
     unmerged_paths,
 };
@@ -26,8 +26,25 @@ pub(in crate::executor::automation) fn prepare_pr_handoff<H: RuntimeHost + ?Size
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let context = load_handoff_context(host, input, "pr_prepare")?;
+    if input
+        .get("authenticate_preparation")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        super::preparation::validate_owner(host, recovery_run_id(input, &context), &context)?;
+    }
     match prepare_pr_handoff_inner(input, &context) {
-        Ok(output) => Ok(output),
+        Ok(mut output) => {
+            if input
+                .get("authenticate_preparation")
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                output["preparation"] =
+                    super::preparation::certify_preparation(host, input, &context, output.clone())?;
+            }
+            Ok(output)
+        }
         Err(failure) => {
             let (phase, error) = *failure;
             record_failed_handoff(host, &context, input, phase, &error)?;
@@ -36,7 +53,7 @@ pub(in crate::executor::automation) fn prepare_pr_handoff<H: RuntimeHost + ?Size
     }
 }
 
-fn prepare_pr_handoff_inner(
+pub(super) fn prepare_pr_handoff_inner(
     input: &Value,
     context: &HandoffContext,
 ) -> Result<Value, Box<(FailedHandoffPhase, OrbitError)>> {
@@ -95,9 +112,45 @@ pub(in crate::executor::automation) fn rebase_pr_branch<H: RuntimeHost + ?Sized>
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
-    let _timeout_budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget::from_input(input)?);
     let context = load_handoff_context(host, input, "git_rebase")?;
-    match rebase_pr_branch_inner(host, input, &context) {
+    let result = {
+        let _timeout_budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget::from_input(input)?);
+        super::preparation::synchronize(host, input, &context, |prepared, stale| {
+            rebase_pr_branch_inner(host, prepared, &context, stale)
+        })
+    };
+    // Absorption bypasses the later validate step. Run its captured commands
+    // on the final continued/chased head before no-diff settlement. The Git
+    // rewrite budget is over: long validation must not exhaust that budget.
+    let result = match result {
+        Err(OrbitError::CandidateAbsorbed(candidate))
+            if input.get("final_validation").and_then(Value::as_bool) == Some(true)
+                && host
+                    .validation_gates()
+                    .captured_required_commands()
+                    .is_some()
+                && !context
+                    .tasks
+                    .iter()
+                    .any(|task| task.tags.iter().any(|tag| tag == "no-diff-expected")) =>
+        {
+            match super::super::candidate_validate::candidate_validate(
+                host,
+                &json!({
+                    "job_run_id": recovery_run_id(input, &context),
+                    "completed_task_ids": context.tasks.iter().map(|task| &task.id).collect::<Vec<_>>(),
+                    "workspace_path": context.workspace_path,
+                    "base_sha": candidate.base_sha,
+                    "base_ref": candidate.base_ref,
+                }),
+            ) {
+                Ok(_) => Err(OrbitError::CandidateAbsorbed(candidate)),
+                Err(error) => Err(error),
+            }
+        }
+        result => result,
+    };
+    match result {
         Ok(output) => Ok(output),
         Err(error) => {
             record_failed_handoff(host, &context, input, FailedHandoffPhase::Rebase, &error)?;
@@ -110,6 +163,7 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
     context: &HandoffContext,
+    stale: &mut bool,
 ) -> Result<Value, OrbitError> {
     let head = required_input_string(input, "head")?;
     let head_sha_before = required_input_string(input, "head_sha")?;
@@ -194,12 +248,13 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
 
     let observed_base_sha = commit_sha(&context.workspace_path, base_ref)?;
     if observed_base_sha != base_sha {
+        *stale = true;
         return Err(OrbitError::Execution(format!(
             "git_rebase: prepared base ref '{base_ref}' moved from checkpoint '{base_sha}' to '{observed_base_sha}'; refusing to lose concurrent base changes — prepare a fresh handoff checkpoint"
         )));
     }
     if let RecoveredRewrite::Overtaken(checkpoint) = &recovery {
-        return super::super::base_chase::chase_advanced_base(
+        return super::super::base::chase::chase_advanced_base(
             host,
             input,
             context,
@@ -278,6 +333,11 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
         )?
     };
 
+    if rewritten && head_sha == base_sha {
+        let checkpoint = certify_empty_rebase(host, input, context, base_sha)?;
+        return Err(absorbed_outcome(host, input, context, head, &checkpoint));
+    }
+
     Ok(json!({
         "phase": "rebase",
         "decision": decision,
@@ -293,7 +353,7 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
 }
 
 /// The step failure for a recovered HEAD whose certified checkpoint says the
-/// pinned base absorbed the candidate: the settlement marker once
+/// pinned base absorbed the candidate: a typed settlement failure once
 /// [`verify_absorbed_candidate`] re-observes it, otherwise today's empty-branch
 /// refusal with the typed reason.
 fn absorbed_outcome<H: RuntimeHost + ?Sized>(
@@ -321,7 +381,12 @@ fn absorbed_outcome<H: RuntimeHost + ?Sized>(
         )),
     };
     match verified {
-        Ok(candidate) => OrbitError::Execution(candidate.failure_text(head)),
+        Ok(candidate) => OrbitError::CandidateAbsorbed(Box::new(orbit_common::CandidateAbsorbed {
+            head: head.to_string(),
+            base_sha: candidate.base_sha,
+            base_ref: candidate.base_ref,
+            covering_commit: candidate.covering_commit,
+        })),
         Err(refusal) => OrbitError::Execution(format!(
             "git_rebase: recovered branch '{head}' no longer contains a candidate ahead of target base '{}'; {refusal}",
             checkpoint

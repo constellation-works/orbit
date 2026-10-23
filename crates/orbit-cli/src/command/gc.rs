@@ -1,6 +1,8 @@
 //! Out-of-band garbage collection for resources left behind by terminal runs.
 
+use clap::builder::TypedValueParser;
 use clap::{Args, Subcommand};
+use orbit_core::application::gc::DEFAULT_DEPLOYMENT_KEEP;
 use orbit_core::{OrbitError, OrbitRuntime};
 
 use crate::command::{Block, CommandOut, Execute, Payload};
@@ -27,10 +29,15 @@ pub enum GcTarget {
     Worktrees(WorktreeGcArgs),
     /// Reclaim this workspace checkout's scratch contents when no job runs are active
     Tmp(TmpGcArgs),
+    /// Remove deployment directories, executable backups and store backups in the Orbit home
+    /// beyond the newest of each, always keeping the rollback executable
+    Deployments(DeploymentGcArgs),
     /// Prune audit rows older than `retention.audit_days` and the audit blobs no remaining row names
     Audit(AuditGcArgs),
     /// Drop the pipeline state of terminal runs older than `retention.runs_days`, keeping their run and step rows
     Runs(RunGcArgs),
+    /// Delete applied task commit journal rows older than `retention.journal_days`, keeping each task's newest
+    Journal(JournalGcArgs),
 }
 
 impl Execute for GcTarget {
@@ -38,8 +45,10 @@ impl Execute for GcTarget {
         match self {
             Self::Worktrees(args) => args.execute(runtime),
             Self::Tmp(args) => args.execute(runtime),
+            Self::Deployments(args) => args.execute(runtime),
             Self::Audit(args) => args.execute(runtime),
             Self::Runs(args) => args.execute(runtime),
+            Self::Journal(args) => args.execute(runtime),
         }
     }
 }
@@ -88,8 +97,77 @@ impl Execute for TmpGcArgs {
 
 #[derive(Args)]
 #[command(
+    after_help = "Without --confirm this only reports. Three classes are counted separately: \
+                  top-level entries of ~/.orbit/deployments, copies of replaced executables in \
+                  ~/.orbit/bin (names with a .bak, .before-, .pre-, .stale or -stale- marker), \
+                  and store copies named ~/.orbit/orbit.db.bak*. Each class keeps its newest \
+                  entries by the newest modification time inside them. The installed \
+                  executable and every <executable>.previous rollback copy are never removed, \
+                  nor is a deployment whose orbit-local-candidate manifest names the bytes of \
+                  the installed or rollback executable; those do not count toward --keep. \
+                  Links are removed, never followed.\n\nExamples:\n  orbit gc deployments\n  \
+                  orbit gc deployments --keep 1 --confirm --json"
+)]
+pub struct DeploymentGcArgs {
+    /// Remove what the report lists; without this flag the command only reports
+    #[arg(long, visible_alias = "yes", conflicts_with = "dry_run")]
+    pub confirm: bool,
+
+    /// Explicitly request the default non-destructive mode
+    #[arg(long, conflicts_with = "confirm")]
+    pub dry_run: bool,
+
+    /// Newest entries to keep in each class, besides the rollback-pinned ones
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = DEFAULT_DEPLOYMENT_KEEP,
+        value_parser = clap::value_parser!(u16).range(1..).map(usize::from)
+    )]
+    pub keep: usize,
+}
+
+impl Execute for DeploymentGcArgs {
+    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let result = runtime.gc_deployments(self.confirm, self.keep)?;
+        let doc = serde_json::to_value(&result).map_err(|error| {
+            OrbitError::Execution(format!("failed to serialize deployment GC report: {error}"))
+        })?;
+        let mut lines: Vec<_> = result
+            .entries
+            .iter()
+            .map(|entry| {
+                format!(
+                    "class={} path={} action={} reason={} bytes={} modified_at={}",
+                    entry.class.as_str(),
+                    entry.path.display(),
+                    entry.action,
+                    entry.reason,
+                    entry.bytes,
+                    entry.modified_at.as_deref().unwrap_or("-"),
+                )
+            })
+            .collect();
+        lines.push(format!(
+            "mode={} keep={} entries_removed={} total_bytes_reclaimable={} \
+             total_bytes_reclaimed={} total_bytes_kept={}",
+            if result.dry_run { "plan" } else { "confirm" },
+            result.keep,
+            result.entries_removed,
+            result.bytes_reclaimable,
+            result.bytes_reclaimed,
+            result.bytes_kept,
+        ));
+        Ok(Payload::blocks(doc, vec![Block::text(lines.join("\n"))]).into())
+    }
+}
+
+#[derive(Args)]
+#[command(
     after_help = "Without --apply this only reports. The command audit (`audit_events`) is \
-                  host-wide; run audit rows and blobs are this workspace's. A blob is kept while \
+                  host-wide. Run audit rows are this workspace's, plus rows whose workspace id is \
+                  no longer registered; another registered workspace keeps its own window. Blobs \
+                  are this workspace's. A blob is kept while \
                   any remaining run audit row, run step or pipeline state names it, while a \
                   pending-publication marker newer than the cutoff names it, and for 24 hours \
                   after it was last written. Deletes run in batches of 1,000 rows, each its own \
@@ -145,10 +223,15 @@ impl Execute for AuditGcArgs {
 #[derive(Args)]
 #[command(
     after_help = "Without --apply this only reports. Only success, failed, timeout, cancelled and \
-                  interrupted runs of this workspace are selected; a held run, which review \
+                  interrupted runs of this workspace, and of workspace ids that are no longer \
+                  registered, are selected; another registered workspace keeps its own window. A \
+                  held run, which review \
                   evidence can still resume, and every non-terminal run are never touched. The \
                   run row, its steps and its summary stay, so `orbit run show` and run history \
-                  keep working, and `archived_at` records when the state was dropped.\n\n\
+                  keep working, and `archived_at` records when the state was dropped. The \
+                  host's per-minute run and host resource history, and the admission \
+                  forecasts recorded against it, older than 30 days go in the same pass, \
+                  whatever the window.\n\n\
                   Examples:\n  orbit gc runs\n  orbit gc runs --apply"
 )]
 pub struct RunGcArgs {
@@ -156,7 +239,7 @@ pub struct RunGcArgs {
     #[arg(long)]
     pub apply: bool,
 
-    /// Retention window in days, overriding `retention.runs_days` (default 60)
+    /// Retention window in days, overriding `retention.runs_days` (default 60, minimum 30)
     #[arg(long, value_name = "DAYS")]
     pub older_than_days: Option<u32>,
 }
@@ -167,10 +250,55 @@ impl Execute for RunGcArgs {
         let doc = serde_json::to_value(&report).map_err(|error| {
             OrbitError::Execution(format!("failed to serialize run GC report: {error}"))
         })?;
+        let mut lines = vec![format!(
+            "table=job_run_states scope=workspace runs={} bytes={} runs_archived={}",
+            report.runs, report.state_bytes, report.runs_archived
+        )];
+        lines.extend(report.resource_minutes.iter().map(|table| {
+            format!(
+                "table={} scope=host retention_days={} rows={} rows_removed={}",
+                table.table, table.retention_days, table.rows, table.rows_removed
+            )
+        }));
+        lines.push(summary_line(&doc));
+        Ok(Payload::blocks(doc, vec![Block::text(lines.join("\n"))]).into())
+    }
+}
+
+#[derive(Args)]
+#[command(
+    after_help = "Without --apply this only reports. Only applied rows of this workspace, and of \
+                  workspace ids that are no longer registered, are selected; another registered \
+                  workspace keeps its own window. An applied row is a commit decision already \
+                  published to its task, so recovery never reads it again. Prepared and \
+                  committed rows, which recovery replays, aborted rows, and each task's newest \
+                  applied row are never deleted. The rows are selected by one read that holds \
+                  no write lock, then deleted by key in batches of 1,000 rows, each its own \
+                  write transaction. Freed pages stay in the store file; VACUUM it while Orbit \
+                  is idle to return them to the filesystem.\n\n\
+                  Examples:\n  orbit gc journal\n  orbit gc journal --apply --json"
+)]
+pub struct JournalGcArgs {
+    /// Delete what the plan lists; without this flag the command only reports
+    #[arg(long)]
+    pub apply: bool,
+
+    /// Retention window in days, overriding `retention.journal_days` (default 14)
+    #[arg(long, value_name = "DAYS")]
+    pub older_than_days: Option<u32>,
+}
+
+impl Execute for JournalGcArgs {
+    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let report = runtime.gc_journal(self.apply, self.older_than_days)?;
+        let doc = serde_json::to_value(&report).map_err(|error| {
+            OrbitError::Execution(format!("failed to serialize journal GC report: {error}"))
+        })?;
         let lines = [
             format!(
-                "table=job_run_states scope=workspace runs={} bytes={} runs_archived={}",
-                report.runs, report.state_bytes, report.runs_archived
+                "table=task_commit_journal scope=workspace rows={} bytes={} rows_removed={} \
+                 selection_ms={}",
+                report.rows, report.bytes, report.rows_removed, report.selection_ms
             ),
             summary_line(&doc),
         ];
@@ -178,7 +306,7 @@ impl Execute for RunGcArgs {
     }
 }
 
-/// The mode, window, write batches and store pages shared by both reports.
+/// The mode, window, write batches and store pages shared by the store reports.
 fn summary_line(doc: &serde_json::Value) -> String {
     let field = |pointer: &str| {
         doc.pointer(pointer)

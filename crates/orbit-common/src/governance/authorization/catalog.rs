@@ -124,6 +124,22 @@ pub const DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED: GovernedOperation = GovernedOpe
     rationale: "opting in lets every pass of the window approve qualifying proposed tasks into the backlog, including ones filed after submission",
 };
 
+/// Opt-in PR blocker repairs for a dashboard-submitted owner auto-drain.
+pub const DASHBOARD_AUTO_DRAIN_AUTO_FIX: GovernedOperation = GovernedOperation {
+    id: "auto_drain.auto_fix",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "repair authority lets the window run agents to fix failed required checks and merge conflicts on its PRs; completion authority remains separate",
+};
+
+/// Choose a forecast policy for one dashboard-submitted local drain.
+pub const DASHBOARD_AUTO_DRAIN_MODE: GovernedOperation = GovernedOperation {
+    id: "auto_drain.auto_concurrency",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "choosing a per-drain forecast policy changes unattended admission decisions",
+};
+
 /// Stop new admissions for the workspace's live auto-drain window from the
 /// dashboard (the `--stop` equivalent of `orbit run auto`) [ORB-12728].
 pub const DASHBOARD_AUTO_DRAIN_STOP: GovernedOperation = GovernedOperation {
@@ -140,6 +156,14 @@ pub const DASHBOARD_HANDOFF_APPROVE: GovernedOperation = GovernedOperation {
     surface: OperationSurface::Dashboard,
     allowed: &[McpCapability::Operator],
     rationale: "approving a handoff authorizes the owner to merge that exact candidate; a follower's agent access never decides that",
+};
+
+/// Retry an existing authorized stopped landing through the owner machinery.
+pub const DASHBOARD_HANDOFF_RETRY: GovernedOperation = GovernedOperation {
+    id: "handoff.retry",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "retrying a stopped authorized handoff is a deliberate owner operator decision",
 };
 
 /// Withdraw completion authority for a distributed delivery handoff from the
@@ -299,10 +323,22 @@ pub fn governed_plugin_tool(mutating: bool) -> &'static GovernedOperation {
 ///    authority actually lives in.
 pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     GovernedOperation {
+        id: "orbit.task.retry_handoff",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "retrying an authorized stopped landing is a deliberate owner operator decision",
+    },
+    GovernedOperation {
         id: "orbit.task.reconcile_review",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],
         rationale: "reconciliation produces the owner-held review and validation evidence that lets a changed merged head complete",
+    },
+    GovernedOperation {
+        id: "orbit.task.requeue",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "requeuing a blocked task overrides a recorded escalation and preserves its published candidate",
     },
     GovernedOperation {
         id: "orbit.task.review_reset",
@@ -423,6 +459,20 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
                     so the caller has to be someone this process can name",
     },
     GovernedOperation {
+        id: "orbit.auto_task.delete",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "deleting an auto-task discards its scheduler cursor and delivery consumer \
+                    state, and a deleted shipped default stays out of later reseeds",
+    },
+    GovernedOperation {
+        id: "orbit.auto_task.reset",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "resetting a delivery consumer forgets its coverage debt and can abandon an \
+                    executing action",
+    },
+    GovernedOperation {
         id: "orbit.task.delete",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],
@@ -486,6 +536,13 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "collection permanently deletes workspace scratch contents",
     },
     GovernedOperation {
+        id: "gc deployments",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "collection permanently deletes deployment directories and executable and \
+                    store backups from the Orbit home",
+    },
+    GovernedOperation {
         id: "gc audit",
         surface: OperationSurface::CliCommand,
         allowed: &[McpCapability::Operator],
@@ -497,6 +554,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator, McpCapability::Runner],
         rationale: "applying run retention permanently drops old runs' pipeline state",
     },
+    GovernedOperation {
+        id: "gc journal",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "applying journal retention permanently deletes applied task commit decisions",
+    },
     DASHBOARD_ROUTINE_TOGGLE,
     DASHBOARD_JOB_RUN,
     DASHBOARD_CLOCK_SERVICE,
@@ -504,10 +567,13 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_AUTO_TASK_TOGGLE,
     DASHBOARD_AUTO_TASK_MINT,
     DASHBOARD_AUTO_DRAIN_COMPLETE,
+    DASHBOARD_AUTO_DRAIN_MODE,
     DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED,
+    DASHBOARD_AUTO_DRAIN_AUTO_FIX,
     DASHBOARD_AUTO_DRAIN_STOP,
     DASHBOARD_HANDOFF_APPROVE,
     DASHBOARD_HANDOFF_REVOKE,
+    DASHBOARD_HANDOFF_RETRY,
     DASHBOARD_CLAIM_RECOVER,
     DASHBOARD_CONFIG_SET,
     DASHBOARD_HOST_EDIT,
@@ -538,11 +604,4 @@ pub fn governed_command(command: &str, subcommand: &str) -> Option<&'static Gove
                 .split_once(' ')
                 .is_some_and(|(head, tail)| head == command && tail == subcommand)
     })
-}
-
-/// Look up a governed dashboard operation by its stable typed action id.
-pub fn governed_dashboard(id: &str) -> Option<&'static GovernedOperation> {
-    GOVERNED_OPERATIONS
-        .iter()
-        .find(|operation| operation.surface == OperationSurface::Dashboard && operation.id == id)
 }

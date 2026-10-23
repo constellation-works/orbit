@@ -1,8 +1,8 @@
 ---
 title: Distributed Drain — Overview
 owner: claude
-last_updated: 2026-10-04
-last_validated: 2026-10-09
+last_updated: 2026-10-20
+last_validated: 2026-10-20
 status: Draft
 feature: distributed-drain
 doc_role: overview
@@ -50,9 +50,9 @@ planes over one repository, which the federated-mcp spec names an operator misco
 
 Existing roles, capability routing, reservations, and PR checks were the foundations. V1 added
 atomic admission, durable request/claim identity, routed task reads and writes, settlement, and an
-owner landing consumer. With the owner's before-PR review (`review.before_pr`) on, each claimed PR
-leaf runs the reviewer the claim captured before it opens its pull request [ORB-13908];
-after-landing review never affects admission. Implementation validation still
+owner landing consumer. With the owner's before-PR review (`review.timing = "before_pr"`) on,
+each claimed PR leaf runs the reviewer the claim captured before it opens its pull request
+[ORB-13908]; after-landing review never affects admission. Implementation validation still
 runs, and declared context selectors remain protected even when their files do not exist. These
 were substantive integration changes. Throughput depends on file conflicts, provider limits, shared CI,
 and landing capacity as well as local build slots.
@@ -81,7 +81,9 @@ and then one leaf run. Recovery revokes that authority before allowing a replace
 runs. The owner does not track host capacity.
 
 **Epic (tag).** A size hint on a task: one large piece of work a top-tier crew takes on whole. It
-no longer names a pipeline, a worktree, a reservation class, or an admission rule.
+no longer names a pipeline, a worktree, or a reservation class. Admission has one carve-out for
+it: a tagged root with no `context_files` of its own is withheld while a descendant has some
+([§7.1](./2_design.md#71-epic-machinery)).
 
 **Handoff.** Durable PR (or owner-local candidate), validation evidence, and a typed
 `not_required` review disposition, accepted by the owner atomically with promotion to `review`. Execution writes close at this boundary.
@@ -106,8 +108,8 @@ every entry point uses the same claim admission. No schedule is enabled by this 
 | Durable handoff and authorized landing consumer | [crates/orbit-core/src/application/landing/mod.rs](../../../crates/orbit-core/src/application/landing/mod.rs), [task_landing_pipeline.yaml](../../../crates/orbit-core/assets/jobs/task_landing_pipeline.yaml); [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | — | live |
 | Review-only handoff approval and revocation | dashboard `handoff.approve` / `handoff.revoke`; [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | [ORB-12516] | done |
 | Non-pruning selector storage/projection and frozen footprints | `declared_context_files` in [crates/orbit-core/src/runtime/task/mod.rs](../../../crates/orbit-core/src/runtime/task/mod.rs); [2_design.md §2](./2_design.md#2-the-ready-queue-and-orbittaskpull) | [ORB-12490] | done |
-| Refuse pulls from callers that cannot run the before-PR gate the owner captured (`review.before_pr`, `review.before_landing`), and typed handoff evidence | `admission_refusal` in [admission.rs](../../../crates/orbit-store/src/repository/task/coordination/admission.rs); [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | — | done |
-| Claim-aware capacity accounting and interrupted-run recovery | [leaf_occupancy.rs](../../../crates/orbit-core/src/adapter/engine_host/v2_host/admission/leaf_occupancy.rs); [2_design.md §3](./2_design.md#3-pull-mode-drain-and-the-pulled-leaf-pipeline) | [ORB-12617] | done |
+| Refuse pulls from callers that cannot run the before-PR gate the owner captured (`review.timing`), and typed handoff evidence | `admission_refusal` in [admission.rs](../../../crates/orbit-store/src/repository/task/coordination/admission.rs); [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | — | done |
+| Claim-aware capacity accounting and interrupted-run recovery | [leaf_occupancy.rs](../../../crates/orbit-core/src/application/admission/leaf_occupancy.rs); [2_design.md §3](./2_design.md#3-pull-mode-drain-and-the-pulled-leaf-pipeline) | [ORB-12617] | done |
 | Failure and concurrency acceptance coverage | [2_design.md §8](./2_design.md#8-required-validation-scenarios) | [ORB-12617] | partial |
 | Execution provenance on runs, tasks, artifacts | [2_design.md §6](./2_design.md#6-execution-provenance) | [ORB-13649] | done |
 | Retire epic machinery; `epic` becomes a tag | [2_design.md §7.1](./2_design.md#71-epic-machinery) | [ORB-12491] | done |
@@ -117,6 +119,7 @@ every entry point uses the same claim admission. No schedule is enabled by this 
 | Followers pull; the owner never places | [4_decisions.md](./4_decisions.md#followers-pull-the-owner-never-places) | [ORB-12488] | recorded |
 | Requests identify admissions and claims identify attempts | [4_decisions.md](./4_decisions.md#requests-identify-admissions-and-claims-identify-attempts) | [ORB-12488] | recorded |
 | Owner ordering does not require a materialized queue | [4_decisions.md](./4_decisions.md#owner-ordering-does-not-require-a-materialized-queue) | [ORB-12488] | recorded |
+| Scarcity-aware admission order: work only the requester can run leads its band | `census_dispatch_order` in [census.rs](../../../crates/orbit-store/src/contracts/task/coordination/census.rs); [specs/task-pull.md](./specs/task-pull.md#executor-census-and-affinity); [4_decisions.md](./4_decisions.md#admission-prefers-work-only-the-requesting-executor-can-run) | [ORB-17304] | done |
 | Landing consumes durable evidence and explicit completion authority | [4_decisions.md](./4_decisions.md#landing-consumes-durable-evidence-and-explicit-completion-authority) | [ORB-12488] | recorded |
 | Owner is the always-on host | [4_decisions.md](./4_decisions.md#the-owner-is-the-always-on-host-that-followers-can-reach) | [ORB-12488] | recorded |
 | Epic is a tag, not a pipeline | [4_decisions.md](./4_decisions.md#epic-is-a-tag-not-a-pipeline) | [ORB-12488] | recorded |
@@ -126,7 +129,7 @@ every entry point uses the same claim admission. No schedule is enabled by this 
 
 - [ORB-12488] — authored this design folder for the pull-based multi-host drain.
 - [ORB-12492] — retired terminal failed-run triage (§7.2).
-- [ORB-12491] — retired epic execution and added the isolated retirement check (§7.1).
+- [ORB-12491] — retired epic execution (§7.1).
 - [ORB-12490] — replaced context pruning with `declared_context_files`.
 - [ORB-12495] — added the probe, receipt lookup and claim listing.
 - [ORB-12500] — added published-PR observation and the shared entry-point admission decision.
@@ -141,5 +144,6 @@ every entry point uses the same claim admission. No schedule is enabled by this 
 - [ORB-13663] — moved settlement from the admitting drain to the admission record, so cancelling a drain no longer strands its live leaves.
 - [ORB-13664] — the claude provider disables background tasks on every child it spawns, so an agent's validation gates run in the foreground and finish before the leaf reports.
 - [ORB-13992] — admission keys only on before-PR review; the probe reports both review switches.
+- [ORB-17304] — plans the scarcity-aware admission order.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

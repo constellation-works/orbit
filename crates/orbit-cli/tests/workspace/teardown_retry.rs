@@ -241,57 +241,63 @@ fn deletion_failures_keep_every_selector_and_legacy_partition_retryable() {
     ) {
         return;
     }
-    for stage in ["partition", "skills", "orbit"] {
-        for selector_kind in ["name", "id", "path"] {
-            let fixture = Fixture::new();
-            let selector = fixture.selector(selector_kind);
-            let saved = fs::read(&fixture.registry_path).expect("saved catalog");
-            let blocked = match stage {
-                "partition" => fixture.partition.join("blocked"),
-                "skills" => fixture
-                    .owned_link
-                    .parent()
-                    .expect("skills parent")
-                    .to_path_buf(),
-                "orbit" => fixture.orbit_dir.join("blocked"),
-                _ => unreachable!(),
-            };
-            fs::create_dir_all(&blocked).expect("blocked directory");
-            fs::write(blocked.join("leftover"), b"must survive failed deletion").expect("leftover");
-            let read_only = ReadOnlyDir::new(blocked.clone());
-            let failed = fixture.teardown(&selector).failure();
-            let stderr = String::from_utf8_lossy(&failed.get_output().stderr);
-            assert!(
-                stderr.contains("Permission denied"),
-                "{stage}/{selector_kind}: {stderr}"
-            );
+    // Selectors resolve before the common deletion pipeline. Keep every
+    // selector at partition failure and every deletion stage through a path.
+    for (stage, selector_kind) in [
+        ("partition", "name"),
+        ("partition", "id"),
+        ("partition", "path"),
+        ("skills", "path"),
+        ("orbit", "path"),
+    ] {
+        let fixture = Fixture::new();
+        let selector = fixture.selector(selector_kind);
+        let saved = fs::read(&fixture.registry_path).expect("saved catalog");
+        let blocked = match stage {
+            "partition" => fixture.partition.join("blocked"),
+            "skills" => fixture
+                .owned_link
+                .parent()
+                .expect("skills parent")
+                .to_path_buf(),
+            "orbit" => fixture.orbit_dir.join("blocked"),
+            _ => unreachable!(),
+        };
+        fs::create_dir_all(&blocked).expect("blocked directory");
+        fs::write(blocked.join("leftover"), b"must survive failed deletion").expect("leftover");
+        let read_only = ReadOnlyDir::new(blocked.clone());
+        let failed = fixture.teardown(&selector).failure();
+        let stderr = String::from_utf8_lossy(&failed.get_output().stderr);
+        assert!(
+            stderr.contains("Permission denied"),
+            "{stage}/{selector_kind}: {stderr}"
+        );
+        assert_eq!(
+            fs::read(&fixture.registry_path).expect("catalog after failure"),
+            saved,
+            "failed deletion must not persist the in-memory deregistration"
+        );
+        fixture.assert_registered();
+        assert!(
+            blocked.join("leftover").exists(),
+            "failed deletion must leave its data"
+        );
+        if stage == "partition" {
             assert_eq!(
-                fs::read(&fixture.registry_path).expect("catalog after failure"),
-                saved,
-                "failed deletion must not persist the in-memory deregistration"
+                orbit_cmd::bound_partition_id(&fixture.global_root, &fixture.orbit_dir)
+                    .expect("binding after failed partition deletion"),
+                Some("ws_retry".to_string()),
+                "a failed deletion must keep the legacy partition discoverable"
             );
-            fixture.assert_registered();
+        } else {
             assert!(
-                blocked.join("leftover").exists(),
-                "failed deletion must leave its data"
+                !fixture.partition.exists(),
+                "earlier deletion must have succeeded"
             );
-            if stage == "partition" {
-                assert_eq!(
-                    orbit_cmd::bound_partition_id(&fixture.global_root, &fixture.orbit_dir)
-                        .expect("binding after failed partition deletion"),
-                    Some("ws_retry".to_string()),
-                    "a failed deletion must keep the legacy partition discoverable"
-                );
-            } else {
-                assert!(
-                    !fixture.partition.exists(),
-                    "earlier deletion must have succeeded"
-                );
-            }
-            drop(read_only);
-            fixture.teardown(&selector).success();
-            fixture.assert_removed();
         }
+        drop(read_only);
+        fixture.teardown(&selector).success();
+        fixture.assert_removed();
     }
 }
 
@@ -300,28 +306,94 @@ fn retry_finishes_after_deletion_before_bindings_are_saved() {
     if isolated_child("teardown_retry::retry_finishes_after_deletion_before_bindings_are_saved") {
         return;
     }
-    for phase in ["partition_deleted", "local_data_deleted"] {
-        for selector_kind in ["name", "id", "path"] {
-            let fixture = Fixture::new();
-            let selector = fixture.selector(selector_kind);
-            // Model a crash after partition deletion but before task unbinding,
-            // or after all local deletion but before workspace deregistration.
-            if phase == "partition_deleted" {
-                fs::remove_dir_all(&fixture.partition).expect("delete partition before unbinding");
-            } else {
-                orbit_cmd::remove_checkout_task_stores(
-                    &fixture.global_root,
-                    &fixture.orbit_dir,
-                    Some("ws_catalog"),
-                )
-                .expect("delete and unbind partitions");
-                fs::remove_file(&fixture.owned_link).expect("delete skill link");
-                fs::remove_dir_all(&fixture.orbit_dir)
-                    .expect("delete local data before catalog save");
-            }
-            fixture.assert_registered();
-            fixture.teardown(&selector).success();
-            fixture.assert_removed();
+    // Missing local data is the stronger selector boundary: all spellings
+    // must still resolve from the saved catalog after every local file is gone.
+    for (phase, selector_kind) in [
+        ("partition_deleted", "path"),
+        ("local_data_deleted", "path"),
+        ("local_data_deleted", "name"),
+        ("local_data_deleted", "id"),
+    ] {
+        let fixture = Fixture::new();
+        let selector = fixture.selector(selector_kind);
+        // Model a crash after partition deletion but before task unbinding,
+        // or after all local deletion but before workspace deregistration.
+        if phase == "partition_deleted" {
+            fs::remove_dir_all(&fixture.partition).expect("delete partition before unbinding");
+        } else {
+            orbit_cmd::remove_checkout_task_stores(
+                &fixture.global_root,
+                &fixture.orbit_dir,
+                Some("ws_catalog"),
+            )
+            .expect("delete and unbind partitions");
+            fs::remove_file(&fixture.owned_link).expect("delete skill link");
+            fs::remove_dir_all(&fixture.orbit_dir).expect("delete local data before catalog save");
+        }
+        fixture.assert_registered();
+        fixture.teardown(&selector).success();
+        fixture.assert_removed();
+    }
+}
+
+#[test]
+fn teardown_does_not_follow_a_symlinked_discovery_dir_out_of_the_checkout() {
+    if isolated_child(
+        "teardown_retry::teardown_does_not_follow_a_symlinked_discovery_dir_out_of_the_checkout",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    // The registration fixture planted an owned link in a real discovery dir.
+    fs::remove_file(&fixture.owned_link).expect("remove fixture link before redirecting");
+    fs::remove_dir(fixture.owned_link.parent().expect("skills parent"))
+        .expect("empty skills directory");
+    fs::remove_dir(fixture.repo.join(".agents")).expect("empty discovery directory");
+    let outside = fixture._temp.path().join("outside");
+    let outside_agents = outside.join("agents");
+    let outside_claude_skills = outside.join("claude-skills");
+    let unrelated = outside.join("catalog/my-skill");
+    fs::create_dir_all(&unrelated).expect("outside catalog skill");
+    let owned_target = fixture.orbit_dir.join("skills/orbit");
+    for skills in [outside_agents.join("skills"), outside_claude_skills.clone()] {
+        fs::create_dir_all(&skills).expect("outside discovery directory");
+        std::os::unix::fs::symlink(&owned_target, skills.join("orbit"))
+            .expect("owned-looking outside link");
+        std::os::unix::fs::symlink(&unrelated, skills.join("my-skill"))
+            .expect("unrelated outside link");
+    }
+    let repo_agents = fixture.repo.join(".agents");
+    let repo_claude_skills = fixture.repo.join(".claude/skills");
+    fs::create_dir_all(repo_claude_skills.parent().unwrap()).expect("claude directory");
+    std::os::unix::fs::symlink(&outside_agents, &repo_agents).expect("redirect agents");
+    std::os::unix::fs::symlink(&outside_claude_skills, &repo_claude_skills)
+        .expect("redirect claude skills");
+    fixture.teardown("retry").success();
+    assert!(
+        !fixture.orbit_dir.exists(),
+        "teardown must still delete .orbit/"
+    );
+    for skills in [outside_agents.join("skills"), outside_claude_skills.clone()] {
+        for (name, target) in [("orbit", &owned_target), ("my-skill", &unrelated)] {
+            let link = skills.join(name);
+            assert!(
+                fs::symlink_metadata(&link)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink(),
+                "teardown must not delete through a redirected discovery dir"
+            );
+            assert_eq!(fs::read_link(link).unwrap(), *target);
         }
     }
+    assert_eq!(
+        fs::read_link(repo_agents).unwrap(),
+        outside_agents,
+        "a redirected discovery dir must survive"
+    );
+    assert_eq!(
+        fs::read_link(repo_claude_skills).unwrap(),
+        outside_claude_skills,
+        "a redirected discovery dir must survive"
+    );
 }

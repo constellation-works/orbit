@@ -86,6 +86,11 @@ impl MemberHost for Host<'_> {
             }
             StateTriggerKind::ExecutionFailed => BTreeMap::new(),
         };
+        // One scan for the page. Admission of a member retained from an
+        // earlier page reads this cache instead of scanning again.
+        let provider_hold = (self.trigger.kind == StateTriggerKind::PreparationEligible)
+            .then(|| self.pilot_provider_withhold(now))
+            .flatten();
 
         for envelope in tasks.items {
             let task = self.runtime.get_task(&envelope.id)?;
@@ -99,6 +104,10 @@ impl MemberHost for Host<'_> {
                     }
                     if let Some(run_ids) = active_preparations.get(&task.id) {
                         withheld.insert(task.id, already_preparing(run_ids));
+                        continue;
+                    }
+                    if let Some(reason) = &provider_hold {
+                        withheld.insert(task.id, reason.clone());
                         continue;
                     }
                     let fingerprint = match self.fingerprint(&task, &source.commit) {
@@ -240,7 +249,14 @@ impl MemberHost for Host<'_> {
             // page, or another pilot may have prepared them since observation.
             let active_preparations = preparation::active_task_pilot_preparations(self.runtime)?;
             for id in &member.task_ids {
-                let task = self.runtime.get_task(id)?;
+                let task = match self.runtime.get_task(id) {
+                    Ok(task) => task,
+                    Err(OrbitError::NotFound {
+                        kind: NotFoundKind::Task,
+                        ..
+                    }) => return Ok(MemberAdmission::Retire("task_deleted".into())),
+                    Err(error) => return Err(error.into()),
+                };
                 if !orbit_automation::members::preparation::eligible(&task, self.eligibility()) {
                     return Ok(MemberAdmission::Retire("task_ineligible".into()));
                 }
@@ -250,6 +266,22 @@ impl MemberHost for Host<'_> {
                 if self.fingerprint(&task, &source.commit)? != member.fingerprint {
                     return Ok(MemberAdmission::Retire("material_changed".into()));
                 }
+                // Pending members can be off the observation page when an
+                // explicit pilot settles. Recheck accepted evidence here too,
+                // after the active-holder guard, before creating any run.
+                if self
+                    .runtime
+                    .fresh_task_pilot_assessment(id, &member.fingerprint)?
+                    .is_some()
+                {
+                    return Ok(MemberAdmission::Retire("assessment_fresh".into()));
+                }
+            }
+            // A member retained from before the hold started is still pending.
+            // Withhold it here, after the active-pilot guard, so the routine
+            // does not submit a run the provider would fail.
+            if let Some(reason) = self.cached_pilot_provider_withhold() {
+                return Ok(MemberAdmission::Withhold(reason));
             }
             return Ok(MemberAdmission::Admit);
         }
@@ -257,8 +289,24 @@ impl MemberHost for Host<'_> {
         if self.trigger.kind == StateTriggerKind::FindingUnverified {
             let active = preparation::active_finding_verifications(self.runtime)?;
             for id in &member.task_ids {
-                let task = self.runtime.get_task(id)?;
-                if !needs_verification(&task, &self.runtime.get_task_history(id)?) {
+                let task = match self.runtime.get_task(id) {
+                    Ok(task) => task,
+                    Err(OrbitError::NotFound {
+                        kind: NotFoundKind::Task,
+                        ..
+                    }) => return Ok(MemberAdmission::Retire("task_deleted".into())),
+                    Err(error) => return Err(error.into()),
+                };
+                // Deletion can also happen between reading the task and its history.
+                let history = match self.runtime.get_task_history(id) {
+                    Ok(history) => history,
+                    Err(OrbitError::NotFound {
+                        kind: NotFoundKind::Task,
+                        ..
+                    }) => return Ok(MemberAdmission::Retire("task_deleted".into())),
+                    Err(error) => return Err(error.into()),
+                };
+                if !needs_verification(&task, &history) {
                     return Ok(MemberAdmission::Retire(
                         "finding_verified_or_ineligible".into(),
                     ));
@@ -355,10 +403,11 @@ impl MemberHost for Host<'_> {
             StateTriggerKind::FindingUnverified => "finding_verification",
         };
 
-        // Every batch member travels as an explicit task id; evaluate already
-        // grouped the attempt by stored crew, and prepare partitions those
-        // ids by `max_partition_size`, so one run fans out over a
-        // crew-homogeneous batch [ORB-12746, ORB-12761].
+        // Every batch member travels as an explicit task id. Finding
+        // verification grouped the attempt by stored crew [ORB-12761].
+        // Task-pilot preparation may carry several crews; prepare partitions
+        // those ids by live `task.crew` and then by `max_partition_size`
+        // [ORB-12746, ORB-16839].
         let task_ids = attempt.task_ids();
         self.runtime
             .submit_automation_pipeline_run(
@@ -376,6 +425,18 @@ impl MemberHost for Host<'_> {
                 JobRunTrigger::state_routine(self.routine, &attempt.consumer),
             )
             .map(|run| run.run_id)
+            .map_err(Into::into)
+    }
+
+    fn accepted_assessment(&self, member: &StateMember) -> Result<Option<bool>, AutomationError> {
+        if self.trigger.kind != StateTriggerKind::PreparationEligible {
+            return Ok(None);
+        }
+        let [task_id] = member.task_ids.as_slice() else {
+            return Ok(None);
+        };
+        self.runtime
+            .fresh_task_pilot_assessment(task_id, &member.fingerprint)
             .map_err(Into::into)
     }
 
@@ -617,6 +678,31 @@ impl MemberHost for Host<'_> {
 }
 
 impl Host<'_> {
+    /// The task-pilot withhold for `now`, cached so this evaluation scans the
+    /// host's recent runs once. A different clock replaces the cache.
+    fn pilot_provider_withhold(&self, now: DateTime<Utc>) -> Option<String> {
+        if let Some(cached) = self.pilot_hold.borrow().as_ref()
+            && cached.now == now
+        {
+            return cached.withhold.clone();
+        }
+        let withhold = self.runtime.task_pilot_provider_withhold(now);
+        *self.pilot_hold.borrow_mut() = Some(super::PilotHoldCache {
+            now,
+            withhold: withhold.clone(),
+        });
+        withhold
+    }
+
+    /// Admission reads the observation cache. A reconcile that admits before
+    /// observation computes the hold at the current time.
+    fn cached_pilot_provider_withhold(&self) -> Option<String> {
+        if let Some(cached) = self.pilot_hold.borrow().as_ref() {
+            return cached.withhold.clone();
+        }
+        self.pilot_provider_withhold(Utc::now())
+    }
+
     /// The task statuses this consumer's members are observed in.
     fn observed_statuses(&self) -> Vec<TaskStatus> {
         match self.trigger.kind {

@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::{
     FrictionAddParams, FrictionListFilter, FrictionRehomeOutcome, FrictionRehomeParams,
-    FrictionReportedCount, FrictionStore, FrictionUpdateParams, StoredFrictionRecord,
+    FrictionStore, FrictionUpdateParams, StoredFrictionRecord,
 };
 
 impl crate::contracts::FrictionStoreBackend for FrictionStore {
@@ -104,13 +104,6 @@ impl crate::contracts::FrictionStoreBackend for FrictionStore {
 
     fn tag_taxonomy(&self) -> Result<Vec<(String, String)>, OrbitError> {
         Self::tag_taxonomy(self)
-    }
-
-    fn reported_by_model(
-        &self,
-        since: Option<DateTime<Utc>>,
-    ) -> Result<Vec<FrictionReportedCount>, OrbitError> {
-        Self::reported_by_model(self, since)
     }
 
     fn stats(&self, tasks: &[Task]) -> Result<Value, OrbitError> {

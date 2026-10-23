@@ -7,15 +7,16 @@
     clippy::unwrap_used
 )]
 
-//! v2 runtime integration coverage: the deterministic reference activity
-//! dispatches through a stub `RuntimeHost` and persists its §7 envelope
-//! events, a deterministic step's tool binding comes from the dispatch rather
-//! than its tool arguments, and job assets with `parallel:`, `fan_out:` and `loop:` blocks
+//! v2 runtime integration coverage: a deterministic step's tool binding comes
+//! from the dispatch rather than its tool arguments, and job assets with
+//! `parallel:`, `fan_out:` and `loop:` blocks
 //! keep their join semantics when run through `execute_job_with_resume`,
 //! and the shipped before-PR `review` step retries and recovers a failing
 //! reviewer while charging only reviewer invocations.
 //!
 //! Runs under `cargo nextest run -p orbit-engine --test engine -E 'test(/^v2_runtime::/)'`.
+
+mod gate_deadline;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -25,10 +26,10 @@ use std::time::Duration;
 
 use orbit_agent::loop_engine::InMemorySink;
 use orbit_common::OrbitError;
-use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_job_asset};
+use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
 use orbit_engine::{
-    DispatchError, JobOutcome, ResolvedCliExecutor, ReviewerInvocationRequest, RuntimeHost,
-    V2AuditWriter, V2DispatchInput, V2SqliteSink, dispatch_v2_activity, execute_job_with_resume,
+    DispatchError, JobOutcome, ReviewerInvocationRequest, V2AuditWriter, V2DispatchInput,
+    V2SqliteSink, dispatch_v2_activity, execute_job_with_resume,
     resolve_job_catalog_refs_for_execution,
 };
 use orbit_types::workflow::activity_job::{
@@ -37,21 +38,10 @@ use orbit_types::workflow::activity_job::{
 use orbit_types::workflow::{JobRunState, PipelineState, ReviewerInvocationEvent};
 use serde_json::{Value, json};
 
-#[test]
-fn deterministic_reference_dispatches_and_persists_audit_events() -> Result<(), String> {
-    let references_dir = workspace_root().join("crates/orbit-core/assets/activities/examples");
-    let tmp_audit = tempfile::tempdir().map_err(|err| err.to_string())?;
-    smoke_dispatch_deterministic(
-        &references_dir.join("deterministic_reference.yaml"),
-        tmp_audit.path(),
-    )
-}
-
 /// [ORB-13115] A deterministic step's tools learn which task and run they
 /// serve from the dispatcher, not from the tool arguments the step forwards.
 /// The host binds the run; the dispatcher adds the task from the run's own
 /// input, the value a CLI agent step would export as `ORBIT_TASK_ID`.
-#[test]
 fn a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_args() {
     use orbit_agent::loop_engine::audit::{AuditSink, NullSink};
     use orbit_tools::{ActivityBinding, ToolContext};
@@ -62,7 +52,7 @@ fn a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_ar
         seen: Mutex<Option<ToolContext>>,
     }
 
-    impl RuntimeHost for BindingHost {
+    impl orbit_engine::test_support::NullRuntimeHost for BindingHost {
         fn tool_context_for_activity(
             &self,
             run_id: Option<&str>,
@@ -138,70 +128,6 @@ fn a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_ar
     assert_eq!(binding.task_id, None, "a step serving no task names none");
 }
 
-fn smoke_dispatch_deterministic(
-    path: &std::path::Path,
-    audit_root: &std::path::Path,
-) -> Result<(), String> {
-    let yaml = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
-    let asset = load_v2(&yaml)?;
-
-    let run_id = "smoke-det-001";
-    let (writer, envelope, _inner) = build_writer_and_sinks(audit_root, run_id);
-
-    let host = EchoHost;
-    let outcome = dispatch_v2_activity(V2DispatchInput {
-        activity_name: &asset.name,
-        spec: &asset.spec.spec,
-        fs_profile: asset.spec.fs_profile.as_deref(),
-        input: Value::Null,
-        audit: writer.clone(),
-        run_id,
-        host: Some(&host),
-    })
-    .map_err(|e| format!("dispatch: {e}"))?;
-
-    if !outcome.success {
-        return Err(format!("deterministic returned non-success: {outcome:?}"));
-    }
-    assert_sqlite_nonempty(&envelope)?;
-    Ok(())
-}
-
-struct EchoHost;
-
-impl RuntimeHost for EchoHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Ok(serde_json::json!({
-            "action": action,
-            "config": config,
-            "input": input,
-            "echo": "deterministic smoke stub"
-        }))
-    }
-
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Err(DispatchError::CliInvocationFailed(
-            "EchoHost has no CLI provider mapping".into(),
-        ))
-    }
-
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<std::sync::Arc<dyn orbit_tools::FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext::default()
-    }
-}
-
 pub(crate) fn build_writer_and_sinks(
     audit_root: &std::path::Path,
     run_id: &str,
@@ -224,31 +150,6 @@ pub(crate) fn build_writer_and_sinks(
     (writer, envelope, inner)
 }
 
-fn load_v2(yaml: &str) -> Result<V2ReferenceAsset, String> {
-    match load_activity_asset(yaml) {
-        Ok(a) => Ok(V2ReferenceAsset {
-            name: a.name,
-            spec: a.spec,
-        }),
-        Err(err) => Err(format!("load: {err}")),
-    }
-}
-
-struct V2ReferenceAsset {
-    name: String,
-    spec: ActivityV2,
-}
-
-fn assert_sqlite_nonempty(sink: &V2SqliteSink) -> Result<(), String> {
-    let count = sink
-        .persisted_event_count()
-        .map_err(|e| format!("read audit sqlite rows: {e}"))?;
-    if count == 0 {
-        return Err("audit sqlite rows are empty".to_string());
-    }
-    Ok(())
-}
-
 pub(crate) fn workspace_root() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest
@@ -265,7 +166,6 @@ pub(crate) fn workspace_root() -> PathBuf {
 /// `parallel:` decides the block from its `join` policy, reports every branch
 /// in declaration order on `step.join`, and turns a panicking branch into a
 /// failed branch instead of unwinding through the job thread.
-#[test]
 fn parallel_join_policy_decides_the_block_from_its_branches() {
     let cases = [
         ("all, no branches", json!({"mode": "all"}), "", true),
@@ -375,7 +275,6 @@ fn parallel_join_policy_decides_the_block_from_its_branches() {
 /// `fan_out:` runs one worker per item under the `max_workers` cap and
 /// collects outputs in item order (not completion order) under both the step
 /// id and the `fan_in.collect` alias.
-#[test]
 fn fan_out_collects_outputs_in_item_order_within_the_worker_cap() {
     let items: Vec<Value> = [120, 0, 40, 40, 40, 40]
         .iter()
@@ -409,7 +308,6 @@ fn fan_out_collects_outputs_in_item_order_within_the_worker_cap() {
 
 /// `fan_in.join` judges the collected workers; a failed or panicked worker is
 /// collected as `null` and counted on `fanin.joined`.
-#[test]
 fn fan_in_join_policy_decides_the_block_from_its_workers() {
     let cases = [
         ("all, no workers", json!({"mode": "all"}), "", true),
@@ -551,7 +449,6 @@ fn fan_in_join_policy_decides_the_block_from_its_workers() {
 /// match, reports a loop that exhausted its budget without converging, stops
 /// at the first failed body, and refuses more items than `max_iterations`
 /// before running any of them.
-#[test]
 fn loop_iterates_until_break_failure_or_budget() {
     let stops = |values: &[bool]| -> Vec<Value> {
         values
@@ -613,7 +510,6 @@ fn loop_iterates_until_break_failure_or_budget() {
 /// `JobExecution` naming `fan_out.items` or `loop.items`, and no worker runs.
 /// A JSON array still parses, including one that holds an object, and a bare
 /// `A, B` string still splits on the comma.
-#[test]
 fn items_expression_rejects_non_array_json() {
     let rejected = [
         ("null", Value::Null),
@@ -693,7 +589,6 @@ fn items_expression_rejects_non_array_json() {
 /// A step whose `when:` guard is false is ordinary control flow and logs its
 /// skip at INFO; a skip that is not a guard decision, such as a resumed step,
 /// stays at WARN so the operational feed still shows it.
-#[test]
 fn when_false_step_skips_log_below_warn_and_other_skips_keep_warn() {
     // Tracing callsite interest is shared by parallel libtest bodies. Keep
     // this capture in its own process while the parent suite stays parallel.
@@ -947,6 +842,212 @@ fn assert_empty_join_resume(
     );
 }
 
+/// Ordinary resume keeps the seeded conflict, and step recovery replaces it
+/// with the newer one. Final-recovery invalidation is covered by
+/// `final_recovery_resume_checkpoints_the_latest_conflict_diagnostics`.
+fn incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpoint() {
+    use orbit_common::{ConflictedFile, RecoverableVcsConflict};
+    use orbit_types::workflow::activity_job::JobV2StepBody;
+
+    struct DiagnosticHost {
+        state: Mutex<PipelineState>,
+        conflict: Mutex<Option<RecoverableVcsConflict>>,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl orbit_engine::test_support::NullRuntimeHost for DiagnosticHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _: &Value,
+            _: &Value,
+            _: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.calls.lock().unwrap().push(action.to_string());
+            match action {
+                "probe_rebase" => {
+                    if let Some(conflict) = self.conflict.lock().unwrap().take() {
+                        return Err(DispatchError::RecoverableVcsConflict(Box::new(conflict)));
+                    }
+                    Ok(json!({"rebased": true}))
+                }
+                "resolve_conflict" => Ok(json!({})),
+                _ => panic!("unexpected action {action}"),
+            }
+        }
+
+        fn checkpoint_step_diagnostic(
+            &self,
+            _: &str,
+            step_id: &str,
+            output: &Value,
+        ) -> Result<(), DispatchError> {
+            self.state
+                .lock()
+                .unwrap()
+                .record_pipeline_output(step_id, output.clone());
+            Ok(())
+        }
+
+        fn checkpoint_step(
+            &self,
+            _: &str,
+            index: u32,
+            step_id: &str,
+            output: &Value,
+            _: &BTreeMap<String, Value>,
+        ) -> Result<(), DispatchError> {
+            let mut state = self.state.lock().unwrap();
+            state.record_step(index, JobRunState::Success, Some(output.clone()), None);
+            state.record_pipeline_output(step_id, output.clone());
+            Ok(())
+        }
+    }
+
+    let conflict = |path: &str, resolvable: bool| RecoverableVcsConflict {
+        operation: "git_rebase".into(),
+        original_base_sha: "original".into(),
+        target_base_sha: "target".into(),
+        conflicting_paths: vec![path.into()],
+        conflicting_files: vec![ConflictedFile {
+            path: path.into(),
+            deterministically_resolvable: resolvable,
+        }],
+        diagnostic: "stopped rebase".into(),
+    };
+    for new_conflict in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let run_id = "diagnostic-resume";
+        let (writer, _, _) = build_writer_and_sinks(root.path(), run_id);
+        let mut job = job_asset(json!([{
+            "id": "sync_base",
+            // A custom action reaches the stub host; the built-in
+            // git_rebase dispatches the real VCS implementation instead.
+            "spec": {"type": "deterministic", "action": "probe_rebase", "config": {}},
+        }]));
+        let host = DiagnosticHost {
+            state: Mutex::new(PipelineState::new(
+                run_id.into(),
+                "graph_fixture".into(),
+                json!({}),
+            )),
+            conflict: Mutex::new(Some(conflict("old.rs", false))),
+            calls: Mutex::new(Vec::new()),
+        };
+        let stopped = execute_job_with_resume(&job, json!({}), run_id, writer.clone(), &host, None);
+        assert!(
+            matches!(stopped, Err(DispatchError::RecoverableVcsConflict(_))),
+            "initial conflict must checkpoint diagnostics: {stopped:?}"
+        );
+        let mut resume = host.state.lock().unwrap().clone();
+        assert!(
+            resume.step_states.is_empty(),
+            "diagnostics do not certify completion"
+        );
+        assert!(
+            resume.step_outputs.is_empty(),
+            "diagnostics are not usable checkpoints"
+        );
+        assert_eq!(
+            resume.pipeline["sync_base"]["conflicting_paths"],
+            json!(["old.rs"])
+        );
+        assert_eq!(
+            resume.pipeline["sync_base"]["conflicting_files"],
+            json!([{
+                "path": "old.rs", "deterministically_resolvable": false,
+            }])
+        );
+        // A persisted failed output may contain other fields; none may
+        // become a usable checkpoint or survive into the success output.
+        resume.pipeline["sync_base"]["failed_only"] = json!("discard me");
+        *host.state.lock().unwrap() = resume.clone();
+        host.calls.lock().unwrap().clear();
+
+        let mut reads_incomplete = job.clone();
+        let JobV2StepBody::Target(target) = &mut reads_incomplete.steps[0].body else {
+            panic!("target step");
+        };
+        target.default_input = Some(json!({"prior": "{{ steps.sync_base.output }}"}));
+        let error = execute_job_with_resume(
+            &reads_incomplete,
+            json!({}),
+            run_id,
+            writer.clone(),
+            &host,
+            Some(&resume),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, DispatchError::JobExecution(ref message) if message.contains("no data recorded for step 'sync_base'")),
+            "incomplete output stays outside the template pipeline: {error}"
+        );
+        assert!(host.calls.lock().unwrap().is_empty());
+        assert!(host.state.lock().unwrap().step_states.is_empty());
+
+        if new_conflict {
+            *host.conflict.lock().unwrap() = Some(conflict("new.rs", true));
+            job.steps[0].recovery_activity = Some("resolve_conflict".into());
+            job.steps[0].resolved_recovery_activity = Some(ActivityV2 {
+                description: String::new(),
+                input_schema_json: Value::Null,
+                output_schema_json: Value::Null,
+                fs_profile: None,
+                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                    action: "resolve_conflict".into(),
+                    config: json!({}),
+                }),
+            });
+        }
+        let (resumed_writer, _, _) = build_writer_and_sinks(root.path(), run_id);
+        let outcome = execute_job_with_resume(
+            &job,
+            json!({}),
+            run_id,
+            resumed_writer.clone(),
+            &host,
+            Some(&resume),
+        )
+        .unwrap();
+        assert!(outcome.success);
+        assert_eq!(
+            *host.calls.lock().unwrap(),
+            if new_conflict {
+                vec!["probe_rebase", "resolve_conflict", "probe_rebase"]
+            } else {
+                vec!["probe_rebase"]
+            },
+            "an incomplete sync_base must execute; a fresh conflict must recover and rerun"
+        );
+        let expected = conflict(if new_conflict { "new.rs" } else { "old.rs" }, new_conflict);
+        let expected_output = json!({
+            "rebased": true,
+            "conflicting_paths": expected.conflicting_paths,
+            "conflicting_files": expected.conflicting_files,
+        });
+        assert_eq!(outcome.pipeline["sync_base"], expected_output);
+        let state = host.state.lock().unwrap();
+        assert_eq!(
+            state.pipeline_step_output("sync_base"),
+            Some(&expected_output)
+        );
+        assert_eq!(state.step_outputs.get(&0), Some(&expected_output));
+        assert_eq!(state.step_states.get(&0), Some(&JobRunState::Success));
+        assert!(
+            resumed_writer
+                .events_snapshot()
+                .unwrap()
+                .iter()
+                .any(|event| matches!(
+                    &event.kind, V2AuditEventKind::StepStarted { step_id } if step_id == "sync_base"
+                ))
+        );
+        assert!(!resumed_writer.events_snapshot().unwrap().iter().any(|event| matches!(
+            &event.kind, V2AuditEventKind::StepSkipped { step_id, .. } if step_id == "sync_base"
+        )));
+    }
+}
+
 /// Runs the single `probe` action every graph fixture uses. Its input says
 /// what to do: sleep `sleep_ms`, then panic, fail or echo the input back.
 #[derive(Default)]
@@ -975,7 +1076,7 @@ impl GraphHost {
     }
 }
 
-impl RuntimeHost for GraphHost {
+impl orbit_engine::test_support::NullRuntimeHost for GraphHost {
     fn checkpoint_step(
         &self,
         _run_id: &str,
@@ -1036,7 +1137,6 @@ impl RuntimeHost for GraphHost {
 /// gets one `step_failure_recovery` and one re-attempt, and only then fails
 /// the run. Each reviewer dispatch — and nothing else — reports its start
 /// and end, so backoff and recovery are never charged as review minutes.
-#[test]
 fn the_shipped_review_step_retries_then_recovers_a_failing_reviewer() {
     for (failures, succeeds, expected_calls) in [
         (1, true, vec![REVIEWER, REVIEWER]),
@@ -1112,10 +1212,9 @@ pub(crate) const RECOVERY: &str = "step_failure_recovery";
 
 /// Both dispatch errors and unsuccessful CLI outcomes bypass recovery when
 /// the provider is unusable; the CLI-outcome case lives in v2_cli_agent.
-#[test]
 fn provider_unavailable_dispatch_errors_do_not_attempt_recovery() {
     struct UnavailableHost;
-    impl RuntimeHost for UnavailableHost {
+    impl orbit_engine::test_support::NullRuntimeHost for UnavailableHost {
         fn run_deterministic(
             &self,
             action: &str,
@@ -1178,7 +1277,6 @@ fn provider_unavailable_dispatch_errors_do_not_attempt_recovery() {
 /// follows, and the job has final recovery plus a failure activity. None of
 /// the retry, step recovery, commit, or final recovery dispatches run. The
 /// failure activity is invoked once with `task_blocked_by_agent` and the kind.
-#[test]
 fn an_implementer_blocker_ends_implement_one_without_recovery() {
     let marker = orbit_types::workflow::TASK_BLOCKED_BY_AGENT_MARKER;
     let host = ScriptedHost {
@@ -1233,7 +1331,7 @@ fn an_implementer_blocker_ends_implement_one_without_recovery() {
     assert!(
         events.iter().any(|event| matches!(
             &event.kind,
-            V2AuditEventKind::StepFinished { step_id, outcome, error_message }
+            V2AuditEventKind::StepFinished { step_id, outcome, error_message, .. }
                 if step_id == "implement_one"
                     && outcome == "failed"
                     && error_message.as_deref().is_some_and(|message| {
@@ -1250,7 +1348,6 @@ fn an_implementer_blocker_ends_implement_one_without_recovery() {
 /// `task_blocked_by_agent`. The failure activity receives that code, so the
 /// handoff keeps the candidate without blocking the task, and a claimed
 /// leaf's settlement reads it as transient.
-#[test]
 fn an_upgrade_refusal_blocker_ends_the_step_as_upgrade_pending() {
     for kind in [
         "upgrade_admission_refused",
@@ -1311,7 +1408,6 @@ fn an_upgrade_refusal_blocker_ends_the_step_as_upgrade_pending() {
 /// A reviewer meets the same refusal as the implementer, so an upgrade
 /// refusal ends any agent step. A task blocker stays the implementer's: on
 /// another step it is not a stop.
-#[test]
 fn an_upgrade_refusal_ends_any_step_but_a_task_blocker_only_the_implementers() {
     for (kind, stops) in [("conflict", false), ("upgrade_admission_refused", true)] {
         let host = ScriptedHost {
@@ -1349,7 +1445,6 @@ fn an_upgrade_refusal_ends_any_step_but_a_task_blocker_only_the_implementers() {
 /// A blocker shape that is not `{kind, evidence}` stays ordinary success, and
 /// a resolved `agent_implement` target honors a well-formed blocker even when
 /// the step id is not `implement_one`.
-#[test]
 fn a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is() {
     let malformed = ScriptedHost {
         implement_output: json!({
@@ -1411,7 +1506,6 @@ fn a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is() {
 /// delivery steps after it never run, so nothing is committed, pushed or
 /// opened for a handoff that cannot be accepted. Well-formed findings, and
 /// output with no findings, still deliver.
-#[test]
 fn malformed_unfiled_findings_fail_implement_one_before_delivery() {
     let malformed = [
         json!(["The owner refused this. It needs a follow-up."]),
@@ -1497,7 +1591,7 @@ impl ScriptedHost {
     }
 }
 
-impl RuntimeHost for ScriptedHost {
+impl orbit_engine::test_support::NullRuntimeHost for ScriptedHost {
     fn run_deterministic(
         &self,
         action: &str,
@@ -1667,7 +1761,7 @@ impl ReviewerHost {
     }
 }
 
-impl RuntimeHost for ReviewerHost {
+impl orbit_engine::test_support::NullRuntimeHost for ReviewerHost {
     fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
         Ok(None)
     }
@@ -1727,12 +1821,11 @@ impl RuntimeHost for ReviewerHost {
 
 /// Execute the shipped prefix, so an admission refusal must stop the graph
 /// before `implement_one`, even when that step has failure recovery enabled.
-#[test]
 fn exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation() {
     struct ExhaustedHost {
         calls: Mutex<Vec<String>>,
     }
-    impl RuntimeHost for ExhaustedHost {
+    impl orbit_engine::test_support::NullRuntimeHost for ExhaustedHost {
         fn run_deterministic(
             &self,
             action: &str,
@@ -1807,7 +1900,6 @@ fn exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation()
     );
 }
 
-#[test]
 fn fan_in_retains_position_aligned_errors_through_successful_join_and_resume() {
     let mut fan = fan_out_step(3, json!({"mode": "any"}));
     fan["fan_in"]["errors"] = json!("worker_errors");
@@ -1839,7 +1931,6 @@ fn fan_in_retains_position_aligned_errors_through_successful_join_and_resume() {
     );
 }
 
-#[test]
 fn a_skipped_fan_out_does_not_overwrite_a_siblings_collection_on_resume() {
     let mut empty = fan_out_step(1, json!({"mode": "all"}));
     empty["id"] = json!("empty");
@@ -1876,4 +1967,245 @@ fn a_skipped_fan_out_does_not_overwrite_a_siblings_collection_on_resume() {
             );
         }
     }
+}
+
+fn leaf_completion_records_file_and_store_waits_without_leaking_between_steps() {
+    use orbit_common::fs::file_lock::{FileLockOptions, acquire_exclusive_file_lock};
+    use orbit_store::Store;
+    struct WaitHost {
+        root: PathBuf,
+        store: Store,
+    }
+    impl orbit_engine::test_support::NullRuntimeHost for WaitHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _: &Value,
+            _: &Value,
+            _: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            match action {
+                "file_wait" | "failed_wait" => {
+                    let path = self.root.join("held.lock");
+                    let _held = acquire_exclusive_file_lock(
+                        &path,
+                        "fixture holder",
+                        FileLockOptions::default(),
+                    )
+                    .unwrap();
+                    let refusal = acquire_exclusive_file_lock(
+                        &path,
+                        "fixture waiter",
+                        FileLockOptions {
+                            timeout: Duration::from_millis(25),
+                            ..FileLockOptions::default()
+                        },
+                    )
+                    .unwrap_err();
+                    assert_eq!(refusal.kind(), std::io::ErrorKind::TimedOut);
+                    if action == "failed_wait" {
+                        return Err(DispatchError::DeterministicActionFailed {
+                            action: action.into(),
+                            message: "injected refusal".into(),
+                        });
+                    }
+                }
+                "store_wait" => {
+                    let connection = self.store.connection();
+                    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+                    let (waiting_tx, waiting_rx) = std::sync::mpsc::channel();
+                    let holder = std::thread::spawn(move || {
+                        let _held = connection.lock().unwrap();
+                        ready_tx.send(()).unwrap();
+                        waiting_rx.recv().unwrap();
+                        std::thread::sleep(Duration::from_millis(25));
+                    });
+                    ready_rx.recv().unwrap();
+                    waiting_tx.send(()).unwrap();
+                    self.store.with_transaction(|_| Ok(())).unwrap();
+                    holder.join().unwrap();
+                }
+                _ => {}
+            }
+            Ok(json!({}))
+        }
+    }
+    for fail in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let host = WaitHost {
+            root: root.path().into(),
+            store: Store::open_in_memory().unwrap(),
+        };
+        let (writer, _, _) = build_writer_and_sinks(root.path(), "lock-wait-fixture");
+        let mut steps = vec!["file_wait", "store_wait", "quiet"];
+        if fail {
+            steps.push("failed_wait");
+        }
+        let job = job_asset(json!(
+            steps
+                .iter()
+                .map(|id| json!({
+                    "id": id, "spec": {"type": "deterministic", "action": id, "config": {}}
+                }))
+                .collect::<Vec<_>>()
+        ));
+        let outcome = execute_job_with_resume(
+            &job,
+            json!({}),
+            "lock-wait-fixture",
+            writer.clone(),
+            &host,
+            None,
+        );
+        if fail {
+            assert!(outcome.is_err());
+        } else {
+            assert!(outcome.unwrap().success);
+        }
+        let finished = writer
+            .events_snapshot()
+            .unwrap()
+            .into_iter()
+            .filter_map(|event| match event.kind {
+                V2AuditEventKind::StepFinished {
+                    step_id,
+                    lock_wait_ms,
+                    ..
+                } => Some((step_id, lock_wait_ms)),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        for id in ["file_wait", "store_wait"] {
+            assert!(finished[id].unwrap() > 0, "{id}: {finished:?}");
+        }
+        assert_eq!(
+            finished["quiet"],
+            Some(0),
+            "waits must not leak between leaves"
+        );
+        if fail {
+            assert!(finished["failed_wait"].unwrap() >= 25);
+        }
+    }
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn runtime_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "runtime_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_args",
+                a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_args,
+            ),
+            (
+                "parallel_join_policy_decides_the_block_from_its_branches",
+                parallel_join_policy_decides_the_block_from_its_branches,
+            ),
+            (
+                "fan_out_collects_outputs_in_item_order_within_the_worker_cap",
+                fan_out_collects_outputs_in_item_order_within_the_worker_cap,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn runtime_contracts_2() {
+    crate::git_fixture::isolated(module_path!(), "runtime_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "fan_in_join_policy_decides_the_block_from_its_workers",
+                fan_in_join_policy_decides_the_block_from_its_workers,
+            ),
+            (
+                "loop_iterates_until_break_failure_or_budget",
+                loop_iterates_until_break_failure_or_budget,
+            ),
+            (
+                "items_expression_rejects_non_array_json",
+                items_expression_rejects_non_array_json,
+            ),
+            (
+                "when_false_step_skips_log_below_warn_and_other_skips_keep_warn",
+                when_false_step_skips_log_below_warn_and_other_skips_keep_warn,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn runtime_contracts_3() {
+    crate::git_fixture::isolated(module_path!(), "runtime_contracts_3", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpoint",
+                incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpoint,
+            ),
+            (
+                "the_shipped_review_step_retries_then_recovers_a_failing_reviewer",
+                the_shipped_review_step_retries_then_recovers_a_failing_reviewer,
+            ),
+            (
+                "provider_unavailable_dispatch_errors_do_not_attempt_recovery",
+                provider_unavailable_dispatch_errors_do_not_attempt_recovery,
+            ),
+            (
+                "an_implementer_blocker_ends_implement_one_without_recovery",
+                an_implementer_blocker_ends_implement_one_without_recovery,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn runtime_contracts_4() {
+    crate::git_fixture::isolated(module_path!(), "runtime_contracts_4", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "an_upgrade_refusal_blocker_ends_the_step_as_upgrade_pending",
+                an_upgrade_refusal_blocker_ends_the_step_as_upgrade_pending,
+            ),
+            (
+                "an_upgrade_refusal_ends_any_step_but_a_task_blocker_only_the_implementers",
+                an_upgrade_refusal_ends_any_step_but_a_task_blocker_only_the_implementers,
+            ),
+            (
+                "a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is",
+                a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is,
+            ),
+            (
+                "malformed_unfiled_findings_fail_implement_one_before_delivery",
+                malformed_unfiled_findings_fail_implement_one_before_delivery,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn runtime_contracts_5() {
+    crate::git_fixture::isolated(module_path!(), "runtime_contracts_5", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation",
+                exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation,
+            ),
+            (
+                "fan_in_retains_position_aligned_errors_through_successful_join_and_resume",
+                fan_in_retains_position_aligned_errors_through_successful_join_and_resume,
+            ),
+            (
+                "a_skipped_fan_out_does_not_overwrite_a_siblings_collection_on_resume",
+                a_skipped_fan_out_does_not_overwrite_a_siblings_collection_on_resume,
+            ),
+            (
+                "leaf_completion_records_file_and_store_waits_without_leaking_between_steps",
+                leaf_completion_records_file_and_store_waits_without_leaking_between_steps,
+            ),
+        ]);
+    });
 }

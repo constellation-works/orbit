@@ -1,5 +1,5 @@
 //! [ORB-14173] A replica checkout schedules its host-local worktree GC on the
-//! host clock, and nothing else.
+//! host clock, and [ORB-16354] its host-local store GC. Nothing else.
 //!
 //! The fixture host owns one owner checkout and one replica checkout of a
 //! workspace owned by another machine. Both carry the seeded routines. The
@@ -42,6 +42,296 @@ fn held_owner_is_settled_before_fixture_teardown_on_assertion_failure() {
         return;
     }
     exercise_routine_settlement(true);
+}
+
+/// [ORB-16354] A replicated workspace's store-gc routine loads, fires, and
+/// prunes the local host store. The remote owner has no route, the run never
+/// names that owner, and the owner checkout's own workspace-scoped rows stay.
+#[test]
+fn replica_store_gc_prunes_the_local_store_and_does_not_contact_the_owner() {
+    if !isolated("replica_store_gc_prunes_the_local_store_and_does_not_contact_the_owner") {
+        return;
+    }
+    const OLD: &str = "2020-01-01T00:00:00+00:00";
+
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let owner_repo = temp.path().join("owner");
+    let replica_repo = temp.path().join("replica");
+    fs::create_dir_all(&home).expect("create home");
+    crate::git_repo::SeededRepo::new(&owner_repo)
+        .readme("# replica store gc\n")
+        .build();
+    crate::git_repo::SeededRepo::new(&replica_repo)
+        .readme("# replica store gc\n")
+        .build();
+    run_success(
+        &owner_repo,
+        &home,
+        &[
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "replica-store-gc-host",
+            "--task-prefix",
+            "RS",
+        ],
+    );
+    fixture_crew::configure_sol(&home.join(".orbit"));
+    run_success(&owner_repo, &home, &["workspace", "init", "--name", OWNER]);
+    run_success(
+        &replica_repo,
+        &home,
+        &[
+            "workspace",
+            "init",
+            "--name",
+            REPLICA,
+            "--role",
+            "replica",
+            "--owner",
+            REMOTE_OWNER,
+        ],
+    );
+    let mut runs = RoutineRuns::new(temp, &home, &[&owner_repo, &replica_repo]);
+    run_success(
+        &owner_repo,
+        &home,
+        &[
+            "config",
+            "set",
+            "workflow.resource_throttle.enabled",
+            "false",
+            "--global",
+        ],
+    );
+    // No destination is registered for the replica's owner. A run that tried
+    // to call that machine would have nothing to call.
+    let hosts = home.join(".orbit/hosts.toml");
+    if let Ok(registered) = fs::read_to_string(&hosts) {
+        assert!(
+            !registered.contains(REMOTE_OWNER),
+            "fixture registered a route to the owner: {registered}"
+        );
+    }
+
+    enable_routine(&replica_repo, "store_gc.yaml");
+    enable_routine(&replica_repo, "ship_sweep.yaml");
+    fs::write(
+        replica_repo.join(".orbit/routines/store_gc_on_delivery.yaml"),
+        "schemaVersion: 1\nname: store-gc-on-delivery\nenabled: true\ntrigger:\n  \
+         deliveries_landed:\n    branch: main\n    threshold: 1\n    max_wait_minutes: 60\n    \
+         coverage: landed_code_review_v1\n    max_items: 1\ntarget: job:store_gc_pipeline\n",
+    )
+    .expect("write delivery-triggered store gc");
+
+    let replica_id = workspace_id(&replica_repo);
+    let owner_id = workspace_id(&owner_repo);
+    let now = Utc::now().to_rfc3339();
+    {
+        let database = home.join(".orbit/orbit.db");
+        let db = rusqlite::Connection::open(&database)
+            .unwrap_or_else(|error| panic!("open {}: {error}", database.display()));
+        for (execution_id, at) in [("old-command", OLD), ("kept-command", now.as_str())] {
+            db.execute(
+                "INSERT INTO audit_events (execution_id, timestamp, command, role, status, \
+                     exit_code, duration_ms, working_directory, pid) \
+                 VALUES (?1, ?2, 'task', 'codex', 'success', 0, 1, '.', 1)",
+                rusqlite::params![execution_id, at],
+            )
+            .expect("seed command audit");
+        }
+        for (workspace_id, event_id, at) in [
+            (replica_id.as_str(), "replica-old", OLD),
+            (replica_id.as_str(), "replica-kept", now.as_str()),
+            (owner_id.as_str(), "owner-old", OLD),
+        ] {
+            db.execute(
+                "INSERT INTO v2_audit_events (workspace_id, event_id, source, schema_version, \
+                     event_type, ts, run_id, agent_identity, payload_json) \
+                 VALUES (?1, ?2, 'loop_event', 1, 'tool.call.result', ?3, 'jrun-seed', 'codex', \
+                     '{}')",
+                rusqlite::params![workspace_id, event_id, at],
+            )
+            .expect("seed run audit");
+        }
+        for (run_id, workspace_id) in [
+            ("jrun-replica-old", replica_id.as_str()),
+            ("jrun-owner-old", owner_id.as_str()),
+        ] {
+            // Leave pid unset. RoutineRuns treats a terminal row whose pid is
+            // still this process as a live worker and fails fixture teardown.
+            db.execute(
+                "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, \
+                     scheduled_at, started_at, finished_at, duration_ms, created_at) \
+                 VALUES (?1, ?2, 'fixture', 1, 'success', ?3, ?3, ?3, 1, ?3)",
+                rusqlite::params![run_id, workspace_id, OLD],
+            )
+            .expect("seed run");
+            db.execute(
+                "INSERT INTO job_run_states (workspace_id, run_id, pipeline_state_json) \
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![workspace_id, run_id, "{\"seed\":true}"],
+            )
+            .expect("seed run state");
+        }
+    }
+
+    let replica_gc = format!("store-gc-{REPLICA}");
+    let owner_gc = format!("store-gc-{OWNER}");
+    let replica_ship = format!("ship-sweep-{REPLICA}");
+    let listed = run_json(&owner_repo, &home, &["routine", "list", "--json"]);
+    let scheduled = names(&listed["routines"]);
+    assert!(
+        scheduled.contains(&replica_gc),
+        "replica store GC did not load: {listed}"
+    );
+    assert!(
+        scheduled.contains(&owner_gc),
+        "owner store GC left the schedulable list: {listed}"
+    );
+    let owner_only_names = names(&listed["owner_only"]);
+    assert!(
+        !owner_only_names.contains(&replica_gc),
+        "replica store GC was treated as owner work: {listed}"
+    );
+    assert!(
+        !owner_only_names.contains(&owner_gc),
+        "owner store GC was treated as owner work: {listed}"
+    );
+    for name in [&replica_ship, "store-gc-on-delivery"] {
+        assert!(
+            owner_only_names.iter().any(|row| row == name),
+            "{name} was not kept owner-only: {listed}"
+        );
+    }
+
+    let baseline = sweep(&owner_repo, &home);
+    runs.retain_sweep(&baseline);
+    assert_owner_work_refused(&baseline, &replica_ship);
+    assert_owner_work_refused(&baseline, "store-gc-on-delivery");
+    make_routine_due(&home, &replica_gc);
+
+    let fired = sweep(&owner_repo, &home);
+    runs.retain_sweep(&fired);
+    assert_owner_work_refused(&fired, &replica_ship);
+    assert_owner_work_refused(&fired, "store-gc-on-delivery");
+    let owner_row = routine_report(&fired, &owner_gc).expect("owner store GC row");
+    assert_eq!(owner_row["action"], "skipped", "{owner_row}");
+    assert_eq!(
+        owner_row["reason"], "disabled_in_definition",
+        "owner store GC scheduling changed: {owner_row}"
+    );
+    let replica_row = routine_report(&fired, &replica_gc).expect("replica store GC row");
+    assert!(
+        matches!(
+            replica_row["action"].as_str(),
+            Some("fired" | "retry_fired")
+        ),
+        "replica store GC did not dispatch: {replica_row}"
+    );
+    let run_id = replica_row["run_id"]
+        .as_str()
+        .expect("fired replica store GC carries a run id")
+        .to_string();
+    let replica_orbit_dir = replica_repo
+        .canonicalize()
+        .expect("resolve replica checkout")
+        .join(".orbit");
+    let run = wait_for_terminal_run(&replica_repo, &home, &run_id);
+    assert_eq!(run["run"]["state"], "success", "{run}");
+    assert_eq!(
+        run["pipeline_state"]["initial_input"]["__routine_dispatch_orbit_dir"],
+        replica_orbit_dir.to_string_lossy().as_ref(),
+        "{run}"
+    );
+    let sweep_report = &run["pipeline_state"]["pipeline"]["sweep"];
+    assert_eq!(sweep_report["audit"]["apply"], true, "{sweep_report}");
+    assert_eq!(sweep_report["runs"]["apply"], true, "{sweep_report}");
+    assert!(
+        sweep_report["audit"]["tables"][0]["rows_removed"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1,
+        "local command audit was not pruned: {sweep_report}"
+    );
+    let blob_root = sweep_report["audit"]["blobs"]["root"]
+        .as_str()
+        .expect("blob root");
+    assert!(
+        blob_root.contains(
+            replica_orbit_dir
+                .join("state/audit")
+                .to_string_lossy()
+                .as_ref()
+        ),
+        "store GC swept a directory outside the replica checkout: {blob_root}"
+    );
+    assert!(
+        !run["pipeline_state"].to_string().contains(REMOTE_OWNER),
+        "store GC run recorded the owner: {run}"
+    );
+    if let Ok(registered) = fs::read_to_string(&hosts) {
+        assert!(
+            !registered.contains(REMOTE_OWNER),
+            "store GC registered a route to the owner: {registered}"
+        );
+    }
+
+    let database = home.join(".orbit/orbit.db");
+    let db = rusqlite::Connection::open(&database)
+        .unwrap_or_else(|error| panic!("reopen {}: {error}", database.display()));
+    let count = |sql: &str| -> i64 {
+        db.query_row(sql, [], |row| row.get(0))
+            .unwrap_or_else(|error| panic!("{sql}: {error}"))
+    };
+    assert_eq!(
+        count("SELECT COUNT(*) FROM audit_events WHERE execution_id = 'old-command'"),
+        0,
+        "old host command audit survived"
+    );
+    assert_eq!(
+        count("SELECT COUNT(*) FROM audit_events WHERE execution_id = 'kept-command'"),
+        1,
+        "command audit inside the window was deleted"
+    );
+    assert_eq!(
+        count("SELECT COUNT(*) FROM v2_audit_events WHERE event_id = 'replica-old'"),
+        0
+    );
+    assert_eq!(
+        count("SELECT COUNT(*) FROM v2_audit_events WHERE event_id = 'replica-kept'"),
+        1
+    );
+    assert_eq!(
+        count("SELECT COUNT(*) FROM v2_audit_events WHERE event_id = 'owner-old'"),
+        1,
+        "the owner checkout's run audit was pruned"
+    );
+    assert_eq!(
+        count("SELECT COUNT(*) FROM job_run_states WHERE run_id = 'jrun-replica-old'"),
+        0
+    );
+    assert_eq!(
+        count(
+            "SELECT COUNT(*) FROM job_runs WHERE run_id = 'jrun-replica-old' \
+             AND archived_at IS NOT NULL"
+        ),
+        1,
+        "the replica run row was deleted instead of archived"
+    );
+    assert_eq!(
+        count("SELECT COUNT(*) FROM job_run_states WHERE run_id = 'jrun-owner-old'"),
+        1,
+        "the owner checkout's run state was pruned"
+    );
+    assert_eq!(
+        count(
+            "SELECT COUNT(*) FROM job_runs WHERE run_id = 'jrun-owner-old' AND archived_at IS NULL"
+        ),
+        1
+    );
+    drop(runs);
 }
 
 fn exercise_routine_settlement(assertion_failure: bool) {
@@ -431,7 +721,12 @@ fn replica_auto_task_definition_mutations_refuse_without_changing_local_state() 
         vec!["auto-task", "mint", "qa-sweep", "--json"],
     ] {
         let before = auto_task_state_snapshot(&replica_repo, &home);
-        let output = command(&replica_repo, &home)
+        let mut mutation = command(&replica_repo, &home);
+        if args[1] == "delete" {
+            // Governed `operator`: an operator is still refused on a replica.
+            mutation.env("ORBIT_OPERATOR", "1");
+        }
+        let output = mutation
             .args(&args)
             .output()
             .expect("run replica auto-task mutation");
@@ -549,6 +844,17 @@ fn seed_replica_worktree(repo: &Path, home: &Path) -> PathBuf {
         ],
     );
     worktree
+}
+
+fn workspace_id(repo: &Path) -> String {
+    let config: Value = serde_yaml::from_slice(
+        &fs::read(repo.join(".orbit/config.yaml")).expect("read workspace config"),
+    )
+    .expect("parse workspace config");
+    config["workspace_id"]
+        .as_str()
+        .expect("workspace_id")
+        .to_owned()
 }
 
 fn enable_routine(repo: &Path, file: &str) {

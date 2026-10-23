@@ -201,6 +201,7 @@ Every provider id, and what it can run today:
 | `cursor` | `cursor-agent` | Not supported | Active |
 | `pi` | `pi` | `low`–`max`, via `--thinking` | Active |
 | `opencode` | `opencode run` | `high`, `max`, via `--variant` | Active |
+| `muse` | `muse exec` | `low`–`max`, via `--reasoning-effort` | Active on macOS only |
 | `gemini` | `gemini` | Not supported | Legacy |
 | `ollama` | — | Not supported | No shipped crew or executor |
 | `openai_compat` | — | Not supported | No CLI runtime; dispatch fails |
@@ -209,6 +210,10 @@ Every provider id, and what it can run today:
 and `orbit init` never seeds one. A crew that names either id still loads, but
 dispatch refuses it. Orbit never re-points the run at a family that has an
 executor.
+
+Muse Code is the `muse` lane. On macOS, a crew can name `provider = "muse"`
+and `model = "muse-spark-1.3"`; `orbit init` detects its `muse` binary. Orbit
+does not dispatch this executor on Linux or native Windows.
 
 Orbit ships one more executor, **`local-shell`**, which is not a provider. It
 runs deterministic local commands for `local_shell` steps. It carries no model,
@@ -247,7 +252,7 @@ Each snippet is a complete example you can select and copy, with or without
 JavaScript.
 
 <div class="orbit-setup-explorer not-content">
-<p class="ose-lede">These are <strong>examples</strong>, not availability guarantees. Orbit passes <code>model</code> to the provider CLI verbatim; whether your account can run it is up to that provider. Orbit does not read, store, or send credentials. Sign in to each CLI with its vendor's instructions first.</p>
+<p class="ose-lede">These are <strong>examples</strong>, not availability guarantees. Orbit passes <code>model</code> to the provider CLI verbatim; whether your account can run it is up to that provider. Sign in to each CLI with its vendor's instructions first. Orbit can forward credentials through configured environment variables, including a global crew's <code>env</code> list; configure variable names, not secret values, in <code>config.toml</code>.</p>
 <fieldset class="ose-field">
 <legend>1. Executor</legend>
 <div class="ose-choices">
@@ -617,7 +622,8 @@ CLI's own built-in tools stay with that CLI's harness, inside the OS sandbox.
 ## Crews
 
 A **crew** is a named provider and model, with an optional reasoning `effort`.
-Activities don't choose a model. A task names a crew, and the run resolves it
+The selected crew overrides an activity's provider, model and effort baseline.
+A task names a crew, and the run resolves it
 at dispatch: an explicit crew on the activity input first, then the task's
 `crew` field, then `[workflow] default_crew`.
 
@@ -639,10 +645,24 @@ downgrades it to the nearest supported value, and `orbit config set` refuses
 to save a value that load would drop. The per-provider sets are in
 [Configuration](../../reference/config/#reasoning-effort).
 
-System activities Orbit creates at runtime have no crew of their own. The task
-pilot draws from the `low` complexity pool, and step-failure and PR conflict
-recovery from `medium`, once per run; an empty pool falls back to the default
-crew. Recovery never inherits a failed task's crew.
+System activities Orbit creates at runtime have no crew of their own. A task
+pilot uses `workflow.purpose_crews.task_pilot` when configured, otherwise the
+`low` complexity pool; step-failure and PR conflict recovery use
+`workflow.purpose_crews.failure_recovery`, otherwise `medium`. Draws are kept
+for the run, and an empty fallback pool uses the default crew. Recovery never
+inherits a failed task's crew. See [Purpose pools](../../reference/config/#purpose-pools).
+
+With `workflow.explore.enabled` and an eligible
+`workflow.purpose_crews.explorer` pool, implementing and review-repair agents
+can ask bounded, read-only questions in their own worktree through
+`orbit.agent.invoke`. Explorers return the paths they read and cannot delegate
+again. This is separate from the operator's host investigation command,
+`orbit run agent`.
+
+`workflow.mid_run_steering.enabled` lets operator comments added after dispatch
+reach later managed prompts. A bounded checkpoint holds promotion while new
+guidance is undelivered. Both exploration and steering are off by default;
+see [Configuration](../../reference/config/).
 
 Moving work to another provider is always explicit: `orbit task update <id>
 --crew <name>`. Orbit never moves a task to a different provider on its own.

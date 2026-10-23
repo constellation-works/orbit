@@ -78,9 +78,12 @@ by default: the command returns once the run is durable, not once it finishes.
 **Crew** — a named provider-and-model assignment, defined as a `[crews.<name>]`
 table in `config.toml` (`orbit doctor providers` shows which provider CLIs this
 machine can launch). A task's `crew` selects who executes it;
-`workflow.default_crew` covers tasks that don't declare one. Tasks without a
-crew, and Orbit's own bounded activities like failure recovery and the task
-pilot, draw from `workflow.<tier>_complexity_crews` for their complexity.
+`workflow.default_crew` covers tasks that don't declare one. An unassigned
+task draws `workflow.<tier>_complexity_crews` for its complexity, then the
+default crew. An activity that names a purpose draws
+`workflow.purpose_crews.<purpose>` first; an unset pool keeps that purpose's
+earlier tier (`low` for the task pilot and auto-fix, `medium` for failure
+recovery).
 
 **Executor** — how a provider is actually invoked. Mostly infrastructure; you
 choose crews, not executors.
@@ -94,9 +97,11 @@ declared explicitly.
 
 **Routine** — a definition (`.orbit/routines/*.yaml`) pointing at a
 `job:<name>` target, with a retry and overlap policy. The trigger is cron, or
-a state predicate for task-pilot. Definitions are
-per-user checkout state and are evaluated by every host holding an owner
-checkout of that workspace.
+a state predicate (`preparation_eligible` for task-pilot,
+`finding_unverified` for finding-verification). Definitions are per-user
+checkout state. An owner checkout evaluates its routines. A replica checkout
+schedules only cron routines whose job is `worktree_gc_pipeline` or
+`store_gc_pipeline`.
 
 **Sweep** — the stateless tick. `orbit clock tick` (alias `orbit sweep`)
 evaluates due routines and auto-tasks on this host. An OS clock unit invokes

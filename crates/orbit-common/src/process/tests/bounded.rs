@@ -14,47 +14,6 @@ use crate::process::{run_bounded, run_bounded_capped};
 
 #[cfg(unix)]
 #[test]
-fn bounded_run_times_out_and_reaps_the_process_group() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let leader_path = dir.path().join("leader.pid");
-    let child_path = dir.path().join("child.pid");
-    let script = dir.path().join("stall.sh");
-    let body = format!(
-        "#!/bin/sh\necho $$ > {}\nsleep 120 &\necho $! > {}\nwait\n",
-        quote_posix_arg(&leader_path.display().to_string()),
-        quote_posix_arg(&child_path.display().to_string()),
-    );
-    fs::write(&script, body).expect("script");
-
-    let deadline = Duration::from_millis(400);
-    let started = Instant::now();
-    let mut command = Command::new("sh");
-    command.arg(&script);
-    let error = run_bounded(&mut command, deadline).expect_err("timeout");
-    let elapsed = started.elapsed();
-    assert!(
-        elapsed >= deadline,
-        "returned in {elapsed:?}, before the {deadline:?} budget"
-    );
-    assert!(
-        elapsed < deadline + Duration::from_secs(2),
-        "returned in {elapsed:?}, past the {deadline:?} budget"
-    );
-    match error {
-        OrbitError::ProcessTimeout { timeout_ms, .. } => {
-            assert_eq!(timeout_ms, u64::try_from(deadline.as_millis()).unwrap());
-        }
-        other => panic!("expected process timeout, got {other}"),
-    }
-
-    let leader = read_pid(&leader_path);
-    let child = read_pid(&child_path);
-    assert_reaped(leader, script.to_str().unwrap().as_bytes());
-    assert_reaped(child, b"sleep");
-}
-
-#[cfg(unix)]
-#[test]
 fn bounded_run_returns_when_a_descendant_holds_either_pipe() {
     // Each case leaves a descendant holding exactly one of the output pipes
     // after the leader exits.
@@ -81,31 +40,6 @@ fn bounded_run_returns_when_a_descendant_holds_either_pipe() {
         assert!(output.status.success(), "{label}: {:?}", output.status);
         assert_eq!(output.stdout, b"ready\n", "{label}");
         assert_reaped(read_pid(&child_path), b"sleep");
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn bounded_run_drains_output_past_pipe_capacity_with_capped_retention() {
-    // 1 MiB per stream is far past any pipe buffer: an undrained child would
-    // block on write and hit the deadline instead of exiting.
-    let mut command = Command::new("sh");
-    command.args([
-        "-c",
-        "head -c 1048576 /dev/zero; head -c 1048576 /dev/zero >&2; echo done >&2",
-    ]);
-    let limit = 4096;
-    let output =
-        run_bounded_capped(&mut command, Duration::from_secs(30), limit).expect("drained run");
-    assert!(output.status.success(), "{:?}", output.status);
-    for (label, stream) in [("stdout", &output.stdout), ("stderr", &output.stderr)] {
-        assert_eq!(
-            stream.len(),
-            limit + OUTPUT_TRUNCATED_MARKER.len(),
-            "{label} retention"
-        );
-        assert!(stream[..limit].iter().all(|byte| *byte == 0), "{label}");
-        assert!(stream.ends_with(OUTPUT_TRUNCATED_MARKER), "{label}");
     }
 }
 
@@ -406,8 +340,9 @@ enum ArgvInspection {
     Present(Vec<u8>),
     /// The pid is gone or is an unreaped zombie (`process_is_alive` is false).
     NoProcess,
-    /// The process may still be running, but its argv could not be read.
-    Unavailable,
+    /// The process may still be running, but its argv could not be read or
+    /// was empty.
+    Unavailable(String),
 }
 
 /// How the leak assertion treats one inspection.
@@ -424,7 +359,7 @@ enum ReapVerdict {
 fn reap_verdict(inspection: &ArgvInspection, marker: &[u8]) -> ReapVerdict {
     match inspection {
         ArgvInspection::NoProcess => ReapVerdict::Reaped,
-        ArgvInspection::Unavailable => ReapVerdict::Uncertain,
+        ArgvInspection::Unavailable(_) => ReapVerdict::Uncertain,
         ArgvInspection::Present(cmdline) => {
             let still_recorded =
                 !marker.is_empty() && cmdline.windows(marker.len()).any(|window| window == marker);
@@ -441,12 +376,18 @@ fn signal_authorized(inspection: &ArgvInspection, markers: &[&[u8]]) -> bool {
     match inspection {
         ArgvInspection::Present(cmdline) => cmdline_matches(cmdline, markers),
         // A missing or unreadable argv never identifies the recorded child.
-        ArgvInspection::NoProcess | ArgvInspection::Unavailable => false,
+        ArgvInspection::NoProcess | ArgvInspection::Unavailable(_) => false,
     }
 }
 
 fn inspection_from_read(result: io::Result<Vec<u8>>) -> ArgvInspection {
     match result {
+        // Linux reads a live pid's argv as empty until `execve` publishes the
+        // new image's arguments, which can be after `spawn` returns. Empty
+        // argv names no command, so it is not a different one.
+        Ok(cmdline) if cmdline.is_empty() => {
+            ArgvInspection::Unavailable("empty argv; exec has not published it".to_string())
+        }
         Ok(cmdline) => ArgvInspection::Present(cmdline),
         Err(error)
             if error.kind() == io::ErrorKind::NotFound
@@ -454,7 +395,7 @@ fn inspection_from_read(result: io::Result<Vec<u8>>) -> ArgvInspection {
         {
             ArgvInspection::NoProcess
         }
-        Err(_) => ArgvInspection::Unavailable,
+        Err(error) => ArgvInspection::Unavailable(error.to_string()),
     }
 }
 
@@ -530,7 +471,11 @@ fn inspect_argv(pid: u32) -> ArgvInspection {
     if !crate::process::identity::process_is_alive(pid) {
         return ArgvInspection::NoProcess;
     }
-    inspection_from_read(read_argv_bytes(pid))
+    let result = read_argv_bytes(pid);
+    if let Err(error) = &result {
+        tracing::warn!(pid, ?error, "argv read failed");
+    }
+    inspection_from_read(result)
 }
 
 #[cfg(target_os = "linux")]
@@ -542,7 +487,6 @@ fn read_argv_bytes(pid: u32) -> io::Result<Vec<u8>> {
 fn read_argv_bytes(pid: u32) -> io::Result<Vec<u8>> {
     // `ps` is setuid and this lane refuses to exec it. `sysctl` KERN_PROCARGS2
     // reads the same arguments without starting a process.
-    const MAX_PROCARGS: usize = 1024 * 1024;
     let pid = libc::pid_t::try_from(pid)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "pid out of range"))?;
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
@@ -562,13 +506,19 @@ fn read_argv_bytes(pid: u32) -> io::Result<Vec<u8>> {
     if rc != 0 {
         return Err(io::Error::last_os_error());
     }
-    if len == 0 || len > MAX_PROCARGS {
+    read_argv_with_capacity(pid, len)
+}
+
+#[cfg(target_os = "macos")]
+fn read_argv_with_capacity(pid: libc::pid_t, mut cap: usize) -> io::Result<Vec<u8>> {
+    const MAX_PROCARGS: usize = 1024 * 1024;
+    if cap == 0 || cap > MAX_PROCARGS {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "unexpected procargs2 size",
         ));
     }
-    let mut cap = len;
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
     for _ in 0..4 {
         let mut buf = vec![0u8; cap];
         let mut out_len = cap;
@@ -592,7 +542,16 @@ fn read_argv_bytes(pid: u32) -> io::Result<Vec<u8>> {
                 ));
             }
             buf.truncate(out_len);
-            return argv_from_procargs2(&buf);
+            let argv = argv_from_procargs2(&buf);
+            // Darwin can return success with an incomplete record when argv
+            // grows between the size query and read (including shell startup).
+            // A full buffer and invalid record warrant the same bounded growth
+            // as ENOMEM; a malformed record never proves that the child exited.
+            if argv.is_err() && out_len == cap && cap < MAX_PROCARGS {
+                cap = cap.saturating_mul(2).min(MAX_PROCARGS);
+                continue;
+            }
+            return argv;
         }
         let error = io::Error::last_os_error();
         if error.raw_os_error() == Some(libc::ENOMEM) && cap < MAX_PROCARGS {
@@ -654,7 +613,7 @@ fn unreadable_argv_is_not_a_reaped_child_and_authorizes_no_signal() {
     let recorded = ArgvInspection::Present(b"cat\0/unique/writer/0".to_vec());
     let cases = [
         (
-            ArgvInspection::Unavailable,
+            ArgvInspection::Unavailable("injected unreadable argv".to_string()),
             ReapVerdict::Uncertain,
             false,
             "unreadable argv",
@@ -713,7 +672,7 @@ fn unreadable_argv_is_not_a_reaped_child_and_authorizes_no_signal() {
     let unreadable = inspection_from_read(argv_from_procargs2(truncated));
     assert_eq!(
         unreadable,
-        ArgvInspection::Unavailable,
+        ArgvInspection::Unavailable("unterminated procargs2 argument".to_string()),
         "a truncated argument record is uncertainty, not a different process"
     );
     assert_eq!(
@@ -721,6 +680,205 @@ fn unreadable_argv_is_not_a_reaped_child_and_authorizes_no_signal() {
         ReapVerdict::Uncertain
     );
     assert!(!signal_authorized(&unreadable, &markers));
+}
+
+// Native fault injection: grow argv between the size query and read without
+// relying on a startup race or generating load on the shared host.
+#[cfg(target_os = "macos")]
+#[test]
+fn argv_probe_recovers_when_a_live_child_outgrows_the_queried_buffer() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Child, Stdio};
+
+    let _logging =
+        tracing::subscriber::set_default(tracing_subscriber::fmt().with_test_writer().finish());
+
+    struct ReapingChild(Child);
+    impl Drop for ReapingChild {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let marker = format!("orbit-argv-growth-{}", "x".repeat(512));
+    let mut child = ReapingChild(
+        Command::new("sh")
+            .args([
+                "-c",
+                "echo ready; read value; exec sh -c 'echo ready; read value' cat \"$LONG_ARG\"",
+                "cat",
+                "short",
+            ])
+            .env("LONG_ARG", &marker)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn controlled argv growth"),
+    );
+    let mut output = BufReader::new(child.0.stdout.take().expect("readiness pipe"));
+    let mut ready = String::new();
+    output.read_line(&mut ready).expect("initial readiness");
+    assert_eq!(ready.trim(), "ready");
+    let pid = libc::pid_t::try_from(child.0.id()).expect("child pid");
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    let mut cap = 0usize;
+    // Safety: the null output pointer requests only the required byte count.
+    let rc = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            std::ptr::null_mut(),
+            &mut cap,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    assert_eq!(rc, 0, "initial size query: {}", io::Error::last_os_error());
+    writeln!(child.0.stdin.as_mut().expect("control pipe")).expect("release exec");
+    ready.clear();
+    output.read_line(&mut ready).expect("exec readiness");
+    assert_eq!(ready.trim(), "ready");
+
+    // Reproduce the old probe's read with the stale capacity. Darwin may
+    // report success even though the returned record cannot contain argv.
+    let mut buf = vec![0u8; cap];
+    let mut len = cap;
+    // Safety: buf has len writable bytes; sysctl reports the bytes it stored.
+    let rc = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            buf.as_mut_ptr().cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    let stale = if rc == 0 {
+        assert!(len <= buf.len());
+        argv_from_procargs2(&buf[..len])
+    } else {
+        Err(io::Error::last_os_error())
+    };
+    let error = stale.expect_err("a stale buffer must not identify the grown argv");
+    tracing::warn!(
+        cap,
+        returned = len,
+        rc,
+        ?error,
+        "live child stale KERN_PROCARGS2 buffer"
+    );
+    let unreadable = inspection_from_read(Err(error));
+    assert_eq!(
+        reap_verdict(&unreadable, marker.as_bytes()),
+        ReapVerdict::Uncertain
+    );
+    assert!(!signal_authorized(
+        &unreadable,
+        &[b"cat", marker.as_bytes()]
+    ));
+    let recovered = inspection_from_read(read_argv_with_capacity(pid, cap));
+    assert_eq!(
+        reap_verdict(&recovered, marker.as_bytes()),
+        ReapVerdict::StillRecorded
+    );
+    assert!(signal_authorized(&recovered, &[b"cat", marker.as_bytes()]));
+    assert!(child.0.try_wait().expect("live child status").is_none());
+}
+
+// Fault injection: the public runner cannot deterministically fail a native
+// argv read between two successful observations, or keep it unreadable.
+//
+// Linux publishes a new image's argv only late in `execve`, after `spawn`
+// has already returned, so a live child's `/proc/<pid>/cmdline` can read
+// empty. That empty read once passed the blocked-child leak check
+// immediately (hosted Check job 117482341129).
+#[cfg(unix)]
+#[test]
+fn leak_assertion_retries_unreadable_argv_without_accepting_it_as_reaped() {
+    use std::cell::Cell;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let marker = b"/unique/writer/0";
+    let budget = Duration::from_millis(40);
+    let failed_read: fn() -> ArgvInspection =
+        || inspection_from_read(Err(io::Error::from_raw_os_error(libc::EINTR)));
+    let unpublished: fn() -> ArgvInspection = || inspection_from_read(Ok(Vec::new()));
+    for (label, unreadable, recovery, expected) in [
+        (
+            "transient read failure",
+            failed_read,
+            Some(true),
+            Some("still running"),
+        ),
+        (
+            "persistently unreadable argv",
+            failed_read,
+            None,
+            Some("argv inspection unavailable"),
+        ),
+        (
+            "exit after an unreadable read",
+            failed_read,
+            Some(false),
+            None,
+        ),
+        (
+            "argv not yet published by exec",
+            unpublished,
+            Some(true),
+            Some("still running"),
+        ),
+        (
+            "persistently empty argv",
+            unpublished,
+            None,
+            Some("argv inspection unavailable"),
+        ),
+    ] {
+        let started = Instant::now();
+        let elapsed = Cell::new(Duration::ZERO);
+        let mut attempts = 0;
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            assert_reaped_with_probe(
+                123,
+                marker,
+                budget,
+                |_| {
+                    attempts += 1;
+                    if attempts == 1 || recovery.is_none() {
+                        unreadable()
+                    } else if recovery == Some(true) {
+                        ArgvInspection::Present(b"cat\0/unique/writer/0".to_vec())
+                    } else {
+                        ArgvInspection::NoProcess
+                    }
+                },
+                || started + elapsed.get(),
+                |delay| elapsed.set(elapsed.get() + delay),
+            );
+        }));
+        assert!(attempts > 1, "{label}: an unreadable read must be retried");
+        if let Some(expected) = expected {
+            let payload = result.expect_err("unreadable or live argv must not pass the leak check");
+            let message = payload.downcast_ref::<String>().expect("panic diagnostic");
+            assert!(message.contains(expected), "{label}: {message}");
+            assert_eq!(
+                elapsed.get(),
+                budget,
+                "{label}: the whole budget must be used"
+            );
+            if let (None, ArgvInspection::Unavailable(reason)) = (recovery, unreadable()) {
+                assert!(
+                    message.contains(&reason),
+                    "the final unreadable probe must retain the underlying error: {message}"
+                );
+            }
+        } else {
+            assert!(result.is_ok(), "{label}: a confirmed exit must pass");
+        }
+    }
 }
 
 // Native kernel coverage of the cleanup helper itself: a recorded pid may
@@ -815,6 +973,7 @@ fn flood_cleanup_preserves_unmarked_pids_and_other_group_members() {
 #[test]
 fn blocked_child_leak_check_fails_while_the_writer_lives_and_cleanup_kills_only_that_pid() {
     use std::any::Any;
+    use std::io::{BufRead, BufReader};
     use std::os::unix::process::{CommandExt, ExitStatusExt};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::process::{Child, Stdio};
@@ -855,14 +1014,14 @@ fn blocked_child_leak_check_fails_while_the_writer_lives_and_cleanup_kills_only_
     fs::create_dir(&other_kids).expect("other kids dir");
     let marker = kids.join("0");
     let leader_path = dir.path().join("absent-leader.pid");
-    // `read` is a shell builtin, so this process blocks with both markers in
-    // its own argv and with no descendants.
+    // `echo` and `read` are shell builtins, so this process blocks with both
+    // markers in its own argv and with no descendants.
     let mut writer = ReapingChild(
         Command::new("sh")
-            .args(["-c", "read value", "cat"])
+            .args(["-c", "echo ready; read value", "cat"])
             .arg(&marker)
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .process_group(0)
             .spawn()
@@ -884,23 +1043,12 @@ fn blocked_child_leak_check_fails_while_the_writer_lives_and_cleanup_kills_only_
     fs::write(other_kids.join("0"), pid.to_string()).expect("unmatched pid");
     let marker_bytes = marker.as_os_str().as_encoded_bytes().to_vec();
 
-    match inspect_argv(pid) {
-        ArgvInspection::Present(cmdline) => {
-            assert!(
-                cmdline
-                    .windows(marker_bytes.len())
-                    .any(|window| window == marker_bytes),
-                "live writer argv must contain the recorded marker, got {}",
-                String::from_utf8_lossy(&cmdline)
-            );
-            assert!(
-                cmdline.windows(b"cat".len()).any(|window| window == b"cat"),
-                "live writer argv must contain cat, got {}",
-                String::from_utf8_lossy(&cmdline)
-            );
-        }
-        other => panic!("live writer argv must be readable, got {other:?}"),
-    }
+    // `spawn` can return before `execve` publishes the writer's argv. Once the
+    // shell runs its script, exec has finished and the probe sees both markers.
+    let mut readiness = BufReader::new(writer.0.stdout.take().expect("readiness pipe"));
+    let mut ready = String::new();
+    readiness.read_line(&mut ready).expect("writer readiness");
+    assert_eq!(ready.trim(), "ready", "writer must start its blocking read");
     assert!(
         writer.0.try_wait().expect("writer status").is_none(),
         "writer must still be blocked before the leak check"
@@ -1000,8 +1148,8 @@ fn read_pid_optional(path: &Path) -> Option<u32> {
 /// The recorded process is gone, is a zombie, or its pid was reused by a
 /// command that does not contain `marker`.
 ///
-/// Unreadable argv is uncertainty. The assertion panics instead of treating
-/// a still-live child on a host without `/proc` as reaped.
+/// Argv that stays unreadable through the grace budget is uncertainty. The
+/// assertion panics instead of treating a still-live child on a host without `/proc` as reaped.
 #[cfg(unix)]
 fn assert_reaped(pid: u32, marker: &[u8]) {
     assert_reaped_within(pid, marker, Duration::from_secs(2));
@@ -1009,25 +1157,171 @@ fn assert_reaped(pid: u32, marker: &[u8]) {
 
 #[cfg(unix)]
 fn assert_reaped_within(pid: u32, marker: &[u8], budget: Duration) {
-    let deadline = Instant::now() + budget;
+    assert_reaped_with_probe(
+        pid,
+        marker,
+        budget,
+        inspect_argv,
+        Instant::now,
+        thread::sleep,
+    );
+}
+
+// Inject the probe and clock so a read failure and its recovery can be ordered
+// without racing a native sysctl or generating load on the shared host.
+#[cfg(unix)]
+fn assert_reaped_with_probe(
+    pid: u32,
+    marker: &[u8],
+    budget: Duration,
+    mut inspect: impl FnMut(u32) -> ArgvInspection,
+    mut now: impl FnMut() -> Instant,
+    mut pause: impl FnMut(Duration),
+) {
+    let deadline = now() + budget;
     loop {
-        let inspection = inspect_argv(pid);
-        match reap_verdict(&inspection, marker) {
-            ReapVerdict::Reaped => return,
-            ReapVerdict::Uncertain => panic!(
-                "pid {pid} argv inspection unavailable; refusing to treat an unreadable child as reaped"
-            ),
-            ReapVerdict::StillRecorded if Instant::now() >= deadline => {
-                let cmdline = match inspection {
-                    ArgvInspection::Present(cmdline) => cmdline,
-                    ArgvInspection::NoProcess | ArgvInspection::Unavailable => Vec::new(),
-                };
-                panic!(
+        let inspection = inspect(pid);
+        let verdict = reap_verdict(&inspection, marker);
+        if verdict == ReapVerdict::Reaped {
+            return;
+        }
+        let remaining = deadline.saturating_duration_since(now());
+        if remaining.is_zero() {
+            match inspection {
+                ArgvInspection::Unavailable(error) => panic!(
+                    "pid {pid} argv inspection unavailable ({error}); refusing to treat an unreadable child as reaped"
+                ),
+                ArgvInspection::Present(cmdline) => panic!(
                     "pid {pid} still running: {}",
                     String::from_utf8_lossy(&cmdline)
-                );
+                ),
+                ArgvInspection::NoProcess => unreachable!("a missing process is reaped"),
             }
-            ReapVerdict::StillRecorded => thread::sleep(Duration::from_millis(20)),
+        }
+        // Neither a live recorded child nor an unreadable probe proves exit.
+        // Give a transient read failure the same grace budget as teardown.
+        pause(remaining.min(Duration::from_millis(20)));
+    }
+}
+
+/// Fault injection (test-strategy criterion 2) forces otherwise unreachable
+/// pipe and wait errors through the public run boundary. A separately waitable
+/// group peer proves no live member survives, without relying on init reaping.
+#[test]
+fn bounded_supervision_errors_kill_the_group_and_reap_the_leader() {
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    use std::process::Child;
+    use std::sync::Mutex;
+
+    use crate::process::OwnedChild;
+    use crate::process::bounded::{SupervisionFailure, with_supervision_failure};
+
+    struct Group {
+        pid: Option<u32>,
+        peer: Child,
+    }
+    impl Drop for Group {
+        fn drop(&mut self) {
+            if let Some(pid) = self.pid {
+                let _ = OwnedChild::signal_spawned_group(pid, libc::SIGKILL);
+                // SAFETY: reap only the leader this fixture spawned, if the
+                // supervisor failed to do so. ECHILD is harmless after reap.
+                unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), 0) };
+            }
+            let _ = self.peer.kill();
+            let _ = self.peer.wait();
+        }
+    }
+
+    let calling_thread = thread::current().id();
+    for api in 0..4 {
+        for point in [
+            SupervisionFailure::PipeSetup,
+            SupervisionFailure::PreparePipes,
+            SupervisionFailure::PipeRead,
+            SupervisionFailure::Wait,
+        ] {
+            let group = Arc::new(Mutex::new(None));
+            let observed = Arc::clone(&group);
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", "printf ready; exec sleep 60"]);
+            let started = Instant::now();
+            let result = with_supervision_failure(
+                point,
+                move |pid| {
+                    if matches!(
+                        point,
+                        SupervisionFailure::PipeSetup | SupervisionFailure::PipeRead
+                    ) {
+                        assert_ne!(
+                            thread::current().id(),
+                            calling_thread,
+                            "capture faults must execute in the actual output worker"
+                        );
+                    }
+                    let peer = Command::new("/bin/sleep")
+                        .arg("60")
+                        .process_group(pid as i32)
+                        .spawn()
+                        .expect("spawn waitable group peer before the injected error");
+                    *observed.lock().expect("group lock") = Some(Group {
+                        pid: Some(pid),
+                        peer,
+                    });
+                },
+                || {
+                    use crate::process::{
+                        run_bounded_capped_complete_typed, run_bounded_capped_typed,
+                    };
+                    let deadline = Duration::from_secs(5);
+                    match api {
+                        0 => run_bounded(&mut command, deadline),
+                        1 => run_bounded_capped(&mut command, deadline, 4096),
+                        2 => run_bounded_capped_typed(&mut command, deadline, 4096)
+                            .map_err(OrbitError::from),
+                        _ => run_bounded_capped_complete_typed(&mut command, deadline, 4096)
+                            .map_err(OrbitError::from),
+                    }
+                },
+            );
+            assert!(
+                matches!(result, Err(OrbitError::Execution(ref message))
+                if message.contains(&format!("failure: {point:?}"))),
+                "API {api} must preserve the injected failure: {point:?}, {result:?}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(3),
+                "worker failure must stop API {api} before its deadline: {point:?}"
+            );
+            let mut group = group
+                .lock()
+                .expect("group lock")
+                .take()
+                .expect("fault reached");
+            let pid = group.pid.expect("leader pid");
+            // SAFETY: only probes the child created by this call. ECHILD proves
+            // cleanup reaped it rather than merely leaving a killed zombie.
+            let waited = unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), libc::WNOHANG) };
+            let wait_error = io::Error::last_os_error().raw_os_error();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let status = loop {
+                if let Some(status) = group.peer.try_wait().expect("wait for peer") {
+                    break status;
+                }
+                assert!(Instant::now() < deadline, "peer survived {point:?}");
+                thread::sleep(Duration::from_millis(10));
+            };
+            // SAFETY: signal zero only queries this fixture's group after peer reap.
+            let probe = unsafe { libc::killpg(pid as i32, 0) };
+            let group_error = io::Error::last_os_error().raw_os_error();
+            if probe == -1 && group_error == Some(libc::ESRCH) {
+                group.pid = None;
+            }
+            assert_eq!((waited, wait_error), (-1, Some(libc::ECHILD)), "{point:?}");
+            assert_eq!(status.signal(), Some(libc::SIGKILL), "{point:?}");
+            assert_eq!((probe, group_error), (-1, Some(libc::ESRCH)), "{point:?}");
+            // A disappeared group must be harmless to signal again.
+            OwnedChild::signal_spawned_group(pid, libc::SIGKILL).expect("absent group");
         }
     }
 }

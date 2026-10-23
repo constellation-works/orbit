@@ -12,16 +12,22 @@
 //! run of the shipped reconciliation job: it runs the owner's required
 //! commands at the merged head, a read-only reviewer on the configured crew
 //! inspects it, and the desktop consumer reads the settled record.
+//!
+//! An authenticated terminal release also proves the exact foreign execution
+//! stopped, including a held red base; operator recovery alone does not.
 
 use super::*;
 
 use orbit_core::application::review::ExpectedCandidate;
+use orbit_store::contracts::ClaimSettlementKind;
 use orbit_types::desktop::{
     DesktopCriterionOutcome, DesktopReviewDecision, DesktopReviewVerdict, DesktopTaskOperation,
     DesktopTaskRequest,
 };
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::{ExecutorSandboxKind, REVIEW_RECONCILIATION_JOB, ReviewReconciliation};
+use orbit_types::workflow::{
+    BaselineRedHold, ExecutorSandboxKind, REVIEW_RECONCILIATION_JOB, ReviewReconciliation,
+};
 
 const PR_URL: &str = "https://github.com/owner/repository/pull/42";
 const RECONCILE: &str = "orbit.task.reconcile_review";
@@ -179,6 +185,31 @@ fn owner_config(commands: &[&str], review_crew: &str, crews: &[&str]) -> String 
         config.push_str(&format!(
             "\n[crews.{crew}]\nprovider = \"codex\"\nmodel = \"fixture-{crew}\"\n"
         ));
+    }
+    config
+}
+
+/// Owner configuration using the canonical review-crew pool setting.
+fn owner_config_with_review_pool(
+    commands: &[&str],
+    review_pool: &[&str],
+    crews: &[&str],
+    disabled_crew: Option<&str>,
+) -> String {
+    let mut config = format!(
+        "[workflow]\ndefault_crew = \"{}\"\nrequired_validation_commands = {}\n\n\
+         [workflow.purpose_crews]\nreview = {}\n",
+        crews[0],
+        serde_json::to_string(commands).unwrap(),
+        serde_json::to_string(review_pool).unwrap()
+    );
+    for crew in crews {
+        config.push_str(&format!(
+            "\n[crews.{crew}]\nprovider = \"codex\"\nmodel = \"fixture-{crew}\"\n"
+        ));
+        if disabled_crew == Some(*crew) {
+            config.push_str("enabled = false\n");
+        }
     }
     config
 }
@@ -584,19 +615,76 @@ impl Delivery {
     }
 }
 
+/// A timed wait can report still-running, then lose the CPU until after both
+/// the child's exit and the deadline. That stale poll must not turn a completed
+/// provider read into an operator submission failure.
+#[test]
+fn a_completed_pr_read_survives_a_delayed_waiter() {
+    use orbit_common::test_env::{SupervisorSeam, with_supervision_clock, with_supervisor_seam};
+    use std::io::Write;
+    use std::{cell::Cell, rc::Rc, time::Instant};
+
+    if !isolated(
+        module_path!(),
+        "a_completed_pr_read_survives_a_delayed_waiter",
+    ) {
+        return;
+    }
+    let delivery = Delivery::handed_off(&["test -f src/f0.rs"]);
+    delivery.recover();
+    delivery.merged();
+    delivery.reviewer_reports("accept", json!([]));
+    // Mark the child whose wait we delay, so this regression cannot silently
+    // inject into an unrelated Git or process-identity probe instead.
+    let gh = home().join("bin/gh");
+    std::fs::write(
+        &gh,
+        "#!/bin/sh\nprintf '%s\\n' \"$$\" > \"$HOME/gh.pid\"\nexec cat \"$HOME/pr.json\"\n",
+    )
+    .unwrap();
+    executable(&gh);
+    let elapsed = Rc::new(Cell::new(Duration::ZERO));
+    let clock_elapsed = Rc::clone(&elapsed);
+    let wait_elapsed = Rc::clone(&elapsed);
+    let injected = Rc::new(Cell::new(false));
+    let wait_injected = Rc::clone(&injected);
+    let seam = SupervisorSeam {
+        wait: Some(Box::new(move |child| {
+            let status = child.wait()?;
+            let provider_pid = std::fs::read_to_string(home().join("gh.pid"))
+                .ok()
+                .and_then(|pid| pid.trim().parse::<u32>().ok());
+            if provider_pid == Some(child.id()) && !wait_injected.replace(true) {
+                // Force the ordering without load or sleeps: the poll was
+                // empty, the child exits, and only then the waiter resumes.
+                assert!(status.success(), "the no-op provider exited: {status}");
+                wait_elapsed.set(Duration::from_secs(16));
+                writeln!(
+                    std::io::stderr(),
+                    "delayed PR waiter: child exited zero; returning stale None after 16s of supervision time"
+                )
+                .expect("report the injected waiter delay");
+                return Ok(None);
+            }
+            Ok(Some(status))
+        })),
+        ..Default::default()
+    };
+    let submitted = with_supervision_clock(
+        move || Instant::now() + clock_elapsed.get(),
+        || with_supervisor_seam(seam, || delivery.submit("delayed-pr-waiter")),
+    );
+    assert!(injected.get(), "the provider wait must be exercised");
+    let settled = delivery.run(&submitted);
+    assert_eq!(settled["outcome"], "accepted", "{settled:#}");
+}
+
 /// The recovered Mac delivery that motivated this: the follower handed off
 /// PR #42, the owner's landing stopped, an operator fixed and merged the PR
 /// by hand, revoked the handoff and recovered the claim. The changed merged
 /// head completes only after the operator's reconciliation validated and
 /// reviewed exactly that head; the original run's identity never changes.
-#[test]
 fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
-    if !isolated(
-        module_path!(),
-        "a_recovered_follower_delivery_completes_through_a_reconciled_merged_head",
-    ) {
-        return;
-    }
     let delivery = Delivery::handed_off(&["test -f src/f0.rs"]);
     let owner = &delivery.owner;
     let task = &delivery.task;
@@ -835,14 +923,7 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
 
 /// A reviewer's open finding refuses the merged head and becomes one
 /// follow-up task; the merged pull request stays as it landed.
-#[test]
 fn a_rejected_merged_head_files_a_follow_up_and_cannot_complete() {
-    if !isolated(
-        module_path!(),
-        "a_rejected_merged_head_files_a_follow_up_and_cannot_complete",
-    ) {
-        return;
-    }
     let delivery = Delivery::handed_off(&["test -f src/f0.rs"]);
     delivery.recover();
     delivery.merged();
@@ -885,14 +966,7 @@ fn a_rejected_merged_head_files_a_follow_up_and_cannot_complete() {
 /// A required command that also fails at the base waits for an operator's
 /// evidence-bound disposition naming a landed remediation; validation stays
 /// incomplete even after the disposition lets the task complete.
-#[test]
 fn a_baseline_failure_completes_only_on_an_operator_disposition() {
-    if !isolated(
-        module_path!(),
-        "a_baseline_failure_completes_only_on_an_operator_disposition",
-    ) {
-        return;
-    }
     std::fs::create_dir_all(home().join("bin")).unwrap();
     let command_path = home().join("bin/verify.sh");
     std::fs::write(&command_path, "#!/bin/sh\ntest -f NOTICE\n").unwrap();
@@ -1175,14 +1249,7 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
 /// same required command on its own, while the merged code still fails it
 /// for a reason the delivery introduced; the disposition refuses it before
 /// running anything, and accepts a remediation landed on top of the merge.
-#[test]
 fn a_baseline_remediation_must_contain_the_landed_delivery() {
-    if !isolated(
-        module_path!(),
-        "a_baseline_remediation_must_contain_the_landed_delivery",
-    ) {
-        return;
-    }
     // Test A: the landing branch lacks NOTICE. Test B: the delivery's hand
     // fix is a regression. One required command runs both.
     std::fs::create_dir_all(home().join("bin")).unwrap();
@@ -1388,14 +1455,7 @@ fn a_baseline_remediation_must_contain_the_landed_delivery() {
 /// contain the squash commit the provider reports, never the head. Provider
 /// facts that change before or while the remediation runs refuse the
 /// disposition, and completion binds the same landed commit.
-#[test]
 fn a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit() {
-    if !isolated(
-        module_path!(),
-        "a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit",
-    ) {
-        return;
-    }
     // The command can swap the provider's answer while it runs.
     std::fs::create_dir_all(home().join("bin")).unwrap();
     let command_path = home().join("bin/notice.sh");
@@ -1439,7 +1499,7 @@ fn a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit() {
     let original = settled["record"]["validation"].clone();
 
     let remediation = delivery.land("NOTICE", "notice\n", "Add NOTICE");
-    let head_in_remediation = std::process::Command::new("git")
+    let head_in_remediation = crate::git_test_support::command()
         .arg("-C")
         .arg(&delivery.repo)
         .args(["merge-base", "--is-ancestor", &delivery.head, &remediation])
@@ -1520,14 +1580,7 @@ fn a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit() {
 /// A command that fails as code at the merged head but cannot be judged at
 /// the base is not an attributable head-only regression or a baseline
 /// disposition candidate.
-#[test]
 fn a_baseline_environment_failure_is_not_misreported_as_head_only() {
-    if !isolated(
-        module_path!(),
-        "a_baseline_environment_failure_is_not_misreported_as_head_only",
-    ) {
-        return;
-    }
     let command =
         "grep -q fixed_by_hand src/f0.rs && exit 1 || orbit-baseline-environment-probe-14175";
     let delivery = Delivery::handed_off(&[command]);
@@ -1561,18 +1614,64 @@ fn a_baseline_environment_failure_is_not_misreported_as_head_only() {
     );
 }
 
+/// A canonical review pool refusal can be repaired through the operator tool.
+fn a_canonical_review_pool_refusal_can_be_repaired_and_retried() {
+    let required = "test -f src/f0.rs";
+    let delivery = Delivery::handed_off(&[required]);
+    delivery.recover();
+    delivery.merged();
+    delivery.reviewer_reports("accept", json!([]));
+
+    let unavailable = delivery.reconfigured(&owner_config_with_review_pool(
+        &[required],
+        &["gone"],
+        &["sol", "gone"],
+        Some("gone"),
+    ));
+    let refused = delivery
+        .reconcile_on(&unavailable, json!({"action": "inspect"}))
+        .expect("operator can inspect an unavailable review crew");
+    assert_eq!(refused["eligible"], false, "{refused:#}");
+    assert!(
+        refused["refusal"]
+            .as_str()
+            .is_some_and(|reason| !reason.is_empty()),
+        "the unresolved configured crew must produce an observable refusal: {refused:#}"
+    );
+
+    let repaired = delivery.reconfigured(&owner_config_with_review_pool(
+        &[required],
+        &["sol"],
+        &["sol"],
+        None,
+    ));
+    let retry = delivery
+        .reconcile_on(
+            &repaired,
+            json!({"action": "submit", "request_key": "canonical-review-retry"}),
+        )
+        .expect("operator can retry after repairing the canonical review pool");
+    assert_eq!(
+        retry["record"]["contract"]["review_crew"], "sol",
+        "{retry:#}"
+    );
+    let reconciliation = retry["reconciliation_id"].as_str().unwrap();
+    delivery.execute_on(&repaired, retry["run_id"].as_str().unwrap());
+    let settled = delivery
+        .reconcile_on(
+            &repaired,
+            json!({"action": "status", "reconciliation_id": reconciliation}),
+        )
+        .unwrap()["reconciliations"][0]
+        .clone();
+    assert_eq!(settled["outcome"], "accepted", "{settled:#}");
+}
+
 /// The validation commands and review crew are frozen when the operator
 /// submits. A configuration edited before the run starts, or before a
 /// resubmission, neither drops a requirement nor changes the reviewer; a
 /// frozen crew that no longer resolves refuses with the new-request path.
-#[test]
 fn a_reconciliation_runs_under_the_contract_frozen_at_submission() {
-    if !isolated(
-        module_path!(),
-        "a_reconciliation_runs_under_the_contract_frozen_at_submission",
-    ) {
-        return;
-    }
     let required = "test -f src/f0.rs";
     let delivery = Delivery::handed_off(&[required]);
     delivery.recover();
@@ -1685,14 +1784,7 @@ fn a_reconciliation_runs_under_the_contract_frozen_at_submission() {
 /// explicitly empty one is a no-check acceptance, not a missing snapshot: the
 /// reconciliation adopts the owner's configuration at submission as its own
 /// contract, labelled so, and refuses when there is none to adopt.
-#[test]
 fn an_explicit_no_check_acceptance_adopts_a_labelled_owner_contract() {
-    if !isolated(
-        module_path!(),
-        "an_explicit_no_check_acceptance_adopts_a_labelled_owner_contract",
-    ) {
-        return;
-    }
     let delivery = Delivery::handed_off(&[]);
     delivery.recover();
     delivery.merged();
@@ -1744,14 +1836,7 @@ fn an_explicit_no_check_acceptance_adopts_a_labelled_owner_contract() {
 /// Evidence binds one observation: a head that changes after submission
 /// refuses the run, and no run outside the governed submission can produce
 /// a record.
-#[test]
 fn a_reconciliation_refuses_a_changed_head_and_forged_runs() {
-    if !isolated(
-        module_path!(),
-        "a_reconciliation_refuses_a_changed_head_and_forged_runs",
-    ) {
-        return;
-    }
     let delivery = Delivery::handed_off(&["test -f src/f0.rs"]);
     delivery.recover();
     delivery.merged();
@@ -1823,14 +1908,7 @@ fn a_reconciliation_refuses_a_changed_head_and_forged_runs() {
 /// A claim recovered while its leaf was still running proves nothing about
 /// that run, and a run the owner happens to hold under the same id is a
 /// different run: completion refuses instead of substituting it.
-#[test]
 fn a_same_named_owner_run_never_stands_in_for_a_follower_run() {
-    if !isolated(
-        module_path!(),
-        "a_same_named_owner_run_never_stands_in_for_a_follower_run",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let owner = &pair.wire.owner;
     let drain = pair.run_drain();
@@ -1925,3 +2003,251 @@ fn a_same_named_owner_run_never_stands_in_for_a_follower_run() {
     );
     assert_eq!(pair.owner_status(&task), "review");
 }
+
+/// A held leaf gives its claim back through the authenticated follower route.
+/// Unlike operator recovery, that exact-bound terminal settlement proves the
+/// execution stopped, without inventing a handoff or substituting a local run.
+fn a_settled_follower_release_completes_on_current_review_evidence() {
+    let pair = Pair::new(1);
+    let owner = &pair.wire.owner;
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let operator = session(McpCapability::Operator);
+    let admission = pair.admission(&leaf);
+    let claim_id = admission.receipt.unwrap().claim.unwrap().claim_id;
+    let hold = BaselineRedHold {
+        base_ref: "main".into(),
+        base_sha: "b".repeat(40),
+        command: "make ci-lint".into(),
+        run_id: leaf.clone(),
+        selection: None,
+        failures: Default::default(),
+    };
+    pair.advance(
+        &leaf,
+        LocalPullMutation::Settle(Box::new(ClaimMutation::Release(ClaimEvidence {
+            summary: Some("The base failed its required check.".into()),
+            baseline_red: Some(hold),
+            ..Default::default()
+        }))),
+    );
+    pair.follower_jobs
+        .finalize_job_run(&leaf, JobRunState::Held, Utc::now(), None)
+        .unwrap();
+    let pass = pair.pass_over(&drain, json!({"window_expired": true}));
+    assert!(pass["error"].is_null(), "{pass:#}");
+    let claim = pair.owner_claim(&claim_id);
+    assert_eq!(claim["claim"]["phase"], "revoked", "{claim:#}");
+    assert_eq!(claim["bound_run"]["machine_id"], FOLLOWER);
+    assert_eq!(claim["bound_run"]["run_id"], leaf);
+    let settlements = owner.leaf_settlements(None, false).unwrap();
+    let settlement = &settlements[0];
+    assert_eq!(settlement.kind, Some(ClaimSettlementKind::Release));
+    assert_eq!(settlement.evidence, "baseline_red");
+    assert_eq!(settlement.last_event, "baseline_red_hold");
+    assert_eq!(settlement.leaf_run_id.as_deref(), Some(leaf.as_str()));
+    assert_eq!(settlement.machine_id, FOLLOWER);
+    assert_eq!(pair.run_state(&leaf), JobRunState::Held);
+    let owner_jobs = orbit_store::compose::workspace_job_run_store(
+        owner.sqlite_store().unwrap(),
+        owner.workspace_id().unwrap(),
+    );
+    assert!(owner_jobs.get_job_run(&leaf).unwrap().is_none());
+
+    back_to_review(
+        owner,
+        &task,
+        Some("Independent review accepted the native repair."),
+    );
+    // A settlement on one host/run cannot substitute for another binding.
+    // Build these hostile documents through the public store fixture surface;
+    // production callers cannot rewrite the trusted execution location.
+    use orbit_store::contracts::TaskDocumentUpdateParams;
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+    let documents = orbit_store::compose::workspace_coordinated_backends(
+        TaskRegistryStore::open(&task_registry_path(&owner.global_root())).unwrap(),
+        owner.workspace_id().unwrap(),
+        owner.sqlite_store().unwrap(),
+    )
+    .unwrap()
+    .task
+    .document;
+    let original = owner.get_task(&task).unwrap();
+    let bind = |run, location| {
+        // A location is immutable while its run remains linked. Each hostile
+        // fixture binding is established anew, rather than rewriting one.
+        documents
+            .update_task_document(
+                &task,
+                TaskDocumentUpdateParams {
+                    actor: "fixture".into(),
+                    job_run_id: Some(None),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        documents
+            .update_task_document(
+                &task,
+                TaskDocumentUpdateParams {
+                    actor: "fixture".into(),
+                    job_run_id: Some(run),
+                    job_run_machine: Some(location),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    };
+    let mut wrong_host = original.job_run_machine.clone().unwrap();
+    wrong_host.machine_id = "hm_other_follower".into();
+    for (run, location, reason) in [
+        (
+            Some(leaf.clone()),
+            Some(wrong_host),
+            "holds no claim bound to that run",
+        ),
+        (
+            Some("unbound-run".into()),
+            original.job_run_machine.clone(),
+            "holds no claim bound to that run",
+        ),
+        (Some(leaf.clone()), None, "linked review run is unavailable"),
+    ] {
+        bind(run, location);
+        let refused = owner.desktop_task_snapshot(&task, &operator).unwrap();
+        assert!(!refused.actions.complete.enabled);
+        assert!(
+            refused
+                .actions
+                .complete
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains(reason),
+            "{:?}",
+            refused.actions.complete
+        );
+    }
+    bind(original.job_run_id, original.job_run_machine);
+    let shown = pair.owner_task(&task);
+    let snapshot = owner.desktop_task_snapshot(&task, &operator).unwrap();
+    assert!(
+        snapshot.actions.complete.enabled,
+        "{:?}",
+        snapshot.actions.complete
+    );
+    // Release evidence proves only stopped execution. It does not make a PR
+    // reconciliation eligible without an accepted PR handoff.
+    let reconciliation = owner
+        .run_tool_with_context_and_role(
+            RECONCILE,
+            json!({"id": task, "action": "inspect"}),
+            Role::Admin,
+            ToolContext {
+                session_context: operator.clone(),
+                ..ToolContext::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(reconciliation["eligible"], false, "{reconciliation:#}");
+
+    let mut current = verdict(&shown, "", &leaf);
+    current.expected_head = None;
+    current.evidence = vec!["execution_summary".into()];
+    for criterion in &mut current.criteria {
+        criterion.evidence = vec!["execution_summary".into()];
+    }
+    for (request, changed, reason) in [
+        (
+            "stale-run",
+            {
+                let mut v = current.clone();
+                v.expected_run_id = Some("other-run".into());
+                v
+            },
+            "reviewed run binding changed",
+        ),
+        (
+            "stale-head",
+            {
+                let mut v = current.clone();
+                v.expected_head = Some("a".repeat(40));
+                v
+            },
+            "linked PR head changed",
+        ),
+        (
+            "missing-evidence",
+            {
+                let mut v = current.clone();
+                v.evidence = vec!["missing-artifact".into()];
+                v
+            },
+            "review evidence must reference current",
+        ),
+    ] {
+        let refused = owner
+            .desktop_task_write(
+                review(&task, &snapshot.revision, changed, request),
+                None,
+                None,
+                &operator,
+            )
+            .unwrap_err();
+        assert!(refused.to_string().contains(reason), "{refused}");
+        assert_eq!(pair.owner_status(&task), "review");
+    }
+    assert!(
+        owner
+            .desktop_task_write(
+                review(&task, &snapshot.revision, current.clone(), "agent-release"),
+                None,
+                None,
+                &session(McpCapability::Agent)
+            )
+            .is_err()
+    );
+    let done = owner
+        .desktop_task_write(
+            review(&task, &snapshot.revision, current, "complete-release"),
+            None,
+            None,
+            &operator,
+        )
+        .expect("the exact terminal release permits evidence-bound completion");
+    assert_eq!(done.snapshot.task.status, TaskStatus::Done);
+    let completed = pair.owner_task(&task);
+    assert_eq!(completed["job_run_id"], leaf);
+    assert_eq!(completed["job_run_machine"]["machine_id"], FOLLOWER);
+    assert!(owner_jobs.get_job_run(&leaf).unwrap().is_none());
+    assert_eq!(
+        owner.leaf_settlements(None, false).unwrap()[0].kind,
+        Some(ClaimSettlementKind::Release)
+    );
+}
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_recovered_follower_delivery_completes_through_a_reconciled_merged_head_scenarios,
+    a_recovered_follower_delivery_completes_through_a_reconciled_merged_head,
+    a_rejected_merged_head_files_a_follow_up_and_cannot_complete,
+    a_baseline_failure_completes_only_on_an_operator_disposition
+);
+
+crate::scenario_table!(
+    a_baseline_remediation_must_contain_the_landed_delivery_scenarios,
+    a_baseline_remediation_must_contain_the_landed_delivery,
+    a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit,
+    a_baseline_environment_failure_is_not_misreported_as_head_only
+);
+
+crate::scenario_table!(
+    a_reconciliation_runs_under_the_contract_frozen_at_submission_scenarios,
+    a_canonical_review_pool_refusal_can_be_repaired_and_retried,
+    a_reconciliation_runs_under_the_contract_frozen_at_submission,
+    an_explicit_no_check_acceptance_adopts_a_labelled_owner_contract,
+    a_reconciliation_refuses_a_changed_head_and_forged_runs,
+    a_same_named_owner_run_never_stands_in_for_a_follower_run,
+    a_settled_follower_release_completes_on_current_review_evidence
+);

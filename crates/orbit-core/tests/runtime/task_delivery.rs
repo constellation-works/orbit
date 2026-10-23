@@ -11,6 +11,16 @@ use orbit_types::workflow::{CommitObservationStatus, JobRun, JobRunState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod resume;
+#[path = "source_repair.rs"]
+mod source_repair;
+use resume::{
+    inherited_commit_refuses_invalid_parent_evidence,
+    legacy_checkpoint_and_wire_shape_remain_readable_after_resume,
+    public_resume_retains_commit_producer_and_reads_current_landing,
+    repeated_resume_authenticates_each_parent_and_requires_current_landing,
+};
+
 struct Fixture {
     _root: TempDir,
     runtime: OrbitRuntime,
@@ -20,16 +30,13 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("home/.orbit");
         let repo = root.path().join("repo");
         let jobs = global.join("resources/jobs");
         std::fs::create_dir_all(&jobs).unwrap();
         std::fs::create_dir_all(repo.join(".orbit")).unwrap();
-        let mut git = std::process::Command::new("git");
-        orbit_common::test_env::clear_inherited_authority(|key| {
-            git.env_remove(key);
-        });
+        let mut git = crate::git_test_support::command();
         assert!(
             git.args(["init", "-q"])
                 .current_dir(&repo)
@@ -45,6 +52,7 @@ impl Fixture {
                 "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {name}\nspec:\n  state: enabled\n{delivery}  steps: []\n"
             )).unwrap();
         }
+        crate::fixture_template::seed_store(&global);
         let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
         let task = |title: &str| {
             runtime
@@ -100,13 +108,7 @@ impl Fixture {
     }
 }
 
-#[test]
 fn newest_delivery_uses_submitted_task_bindings() {
-    if !super::dispatch_admission::isolated(
-        "task_delivery::newest_delivery_uses_submitted_task_bindings",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     assert!(matches!(
         fixture.runtime.observe_task_delivery(&fixture.task, None),
@@ -225,13 +227,7 @@ fn newest_delivery_uses_submitted_task_bindings() {
 /// definition is what the run executes. The observation reads the same one:
 /// the catalog asset of the same name lists the steps in another order, so its
 /// indexes would name other steps.
-#[test]
 fn direct_path_run_is_observed_through_its_pinned_definition() {
-    if !super::dispatch_admission::isolated(
-        "task_delivery::direct_path_run_is_observed_through_its_pinned_definition",
-    ) {
-        return;
-    }
     // The detached worker is substituted, so nothing beyond admission runs.
     orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
     let fixture = Fixture::new();
@@ -397,3 +393,14 @@ fn measure_delivery_lookup() {
     use std::io::Write;
     writeln!(std::io::stdout(), "DELIVERY_MEASUREMENT {report}").unwrap();
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    newest_delivery_uses_submitted_task_bindings_scenarios,
+    newest_delivery_uses_submitted_task_bindings,
+    direct_path_run_is_observed_through_its_pinned_definition,
+    public_resume_retains_commit_producer_and_reads_current_landing,
+    inherited_commit_refuses_invalid_parent_evidence,
+    repeated_resume_authenticates_each_parent_and_requires_current_landing,
+    legacy_checkpoint_and_wire_shape_remain_readable_after_resume
+);

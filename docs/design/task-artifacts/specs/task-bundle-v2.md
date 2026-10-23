@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Task Bundle V2"
 tags: ["task-artifacts"]
-last_validated: 2026-10-11
+last_validated: 2026-10-22
 ---
 
 # Spec: Task Bundle V2
@@ -25,7 +25,7 @@ Every canonical task bundle lives at:
 ~/.orbit/tasks/workspaces/<workspace-id>/<task-id>/
 ```
 
-`<task-id>` must be the canonical ID inside the current allocation authority. The canonical task ID grammar is `<prefix>-<digits>`: `<prefix>` is 2 to 5 uppercase ASCII letters (excluding reserved artifact namespaces `ADR`, `L`, and `F`) configured for the allocating authority (such as `ORB`, `DANI`, or `SHR`), and `<digits>` is a non-empty sequence of ASCII decimal digits. Minted IDs format the suffix with at least five digits (for example, `ORB-00000` or `DANI-00001`); validation accepts shorter and wider suffixes, without a numeric upper bound. Numeric parsing and allocation are separately bounded by `u32::MAX`. `ORB` remains valid for migrated machines but is reserved when configuring a new machine. `<workspace-id>` is assigned once per workspace as `<slug>-<6char>` and stored in `.orbit/config.yaml`. Old `T<YYYYMMDD>-<N>` IDs are not valid v2 identifiers or lookup aliases.
+`<task-id>` must be the canonical ID inside the current allocation authority. The canonical task ID grammar is `<prefix>-<digits>`: `<prefix>` is 2 to 5 uppercase ASCII letters (excluding reserved artifact namespaces `ADR`, `L`, and `F`) configured for the allocating authority (such as `ORB`, `DANI`, or `SHR`), and `<digits>` is a non-empty sequence of ASCII decimal digits. Minted IDs format the suffix with at least five digits (for example, `ORB-00000` or `DANI-00001`); validation accepts shorter and wider suffixes, without a numeric upper bound. Numeric parsing and allocation are separately bounded by `u32::MAX`. `ORB` remains valid for migrated machines but is reserved when configuring a new machine. `<workspace-id>` is assigned once per workspace and stored in `.orbit/config.yaml`: `orbit workspace init` assigns the canonical `ws_<name>` form, and legacy standalone bindings keep a generated `<slug>-<6char>` ID. Old `T<YYYYMMDD>-<N>` IDs are not valid v2 identifiers or lookup aliases.
 
 Required files:
 
@@ -96,6 +96,8 @@ complexity: null   # legacy unlabeled only; new creates always persist a value
 job_run_id: null
 crew: implementer-crew
 orchestrator: orchestration-crew
+orchestrator_model: claude-opus-5-5
+orchestrator_model_source: crew_config
 relations:
   - type: resolves
     target: F2026-05-007
@@ -111,7 +113,7 @@ updated_at: 2026-05-11T00:00:00Z
 
 The envelope must not contain `description`, `acceptance_criteria`, `plan`, `execution_summary`, `history`, `comments`, or `review_threads`.
 The envelope must not contain local-only `workspace_path` or `repo_root`; those live in the local registry workspace binding.
-The envelope must not contain the old `batch_id` name or internal execution-routing fields such as `agent` and `model`; job-run membership is stored as `job_run_id`, while durable task attribution uses `created_by`, `planned_by`, `implemented_by`, and the explicit `orchestrator` named-crew alias. `crew` is execution selection only; `orchestrator` is read-only orchestration attribution, never a model/provider selector. It is mutable only in `proposed` and `backlog`, and a missing field in a schema-v1 bundle reads as `null`. A legacy writer can omit this additive field, so schema-v1 compatibility guarantees readability rather than preservation across legacy writes.
+The envelope must not contain the old `batch_id` name or internal execution-routing fields such as `agent` and `model`; job-run membership is stored as `job_run_id`, while durable task attribution uses `created_by`, `planned_by`, `implemented_by`, and the explicit `orchestrator` named-crew alias. `crew` is execution selection only; `orchestrator` is read-only orchestration attribution, never a model/provider selector. It is mutable only in `proposed` and `backlog`, and a missing field in a schema-v1 bundle reads as `null`. `orchestrator_model` is the orchestrator's model, written once when the task is created with an orchestrator and never updated: an explicit `orchestrator_model` create input (`orchestrator_model_source: explicit`), else that crew's configured model at creation (`crew_config`). Both are absent on a task created without an orchestrator and read as `null` on older bundles; nothing backfills them. A legacy writer can omit this additive field, so schema-v1 compatibility guarantees readability rather than preservation across legacy writes.
 Task-only relation types must target valid task IDs matching the configured-prefix grammar (including non-ORB task IDs, such as `DANI-00001` or `SHR-00001`). `produces` and `resolves` may target task IDs or friction (`FYYYY-MM-NNN`) and ADR (`ADR-NNNN+`) IDs. `covered_by` targets a task ID or GitHub PR external key.
 
 ## Documents
@@ -142,6 +144,7 @@ Convenience reads:
 - `note`: optional string.
 - `from_status`: optional status.
 - `to_status`: optional status.
+- `operation_id`: optional idempotency key of the atomic task mutation (task-pilot apply) that wrote the event; that mutation replays when a same-type event carries the key.
 
 Writers must not rewrite prior event lines except during explicit cutover or repair commands. Appends must write one JSON object plus newline, flush and sync the file before success, and preserve a valid prefix if the process crashes. Readers must tolerate a final unterminated or invalid JSON line as tail corruption; repair may truncate only that final corrupt tail.
 
@@ -152,7 +155,7 @@ inline a machine-generated blob — a serialized structure, a path list, a
 captured stream — into it. Because `events.jsonl` is append-only, an oversized
 note is permanent: it dilutes every downstream reader of that task (history
 scanning, memory distillation, triage, and the agent task context assembled in
-`v2_host/task_context.rs`) for the life of the record.
+`engine_host/actions/task_context.rs`) for the life of the record.
 
 A writer whose note would carry such a payload must instead keep a leading
 excerpt and name, **inside the note itself**, the command that reads the full
@@ -179,6 +182,9 @@ Re-measure the surface with `scripts/measure-history-signal.py`. [ORB-10343]
 - `at`
 - `by`
 - `body`
+- `operation_id`: optional; the atomic task mutation's key, on the audit comment that event wrote.
+
+The key is written only to `operation_id`, never into `note` or `body`. Rows written before the field carried it as text: a ` (operation_id=<key>)` note suffix or an `operation_id=<key>` first line ahead of the comment body. `orbit-types`' task `receipt` module is the one reader of that legacy text, behind the typed field.
 
 Comment bodies are Markdown strings. Multi-line bodies must be JSON escaped inside one JSONL row, not spread across lines.
 Comment appends follow the same atomicity and tail-repair rules as `events.jsonl`.
@@ -208,17 +214,59 @@ Writers must validate the relation type set, reject self-edges, reject duplicate
 
 Local indexes should materialize `(source_task_id, relation_type, target_task_id)` and inverse lookup rows so lineage queries do not scan every task bundle.
 
+### Regression classification
+
+A `regression_from` entry may carry an optional `regression` payload that
+records what kind of regression it is and why the delivery gates missed it.
+No other relation type accepts it.
+
+```yaml
+relations:
+  - type: regression_from
+    target: ORB-00042
+    regression:
+      nature: defect_in_new
+      escape: test_not_selected
+```
+
+Both fields are required inside the payload and take one value from a closed
+set:
+
+- `nature`
+  - `broke_existing`: the culprit broke behavior that worked before it landed.
+  - `defect_in_new`: the defect is in code the culprit itself introduced.
+  - `incomplete`: the culprit shipped without part of what its task required.
+  - `merge_reintroduced`: a merge restored code or assets an earlier change had removed.
+  - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
+  - `unclassified`: the filer could not tell which nature applies.
+- `escape`
+  - `no_test`: no test covered the broken behavior.
+  - `test_not_selected`: a covering test existed but the delivery's gates did not run it.
+  - `platform_only`: the defect shows only on a platform or host the gates did not exercise.
+  - `review_missed`: the defect was visible in the diff and review did not flag it.
+  - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
+  - `nondeterministic`: the failure depends on timing, ordering or environment and passed when gated.
+  - `unclassified`: the filer could not tell how the defect escaped.
+
+The payload is additive. An entry written without it, including every link
+stored before the field existed, reads back with no `regression` key, which is
+distinct from an explicit `unclassified`. `orbit.task.add`, `orbit.task.update`
+and the task API refuse an unknown value and name the allowed ones. Task show,
+the API and MCP return the payload on the relation. The registry relation index
+does not store it; the envelope stays canonical. Layer and detected-by are
+derived by analytics and are not stored on the relation.
+
 ## Generated Views
 
 The local registry must maintain generated status and terminal-month views or rebuild them from bundles/events on demand. These views replace the current `review/` and `done/<yyyy-mm>/` directory browsing affordances without making lifecycle state part of the path.
 
 The initial registry projections are:
 
-- `task_bundle_index(task_id, workspace_id, status, priority, job_run_id, created_at, updated_at, terminal_month, complexity)`. `complexity` is `low`/`medium`/`hard`/`xhard`/`unassessed`, or empty when the envelope left it unset. SQL `NULL` means the row has not been rewritten since the column was added.
+- `task_bundle_index(task_id, workspace_id, status, priority, job_run_id, created_at, updated_at, terminal_month, complexity, task_type)`. `complexity` is `low`/`medium`/`hard`/`xhard`/`unassessed`, or empty when the envelope left it unset. `task_type` is `feature`/`bug`/`refactor`/`chore`. SQL `NULL` means a binary that knows the column has not rewritten the row. An older writer's upsert preserves the previous `task_type`, which can disagree with the canonical envelope; freshness treats that disagreement as stale the same way it treats `NULL`. `complexity` `NULL` still means that column has not been rewritten.
 - `task_bundle_tags(task_id, workspace_id, tag)`.
 - `task_bundle_relations(source_task_id, workspace_id, relation_type, target_task_id)`. The physical column name is historical; `produces` and `resolves` rows may store non-task artifact IDs in `target_task_id`, and `covered_by` may store a GitHub PR external key.
 
-Indexes are generated data. The bundle envelope is canonical, and repair/rebuild paths may delete and regenerate index rows from bundles. The `task_bundle_index.updated_at` value is the envelope version stamp. Query paths should treat a missing row, incomplete index, or `updated_at` mismatch as a cache miss: rebuild from registered bundles when possible, otherwise fall back to bundle reads rather than treating the index as proof that tasks do not exist.
+Indexes are generated data. The bundle envelope is canonical, and repair/rebuild paths may delete and regenerate index rows from bundles. The `task_bundle_index.updated_at` value is the envelope version stamp. Query paths should treat a missing row, incomplete index, `updated_at` mismatch, or a `task_type` that disagrees with the envelope (including when `updated_at` still matches) as a cache miss: rebuild from registered bundles when possible, otherwise fall back to bundle reads rather than treating the index as proof that tasks do not exist. Defect reads keep the rebuild best-effort, so a refused repair can still serve the projection it already holds.
 
 ## Local Locks
 
@@ -231,7 +279,7 @@ The file bundle does not provide all-or-nothing transactions across Markdown sid
 - `task.yaml` remains canonical for structured metadata.
 - JSONL tail corruption is repaired only at the final partial row; corruption before the tail is an error.
 - The last event with `to_status` must match `task.yaml.status`; a mismatch on a *settled* bundle is corruption and must fail reads. A mismatch observed while a writer is mid-publication is not corruption and must not be observable at all — see [Concurrent reads and lifecycle writes](#concurrent-reads-and-lifecycle-writes).
-- Generated indexes are invalid when the row count, `updated_at`, or any indexed listing field (status, priority, job run, `created_at`, tags) differs from registered bundle envelopes and must be rebuilt from bundles.
+- Generated indexes are invalid when the row count, `updated_at`, `task_type`, or any indexed listing field (status, priority, job run, `created_at`, tags) differs from registered bundle envelopes and must be rebuilt from bundles.
 - Artifact manifest entries must reference existing relative files with matching size and SHA-256; unmanifested files are ignored until a future compaction/prune command removes them.
 
 Malformed registered bundles surface as a typed `task_bundle_corrupt`
@@ -332,8 +380,11 @@ registered, settled envelope, then select from the index: SQL answers the
 status, priority, job-run, tag and continuation predicates, newest-first
 ordering (task ID ascending for ties), the limit and the total, so only the
 selected envelopes leave the parse cache and only the selected bundles load.
-Predicates the index does not project (search, type, parent, external
-references) narrow the indexed candidates in memory before the limit. Exact
+A parent predicate narrows the selection through the indexed `child_of`
+relation rows, but the freshness scan does not compare relations, so each
+selected envelope still confirms it. That predicate and those the index does
+not project (search, type, external references) narrow the indexed candidates
+in memory before the limit. Exact
 totals count metadata matches; they do not certify off-page body, event, or
 artifact integrity. A selected bundle with envelope, body, or event-log damage fails
 the request and is never replaced with another row. Listing and search
@@ -395,9 +446,10 @@ They do not audit off-page bodies, event logs or artifacts.
 
 The ORB-11205 measurements came from an ignored `task_list_io_benchmark`
 store test and the dashboard's ignored `task_response_benchmark` harness. The
-store harness was retired with the store unit tests. To reproduce the
-measurements, check out `630bc95d241c1441de9c31f980bc016948b84f5d`, the last
-commit with the historical source
+store harness was retired with the store unit tests (`bb22f499b`), and the
+dashboard harness with the orbit-web unit tests (`85726a56e`). To reproduce the
+measurements, check out `630bc95d241c1441de9c31f980bc016948b84f5d`, a commit
+that still has the historical source
 `630bc95d241c1441de9c31f980bc016948b84f5d:crates/orbit-store/src/repository/task/v2/tests/listing_bench.rs`,
 and follow that file's module docs. It generated three temporary workspaces of
 `ORBIT_TASK_BENCH_SIZE` tasks (100, 1000 or 10000), with

@@ -1,14 +1,17 @@
-//! Fault injection for phase-specific malformed-reply classification.
+//! Fault injection on the private destination session.
 //!
-//! A child destination consumes requests before corrupting their replies. This
-//! requires the real session I/O seam, which the public mux API cannot expose.
+//! A child destination consumes requests, corrupts replies, floods non-JSON
+//! lines, or withholds an answer. This requires the real session I/O seam,
+//! which the public mux API cannot expose: [`DestinationSession`] stays inside
+//! the federated module, and a [`crate::federated::DestinationProbe`] cannot
+//! attach that bounded reader to a caller-supplied child.
 
 use super::super::session::DestinationSession;
 use crate::federated::config::Destination;
 use orbit_common::OrbitError;
 use serde_json::json;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const OWNER_MACHINE: &str = "hm_owner";
 
@@ -324,4 +327,77 @@ fn replies_without_usable_structured_content_are_unknown_outcomes() {
             );
         }
     }
+}
+
+/// A destination that takes the request and stops there.
+fn stalled_session(budget: Duration) -> DestinationSession {
+    let child = Command::new("sleep")
+        .arg("30")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn a stalled destination");
+    DestinationSession::start(
+        Destination::ssh("orbit-owner", OWNER_MACHINE),
+        child,
+        budget,
+    )
+    .expect("start a session against the stalled destination")
+}
+
+/// A destination that streams garbage as fast as the pipe allows. The reader
+/// queue applies backpressure instead of buffering the flood while the
+/// consumer decides, and the first non-JSON line ends the session promptly.
+///
+/// Distinct from [`peer_traffic_and_blocked_peer_replies_preserve_the_call_deadline_and_unknown_outcome`]:
+/// that case is valid JSON peer traffic after a handshake, during `tools/call`,
+/// and must stay [`OrbitError::OutcomeUnknown`]. This one fails the handshake
+/// itself, so the class is still a delivery miss.
+#[cfg(unix)]
+#[test]
+fn a_flooding_destination_is_refused_without_buffering_the_flood() {
+    let child = Command::new("yes")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn a flooding destination");
+    let mut session = DestinationSession::start(
+        Destination::ssh("orbit-owner", OWNER_MACHINE),
+        child,
+        Duration::from_secs(5),
+    )
+    .expect("start a session against the flooding destination");
+
+    let started = Instant::now();
+    let error = session
+        .handshake()
+        .expect_err("a stream of `y` lines is not an MCP answer");
+    assert!(
+        matches!(error, OrbitError::UnreachableDestination(_)),
+        "{error}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the first bad line must end the session, not the deadline"
+    );
+}
+
+/// Silence after an internal admission was written is not a delivery miss.
+/// The admitted malformed-reply case corrupts a consumed answer; it does not
+/// cover a child that accepts the request and never replies.
+#[test]
+fn a_lost_internal_admission_answer_is_outcome_unknown() {
+    let mut session = stalled_session(Duration::from_millis(50));
+    let error = session
+        .call_internal_drain(
+            "orbit.task.pull",
+            json!({"request_id":"original-admission"}),
+        )
+        .expect_err("no reply");
+    assert!(
+        matches!(error, OrbitError::OutcomeUnknown { .. }),
+        "a sent internal admission may have committed: {error}"
+    );
 }

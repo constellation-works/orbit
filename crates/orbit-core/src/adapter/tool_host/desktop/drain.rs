@@ -1,20 +1,28 @@
 //! Desktop auto-drain translation. Authorization remains at the tool chokepoint;
 //! scheduling, claims, stopping and settlement reuse the CLI/dashboard runtime.
-use crate::application::job::DrainWorkerLimitRequest;
-use crate::application::workflow::MAX_DRAIN_WINDOW_SECONDS;
+use crate::application::job::{DrainWorkerLimitRequest, SubmissionKind};
+use crate::application::workflow::drain_window_input_error;
 use crate::{CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime};
 use orbit_common::OrbitError;
-use orbit_common::protocol::tool_input::{optional_string, required_string};
+use orbit_common::protocol::tool_input::{
+    optional_csv_or_string_list_alias, optional_string, optional_string_list_alias, required_string,
+};
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 
-pub(super) fn readiness(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
+pub(super) fn readiness(
+    runtime: &OrbitRuntime,
+    input: &Value,
+    limit: usize,
+) -> Result<Value, OrbitError> {
+    let task_ids = optional_string_list_alias(input, &["task"])?.unwrap_or_default();
+    let concurrency = optional_u32(input, "concurrency")?;
+    let allowed_crews =
+        optional_csv_or_string_list_alias(input, &["allow_crew"])?.unwrap_or_default();
     // This is a bounded observational read, not a reconciliation tick.
-    let mut value = runtime.workspace_auto_readiness(&[], None, 50, &[])?;
+    let mut value =
+        runtime.workspace_auto_readiness(&task_ids, concurrency, limit, &allowed_crews)?;
     value["controls_authorized"] = json!(true);
-    // [ORB-13987] What `orbit doctor` reports as `validation-env`, before a
-    // start: required validation may not find the user's toolchain.
-    value["validation_env_warning"] = json!(runtime.validation_env_preflight_warning());
     Ok(value)
 }
 
@@ -28,6 +36,16 @@ pub(in crate::adapter::tool_host) fn control(
     actor: &str,
 ) -> Result<Value, OrbitError> {
     let action = required_string(&input, &["action"], "action")?;
+    if action != "start" && input.get("auto_concurrency").is_some() {
+        return Err(OrbitError::InvalidInput(
+            "auto_concurrency is a start setting".into(),
+        ));
+    }
+    if action != "start" && input.get("review").is_some() {
+        return Err(OrbitError::InvalidInput(format!(
+            "`review` is a start setting; {action} does not accept it"
+        )));
+    }
     let claim = optional_string(&input, "claim_token")?;
     let workspace = input["workspace"].clone();
     if action != "stop" && input.get("force").is_some() {
@@ -46,17 +64,11 @@ pub(in crate::adapter::tool_host) fn control(
     }
     let mut result = match action.as_str() {
         "start" => {
-            // The drain refuses a longer window at its first step, so a start
-            // past it would only submit a run that fails.
             let seconds = input
                 .get("for_seconds")
                 .and_then(Value::as_u64)
-                .filter(|seconds| (1..=MAX_DRAIN_WINDOW_SECONDS).contains(seconds))
-                .ok_or_else(|| {
-                    OrbitError::InvalidInput(format!(
-                        "for_seconds must be a whole number from 1 to {MAX_DRAIN_WINDOW_SECONDS} (24 hours)"
-                    ))
-                })?;
+                .filter(|seconds| *seconds > 0)
+                .ok_or_else(drain_window_input_error)?;
             let concurrency = input
                 .get("concurrency")
                 .map(|v| {
@@ -91,7 +103,8 @@ pub(in crate::adapter::tool_host) fn control(
                 })
                 .transpose()?
                 .unwrap_or(false);
-            let run = runtime.submit_workspace_auto_run_with_containment(
+            let review = super::super::workflow_tools::review_layer(&input)?;
+            let run = runtime.submit_workspace_auto_run_with_mode(
                 Some(seconds),
                 concurrency,
                 completion,
@@ -102,34 +115,23 @@ pub(in crate::adapter::tool_host) fn control(
                 trigger,
                 false,
                 approve_proposed,
+                false,
+                input
+                    .get("auto_concurrency")
+                    .map(|value| {
+                        serde_json::from_value(value.clone())
+                            .map_err(|error| OrbitError::InvalidInput(error.to_string()))
+                    })
+                    .transpose()?,
+                review,
             )?;
             let mut started = json!({"action":"start","run_id":run.run_id,"state":if run.queued {"queued"} else {"submitted"},
                 "completion":completion.as_input_value(),"approve_proposed":approve_proposed,"submitted_at":run.submitted_at});
-            // [ORB-13901] The drain starts and holds its own waves while the
-            // host is throttled; the caller learns why it admits nothing.
-            let mut warnings = Vec::new();
-            if let Some(throttle) = runtime.admission_resource_throttle().throttle {
-                warnings.push(throttle.hold_reason());
-                started["resource_throttle"] = json!(throttle);
-            }
-            // [ORB-13987] The drain starts either way; the caller learns that
-            // required validation may not find the user's toolchain.
-            if let Some(warning) = runtime.validation_env_preflight_warning() {
-                started["validation_env_warning"] = json!(warning);
-                warnings.push(warning);
-            }
-            // Backlog this host's OS cannot start waits for a host of its
-            // own; named so the window does not read as an empty backlog.
-            if let Some(warning) = runtime.host_os_backlog_warning() {
-                warnings.push(warning);
-            }
-            if !warnings.is_empty() {
-                started["warning"] = json!(warnings.join("\n"));
-            }
-            // Informational, not a refusal: an empty list is no required check.
-            if let Some(note) = runtime.required_validation_note() {
-                started["note"] = json!(note);
-            }
+            started["review"] = runtime.run_review_layer(&run.run_id)?;
+            started["auto_concurrency"] = runtime.run_auto_concurrency(&run.run_id)?;
+            runtime
+                .submission_notices(SubmissionKind::Drain)
+                .insert_into(&mut started);
             started
         }
         "stop" => {
@@ -183,12 +185,9 @@ pub(in crate::adapter::tool_host) fn control(
                     unstopped.join("; ")
                 )));
             }
-            let coordinators = stopped.coordinators.iter().map(|change| json!({
-                "run_id":change.run_id,"outcome":change.outcome,
-                "remaining_children":change.remaining_children.iter().map(|child| json!({"run_id":child.run_id,"phase":child.phase})).collect::<Vec<_>>(),
-                "forced_runs":change.forced_runs,
-            })).collect::<Vec<_>>();
-            json!({"action":"stop","outcome":stopped.outcome,"coordinators":coordinators,"pull_settlements":stopped.pull_settlements})
+            let mut result = stopped.to_json();
+            result["action"] = json!("stop");
+            result
         }
         "resize" => resize(runtime, &input, claim.as_deref(), actor)?,
         _ => {

@@ -1,6 +1,7 @@
 //! [ORB-15308] A re-claimed task whose earlier claim already opened a pull
 //! request republishes through that pull request, or closes it for the new
-//! one, and never leaves two open.
+//! one, and never leaves two open. A fresh attempt that resumes nothing
+//! closes the task's earlier open pull requests the same way.
 //!
 //! Each test drives the shipped `candidate_resume`, `git_push` and `pr_open`
 //! actions in order, as the claimed PR leaf runs them, through
@@ -20,11 +21,13 @@ use std::process::Command;
 
 use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError, test_env};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate, execute_deterministic_action};
+use orbit_engine::{PrConfig, TaskAutomationUpdate, execute_deterministic_action};
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 
 use super::git_fixture;
+
+mod final_recovery;
 
 const CHILD_ENV: &str = "ORBIT_CLAIMED_PR_REUSE_CHILD";
 const SANDBOX_ENV: &str = "ORBIT_CLAIMED_PR_REUSE_SANDBOX";
@@ -38,13 +41,77 @@ const EARLIER: &str = "orbit/T-REUSE-aaaaaaaa";
 const OURS: &str = "orbit/T-REUSE-bbbbbbbb";
 const PRIOR_PR: &str = "41";
 
+/// A fresh attempt of a re-admitted task: the earlier attempt's `[BLOCKED]`
+/// failure-handoff pull request #41 is still open, and the new run resumes
+/// no candidate, so nothing names #41 to it. Its `pr_open` opens the new pull
+/// request and closes #41 with a comment naming it, so the task has exactly
+/// one open pull request. A human's pull request on the task's branch prefix,
+/// another task's pull request and a merged one are left alone, and a retried
+/// `pr_open` closes nothing more.
+fn a_fresh_attempt_closes_the_tasks_earlier_open_pull_request() {
+    isolated(
+        "a_fresh_attempt_closes_the_tasks_earlier_open_pull_request",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            fx.describe_pr(PRIOR_PR, None, &format!("Blocked delivery of {TASK_ID}."));
+            fx.add_pr(
+                "50",
+                "orbit/T-REUSE-cccccccc",
+                "OPEN",
+                Some("someone"),
+                TASK_ID,
+            );
+            fx.add_pr("51", "orbit/T-OTHER-dddddddd", "OPEN", None, "T-OTHER");
+            fx.add_pr("52", "orbit/T-REUSE-eeeeeeee", "MERGED", None, TASK_ID);
+            let host = Host::closing_superseded(&fx.repo);
+
+            fs::write(fx.claim.join("fresh.txt"), "fresh attempt\n").unwrap();
+            git(&fx.claim, &["add", "fresh.txt"]);
+            git(&fx.claim, &["commit", "-q", "-m", "fresh attempt"]);
+            let pushed = action(&host, "git_push", &fx.push_input(OURS, &Value::Null)).unwrap();
+            assert_eq!(pushed["decision"], "performed_create", "{pushed}");
+
+            let opened = action(&host, "pr_open", &fx.open_input(OURS, &Value::Null)).unwrap();
+            assert_eq!(opened["decision"], "performed", "{opened}");
+            let replacement = opened["pr_number"].as_str().unwrap().to_string();
+            assert!(opened["superseded_pull_request"].is_null(), "{opened}");
+            let closed = opened["closed_stale_pull_requests"].as_array().unwrap();
+            assert_eq!(closed.len(), 1, "{opened}");
+            assert_eq!(closed[0]["number"], PRIOR_PR, "{opened}");
+            assert_eq!(closed[0]["decision"], "closed", "{opened}");
+            assert!(
+                !fx.pr_file(PRIOR_PR, "comment").is_empty(),
+                "the earlier pull request is closed with a comment"
+            );
+            let mut expected = vec!["50".to_string(), "51".to_string(), replacement];
+            expected.sort();
+            assert_eq!(
+                fx.open_prs(),
+                expected,
+                "only the task's earlier Orbit pull request is closed"
+            );
+            assert_eq!(fx.pr_file("52", "state"), "MERGED");
+            assert_eq!(
+                fx.remote_tip(EARLIER),
+                fx.earlier_head,
+                "the closed pull request's branch is kept"
+            );
+
+            let again = action(&host, "pr_open", &fx.open_input(OURS, &Value::Null)).unwrap();
+            assert_eq!(again["decision"], "reused", "{again}");
+            assert_eq!(again["closed_stale_pull_requests"], json!([]), "{again}");
+            let closes = fx.calls().iter().filter(|call| *call == "pr close").count();
+            assert_eq!(closes, 1, "{:?}", fx.calls());
+        },
+    );
+}
+
 /// The earlier claim pushed its candidate and opened #41, then failed in its
 /// before-landing review. The re-claim resumes it on a moved base: its
 /// branch becomes the candidate's, the push replaces the published head
 /// under a lease on it, and `pr_open` reuses #41 rather than opening another.
 /// The earlier claim's retained worktree keeps its checkout and commits on a
 /// branch renamed aside.
-#[test]
 fn a_resumed_published_candidate_republishes_through_its_open_pull_request() {
     isolated(
         "a_resumed_published_candidate_republishes_through_its_open_pull_request",
@@ -98,7 +165,6 @@ fn a_resumed_published_candidate_republishes_through_its_open_pull_request() {
 /// holds a commit that was never published, which is never moved. The leaf
 /// publishes on its own branch, and `pr_open` closes #41 with a comment
 /// naming the pull request that replaced it.
-#[test]
 fn an_unreusable_branch_closes_the_earlier_pull_request_for_the_new_one() {
     isolated(
         "an_unreusable_branch_closes_the_earlier_pull_request_for_the_new_one",
@@ -158,7 +224,6 @@ fn an_unreusable_branch_closes_the_earlier_pull_request_for_the_new_one() {
 /// advanced remote and `git_rebase` reports a fresh rewrite checkpoint that
 /// names it, which the ordinary push would accept. The adopted lease is on
 /// the published head, so the push refuses and the newer commit stays.
-#[test]
 fn an_advanced_adopted_branch_is_not_overwritten_after_a_base_rebase() {
     isolated(
         "an_advanced_adopted_branch_is_not_overwritten_after_a_base_rebase",
@@ -190,7 +255,6 @@ fn an_advanced_adopted_branch_is_not_overwritten_after_a_base_rebase() {
 
 /// A branch deleted on the remote since the published head is not recreated
 /// by the resumed candidate.
-#[test]
 fn a_deleted_adopted_branch_is_not_recreated() {
     isolated("a_deleted_adopted_branch_is_not_recreated", |sandbox| {
         let fx = Fixture::new(sandbox);
@@ -217,7 +281,6 @@ fn a_deleted_adopted_branch_is_not_recreated() {
 
 /// A remote still at the published head is replaced under the lease on it
 /// even when the base moved, and a retried push finds its own head published.
-#[test]
 fn an_unmoved_adopted_branch_is_replaced_after_a_base_rebase() {
     isolated(
         "an_unmoved_adopted_branch_is_replaced_after_a_base_rebase",
@@ -246,7 +309,6 @@ fn an_unmoved_adopted_branch_is_replaced_after_a_base_rebase() {
 
 /// A remote still at the published head fast-forwards under the lease on it,
 /// and a retried push finds the candidate published.
-#[test]
 fn an_unmoved_adopted_branch_fast_forwards_under_its_published_lease() {
     isolated(
         "an_unmoved_adopted_branch_fast_forwards_under_its_published_lease",
@@ -271,7 +333,6 @@ fn an_unmoved_adopted_branch_fast_forwards_under_its_published_lease() {
 /// The adopted branch is deleted after the engine observed it, before its
 /// fast-forward push starts. The lease refuses the push, and the branch stays
 /// deleted.
-#[test]
 fn a_fast_forward_does_not_recreate_an_adopted_branch_deleted_after_observation() {
     isolated(
         "a_fast_forward_does_not_recreate_an_adopted_branch_deleted_after_observation",
@@ -296,7 +357,6 @@ fn a_fast_forward_does_not_recreate_an_adopted_branch_deleted_after_observation(
 /// The adopted branch is rewound to an ancestor of the local candidate after
 /// the engine observed it, before its fast-forward push starts. The lease
 /// refuses the push, and the rewound head survives.
-#[test]
 fn a_fast_forward_does_not_move_an_adopted_branch_rewound_after_observation() {
     isolated(
         "a_fast_forward_does_not_move_an_adopted_branch_rewound_after_observation",
@@ -323,6 +383,7 @@ enum Change {
 }
 
 struct Fixture {
+    _root: tempfile::TempDir,
     forge: PathBuf,
     repo: PathBuf,
     /// The earlier claim's retained worktree.
@@ -337,12 +398,13 @@ struct Fixture {
 
 impl Fixture {
     fn new(sandbox: &Path) -> Self {
-        let forge = sandbox.join("forge");
+        let root = tempfile::tempdir_in(sandbox).unwrap();
+        let forge = root.path().join("forge");
         let remote = forge.join("remote.git");
-        let repo = sandbox.join("repo");
+        let repo = root.path().join("repo");
         fs::create_dir_all(forge.join("prs")).unwrap();
         fs::create_dir_all(&repo).unwrap();
-        git(sandbox, &["init", "-q", "--bare", path_str(&remote)]);
+        git(root.path(), &["init", "-q", "--bare", path_str(&remote)]);
         git_fixture::init(&repo);
         let repo = repo.canonicalize().unwrap();
         git(&repo, &["remote", "add", "origin", path_str(&remote)]);
@@ -358,7 +420,7 @@ impl Fixture {
         git(&repo, &["push", "-q", "origin", BASE]);
 
         // The earlier claim: its candidate, pushed, with #41 open on it.
-        let earlier = sandbox.join("earlier");
+        let earlier = root.path().join("earlier");
         git(
             &repo,
             &[
@@ -391,7 +453,7 @@ impl Fixture {
         git(&repo, &["push", "-q", "origin", BASE]);
         let base_sha = git(&repo, &["rev-parse", BASE]);
 
-        let claim = sandbox.join("claim");
+        let claim = root.path().join("claim");
         git(
             &repo,
             &["worktree", "add", "-q", "-b", OURS, path_str(&claim), BASE],
@@ -404,10 +466,8 @@ impl Fixture {
         fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
 
         // The real Git is found before the substitute shadows it on `PATH`.
-        let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-            .find_map(|dir| fs::canonicalize(dir.join("git")).ok())
-            .expect("git on PATH");
-        let change_file = sandbox.join("push-change");
+        let real_git = PathBuf::from(std::env::var_os("ORBIT_CLAIMED_PR_REUSE_REAL_GIT").unwrap());
+        let change_file = root.path().join("push-change");
         let git_shim = sandbox.join("bin").join("git");
         fs::write(
             &git_shim,
@@ -420,6 +480,7 @@ impl Fixture {
         .unwrap();
         fs::set_permissions(&git_shim, fs::Permissions::from_mode(0o755)).unwrap();
         Self {
+            _root: root,
             forge,
             repo,
             earlier,
@@ -585,6 +646,25 @@ impl Fixture {
         })
     }
 
+    /// Gives a seeded pull request an author (when not Orbit's) and a body.
+    fn describe_pr(&self, number: &str, author: Option<&str>, body: &str) {
+        let dir = self.forge.join("prs").join(number);
+        if let Some(author) = author {
+            fs::write(dir.join("author"), author).unwrap();
+        }
+        fs::write(dir.join("body"), body).unwrap();
+    }
+
+    /// Seeds a pull request the earlier attempt did not open.
+    fn add_pr(&self, number: &str, head: &str, state: &str, author: Option<&str>, names: &str) {
+        let dir = self.forge.join("prs").join(number);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("head"), head).unwrap();
+        fs::write(dir.join("base"), BASE).unwrap();
+        fs::write(dir.join("state"), state).unwrap();
+        self.describe_pr(number, author, &format!("Delivery of {names}."));
+    }
+
     fn remote_tip(&self, branch: &str) -> String {
         git(
             &self.forge.join("remote.git"),
@@ -618,17 +698,28 @@ impl Fixture {
 /// The task the delivery actions read; everything else is the engine's own.
 struct Host {
     repo: PathBuf,
+    /// `pr.close_on_terminal`, which also closes a task's earlier delivery
+    /// pull requests when a run publishes its own.
+    close_superseded: bool,
 }
 
 impl Host {
     fn new(repo: &Path) -> Self {
         Self {
             repo: repo.to_path_buf(),
+            close_superseded: false,
+        }
+    }
+
+    fn closing_superseded(repo: &Path) -> Self {
+        Self {
+            close_superseded: true,
+            ..Self::new(repo)
         }
     }
 }
 
-impl RuntimeHost for Host {
+impl orbit_engine::test_support::NullRuntimeHost for Host {
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
         if task_id != TASK_ID {
             return Err(OrbitError::not_found(
@@ -662,6 +753,9 @@ impl RuntimeHost for Host {
             crew: None,
             crew_source: None,
             orchestrator: None,
+            orchestrator_model: None,
+            orchestrator_model_source: None,
+            origin: None,
             created_at: now,
             updated_at: now,
         })
@@ -677,6 +771,13 @@ impl RuntimeHost for Host {
 
     fn repo_root(&self) -> Result<String, OrbitError> {
         Ok(self.repo.to_string_lossy().into_owned())
+    }
+
+    fn pr_config(&self) -> PrConfig {
+        PrConfig {
+            close_superseded: self.close_superseded,
+            ..PrConfig::default()
+        }
     }
 }
 
@@ -696,7 +797,8 @@ fn path_str(path: &Path) -> &str {
 }
 
 /// The `gh` surface the provider adapter calls, over any number of pull
-/// requests: `prs/<number>/{head,base,state,comment}` under the forge.
+/// requests: `prs/<number>/{head,base,state,comment}` under the forge, with
+/// an optional `author` (else `orbit`) and single-line `body`.
 const FAKE_GH: &str = r#"#!/bin/sh
 set -eu
 forge='__FORGE__'
@@ -716,14 +818,20 @@ url() { printf 'https://github.com/orbit/test/pull/%s' "$1"; }
 
 case "$1 ${2:-}" in
     "pr list")
+        # With `--head`, the open pull requests on that branch; without it,
+        # every open one with its body.
         head=$(flag --head "$@")
         printf '['
         sep=
         for dir in "$forge"/prs/*; do
             [ "$(cat "$dir/state")" = OPEN ] || continue
-            [ "$(cat "$dir/head")" = "$head" ] || continue
-            printf '%s{"number":%s,"title":"Delivery","headRefName":"%s","author":{"login":"orbit"}}' \
-                "$sep" "${dir##*/}" "$head"
+            [ -z "$head" ] || [ "$(cat "$dir/head")" = "$head" ] || continue
+            author=orbit
+            [ ! -f "$dir/author" ] || author=$(cat "$dir/author")
+            body=
+            [ ! -f "$dir/body" ] || body=$(cat "$dir/body")
+            printf '%s{"number":%s,"title":"Delivery","headRefName":"%s","author":{"login":"%s"},"body":"%s"}' \
+                "$sep" "${dir##*/}" "$(cat "$dir/head")" "$author" "$body"
             sep=,
         done
         printf ']\n' ;;
@@ -784,7 +892,7 @@ exec "$git" "$@"
 /// Run `body` in a copy of this test binary whose `PATH` starts with the
 /// substitute `gh`, with disposable `$HOME` and no inherited authority.
 fn isolated(test: &str, body: impl FnOnce(&Path)) {
-    if std::env::var(CHILD_ENV).as_deref() == Ok(test) {
+    if std::env::var_os(CHILD_ENV).is_some() {
         let sandbox = PathBuf::from(std::env::var_os(SANDBOX_ENV).expect("sandbox path"));
         body(&sandbox);
         return;
@@ -800,6 +908,9 @@ fn isolated(test: &str, body: impl FnOnce(&Path)) {
     path.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     ));
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .find_map(|dir| fs::canonicalize(dir.join("git")).ok())
+        .expect("git on PATH");
     let qualified = format!(
         "{}::{test}",
         module_path!().split_once("::").expect("test module").1
@@ -818,6 +929,7 @@ fn isolated(test: &str, body: impl FnOnce(&Path)) {
     command
         .args([&qualified, "--exact", "--nocapture", "--test-threads=1"])
         .current_dir(sandbox.path())
+        .env("ORBIT_CLAIMED_PR_REUSE_REAL_GIT", real_git)
         .env(CHILD_ENV, test)
         .env(SANDBOX_ENV, sandbox.path())
         .env("PATH", std::env::join_paths(path).unwrap())
@@ -828,4 +940,58 @@ fn isolated(test: &str, body: impl FnOnce(&Path)) {
         .env("GIT_TERMINAL_PROMPT", "0");
     let output = test_env::run_child_test(&mut command, &qualified, sandbox.path());
     test_env::assert_child_test_passed(&qualified, output.status, output.stdout, output.stderr);
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn published_lease_contracts_1() {
+    isolated("published_lease_contracts_1", |_| {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_resumed_published_candidate_republishes_through_its_open_pull_request",
+                a_resumed_published_candidate_republishes_through_its_open_pull_request,
+            ),
+            (
+                "an_unreusable_branch_closes_the_earlier_pull_request_for_the_new_one",
+                an_unreusable_branch_closes_the_earlier_pull_request_for_the_new_one,
+            ),
+            (
+                "an_advanced_adopted_branch_is_not_overwritten_after_a_base_rebase",
+                an_advanced_adopted_branch_is_not_overwritten_after_a_base_rebase,
+            ),
+            (
+                "a_deleted_adopted_branch_is_not_recreated",
+                a_deleted_adopted_branch_is_not_recreated,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn published_lease_contracts_2() {
+    isolated("published_lease_contracts_2", |_| {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "an_unmoved_adopted_branch_is_replaced_after_a_base_rebase",
+                an_unmoved_adopted_branch_is_replaced_after_a_base_rebase,
+            ),
+            (
+                "an_unmoved_adopted_branch_fast_forwards_under_its_published_lease",
+                an_unmoved_adopted_branch_fast_forwards_under_its_published_lease,
+            ),
+            (
+                "a_fast_forward_does_not_recreate_an_adopted_branch_deleted_after_observation",
+                a_fast_forward_does_not_recreate_an_adopted_branch_deleted_after_observation,
+            ),
+            (
+                "a_fast_forward_does_not_move_an_adopted_branch_rewound_after_observation",
+                a_fast_forward_does_not_move_an_adopted_branch_rewound_after_observation,
+            ),
+            (
+                "a_fresh_attempt_closes_the_tasks_earlier_open_pull_request",
+                a_fresh_attempt_closes_the_tasks_earlier_open_pull_request,
+            ),
+        ]);
+    });
 }

@@ -10,7 +10,7 @@ Symptoms:
 
 - A gate, auto, or task run repeatedly emits `task.locks.reserve.denied`.
 - Conflicts name `held_by: "reservation"` with the same `held_by_id` on each retry.
-- CLI-only `orbit task locks list` or reservation-store inspection shows the blocking reservation belongs to a different task that is already `done`, `rejected`, `archived`, or otherwise no longer active.
+- The dashboard’s **Locks held** card, `orbit task locks list`, or reservation-store inspection shows the blocking reservation belongs to a different task that is already `done`, `rejected`, `archived`, or otherwise no longer active.
   `failed` is a run state, not a task lifecycle status.
 - The reservation has `owner_run_id: null`, so terminal run cleanup cannot release it by owner.
 
@@ -38,7 +38,7 @@ Solution:
 2. Release through the CLI-only lock admin surface, not by editing SQLite:
 
    ```bash
-   orbit task locks release <reservation_id>
+   orbit task locks release <reservation_id> --confirm
    ```
 
 3. Re-run or re-check the blocked run. The next reserve attempt should either acquire a fresh reservation with `owner_run_id` set or reveal a different conflict.
@@ -58,7 +58,7 @@ Confirm:
 orbit run show <run_id> --json
 orbit job show <job> --json
 orbit run events <run_id> --json | rg '<missing_field>|<activity_name>|<job_name>'
-diff -u .orbit/resources/jobs/job_<job>.yaml ~/.orbit/resources/jobs/job_<job>.yaml
+diff -u .orbit/resources/jobs/<job>.yaml ~/.orbit/resources/jobs/<job>.yaml
 find .orbit/resources/jobs ~/.orbit/resources/jobs -name '*<job>*' -print
 ```
 

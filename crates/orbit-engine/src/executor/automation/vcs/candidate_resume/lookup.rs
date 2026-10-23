@@ -5,6 +5,7 @@ use orbit_store::contracts::{CandidateFreshReason, KeptClaimCandidate};
 use orbit_types::task::{CANDIDATE_DISCARDED_EVENT, Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT, ReviewEvidenceHold,
+    ReviewGateHistoryNote,
 };
 use serde_json::{Value, json};
 
@@ -55,9 +56,42 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
         {
             return claim_repair_resume(repair, &workspace_path, &base_sha);
         }
-        return claimed_resume(host, input, task_id, &workspace_path, &base_sha);
+        return claimed_resume(input, task_id, &workspace_path, &base_sha);
     }
     let task = host.get_task(task_id)?;
+    if host.source_repair_admission(&run_id)?.is_some() {
+        let run = host
+            .get_job_run(&run_id)?
+            .ok_or_else(|| OrbitError::Execution("source repair run disappeared".into()))?;
+        let request = run
+            .input
+            .as_ref()
+            .and_then(|input| input.get(orbit_types::workflow::SOURCE_REPAIR_KEY))
+            .ok_or_else(|| OrbitError::Execution("source repair admission disappeared".into()))?;
+        return super::source_repair::continue_source(
+            host,
+            &run,
+            &task,
+            request,
+            &workspace_path,
+            &base_sha,
+        );
+    }
+    if input.get("prior_foreign_run").is_none_or(Value::is_null)
+        && let Some(binding) = host.owner_published_candidate(
+            &task.id,
+            input.get("prior_job_run_id").and_then(Value::as_str),
+        )?
+    {
+        return super::source_repair::continue_published_owner(
+            host,
+            &run_id,
+            &task,
+            &binding,
+            &workspace_path,
+            &base_sha,
+        );
+    }
     let foreign = input.get("prior_foreign_run").and_then(|run| {
         Some(ForeignRun {
             run_id: input_string_field(run, "run_id")?,
@@ -89,14 +123,7 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
         Preserved::Refused(candidate, reason) => (candidate, Outcome::Fresh(reason)),
         Preserved::Usable(candidate) => {
             let from_claim = candidate.claim.is_some();
-            let outcome = resume(
-                host,
-                &task.id,
-                &candidate,
-                &workspace_path,
-                &base_sha,
-                from_claim,
-            )?;
+            let outcome = resume(&task.id, &candidate, &workspace_path, &base_sha, from_claim)?;
             (candidate, outcome)
         }
     };
@@ -114,8 +141,7 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
 
 /// [ORB-14257] Resume the candidate the owner kept from the task's last
 /// claim. Nothing is written to the task: its history lives on the owner.
-fn claimed_resume<H: RuntimeHost + ?Sized>(
-    host: &H,
+fn claimed_resume(
     input: &Value,
     task_id: &str,
     workspace_path: &Path,
@@ -134,7 +160,7 @@ fn claimed_resume<H: RuntimeHost + ?Sized>(
             base_sha,
         ));
     };
-    let outcome = resume(host, task_id, &candidate, workspace_path, base_sha, true)?;
+    let outcome = resume(task_id, &candidate, workspace_path, base_sha, true)?;
     tracing::info!(target: "orbit_engine::executor::automation::vcs::candidate_resume",
         task_id,
         outcome = outcome_name(&outcome),
@@ -153,6 +179,12 @@ fn claimed_resume<H: RuntimeHost + ?Sized>(
     resumed["prior_pull_request_head"] = json!(candidate.prior_pull_request_head());
     let adoption = match outcome {
         Outcome::Fresh(_) => Adoption::Refused("the candidate was not resumed".to_string()),
+        // [ORB-16890] The owner's landing stopped that pull request on a
+        // check the candidate fails, and may have updated its branch since:
+        // the repair publishes its own, whose `pr_open` closes it.
+        _ if candidate.landing_stop.is_some() => Adoption::Refused(format!(
+            "the owner's landing stopped pull request #{pull_request}; the repair opens its own"
+        )),
         _ if !candidate.published => Adoption::Refused(format!(
             "branch '{}' was not pushed at {}",
             candidate.branch, candidate.head_sha
@@ -214,6 +246,7 @@ fn claim_candidate(preserved: &Value, claim: Option<ClaimSource>) -> Option<Cand
             .get("interrupted_review")
             .filter(|review| !review.is_null())
             .and_then(|review| serde_json::from_value(review.clone()).ok()),
+        landing_stop: input_string_field(preserved, "landing_stop"),
     })
 }
 
@@ -275,6 +308,7 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
         pull_request: None,
         pull_request_head: None,
         interrupted_review: None,
+        landing_stop: None,
     };
     let recorded = input_string_field(evidence, "task_spec_digest");
     refuse_stale(host, task, candidate, Some(recorded.as_deref()))
@@ -336,6 +370,7 @@ fn held_candidate<H: RuntimeHost + ?Sized>(
         pull_request: None,
         pull_request_head: None,
         interrupted_review: None,
+        landing_stop: None,
     };
     // A hold from before spec provenance was released by a receipt that
     // checked the task's whole meaning; the fresh review reads the task as
@@ -437,10 +472,10 @@ fn evidence_received(history: &[TaskHistoryEntry], run_id: &str) -> bool {
         })
         .is_some_and(|entry| {
             entry.event == REVIEW_EVIDENCE_RECEIVED_EVENT
-                && entry
-                    .note
-                    .as_deref()
-                    .is_some_and(|note| note.starts_with(&format!("run={run_id};")))
+                && entry.note.as_deref().is_some_and(|note| {
+                    ReviewGateHistoryNote::from_text(note)
+                        .is_some_and(|parsed| parsed.run_id == run_id)
+                })
         })
 }
 
@@ -523,6 +558,7 @@ fn claim_repair_resume(
         pull_request: None,
         pull_request_head: None,
         interrupted_review: None,
+        landing_stop: None,
     };
     let outcome = match apply(&candidate, &candidate.head_sha, workspace_path, base_sha)? {
         Applied::Refused(reason) => {

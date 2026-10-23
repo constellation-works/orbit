@@ -32,14 +32,16 @@ Start with [ARCHITECTURE.md](ARCHITECTURE.md) for the crate layout and layering 
 2. **Keep it scoped.** One change per PR, with no unrelated refactors.
 3. **Follow the code rules** in [CLAUDE.md](CLAUDE.md#code). Lints are enforced, behaviour is tested at the boundary first (integration, golden, e2e) with unit tests only by exception ([test_strategy.md](docs/design-patterns/test_strategy.md)) in a sibling `tests/` dir, and internal IDs stay out of user-facing text.
 4. **Update docs in the same PR.** That includes the affected pages in `docs/design/` and `website/`, and `make goldens UPDATE=1` if you changed CLI help or the MCP surface. Leave `CHANGELOG.md` alone, because it's compiled at release.
-5. **Run the gates** before opening the PR:
-
-   ```bash
-   make ci-fast    # fmt and repository guardrails; no Rust tests
-   make ci-test-affected  # full tests for changed crates and workspace dependents
-   make ci-lint    # clippy and rustdoc, -D warnings
-   make goldens    # CLI help and MCP snapshots
-   ```
+5. **Run focused local checks** before opening the PR. For a diff, run the
+   checks relevant to the change, such as tests for the behavior you changed,
+   `make goldens` when you change CLI help, MCP text or another golden surface,
+   and Clippy for Rust crates you touched. The required PR checks —
+   `Check / Clippy / Test` and `Test shard 1/3`, `2/3` and `3/3` — cover
+   formatting, guardrails, lint, rustdoc, goldens and the full test suite. For
+   managed Orbit deliveries, the pipeline runs the commands in
+   `task.final_validation_commands`, configured through
+   `workflow.required_validation_commands`. See
+   [Validation and CI](docs/DEVELOPMENT.md#validation-and-ci) for details.
 
 6. **Write a clear commit message** with a type prefix: `feat:`, `fix:`, `docs:`, `refactor:`, or `chore:`.
 
@@ -47,14 +49,14 @@ Tests that mutate Orbit state, spawn pipeline runs, or depend on the sandbox hav
 
 ## Review
 
-- CI runs the full `make ci` on GitHub-hosted runners. Fork PRs get no secrets.
-- Linux and macOS CI cancel superseded runs for the same PR within each workflow. Non-PR runs use separate concurrency groups, so pushes to `main` and `agent-main` can finish independently.
+- Pull requests require `Check / Clippy / Test` and `Test shard 1/3`, `2/3` and `3/3`. Fork PRs get no secrets.
+- Linux CI cancels superseded runs for the same PR. The macOS workflow runs only on pushes to `main` and `agent-main`, never on pull requests. Its push runs share one group per branch, so a branch has at most one running and one waiting run, and a newer push replaces the waiting one. An intermediate `agent-main` commit can therefore get no macOS run; the newest commit always gets one. `main` and `agent-main` queue separately.
 - A maintainer reviews every PR on GitHub and squash-merges it into `agent-main`. Maintainers never run contributed branches through Orbit's own pipeline host.
 - Expect a first response within a week. If a PR stalls, a comment is welcome.
 
 ## Using coding agents
 
-Agent-assisted PRs are welcome. [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md) load automatically in most agent CLIs. You are responsible for the diff, so read it, run the gates, and say in the PR description what you verified.
+Agent-assisted PRs are welcome. [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md) load automatically in most agent CLIs. You are responsible for the diff, so review it, run focused local checks relevant to the changes, and say in the PR description what you verified. Required PR checks and managed-delivery final validation are described in [Validation and CI](docs/DEVELOPMENT.md#validation-and-ci).
 
 ## Community
 

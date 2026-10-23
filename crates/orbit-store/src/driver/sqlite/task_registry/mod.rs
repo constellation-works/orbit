@@ -2,7 +2,11 @@
 //!
 //! `types` contains the public task-registry data structs.
 //! `partition_id` derives, validates, and allocates task-store partition ids.
-//! `schema` owns SQLite schema setup, migrations, and registry user-version guards.
+//! `ledger` is the registry's own migration ledger, run by the store ledger engine,
+//! and documents the `user_version` fence kept for pre-ledger binaries.
+//! `baseline` is the frozen ledger v1 body that pre-ledger registries adopt through.
+//! `index_task_type` is the frozen ledger v2 body that indexes each task's `type`.
+//! `schema` adopts, migrates and admits a registry when it opens.
 //! `queries` contains internal SQL helpers and row-to-type mapping.
 //! `util` contains shared path, time, relation, and WAL helpers used by the registry.
 //! `store` defines `TaskRegistryStore` and opens it; the rest of its implementation
@@ -19,9 +23,12 @@
 use std::path::{Path, PathBuf};
 
 mod allocator;
+mod baseline;
 mod bindings;
 mod envelope_stamps;
 mod index;
+mod index_task_type;
+pub(crate) mod ledger;
 mod listing;
 mod partition_id;
 mod queries;
@@ -30,12 +37,6 @@ mod schema;
 mod store;
 mod util;
 mod workspaces;
-
-// Reader compatibility floor, not a counter for additive setup. Action keys
-// preserve the v5 task/allocator format and can be ignored by older readers.
-// Version 6 was shipped for that addition alone; schema.rs recovers it. Never
-// reuse 6 for an incompatible format.
-const REGISTRY_SCHEMA_VERSION: u32 = 5;
 
 pub fn task_registry_path(global_root: &Path) -> PathBuf {
     global_root.join("tasks").join("index.sqlite")
@@ -80,6 +81,7 @@ pub use crate::contracts::{
     WorkspaceBinding, WorkspaceCheckoutBinding,
 };
 pub(crate) use allocator::parse_orb_task_number;
+pub(crate) use ledger::registry_compatibility;
 pub use store::TaskRegistryStore;
 
 #[cfg(test)]

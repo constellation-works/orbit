@@ -3,8 +3,8 @@ summary: "MCP Session Context — Vision"
 type: design
 title: "MCP Session Context — Vision"
 owner: codex
-last_updated: 2026-09-09
-last_validated: 2026-10-09
+last_updated: 2026-10-21
+last_validated: 2026-10-21
 status: Accepted
 feature: mcp-session-context
 doc_role: vision
@@ -39,13 +39,16 @@ Add a field only when all three are true:
 ## Stable principles
 
 - External workspace values address server state; they do not prove identity.
-  Federated mode uses host-qualified (`hm_…/ws_*`) selectors, while v1 still
-  resolves a local selector on the accepting machine. See
-  [federated-mcp](../federated-mcp/specs/federated-workspace-mcp.md).
+  Federated workspace-scoped calls use host-qualified (`hm_…/ws_*`) selectors.
+  Id-routed task calls use the task ID and configured task-prefix table; the v1
+  server resolves workspace selectors locally and refuses IDs owned by another
+  host. See [federated-mcp](../federated-mcp/specs/federated-workspace-mcp.md).
 - The accepting machine describes itself.
 - Caller machine and network labels are useful for audit correlation but remain fallible.
 - The MCP adapter owns call correlation.
-- Every tools/call, including an unknown raw name, crosses one Core audit boundary.
+- Tool calls dispatched to the host, including an unknown raw name, cross one Core audit boundary.
+  Adapter-only presentation responses without a data read and adapter-level refusals can return
+  before host dispatch; presentation data reads use the underlying tool's audit boundary.
 - Core remains the execution, audit, and authorization authority.
 
 ## Task References

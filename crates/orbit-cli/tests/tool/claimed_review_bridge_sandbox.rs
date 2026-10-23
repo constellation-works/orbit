@@ -24,11 +24,17 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+#[cfg(target_os = "linux")]
+use std::io::Read;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::process::Child;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_core::OrbitRuntime;
@@ -216,14 +222,93 @@ impl Node {
     }
 }
 
+/// Exec'd around the owner runtime. `PR_SET_PDEATHSIG`/`SIGKILL` survives
+/// `exec`, so the runtime dies with the stand-in even when the broker's
+/// session drop SIGKILLs that pid and cannot run a reaper. The `getppid()==1`
+/// recheck covers the parent dying between `fork` and `prctl`.
+///
+/// The wrapper also holds `ORBIT_FIXTURE_RUNTIME_LOCK` across that exec. The
+/// fd stays open for the runtime's whole life, including while the process
+/// is stuck in an uninterruptible write and has not yet honored SIGKILL.
+/// The next session blocks on the same flock until this process has exited,
+/// so it does not spend the store's busy budget on a lock the kernel still
+/// holds. Parent-death is armed before the wait: a session killed while this
+/// process is only waiting must not become the lock holder.
+const DIE_WITH_PARENT_WRAPPER: &str = r#"#!/usr/bin/env python3
+import ctypes, fcntl, os, sys
+if sys.platform.startswith("linux") and os.environ.get("ORBIT_FIXTURE_DIE_WITH_PARENT") == "1":
+    libc = ctypes.CDLL(None, use_errno=True)
+    prctl = libc.prctl
+    prctl.argtypes = [ctypes.c_int, ctypes.c_ulong]
+    prctl.restype = ctypes.c_int
+    if prctl(1, 9) != 0:
+        os._exit(1)
+    if os.getppid() == 1:
+        os._exit(1)
+lock = os.environ.get("ORBIT_FIXTURE_RUNTIME_LOCK")
+if lock:
+    held = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(held, fcntl.LOCK_EX)
+    os.set_inheritable(held, True)
+os.execv(sys.argv[1], sys.argv[1:])
+"#;
+
+/// Holds `BEGIN EXCLUSIVE` across stdin EOF, the shutdown-checkpoint shape
+/// that surfaces `database is locked` once the busy timeout expires. The
+/// checkpoint outlasts the fixture hang guard, so a runtime that outlives its
+/// stand-in keeps the store locked for the whole wait; the test kills it after.
+#[cfg(target_os = "linux")]
+const LOCK_HOLDING_RUNTIME: &str = r#"#!/usr/bin/env python3
+import os, sqlite3, sys, time
+db = os.environ["ORBIT_FIXTURE_DB"]
+ready = os.environ["ORBIT_FIXTURE_READY"]
+connection = sqlite3.connect(db, isolation_level=None, timeout=0)
+connection.execute("BEGIN EXCLUSIVE")
+connection.execute("CREATE TABLE IF NOT EXISTS held(x INTEGER)")
+connection.execute("INSERT INTO held VALUES (1)")
+with open(ready, "w") as handle:
+    handle.write(str(os.getpid()))
+sys.stdin.buffer.read(1)
+time.sleep(600)
+connection.execute("COMMIT")
+"#;
+
 /// An `ssh` stand-in for the follower: it needs the caller's
 /// `~/.ssh/known_hosts`, as the real client does to verify the owner, then
-/// runs the runtime-composed remote argv against the owner's home. A marker
-/// file drops the answer to the next artifact put after the owner commits it.
+/// runs the runtime-composed remote argv against the owner's home. The owner
+/// runtime dies with this process, so a session drop cannot leave it
+/// checkpointing the owner store. A marker file drops the answer to the next
+/// artifact put after the owner commits it.
 fn plant_ssh(base: &Path, owner: &Node) -> PathBuf {
+    write_ssh_stand_in(
+        base,
+        &owner.home,
+        &owner.work,
+        Path::new(env!("CARGO_BIN_EXE_orbit")),
+        true,
+    )
+}
+
+fn write_ssh_stand_in(
+    base: &Path,
+    home: &Path,
+    work: &Path,
+    binary: &Path,
+    release_on_parent_death: bool,
+) -> PathBuf {
     let bin = base.join("bin");
     fs::create_dir_all(&bin).expect("bin");
+    let wrapper = bin.join("die-with-parent.py");
+    fs::write(&wrapper, DIE_WITH_PARENT_WRAPPER).expect("parent-death wrapper");
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).expect("executable");
     let lose = base.join("lose-next-put-answer");
+    let runtime_lock = base.join("owner-runtime.lock");
+    let launch = format!(
+        "[sys.executable, {}, {}] + argv",
+        json!(wrapper),
+        json!(binary)
+    );
+    let die_with_parent = if release_on_parent_death { "1" } else { "0" };
     let script = format!(
         r#"#!/usr/bin/env python3
 import json, os, shlex, subprocess, sys, threading
@@ -239,7 +324,9 @@ assert argv.pop(0) == 'orbit'
 env = os.environ.copy()
 env['HOME'] = {home}
 env['USERPROFILE'] = {home}
-child = subprocess.Popen([{binary}] + argv, cwd={work}, env=env,
+env['ORBIT_FIXTURE_RUNTIME_LOCK'] = {lock}
+env.setdefault('ORBIT_FIXTURE_DIE_WITH_PARENT', {die})
+child = subprocess.Popen({launch}, cwd={work}, env=env,
     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 puts = set()
 def forward():
@@ -252,25 +339,379 @@ def forward():
         child.stdin.flush()
     child.stdin.close()
 threading.Thread(target=forward, daemon=True).start()
+def exit_now():
+    # forward() is blocked reading stdin under its buffer lock, so interpreter
+    # finalization would abort on it [ORB-15926]. Exit without finalizing.
+    sys.stdout.flush()
+    os._exit(0)
 for line in child.stdout:
     message = json.loads(line)
     if message.get('id') in puts and os.path.exists({lose}):
         os.rename({lose}, {lose} + '.consumed')
         child.terminate()
         child.wait()
-        sys.exit(0)
+        exit_now()
     sys.stdout.buffer.write(line)
     sys.stdout.buffer.flush()
 child.wait()
+exit_now()
 "#,
-        home = json!(owner.home),
-        work = json!(owner.work),
-        binary = json!(env!("CARGO_BIN_EXE_orbit")),
+        home = json!(home),
+        work = json!(work),
+        launch = launch,
+        lock = json!(runtime_lock),
+        die = json!(die_with_parent),
         lose = json!(lose),
     );
     fs::write(bin.join("ssh"), script).expect("ssh stub");
     fs::set_permissions(bin.join("ssh"), fs::Permissions::from_mode(0o755)).expect("executable");
     lose
+}
+
+/// The broker kills the ssh stand-in's pid. Without the parent-death wrapper
+/// the owner runtime keeps its exclusive lock, and a fresh Orbit runtime's
+/// store write probe exhausts the busy timeout. With the wrapper, the lock is
+/// released and the next Orbit store open succeeds within the busy budget.
+#[cfg(target_os = "linux")]
+#[test]
+fn ssh_stand_in_releases_the_owner_store_when_the_session_is_killed() {
+    let before = session_kill_leaves_store_locked(false);
+    let after = session_kill_leaves_store_locked(true);
+    assert!(
+        before,
+        "without the parent-death wrapper, killing the stand-in leaves the owner runtime holding \
+         the write lock"
+    );
+    assert!(
+        !after,
+        "with the parent-death wrapper, killing the stand-in releases the owner write lock"
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn session_kill_leaves_store_locked(release_on_parent_death: bool) -> bool {
+    let root = tempfile::tempdir().expect("session root");
+    let base = root.path();
+    let caller_home = base.join("caller");
+    fs::create_dir_all(caller_home.join(".ssh")).expect("ssh dir");
+    fs::write(caller_home.join(".ssh/known_hosts"), "trusted\n").expect("known_hosts");
+    let owner = Node::init(base, "owner", "TSO");
+    let holder = base.join("runtime.py");
+    fs::write(&holder, LOCK_HOLDING_RUNTIME).expect("holder");
+    fs::set_permissions(&holder, fs::Permissions::from_mode(0o755)).expect("executable");
+    write_ssh_stand_in(
+        base,
+        &owner.home,
+        &owner.work,
+        &holder,
+        release_on_parent_death,
+    );
+    let db = PathBuf::from(
+        owner.runtime().persistence_config_json()["audit"]["path"]
+            .as_str()
+            .expect("owner store path"),
+    );
+    let ready = base.join("ready");
+    let mut session = Command::new(base.join("bin/ssh"))
+        .args(["-T", "--", "isolated-owner", "orbit hold"])
+        .env("HOME", &caller_home)
+        .env("ORBIT_FIXTURE_DB", &db)
+        .env("ORBIT_FIXTURE_READY", &ready)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("ssh stand-in");
+    // Keep the stand-in's stdin open until after SIGKILL, as a broker session
+    // is killed while its pipe is still held.
+    let _stdin = session.stdin.take();
+    let pid = wait_for_holder(&ready, &mut session);
+    session.kill().expect("kill the stand-in");
+    let _ = session.wait();
+    let locked = if release_on_parent_death {
+        // The runtime is gone only once it has left the write that was in
+        // flight. Waiting for that exit is the event; the hang guard bounds it
+        // and reports the store still locked when it expires.
+        !wait_until_owner_store_released(&db, pid)
+    } else {
+        owner_store_locked_now(&db) && holder_still_running(pid)
+    };
+    let open_started = Instant::now();
+    let next_open = OrbitRuntime::from_roots(&owner.global(), &owner.work.join(".orbit"))
+        .and_then(|runtime| runtime.sqlite_store()?.check_writable());
+    let open_elapsed = open_started.elapsed();
+    if release_on_parent_death {
+        if let Err(error) = next_open {
+            panic!("the Orbit owner open after the killed session must succeed: {error}");
+        }
+        assert!(
+            open_elapsed < STORE_BUSY_BUDGET,
+            "the Orbit owner open must finish within the store busy budget; took {open_elapsed:?}"
+        );
+    } else {
+        match next_open {
+            Err(error) => {
+                assert!(
+                    error.to_string().contains("locked"),
+                    "the failed Orbit store write probe must report its held SQLite lock: {error}"
+                );
+                assert!(
+                    open_elapsed >= STORE_BUSY_BUDGET.saturating_sub(Duration::from_millis(250)),
+                    "the next Orbit store open must wait out the busy budget; waited {open_elapsed:?}"
+                );
+            }
+            Ok(()) => panic!("the deliberately held owner lock must exhaust its busy timeout"),
+        }
+    }
+    if holder_still_running(pid) {
+        let _ = Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status();
+    }
+    locked
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_holder(ready: &Path, session: &mut Child) -> u32 {
+    let started = Instant::now();
+    loop {
+        if let Ok(text) = fs::read_to_string(ready)
+            && let Ok(pid) = text.trim().parse::<u32>()
+        {
+            return pid;
+        }
+        if let Some(status) = session.try_wait().expect("session status") {
+            let mut stderr = String::new();
+            if let Some(mut pipe) = session.stderr.take() {
+                let _ = pipe.read_to_string(&mut stderr);
+            }
+            panic!("stand-in exited {status} before the runtime locked the store: {stderr}");
+        }
+        assert!(
+            started.elapsed() < orbit_common::test_env::FIXTURE_STEP_DEADLINE,
+            "owner runtime did not take the write lock"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The production connection's busy timeout. The next open must stay behind
+/// the holder's runtime lock longer than this rather than spend it on SQLite.
+#[cfg(target_os = "linux")]
+const STORE_BUSY_BUDGET: Duration =
+    Duration::from_millis(orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS as u64);
+
+#[cfg(target_os = "linux")]
+fn probe_owner_store(db: &Path, timeout_secs: &str) -> i32 {
+    let status = Command::new("/usr/bin/python3")
+        .args([
+            "-c",
+            "import sqlite3, sys\nconnection = sqlite3.connect(sys.argv[1], timeout=float(sys.argv[2]))\ntry:\n    connection.execute('BEGIN IMMEDIATE')\n    connection.execute('ROLLBACK')\nexcept sqlite3.OperationalError as error:\n    raise SystemExit(2 if 'locked' in str(error) else 1)\n",
+            db.to_str().expect("utf-8 db path"),
+            timeout_secs,
+        ])
+        .status()
+        .expect("probe the owner store");
+    status.code().unwrap_or(1)
+}
+
+#[cfg(target_os = "linux")]
+fn owner_store_locked_now(db: &Path) -> bool {
+    match probe_owner_store(db, "0") {
+        2 => true,
+        0 => false,
+        other => panic!("store probe exited {other}"),
+    }
+}
+
+/// Whether the killed stand-in's runtime has left the store. A holder that is
+/// still exiting is polled until the fixture hang guard, then reported as
+/// still holding the store.
+#[cfg(target_os = "linux")]
+fn wait_until_owner_store_released(db: &Path, holder: u32) -> bool {
+    let started = Instant::now();
+    loop {
+        if !holder_still_running(holder) && !owner_store_locked_now(db) {
+            return true;
+        }
+        if started.elapsed() >= orbit_common::test_env::FIXTURE_STEP_DEADLINE {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// One runtime, two modes selected by `ORBIT_FIXTURE_LOCK_MODE`. `hold` keeps
+/// the write lock until released. `acquire` records that it started and then
+/// takes the lock with the production busy timeout. The inherited flock stays
+/// open until the process exits.
+#[cfg(target_os = "linux")]
+const LOCK_BUDGET_RUNTIME: &str = r#"#!/usr/bin/env python3
+import os, sqlite3, sys, time
+mode = os.environ["ORBIT_FIXTURE_LOCK_MODE"]
+db = os.environ["ORBIT_FIXTURE_DB"]
+if mode == "hold":
+    ready = os.environ["ORBIT_FIXTURE_READY"]
+    release = os.environ["ORBIT_FIXTURE_RELEASE"]
+    released = os.environ["ORBIT_FIXTURE_RELEASED"]
+    connection = sqlite3.connect(db, isolation_level=None, timeout=0)
+    connection.execute("BEGIN EXCLUSIVE")
+    connection.execute("CREATE TABLE IF NOT EXISTS held(x INTEGER)")
+    with open(ready, "w") as handle:
+        handle.write(str(os.getpid()))
+    while not os.path.exists(release):
+        time.sleep(0.05)
+    connection.execute("COMMIT")
+    with open(released, "w") as handle:
+        handle.write("released")
+elif mode == "acquire":
+    open(os.environ["ORBIT_FIXTURE_ENTERED"], "w").close()
+    connection = sqlite3.connect(
+        db, timeout=float(os.environ["ORBIT_FIXTURE_BUSY_TIMEOUT"])
+    )
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+    except sqlite3.OperationalError as error:
+        raise SystemExit(2 if "locked" in str(error) else 1)
+    connection.execute("ROLLBACK")
+    open(os.environ["ORBIT_FIXTURE_ACQUIRED"], "w").close()
+else:
+    sys.exit(1)
+"#;
+
+/// After the stand-in is killed, its runtime still holds the owner write lock.
+/// A next owner open must not start through the busy budget; after releasing
+/// the holder, that open must acquire the store successfully.
+#[cfg(target_os = "linux")]
+#[test]
+fn next_owner_open_waits_out_a_lock_held_past_the_busy_budget() {
+    let root = tempfile::tempdir().expect("lock-hold root");
+    let base = root.path();
+    let caller_home = base.join("caller");
+    fs::create_dir_all(caller_home.join(".ssh")).expect("ssh dir");
+    fs::write(caller_home.join(".ssh/known_hosts"), "trusted\n").expect("known_hosts");
+    let owner_home = base.join("owner");
+    let work = base.join("work");
+    fs::create_dir_all(&owner_home).expect("owner home");
+    fs::create_dir_all(&work).expect("work");
+    let binary = base.join("lock_runtime.py");
+    fs::write(&binary, LOCK_BUDGET_RUNTIME).expect("runtime");
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("executable");
+    write_ssh_stand_in(base, &owner_home, &work, &binary, false);
+    let db = base.join("owner.db");
+    let ready = base.join("ready");
+    let release = base.join("release");
+    let released = base.join("released");
+    let entered = base.join("entered");
+    let acquired = base.join("acquired");
+    let mut holder_session = Command::new(base.join("bin/ssh"))
+        .args(["-T", "--", "isolated-owner", "orbit hold"])
+        .env("HOME", &caller_home)
+        .env("ORBIT_FIXTURE_DB", &db)
+        .env("ORBIT_FIXTURE_READY", &ready)
+        .env("ORBIT_FIXTURE_RELEASE", &release)
+        .env("ORBIT_FIXTURE_RELEASED", &released)
+        .env("ORBIT_FIXTURE_ENTERED", &entered)
+        .env("ORBIT_FIXTURE_LOCK_MODE", "hold")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("holding stand-in");
+    let holder = wait_for_holder(&ready, &mut holder_session);
+    let _holder_guard = KillPidOnDrop(holder);
+    holder_session.kill().expect("kill the holding stand-in");
+    let _ = holder_session.wait();
+    assert!(
+        holder_still_running(holder),
+        "without parent-death, the runtime keeps the write lock after the stand-in dies"
+    );
+    let next = Command::new(base.join("bin/ssh"))
+        .args(["-T", "--", "isolated-owner", "orbit acquire"])
+        .env("HOME", &caller_home)
+        .env("ORBIT_FIXTURE_DB", &db)
+        .env("ORBIT_FIXTURE_ENTERED", &entered)
+        .env("ORBIT_FIXTURE_ACQUIRED", &acquired)
+        .env("ORBIT_FIXTURE_LOCK_MODE", "acquire")
+        .env(
+            "ORBIT_FIXTURE_BUSY_TIMEOUT",
+            STORE_BUSY_BUDGET.as_secs_f64().to_string(),
+        )
+        .env("ORBIT_FIXTURE_DIE_WITH_PARENT", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("next stand-in");
+    let mut next = KillChildOnDrop(next);
+    let started = Instant::now();
+    while started.elapsed() < STORE_BUSY_BUDGET + Duration::from_millis(100) {
+        assert!(
+            !entered.exists(),
+            "the next runtime started while the killed session's runtime still held the store"
+        );
+        if let Some(status) = next.0.try_wait().expect("next session") {
+            panic!("next session ended before the lock was released: {status}");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        !entered.exists(),
+        "the next runtime started during the store busy budget"
+    );
+    fs::write(&release, "").expect("release the holder");
+    let deadline = Instant::now() + orbit_common::test_env::FIXTURE_STEP_DEADLINE;
+    let status = loop {
+        if let Some(status) = next.0.try_wait().expect("next session") {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "next owner open did not finish after the holder released the store"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(
+        status.success(),
+        "the open after the holder exits must succeed, not spend the busy budget: {status}"
+    );
+    assert!(released.exists(), "the holder committed before it exited");
+    assert!(
+        acquired.exists(),
+        "the next runtime took the write lock after the holder exited"
+    );
+}
+
+#[cfg(target_os = "linux")]
+struct KillChildOnDrop(Child);
+
+#[cfg(target_os = "linux")]
+impl Drop for KillChildOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct KillPidOnDrop(u32);
+
+#[cfg(target_os = "linux")]
+impl Drop for KillPidOnDrop {
+    fn drop(&mut self) {
+        let _ = Command::new("kill")
+            .args(["-KILL", &self.0.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn holder_still_running(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/cmdline"))
+        .map(|command| command.contains("runtime.py"))
+        .unwrap_or(false)
 }
 
 /// The broker's view of the reviewer run, as the step runner builds it.
@@ -558,11 +999,18 @@ fn sandbox_fixture() {
     fs::write(&pinned_signal, "").expect("signal the pinned manifest");
     // The MCP put alone attached the owner's report, before any CLI put.
     wait_for(&mcp_put_done, Duration::from_secs(300));
-    let owner_runtime = owner.runtime();
-    let attached_over_mcp = owner_runtime
-        .get_task_artifact(&task, REVIEW_REPORT_ARTIFACT)
-        .expect("owner artifact")
-        .map(|artifact| artifact.content);
+    // The provider is paused on `mcp_put_checked`. Take the runtime flock
+    // before this open so a session killed at the end of the MCP put cannot
+    // still hold the store, then drop it before the provider continues.
+    let (owner_runtime, attached_over_mcp) = {
+        let _gate = OwnerRuntimeLock::acquire(&base);
+        let owner_runtime = owner.runtime();
+        let attached_over_mcp = owner_runtime
+            .get_task_artifact(&task, REVIEW_REPORT_ARTIFACT)
+            .expect("owner artifact")
+            .map(|artifact| artifact.content);
+        (owner_runtime, attached_over_mcp)
+    };
     fs::write(&mcp_put_checked, "").expect("signal the checked MCP put");
     let running = first.finish();
     assert_eq!(
@@ -689,6 +1137,7 @@ fn sandbox_fixture() {
     }
 
     // The owner holds the report's exact bytes once, and no certificate.
+    let _gate = OwnerRuntimeLock::acquire(&base);
     let attached = owner_runtime
         .get_task_artifact(&task, REVIEW_REPORT_ARTIFACT)
         .expect("owner artifact")
@@ -761,6 +1210,7 @@ fn sandbox_fixture() {
                 .all(|row| row.transport == Some(orbit_types::tool::McpTransport::SshMcp)),
         "{owner_rows:?}"
     );
+    drop(_gate);
 
     // Phase 2: the reviewer has finished, so its attempt no longer admits
     // calls; another activity's broker never did; and a broker that has
@@ -858,15 +1308,18 @@ fn sandbox_fixture() {
         caller_failures, 2,
         "the CLI and MCP each retain one caller-side failure when the broker is stopped: {unavailable_rows:?}"
     );
-    assert_eq!(
-        owner_runtime
-            .get_task_artifact(&task, REVIEW_REPORT_ARTIFACT)
-            .expect("owner artifact")
-            .expect("report attached")
-            .content,
-        report,
-        "refused calls change nothing on the owner"
-    );
+    {
+        let _gate = OwnerRuntimeLock::acquire(&base);
+        assert_eq!(
+            owner_runtime
+                .get_task_artifact(&task, REVIEW_REPORT_ARTIFACT)
+                .expect("owner artifact")
+                .expect("report attached")
+                .content,
+            report,
+            "refused calls change nothing on the owner"
+        );
+    }
 
     // Phase 3: the reviewer runs again by the follower's ledger and the
     // claim's reservation window really closes. An elapsed reservation ends
@@ -904,6 +1357,7 @@ fn sandbox_fixture() {
     let elapsed = elapse_reservation(
         &owner_runtime,
         claim["claim_id"].as_str().expect("claim id"),
+        &base,
     );
     assert_eq!(elapsed["phase"], "running", "{elapsed}");
     let live = bridged("leaf-review-elapsed");
@@ -919,17 +1373,21 @@ fn sandbox_fixture() {
         live["mcp_put"].get("error").is_none() && live["mcp_put"]["id"] == task.as_str(),
         "an elapsed reservation leaves the claim writing: {live}"
     );
-    owner_runtime
-        .recover_claim_as_operator(
-            claim["claim_id"].as_str().expect("claim id"),
-            "running",
-            TaskStatus::Backlog,
-            "operator",
-            "The claim outlived its reservation.",
-            "claimed-review-revocation",
-        )
-        .expect("the owner revokes the claim");
+    {
+        let _gate = OwnerRuntimeLock::acquire(&base);
+        owner_runtime
+            .recover_claim_as_operator(
+                claim["claim_id"].as_str().expect("claim id"),
+                "running",
+                TaskStatus::Backlog,
+                "operator",
+                "The claim outlived its reservation.",
+                "claimed-review-revocation",
+            )
+            .expect("the owner revokes the claim");
+    }
     let owner_evidence = || {
+        let _gate = OwnerRuntimeLock::acquire(&base);
         let artifacts = owner_runtime
             .get_task_artifacts(&task)
             .expect("owner artifacts")
@@ -977,10 +1435,68 @@ fn sandbox_fixture() {
     assert!(!before.1, "the bridge never records a certificate");
 }
 
+/// Exclusive flock shared with the owner runtime the ssh stand-in execs.
+///
+/// Acquiring it means that process has exited, including when SIGKILL was
+/// pending on an uninterruptible write. The guard must be dropped before the
+/// next ssh session: that session blocks on the same file.
+struct OwnerRuntimeLock {
+    file: fs::File,
+}
+
+impl OwnerRuntimeLock {
+    fn acquire(base: &Path) -> Self {
+        let path = base.join("owner-runtime.lock");
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            // Flock token shared with the stand-in wrapper. Keep the inode;
+            // truncating is not part of taking the lock.
+            .truncate(false)
+            .mode(0o600)
+            .open(&path)
+            .unwrap_or_else(|error| panic!("open {}: {error}", path.display()));
+        let started = Instant::now();
+        loop {
+            // SAFETY: `file` is a live descriptor owned here. `LOCK_NB` returns
+            // instead of blocking, so the hang guard below can fire.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                return Self { file };
+            }
+            let error = std::io::Error::last_os_error();
+            assert!(
+                error.raw_os_error() == Some(libc::EWOULDBLOCK)
+                    || error.raw_os_error() == Some(libc::EAGAIN),
+                "lock {}: {error}",
+                path.display()
+            );
+            assert!(
+                started.elapsed() < orbit_common::test_env::FIXTURE_STEP_DEADLINE,
+                "owner runtime still holds {} after its session ended",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+impl Drop for OwnerRuntimeLock {
+    fn drop(&mut self) {
+        // SAFETY: `file` is the descriptor acquired above and still owned here.
+        // Closing it would release the flock too; unlocking first makes the
+        // reason visible next to the wait in `acquire`.
+        unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
 /// Let the owner's reservation for `claim_id` run out: its window is moved,
 /// in the owner's own store, to one that closed a minute ago. Returns the
 /// claim as the owner's console, read at the real clock, then reports it.
-fn elapse_reservation(owner: &OrbitRuntime, claim_id: &str) -> Value {
+fn elapse_reservation(owner: &OrbitRuntime, claim_id: &str, base: &Path) -> Value {
+    // The raw connection below uses the store's ordinary busy budget. Wait
+    // until the ssh stand-in's runtime has exited before spending it.
+    let _gate = OwnerRuntimeLock::acquire(base);
     let console = || {
         owner.distributed_claim_console().expect("owner console")["claims"]
             .as_array()
@@ -1102,11 +1618,21 @@ fn manifest(task: &str, attempt_id: &str, candidate: &SourceRevision) -> ReviewM
     }
 }
 
+/// A file the provider waits on, unique per spawn so an earlier release
+/// cannot let the next provider open the follower store early.
+fn provider_start_signal(work: &Path) -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = work.join(".orbit/tmp");
+    fs::create_dir_all(&dir).expect("provider start directory");
+    dir.join(format!(
+        "provider-start-{}",
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
 /// The reviewer provider, confined as a managed launch confines it.
 struct Confined {
     child: ProviderChild,
-    #[cfg(target_os = "macos")]
-    _profile: Arc<tempfile::NamedTempFile>,
 }
 
 impl Confined {
@@ -1131,6 +1657,11 @@ impl Confined {
             brokers[0].socket_path().display().to_string(),
         ));
         env.push(("ORBIT_WORKER_CONTEXT_REQUIRED".to_string(), "1".to_string()));
+        let start_signal = provider_start_signal(&follower.work);
+        env.push((
+            "ORBIT_FIXTURE_PROVIDER_START".to_string(),
+            start_signal.display().to_string(),
+        ));
         env.extend(
             extra_env
                 .iter()
@@ -1140,11 +1671,14 @@ impl Confined {
         let confined = Self::launch(profile, &argv, &env, &follower.work, prepared);
         let pid = confined.child.id();
         // What the step runner records for the provider it just spawned.
+        // The provider waits on `start_signal` before it opens the follower
+        // store, so these writes finish first.
         RuntimeHost::register_worker_process(runner, pid).expect("record the worker");
         RuntimeHost::register_worker_pid_namespace(runner, pid).expect("record the namespace");
         for broker in brokers {
             broker.bind_sandbox(pid).expect("authenticate the sandbox");
         }
+        fs::write(&start_signal, "").expect("release the confined provider");
         confined
     }
 
@@ -1196,22 +1730,20 @@ impl Confined {
         let mut profile_text =
             orbit_exec::compile_macos_sandbox_profile(profile, "codex").expect("compile profile");
         orbit_exec::append_macos_subpath_mask(&mut profile_text, &prepared.trees);
-        let (child, profile_file) =
-            orbit_exec::spawn_under_macos_sandbox(orbit_exec::MacosSandboxSpawnRequest {
-                profile_text: &profile_text,
-                program: "/usr/bin/python3",
-                args: argv,
-                env,
-                cwd: Some(cwd),
-                stdin: Stdio::null(),
-                stdout: Stdio::piped(),
-                stderr: Stdio::piped(),
-                inherited_fds: &[],
-            })
-            .expect("spawn real sandbox");
+        let child = orbit_exec::spawn_under_macos_sandbox(orbit_exec::MacosSandboxSpawnRequest {
+            profile_text: &profile_text,
+            program: "/usr/bin/python3",
+            args: argv,
+            env,
+            cwd: Some(cwd),
+            stdin: Stdio::null(),
+            stdout: Stdio::piped(),
+            stderr: Stdio::piped(),
+            inherited_fds: &[],
+        })
+        .expect("spawn real sandbox");
         Self {
             child: ProviderChild::new(child),
-            _profile: profile_file,
         }
     }
 
@@ -1232,6 +1764,19 @@ impl Confined {
 /// plus raw broker requests no `orbit` would send.
 const PROVIDER: &str = r#"import json, os, socket, struct, subprocess, sys, time
 orbit, mode, task = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def wait_for_file(path, seconds):
+    deadline = time.time() + seconds
+    while not os.path.exists(path) and time.time() < deadline:
+        time.sleep(0.05)
+    return os.path.exists(path)
+
+# Registration writes the follower store before this provider may open it.
+start = os.environ.get('ORBIT_FIXTURE_PROVIDER_START')
+if start and not wait_for_file(start, 180):
+    sys.stderr.write('timed out waiting for %s\n' % start)
+    sys.exit(1)
+
 MANIFEST, REPORT = 'review-manifest.json', 'review-report.json'
 
 def run(argv, env=None, cwd=None):
@@ -1307,9 +1852,9 @@ report = {}
 if mode == 'running':
     scratch, lose, stale_seen, pinned, selector, nested, mcp_done, mcp_checked = sys.argv[4:12]
     def wait(path):
-        deadline = time.time() + 180
-        while not os.path.exists(path) and time.time() < deadline:
-            time.sleep(0.1)
+        if not wait_for_file(path, 180):
+            sys.stderr.write('timed out waiting for %s\n' % path)
+            sys.exit(1)
     def readable(path):
         try:
             with open(path) as handle:

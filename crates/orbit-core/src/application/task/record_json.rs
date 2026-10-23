@@ -9,7 +9,7 @@ use orbit_types::task::{
 };
 use serde_json::{Map, Value};
 
-use super::TaskRow;
+use super::{TaskOsReadout, TaskRow, task_pilot_warnings};
 use crate::OrbitRuntime;
 
 impl OrbitRuntime {
@@ -33,8 +33,8 @@ impl OrbitRuntime {
 /// `review` gate when one exists [ORB-11333], and the host-local crew
 /// enrichment ([`OrbitRuntime::task_crew_read`]).
 ///
-/// `orbit task show --json`, `orbit.task.show` and the dashboard's task detail
-/// all serve this record and add only their own extras to it.
+/// A single-task show serves [`task_show_json`], which is this record plus
+/// `block`, `next_step` and `final_recovery`. Writes and list rows stay on this record.
 pub fn task_record_json(
     runtime: &OrbitRuntime,
     row: &TaskRow,
@@ -42,6 +42,11 @@ pub fn task_record_json(
 ) -> Result<Map<String, Value>, OrbitError> {
     let task = &row.task;
     let mut object = task_base_json(task, status_by_id);
+    TaskOsReadout::new(runtime)?.insert_into(task, &mut object);
+    object.insert(
+        "pilot_warnings".into(),
+        serde_json::json!(task_pilot_warnings(task.status, &row.comments)),
+    );
     object.insert(
         "comments".to_string(),
         serde_json::to_value(&row.comments).map_err(serialize_error("comments"))?,
@@ -63,6 +68,48 @@ pub fn task_record_json(
     Ok(object)
 }
 
+/// The show record: [`task_record_json`] plus the operator guidance only a
+/// single-task readout carries.
+///
+/// `block` explains the latest block or escalation (reason, time and source).
+/// `next_step` says what to do about a task a failed run left `blocked`.
+/// `final_recovery` is the last automated final-recovery decision, with
+/// `run_id`, `decision`, `outcome` and `at`. `owed_criteria` lists each
+/// criterion the delivery owes after deploy, with its host, command, target
+/// and state. Each key is present only when it applies. `orbit task show`, `orbit.task.show`, `GET /api/tasks/:id` and a
+/// routed remote show all serve this record and add only their own extras.
+pub fn task_show_json(
+    runtime: &OrbitRuntime,
+    row: &TaskRow,
+    status_by_id: &BTreeMap<String, TaskStatus>,
+) -> Result<Map<String, Value>, OrbitError> {
+    let mut object = task_record_json(runtime, row, status_by_id)?;
+    if let Some(block) = super::blocked_recovery::block_json(row) {
+        object.insert("block".to_string(), block);
+    }
+    if let Some(next) = runtime.blocked_next_step(&row.task, &row.history) {
+        object.insert(
+            "next_step".to_string(),
+            serde_json::to_value(next).map_err(serialize_error("next_step"))?,
+        );
+    }
+    if let Some(record) = super::FinalRecoveryRecord::last(&row.history, &row.comments) {
+        object.insert(
+            "final_recovery".to_string(),
+            serde_json::json!({
+                "run_id": record.run_id,
+                "decision": record.decision,
+                "outcome": record.outcome,
+                "at": record.at,
+            }),
+        );
+    }
+    if let Some(owed) = super::owed_criteria_json(&row.history) {
+        object.insert("owed_criteria".to_string(), owed);
+    }
+    Ok(object)
+}
+
 /// One `orbit.task.show` / `orbit task show --fields` projection.
 ///
 /// A record field answers the value [`task_base_json`] carries for it; a
@@ -77,6 +124,11 @@ pub fn task_show_field_json(
     status_by_id: Option<&BTreeMap<String, TaskStatus>>,
 ) -> Result<Value, OrbitError> {
     match field {
+        "pilot_warnings" => Ok(serde_json::json!(task_pilot_warnings(
+            task.status,
+            &runtime.get_task_comments(&task.id)?
+        ))),
+        "os_requirement" => Ok(TaskOsReadout::new(runtime)?.requirement(task)),
         "comments" => serde_json::to_value(runtime.get_task_comments(&task.id)?)
             .map_err(serialize_error("comments")),
         "history" => serde_json::to_value(runtime.get_task_history(&task.id)?)

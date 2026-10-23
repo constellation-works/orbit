@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::{
     ReviewAttemptState, ReviewCertificate, ReviewLanding, ReviewLedger, ReviewReconciliation,
     ReviewReservation, ReviewResetDecision,
@@ -11,7 +12,9 @@ use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use super::attempts::{
     record_invocation, release_attempt, reserve_new, reserve_new_in, review_spent, settle_attempt,
 };
-use super::ledger::{decode, encode, ledgers_held_by, read_ledger, write_ledger};
+use super::ledger::{
+    decode, encode, ledgers_for_claim, ledgers_held_by, read_ledger, write_ledger,
+};
 use crate::Store;
 use crate::contracts::{
     ReviewInvocationRecord, ReviewRelease, ReviewReserveRequest, ReviewResetRequest,
@@ -80,6 +83,52 @@ impl ReviewStoreBackend for Store {
         run_id: &str,
     ) -> Result<Vec<ReviewLedger>, OrbitError> {
         self.with_read_connection(|conn| ledgers_held_by(conn, workspace_id, run_id))
+    }
+
+    fn review_ledgers_for_claim(
+        &self,
+        workspace_id: &str,
+        claim_id: &str,
+        task_id: &str,
+    ) -> Result<Vec<ReviewLedger>, OrbitError> {
+        if claim_id.is_empty() || task_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.with_read_connection(|conn| {
+            let mut ledgers = ledgers_for_claim(conn, workspace_id, claim_id)?;
+            ledgers.retain(|ledger| ledger.task_ids.iter().any(|id| id == task_id));
+            Ok(ledgers)
+        })
+    }
+
+    fn review_import_claimed_ledger(
+        &self,
+        workspace_id: &str,
+        ledger: &ReviewLedger,
+    ) -> Result<ReviewLedger, OrbitError> {
+        if ledger.lineage_key.is_empty() {
+            return Err(OrbitError::InvalidInput(
+                "review import requires a lineage key".into(),
+            ));
+        }
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let conn = tx.connection();
+            let now = Utc::now();
+            match read_ledger(conn, workspace_id, &ledger.lineage_key)? {
+                None => {
+                    let mut incoming = ledger.clone();
+                    write_ledger(conn, workspace_id, None, &mut incoming, now)?;
+                    Ok(incoming)
+                }
+                Some(local) if local.decisions.len() >= ledger.decisions.len() => Ok(local),
+                Some(local) => {
+                    let revision = local.revision;
+                    let mut incoming = ledger.clone();
+                    write_ledger(conn, workspace_id, Some(revision), &mut incoming, now)?;
+                    Ok(incoming)
+                }
+            }
+        })
     }
 
     fn review_reserve(
@@ -341,7 +390,7 @@ impl ReviewStoreBackend for Store {
                     |row| row.get(0),
                 )
                 .optional()
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             if let Some(raw) = existing {
                 if raw == encoded {
                     return Ok(());
@@ -364,7 +413,7 @@ impl ReviewStoreBackend for Store {
                     certificate.issued_at.to_rfc3339()
                 ],
             )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
             Ok(())
         })
     }
@@ -382,7 +431,7 @@ impl ReviewStoreBackend for Store {
                     |row| row.get(0),
                 )
                 .optional()
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             raw.as_deref().map(decode).transpose()
         })
     }
@@ -398,14 +447,14 @@ impl ReviewStoreBackend for Store {
                 .prepare(
                     "SELECT certificate_json FROM review_certificates WHERE repository=?1 AND candidate_tree=?2 AND passed=1 ORDER BY issued_at DESC LIMIT ?3",
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map(
                     params![repository, final_candidate_tree, limit.clamp(1, 100)],
                     |row| row.get::<_, String>(0),
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
-            rows.map(|row| decode(&row.map_err(|error| OrbitError::Store(error.to_string()))?))
+                .map_err(sqlite_store_error)?;
+            rows.map(|row| decode(&row.map_err(sqlite_store_error)?))
                 .collect()
         })
     }
@@ -422,7 +471,7 @@ impl ReviewStoreBackend for Store {
                     |row| row.get(0),
                 )
                 .optional()
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             if existing.is_some() {
                 // A landing is a fact about one commit; replay changes nothing.
                 return Ok(());
@@ -437,7 +486,7 @@ impl ReviewStoreBackend for Store {
                     landing.recorded_at.to_rfc3339()
                 ],
             )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
             Ok(())
         })
     }
@@ -448,11 +497,11 @@ impl ReviewStoreBackend for Store {
                 .prepare(
                     "SELECT landing_json FROM review_landings WHERE attempt_id=?1 ORDER BY recorded_at ASC LIMIT 100",
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map([attempt_id], |row| row.get::<_, String>(0))
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
-            rows.map(|row| decode(&row.map_err(|error| OrbitError::Store(error.to_string()))?))
+                .map_err(sqlite_store_error)?;
+            rows.map(|row| decode(&row.map_err(sqlite_store_error)?))
                 .collect()
         })
     }

@@ -21,11 +21,16 @@ Three things must all be true for a routine to fire:
 
 The workspace itself opts in by being registered: the tick loads definitions
 from every registered, active checkout on the host, and there is no config key
-to set. A **replica** checkout fires only its `worktree-gc` routine, which
-reclaims that host's claimed-leaf worktrees after asking the owner whether each
-task settled. Its other routines are listed as `owner-only` with the owner
-machine named and never fire there. Auto-tasks are not evaluated there, and the
-auto-task panel disables toggle and manual mint with the owner machine named.
+to set. A **replica** checkout fires only its host-local `worktree-gc` and
+`store-gc` routines, and only on a cron trigger. Worktree GC reclaims that
+host's claimed-leaf worktrees after asking the owner whether each task
+settled. Store GC prunes this host's own store for that workspace (command
+audit and resource history are host-wide; run audit and terminal pipeline
+state are this workspace's) and does not call the owner. Every other routine,
+and a delivery- or state-triggered copy of either job, is listed as
+`owner-only` with the owner machine named and never fires there. Auto-tasks
+are not evaluated there, and the auto-task panel disables toggle and manual
+mint with the owner machine named.
 
 ## Turning the scheduler on
 
@@ -43,7 +48,7 @@ owns that.
 ```bash
 orbit clock status                  # cadence and native manager state
 orbit clock pause|enable            # host-wide, without touching definition state
-orbit clock set --cadence-seconds 300  # whole-minute cadence, reloads the unit
+orbit clock set --cadence-seconds 300  # whole-minute cadence, reloads the unit; a paused clock stays paused
 ```
 
 The clock starts with no login environment. Credentials its runs need (on a Mac,
@@ -78,23 +83,25 @@ checkout already made the workspace a routine source; an older `.orbit/config.to
 may still carry a `[routines]` section, which is ignored with a warning and can
 be deleted.
 
-## The six seeded routines
+## The seven seeded routines
 
-`orbit workspace init` seeds all six, **all disabled**, with a workspace-unique
+`orbit workspace init` seeds all seven, **all disabled**, with a workspace-unique
 name (`<base>-<workspace>`) resolved at seed time. The five cron routines resolve
-nothing else per machine, so two hosts seed identical bytes. `task-pilot` is
-state-triggered and additionally resolves this host's machine id as its
-`owner_machine` and the registered base branch as the `branch` it observes;
+nothing else per machine, so two hosts seed identical bytes. `task-pilot` and
+`finding-verification` are state-triggered and additionally resolve this host's
+machine id as `trigger.state.owner_machine` and the registered base branch as
+`trigger.state.branch`;
 a second host registering the same workspace seeds itself as owner of its own
 copy. Run `orbit routine list` to see their names on this host.
 
 | Base name | Cadence | Target | What it does |
 |---|---|---|---|
-| `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived, and prunes `.orbit/tmp` entries untouched for 24 hours (`scratch_older_than_hours`). |
-| `task-pilot` | state trigger (`preparation_eligible`) | `task_pilot_pipeline` | Fingerprints eligible proposed/backlog tasks each tick and preflights one whose material has no fresh assessment; quiet while the backlog is unchanged. |
+| `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived, or has been parked in someday for `worktree.parked_reclaim_after_hours` (default 336), and prunes `.orbit/tmp` entries untouched for 24 hours (`scratch_older_than_hours`). |
+| `task-pilot` | state trigger (`preparation_eligible`) | `task_pilot_pipeline` | Fingerprints eligible proposed/backlog tasks each tick and preflights a batch whose material has no fresh assessment (seeded `batch_size` 5, mixed crews included); quiet while the backlog is unchanged. |
+| `finding-verification` | state trigger (`finding_unverified`) | `finding_verification_pipeline` | Disabled by default; verifies review-filed bug findings still owed a verdict in proposed, someday, or backlog, recording confirmation or rejection with evidence. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
-| `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days`. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). |
+| `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` (this workspace and workspace ids that are no longer registered) and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days` and the per-minute resource history older than 30 days. Another registered workspace keeps its own window. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). On a large store, consider `retention.runs_days = 30` first; smaller windows are refused to preserve 30-day reliability and forecast-accuracy evidence. |
 | `ship-sweep` | every 30m | `workspace_ship_pipeline` | Ships this workspace's ready backlog through the gated pipeline, unattended. The 30-minute cadence leaves 10 minutes of slack past the job's 20-minute drain, so `overlap: forbid` does not skip the next fire. |
 
 ## Built in: final recovery of blocked tasks
@@ -108,7 +115,10 @@ two at a time. The `final_recovery` agent proposes `complete_no_diff`,
 applier acts on it. Each decision is a task comment with the run id. An
 escalation names the failed run's worktree and its changed paths when it
 still exists, since that is where unfinished work stays.
-`orbit task show` prints the last one, and `orbit doctor` lists tasks still
+Every task show prints the last one: local and routed `orbit task show` text
+(`Final Recovery:`), `orbit.task.show`, and the dashboard task detail
+(`final_recovery`, with `run_id`, `decision`, `outcome` and `at`). A task list
+does not. `orbit doctor` lists tasks still
 blocked after one in its `blocked-task-recovery` row.
 
 It leaves a block alone when someone other than Orbit's automation has
@@ -119,8 +129,48 @@ actor, so any such edit after the block also leaves it to a human; `orbit
 doctor` names those tasks. It never runs on a follower or inside a claimed
 worker.
 
-The crew comes from `workflow.final_recovery_crews`. To opt out, set it to
-`[]`; this also turns off final recovery inside the delivery pipelines.
+The crew comes from `workflow.purpose_crews.final_recovery`. To opt out, set
+it to `[]`; this also turns off final recovery inside the delivery pipelines.
+
+### Blocked-task triage
+
+What final recovery escalates stays blocked for a human. The bundled
+`blocked-task-triage` auto-task (disabled until you enable it, hourly) re-reads
+those blocks once each. A block episode — the task's latest move to `blocked` —
+awaits triage when its final-recovery decision was an escalation, or when it
+has none and is older than the 72 hours after which the backstop above never
+decides it. An episode is skipped when a human set the block or commented,
+changed the status, attached an artifact or made an unattributed edit after
+it, and once triaged; a later block is a new episode. With nothing waiting the
+tick mints nothing and records a `no_blocked_candidates` skip
+([auto-tasks.md](auto-tasks.md#skipping-a-tick-when-nothing-is-blocked)).
+
+The minted task records exactly one disposition per episode through
+`orbit.task.block_triage`, whose `candidates` action lists what qualifies:
+
+- **Mechanical** — a cause with a supported recovery. `requeue` moves the task
+  to `backlog` as a final-recovery requeue: it counts against the same bound
+  (2 requeues per 24 hours, one count shared with final recovery), and the
+  comment records `requeue n of 2 per 24h`. Past the bound it is refused and
+  the task stays blocked with the bound named; when the count cannot be read
+  nothing is written. An Orbit defect with no supported recovery gets a
+  friction record and a report, never a requeue.
+- **Decision** — a scope or requirements choice. `propose` writes one comment
+  quoting the blocker, with two or three options, their consequences,
+  ready-to-apply replacement text and a recommendation; nothing else on the
+  task changes.
+- **Human-only** — credentials or login, a named owner sign-off, a `security`
+  or `security-review` tag, a run another machine executed, or an OS or
+  browser-kit requirement. `report` names the human action and changes
+  nothing else. The tool itself refuses to requeue a security-tagged task or
+  one whose run executed on another machine.
+
+The triage holds no operator-only tool and no `--force` path: it never
+completes, rejects or archives a task, resumes a run, or merges or closes a
+pull request. A recovery that needs one of those is reported with the exact
+operator command. Its task's execution summary lists every block it read,
+with the block's age, the quoted escalation reason, the disposition and the
+action.
 
 ## Built in: re-checking tasks held for a red base
 
@@ -137,9 +187,11 @@ at a time. That run executes the held command on the new tip and records the
 verdict; the hold lifts only when the command passes. The sweep never runs the
 command itself, so a long check never makes later ticks report `lock_busy`.
 The same sweep files one `baseline-red-repair` task per red base failure (a
-command and the tests it fails on the base) and links each later task held
-for the same failures to it, so the red base has an owner without anyone
-reading worker logs.
+command and the tests it fails on the base) at complexity `medium` and links each
+later task held for the same failures to it, so the red base has an owner
+without anyone reading worker logs.
+Its crew comes from `workflow.purpose_crews.baseline_red_repair` when that is
+set, else the `medium` complexity pool.
 It never runs on a follower or inside a claimed worker.
 
 ## Built in: Linux CodeQL evidence for held reviews
@@ -253,11 +305,12 @@ trigger:
 ```
 
 `batch_size` is how many due tasks one tick admits into a single
-`task_pilot_pipeline` run. The batch is crew-homogeneous: members that
-disagree on stored `task.crew` (including set vs unset) stay pending for
-the next admission, so dispatch is never asked to reject a mixed-crew
-bundle. The run pilots them five per partition; a burst of same-crew
-filed tasks is prepared as one run rather than one run per task, and
+`task_pilot_pipeline` run. Tasks whose stored `task.crew` differs, including
+set versus unset, share that run; prepare gives each crew its own partitions
+of at most five, so one pass assesses every crew instead of refusing a mixed
+bundle. A hand-assembled `orbit run task-pilot` list that mixes crews is still
+refused at run start. A burst of same-crew filed tasks is prepared as one run
+rather than one run per task, and
 `orbit clock tick --dry-run` lists the batch it would admit. Narrow the
 predicate to, say, `statuses: [backlog]` or `require_tags: [pilot]` to keep the
 scheduled pilot off proposals a human has not looked at yet. Unknown keys and
@@ -309,7 +362,8 @@ orbit --workspace <name> clock tick --dry-run  # restrict to one workspace
 
 The global `--workspace` selector narrows a sweep — dry-run or live — to one
 registered workspace's routines; without it the pass covers every registered
-owner checkout on the host.
+checkout on the host. A replica checkout contributes only its cron worktree-GC
+and store-GC routines.
 
 ## Observe and control
 

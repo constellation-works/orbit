@@ -1,9 +1,10 @@
-# Task bundle PR pipeline.
+# Single-task PR pipeline.
 #
 # Failure semantics:
-# - `implement_bundle` runs one task at a time in the shared worktree.
-# - If `implement_one` fails, earlier commits remain on the bundle branch.
-# - While the run is still alive, tasks stay `in-progress`: a mid-bundle step
+# - Admission accepts one distinct task before creating a run or worktree.
+#   Use separate singleton PR runs, or local delivery for a multi-task bundle.
+# - `implement_bundle` retains its checkpoint shape but implements only that task.
+# - While the run is still alive, the task stays `in-progress`: a step
 #   failure that the run recovers from does not block anything. Commit, branch
 #   preparation, base synchronization, required validation, push, PR
 #   creation/reuse, and promotion are independent durable steps, so recovery
@@ -34,7 +35,7 @@
 #   event with the blocker kind. Resume does not move that task back. Once a
 #   PR was published and the task promoted to review, a completion-stage merge
 #   failure preserves that exact candidate and review state for a safe retry.
-# - ORB-14849: with `review.before_landing` captured instead, the pre-push
+# - ORB-14849: with `review.timing = before_landing` captured instead, the pre-push
 #   gate does not apply and the PR opens at once; the `landing_review*` steps
 #   then review the published head while hosted CI runs on it, and
 #   completion merges only the head they settled. Any outcome but an approve
@@ -45,6 +46,25 @@
 #   a conflict after the second keeps the PR and the task in review. A base
 #   that advances again after a completion step's recovery is followed a
 #   bounded number of times before failing as base_chase_exhausted.
+# - `auto_fix: true` (`orbit run auto --auto-fix`) runs `complete_pr` even
+#   without `completion: done`, as a watcher that never merges and ends once
+#   the PR is mergeable. With it, a required check that fails on the PR's
+#   head is handed to `step_failure_recovery` (the completion step's conflict
+#   leaf cannot repair it) and a conflicting head takes the conflict path
+#   above. Both draw their crew from `workflow.purpose_crews.auto_fix` (the
+#   low complexity pool while that purpose is unset), are
+#   admitted against the PR's durable repair ledger (one repair per head and
+#   blocker, a bounded budget per PR), and publish the repaired head only
+#   after required validation passes on it; a reviewed head is re-reviewed
+#   through the rounds below first. Review gates, unreadable checks and other
+#   administrative blockers stop without an agent.
+# - A final-recovery `requeue` whose run had pushed or opened its PR preserves
+#   that publication; the next run's `resume_candidate` adopts the same branch
+#   and PR, at the head Orbit's own auto-fix last recorded publishing on it
+#   (`pr_auto_fix_pushed`), and refuses a branch moved any other way. Such a
+#   run is admitted without waiting on other tasks' context locks
+#   (`footprint_deferred`), and takes them before its first agent that may
+#   edit; re-applying the unchanged published patch is not an edit.
 #
 schemaVersion: 2
 kind: Job
@@ -62,12 +82,29 @@ spec:
   # live by `orbit run concurrency`) bounds how many of these run at once.
   max_active_runs: 0
   # ORB-13907: once step recovery is spent, a crew from
-  # `workflow.final_recovery_crews` gets one last look and returns a typed
+  # `workflow.purpose_crews.final_recovery` gets one last look and returns a typed
   # decision. `resume` reruns from the failed step or an earlier one of its
   # phase; `escalate` blocks the task and still runs `failure_activity`; any
   # other decision is applied by Orbit's deterministic applier and the run ends
   # without a blocked PR. An empty crew pool skips it.
   final_recovery_activity: final_recovery
+  # Mid-run steering's promotion gate (docs/design/mid-run-steering/2_design.md
+  # §3). With `workflow.mid_run_steering.enabled`, the run does not reach
+  # `commit` while an operator comment past its steering watermark is
+  # undelivered. Each refusal spends one of `workflow.mid_run_steering.max_rounds`
+  # steering rounds: `implement_bundle` runs again, even for a carried
+  # candidate, so the implementer's next prompt carries the steering block onto
+  # the candidate still uncommitted in this worktree. When no round is left, or
+  # the last one delivered nothing, the task is blocked as `steering_unconsumed`
+  # naming the outstanding comments. An unreadable gate or a task gone terminal
+  # stops the run before `commit` as well. Steering off, nothing is read.
+  # A candidate `resume_candidate` carries past `implement_bundle` was built by
+  # the run it names as `source_run_id`, so the gate judges from that run's
+  # watermark, never from this run's start.
+  steering_gate:
+    before: commit
+    round: implement_bundle
+    candidate: resume_candidate
   # Preserve recoverable work after terminal failures while keeping the
   # original error authoritative. Completion-stage failures retain the
   # already-published PR instead of fabricating a conflict handoff.
@@ -86,11 +123,22 @@ spec:
     # explicit per-invocation operator authorization to also merge the PR and
     # complete the tasks, which only happens after the merge is verified.
     completion: review
+    # `--auto-fix`: repair authority, never merge authority, over this run's
+    # PR (see the header and `pr_complete`). Requires the PR route below.
+    auto_fix: false
     # ORB-11242: the run-scoped crew restriction the auto-drain admitting this
     # run applied. Empty means unrestricted. This is the innermost carrier: the
     # agent activities below resolve their crew against this run input, so the
     # dispatch gate refuses a crew the window excluded before a provider starts.
     allowed_crews: []
+    # Set by the gate when it admitted a resumed published delivery without
+    # its context locks. Before an agent that may edit the worktree runs, the
+    # run then takes them like any reservation, polling every
+    # `footprint_poll_seconds` for at most `footprint_wait_seconds` while
+    # other tasks hold them; still held, the dispatch is refused.
+    footprint_deferred: false
+    footprint_wait_seconds: 3600
+    footprint_poll_seconds: 30
     title: null
     body: null
 
@@ -120,11 +168,11 @@ spec:
 
     # ORB-13985: a task whose last failed run preserved a candidate resumes
     # it rather than re-implementing: the candidate is squash-merged onto
-    # this base. A candidate that failed at `commit` or later runs owner
-    # validation; a pass skips `implement_bundle`. A conflict, failing
-    # validation or review refusal hands the implementer the applied
-    # candidate and that output to repair. A candidate preserved from
-    # `implement_bundle` or any step before `commit` is unfinished
+    # this base. A completed owner-local candidate that failed at `commit`
+    # or later is carried unvalidated and skips `implement_bundle`; the final
+    # gate judges its committed candidate. A conflict or review refusal hands
+    # the implementer the applied candidate and that output to repair. Work
+    # preserved from `implement_bundle` or before `commit` is unfinished
     # (ORB-14024): the implementer always runs on it. A discarded candidate,
     # a changed spec or a bundle implements fresh. ORB-14450: a candidate held
     # on named evidence whose receipt arrived resumes as `resumed_held`,
@@ -145,7 +193,7 @@ spec:
       when: "{{ steps.resume_candidate.output.implement }} == true"
       loop:
         items: "{{ input.task_ids }}"
-        max_iterations: 256
+        max_iterations: 1
         steps:
           # The engine injects typed final_recovery_resume into every nested
           # target of a resumed phase. agent_implement addresses its rationale
@@ -160,6 +208,10 @@ spec:
               # ORB-15287: the pinned delivery base a deferred sandbox
               # validation must name.
               base_sha: "{{ steps.worktree.output.base_sha }}"
+              # ORB-15963: `validate` runs the required commands on the final
+              # candidate, so the envelope lists them for the implementer to
+              # leave to it.
+              final_validation: true
               resume_candidate: "{{ steps.resume_candidate.output.repair }}"
 
     - id: commit
@@ -179,6 +231,7 @@ spec:
       recovery_activity: step_failure_recovery
       target: activity:pr_prepare
       default_input:
+        authenticate_preparation: true
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
         base: "{{ input.base_branch }}"
         base_sync: "{{ input.base_sync }}"
@@ -190,15 +243,20 @@ spec:
       # Only the typed unmerged-index conflict emitted by git_rebase may
       # dispatch this leaf. Other VCS failures preserve the original error and
       # fall through to the terminal candidate handoff without an agent.
-      # ORB-14668: a recovery that leaves the branch exactly on its base,
+      # A clean rebase or conflict recovery that leaves the branch on its base,
       # because a base commit already carries the candidate's change, fails
-      # the retry as `[candidate_absorbed]`. Final recovery re-verifies the
+      # the step as `[candidate_absorbed]`. Final recovery re-verifies the
       # certified evidence and settles it as `complete_no_diff` for that
       # commit without dispatching its agent; any refusal reaches the agent
       # as `absorbed_refusal`.
       recovery_activity: pr_conflict_recovery
+      # A certified stale preparation is refreshed by the host at most twice
+      # within one 120-second budget; only real conflicts dispatch recovery.
       target: activity:git_rebase
       default_input:
+        step_id: sync_base
+        preparation: "{{ steps.prepare_branch.output }}"
+        final_validation: true
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
@@ -242,8 +300,8 @@ spec:
     # ORB-11333: the before-PR review gate sits after the final planned base
     # synchronization and before push/PR creation. `review_gate_admit` and
     # `review_gate_settle` always run so later steps can read their output;
-    # they report `applies: false` when the run captured `review.before_pr`
-    # off (`review.before_landing` reviews after `pr_open` instead), and for
+    # they report `applies: false` when the run captured no
+    # `review.timing = before_pr` (`before_landing` reviews after `pr_open` instead), and for
     # a checked no-diff exemption. Transient gate and reviewer failures retry,
     # then get one diagnosed recovery before the run fails.
     #
@@ -398,7 +456,7 @@ spec:
 
     # ORB-14849: the before-landing review of the published PR, while hosted
     # CI runs on its head. The gate steps always run and report `applies:
-    # false` unless the run captured `review.before_landing` on, and for a
+    # false` unless the run captured `review.timing = before_landing`, and for a
     # checked no-diff exemption; they run whatever `completion` is, so a
     # review-only run hands off a reviewed PR. One fresh reviewer from the
     # run's lineage and budget fixes what it finds as one reviewer commit
@@ -488,7 +546,7 @@ spec:
         pr_number: "{{ steps.pr_open.output.pr_number }}"
 
     - id: complete_pr
-      when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} != true"
+      when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} != true || {{ input.auto_fix }} == true && {{ steps.commit.output.skipped_no_diff_expected }} != true"
       # A DIRTY PR is repaired only after pr_complete reuses git_rebase to
       # prove real unmerged entries. Protection, review, check, auth, stale
       # ownership, and lease failures remain ineligible for agent recovery.
@@ -508,6 +566,11 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         pr_number: "{{ steps.pr_open.output.pr_number }}"
         completion: "{{ input.completion }}"
+        # Completion receives the new execution run_id from the dispatcher.
+        # Its durable retry ancestors authorize prior auto-fix ledger entries;
+        # the successful push checkpoint below deliberately retains its SHA.
+        auto_fix: "{{ input.auto_fix }}"
+        allowed_crews: "{{ input.allowed_crews }}"
         head: "{{ steps.sync_base.output.head }}"
         published_head_sha: "{{ steps.push.output.local_sha }}"
         previous_published_head_sha: "{{ steps.push.output.remote_sha_before }}"
@@ -541,6 +604,7 @@ spec:
         base_sync: "{{ input.base_sync }}"
         mode: pr
         completion: "{{ input.completion }}"
+        auto_fix: "{{ input.auto_fix }}"
         skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
         re_review_after: complete_pr
 
@@ -623,6 +687,8 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         pr_number: "{{ steps.pr_open.output.pr_number }}"
         completion: "{{ input.completion }}"
+        auto_fix: "{{ input.auto_fix }}"
+        allowed_crews: "{{ input.allowed_crews }}"
         head: "{{ steps.complete_pr.output.rebased.head }}"
         published_head_sha: "{{ steps.re_push.output.local_sha }}"
         previous_published_head_sha: "{{ steps.re_push.output.remote_sha_before }}"
@@ -652,6 +718,7 @@ spec:
         base_sync: "{{ input.base_sync }}"
         mode: pr
         completion: "{{ input.completion }}"
+        auto_fix: "{{ input.auto_fix }}"
         skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
         re_review_after: complete_reviewed_pr
 
@@ -725,6 +792,8 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         pr_number: "{{ steps.pr_open.output.pr_number }}"
         completion: "{{ input.completion }}"
+        auto_fix: "{{ input.auto_fix }}"
+        allowed_crews: "{{ input.allowed_crews }}"
         head: "{{ steps.complete_reviewed_pr.output.rebased.head }}"
         published_head_sha: "{{ steps.re_push_2.output.local_sha }}"
         previous_published_head_sha: "{{ steps.re_push_2.output.remote_sha_before }}"

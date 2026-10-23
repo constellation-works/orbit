@@ -64,6 +64,12 @@ pub(super) fn execute(
         )?;
         return Ok(result);
     }
+    // An operator is a caller holding operator capability and naming no
+    // agent identity; only such a caller can close out a rescued blocked
+    // task without starting work on it.
+    let operator = agent.is_none()
+        && model.is_none()
+        && resolved_caller_capabilities(session_context).contains(&McpCapability::Operator);
     let agent_for_audit = agent.clone();
     let model_for_audit = model.clone();
     let mut persisted_task_id = None;
@@ -71,20 +77,12 @@ pub(super) fn execute(
         OrbitBuiltinAction::AgentInvoke => {
             super::agent_tools::invoke(runtime, session_context, input, agent, model)
         }
-        OrbitBuiltinAction::AutoTaskAdd => super::auto_task_tools::add(runtime, input),
-        OrbitBuiltinAction::AutoTaskList => super::auto_task_tools::list(runtime, input),
-        OrbitBuiltinAction::AutoTaskMint => super::auto_task_tools::mint(runtime, input),
-        OrbitBuiltinAction::AutoTaskShow => super::auto_task_tools::show(runtime, input),
-        OrbitBuiltinAction::AutoTaskUpdate => super::auto_task_tools::update(runtime, input),
+        OrbitBuiltinAction::AutoTask(verb) => {
+            super::auto_task_tools::dispatch(runtime, verb, input)
+        }
         OrbitBuiltinAction::DesktopAutomation => {
             super::desktop::automation::control(runtime, input, submission_trigger(session_context))
         }
-        OrbitBuiltinAction::DesktopDrain => super::desktop::drain::control(
-            runtime,
-            input,
-            submission_trigger(session_context),
-            &super::workflow_tools::actor(runtime, agent.as_deref(), model.as_deref()),
-        ),
         OrbitBuiltinAction::DesktopRead => {
             super::desktop::task::read(runtime, session_context, input)
         }
@@ -94,20 +92,14 @@ pub(super) fn execute(
         OrbitBuiltinAction::DesktopTaskWrite => {
             super::desktop::task::write(runtime, session_context, input, agent, model)
         }
+        OrbitBuiltinAction::Agents(verb) => super::agents_tools::dispatch(runtime, verb, input),
+        OrbitBuiltinAction::Codebase(verb) => super::codebase_tools::dispatch(runtime, verb, input),
+        OrbitBuiltinAction::Orchestrator(verb) => {
+            super::orchestrator_tools::dispatch(runtime, verb, input)
+        }
         OrbitBuiltinAction::CommandExec => super::command_tools::exec(runtime, input, agent, model),
-        OrbitBuiltinAction::DrainClaims => super::drain_tools::claims(runtime, input),
-        OrbitBuiltinAction::DrainClaimBind => {
-            super::drain_tools::claim_bind(runtime, session_context, input)
-        }
-        OrbitBuiltinAction::DrainClaimSettle => {
-            super::drain_tools::claim_settle(runtime, session_context, input)
-        }
-        OrbitBuiltinAction::TaskPull => super::drain_tools::pull(runtime, session_context, input),
-        OrbitBuiltinAction::DrainProbe => {
-            super::drain_tools::probe(runtime, session_context, input)
-        }
-        OrbitBuiltinAction::DrainReceiptLookup => {
-            super::drain_tools::receipt_lookup(runtime, session_context, input)
+        OrbitBuiltinAction::Drain(verb) => {
+            super::drain_tools::dispatch(runtime, session_context, verb, input)
         }
         // ADR-0209 bearing 1 [ORB-10358]: the friction handler table lives with
         // the other friction handlers, keyed by the registry's verb enum.
@@ -125,94 +117,35 @@ pub(super) fn execute(
         OrbitBuiltinAction::PipelineWait => {
             super::pipeline_tools::wait(runtime, input, agent, model)
         }
-        OrbitBuiltinAction::Search => super::search_tools::search(runtime, input),
-        OrbitBuiltinAction::TaskAdd => {
-            let written = super::task_tools::add(
+        OrbitBuiltinAction::Search(verb) => super::search_tools::dispatch(runtime, verb, input),
+        OrbitBuiltinAction::Task(verb) => {
+            let (response, written) = super::task::operation::dispatch(
                 runtime,
-                input,
-                agent,
-                model,
-                session_context.worker_invocation.as_ref(),
-            )?;
-            persisted_task_id = Some(written.persisted_id);
-            Ok(written.response)
-        }
-        OrbitBuiltinAction::TaskArtifactGet => super::task_tools::artifact_get(runtime, input),
-        OrbitBuiltinAction::TaskDelete => super::task_tools::delete(runtime, input),
-        OrbitBuiltinAction::TaskEligible => super::task_tools::eligible(runtime, input),
-        OrbitBuiltinAction::TaskLint => super::task_tools::lint(runtime, input),
-        OrbitBuiltinAction::TaskList => super::task_tools::list(runtime, input),
-        OrbitBuiltinAction::TaskLocks => crate::runtime::task::locks::list(runtime),
-        OrbitBuiltinAction::TaskLocksRelease => {
-            crate::runtime::task::locks::release(runtime, input, agent, model)
-        }
-        OrbitBuiltinAction::TaskLocksReserve => {
-            crate::runtime::task::locks::reserve(runtime, input, agent, model, reservation_owner)
-        }
-        OrbitBuiltinAction::TaskReject => {
-            let written = super::task_tools::reject(runtime, input, agent, model)?;
-            persisted_task_id = Some(written.persisted_id);
-            Ok(written.response)
-        }
-        OrbitBuiltinAction::TaskReconcileReview => {
-            let result = crate::application::review::reconciliation::reconcile_review(
-                runtime,
-                session_context,
-                &input,
-            )?;
-            persisted_task_id = result
-                .get("id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned);
-            Ok(result)
-        }
-        OrbitBuiltinAction::TaskReviewReset => {
-            let result = crate::application::review::reset_review(runtime, &input)?;
-            persisted_task_id = result
-                .get("id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned);
-            Ok(result)
-        }
-        OrbitBuiltinAction::TaskShow => super::task_tools::show(runtime, input),
-        OrbitBuiltinAction::TaskUpdate => {
-            // An operator is a caller holding operator capability and naming
-            // no agent identity; only such a caller can close out a rescued
-            // blocked task without starting work on it.
-            let operator = agent.is_none()
-                && model.is_none()
-                && resolved_caller_capabilities(session_context).contains(&McpCapability::Operator);
-            let written = super::task_tools::update(
-                runtime,
-                input,
-                agent,
-                model,
-                reservation_owner,
-                runtime.artifact_origin(session_context),
+                ToolCaller {
+                    session_context,
+                    agent,
+                    model,
+                    reservation_owner,
+                },
                 operator,
+                verb,
+                input,
             )?;
-            persisted_task_id = Some(written.persisted_id);
-            Ok(written.response)
+            persisted_task_id = written;
+            Ok(response)
         }
-        OrbitBuiltinAction::WorkflowShip => super::workflow_tools::ship(
+        OrbitBuiltinAction::Workflow(verb) => super::workflow_tools::dispatch(
             runtime,
+            session_context,
+            verb,
             input,
             agent,
             model,
             submission_trigger(session_context),
         ),
-        OrbitBuiltinAction::WorkflowRunShow => super::workflow_tools::show(runtime, input),
-        OrbitBuiltinAction::WorkflowRunList => super::workflow_tools::list(runtime, input),
-        OrbitBuiltinAction::WorkflowRunResume => {
-            super::workflow_tools::resume(runtime, input, agent, model)
+        OrbitBuiltinAction::WorkspaceClaim(verb) => {
+            super::workspace_claim_tools::dispatch(runtime, verb, input, agent, model)
         }
-        OrbitBuiltinAction::WorkspaceClaimAcquire => {
-            crate::runtime::workspace::claim::acquire(runtime, input, agent, model)
-        }
-        OrbitBuiltinAction::WorkspaceClaimRelease => {
-            crate::runtime::workspace::claim::release(runtime, input, agent, model)
-        }
-        OrbitBuiltinAction::WorkspaceClaimShow => crate::runtime::workspace::claim::show(runtime),
     }?;
     super::artifact_redaction::finish_tool_response(
         runtime,

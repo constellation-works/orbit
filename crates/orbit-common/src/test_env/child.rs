@@ -7,9 +7,11 @@ use super::{clear_inherited_authority, host_load, orphan_watchdog};
 ///
 /// Pass captured libtest output, including its final summary. Checking the last
 /// summary prevents a nested child's result from hiding an empty outer run.
-/// A passing child's `DEFERRED:` notices are repeated on the parent's stderr,
+/// A passing child's `DEFERRED:` and `SKIP:` notices are repeated on the parent's stderr,
 /// so a test that deferred its sandbox-confined path inside an isolated child
-/// still says so in the run's output [ORB-14334].
+/// still says so in the run's output [ORB-14334]. `test-note:` diagnostics and
+/// completed `qa-scenario-pass:` rows are forwarded too, so conditional native
+/// probes and consolidated cases expose their result.
 pub fn assert_child_test_passed(
     test_name: &str,
     status: std::process::ExitStatus,
@@ -33,13 +35,23 @@ pub fn assert_child_test_passed(
         "child test `{test_name}` did not run exactly once; missing or ignored entry point:\n{stdout}\n{stderr}"
     );
     let deferrals = stdout.lines().chain(stderr.lines()).filter(|line| {
-        line.trim_start()
-            .starts_with(orbit_types::workflow::HOST_TEST_DEFERRED_PREFIX)
+        let line = line.trim_start();
+        line.starts_with(orbit_types::workflow::HOST_TEST_DEFERRED_PREFIX)
+            || line.starts_with("SKIP:")
+            || line.starts_with("test-note: ")
+            || line.starts_with("qa-scenario-pass: ")
     });
     for line in deferrals {
         // Bypass libtest capture, as the child's own notice did.
         let _ = writeln!(std::io::stderr(), "{}", line.trim());
     }
+}
+
+/// Retain a consolidated behavioral row's completion at the test-command boundary.
+/// Call only after the row's assertions return; unavailable coverage must still
+/// emit its skip or deferral notice, which invalidates QA execution credit.
+pub fn record_scenario_pass(name: &str) {
+    let _ = writeln!(std::io::stderr(), "qa-scenario-pass: {name}");
 }
 
 /// How long [`run_child_test`] lets a re-executed child test go without
@@ -49,11 +61,13 @@ pub fn assert_child_test_passed(
 /// on a CPU-saturated host: a default-concurrency nextest run beside a busy
 /// drain, or an instrumented `cargo llvm-cov` run. Fixed one- and two-minute
 /// deadlines failed passing children there (ORB-14659). It is measured from
-/// the child's latest output, so a child that reports progress (a
-/// [`FixtureProgress`] fixture) is not killed for being slow while it still
-/// advances. Write-latency spikes on a loaded macOS host stretched a
-/// progressing golden fixture past a deadline measured from its start
-/// (ORB-15293).
+/// the child's latest output, and the window opens at the first byte, so
+/// exec and libtest startup do not consume it (ORB-16411). A child that
+/// reports progress (a [`FixtureProgress`] fixture) is not killed for being
+/// slow while it still advances. Write-latency spikes on a loaded macOS host
+/// stretched a progressing golden fixture past a deadline measured from its
+/// start (ORB-15293). A child that has not printed yet is bounded only by
+/// [`CHILD_TEST_CEILING`].
 pub const CHILD_TEST_DEADLINE: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// The longest [`run_child_test`] lets a child run, even one that keeps
@@ -68,10 +82,12 @@ pub const CHILD_TEST_CEILING: std::time::Duration = std::time::Duration::from_se
 /// is killed once the child has exited or overrun, or by a watchdog process
 /// if this process dies first (nextest interrupting or timing out the test).
 /// Pass the result to
-/// [`assert_child_test_passed`]. A child silent for [`CHILD_TEST_DEADLINE`],
-/// or still running at [`CHILD_TEST_CEILING`], fails the caller with the
-/// host's load and everything the child printed so far, so an overrun on a
-/// saturated host is told apart from a hang at the point where it stopped.
+/// [`assert_child_test_passed`]. Once a child has printed, a further silence
+/// of [`CHILD_TEST_DEADLINE`] fails the caller. A child that has not printed
+/// yet, or one that keeps printing, fails only at [`CHILD_TEST_CEILING`].
+/// Either failure includes the host's load and everything the child printed
+/// so far, so an overrun on a saturated host is told apart from a hang at
+/// the point where it stopped.
 pub fn run_child_test(
     command: &mut std::process::Command,
     test_name: &str,
@@ -88,7 +104,9 @@ pub fn run_child_test(
 
 /// [`run_child_test`] with an explicit `quiet` deadline and `ceiling`, so a
 /// test can exercise both overrun paths by injecting short ones instead of
-/// waiting out minutes.
+/// waiting out minutes. `quiet` opens at the child's first byte and then
+/// measures the gap since the latest output. Before that byte only `ceiling`
+/// applies.
 pub fn run_child_test_within(
     command: &mut std::process::Command,
     test_name: &str,
@@ -107,10 +125,12 @@ pub fn run_child_test_within(
         .stdout(create(&stdout_path))
         .stderr(create(&stderr_path));
     crate::process::bounded::isolate_process_group(command);
-    let mut child = command
-        .spawn()
-        .unwrap_or_else(|error| panic!("spawn child test `{test_name}`: {error}"));
-    let watchdog = orphan_watchdog::OrphanWatchdog::arm(child.id());
+    let mut child = crate::process::OwnedChild::from_spawned(
+        command
+            .spawn()
+            .unwrap_or_else(|error| panic!("spawn child test `{test_name}`: {error}")),
+    );
+    let watchdog = orphan_watchdog::OrphanWatchdog::arm(child.pid());
     let started = std::time::Instant::now();
     let output_len = || {
         [&stdout_path, &stderr_path]
@@ -118,30 +138,36 @@ pub fn run_child_test_within(
             .map(|path| std::fs::metadata(path).map_or(0, |metadata| metadata.len()))
             .sum::<u64>()
     };
-    let (mut printed, mut last_output) = (0, started);
+    // Opens at the first byte. Exec and libtest startup precede that byte,
+    // and a short injected deadline must not kill a child that has not yet
+    // printed (ORB-16411). Silence after it, and the ceiling, still fail.
+    let mut printed = 0u64;
+    let mut last_output: Option<std::time::Instant> = None;
     let status = loop {
-        match child.try_wait() {
+        match child.child_mut().try_wait() {
             Ok(Some(status)) => break Ok(status),
             Ok(None) => {}
             Err(error) => panic!("wait for child test `{test_name}`: {error}"),
         }
         let now_printed = output_len();
         if now_printed != printed {
-            (printed, last_output) = (now_printed, std::time::Instant::now());
+            printed = now_printed;
+            last_output = Some(std::time::Instant::now());
         }
-        if last_output.elapsed() >= quiet {
+        if last_output.is_some_and(|at| at.elapsed() >= quiet) {
             break Err(format!("printed nothing for {quiet:?}"));
         }
         if started.elapsed() >= ceiling {
-            break Err(format!("still printing at its {ceiling:?} ceiling"));
+            let overrun = if last_output.is_none() {
+                format!("printed nothing before its {ceiling:?} ceiling")
+            } else {
+                format!("still printing at its {ceiling:?} ceiling")
+            };
+            break Err(overrun);
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     };
-    crate::process::bounded::kill_owned_group(child.id());
-    if status.is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
+    child.kill_and_reap();
     if let Some(watchdog) = watchdog {
         watchdog.disarm();
     }

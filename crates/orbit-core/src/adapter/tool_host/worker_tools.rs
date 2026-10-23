@@ -1,11 +1,21 @@
 //! Generic coordination writes translated into owner claim transactions.
+use orbit_common::governance::agents::AgentsVerb;
+use orbit_common::governance::auto_task::AutoTaskVerb;
+use orbit_common::governance::codebase::CodebaseVerb;
+use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
+use orbit_common::governance::operation::OperationVerb;
+use orbit_common::governance::orchestrator::OrchestratorVerb;
+use orbit_common::governance::search::SearchVerb;
+use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
+use orbit_common::governance::workflow::WorkflowVerb;
+use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_store::contracts::{
-    ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun, ClaimWorkerUpdate,
+    ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun, ClaimSteeringRecord, ClaimWorkerUpdate,
 };
 use orbit_tools::OrbitBuiltinAction;
-use orbit_types::tool::ToolSessionContext;
+use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -17,26 +27,73 @@ pub(crate) fn execute(
     input: &Value,
     model: Option<&str>,
 ) -> Result<Option<Value>, OrbitError> {
-    if !matches!(
-        action,
-        OrbitBuiltinAction::TaskUpdate
-            | OrbitBuiltinAction::TaskShow
-            | OrbitBuiltinAction::TaskList
-            | OrbitBuiltinAction::TaskEligible
-            | OrbitBuiltinAction::TaskArtifactGet
-            | OrbitBuiltinAction::TaskLint
-            | OrbitBuiltinAction::TaskLocks
-            | OrbitBuiltinAction::TaskAdd
-            | OrbitBuiltinAction::TaskDelete
-            | OrbitBuiltinAction::TaskReject
-            | OrbitBuiltinAction::TaskReconcileReview
-            | OrbitBuiltinAction::TaskReviewReset
-            | OrbitBuiltinAction::TaskLocksRelease
-            | OrbitBuiltinAction::TaskLocksReserve
-            | OrbitBuiltinAction::AutoTaskAdd
-            | OrbitBuiltinAction::AutoTaskUpdate
-            | OrbitBuiltinAction::Friction(_)
-    ) {
+    let worker_routed = match action {
+        OrbitBuiltinAction::Drain(verb) => match verb {
+            DrainVerb::Probe
+            | DrainVerb::ReceiptLookup
+            | DrainVerb::Pull
+            | DrainVerb::ClaimBind
+            | DrainVerb::ClaimSettle
+            | DrainVerb::Claims => false,
+        },
+        OrbitBuiltinAction::WorkspaceClaim(verb) => match verb {
+            WorkspaceClaimVerb::Acquire
+            | WorkspaceClaimVerb::Release
+            | WorkspaceClaimVerb::Show => false,
+        },
+        OrbitBuiltinAction::Search(verb) => match verb {
+            SearchVerb::Query => true,
+        },
+        OrbitBuiltinAction::Codebase(verb) => match verb {
+            CodebaseVerb::Analytics | CodebaseVerb::Show | CodebaseVerb::Related => false,
+        },
+        OrbitBuiltinAction::Agents(verb) => match verb {
+            AgentsVerb::Scorecard | AgentsVerb::Show => false,
+        },
+        OrbitBuiltinAction::Orchestrator(verb) => match verb {
+            OrchestratorVerb::Scorecard | OrchestratorVerb::Show => false,
+        },
+        OrbitBuiltinAction::Workflow(verb) => match verb {
+            WorkflowVerb::Auto
+            | WorkflowVerb::RunList
+            | WorkflowVerb::RunResume
+            | WorkflowVerb::RunShow
+            | WorkflowVerb::Ship => false,
+        },
+        OrbitBuiltinAction::Task(verb) => match verb {
+            TaskVerb::Add
+            | TaskVerb::Update
+            | TaskVerb::List
+            | TaskVerb::Eligible
+            | TaskVerb::Show
+            | TaskVerb::Lint
+            | TaskVerb::ArtifactPut
+            | TaskVerb::ArtifactGet
+            | TaskVerb::LocksList
+            | TaskVerb::LocksReserve
+            | TaskVerb::LocksRelease
+            | TaskVerb::ReviewReset
+            | TaskVerb::Requeue
+            | TaskVerb::BlockTriage
+            | TaskVerb::ReconcileReview
+            | TaskVerb::RetryHandoff
+            | TaskVerb::Reject
+            | TaskVerb::Delete => true,
+        },
+        action => matches!(
+            action,
+            OrbitBuiltinAction::AutoTask(
+                AutoTaskVerb::Add
+                    | AutoTaskVerb::Update
+                    | AutoTaskVerb::Toggle
+                    | AutoTaskVerb::Delete
+                    | AutoTaskVerb::Restore
+                    | AutoTaskVerb::Recover
+                    | AutoTaskVerb::Reset
+            ) | OrbitBuiltinAction::Friction(_)
+        ),
+    };
+    if !worker_routed {
         return Ok(None);
     }
     crate::runtime::check_worker_host_input(input, session.worker_host_call)?;
@@ -55,7 +112,11 @@ pub(crate) fn execute(
             "worker owner destination mismatch".into(),
         ));
     }
-    if action == OrbitBuiltinAction::TaskShow
+    if action == OrbitBuiltinAction::Search(SearchVerb::Query) {
+        crate::runtime::check_worker_search_scope(input)?;
+        return Ok(None);
+    }
+    if action == OrbitBuiltinAction::Task(TaskVerb::Show)
         && let Some(projection) = input.get("_worker_read").and_then(Value::as_str)
     {
         let id = input.get("id").and_then(Value::as_str).unwrap_or_default();
@@ -107,12 +168,26 @@ pub(crate) fn execute(
             "terminal_transitions" => serde_json::to_value(
                 runtime.task_terminal_transitions(optional_field(input, "since")?)?,
             ),
+            "defect_filings" => {
+                serde_json::to_value(runtime.task_defect_filings(optional_field(input, "since")?)?)
+            }
             "task" => serde_json::to_value(runtime.get_task(id)?),
             "artifacts" => serde_json::to_value(runtime.get_task_artifacts(id)?),
             "manifest" => serde_json::to_value(runtime.get_task_artifact_manifest(id)?),
             "comments" => serde_json::to_value(runtime.get_task_comments(id)?),
             "history" => serde_json::to_value(runtime.get_task_history(id)?),
             "dependency_history" => serde_json::to_value(runtime.dependency_history(id)?),
+            // Mid-run steering's records for this worker's own claim, never
+            // another task's: its promotion gate certifies only what the
+            // owner holds.
+            "steering" => {
+                if id != binding.task_id {
+                    return Err(OrbitError::PolicyDenied(
+                        "worker task binding mismatch".into(),
+                    ));
+                }
+                serde_json::to_value(runtime.worker_claim_steering(&worker_auth(binding))?)
+            }
             "dependency" => match runtime.resolve_dependency_task(id)? {
                 orbit_store::RegisteredTaskResolution::Resolved(task) => serde_json::to_value(task),
                 _ => {
@@ -130,162 +205,271 @@ pub(crate) fn execute(
         .map_err(|error| OrbitError::Store(error.to_string()))?;
         return Ok(Some(value));
     }
-    if action == OrbitBuiltinAction::TaskArtifactGet {
+    if action == OrbitBuiltinAction::Task(TaskVerb::ArtifactGet) {
         require_active_claim(runtime, session)?;
-        return Ok(None);
-    }
-    let mut friction_tag_substitutions = Vec::new();
-    let mutation = match action {
-        OrbitBuiltinAction::TaskUpdate => {
-            binding.validate_arguments(input)?;
-            // Artifact attachments can reach the mutation receipt path, which
-            // intentionally reconciles a lost reply before rechecking claim
-            // authority. Check the current claim first so a stale replay cannot
-            // turn an old successful report upload into a new apparent success.
-            if input.get("artifacts").is_some() {
-                require_active_claim(runtime, session)?;
+        if let Some(projection) = input.get("_worker_read").and_then(Value::as_str) {
+            if projection != "artifact" {
+                return Err(OrbitError::InvalidInput(
+                    "unknown worker artifact read projection".into(),
+                ));
             }
-            if input
-                .get("id")
-                .is_some_and(|id| id.as_str() != Some(&binding.task_id))
-            {
+            if input.get("id").and_then(Value::as_str) != Some(binding.task_id.as_str()) {
                 return Err(OrbitError::PolicyDenied(
                     "worker task binding mismatch".into(),
                 ));
             }
-            if let Some(update) = input.get("_worker_update") {
-                let update: ClaimWorkerUpdate = serde_json::from_value(update.clone())
-                    .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
-                if !update.evidence.artifacts.is_empty() {
-                    return Err(OrbitError::InvalidInput(
-                        "use the task artifact adapter for artifact payloads".into(),
+            let mut request = input.clone();
+            if let Some(object) = request.as_object_mut() {
+                object.remove("_worker_read");
+            }
+            let parsed = TaskVerb::ArtifactGet.spec().parse_input(request)?;
+            let artifact = runtime.get_task_artifact_inline(
+                &parsed.required_string("id")?,
+                &parsed.required_string("path")?,
+            )?;
+            return serde_json::to_value(artifact)
+                .map(Some)
+                .map_err(|error| OrbitError::Store(error.to_string()));
+        }
+        return Ok(None);
+    }
+    let (mutation, friction_tag_substitutions) = match action {
+        OrbitBuiltinAction::Friction(verb) => match verb {
+            FrictionVerb::Add => {
+                binding.validate_arguments(input)?;
+                let parsed = verb.spec().parse_input(input.clone())?;
+                let (mut params, substitutions) =
+                    super::friction_tools::add_params(&parsed, model.map(str::to_owned))?;
+                params.during_task = Some(binding.task_id.clone());
+                let taxonomy = crate::runtime::friction::store_for(runtime)?
+                    .tags()?
+                    .into_iter()
+                    .collect();
+                params.tags =
+                    orbit_store::contracts::normalize_friction_tags(params.tags, &taxonomy)?;
+                (ClaimMutation::Friction(params), substitutions)
+            }
+            FrictionVerb::List | FrictionVerb::Show | FrictionVerb::Stats | FrictionVerb::Tags => {
+                return Ok(None);
+            }
+            FrictionVerb::Update | FrictionVerb::Resolve | FrictionVerb::Rehome => {
+                return Err(OrbitError::PolicyDenied(
+                    "claimed worker operation requires its lifecycle boundary".into(),
+                ));
+            }
+        },
+        OrbitBuiltinAction::Task(verb) => match verb {
+            // [ORB-14260] A claimed worker files follow-up work as ordinary
+            // creation, but only work spawned from its own claimed task, and only
+            // while the owner still holds that claim as active. [ORB-14792] A
+            // claimed review task's findings may also name the task in this
+            // workspace that introduced each, as `regression_from`.
+            TaskVerb::Add => {
+                binding.validate_arguments(input)?;
+                if input.get(TASK_CLI_OPTIONS_PARAM).is_some() {
+                    return Err(OrbitError::PolicyDenied(
+                        "a claimed worker files work as ordinary creation, without the operator command's options"
+                            .into(),
                     ));
                 }
-                return apply(runtime, session, ClaimMutation::Update(update), Vec::new())
-                    .map(Some);
-            }
-            orbit_common::protocol::tool_input::reject_unknown_tool_fields(
-                input,
-                &[
-                    "id",
-                    "task_id",
-                    "claim_id",
-                    "bound_run_id",
-                    "execution_summary",
-                    "plan",
-                    "context_files",
-                    "allow_missing_context",
-                    "status",
-                    "external_refs",
-                    "comment",
-                    "artifacts",
-                    "model",
-                    "agent",
-                    "workspace",
-                    "field",
-                    "fields",
-                ],
-            )?;
-            let mut artifacts = super::input::parse_artifacts(input)?;
-            // A worker on its owner's machine reaches this boundary in
-            // process, past any broker, so the reserved review namespace is
-            // enforced here for every route. Only the host's own channel —
-            // the review gate writing its records — is the system writer.
-            if !session.worker_host_call {
-                for artifact in &mut artifacts {
-                    crate::application::task::admit_agent_artifact(artifact)?;
+                let findings = orbit_types::workflow::files_regression_findings(
+                    &runtime.get_task(&binding.task_id)?.tags,
+                );
+                let culprits = binding.validate_spawned_relations(input, findings)?;
+                for culprit in culprits {
+                    match runtime.get_task(&culprit) {
+                        Ok(_) => {}
+                        Err(OrbitError::NotFound { .. }) => {
+                            return Err(OrbitError::PolicyDenied(format!(
+                                "a claimed review worker's regression_from target `{culprit}` is \
+                                 not a task in the claimed task's workspace"
+                            )));
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
+                require_active_claim(runtime, session)?;
+                return Ok(None);
             }
-            ClaimMutation::Update(ClaimWorkerUpdate {
-                plan: orbit_common::protocol::tool_input::optional_raw_string(input, "plan")?,
-                context_files:
-                    orbit_common::protocol::tool_input::optional_csv_or_string_list_alias(
-                        input,
-                        &["context_files"],
-                    )?,
-                status: optional_field(input, "status")?,
-                external_refs: optional_field(input, "external_refs")?.unwrap_or_default(),
-                evidence: ClaimEvidence {
-                    summary: orbit_common::protocol::tool_input::optional_raw_string(
-                        input,
-                        "execution_summary",
-                    )?,
-                    comment: orbit_common::protocol::tool_input::optional_raw_string(
-                        input, "comment",
-                    )?,
-                    artifacts,
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-        }
-        OrbitBuiltinAction::Friction(FrictionVerb::Add) => {
-            binding.validate_arguments(input)?;
-            let (mut params, substitutions) =
-                super::friction_tools::add_params(input, model.map(str::to_owned))?;
-            friction_tag_substitutions = substitutions;
-            params.during_task = Some(binding.task_id.clone());
-            let taxonomy = crate::runtime::friction::store_for(runtime)?
-                .tags()?
-                .into_iter()
-                .collect();
-            params.tags = orbit_store::contracts::normalize_friction_tags(params.tags, &taxonomy)?;
-            ClaimMutation::Friction(params)
-        }
-        OrbitBuiltinAction::TaskShow
-        | OrbitBuiltinAction::TaskList
-        | OrbitBuiltinAction::TaskEligible
-        | OrbitBuiltinAction::TaskLint
-        | OrbitBuiltinAction::TaskLocks
-        | OrbitBuiltinAction::Friction(
-            FrictionVerb::List | FrictionVerb::Show | FrictionVerb::Stats | FrictionVerb::Tags,
-        ) => return Ok(None),
+            TaskVerb::Update | TaskVerb::ArtifactPut => {
+                return worker_update(runtime, session, binding, input).map(Some);
+            }
+            TaskVerb::List
+            | TaskVerb::Eligible
+            | TaskVerb::Show
+            | TaskVerb::Lint
+            | TaskVerb::ArtifactGet
+            | TaskVerb::LocksList => {
+                return Ok(None);
+            }
+            TaskVerb::LocksReserve
+            | TaskVerb::LocksRelease
+            | TaskVerb::ReviewReset
+            | TaskVerb::Requeue
+            | TaskVerb::BlockTriage
+            | TaskVerb::ReconcileReview
+            | TaskVerb::RetryHandoff
+            | TaskVerb::Reject
+            | TaskVerb::Delete => {
+                return Err(OrbitError::PolicyDenied(
+                    "claimed worker operation requires its lifecycle boundary".into(),
+                ));
+            }
+        },
         // These writes use the owner's checkout-backed definition root. They
         // must pass the worker destination check above before ordinary CRUD.
-        OrbitBuiltinAction::AutoTaskAdd | OrbitBuiltinAction::AutoTaskUpdate => {
-            binding.validate_arguments(input)?;
-            return Ok(None);
-        }
-        // [ORB-14260] A claimed worker files follow-up work as ordinary
-        // creation, but only work spawned from its own claimed task, and only
-        // while the owner still holds that claim as active. [ORB-14792] A
-        // claimed review task's findings may also name the task in this
-        // workspace that introduced each, as `regression_from`.
-        OrbitBuiltinAction::TaskAdd => {
-            binding.validate_arguments(input)?;
-            let findings = orbit_types::workflow::files_regression_findings(
-                &runtime.get_task(&binding.task_id)?.tags,
-            );
-            let culprits = binding.validate_spawned_relations(input, findings)?;
-            for culprit in culprits {
-                match runtime.get_task(&culprit) {
-                    Ok(_) => {}
-                    Err(OrbitError::NotFound { .. }) => {
-                        return Err(OrbitError::PolicyDenied(format!(
-                            "a claimed review worker's regression_from target `{culprit}` is \
-                             not a task in the claimed task's workspace"
-                        )));
-                    }
-                    Err(error) => return Err(error),
-                }
+        OrbitBuiltinAction::AutoTask(verb) => match verb {
+            AutoTaskVerb::Add | AutoTaskVerb::Update | AutoTaskVerb::Toggle => {
+                binding.validate_arguments(input)?;
+                return Ok(None);
             }
-            require_active_claim(runtime, session)?;
-            return Ok(None);
-        }
-        OrbitBuiltinAction::TaskDelete
-        | OrbitBuiltinAction::TaskReject
-        | OrbitBuiltinAction::TaskReconcileReview
-        | OrbitBuiltinAction::TaskReviewReset
-        | OrbitBuiltinAction::TaskLocksRelease
-        | OrbitBuiltinAction::TaskLocksReserve
-        | OrbitBuiltinAction::Friction(_) => {
-            return Err(OrbitError::PolicyDenied(
-                "claimed worker operation requires its lifecycle boundary".into(),
-            ));
-        }
+            AutoTaskVerb::List | AutoTaskVerb::Show | AutoTaskVerb::Mint => return Ok(None),
+            AutoTaskVerb::Delete
+            | AutoTaskVerb::Restore
+            | AutoTaskVerb::Recover
+            | AutoTaskVerb::Reset => {
+                return Err(OrbitError::PolicyDenied(
+                    "claimed worker operation requires its lifecycle boundary".into(),
+                ));
+            }
+        },
+        OrbitBuiltinAction::Drain(verb) => match verb {
+            DrainVerb::Probe
+            | DrainVerb::ReceiptLookup
+            | DrainVerb::Pull
+            | DrainVerb::ClaimBind
+            | DrainVerb::ClaimSettle
+            | DrainVerb::Claims => return Ok(None),
+        },
+        OrbitBuiltinAction::WorkspaceClaim(verb) => match verb {
+            WorkspaceClaimVerb::Acquire
+            | WorkspaceClaimVerb::Release
+            | WorkspaceClaimVerb::Show => return Ok(None),
+        },
+        OrbitBuiltinAction::Search(verb) => match verb {
+            SearchVerb::Query => return Ok(None),
+        },
+        OrbitBuiltinAction::Codebase(verb) => match verb {
+            CodebaseVerb::Analytics | CodebaseVerb::Show | CodebaseVerb::Related => {
+                return Ok(None);
+            }
+        },
+        OrbitBuiltinAction::Agents(verb) => match verb {
+            AgentsVerb::Scorecard | AgentsVerb::Show => return Ok(None),
+        },
+        OrbitBuiltinAction::Orchestrator(verb) => match verb {
+            OrchestratorVerb::Scorecard | OrchestratorVerb::Show => return Ok(None),
+        },
+        OrbitBuiltinAction::Workflow(verb) => match verb {
+            WorkflowVerb::Auto
+            | WorkflowVerb::RunList
+            | WorkflowVerb::RunResume
+            | WorkflowVerb::RunShow
+            | WorkflowVerb::Ship => return Ok(None),
+        },
         _ => return Ok(None),
     };
     apply(runtime, session, mutation, friction_tag_substitutions).map(Some)
+}
+
+/// A claimed worker's task update, or an artifact put, as its owner's claim
+/// mutation.
+fn worker_update(
+    runtime: &OrbitRuntime,
+    session: &ToolSessionContext,
+    binding: &WorkerInvocation,
+    input: &Value,
+) -> Result<Value, OrbitError> {
+    binding.validate_arguments(input)?;
+    // Artifact attachments can reach the mutation receipt path, which
+    // intentionally reconciles a lost reply before rechecking claim
+    // authority. Check the current claim first so a stale replay cannot
+    // turn an old successful report upload into a new apparent success.
+    if input.get("artifacts").is_some() {
+        require_active_claim(runtime, session)?;
+    }
+    if input
+        .get("id")
+        .is_some_and(|id| id.as_str() != Some(&binding.task_id))
+    {
+        return Err(OrbitError::PolicyDenied(
+            "worker task binding mismatch".into(),
+        ));
+    }
+    // The host's own record of what a prompt it built carried; agent tool
+    // calls cannot reach this channel (`check_worker_host_input`).
+    if let Some(record) = input.get("_worker_steering") {
+        let record: ClaimSteeringRecord = serde_json::from_value(record.clone())
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        return apply(
+            runtime,
+            session,
+            ClaimMutation::Steering(record),
+            Vec::new(),
+        );
+    }
+    if let Some(update) = input.get("_worker_update") {
+        let update: ClaimWorkerUpdate = serde_json::from_value(update.clone())
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        if !update.evidence.artifacts.is_empty() {
+            return Err(OrbitError::InvalidInput(
+                "use the task artifact adapter for artifact payloads".into(),
+            ));
+        }
+        return apply(runtime, session, ClaimMutation::Update(update), Vec::new());
+    }
+    orbit_common::protocol::tool_input::reject_unknown_tool_fields(
+        input,
+        &[
+            "id",
+            "task_id",
+            "claim_id",
+            "bound_run_id",
+            "execution_summary",
+            "plan",
+            "context_files",
+            "allow_missing_context",
+            "status",
+            "external_refs",
+            "comment",
+            "artifacts",
+            "model",
+            "agent",
+            "workspace",
+            "field",
+            "fields",
+        ],
+    )?;
+    let mut artifacts = super::input::parse_artifacts(input)?;
+    // A worker on its owner's machine reaches this boundary in
+    // process, past any broker, so the reserved review namespace is
+    // enforced here for every route. Only the host's own channel —
+    // the review gate writing its records — is the system writer.
+    if !session.worker_host_call {
+        for artifact in &mut artifacts {
+            crate::application::task::admit_agent_artifact(artifact)?;
+        }
+    }
+    let mutation = ClaimMutation::Update(ClaimWorkerUpdate {
+        plan: orbit_common::protocol::tool_input::optional_raw_string(input, "plan")?,
+        context_files: orbit_common::protocol::tool_input::optional_csv_or_string_list_alias(
+            input,
+            &["context_files"],
+        )?,
+        status: optional_field(input, "status")?,
+        external_refs: optional_field(input, "external_refs")?.unwrap_or_default(),
+        evidence: ClaimEvidence {
+            summary: orbit_common::protocol::tool_input::optional_raw_string(
+                input,
+                "execution_summary",
+            )?,
+            comment: orbit_common::protocol::tool_input::optional_raw_string(input, "comment")?,
+            artifacts,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    apply(runtime, session, mutation, Vec::new())
 }
 
 fn optional_field<T: serde::de::DeserializeOwned>(

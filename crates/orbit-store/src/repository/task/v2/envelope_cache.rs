@@ -25,8 +25,8 @@
 //! are identical. An in-place overwrite that preserved identity, length, and
 //! timestamp would go unnoticed, and a filesystem with coarse timestamps or no
 //! inode numbers narrows the evidence further. Reuse therefore never stands
-//! alone: the caller still compares every reused envelope's `updated_at`
-//! against the generated index, and `reindex_workspace` re-reads and
+//! alone: the caller still compares every reused envelope's indexed scalar
+//! fields, tags and `child_of` targets against the generated index, and `reindex_workspace` re-reads and
 //! re-validates every bundle from disk with no reference to this cache.
 //!
 //! Entries are bounded by the tasks registered to the workspace, which the
@@ -83,6 +83,21 @@ impl EnvelopeStamp {
     }
 }
 
+/// [`EnvelopeStamp::persisted`] for any store file the same writes replace
+/// or append to, such as a bundle's event and comment logs.
+pub(super) fn persisted_file_stamp(path: &Path) -> Option<String> {
+    file_stamp(path)?.persisted()
+}
+
+fn file_stamp(path: &Path) -> Option<EnvelopeStamp> {
+    let metadata = fs::metadata(path).ok()?;
+    Some(EnvelopeStamp {
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+        identity: file_identity(&metadata),
+    })
+}
+
 #[derive(Default)]
 pub(super) struct EnvelopeCache {
     entries: Mutex<HashMap<String, (EnvelopeStamp, TaskEnvelopeV2)>>,
@@ -94,12 +109,7 @@ impl EnvelopeCache {
     /// failed. Both cases fall through to the strict envelope read, which
     /// decides between "skip this task" and a reported error.
     pub(super) fn stamp(&self, path: &Path) -> Option<EnvelopeStamp> {
-        let metadata = fs::metadata(path).ok()?;
-        Some(EnvelopeStamp {
-            len: metadata.len(),
-            modified: metadata.modified().ok(),
-            identity: file_identity(&metadata),
-        })
+        file_stamp(path)
     }
 
     /// Run `inspect` on the envelope parsed from the file this stamp

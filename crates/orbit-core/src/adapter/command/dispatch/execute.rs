@@ -15,7 +15,7 @@ use orbit_types::plugin::PluginProvenance;
 use orbit_types::policy::Role;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ToolSessionContext;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::redact_sensitive_env_text;
@@ -638,7 +638,7 @@ impl OrbitRuntime {
             execution_kind,
             plugin,
             audit,
-            |params, invocation| self.record_tool_dispatch_audit(params, invocation),
+            |params, invocation| self.record_audit_event_with_invocation(params, invocation),
             |input| {
                 enforce_plugin_callback_allowlist(
                     &self.global_root(),
@@ -657,12 +657,12 @@ fn execute_tool_dispatch_with_audit_store<F, S>(
     execution_kind: ToolExecutionKind,
     plugin: Option<PluginProvenance>,
     audit: ToolDispatchAuditContext,
-    persist_audit: S,
+    mut persist_audit: S,
     dispatch: F,
 ) -> Result<ToolDispatchOutcome, OrbitError>
 where
     F: FnOnce(Value) -> Result<Value, OrbitError>,
-    S: FnOnce(&AuditEventInsertParams, AuditInvocationFields<'_>) -> Result<(), OrbitError>,
+    S: FnMut(&AuditEventInsertParams, AuditInvocationFields<'_>) -> Result<(), OrbitError>,
 {
     let ToolDispatchAuditContext {
         agent_override,
@@ -801,7 +801,9 @@ where
     // stops there. `role_label` above was computed without it, and no field of
     // `ToolContext` reads it, so an MCP client naming itself cannot move its
     // own trust label off `unverified`.
-    let invocation = AuditInvocationFields {
+    // Rebuilt for the lock retry. The fields only borrow this call's
+    // session, so a second insert does not observe a different invocation.
+    let invocation = || AuditInvocationFields {
         trace_id: session_context
             .as_ref()
             .and_then(|context| context.trace_id.as_deref()),
@@ -816,7 +818,19 @@ where
         plugin_secret_updates: Some(&plugin_secret_updates),
         brokered_peer_pid,
     };
-    let audit_write = persist_audit(&params, invocation);
+    let mut audit_write = persist_audit(&params, invocation());
+    // The tool's store and the global audit database are different files, so
+    // the audit row cannot join the mutation's transaction. A lock that
+    // outlasts one busy timeout is retried once, and only after the tool
+    // itself succeeded: a failed call has nothing committed to protect, and
+    // its own error must not wait on a second timeout.
+    if result.is_ok() && audit_write.as_ref().is_err_and(is_store_lock_contention) {
+        tracing::warn!(
+            tool = name,
+            "committed tool call lost the audit-store lock; retrying with the busy timeout"
+        );
+        audit_write = persist_audit(&params, invocation());
+    }
 
     // Claim the row for the runtime the moment it persists, so the CLI
     // `AuditGuard` suppresses its own duplicate emission. This is
@@ -832,25 +846,36 @@ where
     let value = result?;
 
     // The tool call succeeded, so any mutation it performed is now
-    // committed. Audit persistence is part of that success contract:
-    // finding M1 (SECURITY-REVIEW-2026-07-15) — the previous code only
-    // `warn!`ed on an audit-write `Err` and still returned the tool's
-    // successful value, so an unwritable audit store (disk full, locked
-    // db, bad perms) yielded a successful, un-audited mutation with no
-    // error surfaced. Fail the call instead so a committed change can
-    // never surface without its audit row.
+    // committed in its own store. The audit row is a later write to the
+    // global audit database. Failing this call does not roll the mutation
+    // back, and a caller that retries on the error creates a second object
+    // (ORB-16383). Finding M1 (SECURITY-REVIEW-2026-07-15) still holds for
+    // the silent case: a missing audit row is reported on the success value.
     finalize_successful_dispatch(name, execution_kind, value, audit_write)
+}
+
+/// Whether `error` is a SQLite writer lock that the store's busy timeout
+/// did not outlast. `sqlite_store_error` keeps that as [`OrbitError::Store`]
+/// whose text is `database is locked`; the classified contention variant is
+/// the same wait exhausted on a path-aware open.
+fn is_store_lock_contention(error: &OrbitError) -> bool {
+    if error.is_lock_busy() {
+        return true;
+    }
+    orbit_common::is_lock_busy_message(&error.to_string())
 }
 
 /// Fold a successful tool call together with its audit-write outcome into the
 /// dispatch result.
 ///
-/// On a persisted audit row it returns the value. On a failed audit write it
-/// discards the value and returns the error, so a committed mutation can never
-/// be surfaced without its audit row (finding M1). The caller is responsible
-/// for the per-thread dedup signal, which is set as soon as the row persists
-/// regardless of the tool's own outcome.
-///
+/// On a persisted audit row it returns the value. A read-only call also
+/// returns its value when the audit write fails, because it committed
+/// nothing. A mutating call whose audit write still fails after the lock
+/// retry returns that same success with [`attach_unpersisted_audit_warning`]:
+/// the mutation is already committed, so an error would only make a retrying
+/// caller duplicate it. The caller is responsible for the per-thread dedup
+/// signal, which is set as soon as the row persists regardless of the tool's
+/// own outcome.
 pub(super) fn finalize_successful_dispatch(
     tool_name: &str,
     execution_kind: ToolExecutionKind,
@@ -875,11 +900,64 @@ pub(super) fn finalize_successful_dispatch(
         Err(err) => {
             tracing::error!(
                 tool = tool_name,
-                "failed to persist tool audit event: {err}"
+                "mutating tool committed but its audit row could not be persisted: {err}"
             );
-            Err(OrbitError::Store(format!(
-                "tool '{tool_name}' completed but its audit row could not be persisted; failing the call so no un-audited change is surfaced: {err}"
-            )))
+            Ok(ToolDispatchOutcome {
+                value: attach_unpersisted_audit_warning(tool_name, value, &err),
+                audit_recorded: false,
+            })
         }
     }
+}
+
+/// Name the committed object on a success value whose audit row is missing.
+///
+/// The field is `audit_warning`, beside the tool's own document, so a caller
+/// that treats a transport error as "try the mutation again" does not retry.
+/// An object result gains the field. Any other JSON shape is wrapped, because
+/// this path exists only when the alternative is reporting a committed
+/// mutation as a failure.
+fn attach_unpersisted_audit_warning(tool_name: &str, value: Value, err: &OrbitError) -> Value {
+    let id = committed_object_id(&value).map(str::to_string);
+    let message = match &id {
+        Some(id) => format!(
+            "tool '{tool_name}' committed '{id}' but its audit row could not be persisted: {err}"
+        ),
+        None => {
+            format!("tool '{tool_name}' committed but its audit row could not be persisted: {err}")
+        }
+    };
+    let warning = json!({
+        "code": "audit_row_unpersisted",
+        "message": message,
+        "committed": {
+            "tool": tool_name,
+            "id": id,
+        }
+    });
+    match value {
+        Value::Object(mut object) => {
+            object.insert("audit_warning".to_string(), warning);
+            Value::Object(object)
+        }
+        other => json!({
+            "value": other,
+            "audit_warning": warning,
+        }),
+    }
+}
+
+/// Identity a mutating tool's JSON result uses for the object it just wrote.
+fn committed_object_id(value: &Value) -> Option<&str> {
+    let object = value.as_object()?;
+    for key in ["id", "task_id", "friction_id"] {
+        if let Some(id) = non_empty_str(object.get(key)) {
+            return Some(id);
+        }
+    }
+    non_empty_str(object.get("task").and_then(|task| task.get("id")))
+}
+
+fn non_empty_str(value: Option<&Value>) -> Option<&str> {
+    value.and_then(Value::as_str).filter(|id| !id.is_empty())
 }

@@ -5,6 +5,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use orbit_core::application::task::TaskListFilter;
 use orbit_core::{DEFAULT_TASK_LIST_LIMIT, TaskStatus, TaskType};
+use orbit_types::task::TaskOrigin;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -26,8 +27,10 @@ pub(super) struct TaskCursor {
 pub(super) struct TaskPageQuery {
     statuses: Vec<TaskStatus>,
     no_statuses: bool,
+    pilot_warnings: bool,
     tags: Vec<String>,
     task_type: Option<TaskType>,
+    origin: Option<TaskOrigin>,
     search: Option<String>,
     limit: usize,
     raw_cursor: Option<String>,
@@ -39,8 +42,10 @@ impl Default for TaskPageQuery {
         Self {
             statuses: Vec::new(),
             no_statuses: false,
+            pilot_warnings: false,
             tags: Vec::new(),
             task_type: None,
+            origin: None,
             search: None,
             limit: DEFAULT_TASK_LIST_LIMIT,
             raw_cursor: None,
@@ -54,6 +59,7 @@ impl TaskPageQuery {
         let mut query = Self::default();
         for (key, value) in url::form_urlencoded::parse(raw_query.unwrap_or_default().as_bytes()) {
             match key.as_ref() {
+                "pilot" => query.pilot_warnings = value == "warnings",
                 "status" => query.parse_statuses(&value)?,
                 "tag" | "tags" => query.tags.extend(split_values(&value).map(str::to_string)),
                 "type" | "task_type" => {
@@ -61,6 +67,14 @@ impl TaskPageQuery {
                         query.task_type =
                             Some(raw.to_ascii_lowercase().parse::<TaskType>().map_err(
                                 |error| format!("invalid `type` value `{raw}`: {error}"),
+                            )?);
+                    }
+                }
+                "origin" => {
+                    if let Some(raw) = split_values(&value).next_back() {
+                        query.origin =
+                            Some(raw.to_ascii_lowercase().parse::<TaskOrigin>().map_err(
+                                |error| format!("invalid `origin` value `{raw}`: {error}"),
                             )?);
                     }
                 }
@@ -102,9 +116,14 @@ impl TaskPageQuery {
                 (!self.statuses.is_empty()).then(|| self.statuses.clone())
             },
             task_type: self.task_type,
+            origin: self.origin,
             tags: self.tags.clone(),
             ..Default::default()
         }
+    }
+
+    pub(super) fn pilot_warnings(&self) -> bool {
+        self.pilot_warnings
     }
 
     pub(super) fn limit(&self) -> usize {
@@ -156,15 +175,23 @@ impl TaskPageQuery {
             .collect::<Vec<_>>();
         statuses.sort();
         tags.sort();
-        json!({
+        let mut key = json!({
             "statuses": statuses,
             "no_statuses": self.no_statuses,
             "tags": tags,
             "type": self.task_type.map(|value| value.to_string()),
             "search": self.search,
             "limit": self.limit,
-        })
-        .to_string()
+        });
+        // Keyed only when set, so a cursor issued before the origin filter
+        // existed still binds to the same unfiltered listing.
+        if self.pilot_warnings {
+            key["pilot_warnings"] = json!(true);
+        }
+        if let Some(origin) = self.origin {
+            key["origin"] = json!(origin.as_str());
+        }
+        key.to_string()
     }
 }
 
@@ -233,7 +260,7 @@ impl TaskCursor {
         }
         if cursor.filters != filters {
             return Err(
-                "task cursor does not match the active status, tag, type, or search filters"
+                "task cursor does not match the active status, tag, type, origin, or search filters"
                     .to_string(),
             );
         }

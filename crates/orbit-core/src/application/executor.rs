@@ -22,6 +22,7 @@ pub(crate) const DEFAULT_EXECUTOR_FILES: &[(&str, &str)] = &[
         "opencode",
         include_str!("../../assets/executors/opencode.yaml"),
     ),
+    ("muse", include_str!("../../assets/executors/muse.yaml")),
     (
         "local-shell",
         include_str!("../../assets/executors/local-shell.yaml"),
@@ -83,7 +84,7 @@ pub(crate) fn seed_default_executors_for_platform(
 /// silent. It does NOT relax validation of user-authored executor defs: a
 /// custom def that explicitly requests an incompatible sandbox backend is left
 /// untouched here and still fails closed at dispatch in
-/// `runtime::v2_host::sandbox`. See [ORB-10112] / [ORB-10047].
+/// `adapter::engine_host::actions::sandbox`. See [ORB-10112] / [ORB-10047].
 fn select_shipped_sandbox(
     declared: Option<ExecutorSandboxKind>,
     target_os: &str,
@@ -147,6 +148,14 @@ pub(super) fn migrated_default_executor_for_platform(
         })
     {
         migrated.sandbox = seeded.sandbox;
+        changed = true;
+    }
+
+    // `host_os` is new. Copy the shipped declaration onto an installed default
+    // that still omits it, and leave an operator-set value in place. An
+    // executor that omits the field stays unrestricted.
+    if existing.host_os.is_none() && seeded.host_os.is_some() {
+        migrated.host_os.clone_from(&seeded.host_os);
         changed = true;
     }
 

@@ -1,15 +1,15 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-10-11
-last_validated: 2026-10-11
+last_updated: 2026-10-20
+last_validated: 2026-10-19
 status: Accepted
 feature: routines
 doc_role: design
 type: design
 summary: Contract for routine definitions, clock-tick dispatch, host-local state, and OS clock integration.
 tags: [routines, scheduler]
-paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry/routines.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/sqlite/routine_store/**"]
+paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry/routines.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/driver/sqlite/routine_store/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry]
 related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10800, ORB-10986, ORB-11082, ORB-11315, ORB-12236, ORB-12237, ORB-12745]
 ---
@@ -90,6 +90,16 @@ clock object is `health: unknown` with the bounded diagnostic in `error` /
 `health_issue`, `enabled` is JSON null, and clock controls are disabled. That
 projection never invents paused or disabled clock authority. `orbit clock status`
 continues to fail closed with the same diagnostic.
+Core owns one projection of a routine status row, its fire records and the
+`retired`, `owner_only` and `load_errors` rows; `orbit routine list` and `show`,
+`GET /api/routines` and the MCP `orbit.routine.control` list each select the
+fields they render from it. Core also owns one clock-health classification,
+which each surface names in its own vocabulary: `orbit clock status` reads any
+reported health issue as `unhealthy`, while the dashboard's `health` stays
+`healthy` for an enabled clock with a future trigger and reports an enabled
+clock without one as `missed`. Dashboard and MCP routine toggles run the same
+Core selection (owner-only refusal, name lookup, source workspace, target);
+the dashboard keeps its own authorization, audit rows and error codes.
 Next evaluation uses schedule display state (`scheduled`, `disabled`, `paused`,
 `waiting`, `never_observed`, `unavailable`) so a disabled or paused routine
 does not look armed; a theoretical next slot is labeled hypothetical. The time
@@ -176,7 +186,10 @@ Field semantics:
   load warning naming the file for one release, then rejected as an unknown key.
 - **`trigger.cron`** — when the routine is due. `missed_run` governs fires that fall in a
   window when the host was asleep or powered off: `catch_up_once` fires a single make-up run
-  on the next sweep (never one per missed slot); `skip` waits for the next natural slot.
+  on the next sweep (never one per missed slot); `skip` waits for the next natural slot and
+  records each missed past-grace slot as a skipped fire whose detail is `missed_run: skip`
+  (`orbit routine list --json` shows it on `last_fire.detail`, and `orbit routine show` shows
+  it in recent fires). The seeded worktree-gc routine uses `catch_up_once`.
 - **`target`** — a `job:<name>` reference resolved through the source workspace's job
   catalog at load time. Unresolvable targets are load-time errors. `activity:<name>` is
   reserved and rejected at parse time with wrapping guidance: run dispatch is job-shaped
@@ -189,7 +202,10 @@ Field semantics:
   fixed backoff, and overlap handling. `overlap: forbid` is the default; `timeout_minutes`
   defaults to 60 and doubles as the staleness horizon (§4), `retries` defaults to
   `{max: 0, backoff_minutes: 2}`. Retries re-dispatch a *failed* fire under the same slot
-  (attempt 2..max+1) once the backoff has elapsed, evaluated on later sweep passes. A fire
+  once the backoff has elapsed, evaluated on later sweep passes. `retries.max` counts
+  non-skipped attempts on that slot (the initial fire plus re-dispatches). A skipped
+  attempt occupies its number but does not spend budget, so the next re-dispatch uses
+  the next free attempt. With no skipped rows that number is still 2..max+1. A fire
   that *errored at dispatch* (`submit_pipeline_run` failed synchronously — lock contention, a
   momentary catalog/store hiccup) is retried under the same policy as a run-level failure
   ([ORB-00422]): a transient dispatch failure is the class retries exist to absorb, so it must
@@ -330,6 +346,8 @@ are evaluated by the tick directly; there is no seeded auto-task scheduler routi
 `enabled` field is the opt-in: changing it to `true` deliberately grants that scheduled
 capability in the workspace.
 
+`worktree_gc.yaml` uses `missed_run: catch_up_once`, so a gap in that hourly backstop runs one make-up GC instead of dropping the slots. Other seeded routines keep their own `missed_run` policy.
+
 The files under `crates/orbit-core/assets/routines/retired/` are provenance shapes of retired defaults, not seeds: `orbit workspace sync` compares a workspace definition with them to tell an Orbit-seeded copy from an operator's.
 
 Seeded files become workspace-authored immediately. Plain re-init is create-if-missing:
@@ -411,12 +429,15 @@ matching the loader, which skips the same links.
 
 A routines directory carrying no manifest at all predates that provenance, and its routines
 are customized by design — flipping `enabled` is the lifecycle the templates invite. Content alone cannot separate such a routine from a file the operator wrote
-from scratch, so reconciliation adopts it [ORB-11154]: the binding is parsed from that exact
+from scratch with the same seeded name, so reconciliation adopts it [ORB-11154]: the binding is parsed from that exact
 on-disk instance, and the bytes already on disk are recorded as the ones Orbit owns. Nothing
 is rewritten, no warning is emitted, and a later shipped-template change refreshes the routine
 onto the adopted binding instead of being reported as a collision forever. Adoption is skipped
-for a file that does not parse as a routine or whose binding could not be re-rendered later,
-and once the directory has a manifest, a shipped name the manifest does not claim is genuinely
+for a file that does not parse as a routine, declares a different name from the one this
+workspace seeds, or has a binding that could not be re-rendered later. A differently named
+routine is reported as a user-authored collision and remains outside managed provenance,
+so later template changes cannot replace it. Once the directory has a manifest,
+a shipped name the manifest does not claim is genuinely
 user-authored and is still reported and preserved in place.
 
 The seeded `ci_failure_sweep` targets `job:ci_failure_sweep_pipeline` hourly at
@@ -435,6 +456,12 @@ A receipt failure is recorded per observation and does not abort independent
 landing-failure filing. Missing task owners
 remain retryable, and other non-landing failures are explicitly excluded.
 The existing freshness selection still precedes routing; it also sets aside runs on
+GitHub's managed `Dependabot Updates` workflow with event `dynamic`, recording
+their identities and reason `github_managed_dependabot_update` in collection's
+`skipped_runs` and the filing audit before branch probes or investigation. They
+are excluded from current, mixed-state and deferred failures; open security alerts
+belong to the Dependabot alert sweep. Pull-request CI on `dependabot/*` branches
+remains ordinary CI. Freshness selection also sets aside runs on
 branches whose pull request closed at the branch's current head with no open pull request,
 jobs a workflow concurrency group cancelled, and a run-scoped retryable error repeated on
 three distinct consecutive workflow sweeps is reported as persistent instead of failing every
@@ -495,7 +522,7 @@ so neither promotion path can turn a pending publication into automatic version 
 
 The seeded `ship_sweep` targets `job:workspace_ship_pipeline` with `missed_run: skip` and
 `overlap: forbid`. The wrapper resolves the source runtime's ship mode and configured base
-branch, invokes and waits for `task_auto_pipeline` without explicit task IDs, and guards
+branch, invokes and waits for `workspace_auto_pipeline` without explicit task IDs, and guards
 its result. It never calls the legacy cross-workspace CLI sweep or consults
 `[workflow] auto_ship`; the child's existing empty-backlog path is a successful no-op.
 Waiting keeps the wrapper run active for the whole shipment, so routine overlap protection
@@ -575,21 +602,32 @@ contribute one kind of routine only (§2.1). Two properties fall out:
   a central workspace; the mechanism tolerates additional sources, and `orbit routine list`
   names each routine's source workspace so provenance is never ambiguous.
 
-### 2.1 Replica checkouts: host-local worktree GC only
+### 2.1 Replica checkouts: host-local worktree GC and store GC
 
-A replica checkout schedules exactly one kind of routine for itself: a cron
-definition targeting `job:worktree_gc_pipeline` [ORB-14173]. That job reclaims this
-host's own run worktrees. It reads historical tasks carrying this machine's prefix
-locally and asks the owner over its tool surface only for the owner's prefix;
-it writes nothing to the owner's task store. The owner prefix comes from existing
-claim admissions, or a single foreign prefix in this workspace's stored task ids
-before any pull. Other prefixes, including ambiguous foreign mirrors without
-admissions, are retained as `skipped:task_prefix_unroutable` without an owner call.
-Owner and replica definitions
-load together, so a name claimed in both still fails closed.
+A replica checkout schedules a cron routine only when it targets one of two
+jobs. Owner and replica definitions load together, so a name claimed in both
+still fails closed.
+
+`job:worktree_gc_pipeline` reclaims this host's own run worktrees [ORB-14173].
+It reads historical tasks carrying this machine's prefix locally and asks the
+owner over its tool surface only for the owner's prefix; it writes nothing to
+the owner's task store. The owner prefix comes from existing claim admissions,
+or a single foreign prefix in this workspace's stored task ids before any pull.
+Other prefixes, including ambiguous foreign mirrors without admissions, are
+retained as `skipped:task_prefix_unroutable` without an owner call.
+
+`job:store_gc_pipeline` prunes this host's own store [ORB-16354]. The activity
+opens the local sqlite store and this workspace's audit directory. It deletes
+command-audit rows and resource history past their windows (those tables are
+host-wide on this machine) and this workspace's run-audit rows, unreferenced
+audit blobs, and the pipeline state of old terminal runs. Run rows and steps
+stay. It does not call the owner and does not read or write the owner's
+coordination store. A follower-only host otherwise cannot trim that store:
+every checkout is a replica, and the owner's store-gc routine runs against the
+owner's store, not the follower's.
 
 Every other replica definition — ship sweep, task pilot, CI and Dependabot sweeps, and
-any delivery- or state-triggered routine, including one targeting the GC job — is owner
+any delivery- or state-triggered routine, including one targeting either GC job — is owner
 work. The sweep reports it as `skipped` with an `owner_only_in_replica:` reason naming
 the owner machine and never dispatches it. `orbit routine list` and `show`, the
 dashboard's `owner_only` rows and the MCP `orbit.routine.control` list all project the
@@ -611,16 +649,21 @@ task or an unreachable owner leaves the worktree in place.
 A `config.toml` written before [ORB-12236] may still carry `[routines] role = "source"`;
 it loads with a warning for one release and selects nothing.
 
-Host identity is the one genuinely host-local datum: `~/.orbit/host.toml` carries the
-versioned `machine_id`, human-facing `host_id`, and immutable `task_prefix`. `orbit init` owns identity
-creation and legacy migration; `orbit routine init --install-clock` only installs the OS
-clock unit (§5). A malformed `host.toml` is an error, not a fallback. Host identity names
-run ownership and display; it takes no part in deciding what is evaluated.
+Host identity is the one genuinely host-local datum: the `[machine]` table of the global
+`~/.orbit/config.toml` carries the generated `id` (the machine ID), the operator-chosen
+`name`, and the immutable `task_prefix`. `orbit init` owns identity creation; a legacy
+`host.toml` from before [ORB-12725] is migrated into that table once.
+`orbit routine init --install-clock` only installs the OS clock unit (§5). A malformed
+`[machine]` table is an error, not a fallback. The stable `id` participates in
+owner-only routine admission: a state trigger compares `owner_machine` with the local
+machine ID, and replicas classify delivery/state routines owned elsewhere as
+owner-only and skip them (§1.1–1.2). The operator-chosen `name` remains the display
+label, while `task_prefix` selects this machine's task-ID namespace.
 
 The implementation boundary is vertical: `crates/orbit-cmd/src/registry/routines.rs` reads
-`host.toml` and `workspaces.json` through `orbit-registry`, validates local checkout paths,
-and constructs registered runtimes through `registry_runtime`. It projects those inputs
-through `RoutineWorkspaceProvider` into
+the `[machine]` identity from `config.toml` and `workspaces.json` through `orbit-registry`,
+validates local checkout paths, and constructs registered runtimes through `registry_runtime`.
+It projects those inputs through `RoutineWorkspaceProvider` into
 `crates/orbit-core/src/application/routines/`. Core owns the registry-neutral scheduler and does not
 read either registry file directly. There is no hub snapshot, satellite cache, fleet
 health, or remote placement service in the v1 path.
@@ -661,8 +704,15 @@ Per pass:
    missed slot; `missed_run` policy decides gaps. A slot is "natural" for two configured
    clock-cadence intervals after its scheduled time: the default 60s clock therefore keeps
    the existing 120s grace, while a configured 300s clock keeps a slot natural for 600s.
-   This admits one delayed or missed poll without turning genuine downtime into a `skip`
-   fire.
+   This admits one delayed or missed poll without recording that slot as missed. Past that
+   grace, `skip` records each unconsumed slot (oldest first, at most 64 per tick) as a
+   skipped fire with detail `missed_run: skip` and does not dispatch. A longer gap continues
+   on the next tick; the cursor does not jump past a slot this pass did not record, so a
+   newer natural slot waits until the recorded batch catches up. `catch_up_once` dispatches
+   one make-up for the latest slot and writes no skip rows. Skip rows are not recorded while
+   any fire is unfinished or a failed fire still has retry budget. `overlap: forbid` holds
+   on any unfinished fire (`intent` or `dispatched`), not only the newest row, so a later
+   skipped slot cannot hide a run that is still going.
 6. For each due cron routine: check `overlap` against in-flight fires, record the fire intent
    (idempotency key: routine name + scheduled slot + attempt, transactionally with the
    cursor advance), then dispatch the target via `submit_pipeline_run` in the routine's
@@ -673,16 +723,28 @@ Per pass:
    accept no caller-supplied parameters, and every step in such a job must declare its own
    `default_input` rather than inheriting the job base input (which would expose the
    reserved field to the activity).
-   A due `workspace_ship_pipeline` slot is consumed as `skipped` when a
+   A due `workspace_ship_pipeline` slot's first attempt is consumed as `skipped` when a
    `workspace_auto_pipeline` is already running or retrying in its source
-   workspace. The tick reports `workspace_drain_live: <run id>` even without
-   `--verbose`; `orbit routine show` retains that detail in recent fires. It
-   does not queue a sweep behind a manual drain: the later sweep would use its
+   workspace. A retry of a failed fire yields to that drain without writing another
+   skipped row, so the attempt stays free. A skipped retry already stored on the slot
+   does not stick later ticks on `slot_already_claimed`: the sweep dispatches the next
+   free attempt, and that skipped row does not spend `retries.max`. The tick reports
+   `workspace_drain_live: <run id>` even without
+   `--verbose`; `orbit routine show` retains that detail in recent fires when the
+   first attempt was recorded. It does not queue a sweep behind a manual drain: the
+   later sweep would use its
    own review completion policy after a manual `--complete` window expires.
    Readiness names the running `workspace_auto_pipeline` and its live worker
    ceiling in `capacity.drain_run_id` and `capacity.max_active_leaf_runs`.
    Pending coordinators appear separately in `capacity.queued_drains` with
-   their run id, submitted ceiling, and completion policy.
+   their run id, submitted ceiling, completion policy, `allowed_crews` (`null`
+   when unrestricted), window (`for_seconds`, `0` for a single pass),
+   `submitted_at`, the `execution.env.pass` names their submission did not hold
+   (`env_pass_unset`, names only), and `uncredentialed_crews`: the Claude crews
+   in their window when that submission recorded every listed Claude credential
+   name unset. `orbit run readiness` prints each as a `Queued drain:` line, and
+   the dashboard Drain card lists them under the live window with a per-run
+   cancel.
 7. The detached worker clears `ORBIT_ROOT` unconditionally. With no explicit `--root`, its
    cwd is therefore the workspace selector; when a parent explicitly forwarded `--root`,
    that argument is the selector. Before any step executes, the worker compares the
@@ -890,11 +952,13 @@ on each owner; delivery/state admission still requires the consumer's owner mach
   can skip or double a slot exactly as classic cron does. The idempotency key (name + slot)
   prevents double *fires* for the same slot but cannot invent a skipped slot.
 - **`catch_up_once` collapses history.** After a week of laptop sleep, a nightly routine
-  fires once, not seven times. This is the intended semantic for every currently envisioned
-  routine (commits, reindexing), but it is a lossy default; a count-preserving mode would
-  be a new `missed_run` variant.
+  fires once, not seven times. This is the intended semantic for make-up work (the seeded
+  worktree-gc routine included), but it is a lossy default; a count-preserving mode would
+  be a new `missed_run` variant. `skip` does not replay the gap either: it records each
+  missed slot with a reason and dispatches nothing until the next natural slot.
 - **Cron overlap recovery is on the dispatcher.** `overlap: forbid` depends on
-  accurate in-flight bookkeeping; a crashed sweep that recorded a fire intent but died
+  accurate in-flight bookkeeping and looks for any unfinished fire, not only the newest
+  row. A crashed sweep that recorded a fire intent but died
   before dispatch leaves a stale in-flight entry. The outcome-sync step reclaims intents
   and dispatches older than `policy.timeout_minutes` (marking them `error` / `timed_out`);
   the consumed slot is not re-fired — the idempotency key holds. The two failure paths are

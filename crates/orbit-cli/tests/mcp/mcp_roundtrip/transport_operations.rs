@@ -1,7 +1,6 @@
 //! Positive production-stdio proofs with disposable records and deterministic jobs.
 use super::*;
 
-#[test]
 fn stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape() {
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
@@ -11,7 +10,23 @@ fn stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape() {
     let source = workspace.work.join(".orbit/tmp/source.txt");
     std::fs::create_dir_all(source.parent().unwrap()).unwrap();
     std::fs::write(&source, "Exact evidence\nπ\n").unwrap();
-    client.call_tool_ok("orbit_task_artifact_put",json!({"workspace":selector,"id":id,"source_path":source,"path":"evidence/report.txt","model":"codex"}));
+    // MCP keeps its shipped source-string trimming while the local CLI
+    // preserves exact filesystem names.
+    for sibling in [false, true] {
+        if sibling {
+            std::fs::write(
+                source.with_file_name("source.txt "),
+                "wrong sibling bytes\n",
+            )
+            .unwrap();
+        }
+        client.call_tool_ok("orbit_task_artifact_put",json!({"workspace":selector,"id":id,"source_path":format!(" {} ", source.display()),"path":" evidence/report.txt ","model":"codex"}));
+        let read = client.call_tool_ok(
+            "orbit_task_artifact_get",
+            json!({"workspace":selector,"id":id,"path":"evidence/report.txt"}),
+        );
+        assert_eq!(read["content"], "Exact evidence\nπ\n");
+    }
     drop(client);
     let mut client = workspace.serve();
     let read = client.call_tool_ok(
@@ -36,7 +51,6 @@ fn stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape() {
     );
 }
 
-#[test]
 fn stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state() {
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
@@ -86,7 +100,10 @@ fn stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state() {
         json!({"workspace":selector,"name":"stdio-chore","force":true}),
     );
     drop(client);
+    // The CLI delete is governed `operator`, so the refusal below is the
+    // open-mint one rather than a capability denial.
     let refused = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .env("ORBIT_OPERATOR", "1")
         .args(["auto-task", "delete", "stdio-chore"])
         .output()
         .unwrap();
@@ -97,12 +114,9 @@ fn stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state() {
         "open-mint deletion refusal preserves definition"
     );
     orbit_ok(
-        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
-            "auto-task",
-            "delete",
-            "stdio-chore",
-            "--force",
-        ]),
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .env("ORBIT_OPERATOR", "1")
+            .args(["auto-task", "delete", "stdio-chore", "--force"]),
     );
     assert!(!definition.exists());
     let mut client = workspace.serve_with_args(&["--operator"]);
@@ -208,6 +222,20 @@ fn stdio_workers_changes_one_running_record_and_preserves_it_on_stale_or_unautho
         "capability_denied"
     );
     assert_eq!(runtime.read_run_state(id).unwrap().unwrap(), before);
+    // The run list projects each row with its pipeline state, and still lists
+    // the run, without that state, when the states cannot be read.
+    drop(client);
+    let mut client = workspace.serve_with_args(&["--operator"]);
+    let listed = client.call_tool_ok("orbit_workflow_run_list", json!({"workspace":selector}));
+    assert_eq!(listed["items"][0]["run_id"], id);
+    assert_eq!(listed["items"][0]["drain_worker_limit"]["revision"], 1);
+    Connection::open(workspace.home.join(".orbit/orbit.db"))
+        .unwrap()
+        .execute_batch("DROP TABLE job_run_states")
+        .unwrap();
+    let listed = client.call_tool_ok("orbit_workflow_run_list", json!({"workspace":selector}));
+    assert_eq!(listed["items"][0]["run_id"], id);
+    assert_eq!(listed["items"][0]["drain_worker_limit"], Value::Null);
 }
 
 /// A start window longer than the drain itself accepts is refused before any
@@ -231,11 +259,74 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
         json!({"max_active_leaf_runs":5}),
     );
     let mut client = workspace.serve_with_args(&["--operator"]);
-    let refused = client.call_tool_err(
-        "orbit_workflow_auto",
-        json!({"workspace":selector,"action":"start","for_seconds":86_401}),
+    for seconds in [json!(86_401), json!(172_800), json!(u64::MAX), json!(0)] {
+        let refused = client.call_tool_err(
+            "orbit_workflow_auto",
+            json!({"workspace":selector,"action":"start","for_seconds":seconds}),
+        );
+        assert_eq!(refused["code"], "invalid_input", "{refused}");
+        assert_eq!(
+            refused["message"],
+            "invalid input: for_seconds must be a whole number from 1 to 86400 (24 hours)"
+        );
+    }
+    for seconds in [json!(1.5), json!("60"), json!(null)] {
+        let refused = client.call_tool_err(
+            "orbit_workflow_auto",
+            json!({"workspace":selector,"action":"start","for_seconds":seconds}),
+        );
+        assert_eq!(refused["code"], "invalid_input", "{refused}");
+    }
+    assert_eq!(
+        client.call_tool_err(
+            "orbit_workflow_auto",
+            json!({"workspace":selector,"action":"start"})
+        )["code"],
+        "invalid_input"
     );
-    assert_eq!(refused["code"], "invalid_input", "{refused}");
+    for (action, mode, expected_message) in [
+        (
+            "start",
+            json!(false),
+            "invalid input: auto_concurrency must be off, shadow or enforce",
+        ),
+        (
+            "start",
+            json!(null),
+            "invalid input: auto_concurrency must be off, shadow or enforce",
+        ),
+        (
+            "start",
+            json!("invalid"),
+            "invalid input: auto_concurrency must be off, shadow or enforce",
+        ),
+        (
+            "stop",
+            json!("off"),
+            "invalid input: auto_concurrency is a start setting",
+        ),
+        (
+            "resize",
+            json!("enforce"),
+            "invalid input: auto_concurrency is a start setting",
+        ),
+        (
+            "status",
+            json!("shadow"),
+            "invalid input: auto_concurrency is a start setting",
+        ),
+    ] {
+        let mut input = json!({"workspace":selector,"action":action,"auto_concurrency":mode});
+        if action == "start" {
+            input["for_seconds"] = json!(60);
+        }
+        if action == "resize" {
+            input["concurrency"] = json!(24);
+        }
+        let refused = client.call_tool_err("orbit_workflow_auto", input);
+        assert_eq!(refused["code"], "invalid_input", "{refused}");
+        assert_eq!(refused["message"], expected_message, "{refused}");
+    }
     let runs = client.call_tool_ok("orbit_workflow_run_list", json!({"workspace":selector}));
     assert_eq!(
         runs["items"].as_array().unwrap().len(),
@@ -253,6 +344,58 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
     assert_eq!(changed["concurrency"], 24);
     let state = runtime.read_run_state(id).unwrap().unwrap();
     assert_eq!(state.effective_max_active_leaf_runs(5), 24);
+    let root = workspace.home.join(".orbit");
+    let jobs = root.join("resources/jobs");
+    std::fs::write(jobs.join("workspace_auto_pipeline.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: workspace_auto_pipeline\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: done\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n      default_input:\n        seconds: 0\n").unwrap();
+    let config = std::fs::read(root.join("config.toml")).unwrap();
+    for mode in [None, Some("off"), Some("shadow"), Some("enforce")] {
+        let seconds = if mode.is_none() { 86_400 } else { 1 };
+        let mut input = json!({"workspace":selector,"action":"start","for_seconds":seconds});
+        if let Some(mode) = mode {
+            input["auto_concurrency"] = json!(mode);
+        }
+        let receipt = client.call_tool_ok("orbit_workflow_auto", input);
+        assert!(receipt["submitted_at"].is_string(), "{receipt}");
+        assert!(receipt.get("review").is_some());
+        assert!(receipt.get("job_id").is_none());
+        assert!(receipt.get("auto_fix").is_none());
+        assert_eq!(receipt["auto_concurrency"]["mode"], mode.unwrap_or("off"));
+        assert_eq!(
+            receipt["auto_concurrency"]["source"],
+            if mode.is_some() {
+                "explicit"
+            } else {
+                "configured"
+            }
+        );
+        let id = receipt["run_id"].as_str().unwrap();
+        let shown = client.call_tool_ok(
+            "orbit_workflow_run_show",
+            json!({"workspace":selector,"id":id}),
+        );
+        assert_eq!(shown["auto_concurrency"]["mode"], mode.unwrap_or("off"));
+        let recorded = runtime.show_job_run(id).unwrap();
+        assert_eq!(recorded.input.as_ref().unwrap()["for_seconds"], seconds);
+        assert_eq!(
+            recorded.input.as_ref().unwrap()["auto_concurrency"],
+            mode.unwrap_or("off")
+        );
+        let waited = runtime
+            .wait_pipeline_runs(&[id.to_string()], 10, 1, None)
+            .unwrap();
+        assert!(
+            waited.results[0].status == "success",
+            "fixture worker must finish before handoff"
+        );
+    }
+    assert_eq!(std::fs::read(root.join("config.toml")).unwrap(), config);
+    let before = runtime.list_job_runs(Default::default()).unwrap();
+    drop(client);
+    let mut unprivileged = workspace.serve();
+    assert_eq!(unprivileged.call_tool_err("orbit_workflow_auto",
+        json!({"workspace":selector,"action":"start","for_seconds":60,"auto_concurrency":"enforce"}))["code"], "capability_denied");
+    assert_eq!(runtime.list_job_runs(Default::default()).unwrap(), before);
 }
 
 #[test]
@@ -353,28 +496,9 @@ fn stdio_resume_runs_only_deterministic_remaining_steps_and_reopens_checkpoint_l
 
 #[test]
 fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
-    const CHILD: &str = "ORBIT_REVIEW_RESET_BOUNDARY_CHILD";
-    if std::env::var_os(CHILD).is_none() {
-        let home = tempdir().unwrap();
-        let mut command = Command::new(std::env::current_exe().unwrap());
-        test_env::clear_inherited_authority(|key| {
-            command.env_remove(key);
-        });
-        let name = "mcp_roundtrip::transport_operations::review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions";
-        let output = command
-            .args(["--exact", name, "--nocapture", "--test-threads=1"])
-            .env(CHILD, "1")
-            .env("HOME", home.path())
-            .env("USERPROFILE", home.path())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed;"));
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::transport_operations::review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions",
+    ) {
         return;
     }
     let workspace = McpWorkspace::init();
@@ -523,46 +647,94 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
 
 /// An operator who starts a drain through MCP with no
 /// `workflow.required_validation_commands` gets a note, not a refusal: an
-/// empty list means no required check, and the drain runs.
-#[test]
-fn stdio_drain_start_notes_that_no_required_validation_runs() {
+/// empty list means no required check, and the drain runs. A drain or ship
+/// start also names each `execution.env.pass` variable the server's
+/// environment does not hold, in its `warning`.
+fn stdio_drain_and_ship_starts_report_their_notices() {
+    // Not `ORBIT_`-prefixed: those names are never reported unset.
+    const UNSET: &str = "FIXTURE_MCP_NOTICE_TOKEN";
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
     let jobs = workspace.home.join(".orbit/resources/jobs");
     std::fs::create_dir_all(&jobs).unwrap();
-    std::fs::write(
-        jobs.join("workspace_auto_pipeline.yaml"),
-        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: workspace_auto_pipeline\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 0\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n",
-    )
-    .unwrap();
+    for job in ["workspace_auto_pipeline", "task_auto_pipeline"] {
+        std::fs::write(
+            jobs.join(format!("{job}.yaml")),
+            format!("schemaVersion: 2\nkind: Job\nmetadata:\n  name: {job}\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 0\n      spec:\n        type: deterministic\n        action: sleep\n        config: {{}}\n"),
+        )
+        .unwrap();
+    }
+    let config = workspace.home.join(".orbit/config.toml");
+    let mut document: toml_edit::DocumentMut =
+        std::fs::read_to_string(&config).unwrap().parse().unwrap();
+    let mut pass = toml_edit::Array::new();
+    for name in ["HOME", "PATH", UNSET] {
+        pass.push(name);
+    }
+    document["execution"]["env"]["pass"] = toml_edit::value(pass);
+    std::fs::write(&config, document.to_string()).unwrap();
+    let added = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "task",
+            "add",
+            "--title",
+            "Ship fixture",
+            "--description",
+            "An explicit selection for the ship start.",
+            "--complexity",
+            "low",
+            "--status",
+            "backlog",
+            "--json",
+        ]),
+    );
+    let task: Value = serde_json::from_slice(&added.stdout).unwrap();
     let mut client = workspace.serve_with_args(&["--operator"]);
 
     let started = client.call_tool_ok(
         "orbit_workflow_auto",
         json!({"workspace":selector,"action":"start","for_seconds":60}),
     );
-
     assert!(
         started["note"]
             .as_str()
             .is_some_and(|note| note.contains("workflow.required_validation_commands")),
         "the start names the empty key it read: {started}"
     );
-    let run_id = started["run_id"].as_str().expect("the drain starts");
-    let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
-        let run = client.call_tool_ok(
-            "orbit_workflow_run_show",
-            json!({"workspace":selector,"id":run_id}),
-        );
-        if run["state"] == "success" {
-            break;
-        }
+    let shipped = client.call_tool_ok(
+        "orbit_workflow_ship",
+        json!({"workspace":selector,"task_ids":[task["id"]],"mode":"local"}),
+    );
+    for receipt in [&started, &shipped] {
+        let unset = receipt["warning"]
+            .as_str()
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.contains("execution.env.pass"))
+            .collect::<Vec<_>>();
         assert!(
-            Instant::now() < deadline && run["state"] != "failed",
-            "the drain runs to completion: {run}"
+            unset.len() == 1 && unset[0].contains(UNSET),
+            "the start names the unset variable once: {receipt}"
         );
-        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(shipped.get("note").is_none(), "{shipped}");
+    for receipt in [&started, &shipped] {
+        let run_id = receipt["run_id"].as_str().expect("the run starts");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let run = client.call_tool_ok(
+                "orbit_workflow_run_show",
+                json!({"workspace":selector,"id":run_id}),
+            );
+            if run["state"] == "success" {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline && run["state"] != "failed",
+                "the run completes: {run}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 }
 
@@ -608,7 +780,7 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
         (readiness["validation_env_warning"].clone(), row)
     };
 
-    configure("workflow.validation_env.login_shell", "false");
+    configure("workflow.validation_env.shell_probe", "off");
     let (warning, row) = observe();
     assert_eq!(
         warning,
@@ -624,7 +796,7 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
     let (warning, row) = observe();
     let warning = warning.as_str().expect("the drain status warns");
     assert!(
-        warning.contains("`workflow.validation_env.login_shell = false`")
+        warning.contains("`workflow.validation_env.shell_probe = off`")
             && warning.contains("source: launcher_fallback")
             && warning.contains("PATH="),
         "the warning names the disabled resolution, the fallback and its PATH: {warning}"
@@ -680,8 +852,7 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
         );
     }
 
-    configure("workflow.validation_env.login_shell", "true");
-    configure("workflow.validation_env.interactive", "false");
+    configure("workflow.validation_env.shell_probe", "login");
     let (_, row) = observe();
     assert!(
         row["message"]
@@ -690,7 +861,7 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
             .contains("probe mode: login;"),
         "the setting reaches the runtime resolver: {row}"
     );
-    configure("workflow.validation_env.interactive", "true");
+    configure("workflow.validation_env.shell_probe", "interactive");
     let (_, row) = observe();
     let message = row["message"].as_str().unwrap();
     // With no rc files the interactive probe succeeds unless a saturated host
@@ -706,6 +877,32 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
         "the interactive setting reaches the resolver ({}): {row}",
         orbit_common::test_env::host_load()
     );
+
+    let (warning, row) = observe();
+    let warning = warning
+        .as_str()
+        .expect("replace drops login-shell PATH entries");
+    assert!(
+        warning.contains("lacks login-shell PATH entries"),
+        "{warning}"
+    );
+    assert!(row["message"].as_str().unwrap().contains(warning), "{row}");
+    let cli = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "run",
+            "readiness",
+            "--json",
+        ]),
+    );
+    let cli: Value = serde_json::from_slice(&cli.stdout).unwrap();
+    assert_eq!(cli["validation_env_warning"], warning);
+    configure("workflow.validation_env.path_mode", "prepend");
+    let (warning, _) = observe();
+    assert!(
+        warning.is_null(),
+        "prepend preserves the login-shell PATH: {warning}"
+    );
+    configure("workflow.validation_env.path_mode", "replace");
 
     // Fixture rc files affect only the probe, with no dependency on the
     // operator's dotfiles. Cover the common account shells on Linux/macOS.
@@ -736,4 +933,347 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
                 || message.contains("did not finish within")),
         "{message}"
     );
+}
+
+/// Task writes run through the operation spec, which refuses an unknown or
+/// retired field before any write, and keeps the operator command's
+/// `cli_options` off the MCP surface.
+fn stdio_task_writes_refuse_unknown_retired_and_cli_only_fields() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let task = client.call_tool_ok(
+        "orbit_task_add",
+        json!({"title":"Refusal proof","description":"Disposable boundary","complexity":"low","model":"codex"}),
+    );
+    let id = task["id"].as_str().unwrap();
+    let target = client.call_tool_ok("orbit_task_add", json!({"title":"Relation target","description":"Disposable target","complexity":"low","model":"codex"}));
+    let relation = json!({"type":"related_to","target":target["id"]});
+    // Exercise each culprit shape independently so the baseline records both
+    // regressions through the same public boundary used after the repair.
+    let mut rejected = Vec::new();
+    let mut singleton_id = Value::Null;
+    for (tool, arguments) in [
+        (
+            "orbit_task_add",
+            json!({"title":"Singleton","description":"Compatibility control","complexity":"low","model":"codex","relations":relation}),
+        ),
+        (
+            "orbit_task_update",
+            json!({"id":id,"model":"codex","relations":relation}),
+        ),
+        (
+            "orbit_task_add",
+            json!({"title":"Boolean","description":"Compatibility control","complexity":"low","model":"codex","allow_missing_context":"false"}),
+        ),
+        (
+            "orbit_task_update",
+            json!({"id":id,"model":"codex","allow_missing_context":"false"}),
+        ),
+        (
+            "orbit_task_update",
+            json!({"id":id,"model":"codex","allow_drop_system_tags":"false"}),
+        ),
+    ] {
+        let result = client.call_tool(tool, arguments.clone());
+        if result["isError"] != false {
+            rejected.push(format!("{tool} {arguments}: {result}"));
+        } else if tool == "orbit_task_add" && arguments.get("relations").is_some() {
+            assert_eq!(result["structuredContent"]["relations"], json!([relation]));
+            singleton_id = result["structuredContent"]["id"].clone();
+        }
+    }
+    assert!(
+        rejected.is_empty(),
+        "accepted task-write shapes rejected:\n{}",
+        rejected.join("\n")
+    );
+
+    let array_added = client.call_tool_ok("orbit_task_add", json!({"title":"Array control","description":"Equivalent relation list","complexity":"low","model":"codex","relations":[relation]}));
+    drop(client);
+    client = workspace.serve();
+    assert_eq!(
+        client.call_tool_ok("orbit_task_show", json!({"id":singleton_id}))["relations"],
+        json!([relation])
+    );
+    assert_eq!(
+        client.call_tool_ok("orbit_task_show", json!({"id":array_added["id"]}))["relations"],
+        json!([relation])
+    );
+    assert_eq!(
+        client.call_tool_ok("orbit_task_show", json!({"id":id}))["relations"],
+        json!([relation])
+    );
+
+    // Boolean spellings drive actual selector authorization and tag retention,
+    // rather than merely producing a successful response.
+    for (index, (flag, enabled)) in [
+        (json!(true), true),
+        (json!(false), false),
+        (json!("true"), true),
+        (json!("false"), false),
+        (json!(" TrUe "), true),
+        (json!(" FaLsE "), false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let context = if enabled {
+            json!([format!("file:future-{index}.rs")])
+        } else {
+            json!([])
+        };
+        let added = client.call_tool_ok(
+            "orbit_task_add",
+            json!({
+                "title":"Boolean control","description":"Disposable compatibility control",
+                "complexity":"low","model":"codex","relations":relation,
+                "context_files":context,"allow_missing_context":flag,
+                "tags":["ci-failure:compatibility","docs"]
+            }),
+        );
+        let added_id = added["id"].as_str().unwrap();
+        // Re-sending a missing selector without the flag proves creation intent
+        // was durably recorded by the add, not only accepted at parse time.
+        client.call_tool_ok(
+            "orbit_task_update",
+            json!({"id":added_id,"model":"codex","context_files":context}),
+        );
+        let replacement = if enabled {
+            json!([format!("file:replacement-{index}.rs")])
+        } else {
+            json!([])
+        };
+        let tags = if enabled {
+            json!(["docs"])
+        } else {
+            json!(["ci-failure:compatibility", "docs"])
+        };
+        client.call_tool_ok(
+            "orbit_task_update",
+            json!({
+                "id":added_id,"model":"codex","relations":relation,
+                "context_files":replacement,"allow_missing_context":flag,
+                "tags":tags,"allow_drop_system_tags":flag
+            }),
+        );
+        client.call_tool_ok(
+            "orbit_task_update",
+            json!({"id":added_id,"model":"codex","context_files":replacement}),
+        );
+        drop(client);
+        client = workspace.serve();
+        let persisted = client.call_tool_ok("orbit_task_show", json!({"id":added_id}));
+        assert_eq!(persisted["relations"], json!([relation]));
+        assert_eq!(persisted["context_files"], replacement);
+        assert_eq!(persisted["tags"], tags);
+        if !enabled {
+            for arguments in [
+                json!({"id":added_id,"model":"codex","title":"Never stored","context_files":["file:unauthorized.rs"],"allow_missing_context":flag}),
+                json!({"id":added_id,"model":"codex","title":"Never stored","tags":["docs"],"allow_drop_system_tags":flag}),
+            ] {
+                client.call_tool_err("orbit_task_update", arguments);
+            }
+            let unchanged = client.call_tool_ok("orbit_task_show", json!({"id":added_id}));
+            assert_eq!(unchanged["title"], "Boolean control");
+            assert_eq!(unchanged["context_files"], replacement);
+            assert_eq!(unchanged["tags"], tags);
+        }
+    }
+    // An array replaces the same singleton list; null preserves it, while []
+    // clears it. Null policy fields also leave selector and tag state intact.
+    let other = client.call_tool_ok("orbit_task_add", json!({"title":"Other target","description":"Disposable target","complexity":"low","model":"codex"}));
+    let replacement = json!([{"type":"related_to","target":other["id"]}]);
+    client.call_tool_ok("orbit_task_update", json!({"id":id,"model":"codex","relations":replacement,"tags":["ci-failure:compatibility"],"context_files":["file:future-null.rs"],"allow_missing_context":true}));
+    let before_null = client.call_tool_ok("orbit_task_show", json!({"id":id}));
+    client.call_tool_ok("orbit_task_update", json!({"id":id,"model":"codex","relations":null,"title":null,"tags":null,"context_files":null,"allow_missing_context":null,"allow_drop_system_tags":null}));
+    drop(client);
+    client = workspace.serve();
+    let after_null = client.call_tool_ok("orbit_task_show", json!({"id":id}));
+    for field in ["relations", "title", "tags", "context_files", "crew"] {
+        assert_eq!(
+            after_null[field], before_null[field],
+            "null changed {field}"
+        );
+    }
+    assert_eq!(after_null["relations"], replacement);
+    client.call_tool_ok(
+        "orbit_task_update",
+        json!({"id":id,"model":"codex","relations":[]}),
+    );
+    drop(client);
+    client = workspace.serve();
+    assert_eq!(
+        client.call_tool_ok("orbit_task_show", json!({"id":id}))["relations"],
+        json!([])
+    );
+    std::fs::write(workspace.work.join("anchor.rs"), "").unwrap();
+    let before_refusals = client.call_tool_ok("orbit_task_show", json!({"id":id}));
+    let count_before = client.call_tool_ok("orbit_task_list", json!({}))["total"].clone();
+    let add =
+        json!({"title":"Refused","description":"Never stored","complexity":"low","model":"codex"});
+    let update = json!({"id":id,"title":"Never stored","model":"codex"});
+    for (tool, base, field, value, expected) in [
+        (
+            "orbit_task_add",
+            &add,
+            "bogus",
+            json!(true),
+            "unknown field 'bogus'",
+        ),
+        (
+            "orbit_task_add",
+            &add,
+            "plan",
+            json!("p"),
+            "unknown field 'plan'",
+        ),
+        (
+            "orbit_task_add",
+            &add,
+            "dependencies",
+            json!(["x"]),
+            "unknown field 'dependencies'",
+        ),
+        (
+            "orbit_task_add",
+            &add,
+            "cli_options",
+            json!({}),
+            "unknown field 'cli_options'",
+        ),
+        (
+            "orbit_task_update",
+            &update,
+            "bogus",
+            json!(true),
+            "unknown field 'bogus'",
+        ),
+        (
+            "orbit_task_update",
+            &update,
+            "force",
+            json!(true),
+            "unknown field 'force'",
+        ),
+        (
+            "orbit_task_update",
+            &update,
+            "artifacts",
+            json!([]),
+            "unknown field 'artifacts'",
+        ),
+        (
+            "orbit_task_update",
+            &update,
+            "required_tools",
+            json!(["x"]),
+            "unknown field 'required_tools'",
+        ),
+        (
+            "orbit_task_update",
+            &update,
+            "cli_options",
+            json!({"force":true}),
+            "unknown field 'cli_options'",
+        ),
+        (
+            "orbit_task_update",
+            &update,
+            "crew",
+            Value::Null,
+            "`crew` must be a string",
+        ),
+    ] {
+        let mut arguments = base.clone();
+        arguments[field] = value;
+        let refused = client.call_tool_err(tool, arguments);
+        assert_eq!(
+            refused["code"], "invalid_input",
+            "{tool} {field}: {refused}"
+        );
+        assert!(
+            refused["message"]
+                .as_str()
+                .is_some_and(|m| m.contains(expected)),
+            "{tool} {field}: {refused}"
+        );
+    }
+    for (tool, base, fields) in [
+        ("orbit_task_add", &add, &["allow_missing_context"][..]),
+        (
+            "orbit_task_update",
+            &update,
+            &["allow_missing_context", "allow_drop_system_tags"][..],
+        ),
+    ] {
+        for field in fields {
+            for value in [json!("yes"), json!(""), json!(1), json!({}), json!([])] {
+                let mut arguments = base.clone();
+                arguments[*field] = value;
+                assert_eq!(
+                    client.call_tool_err(tool, arguments)["code"],
+                    "invalid_input"
+                );
+            }
+        }
+        for (field, value) in [
+            ("relations", json!("related_to")),
+            ("relations", json!(true)),
+            ("relations", json!({"type":"related_to"})),
+            ("context_files", json!({"file":"future.rs"})),
+            ("context_files", json!(["file:../outside.rs"])),
+            ("context_files", json!(["dir:anchor.rs"])),
+        ] {
+            let mut arguments = base.clone();
+            arguments[field] = value;
+            assert_eq!(
+                client.call_tool_err(tool, arguments)["code"],
+                "invalid_input"
+            );
+        }
+    }
+    drop(client);
+    client = workspace.serve();
+    let after_refusals = client.call_tool_ok("orbit_task_show", json!({"id":id}));
+    for field in ["relations", "context_files", "tags", "crew"] {
+        assert_eq!(
+            after_refusals[field], before_refusals[field],
+            "refusal changed {field}"
+        );
+    }
+    assert_eq!(
+        client.call_tool_ok("orbit_task_list", json!({}))["total"],
+        count_before,
+        "a refused add persisted a task"
+    );
+    assert_eq!(
+        after_refusals["title"], "Refusal proof",
+        "a refused update wrote: {after_refusals}"
+    );
+}
+
+#[test]
+fn artifact_and_auto_task_stdio_contracts() {
+    for (name, check) in [
+        (
+            "stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape",
+            stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape as fn(),
+        ),
+        (
+            "stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state",
+            stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state as fn(),
+        ),
+        (
+            "stdio_drain_and_ship_starts_report_their_notices",
+            stdio_drain_and_ship_starts_report_their_notices as fn(),
+        ),
+        (
+            "stdio_task_writes_refuse_unknown_retired_and_cli_only_fields",
+            stdio_task_writes_refuse_unknown_retired_and_cli_only_fields as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
 }

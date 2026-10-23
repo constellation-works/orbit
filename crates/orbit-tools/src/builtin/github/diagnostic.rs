@@ -34,6 +34,7 @@ pub(super) struct DiagnosticCollector {
     candidate: Option<Command>,
     selected: Option<Command>,
     failures: usize,
+    in_command_display: bool,
 }
 
 #[derive(Default)]
@@ -75,7 +76,7 @@ impl DiagnosticCollector {
                 self.line.push(*byte);
             }
             if *byte == b'\n' {
-                let bytes = std::mem::take(&mut self.line);
+                let mut bytes = std::mem::take(&mut self.line);
                 let total_bytes = std::mem::take(&mut self.line_bytes);
                 // A retained prefix may end inside a UTF-8 character. Only
                 // assertion payloads are allowed to exceed the line buffer.
@@ -90,20 +91,32 @@ impl DiagnosticCollector {
                     }
                 };
                 self.observe(line, total_bytes);
+                bytes.clear();
+                self.line = bytes;
             }
         }
     }
 
     fn observe(&mut self, line: &str, total_bytes: usize) {
+        // A short, intact line cannot open a runner command or carry a source
+        // truncation notice. Inside a command every byte still counts.
+        if self.candidate.is_none() && total_bytes == line.len() && line.len() < 7 {
+            return;
+        }
         let (columns, payload) = runner_payload(line);
         let plain = strip_ansi_sequences(payload);
         let payload = plain.trim();
         let lower = payload.to_ascii_lowercase();
+        let end_display = plain.trim_end() == "##[endgroup]";
+        let start = !self.in_command_display && payload.starts_with("##[group]Run ");
+        let printed = self.in_command_display && !end_display;
         let source_notice = payload.starts_with("##[warning]")
             || payload.starts_with("##[error]")
             || payload.starts_with("Log output")
             || payload.starts_with("[...");
-        if source_notice
+        if !printed
+            && !start
+            && source_notice
             && lower.contains("log")
             && (lower.contains("truncat") || lower.contains("omitted"))
         {
@@ -113,7 +126,11 @@ impl DiagnosticCollector {
         if total_bytes > line.len() && !assertion_payload {
             self.invalid = true;
         }
-        let start = payload.starts_with("##[group]Run ");
+        if start {
+            self.in_command_display = true;
+        } else if end_display {
+            self.in_command_display = false;
+        }
         if start {
             self.candidate = Some(Command {
                 full: Some(String::new()),
@@ -121,13 +138,21 @@ impl DiagnosticCollector {
                 ..Command::default()
             });
         }
-        let completed = payload
-            .strip_prefix("##[error]Process completed with exit code ")
-            .and_then(|code| code.strip_suffix('.'))
-            .and_then(|code| code.parse::<i32>().ok())
-            .is_some_and(|code| code != 0);
+        let completed = !printed
+            && !start
+            && payload
+                .strip_prefix("##[error]Process completed with exit code ")
+                .and_then(|code| code.strip_suffix('.'))
+                .and_then(|code| code.parse::<i32>().ok())
+                .is_some_and(|code| code != 0);
         if let Some(candidate) = &mut self.candidate {
-            candidate.observe(line, total_bytes, payload, start || completed);
+            candidate.observe(
+                line,
+                total_bytes,
+                payload,
+                start || end_display || completed,
+                printed || start,
+            );
         }
         if completed {
             self.failures += 1;
@@ -174,7 +199,14 @@ impl DiagnosticCollector {
 }
 
 impl Command {
-    fn observe(&mut self, line: &str, total_bytes: usize, payload: &str, boundary: bool) {
+    fn observe(
+        &mut self,
+        line: &str,
+        total_bytes: usize,
+        payload: &str,
+        boundary: bool,
+        printed: bool,
+    ) {
         let columns = runner_payload(line).0;
         let assertion_payload = payload.starts_with("left:") || payload.starts_with("right:");
         self.total_bytes += total_bytes;
@@ -189,8 +221,8 @@ impl Command {
 
         // Anchored forms avoid passing tests whose names contain "failure".
         // Keep every anchor, not just the last failure in a multi-test command.
-        let anchor = is_failure_anchor(payload);
-        let test_anchor = is_test_block_anchor(payload);
+        let anchor = !printed && is_failure_anchor(payload);
+        let test_anchor = !printed && is_test_block_anchor(payload);
         if anchor {
             self.anchors += 1;
         }
@@ -202,17 +234,18 @@ impl Command {
         } else if anchor && !self.block_open {
             self.context_left = CONTEXT_LINES;
         }
-        if is_captured_section_header(payload) {
+        if !printed && is_captured_section_header(payload) {
             self.in_captured_section = true;
             if self.seen_test_failure && !self.block_cut {
                 self.block_open = true;
                 self.context_left = 0;
             }
         }
-        if is_nextest_status_line(payload) {
+        if !printed && is_nextest_status_line(payload) {
             self.in_captured_section = false;
         }
-        let summary = payload.starts_with("Summary ") || payload.starts_with("test result: FAILED");
+        let summary = !printed
+            && (payload.starts_with("Summary ") || payload.starts_with("test result: FAILED"));
         let ends_block = self.ends_open_block(payload, summary, boundary);
         let window = !self.block_open && self.context_left > 0;
         let retain = boundary || anchor || summary || self.block_open || window;
@@ -441,6 +474,10 @@ fn timestamp_payload(text: &str) -> Option<(&str, &str)> {
 /// Walks characters rather than bytes: a truncated or malformed escape in a
 /// runner log must not split a multi-byte character.
 pub fn strip_ansi_sequences(input: &str) -> String {
+    // Unstyled runner lines need no character-by-character reconstruction.
+    if !input.contains('\u{1b}') {
+        return input.to_owned();
+    }
     let mut out = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     while let Some(ch) = chars.next() {

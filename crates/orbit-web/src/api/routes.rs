@@ -46,9 +46,11 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
             "/tasks/completion-by-complexity",
             get(tasks::completion_by_complexity),
         )
+        .route("/tasks/create", post(task_create::create_proposal))
         .route("/tasks/all", get(workspaces::list_all_tasks))
         .route("/job-runs/all", get(workspaces::list_all_job_runs))
         .route("/workspaces", get(workspaces::list_workspaces))
+        .route("/fleet/drains", get(workspaces::list_fleet_drains))
         .route(
             "/tasks/:id",
             get(tasks::get_task).patch(tasks::update_task_action),
@@ -105,6 +107,10 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         // public navigation entry of its own.
         .route("/distributed/claims", get(distributed::list_claims))
         .route(
+            "/distributed/handoffs/:id/retry",
+            post(distributed::retry_handoff_action),
+        )
+        .route(
             "/distributed/handoffs/:id/approve",
             post(distributed::approve_handoff_action),
         )
@@ -136,7 +142,9 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         .route("/auto-tasks", get(auto_tasks::list_auto_tasks))
         .route("/auto-tasks/toggle", post(auto_tasks::toggle_auto_task))
         .route("/auto-tasks/mint", post(auto_tasks::mint_auto_task))
-        .route("/scoreboard", get(scoreboard::scoreboard))
+        .route("/cost", get(cost::cost))
+        // [ORB-15922] Deprecated alias for /cost; delete after 2026-11-12.
+        .route("/scoreboard", get(cost::scoreboard))
         .route("/metrics/knowledge", get(metrics::knowledge_metrics))
         .route("/metrics/activity", get(metrics::activity_metrics))
         .route("/metrics/tools", get(metrics::tool_metrics))
@@ -149,6 +157,12 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         .route(
             "/metrics/invocations",
             get(metrics::invocation_metrics).post(metrics::ingest_invocation),
+        )
+        // Analytics › Resources: this host's delivery resource profiles for
+        // the selected workspace, as admission prices candidates with them.
+        .route(
+            "/resource-profiles",
+            get(resource_profiles::resource_profiles),
         )
         .route(
             "/diagnostics/metrics",
@@ -170,10 +184,20 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
             "/diagnostics/completions",
             get(diagnostics::diagnostics_completions),
         )
+        .route(
+            "/diagnostics/defects",
+            get(diagnostics::diagnostics_defects),
+        )
         .route("/diagnostics/denials", get(denials::list_denials))
-        // Audit › Codebase: per-path regression, contention, footprint-miss,
+        // Analytics › Codebase: per-path regression, contention, footprint-miss,
         // coupling, blocked and rejected rates from one cached scan.
         .route("/codebase/analytics", get(codebase::codebase_analytics))
+        .route("/codebase/related", get(codebase::codebase_related))
+        // Observe › Agents: one scorecard per agent role ranked by crew and
+        // model, and who each problem counts against, from one cached scan.
+        .route("/agents/attribution", get(agents::agent_attribution))
+        .route("/agents/:role/scorecard", get(agents::agent_scorecard))
+        .route("/agents/:role/detail", get(agents::agent_detail))
         // `orbit doctor` for the selected workspace: read-only, on demand and
         // cached [ORB-14830]. GET only; repairs stay on the CLI.
         .route("/doctor", get(doctor::doctor))

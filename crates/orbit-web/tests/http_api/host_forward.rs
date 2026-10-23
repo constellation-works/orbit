@@ -5,7 +5,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{Ipv4Addr, TcpListener};
+use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
@@ -41,13 +41,22 @@ impl StubSsh {
         let script = dir.path().join("ssh");
         fs::write(&script, include_str!("stub_ssh.py")).unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-        let config = json!({"log": dir.path().join("calls.jsonl"), "hosts": hosts});
+        let config = json!({
+            "log": dir.path().join("calls.jsonl"),
+            "release": dir.path().join("release"),
+            "hosts": hosts,
+        });
         fs::write(dir.path().join("ssh.json"), config.to_string()).unwrap();
         Self { dir }
     }
 
     fn bin(&self) -> &Path {
         self.dir.path()
+    }
+
+    /// Lets every held exit host's ssh run on to its exit.
+    fn release(&self) {
+        fs::write(self.dir.path().join("release"), "").unwrap();
     }
 
     fn calls(&self) -> Vec<Value> {
@@ -68,6 +77,17 @@ impl StubSsh {
 
 impl Drop for StubSsh {
     fn drop(&mut self) {
+        if thread::panicking() {
+            for name in ["calls.jsonl", "bind-events.jsonl", "phases.jsonl"] {
+                // Diagnostic I/O must not interrupt child cleanup during unwind.
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "SSH fixture {name}: {}",
+                    fs::read_to_string(self.dir.path().join(name))
+                        .unwrap_or_else(|error| format!("unavailable: {error}"))
+                );
+            }
+        }
         for pid in self.pids() {
             // SAFETY: signalling a pid this test's stub recorded.
             unsafe {
@@ -83,6 +103,8 @@ fn alive(pid: i64) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
+/// Startup and reaping are liveness guards, so allow the same scheduling
+/// slack as the request that owns the ssh child.
 fn wait_until(what: &str, timeout: Duration, mut done: impl FnMut() -> bool) {
     let deadline = Instant::now() + timeout;
     while !done() {
@@ -223,6 +245,46 @@ fn comments(server: &Server, id: &str) -> usize {
 
 /// Browser fetch must decode the gzip that crosses both dashboard servers.
 #[test]
+fn proposed_creation_forward_preserves_frozen_owner_target_and_receipt() {
+    isolated(
+        "host_forward::proposed_creation_forward_preserves_frozen_owner_target_and_receipt",
+        || {
+            let owner = Fixture::host("hostb", "HB");
+            let owner_server = owner.server(true);
+            let local = Fixture::new();
+            write_hosts(&local, &[("hostb", &owner.machine_id(), "hostb-ssh", "HB")]);
+            let stub =
+                StubSsh::new(json!({"hostb-ssh": {"attach": port(&owner_server), "spawn": null}}));
+            let server = local.server_with_path(true, stub.bin());
+            let rows = json_ok(server.get("/api/on/hostb/workspaces"));
+            let body = json!({
+                "request_id": "forwarded-proposal", "binding": rows[0]["creation_binding"],
+                "title": "Proposal on selected host", "description": "Forward preserves JSON request identity",
+                "complexity": "medium", "acceptance_criteria": ["Only the selected owner stores one task"],
+            });
+            let path = "/api/on/hostb/tasks/create?workspace=ws_http_fixture";
+            let receipt = json_ok(server.send("POST", path, body.clone()));
+            assert!(receipt["id"].as_str().unwrap().starts_with("HB-"));
+            assert_eq!(json_ok(server.send("POST", path, body.clone())), receipt);
+            let readonly = local.server_with_path(false, stub.bin());
+            let refusal = readonly.send("POST", path, body.clone());
+            assert_eq!(refusal.status().as_u16(), 403);
+            assert!(refusal.json::<Value>().unwrap().get("id").is_none());
+            // Sending the frozen remote body to this host cannot fall back to its
+            // local workspace, even though both fixture catalogs use the same ID.
+            assert!(
+                !server
+                    .send("POST", "/api/tasks/create?workspace=ws_http_fixture", body)
+                    .status()
+                    .is_success()
+            );
+            assert!(local.runtime.list_tasks().unwrap().is_empty());
+            assert_eq!(owner.runtime.list_tasks().unwrap().len(), 1);
+        },
+    );
+}
+
+#[test]
 #[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_COMPRESSION_BROWSER_EVIDENCE_DIR"]
 fn gzip_forward_returns_json_to_the_browser() {
     isolated(
@@ -276,17 +338,33 @@ fn gzip_forward_negotiates_upstream_and_preserves_encoding_and_vary() {
             // One route is pre-encoded; the other models an older dashboard.
             thread::spawn(move || {
                 for stream in listener.incoming() {
-                    let mut stream = stream.unwrap();
-                    stream
+                    // A tunnel readiness probe can connect and close without
+                    // sending a request. That connection must not kill the
+                    // only serving thread: every later forwarded request
+                    // would then be refused. Serve each connection
+                    // best-effort and keep accepting.
+                    let Ok(mut stream) = stream else { continue };
+                    if stream
                         .set_read_timeout(Some(Duration::from_secs(10)))
-                        .unwrap();
-                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    let Ok(clone) = stream.try_clone() else {
+                        continue;
+                    };
+                    let mut reader = BufReader::new(clone);
                     let mut first = String::new();
-                    reader.read_line(&mut first).unwrap();
+                    if !matches!(reader.read_line(&mut first), Ok(1..)) {
+                        continue;
+                    }
                     let mut encoding = String::new();
                     loop {
                         let mut line = String::new();
-                        reader.read_line(&mut line).unwrap();
+                        match reader.read_line(&mut line) {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {}
+                        }
                         if line == "\r\n" || line.is_empty() {
                             break;
                         }
@@ -320,10 +398,21 @@ fn gzip_forward_negotiates_upstream_and_preserves_encoding_and_vary() {
                             json
                         }
                     };
-                    write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
-                    stream.write_all(&body).unwrap();
+                    // The peer may have closed after the headers (a probe
+                    // that only needs the status line). A broken pipe on
+                    // one connection is not a fixture failure.
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(&body);
                 }
             });
+            // A readiness probe that connects and closes without a request
+            // must not take the remote stub down before the real requests.
+            drop(TcpStream::connect((Ipv4Addr::LOCALHOST, remote_port)).unwrap());
+            drop(TcpStream::connect((Ipv4Addr::LOCALHOST, remote_port)).unwrap());
             let a = Fixture::new();
             write_hosts(&a, &[("hostb", &b.machine_id(), "hostb-ssh", "HB")]);
             let stub = StubSsh::new(json!({"hostb-ssh": {"attach": remote_port, "spawn": null}}));
@@ -585,7 +674,7 @@ fn forward_failures_are_typed_and_bounded() {
             );
             let stub = StubSsh::new(json!({
                 "hostb-ssh": {"attach": port(&b_server), "spawn": null},
-                "dead-ssh": {"exit": 255, "delay": 1.5},
+                "dead-ssh": {"exit": 255, "hold": true},
                 "imposter-ssh": {"attach": port(&b_server), "spawn": null},
                 "old-ssh": {"attach": old, "spawn": null},
             }));
@@ -620,17 +709,16 @@ fn forward_failures_are_typed_and_bounded() {
                     .send()
                     .unwrap()
             });
-            wait_until(
-                "the dead host's ssh to start",
-                Duration::from_secs(10),
-                || !stub.calls().is_empty(),
-            );
-            let local = Instant::now();
+            wait_until("the dead host's ssh to start", SLOW_REQUEST, || {
+                !stub.calls().is_empty()
+            });
+            // The dead host's ssh is held, so its request is still in flight here.
             json_ok(a_server.get(&format!("/api/tasks{WS}")));
             assert!(
-                local.elapsed() < Duration::from_secs(1),
-                "a slow host does not stall local requests"
+                !dead.is_finished(),
+                "the dead host's request was still in flight when the local request succeeded"
             );
+            stub.release();
             let dead = error_code(dead.join().unwrap(), 502, "unreachable_destination");
             assert!(started.elapsed() < Duration::from_secs(20), "bounded");
             assert!(
@@ -656,11 +744,9 @@ fn forward_failures_are_typed_and_bounded() {
             );
             assert_eq!(mismatch["host"], "imposter");
             let imposter = stub.pids()[before];
-            wait_until(
-                "the mismatched tunnel's ssh to exit",
-                Duration::from_secs(10),
-                || !alive(imposter),
-            );
+            wait_until("the mismatched tunnel's ssh to exit", SLOW_REQUEST, || {
+                !alive(imposter)
+            });
 
             error_code(
                 a_server.get("/api/on/oldhost/workspaces"),
@@ -689,11 +775,12 @@ fn a_foreign_listener_on_the_reserved_port_is_never_the_tunnel() {
                 ],
             );
             let behind = old_dashboard();
-            // `dead-ssh` never binds. `taken-ssh` authenticates for
-            // `bind_delay`, then finds the port taken and exits at once.
+            // The same controlled interleaving covers an unrelated exit while
+            // its port is occupied, and collision exhaustion. Neither may
+            // trust a foreign dashboard or start a remote command.
             let stub = StubSsh::new(json!({
-                "dead-ssh": {"exit": 255, "delay": 1.5},
-                "taken-ssh": {"attach": behind, "spawn": behind, "bind_delay": 1.5},
+                "dead-ssh": {"exit": 255, "hold": true},
+                "taken-ssh": {"attach": behind, "spawn": behind, "bind_gate": "every"},
             }));
             let a_server = a.server_with_path(false, stub.bin());
             let foreign_identity = json!({"hosts": [{"local": true, "machine_id": "hm_foreign"}]});
@@ -711,15 +798,30 @@ fn a_foreign_listener_on_the_reserved_port_is_never_the_tunnel() {
                         .send()
                         .unwrap()
                 });
-                wait_until(
-                    &format!("{host}'s ssh to start"),
-                    Duration::from_secs(10),
-                    || stub.calls().len() > before,
-                );
-                let reserved = forwarded_port(&stub.calls()[before]);
-                let foreign = TcpListener::bind((Ipv4Addr::LOCALHOST, reserved))
-                    .expect("the reserved port is free until ssh binds it");
-                let probes = serve_dashboard(foreign, Some(foreign_identity.clone()));
+                let allocations = if host == "takenhost" { 3 } else { 1 };
+                let mut foreign_probes = Vec::new();
+                for allocation in 0..allocations {
+                    wait_until(
+                        &format!("{host}'s allocation {allocation}"),
+                        SLOW_REQUEST,
+                        || stub.calls().len() > before + allocation,
+                    );
+                    let call = stub.calls()[before + allocation].clone();
+                    let reserved = forwarded_port(&call);
+                    let foreign = TcpListener::bind((Ipv4Addr::LOCALHOST, reserved))
+                        .expect("the selected port is free until ssh binds it");
+                    foreign_probes.push(serve_dashboard(foreign, Some(foreign_identity.clone())));
+                    if host == "deadhost" {
+                        stub.release();
+                    } else {
+                        fs::write(
+                            stub.bin()
+                                .join(format!("release-{}", call["pid"].as_i64().unwrap())),
+                            "",
+                        )
+                        .unwrap();
+                    }
+                }
 
                 let failed = error_code(request.join().unwrap(), 502, "unreachable_destination");
                 assert_eq!(failed["host"], host, "{failed}");
@@ -727,15 +829,24 @@ fn a_foreign_listener_on_the_reserved_port_is_never_the_tunnel() {
                     failed["error"].as_str().unwrap().contains("exit 255"),
                     "{host}: ssh's own failure is reported: {failed}"
                 );
-                assert_eq!(
-                    probes.load(Ordering::SeqCst),
-                    0,
-                    "{host}: nothing is probed through a port its ssh never bound"
-                );
+                for probes in foreign_probes {
+                    assert_eq!(
+                        probes.load(Ordering::SeqCst),
+                        0,
+                        "{host}: nothing is probed through a port its ssh never bound"
+                    );
+                }
+                for call in &stub.calls()[before..] {
+                    assert!(
+                        !alive(call["pid"].as_i64().unwrap()),
+                        "{host}: every refused child is reaped"
+                    );
+                    assert_eq!(call["mode"], "attach", "{host}: no remote command starts");
+                }
                 assert_eq!(
                     stub.calls().len(),
-                    before + 1,
-                    "{host}: a failed probe spawns no remote dashboard"
+                    before + allocations,
+                    "{host}: only proven local collisions reallocate, within a fixed bound"
                 );
             }
         },
@@ -751,35 +862,105 @@ fn a_spawned_remote_is_operator_matched_and_stopped_on_shutdown() {
             let b_server = b.server(true);
             let a = Fixture::new();
             write_hosts(&a, &[("hostb", &b.machine_id(), "hostb-ssh", "HB")]);
-            // Nothing answers the attach forward, so A spawns B's dashboard.
-            let stub =
-                StubSsh::new(json!({"hostb-ssh": {"attach": null, "spawn": port(&b_server)}}));
-            let mut a_server = a.server_with_path(true, stub.bin());
-
-            let state = json_ok(
-                a_server
-                    .request("GET", "/api/hosts/hostb/connection")
-                    .timeout(SLOW_REQUEST)
-                    .send()
-                    .unwrap(),
-            );
-            assert_eq!(state["origin"], "spawned", "{state}");
-            json_ok(a_server.get("/api/on/hostb/workspaces"));
-            let calls = stub.calls();
-            assert_eq!(calls.len(), 2, "attach probe, then spawn: {calls:?}");
-            assert_eq!(
-                calls[1]["command"],
-                "orbit web serve --no-open --operator --port 7878"
-            );
-            let pids = stub.pids();
-            assert!(pids.iter().any(|pid| alive(*pid)));
-
-            assert!(a_server.terminate().success());
-            for pid in pids {
-                assert!(
-                    !alive(pid),
-                    "graceful shutdown stops the ssh child it started"
+            for operator in [false, true] {
+                // F363: hold the initial child after allocation, take its port,
+                // then let its real bind fail. A fresh allocation must still
+                // spawn with exactly this session's authority.
+                let stub = StubSsh::new(json!({"hostb-ssh": {
+                    "attach": null, "spawn": port(&b_server), "bind_gate": "first",
+                }}));
+                let mut a_server = a.server_with_path_envs(
+                    operator,
+                    stub.bin(),
+                    &[(
+                        "ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS",
+                        std::ffi::OsStr::new("300"),
+                    )],
                 );
+                let origin = a_server.origin.clone();
+                let request = thread::spawn(move || {
+                    reqwest::blocking::Client::builder()
+                        .no_proxy()
+                        .timeout(SLOW_REQUEST)
+                        .build()
+                        .unwrap()
+                        .get(format!("{origin}/api/hosts/hostb/connection"))
+                        .send()
+                        .unwrap()
+                });
+                wait_until("the held initial ssh", SLOW_REQUEST, || {
+                    !stub.calls().is_empty()
+                });
+                let first = stub.calls()[0].clone();
+                let reserved = forwarded_port(&first);
+                let foreign = TcpListener::bind((Ipv4Addr::LOCALHOST, reserved)).unwrap();
+                let probes = serve_dashboard(
+                    foreign,
+                    Some(json!({"hosts": [{
+                        "local": true, "machine_id": b.machine_id(),
+                    }]})),
+                );
+                fs::write(
+                    stub.bin()
+                        .join(format!("release-{}", first["pid"].as_i64().unwrap())),
+                    "",
+                )
+                .unwrap();
+                let state = json_ok(request.join().unwrap());
+                let calls = stub.calls();
+                let bind_events = fs::read_to_string(stub.bin().join("bind-events.jsonl")).unwrap();
+                let events: Vec<Value> = bind_events
+                    .lines()
+                    .map(|line| serde_json::from_str(line).unwrap())
+                    .collect();
+                assert_eq!(events[0]["pid"], first["pid"]);
+                assert_eq!(events[0]["port"], reserved);
+                assert_eq!(events[0]["errno"], libc::EADDRINUSE);
+                assert_eq!(
+                    state["reachable"], true,
+                    "a proven local collision must reallocate: {state}"
+                );
+                assert_eq!(state["origin"], "spawned", "{state}");
+                assert_eq!(state["machine_id"], b.machine_id());
+                json_ok(a_server.get("/api/on/hostb/workspaces"));
+                assert_eq!(
+                    calls.len(),
+                    3,
+                    "failed allocation, attach probe, then spawn: {calls:?}"
+                );
+                assert_eq!(calls[0]["mode"], "attach");
+                assert_eq!(calls[1]["mode"], "attach");
+                assert_eq!(calls[2]["mode"], "spawn");
+                assert_ne!(forwarded_port(&calls[1]), reserved);
+                assert_eq!(forwarded_port(&calls[1]), forwarded_port(&calls[2]));
+                let expected = if operator {
+                    "orbit web serve --no-open --operator --port 7878"
+                } else {
+                    "orbit web serve --no-open --port 7878"
+                };
+                assert_eq!(calls[2]["command"], expected);
+                assert_eq!(
+                    probes.load(Ordering::SeqCst),
+                    0,
+                    "even a matching identity on the foreign listener is never read"
+                );
+                assert!(
+                    !alive(first["pid"].as_i64().unwrap()),
+                    "the failed allocation's child is reaped before handoff"
+                );
+                let pids = stub.pids();
+                assert!(
+                    !alive(pids[1]),
+                    "the successful attach probe is reaped before spawn handoff"
+                );
+                assert!(
+                    alive(pids[2]),
+                    "only the owned spawn child serves the verified tunnel"
+                );
+                assert!(a_server.terminate().success());
+                for pid in pids {
+                    assert!(!alive(pid), "graceful shutdown stops every owned ssh child");
+                }
             }
         },
     );

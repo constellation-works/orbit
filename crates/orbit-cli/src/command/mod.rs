@@ -1,6 +1,9 @@
+pub mod agents;
 pub mod audit;
 pub mod auto_task;
+pub mod browser_kit;
 pub mod clock;
+pub mod codebase;
 pub mod config;
 pub mod doctor;
 pub mod friction;
@@ -14,6 +17,7 @@ pub mod log;
 pub mod mcp;
 pub mod migrate;
 pub mod operation;
+pub mod orchestrator;
 pub use operation::args as operation_args;
 pub mod plugin;
 pub mod routine;
@@ -79,6 +83,7 @@ Environment:
   workspace   Manage workspaces
   config      Show or update Orbit configuration
   host        Register and inspect the remote Orbit hosts this machine reaches over SSH
+  browser-kit Install, verify and remove the headless browser kit workers check UIs with
   plugin      Install and manage Orbit plugins
   migrate     Apply or inspect pending .orbit layout/schema migrations
   update      Install a published Orbit release and converge to it
@@ -90,12 +95,14 @@ Knowledge:
 
 Operate:
   run         Run workflows, drain the backlog, and inspect runs
-  job         View job definitions
-  tool        View tool registry
+  job         Define, list, and manage job workflows
+  tool        Manage and run Orbit tools, including external MCP plugins
   gc          Inspect and explicitly reap Orbit-managed garbage
 
 Observe:
   audit       Query the audit event log
+  codebase    Rank the repository paths that are risky for agents to change
+  agents      Score orchestrators, implementers, reviewers and pilots by crew and model
   log         Tail the unified Orbit log feed
   doctor      Diagnose workspace health, provider CLIs, and filesystem access
 
@@ -120,14 +127,11 @@ Options:
     help_template = ROOT_HELP_TEMPLATE
 )]
 pub struct Cli {
-    /// Override the Orbit root directory (highest precedence)
+    /// Orbit data directory to use (overrides every other source)
     #[arg(long, global = true)]
     pub root: Option<PathBuf>,
 
-    /// Select a workspace by registered name, logical ID (`ws_*`), or absolute
-    /// checkout path. Distinct from `--root`, which overrides the Orbit data
-    /// directory. Only active workspaces may be bound; commands fail if the
-    /// workspace status is not active.
+    /// Active workspace to use: registered name, `ws_*` ID or checkout path.
     #[arg(long, global = true, value_name = "SELECTOR")]
     pub workspace: Option<String>,
 
@@ -142,6 +146,8 @@ pub enum Commands {
     Workspace(workspace::WorkspaceCommand),
     Config(config::ConfigCommand),
     Host(host::HostCommand),
+    #[command(name = "browser-kit")]
+    BrowserKit(browser_kit::BrowserKitCommand),
     Plugin(plugin::PluginCommand),
     Migrate(migrate::MigrateCommand),
     Update(update::UpdateCommand),
@@ -159,6 +165,8 @@ pub enum Commands {
 
     // ── Observe ──
     Audit(audit::AuditCommand),
+    Codebase(codebase::CodebaseCommand),
+    Agents(agents::AgentsCommand),
     Log(log::LogCommand),
     Doctor(doctor::DoctorCommand),
 
@@ -187,10 +195,9 @@ pub enum Commands {
     #[command(hide = true)]
     Skill(skill::SkillCommand),
     #[command(hide = true)]
-    Logs(run::legacy_logs::LogsCommand),
-    #[command(hide = true)]
     Artifacts(task::artifacts::ArtifactsCommand),
+    // Deprecated alias of `orbit agents --role orchestrators`, removed in the
+    // next release.
+    #[command(hide = true)]
+    Orchestrator(orchestrator::OrchestratorCommand),
 }
-
-#[cfg(test)]
-mod tests;

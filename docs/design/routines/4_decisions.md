@@ -1,8 +1,8 @@
 ---
 title: Routines — Decisions
 owner: claude
-last_updated: 2026-09-20
-last_validated: 2026-10-08
+last_updated: 2026-10-13
+last_validated: 2026-10-13
 status: Accepted
 feature: routines
 doc_role: decisions
@@ -149,7 +149,7 @@ Routine YAML definitions live in routine-source workspaces and converge via git 
 ## Default routines seed per-workspace at init with host and name resolved at seed time
 
 **Recorded:** 2026-07-11 21:51:20.761360Z · [ORB-10129], [ORB-10207]
-**Paths:** `crates/orbit-core/assets/routines/**`, `crates/orbit-core/src/command/routine.rs`, `crates/orbit-core/src/command/init.rs`
+**Current code paths:** `crates/orbit-core/assets/routines/**`, `crates/orbit-core/src/application/routines/seed.rs`, `crates/orbit-core/src/application/routines/materialize.rs`, `crates/orbit-core/src/bootstrap/init.rs`
 **Superseded in part by:** [Definitions carry no host pin: every owner checkout is an independent schedule](#definitions-carry-no-host-pin-every-owner-checkout-is-an-independent-schedule) (no `__ORBIT_HOST_ID__` resolution; seeded bytes become machine-independent) and [One host tick evaluates routines and auto-task definitions in-process](#one-host-tick-evaluates-routines-and-auto-task-definitions-in-process) (`auto_task_scheduler` leaves the default set). The workspace-name suffix rule below is unchanged.
 
 ### Context
@@ -243,7 +243,7 @@ The clock is host infrastructure shared by both evaluators, so its CLI moves to 
 
 ### Decision
 
-Routine and auto-task definitions carry no host field. A definition is evaluated on a host iff (1) the workspace has an **owner** checkout registered on that host, (2) that host's clock is enabled, and (3) the definition's versioned `enabled` is true and no host-local pause suppresses it. A replica checkout cannot write the coordination store, so it evaluates no owner work. The narrow exception added by [ORB-14173](2_design.md#21-replica-checkouts-host-local-worktree-gc-only) is its own cron `worktree_gc_pipeline` routine, which reclaims only that host's worktrees after checking task settlement with the owner. N owner checkouts of one repository are N independent schedules by design. There is no cross-host coordination, lease, or "exactly one of N" mode.
+Routine and auto-task definitions carry no host field. A definition is evaluated on a host iff (1) the workspace has an **owner** checkout registered on that host, (2) that host's clock is enabled, and (3) the definition's versioned `enabled` is true and no host-local pause suppresses it. A replica checkout cannot write the coordination store, so it evaluates no owner work. The narrow exception added by [ORB-14173](2_design.md#21-replica-checkouts-host-local-worktree-gc-and-store-gc) is its own cron `worktree_gc_pipeline` routine, which reclaims only that host's worktrees after checking task settlement with the owner. A later change admits one more cron job on that same predicate: `store_gc_pipeline` prunes the follower's local store and does not contact the owner ([2_design.md §2.1](2_design.md#21-replica-checkouts-host-local-worktree-gc-and-store-gc)). N owner checkouts of one repository are N independent schedules by design. There is no cross-host coordination, lease, or "exactly one of N" mode.
 
 The standing rule this settles: **scheduled automation acts only on the host-local store.** A definition whose effect lands on the shared remote rather than the local store (a repo-global chore: "bump dependencies weekly") will run once per owner; such a definition must dedupe against the remote itself or must not ship as an embedded default. An `owner:` field on the definition is the additive answer if that case ever bites; it is deliberately not designed now.
 

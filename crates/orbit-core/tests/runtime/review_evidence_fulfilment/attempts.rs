@@ -86,13 +86,7 @@ fn age_out(fixture: &Fixture, key: &str) {
     );
 }
 
-#[test]
 fn a_final_fulfilment_outcome_stays_closed_after_aging_out() {
-    if !super::super::dispatch_admission::isolated(
-        "review_evidence_fulfilment::attempts::a_final_fulfilment_outcome_stays_closed_after_aging_out",
-    ) {
-        return;
-    }
     let probe = orbit_exec::probe_bwrap();
     if !probe.available {
         orbit_exec::report_bwrap_deferral(
@@ -125,13 +119,7 @@ fn a_final_fulfilment_outcome_stays_closed_after_aging_out() {
     assert_still_held(&fixture, "the aged-out final outcome");
 }
 
-#[test]
 fn retryable_and_missing_outcomes_keep_their_budget_after_aging_out() {
-    if !super::super::dispatch_admission::isolated(
-        "review_evidence_fulfilment::attempts::retryable_and_missing_outcomes_keep_their_budget_after_aging_out",
-    ) {
-        return;
-    }
     let probe = orbit_exec::probe_bwrap();
     if !probe.available {
         orbit_exec::report_bwrap_deferral(
@@ -179,3 +167,10 @@ fn retryable_and_missing_outcomes_keep_their_budget_after_aging_out() {
         assert_still_held(&fixture, "the aged-out exhausted budget");
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_final_fulfilment_outcome_stays_closed_after_aging_out_scenarios,
+    a_final_fulfilment_outcome_stays_closed_after_aging_out,
+    retryable_and_missing_outcomes_keep_their_budget_after_aging_out
+);

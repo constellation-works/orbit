@@ -60,6 +60,12 @@ pub fn error_signature(log_excerpt: &str, step: &str) -> ErrorSignature {
 /// Signature and display must agree on the strongest diagnostic, independent
 /// of where setup output or a process-exit wrapper appears in the command.
 pub fn diagnostic_anchor(lines: &[(LineKind, &str)]) -> Option<usize> {
+    if lines
+        .last()
+        .is_some_and(|(kind, _)| matches!(kind, LineKind::RunCommand | LineKind::CommandBody))
+    {
+        return None;
+    }
     for wanted in [
         LineKind::CompilerDiagnostic,
         LineKind::ConcreteDiagnostic,
@@ -75,11 +81,42 @@ pub fn diagnostic_anchor(lines: &[(LineKind, &str)]) -> Option<usize> {
             && let Some(previous) = lines[..index]
                 .iter()
                 .rposition(|(kind, line)| *kind == LineKind::Content && is_diagnostic_content(line))
+            && !lines[previous + 1..index].iter().any(|(kind, _)| {
+                matches!(
+                    kind,
+                    LineKind::RunCommand | LineKind::CommandBody | LineKind::EndGroup
+                )
+            })
         {
             return Some(previous);
         }
     }
     None
+}
+
+/// Bounded raw evidence around the same emitted diagnostic used for identity.
+/// With no diagnostic, retain bounded context without asserting a cause.
+pub fn diagnostic_excerpt(log: &str, max_bytes: usize) -> String {
+    let lines = classify_log_lines(log);
+    let anchor = diagnostic_anchor(&lines);
+    let offset = anchor
+        .map(|index| {
+            log.split_inclusive('\n')
+                .take(index)
+                .map(str::len)
+                .sum::<usize>()
+        })
+        .unwrap_or(0);
+    let anchor_len = anchor.map(|index| lines[index].1.len()).unwrap_or(0);
+    let mut start = offset.saturating_sub(max_bytes.saturating_sub(anchor_len) / 3);
+    while !log.is_char_boundary(start) {
+        start += 1;
+    }
+    let mut end = start.saturating_add(max_bytes).min(log.len());
+    while !log.is_char_boundary(end) {
+        end -= 1;
+    }
+    log[start..end].to_string()
 }
 
 fn is_compiler_diagnostic(payload: &str) -> bool {
@@ -119,6 +156,8 @@ pub struct ErrorSignature {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LineKind {
     RunCommand,
+    /// Printed source inside the runner command group, never emitted evidence.
+    CommandBody,
     ParamDump,
     EndGroup,
     CompilerDiagnostic,
@@ -131,17 +170,42 @@ pub enum LineKind {
     Content,
 }
 
-/// Classify each line of a failed-step log.
+/// Classify each line of a failed-step log. A runner's command display lasts
+/// from `Run` through its unindented closing group; its body is source context,
+/// including lines that resemble compiler, test, or annotation output.
 pub fn classify_log_lines(log: &str) -> Vec<(LineKind, &str)> {
     let mut in_param_block = false;
+    // An orphan closing group can be the tail of a printed command whose
+    // opener was omitted. Keep that prefix as context, never as a cause.
+    let mut in_command = log
+        .lines()
+        .find_map(|line| {
+            let payload = signature_payload(line);
+            if payload.starts_with("##[group]") {
+                Some(false)
+            } else if payload.trim_end() == "##[endgroup]" {
+                Some(true)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(false);
     let mut after_failures_header = false;
     let mut out = Vec::new();
     for line in log.lines() {
         let payload = signature_payload(line);
         let lowered = payload.trim();
         let indented = payload.starts_with(' ') || payload.starts_with('\t');
-        let kind = if is_run_command_payload(lowered) {
+        let kind = if in_command && payload.trim_end() != "##[endgroup]" {
+            LineKind::CommandBody
+        } else if payload.trim_end() == "##[endgroup]" {
+            in_command = false;
             in_param_block = false;
+            LineKind::EndGroup
+        } else if is_run_command_payload(lowered) {
+            in_command = true;
+            in_param_block = false;
+            after_failures_header = false;
             LineKind::RunCommand
         } else if lowered.contains("##[endgroup]") {
             in_param_block = false;
@@ -161,7 +225,10 @@ pub fn classify_log_lines(log: &str) -> Vec<(LineKind, &str)> {
                 LineKind::CargoStatus
             } else if lowered.contains("##[error]") {
                 LineKind::ErrorAnnotated
-            } else if is_runner_bookkeeping(lowered) || lowered.contains("##[group]") {
+            } else if is_runner_bookkeeping(lowered)
+                || is_successful_ci_test_route_summary(lowered)
+                || lowered.contains("##[group]")
+            {
                 LineKind::Bookkeeping
             } else if is_concrete_diagnostic(&payload, lowered, after_failures_header) {
                 LineKind::ConcreteDiagnostic
@@ -171,7 +238,9 @@ pub fn classify_log_lines(log: &str) -> Vec<(LineKind, &str)> {
                 LineKind::Content
             }
         };
-        if lowered == "failures:" || lowered == "errors:" {
+        if matches!(kind, LineKind::RunCommand | LineKind::CommandBody) {
+            after_failures_header = false;
+        } else if lowered == "failures:" || lowered == "errors:" {
             after_failures_header = true;
         } else if is_libtest_stdout_header(lowered) || lowered.starts_with("test result:") {
             after_failures_header = false;
@@ -329,6 +398,22 @@ fn is_runner_bookkeeping(lowered: &str) -> bool {
     lowered.starts_with("head is now at") || lowered.starts_with("syncing repository")
 }
 
+/// `check-ci-macos` prints this successful routing summary after a filtered
+/// test selector matches. A test name can contain any error marker word, but
+/// the exact summary shape is status output rather than a diagnostic.
+fn is_successful_ci_test_route_summary(lowered: &str) -> bool {
+    let Some(summary) = lowered.strip_prefix("check-ci-macos: ") else {
+        return false;
+    };
+    let Some((_, matched)) = summary.rsplit_once(" matched ") else {
+        return false;
+    };
+    let Some(count) = matched.strip_suffix(" tests") else {
+        return false;
+    };
+    !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 /// Unanchored marker hit that is an actual diagnostic, not a passing test or
 /// cargo/libtest section header. Those headers are identical across distinct
 /// panics, and success lines often contain `error`/`failure` in the test name.
@@ -361,18 +446,28 @@ fn is_successful_test_result(lowered: &str) -> bool {
         || status.starts_with("ignored ")
 }
 
-/// Cap `text` at `max_bytes` while keeping `anchor_line`, not the head.
-/// Strip the `job<TAB>step<TAB>timestamp ` columns a runner log carries.
+/// Strip a raw timestamp or the `job<TAB>step<TAB>timestamp ` runner columns,
+/// preserving payload tabs and indentation used to distinguish printed source.
 pub fn log_payload(line: &str) -> &str {
+    // Raw job API logs have no job/step columns. Their payload can contain
+    // arbitrary tabs, so recognize the leading timestamp before splitting.
+    if let Some(payload) = timestamp_payload(line) {
+        return payload;
+    }
     let mut columns = line.splitn(3, '\t');
     let rest = match (columns.next(), columns.next(), columns.next()) {
         (Some(_job), Some(_step), Some(rest)) => rest,
         _ => line,
     };
-    match rest.split_once(' ') {
-        Some((first, tail)) if first.contains('T') && first.ends_with('Z') => tail,
-        _ => rest,
-    }
+    timestamp_payload(rest).unwrap_or(rest)
+}
+
+fn timestamp_payload(line: &str) -> Option<&str> {
+    line.split_once(' ')
+        .filter(|(prefix, _)| {
+            prefix.ends_with('Z') && prefix.contains('T') && !prefix.contains('\t')
+        })
+        .map(|(_, payload)| payload)
 }
 
 /// Payload used for classification and the normalized signature: runner

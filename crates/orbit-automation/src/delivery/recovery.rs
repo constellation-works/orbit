@@ -579,6 +579,42 @@ fn replay_plan(
         }
     }
 
+    // Waived gaps and certificate exclusions keep their own lists and audit
+    // facts; only their commit identity moves, so retirement and batch
+    // cleanup still match them against the canonical pending window.
+    let images = input
+        .record
+        .mappings
+        .iter()
+        .map(|mapping| {
+            (
+                mapping.orphan.commit.as_str(),
+                mapping.canonical.commit.as_str(),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let restated = canonical
+        .pending
+        .iter()
+        .chain(canonical.excluded.iter().map(|item| &item.delivery))
+        .collect::<Vec<_>>();
+    next.excluded = state
+        .excluded
+        .iter()
+        .map(|item| {
+            let delivery = retained(&item.delivery, &restated, &images, stable)?;
+            Ok(ExcludedDelivery {
+                delivery,
+                ..item.clone()
+            })
+        })
+        .collect::<Result<_, AutomationError>>()?;
+    next.waived = state
+        .waived
+        .iter()
+        .map(|old| retained(old, &restated, &images, stable))
+        .collect::<Result<_, _>>()?;
+
     let excluded_keys = state
         .excluded
         .iter()
@@ -631,6 +667,48 @@ fn replay_plan(
     let mut record = input.record.clone();
     record.added_obligations = added;
     Ok((next, record))
+}
+
+/// The canonical identity of a retained waived or excluded delivery. One
+/// that touches no rewritten commit stays as it is. Otherwise the canonical
+/// page must restate the same logical delivery over exactly the proven images
+/// of its commits; anything less refuses rather than guess at membership.
+fn retained(
+    old: &Delivery,
+    restated: &[&Delivery],
+    images: &std::collections::HashMap<&str, &str>,
+    stable: impl Fn(&Delivery, &Delivery) -> bool,
+) -> Result<Delivery, AutomationError> {
+    if !old
+        .commits
+        .iter()
+        .any(|commit| images.contains_key(commit.as_str()))
+    {
+        return Ok(old.clone());
+    }
+
+    let drift = || AutomationError::Refused(refusal::HISTORY_CONTRACT_DRIFT.into());
+    let expected = old
+        .commits
+        .iter()
+        .map(|commit| images.get(commit.as_str()).copied().ok_or_else(drift))
+        .collect::<Result<Vec<_>, _>>()?;
+    let new = restated
+        .iter()
+        .find(|candidate| candidate.key == old.key)
+        .ok_or_else(drift)?;
+    if !stable(old, new)
+        || new.commits != expected
+        || images.get(old.after.commit.as_str()) != Some(&new.after.commit.as_str())
+    {
+        return Err(drift());
+    }
+
+    Ok(Delivery {
+        task_ids: old.task_ids.clone(),
+        unattributed: old.unattributed.clone(),
+        ..(*new).clone()
+    })
 }
 
 /// Why this consumer is or is not stalled, in the evaluator's own precedence:

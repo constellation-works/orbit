@@ -20,7 +20,7 @@ use super::handoff::{
     load_handoff_context, record_failed_handoff,
 };
 use super::operations;
-use super::pr::{PrMergeState, classify_pr_state};
+use super::pr::{PrMergeState, classify_pr_state, read_pr_status};
 use super::remote_probe::{RemoteBranchProbe, pre_push_remote_branch};
 
 pub(in crate::executor::automation) fn push_batch_changes<H: RuntimeHost + ?Sized>(
@@ -103,6 +103,7 @@ fn record_forge_hold<H: RuntimeHost + ?Sized>(
                     at: Utc::now(),
                     by: FAILED_HANDOFF_ACTOR.to_string(),
                     message: message.clone(),
+                    operation_id: None,
                 }],
                 ..TaskAutomationUpdate::default()
             },
@@ -136,6 +137,32 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
     let local_sha = commit_sha(workspace_path, &branch)?;
     let probe = pre_push_remote_branch(workspace_path, &branch)?;
     let remote_sha = &probe.sha;
+    let repair_admission =
+        super::candidate_resume::source_repair::publication_admission(host, input)?;
+    let repair_lease = repair_admission
+        .as_ref()
+        .map(|admission| {
+            super::candidate_resume::source_repair::publication_lease(host, input, admission)
+        })
+        .transpose()?;
+    if let Some(admission) = &repair_admission {
+        let binding = admission;
+        let pr = read_pr_status(host, workspace_path, &binding.pull_request)?;
+        if branch != binding.branch
+            || git_output(workspace_path, &["config", "--get", "remote.origin.url"])?
+                != binding.remote_url
+            || !matches!(remote_sha.as_deref(), Some(sha) if Some(sha) == repair_lease.as_deref() || sha == local_sha)
+            || !super::candidate_resume::source_repair::exact_open_pr(
+                binding,
+                &pr,
+                remote_sha.as_deref().unwrap_or_default(),
+            )
+        {
+            return Err(OrbitError::Execution("push_lease_lost: source repair PR or published branch changed; no replacement publication is authorized".into()));
+        }
+        // Pin the actual write as well as the observation: another publisher
+        // racing this probe must lose the ordinary push's exact lease below.
+    }
     // [ORB-14849] A before-landing reviewer's fix goes onto the published
     // head it reviewed and nowhere else: a branch that moved since loses the
     // lease, and the push itself is conditional on that head.
@@ -161,9 +188,22 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
     // on exactly that head, whatever else the run observed. The read is
     // lenient: a run checkpointed before the step named the field has none,
     // and adopted no branch.
-    let adopted_head = input
-        .get("candidate_resume")
-        .and_then(|resumed| input_string_field(resumed, "reused_head_sha"));
+    // A same-run final replay also republishes an authenticated candidate.
+    // A repeated no-op sync must not erase its exact published-head lease.
+    // This run's own publication supersedes an earlier candidate_resume lease.
+    let adopted_head = super::commit::final_recovery_publication_lease(
+        host,
+        input,
+        workspace_path,
+        &branch,
+        &local_sha,
+    )?
+    .or_else(|| {
+        input
+            .get("candidate_resume")
+            .and_then(|resumed| input_string_field(resumed, "reused_head_sha"))
+    })
+    .or(repair_lease);
     if let Some(adopted) = &adopted_head
         && remote_sha.as_deref() != Some(adopted.as_str())
         && remote_sha.as_deref() != Some(local_sha.as_str())
@@ -493,30 +533,16 @@ fn merged_at_lease<H: RuntimeHost + ?Sized>(
     pr_number: &str,
     lease: &str,
 ) -> Result<Option<String>, OrbitError> {
-    let response = host.run_private_vcs_operation(
-        operations::PR_STATUS,
-        json!({
-            "pr": pr_number,
-            "workspace_path": workspace_path.to_string_lossy(),
-        }),
-    )?;
-    let pull_request = response.get("pull_request").cloned().unwrap_or(Value::Null);
+    let pull_request = read_pr_status(host, workspace_path, pr_number)?;
     if !matches!(classify_pr_state(&pull_request), PrMergeState::Merged) {
         return Ok(None);
     }
-    let head = pull_request
-        .get("headRefOid")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if head != lease {
+    if pull_request.exact_head_sha.as_deref().unwrap_or_default() != lease {
         return Ok(None);
     }
     Ok(pull_request
-        .get("mergeCommit")
-        .and_then(|commit| commit.get("oid"))
-        .and_then(Value::as_str)
-        .filter(|oid| !oid.is_empty())
-        .map(ToOwned::to_owned))
+        .exact_merge_commit
+        .filter(|oid| !oid.is_empty()))
 }
 
 /// Whether `merge_commit` is on `origin/<base>` after a fresh fetch.

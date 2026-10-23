@@ -96,6 +96,21 @@ pub struct EvidenceSubmission {
     pub action_id: String,
     pub evidence_digest: String,
     pub run_id: String,
+    /// Set when the owner committed a claimed worker's bytes: the claim it
+    /// authenticated and the follower machine that ran `run_id`. Absent from
+    /// a witness the owner's own executor run wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim: Option<ClaimedSubmission>,
+}
+
+/// The owner's claim journal entry a claimed submission was authenticated
+/// against, at the moment its bytes were committed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimedSubmission {
+    pub claim_id: String,
+    /// The follower machine the claim was admitted to, which ran `run_id`.
+    pub machine_id: String,
 }
 
 /// Shape supplied with a frozen batch. Workers fill each delivery's

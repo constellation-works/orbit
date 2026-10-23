@@ -1,7 +1,9 @@
+#[cfg(target_os = "macos")]
+mod ancestry;
 #[cfg(unix)]
 mod bounded;
-// macOS: these tests exercise the production libproc start-time and zombie probes.
-#[cfg(target_os = "macos")]
+// Linux fault injection and macOS native libproc identity/liveness coverage.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod identity;
 #[cfg(target_os = "linux")]
 mod stopped_descendants;

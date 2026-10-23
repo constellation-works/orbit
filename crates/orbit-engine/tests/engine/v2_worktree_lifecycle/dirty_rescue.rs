@@ -58,7 +58,7 @@ impl DirtyCheckout {
 fn snapshot_commit(checkout: &Path) -> String {
     let index = checkout.parent().unwrap().join("snapshot.index");
     let scratch = |args: &[&str]| {
-        let output = Command::new("git")
+        let output = crate::git_test_support::command()
             .args(args)
             .current_dir(checkout)
             .env("GIT_INDEX_FILE", &index)
@@ -84,7 +84,6 @@ fn snapshot_commit(checkout: &Path) -> String {
     )
 }
 
-#[test]
 fn a_settled_dirty_worktree_goes_only_once_its_candidate_is_recoverable() {
     isolated_in(
         module_path!(),
@@ -116,6 +115,11 @@ fn a_settled_dirty_worktree_goes_only_once_its_candidate_is_recoverable() {
             assert!(
                 !rescue_store.exists(),
                 "a carried candidate needs no rescue patch"
+            );
+            assert_eq!(
+                git(&fixture.repo, &["for-each-ref", "refs/orbit/rescue/"]),
+                "",
+                "a carried candidate needs no rescue base ref"
             );
 
             // With nothing on `origin`, GC writes a patch, proves it, and only
@@ -178,7 +182,6 @@ fn a_settled_dirty_worktree_goes_only_once_its_candidate_is_recoverable() {
     );
 }
 
-#[test]
 fn distinct_staged_and_working_versions_keep_the_settled_worktree() {
     isolated_in(
         module_path!(),
@@ -254,7 +257,6 @@ fn distinct_staged_and_working_versions_keep_the_settled_worktree() {
     );
 }
 
-#[test]
 fn a_symlinked_rescue_store_keeps_the_worktree_and_writes_nothing_outside() {
     isolated_in(
         module_path!(),
@@ -285,11 +287,148 @@ fn a_symlinked_rescue_store_keeps_the_worktree_and_writes_nothing_outside() {
                 b"edited\n\x00\xff binary tail\n"
             );
             assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+            assert_eq!(
+                git(&fixture.repo, &["for-each-ref", "refs/orbit/rescue/"]),
+                "",
+                "a refused store must not pin a base"
+            );
         },
     );
 }
 
-#[test]
+fn unpublished_head_content_recovers_after_branch_deletion_and_object_expiry() {
+    isolated_in(
+        module_path!(),
+        "unpublished_head_content_recovers_after_branch_deletion_and_object_expiry",
+        || {
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+            let dirty = DirtyCheckout::new(&host, "unpublished", TaskStatus::Done);
+            let path = &dirty.checkout.path;
+            // A commit that exists only on the run branch. The later working
+            // edits stay unstaged, so the rescue patch does not repeat this file.
+            fs::write(path.join("local-only.txt"), "only on the run branch\n").unwrap();
+            git(path, &["add", "local-only.txt"]);
+            git(path, &["commit", "-m", "unpublished local file"]);
+            let head = git(path, &["rev-parse", "HEAD"]);
+            let published = git(
+                &fixture.repo,
+                &["rev-list", "agent-main", "origin/agent-main"],
+            );
+            assert!(
+                !published.lines().any(|line| line == head),
+                "fixture HEAD must be unpublished:\n{published}"
+            );
+
+            let report = dirty.sweep(&host);
+            assert_eq!(report["action"], "removed", "{report}");
+            assert_eq!(report["recovery"]["source"], "rescue_patch", "{report}");
+            assert_eq!(report["recovery"]["commit"], head, "{report}");
+            assert!(!path.exists());
+            assert!(
+                !git_ok(
+                    &fixture.repo,
+                    &[
+                        "show-ref",
+                        "--verify",
+                        "--quiet",
+                        &format!("refs/heads/{}", dirty.checkout.branch),
+                    ],
+                ),
+                "run branch still exists"
+            );
+            let patch = PathBuf::from(report["recovery"]["location"].as_str().unwrap());
+            let patch_bytes = fs::read(&patch).unwrap();
+            assert!(
+                !patch_bytes
+                    .windows(b"local-only.txt".len())
+                    .any(|window| window == b"local-only.txt"),
+                "unchanged unpublished file must not be stored in the patch"
+            );
+            let header = String::from_utf8_lossy(&patch_bytes);
+            let base_ref = header
+                .lines()
+                .find_map(|line| line.strip_prefix("Base-Ref: "))
+                .expect("patch names its base ref")
+                .to_string();
+            assert!(
+                base_ref.starts_with("refs/orbit/rescue/worktree-gc/"),
+                "{base_ref}"
+            );
+            assert_eq!(
+                git(
+                    &fixture.repo,
+                    &["rev-parse", &format!("{base_ref}^{{commit}}")]
+                ),
+                head
+            );
+
+            // The branch and its reflog are gone. The rescue ref is the root.
+            expire_unreachable_objects(&fixture.repo);
+            assert!(
+                git_ok(&fixture.repo, &["cat-file", "-e", &head]),
+                "patch base was pruned"
+            );
+            let reachable = git(&fixture.repo, &["rev-list", "--all"]);
+            assert!(
+                reachable.lines().any(|line| line == head),
+                "patch base is not reachable:\n{reachable}"
+            );
+
+            let restored = fixture.root.path().join("restored");
+            git(
+                &fixture.repo,
+                &[
+                    "worktree",
+                    "add",
+                    "--detach",
+                    path_str(&restored),
+                    &base_ref,
+                ],
+            );
+            git(&restored, &["apply", path_str(&patch)]);
+            assert_eq!(
+                fs::read_to_string(restored.join("local-only.txt")).unwrap(),
+                "only on the run branch\n"
+            );
+            assert_eq!(
+                fs::read(restored.join("README.md")).unwrap(),
+                b"edited\n\x00\xff binary tail\n"
+            );
+            assert_eq!(
+                fs::read_to_string(restored.join("src/new.rs")).unwrap(),
+                "fn candidate() {}\n"
+            );
+
+            // The pin lasts as long as the patch. Once the file is gone, a
+            // deleting sweep drops the ref and expiry can remove the commit.
+            git(
+                &fixture.repo,
+                &["worktree", "remove", "--force", path_str(&restored)],
+            );
+            fs::remove_file(&patch).unwrap();
+            action(
+                &host,
+                "worktree_gc",
+                &json!({"target_run_id": dirty.run_id}),
+            )
+            .unwrap();
+            assert!(
+                !git_ok(
+                    &fixture.repo,
+                    &["show-ref", "--verify", "--quiet", &base_ref],
+                ),
+                "rescue base ref outlived its patch"
+            );
+            expire_unreachable_objects(&fixture.repo);
+            assert!(
+                !git_ok(&fixture.repo, &["cat-file", "-e", &head]),
+                "released patch base is still in the object store"
+            );
+        },
+    );
+}
+
 fn an_open_task_keeps_its_dirty_source_byte_for_byte_and_loses_only_build_output() {
     isolated_in(
         module_path!(),
@@ -341,7 +480,6 @@ fn an_open_task_keeps_its_dirty_source_byte_for_byte_and_loses_only_build_output
     );
 }
 
-#[test]
 fn a_live_or_too_recent_dirty_worktree_is_never_removed() {
     isolated_in(
         module_path!(),
@@ -385,12 +523,77 @@ fn a_live_or_too_recent_dirty_worktree_is_never_removed() {
     );
 }
 
+fn expire_unreachable_objects(repo: &Path) {
+    git(
+        repo,
+        &[
+            "reflog",
+            "expire",
+            "--expire=now",
+            "--expire-unreachable=now",
+            "--all",
+        ],
+    );
+    git(repo, &["gc", "--prune=now"]);
+}
+
+fn git_ok(current_dir: &Path, args: &[&str]) -> bool {
+    crate::git_test_support::command()
+        .args(args)
+        .current_dir(current_dir)
+        .status()
+        .unwrap()
+        .success()
+}
+
 fn git_bytes(current_dir: &Path, args: &[&str]) -> Vec<u8> {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args(args)
         .current_dir(current_dir)
         .output()
         .unwrap();
     assert!(output.status.success(), "git {args:?}: {output:?}");
     output.stdout
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn rescue_contracts_1() {
+    isolated_in(module_path!(), "rescue_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_settled_dirty_worktree_goes_only_once_its_candidate_is_recoverable",
+                a_settled_dirty_worktree_goes_only_once_its_candidate_is_recoverable,
+            ),
+            (
+                "distinct_staged_and_working_versions_keep_the_settled_worktree",
+                distinct_staged_and_working_versions_keep_the_settled_worktree,
+            ),
+            (
+                "a_symlinked_rescue_store_keeps_the_worktree_and_writes_nothing_outside",
+                a_symlinked_rescue_store_keeps_the_worktree_and_writes_nothing_outside,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn rescue_contracts_2() {
+    isolated_in(module_path!(), "rescue_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "unpublished_head_content_recovers_after_branch_deletion_and_object_expiry",
+                unpublished_head_content_recovers_after_branch_deletion_and_object_expiry,
+            ),
+            (
+                "an_open_task_keeps_its_dirty_source_byte_for_byte_and_loses_only_build_output",
+                an_open_task_keeps_its_dirty_source_byte_for_byte_and_loses_only_build_output,
+            ),
+            (
+                "a_live_or_too_recent_dirty_worktree_is_never_removed",
+                a_live_or_too_recent_dirty_worktree_is_never_removed,
+            ),
+        ]);
+    });
 }

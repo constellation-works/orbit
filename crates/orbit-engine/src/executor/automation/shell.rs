@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_exec::supervise_child;
+use orbit_exec::spawn_owned_supervised_cancellable;
 use serde_json::{Value, json};
 
 use crate::activity_job::cli_runner::spawn::{
@@ -138,7 +138,12 @@ pub(super) fn local_shell<H: RuntimeHost + Sync + ?Sized>(
     // An empty stdin payload closes the pipe immediately. A shell step is
     // non-interactive, and a child left reading an open-but-silent stdin would
     // only ever end at the deadline.
-    let outcome = supervise_child(spawned.child, Some(timeout_ms), Some(Vec::new()))?;
+    let outcome = spawn_owned_supervised_cancellable(
+        || Ok(spawned.child),
+        Some(timeout_ms),
+        Some(Vec::new()),
+        None,
+    )?;
     let result = outcome.result;
 
     let mut argv = Vec::with_capacity(args.len() + 1);

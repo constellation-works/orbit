@@ -433,12 +433,14 @@ try {
   assert(filtered.length === 1 && filtered[0].sub.startsWith('orbit.task.claim'), 'search matches a run id');
   await page.locator('#incident-search').fill('');
 
-  // 5. The truncation note opens the exact audit events.
+  // 5. The truncation note opens the exact audit events in Incidents › Events.
   await rowNamed('workspace sync failed').click();
   await page.locator('#diag-body .incident-message-note button').click();
-  await until('the audit drill-down', () => page.evaluate(() => location.hash.startsWith('#audit')));
+  await until('the Events drill-down', () => page.evaluate(() => location.hash.startsWith('#diagnostics/incidents/events?')));
   const auditHash = await page.evaluate(() => decodeURIComponent(location.hash));
   assert(auditHash.includes('ids=2001,2002,2003,2004'), `the drill-down names every event: ${auditHash}`);
+  assert(await page.locator('#diagnostics-events-main').isVisible()
+    && await page.locator('#incidents-views .subtab.active').getAttribute('data-view') === 'events', 'the drill-down opens the Events view of Incidents');
 
   // 6. By cause, the default: signatures sharing a cause sit under one
   //    header that counts signatures, a cause with one signature is one row

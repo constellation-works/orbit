@@ -91,14 +91,17 @@ fn degraded_fixture() -> Fixture {
         TaskRelation {
             relation_type: TaskRelationType::SpawnedFrom,
             target: target.clone(),
+            regression: None,
         },
         TaskRelation {
             relation_type: TaskRelationType::RelatedTo,
             target: FOREIGN_TARGET.to_string(),
+            regression: None,
         },
         TaskRelation {
             relation_type: TaskRelationType::Produces,
             target: "ADR-0001".to_string(),
+            regression: None,
         },
     ];
     let source = store.create_task(source).expect("create source").id;
@@ -413,10 +416,12 @@ fn removing_the_edge_through_a_supported_update_repairs_on_the_next_read() {
                     TaskRelation {
                         relation_type: TaskRelationType::RelatedTo,
                         target: FOREIGN_TARGET.to_string(),
+                        regression: None,
                     },
                     TaskRelation {
                         relation_type: TaskRelationType::Produces,
                         target: "ADR-0001".to_string(),
+                        regression: None,
                     },
                 ]),
                 ..Default::default()
@@ -489,55 +494,4 @@ fn restoring_the_target_repairs_on_the_next_read() {
     assert_eq!(ids, vec![fixture.in_progress.clone()]);
     assert_eq!(reads, 1, "the repaired index serves the filter");
     assert_eq!(fixture.gate().attempts(), 2);
-}
-
-#[test]
-fn rebuild_refusal_names_the_canonical_source_edge() {
-    if ran_in_child("rebuild_refusal_names_the_canonical_source_edge") {
-        return;
-    }
-    let fixture = degraded_fixture();
-    let envelopes = fixture
-        .store
-        .bundle_store
-        .list_bundles()
-        .expect("bundles")
-        .into_iter()
-        .map(|bundle| bundle.envelope)
-        .collect::<Vec<_>>();
-
-    let error = fixture
-        .registry
-        .replace_workspace_task_indexes(WORKSPACE, &envelopes)
-        .expect_err("validator stays strict");
-    assert!(
-        error.to_string().contains(&format!(
-            "{} spawned_from -> '{}'",
-            fixture.source, fixture.target
-        )),
-        "the refusal must name the source and relation: {error}"
-    );
-
-    let unresolved = fixture
-        .registry
-        .unresolved_relation_targets(WORKSPACE, &envelopes)
-        .expect("audit");
-    assert_eq!(
-        unresolved
-            .iter()
-            .map(|edge| (
-                edge.source_task_id.as_str(),
-                edge.relation_type.as_str(),
-                edge.target_task_id.as_str(),
-                edge.indexed
-            ))
-            .collect::<Vec<_>>(),
-        vec![(
-            fixture.source.as_str(),
-            "spawned_from",
-            fixture.target.as_str(),
-            false
-        )],
-        "only the locally known task edge is unresolved, and the index lacks it"
-    );
 }

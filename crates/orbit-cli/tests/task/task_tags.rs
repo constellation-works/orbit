@@ -7,7 +7,6 @@ use std::process::Output;
 
 use serde_json::{Value, json};
 
-#[test]
 fn task_cli_roundtrips_filters_and_replaces_tags() {
     let workspace = workspace();
     let perf = workspace.add_task_cli_with_tags("Perf task", &["perf"]);
@@ -55,7 +54,6 @@ fn task_cli_roundtrips_filters_and_replaces_tags() {
     assert_eq!(updated["tags"], json!(["docs"]));
 }
 
-#[test]
 fn search_status_modes_include_blocked_and_deferred_tasks() {
     let workspace = workspace();
     let routing = workspace.run_with_stdin(
@@ -137,7 +135,6 @@ fn search_status_modes_include_blocked_and_deferred_tasks() {
 }
 
 /// ORB-10310: `orbit task list` is status-neutral and bounded by `--limit`.
-#[test]
 fn task_list_is_status_neutral_and_bounded_by_limit() {
     let workspace = workspace();
     // Every task starts in `proposed`; the default listing must include them
@@ -187,7 +184,6 @@ fn task_list_is_status_neutral_and_bounded_by_limit() {
     );
 }
 
-#[test]
 fn task_update_refuses_dropping_system_identity_tag_without_override() {
     let workspace = workspace();
     let task = workspace.add_task_with_tags(
@@ -327,6 +323,233 @@ fn task_update_tool_refuses_dropping_system_identity_tag_without_override() {
     assert_eq!(updated["tags"], json!(["docs", "perf"]));
 }
 
+/// [ORB-16855] `skip-review` and `skip-validation` skip delivery gates, so
+/// only filing or an operator sets them: an agent's update, such as the
+/// implementer's own during its run, is refused and changes nothing.
+fn light_delivery_tags_are_set_only_by_filing_or_an_operator() {
+    let workspace = workspace();
+    let filed = workspace.add_task_cli_with_tags("Docs task", &["skip-review"]);
+    assert_eq!(filed["tags"], json!(["skip-review"]), "filing sets the tag");
+    let task_id = filed["id"].as_str().expect("task id");
+
+    let input = json!({
+        "id": task_id, "model": "claude",
+        "tags": ["skip-review", "skip-validation"],
+    })
+    .to_string();
+    let mut agent = assert_cmd::cargo::cargo_bin_cmd!("orbit");
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        agent.env_remove(name);
+    });
+    let refused = agent
+        .current_dir(&workspace.work)
+        .env("HOME", &workspace.home)
+        .env("USERPROFILE", &workspace.home)
+        .env("ORBIT_AGENT_NAME", "claude")
+        .env("ORBIT_AGENT_MODEL", "claude")
+        .env("ORBIT_TASK_ID", task_id)
+        .args(["tool", "run", "orbit.task.update", "--input", &input])
+        .output()
+        .expect("run orbit as the implementing agent");
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        !refused.status.success(),
+        "an agent adding `skip-validation` to its own task must be refused"
+    );
+    let error: Value = serde_json::from_slice(&refused.stderr).expect("stderr JSON");
+    assert_eq!(error["code"], "capability_denied", "{stderr}");
+    assert!(
+        error["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("skip-validation")),
+        "names the tag: {stderr}"
+    );
+    let shown = workspace.run(&["task", "show", task_id, "--json"], "show task");
+    let shown: Value = serde_json::from_slice(&shown.stdout).expect("show JSON");
+    assert_eq!(
+        shown["tags"],
+        json!(["skip-review"]),
+        "the refusal wrote nothing"
+    );
+
+    let approved = workspace.run_as_operator(
+        &[
+            "task",
+            "update",
+            task_id,
+            "--tag",
+            "skip-review",
+            "--tag",
+            "skip-validation",
+            "--json",
+        ],
+        "operator adds skip-validation",
+    );
+    let approved: Value = serde_json::from_slice(&approved.stdout).expect("update JSON");
+    assert_eq!(approved["tags"], json!(["skip-review", "skip-validation"]));
+}
+
+/// [ORB-16872] A user-launched MCP server has no agent envelope. A tool
+/// update that still names an agent model is an attributed agent write, so
+/// it cannot add `skip-review` or `skip-validation`, including when the write
+/// is a guarded start. Filing, an operator update, and removal still succeed,
+/// and a refusal leaves the stored tags unchanged.
+fn attributed_agent_without_envelope_cannot_add_light_delivery_tags() {
+    let workspace = workspace();
+    let filed = workspace.add_task_cli_with_tags(
+        "Filed with both light-delivery tags",
+        &["skip-review", "skip-validation"],
+    );
+    assert_eq!(
+        filed["tags"],
+        json!(["skip-review", "skip-validation"]),
+        "filing sets both tags"
+    );
+
+    let reviewed = workspace.add_task_cli_with_tags("Reviewed docs task", &["skip-review"]);
+    let reviewed_id = reviewed["id"].as_str().expect("reviewed task id");
+    let plain = workspace.add_task_cli_with_tags("Plain docs task", &[]);
+    let plain_id = plain["id"].as_str().expect("plain task id");
+    assert_eq!(
+        plain["tags"],
+        json!([]),
+        "filing without the tags stores none"
+    );
+
+    let add_validation = run_tool_update_without_agent_envelope(
+        &workspace,
+        &json!({
+            "id": reviewed_id,
+            "model": "claude",
+            "tags": ["skip-review", "skip-validation"],
+        }),
+    );
+    assert_light_delivery_addition_refused(&add_validation, "skip-validation");
+    assert_eq!(
+        shown_tags(&workspace, reviewed_id),
+        json!(["skip-review"]),
+        "the refused update wrote nothing"
+    );
+
+    let add_review = run_tool_update_without_agent_envelope(
+        &workspace,
+        &json!({
+            "id": plain_id,
+            "model": "grok",
+            "tags": ["skip-review"],
+        }),
+    );
+    assert_light_delivery_addition_refused(&add_review, "skip-review");
+    assert_eq!(
+        shown_tags(&workspace, plain_id),
+        json!([]),
+        "the refused update wrote nothing"
+    );
+
+    let guarded_start = run_tool_update_without_agent_envelope(
+        &workspace,
+        &json!({
+            "id": reviewed_id,
+            "model": "codex",
+            "status": "in-progress",
+            "plan": "Exercise guarded-start admission.",
+            "tags": ["skip-review", "skip-validation"],
+        }),
+    );
+    assert_light_delivery_addition_refused(&guarded_start, "skip-validation");
+    let shown = show_task(&workspace, reviewed_id);
+    assert_eq!(
+        shown["tags"],
+        json!(["skip-review"]),
+        "the refused start wrote nothing"
+    );
+    assert_eq!(
+        shown["status"], "proposed",
+        "the refused start did not move the task"
+    );
+
+    let removed = run_tool_update_without_agent_envelope(
+        &workspace,
+        &json!({
+            "id": reviewed_id,
+            "model": "claude",
+            "tags": ["docs"],
+        }),
+    );
+    assert!(
+        removed.status.success(),
+        "an attributed agent may remove a light-delivery tag\n{}",
+        String::from_utf8_lossy(&removed.stderr)
+    );
+    let removed: Value = serde_json::from_slice(&removed.stdout).expect("removal JSON");
+    assert_eq!(removed["tags"], json!(["docs"]));
+
+    let approved = workspace.run_as_operator(
+        &[
+            "task",
+            "update",
+            reviewed_id,
+            "--tag",
+            "docs",
+            "--tag",
+            "skip-review",
+            "--tag",
+            "skip-validation",
+            "--json",
+        ],
+        "operator adds both light-delivery tags",
+    );
+    let approved: Value = serde_json::from_slice(&approved.stdout).expect("operator update JSON");
+    assert_eq!(
+        approved["tags"],
+        json!(["docs", "skip-review", "skip-validation"])
+    );
+}
+
+/// Tool update in a child with no agent envelope and no operator override.
+/// Attribution comes only from `model` in the tool input.
+fn run_tool_update_without_agent_envelope(workspace: &TestWorkspace, input: &Value) -> Output {
+    let payload = input.to_string();
+    let mut command = assert_cmd::cargo::cargo_bin_cmd!("orbit");
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(&workspace.work)
+        .env("HOME", &workspace.home)
+        .env("USERPROFILE", &workspace.home)
+        .args(["tool", "run", "orbit.task.update", "--input", &payload])
+        .output()
+        .expect("run attributed tool update without an agent envelope")
+}
+
+fn assert_light_delivery_addition_refused(output: &Output, tag: &str) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "attributed agent adding `{tag}` without an agent envelope must be refused\n{stderr}"
+    );
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap_or_else(|_| {
+        panic!("stderr is not the tool error JSON: {stderr}");
+    });
+    assert_eq!(error["code"], "capability_denied", "{stderr}");
+    assert!(
+        error["error"]
+            .as_str()
+            .is_some_and(|message| message.contains(tag)),
+        "names `{tag}`: {stderr}"
+    );
+}
+
+fn show_task(workspace: &TestWorkspace, task_id: &str) -> Value {
+    let shown = workspace.run(&["task", "show", task_id, "--json"], "show task");
+    serde_json::from_slice(&shown.stdout).expect("show JSON")
+}
+
+fn shown_tags(workspace: &TestWorkspace, task_id: &str) -> Value {
+    show_task(workspace, task_id)["tags"].clone()
+}
+
 fn assert_task_titles(output: &Output, expected: &[&str]) {
     let value: Value = serde_json::from_slice(&output.stdout).expect("task array JSON");
     let tasks = value.as_array().expect("task array");
@@ -370,4 +593,37 @@ fn workspace() -> TestWorkspace {
     let mut template = TaskSeed::new("");
     template.description = "Shared tag-search marker.".into();
     TestWorkspace::new("task-tags-test", template)
+}
+
+#[test]
+fn task_tags_status_filters_and_identity() {
+    for (name, check) in [
+        (
+            "task_cli_roundtrips_filters_and_replaces_tags",
+            task_cli_roundtrips_filters_and_replaces_tags as fn(),
+        ),
+        (
+            "search_status_modes_include_blocked_and_deferred_tasks",
+            search_status_modes_include_blocked_and_deferred_tasks as fn(),
+        ),
+        (
+            "task_list_is_status_neutral_and_bounded_by_limit",
+            task_list_is_status_neutral_and_bounded_by_limit as fn(),
+        ),
+        (
+            "task_update_refuses_dropping_system_identity_tag_without_override",
+            task_update_refuses_dropping_system_identity_tag_without_override as fn(),
+        ),
+        (
+            "light_delivery_tags_are_set_only_by_filing_or_an_operator",
+            light_delivery_tags_are_set_only_by_filing_or_an_operator as fn(),
+        ),
+        (
+            "attributed_agent_without_envelope_cannot_add_light_delivery_tags",
+            attributed_agent_without_envelope_cannot_add_light_delivery_tags as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

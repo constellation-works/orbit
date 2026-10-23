@@ -3,28 +3,90 @@
 //! Run finalization holds a task whose run its provider failed
 //! (`runtime::task::provider_hold`). While the hold stands, the task's crew is
 //! drawn from the crews it does not exclude: its own crew or pool first, then
-//! its complexity pool, then the workspace default. When the hold excludes
-//! every one, the local drain's backlog snapshot defers the task until the
-//! hold's `not_before`.
+//! the other enabled members of its purpose pool, then its complexity pool,
+//! then the workspace default. When the hold excludes every one, the local
+//! drain's backlog snapshot defers the task until the hold's `not_before`.
 //!
 //! [ORB-14697] A usage-limit hold on a task whose crew is its explicit choice
 //! follows `workflow.provider_limit_explicit_crews`: under `wait` it does not
 //! redirect the task, which waits out the hold instead.
+//!
+//! [ORB-16379] Local admission reads the task's hold as this machine sees
+//! it, so an unavailable hold placed on another host excludes nothing here,
+//! and widens it by this host's live crew outages, so one failed login keeps
+//! every task off that crew here until the outage lapses. Pull admission
+//! reads the hold as the executor's machine sees it and leaves the owner's
+//! outages out: they are not the executor's.
 
+use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_config::ProviderLimitExplicitCrews;
 use orbit_types::task::Task;
 use orbit_types::workflow::{ProviderFailureClass, ProviderFailureHold};
 
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{CapturedCrewPools, CrewCandidate};
+use crate::application::job::crew_pools::{
+    CapturedCrewPools, CrewCandidate, PURPOSE_SOURCE_PREFIX,
+};
+use crate::runtime::task::provider_hold::same_provider;
 
 impl OrbitRuntime {
+    /// The hold this host's local admission draws `task` under: its standing
+    /// hold as this machine sees it, widened by this host's crew outages. A
+    /// hold that excludes no crew already defers the task, so it is not
+    /// widened. Outages alone make an unavailable hold naming the latest
+    /// outage's run. An unreadable outage store is logged and adds nothing.
+    pub(crate) fn admission_provider_hold(&self, task: &Task) -> Option<ProviderFailureHold> {
+        let hold = self.provider_hold_on(task, self.automation_machine_identity());
+        if hold
+            .as_ref()
+            .is_some_and(|hold| hold.excluded_crews.is_empty())
+        {
+            return hold;
+        }
+        let outages = self
+            .provider_crew_outages(Utc::now())
+            .unwrap_or_else(|error| {
+                tracing::warn!("could not read this host's provider outages: {error}");
+                Vec::new()
+            });
+        // A crew of the same name configured on another provider is not the
+        // one whose login failed.
+        let registry = self.context.settings().crews();
+        let mut outages = outages.into_iter().filter(|outage| {
+            outage.provider.is_none()
+                || registry.get(&outage.crew).is_none_or(|crew| {
+                    same_provider(Some(&crew.assignment.provider), outage.provider.as_deref())
+                })
+        });
+        let Some(latest) = outages.next() else {
+            return hold;
+        };
+        let mut hold = hold.unwrap_or_else(|| ProviderFailureHold {
+            class: ProviderFailureClass::Unavailable,
+            provider: latest.provider.clone(),
+            account: None,
+            excluded_crews: Vec::new(),
+            machine: None,
+            carried_crews: Vec::new(),
+            not_before: latest.until,
+            run_id: latest.run_id.clone(),
+        });
+        for outage in std::iter::once(latest).chain(outages) {
+            hold.excluded_crews.push(outage.crew);
+            hold.not_before = hold.not_before.max(outage.until);
+        }
+        hold.excluded_crews.sort();
+        hold.excluded_crews.dedup();
+        Some(hold)
+    }
+
     /// The crews `task` may be admitted to under a standing hold, or `None`
     /// when the hold excludes every crew it could run as. A hold that excludes
     /// no crew at all leaves nothing to narrow, so it is `None` as well.
     /// `candidates` and `source` are the draw without the hold; the fallbacks
-    /// are the task's complexity pool, then the workspace default.
+    /// are the task's purpose pool, then its complexity pool, then the
+    /// workspace default.
     pub(crate) fn provider_held_candidates(
         &self,
         task: &Task,
@@ -56,11 +118,20 @@ impl OrbitRuntime {
             return Ok(Some((own, held(source))));
         }
         if hold.class == ProviderFailureClass::Limit
-            && self.context.settings().provider_limit().explicit_crews
-                == ProviderLimitExplicitCrews::Wait
+            && self.provider_limit_policy().explicit_crews == ProviderLimitExplicitCrews::Wait
             && self.explicit_task_crew(task)?
         {
             return Ok(None);
+        }
+        // A collapsed `purpose:` assignment names only the chosen member.
+        // Retry the pool's other enabled members before the complexity pool.
+        if source.starts_with(PURPOSE_SOURCE_PREFIX)
+            && let Some((pool, pool_source)) = self.purpose_assignment_candidates(task)?
+        {
+            let pool = permitted(&pool);
+            if drawable(&pool) {
+                return Ok(Some((pool, held(&pool_source))));
+            }
         }
         if let Some((pool, pool_source)) =
             self.complexity_pool_candidates(task.complexity, pools)?

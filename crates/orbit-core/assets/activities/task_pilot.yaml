@@ -18,9 +18,10 @@ spec:
   input_schema_json:
     type: object
     # `crew` and `crew_config_key` are optional here: the pipeline names
-    # `workflow.low_complexity_crews` on the pilot step so the crew's pool is
-    # readable in the job definition, while a direct invocation may omit both
-    # and inherit the run's resolved crew.
+    # `workflow.purpose_crews.task_pilot` on the pilot step so the crew's pool
+    # is readable in the job definition, while a direct invocation may omit
+    # both and inherit the run's resolved crew. An explicit `crew` wins over
+    # the pool key.
     required: [task_ids, workspace_path, base_branch, inspection_revision, partition_index]
     properties:
       task_ids:
@@ -56,13 +57,36 @@ spec:
         type: array
         items:
           type: string
+      implementation_lane:
+        description: >
+          Callable tools of the activity that implements the task, and both
+          artifact-attachment paths. Null when that activity could not be read.
+        oneOf:
+          - type: "null"
+          - type: object
+            properties:
+              activity:
+                type: string
+              tools:
+                type: array
+                items:
+                  type: string
+              artifact_attachment:
+                type: object
+                properties:
+                  owner:
+                    type: string
+                  owner_granted:
+                    type: boolean
+                  claimed:
+                    type: string
   # Agent-returned data is advisory until apply_task_pilot_results validates
-  # the complete fan-in, so keep fields optional at this boundary (no
-  # `required` list at any level) and let that validation step — not this
-  # schema — reject an incomplete partition. Field *types* below mirror the
-  # canonical apply parser exactly (e.g. adr_conflicts is an array of plain
-  # strings, never an array of objects) so a producer sees the concrete
-  # contract instead of an avoidable shape failure after full exploration.
+  # the complete fan-in, so keep partition and assessment fields optional at
+  # this boundary and let that validation step reject incomplete assessments.
+  # Structured findings declare their own required fields. Field types mirror the
+  # canonical apply parser exactly (e.g. adr_conflicts stays an array of plain
+  # strings, while surface/utility findings may carry explicit severity) so a
+  # producer sees the concrete contract instead of an avoidable shape failure after full exploration.
   output_schema_json:
     type: object
     properties:
@@ -83,6 +107,15 @@ spec:
               type: array
               items:
                 type: string
+            context_evidence_dropped:
+              type: array
+              items:
+                type: object
+                properties:
+                  selector:
+                    type: string
+                  reason:
+                    type: string
             disposition:
               type: string
               enum: [selectors, verified_no_diff, host_operational]
@@ -136,13 +169,37 @@ spec:
               items:
                 type: string
             utility_warnings:
+              description: >
+                Findings with explicit admission severity. Advisory observations
+                set holds_promotion to false; legacy strings always hold.
               type: array
               items:
-                type: string
+                oneOf:
+                  - type: string
+                  - type: object
+                    required: [text, holds_promotion]
+                    properties:
+                      text:
+                        type: string
+                        minLength: 1
+                      holds_promotion:
+                        type: boolean
             surface_warnings:
+              description: >
+                Findings with explicit admission severity. Advisory observations
+                set holds_promotion to false; legacy strings always hold.
               type: array
               items:
-                type: string
+                oneOf:
+                  - type: string
+                  - type: object
+                    required: [text, holds_promotion]
+                    properties:
+                      text:
+                        type: string
+                        minLength: 1
+                      holds_promotion:
+                        type: boolean
             required_os:
               type: array
               items:
@@ -170,6 +227,23 @@ spec:
                     type: string
                   evidence:
                     type: string
+            post_deploy:
+              type: array
+              items:
+                type: object
+                required: [criterion, host, command, evidence]
+                properties:
+                  criterion:
+                    type: integer
+                    minimum: 1
+                  host:
+                    type: string
+                  command:
+                    type: string
+                  evidence:
+                    type: string
+            user_facing_ui:
+              type: [boolean, "null"]
       summary:
         type: string
   instruction: |
@@ -214,22 +288,53 @@ spec:
        inspect the supplied filesystem directly.
        Do not edit repository files.
     3. Propose `context_files_after` as exact canonical selectors using only
-       `file:`, `dir:`, or `symbol:`. Every anchor must already exist inside
+       `file:`, `dir:`, or `symbol:` for files the implementation will likely
+       create, modify or delete as a substantive part of the change. This is
+       the task's lock footprint. Omit read-only context, including tests and
+       fixtures only consulted, and shared reference docs that at most need
+       an incidental line update, such as `docs/CONFIG.md`. The implementer
+       must still update affected docs in the same PR; auto-fix resolves
+       textual merges of those incidental edits. Do not list `docs/CONFIG.md`
+       in the footprint. Every anchor must already exist inside
        `workspace_path` at `source_revision` when that field is set; omit
-       read-for-context files and working-tree-only or later-commit paths.
+       working-tree-only or later-commit paths.
        The one exception is an operator-declared creation target: a selector
        named by the task's latest `context_creation_authorized` history entry.
        Keep each one exactly as recorded even though it does not exist yet.
        Never propose any other missing path; deterministic apply keeps
        declared targets you omit and rejects every undeclared missing anchor.
        A task tagged `code-review`, `delivery-code-review`, `qa-full-sweep`,
-       `qa-sweep` or `security-review` was filed by a review whose selectors are its
-       evidence: add the modification targets it lacks, but do not drop a
-       current selector that still exists at `source_revision`, even one you
-       would only read. Deterministic apply keeps any you omit
-       (`context_evidence_retained`); only an operator narrows that scope.
+       `qa-sweep` or `security-review` was filed by a review: keep selectors
+       the finding names as change targets and add modification targets it
+       lacks. You may drop a current selector only after verifying it is
+       read-only evidence or an incidental shared-doc touch, with no substantive
+       change required by the finding. Record each such omission in
+       `context_evidence_dropped` as {"selector":"<exact current selector>",
+       "reason":"<what you inspected and why no substantive change is needed>"}.
+       Read-only evidence belongs in the finding's description; retain its
+       references there and in the recorded drop reason. Do not use a drop
+       record to override a change target or an operator-declared creation
+       target. Deterministic apply validates drop records against omitted,
+       resolving review selectors and records them in the assessment audit.
+       It keeps unexplained omissions in filed order (`context_evidence_retained`).
+       Omit `context_evidence_dropped` or use [] when no verified drops apply.
        Apply uses the host's prepared snapshot as `context_files_before`;
        do not echo that list in your assessment.
+       For substantive source targets, inspect the repository's generator or
+       synchronization evidence at `source_revision` (or in the supplied
+       filesystem for a non-Git workspace). When that evidence establishes
+       an exact derived companion that the planned source change will alter,
+       include its exact file selector alongside the source in
+       `context_files_after`. Record the source-to-output mapping and the
+       generator evidence in `assessment_rationale`. Edit canonical sources
+       and regenerate their companions through the repository's generator;
+       companion declaration does not authorize hand-editing derived files.
+       Do not add a whole generated tree, unrelated goldens, or outputs of
+       sources consulted only as evidence. If no changed companion is
+       established, add none. The existence and operator-declared creation
+       rules above apply to companions too: generator evidence alone does
+       not authorize a missing selector. Report an expected missing output
+       without creation authorization as an evidence gap instead.
        Derive the modification targets from evidence, never by sweeping a
        directory or a crate. For a removal or a rename, the targets are the
        files that actually reference the symbol — enumerate them
@@ -276,6 +381,21 @@ spec:
        variable to make a criterion reachable. A criterion that expects a
        refusal is a correct negative test, and a tool name inside a quoted
        example is not a requirement; report neither.
+       The implementation lane's callable tools are `implementation_lane.tools`
+       on this activity's input (activity `implementation_lane.activity`).
+       Screenshot and task-artifact attachment is feasible and must not be
+       reported in `utility_warnings`: owner mode attaches with
+       `implementation_lane.artifact_attachment.owner` when `owner_granted` is
+       true, and claimed mode always attaches declared files through the
+       `implementation_lane.artifact_attachment.claimed` (`task_artifacts`
+       handoff) even when that tool is absent. A criterion that only requires
+       those screenshots or task artifacts is not infeasible. A criterion that
+       names a tool absent from `implementation_lane.tools` and not declared in
+       the task's immutable `required_tools` is still a `utility_warnings`
+       finding, as are the other infeasibility rules in this step. When
+       `implementation_lane` is null, the activity catalog could not be read;
+       do not invent a tool set, and do not treat artifact attachment as
+       infeasible solely because `required_tools` is empty.
        Friction criteria such as "resolved with the merge sha" are owner-side
        landing obligations, automatically fulfilled after verified delivery.
        Do not flag them as infeasible worker writes or require the implementer
@@ -289,7 +409,11 @@ spec:
        such requirement in `required_os` as
        `{"criterion":N,"os":"macos|linux|windows","evidence":"..."}`, where
        `N` is the criterion's 1-based position, whether or not the task
-       already carries the matching tag. Admission reads only this typed
+       already carries the matching tag. Apply rejects an entry whose
+       criterion text names no OS or native facility: mac, macos, darwin,
+       seatbelt, sandbox-exec, linux, bwrap, bubblewrap, windows, launchd,
+       systemd, keychain, or cgroup — and tells you to leave `required_os`
+       empty for a portable criterion. Admission reads only this typed
        finding, never warning prose: a host requirement stated only in
        `utility_warnings` routes nothing, and a host that cannot meet it will
        claim the task. When every requirement names one OS and the task has no
@@ -322,7 +446,23 @@ spec:
        `owner_machine`, so when the criterion needs another machine, or
        `owner_machine` is null, leave `required_machine` empty and report the
        requirement in `utility_warnings` for an operator to arrange.
-       Keep the bar high for both findings: record one only when the
+       Also check whether a criterion can be evidenced only by the deployed
+       build on a named host, after the change merges and is deployed there:
+       the latency of that host's live service, or the installed binary's
+       behaviour against its live store. No candidate can meet it before
+       merge, wherever it runs: routing the task to that host still measures
+       the deployed build, not the candidate. Record each such criterion in
+       `post_deploy` as
+       `{"criterion":N,"host":"<host>","command":"<exact measurement command>","evidence":"..."}`
+       and not in `required_os` or `required_machine`; apply refuses a
+       criterion typed in both. It holds no admission: it only lets the
+       implementer hand the criterion off as owed after deploy instead of
+       failing, and the delivery then waits in review for an operator to
+       record the measurement. A measurement the candidate can repeat is an
+       ordinary criterion, not `post_deploy`: timing the worktree's own built
+       binary, an execve or request count of it, its payload size, or a test
+       server started from the candidate.
+       Keep the bar high for all three findings: record one only when the
        criterion cannot be met anywhere else. A host or platform mention,
        a measurement that any host could repeat on its own data, a
        cross-compilation target, a mocked platform check, or a negative test
@@ -332,6 +472,12 @@ spec:
        requirements on several OSes add no tag; recommend separate
        host-scoped validation tasks rather than claiming tags arrange
        execution on all hosts.
+       Also set `user_facing_ui` to true when the task's criteria or context
+       files are UI a user sees (a dashboard, web pages, a docs site, a
+       desktop app UI), and false otherwise. When it is true and the task
+       lacks the `ui` tag, apply adds `ui`, which owes screenshots of the
+       changed views at delivery; you never edit tags yourself. Apply never
+       removes a `ui` tag, so false leaves an operator's tag in place.
     6. Assess the bounded logical repair, not alert severity, alert count, file
        count, version increment, or expected wall-clock time. Evaluate repair
        certainty, behavioral change, component coupling, and validation
@@ -376,9 +522,21 @@ spec:
        `surface_warnings`.
        A task never lists itself as a dependency or blocker: every task ID in
        `blocked_by` must name another task.
-       Each of `blocked_by`, `adr_conflicts`, `utility_warnings`, and
-       `surface_warnings` is an array of plain strings,
-       one string per finding combining the finding and its citation — for
+       Every `blocked_by` or `adr_conflicts` entry holds automatic promotion,
+       as does each deterministic `validation_tool_warnings` entry. Keep those
+       fields as arrays of plain strings. For `utility_warnings` and
+       `surface_warnings`, emit objects with `text` (finding plus citation) and
+       the required boolean `holds_promotion`. Set it true only when the task
+       as written would ship the wrong behavior, conflict with the current
+       contract, or cannot be validated by the implementation lane. Set it false
+       for advisory observations: adjacent out-of-scope work, optional cleanup,
+       or useful context that does not prevent this task from shipping correctly.
+       For example, an old section name in an adjacent comment outside this
+       task's criterion is advisory. Advisory entries persist in the assessment
+       and reach the operator and implementing worker, but never hold promotion
+       or appear as held findings. Legacy plain strings in these two fields
+       still hold; always emit explicit severity for new findings.
+       Combine each finding and its citation in its text — for
        example a non-empty adr_conflicts entry reads
        ["the module this task would change still exports the type it removes
        (verified via rg -n 'pub use Bar' at source_revision)"]; never an array
@@ -425,7 +583,9 @@ spec:
         "utility_warnings":[],
         "surface_warnings":[],
         "required_os":[],
-        "required_machine":[]
+        "required_machine":[],
+        "post_deploy":[],
+        "user_facing_ui":false
       }],
       "summary":"one short partition summary"
     },"error":null}

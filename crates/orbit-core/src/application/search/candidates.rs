@@ -1,7 +1,9 @@
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
 use orbit_search::{SOURCE_KIND_TASK, bm25_or_page, bm25_page};
+use orbit_types::task::TaskStatus;
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskListFilter;
@@ -24,7 +26,17 @@ pub(super) struct BranchContext<'a> {
 }
 
 impl OrbitRuntime {
+    /// The task hits of one search. Every task read it makes shares one
+    /// acquisition of the task store's commit boundary: a search used to take
+    /// it once per hydrated hit.
     pub(super) fn task_branch(
+        &self,
+        ctx: BranchContext<'_>,
+    ) -> Result<Vec<GlobalSearchHit>, OrbitError> {
+        self.in_task_read_section(|| self.task_branch_in_section(ctx))
+    }
+
+    fn task_branch_in_section(
         &self,
         ctx: BranchContext<'_>,
     ) -> Result<Vec<GlobalSearchHit>, OrbitError> {
@@ -44,7 +56,7 @@ impl OrbitRuntime {
         };
 
         let candidates = if let Some(query) = query {
-            self.lexical_task_candidates(query, limit, accepts)?
+            self.lexical_task_candidates(query, limit, &statuses, accepts)?
         } else {
             // No query → enumerate tasks (used by `--path` and `--tag`).
             self.accepted_task_page(tag_filter, limit, &accepts)?
@@ -122,19 +134,30 @@ impl OrbitRuntime {
     /// status, tag or path filter cannot starve the page when the best
     /// lexical matches are all filtered out: BM25 is read in bounded pages,
     /// continuing past rejected chunks until the budget fills or the ranking
-    /// runs out.
+    /// runs out. A hit whose indexed status is not in `statuses` is dropped
+    /// before its bundle is read, and the bundle matcher selects `statuses`
+    /// from the index, so on a mostly terminal workspace the tasks a default
+    /// search leaves out cost no read.
     fn lexical_task_candidates(
         &self,
         query: &str,
         limit: usize,
+        statuses: &[TaskStatus],
         accepts: impl Fn(&orbit_types::task::Task) -> bool,
     ) -> Result<Vec<(GlobalSearchHit, orbit_types::task::Task)>, OrbitError> {
         let candidate_limit = limit.saturating_mul(2).max(limit);
-        let mut seen = std::collections::BTreeSet::new();
+        let mut seen = BTreeSet::new();
         let mut candidates = Vec::with_capacity(candidate_limit);
-        if let Ok(index) = self.stores().lexical_index().store()
-            && index.has_source_kind(SOURCE_KIND_TASK)?
-        {
+        let lexical = match self.stores().lexical_index().store() {
+            Ok(index) if index.has_source_kind(SOURCE_KIND_TASK)? => Some(index),
+            _ => None,
+        };
+        let selectable = match lexical {
+            Some(_) => self.task_ids_in_statuses(statuses)?,
+            None => None,
+        };
+        let selectable = |id: &str| selectable.as_ref().is_none_or(|ids| ids.contains(id));
+        if let Some(index) = lexical {
             // BM25 ranks chunks, while this branch returns tasks. Size each
             // page by the number of task fields normally indexed, then keep
             // the first occurrence of each task in BM25 order.
@@ -151,7 +174,7 @@ impl OrbitRuntime {
                 )?;
                 let exhausted = page.len() < page_size;
                 for hit in page {
-                    if !seen.insert(hit.source_id.clone()) {
+                    if !seen.insert(hit.source_id.clone()) || !selectable(&hit.source_id) {
                         continue;
                     }
                     if let Some(task) = self.lexical_hit_task(&hit.source_id)
@@ -179,6 +202,7 @@ impl OrbitRuntime {
             self.search_tasks_visit(
                 query,
                 &[],
+                Some(statuses),
                 &|task| accepts(task) && !seen.borrow().contains(&task.id),
                 &mut |task| {
                     if seen.borrow_mut().insert(task.id.clone()) {
@@ -193,15 +217,14 @@ impl OrbitRuntime {
         let term_count = query.split_whitespace().count();
         if candidates.len() < limit
             && term_count > 1
-            && let Ok(index) = self.stores().lexical_index().store()
-            && index.has_source_kind(SOURCE_KIND_TASK)?
+            && let Some(index) = lexical
         {
             // One bounded query: the any-term ranking sorts its whole match
             // set on every execution, so paging it with OFFSET would re-sort
             // that set once per page whenever `accepts` rejects most hits.
             let scan = limit.saturating_mul(OR_SCAN_CHUNKS_PER_RESULT);
             for hit in bm25_or_page(index, query, Some(SOURCE_KIND_TASK), None, 0, scan)? {
-                if !seen.insert(hit.source_id.clone()) {
+                if !seen.insert(hit.source_id.clone()) || !selectable(&hit.source_id) {
                     continue;
                 }
                 if let Some(task) = self.lexical_hit_task(&hit.source_id)
@@ -220,6 +243,28 @@ impl OrbitRuntime {
             }
         }
         Ok(candidates)
+    }
+
+    /// The tasks whose indexed status is one of `statuses`, answered by the
+    /// generated index without reading an envelope. `None` when the index
+    /// cannot answer, or for a worker, which reads through its owner: every
+    /// hit is then hydrated and judged by `accepts`.
+    fn task_ids_in_statuses(
+        &self,
+        statuses: &[TaskStatus],
+    ) -> Result<Option<BTreeSet<String>>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return Ok(None);
+        }
+        Ok(self
+            .task_candidate_keys(
+                &TaskListFilter {
+                    statuses: Some(statuses.to_vec()),
+                    ..TaskListFilter::default()
+                },
+                usize::MAX,
+            )?
+            .map(|keys| keys.items.into_iter().map(|key| key.id).collect()))
     }
 
     /// Hydrate one BM25 hit for its summary and the filters. The listing read

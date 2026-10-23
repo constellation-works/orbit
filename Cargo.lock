@@ -321,6 +321,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "cfg_aliases"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
+
+[[package]]
 name = "chrono"
 version = "0.4.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1432,9 +1438,9 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "libc"
-version = "0.2.182"
+version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6800badb6cb2082ffd7b6a67e6125bb39f18782f793520caee8cb8846be06112"
+checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "libgit2-sys"
@@ -1573,6 +1579,18 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "tempfile",
+]
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]
@@ -1741,7 +1759,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-agent"
-version = "0.28.3"
+version = "0.31.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -1755,7 +1773,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-automation"
-version = "0.28.3"
+version = "0.31.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -1774,9 +1792,10 @@ dependencies = [
 
 [[package]]
 name = "orbit-cli"
-version = "0.28.3"
+version = "0.31.0"
 dependencies = [
  "assert_cmd",
+ "base64",
  "chrono",
  "clap",
  "colored",
@@ -1798,6 +1817,7 @@ dependencies = [
  "predicates",
  "regex",
  "reqwest",
+ "rsa",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1808,12 +1828,13 @@ dependencies = [
  "toml",
  "toml_edit",
  "tracing",
+ "tracing-subscriber",
  "yaml_serde",
 ]
 
 [[package]]
 name = "orbit-cmd"
-version = "0.28.3"
+version = "0.31.0"
 dependencies = [
  "chrono",
  "flate2",
@@ -1840,7 +1861,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-common"
-version = "0.28.3"
+version = "0.31.0"
 dependencies = [
  "chrono",
  "fs2",
@@ -1860,12 +1881,13 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "url",
+ "wait-timeout",
  "yaml_serde",
 ]
 
 [[package]]
 name = "orbit-config"
-version = "0.28.3"
+version = "0.31.0"
 dependencies = [
  "jsonschema",
  "orbit-common",
@@ -1881,7 +1903,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-core"
-version = "0.28.3"
+version = "0.31.0"
 dependencies = [
  "base64",
  "blake3",
@@ -1897,6 +1919,7 @@ dependencies = [
  "orbit-engine",
  "orbit-exec",
  "orbit-policy",
+ "orbit-registry",
  "orbit-search",
  "orbit-store",
  "orbit-tools",
@@ -1915,7 +1938,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-engine"
-version = "0.28.3"
+version = "0.31.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -1923,6 +1946,7 @@ dependencies = [
  "libc",
  "orbit-agent",
  "orbit-common",
+ "orbit-engine",
  "orbit-exec",
  "orbit-store",
  "orbit-tools",
@@ -1935,26 +1959,26 @@ dependencies = [
  "thiserror",
  "tracing",
  "tracing-subscriber",
- "wait-timeout",
  "yaml_serde",
 ]
 
 [[package]]
 name = "orbit-exec"
-version = "0.28.3"
+version = "0.31.0"
 dependencies = [
  "libc",
  "orbit-common",
  "orbit-types",
  "regex",
- "sha2",
+ "serde",
+ "serde_json",
  "tempfile",
  "wait-timeout",
 ]
 
 [[package]]
 name = "orbit-mcp"
-version = "0.28.3"
+version = "0.31.0"
 dependencies = [
  "base64",
  "chrono",
@@ -1964,6 +1988,7 @@ dependencies = [
  "orbit-tools",
  "orbit-types",
  "rmcp",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
@@ -1974,7 +1999,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-policy"
-version = "0.28.3"
+version = "0.31.0"
 dependencies = [
  "chrono",
  "orbit-common",
@@ -1984,7 +2009,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-registry"
-version = "0.28.3"
+version = "0.31.0"
 dependencies = [
  "chrono",
  "hostname",
@@ -2000,7 +2025,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-search"
-version = "0.28.3"
+version = "0.31.0"
 dependencies = [
  "orbit-common",
  "orbit-types",
@@ -2012,7 +2037,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-store"
-version = "0.28.3"
+version = "0.31.0"
 dependencies = [
  "blake3",
  "chrono",
@@ -2024,6 +2049,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "sha2",
  "tar",
  "tempfile",
@@ -2035,7 +2061,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-tools"
-version = "0.28.3"
+version = "0.31.0"
 dependencies = [
  "chrono",
  "flate2",
@@ -2061,7 +2087,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-types"
-version = "0.28.3"
+version = "0.31.0"
 dependencies = [
  "chrono",
  "clap",
@@ -2078,7 +2104,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-web"
-version = "0.28.3"
+version = "0.31.0"
 dependencies = [
  "axum",
  "base64",
@@ -3724,14 +3750,15 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "8.6.0"
+version = "9.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+checksum = "a954114b47a54df49f83d2722814e86b23d4bb1b54a1b90fb7d92b41619ddc22"
 dependencies = [
  "crc32fast",
  "flate2",
  "indexmap",
  "memchr",
+ "nix",
  "typed-path",
 ]
 

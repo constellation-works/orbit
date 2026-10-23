@@ -12,7 +12,7 @@ paths:
   - "crates/orbit-exec/src/**"
 related_features: [policy-sandbox, executors, routines]
 related_artifacts: []
-last_validated: 2026-10-10
+last_validated: 2026-10-19
 ---
 
 # Run Orbit on Windows through WSL2
@@ -20,9 +20,7 @@ last_validated: 2026-10-10
 Use this runbook to set up Orbit on a Windows machine. Orbit has no native
 Windows build: the supported route is the Linux build running inside a WSL2
 Linux distribution, where the [Linux sandbox](linux-sandbox.md), clock and
-setup paths apply unchanged. Native Windows is **compile-checked only**
-([`ci-windows.yml`](../../.github/workflows/ci-windows.yml) runs `cargo check`
-for `x86_64-pc-windows-msvc`; no test runs on Windows).
+setup paths apply unchanged. Native Windows is not built or checked in CI.
 
 > **NOT VERIFIED ON WINDOWS.** Nobody has executed this procedure on a Windows
 > host. Orbit commands below are checked against the Linux CLI help and source
@@ -30,8 +28,8 @@ for `x86_64-pc-windows-msvc`; no test runs on Windows).
 > Windows-side commands come from Microsoft's documentation. Treat every step
 > that depends on WSL behaviour — the Bubblewrap probe, systemd user units,
 > Windows MCP clients launching `wsl.exe`, and background lifetime — as
-> unproven until its check passes on your machine. Neither Linux test success
-> nor the Windows compile check proves it.
+> unproven until its check passes on your machine. Linux test success does not
+> prove it.
 
 ## 1. Safety and scope
 
@@ -106,7 +104,7 @@ systemctl --user status | head -n 3   # your user manager must answer for the cl
 Microsoft notes that on Debian/Ubuntu/Kali the `systemd` and `systemd-sysv`
 packages must be installed. Without a working user manager, workers run in the
 caller's cgroup with one warning (`machine.worker_containment`; refused when
-`machine.worker_containment_strict` is on — see [CONFIG.md](../CONFIG.md)) and
+it is `strict` — see [CONFIG.md](../CONFIG.md)) and
 `orbit routine init --install-clock` cannot install the timer.
 
 ## 4. Install the toolchain, Orbit and provider CLIs inside the distribution
@@ -357,4 +355,4 @@ that commit on Linux; it does not mean the command ran under WSL.
 - [Linux sandbox onboarding and diagnostics](linux-sandbox.md)
 - [Configuration reference](../CONFIG.md) — `machine.worker_containment`
 - [Setup skill: Windows through WSL2](../../crates/orbit-core/assets/skills/orbit-setup/references/windows-wsl2.md)
-- [Windows compile check](../DEVELOPMENT.md#windows-compile-check)
+- [Windows support](../DEVELOPMENT.md#windows)

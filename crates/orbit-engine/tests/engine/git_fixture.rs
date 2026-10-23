@@ -4,13 +4,60 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-pub(super) const FILE_ONLY_CONFIG: &str =
-    "[protocol]\n\tallow = never\n[protocol \"file\"]\n\tallow = always\n";
+/// Copy a pristine family fixture, keeping independent files and Git objects.
+/// Only repository configuration embeds the template's disposable root.
+pub(super) fn copy_template(source: &Path, destination: &Path) {
+    fn copy(source: &Path, destination: &Path, old_root: &str, new_root: &str) {
+        fs::create_dir_all(destination).unwrap();
+        for entry in fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            let target = destination.join(entry.file_name());
+            let kind = entry.file_type().unwrap();
+            if kind.is_dir() {
+                copy(&entry.path(), &target, old_root, new_root);
+            } else {
+                assert!(
+                    kind.is_file(),
+                    "pristine fixture must contain regular files"
+                );
+                fs::copy(entry.path(), &target).unwrap_or_else(|error| {
+                    panic!(
+                        "pristine fixture copy {} -> {} failed: {error}; source metadata: {:?}; source parent: {:?}; destination parent: {:?}",
+                        entry.path().display(),
+                        target.display(),
+                        fs::symlink_metadata(entry.path()),
+                        fs::symlink_metadata(source),
+                        fs::symlink_metadata(destination),
+                    )
+                });
+                if entry.file_name() == "config" {
+                    let config = fs::read_to_string(&target).unwrap();
+                    fs::write(&target, config.replace(old_root, new_root)).unwrap();
+                }
+            }
+        }
+    }
+    copy(
+        source,
+        destination,
+        source.to_str().unwrap(),
+        destination.to_str().unwrap(),
+    );
+}
+
+// Seed preparation must wait for automatic maintenance, including receive-pack
+// in the bare remote. Git 2.55 transfers temporary locks to detached children;
+// waiting only for the original Git command does not make its files immutable.
+// Keep maintenance, locking and durability enabled, but finish them foreground.
+pub(super) const ISOLATED_GIT_CONFIG: &str = concat!(
+    "[protocol]\n\tallow = never\n[protocol \"file\"]\n\tallow = always\n",
+    "[maintenance]\n\tautoDetach = false\n[gc]\n\tautoDetach = false\n",
+);
 
 pub(super) fn configure_child(command: &mut Command, home: &Path, sandbox: &Path) {
     // Engine VCS children clear GIT_* variables but retain HOME. Both layers
     // must enforce the policy, including calls through the real provider.
-    fs::write(home.join(".gitconfig"), FILE_ONLY_CONFIG).unwrap();
+    fs::write(home.join(".gitconfig"), ISOLATED_GIT_CONFIG).unwrap();
     command
         .env("GIT_ALLOW_PROTOCOL", "file")
         .env("GIT_CEILING_DIRECTORIES", sandbox);
@@ -20,7 +67,7 @@ pub(super) fn configure_child(command: &mut Command, home: &Path, sandbox: &Path
 pub(super) fn isolated(module: &str, test: &str, body: impl FnOnce()) {
     const CHILD_ENV: &str = "ORBIT_GIT_FIXTURE_CHILD";
     let qualified = format!("{}::{test}", module.split_once("::").unwrap().1);
-    if std::env::var(CHILD_ENV).as_deref() == Ok(&qualified) {
+    if std::env::var_os(CHILD_ENV).is_some() {
         body();
         return;
     }
@@ -58,6 +105,16 @@ pub(super) fn isolated(module: &str, test: &str, body: impl FnOnce()) {
     );
 }
 
+/// Retain each row's name in captured failure output; execute every assertion.
+#[allow(clippy::print_stderr)]
+pub(super) fn run_scenarios(rows: &[(&str, fn())]) {
+    for (name, scenario) in rows {
+        eprintln!("scenario: {name}");
+        scenario();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
+}
+
 pub(super) fn assert_local_push_remote(repo: &Path) {
     // get-url expands insteadOf/pushInsteadOf and --all includes every
     // pushurl, so checking only remote.origin.url cannot admit a second URL.
@@ -75,7 +132,7 @@ pub(super) fn run(repo: &Path, args: &[&str]) -> String {
     if args.first() == Some(&"push") {
         assert_local_push_remote(repo);
     }
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args(args)
         .env("GIT_ALLOW_PROTOCOL", "file")
         .current_dir(repo)

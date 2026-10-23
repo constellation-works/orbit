@@ -21,14 +21,21 @@ orbit gc worktrees --target-only --confirm  # delete target/ and keep the checko
 ```
 
 Collection is conservative: it reaps only worktrees whose associated task has
-settled to `done`, `rejected`, or `archived`. A worktree belonging to live work
+settled to `done`, `rejected`, or `archived`, or that has been parked in
+`someday` for `worktree.parked_reclaim_after_hours` (default 336), counted from
+the status change. A parked worktree also stays while its worker or claim is
+live, while Git holds it locked, or while its run branch has commits that
+exist on no published ref and in no rescue patch
+(`skipped:unpublished_commits`). A worktree belonging to live work
 is never a candidate. A worktree with uncommitted changes is kept
 (`skipped:dirty_rescue_candidate`), except by the scheduled
 `worktree_gc_pipeline`. That pipeline removes a settled run's dirty worktree
 once the candidate is recoverable: a carry ref or published branch on `origin`
 holding exactly it, or a patch it writes to
-`.orbit/state/rescue/worktree-gc/` and verifies first. `recovery` in the
-report names which one. Kept terminal worktrees report `retained_bytes`, and
+`.orbit/state/rescue/worktree-gc/` and verifies first. The patch's base commit
+is pinned at `refs/orbit/rescue/worktree-gc/<run>-<tree>` until a deleting
+sweep sees that the patch file is gone. `recovery` in the
+report names which source. Kept terminal worktrees report `retained_bytes`, and
 `orbit run show <gc-run>` lists them with their reasons. Details:
 `docs/runbooks/worktree-reclaim.md` in the Orbit repository. Run the report a
 few times before automating it, then enable the `worktree-gc` routine for
@@ -50,22 +57,29 @@ orbit run job worktree_gc_pipeline --wait --input scratch_older_than_hours=72
 orbit run job worktree_gc_pipeline --wait --input scratch_older_than_hours=0   # everything not in use
 ```
 
-Set the default for a workspace by editing `scratch_older_than_hours` in the
-seeded job under `~/.orbit/resources/jobs/worktree_gc_pipeline.yaml`. A run
-scoped to one run id (`target_run_id`) leaves scratch alone.
+Set a workspace-specific default by editing `scratch_older_than_hours` in the
+workspace copy at `.orbit/resources/jobs/worktree_gc_pipeline.yaml`. To set a
+host-wide default, edit the shipped job at
+`~/.orbit/resources/jobs/worktree_gc_pipeline.yaml`; local edits there are
+preserved instead of refreshed from upstream. A run scoped to one run id
+(`target_run_id`) leaves scratch alone.
 
 Symlinks are removed as links and never followed out of `.orbit/tmp`. GC skips,
 and reports with a reason, any entry that a live process holds open, uses as its
 working directory or executes (read from `/proc` on Linux and `lsof` on macOS —
-best effort, so another user's processes are not visible), or whose path an
-active run's record or state names. When it cannot tell, it skips. A failure
-removing an entry skips that entry and the sweep continues.
+best effort, so another user's processes are not visible), or whose path a
+pending, running or retrying run's record or saved pipeline state names.
+Retrying runs keep their scratch while waiting for another attempt. If the
+run inventory or any required saved state cannot be read, the scratch sweep
+fails before deleting any entry. A failure removing an entry skips that entry
+and the sweep continues.
 
 `orbit run show <run> --json` carries the figures under the `reap` step's
 `scratch` object, beside the worktree figures: `bytes_reclaimed`,
 `entries_removed`, `entries_skipped` (each listed in `entries` with its
 `reason`) and `entries_kept`. To empty the directory by hand regardless of age,
-use `orbit gc tmp`.
+use `orbit gc tmp --confirm`. Without `--confirm` the command only reports,
+and it refuses while job runs are active.
 
 On a replica checkout (one that pulls work from an owner on another machine),
 new claimed tasks live on the owner; historical tasks minted with this machine's
@@ -113,6 +127,26 @@ tracks is kept (`skipped:tracked_content`). The scheduled pipeline does the
 same for every kept terminal worktree. `bytes_reclaimed` reports the size of
 the removed paths.
 
+With `workflow.validation_env.build_output_env` configured, required validation
+binds the workspace's output variables to host-owned output under
+`.orbit/state/host-validation-targets/`, outside the checkout. Native Linux and macOS
+collectors keep the same layout and lineage for historical output; an empty mapping
+allocates nothing and never deletes old output. Other platforms retain configured
+output for operator maintenance. Darwin uses readable no-follow directory handles
+and `fchmod` on held descriptors; unreadable directories or unprovable identities
+refuse reclamation rather than relaxing permissions for measurement. GC attributes
+each target to the runs whose recorded worktree path it was built for, and
+reclaims it once they are terminal with no live worker and the checkout is gone
+(or its kept output is being reclaimed). A scratch checkout's target (base
+rerun, host evidence, recovery) is reclaimed only through its base-cache lock
+or lease record, while GC holds that lock; a held lock reports
+`skipped:host_target_in_use`. Targets with no such record stay
+`skipped:unattributed_host_target`. The existing worktree-GC routine and pipeline
+use the same collector. Platform support does not authorize production deletion,
+resume paused routines or change schedules; validate disposable native fixtures
+and obtain the required review before rollout. Byte reports measure logical output,
+not physical disk headroom.
+
 ## Diagnose and repair
 
 ```bash
@@ -129,29 +163,45 @@ inexplicably. It has targeted repairs, each narrow on purpose:
 | `--fix-stale-task-locks` | Task reservations whose owner and task state are conclusively inactive. |
 | `--fix-stale-artifacts` | Retires deprecated skills, jobs, activities, auto-tasks, and routines that Orbit itself wrote. Locally modified ones are preserved, not deleted. |
 | `--fix-retired-activity-backends` | Removes known retired `spec.backend` values from agent-loop activities. |
+| `--fix-retired-config-keys` | Backs up each edited `config.toml` and removes retired or deprecated keys, first writing each deprecated key's translated value under its replacement key in the same layer while preserving explicit modern values. A second successful run writes nothing. Any legacy after-landing policy refuses before either config is changed or backed up; migrate it manually first. |
 | `--fix-automation-pins` | Deletes this Orbit root and workspace's own state-routine attempt pins that no consumer or live run still names. Legacy shared `refs/orbit/automation/<attempt>` pins and other roots' or workspaces' pins are retained and reported. Refuses while a routine sweep runs. |
+| `--fix-state-directory-permissions` | Restricts writable Orbit state directories to owner-only access, excluding run worktrees, Cargo target trees, and child symlinks (Unix only). |
+| `--fix-orphan-task-stores` | Deletes empty unclaimed task-store partitions, and populated partitions whose bound checkout is confirmed absent, including their task bundles. Unowned or unreachable populated partitions are left alone. Requires `--confirm`. |
 | `--remove-graph` | Removes retired graph state from this worktree and the shared workspace. |
 
+For a retired-key repair refused on `operation.review_policy = "after-landing"`,
+choose the intended consumer state with `orbit auto-task toggle delivery-code-review on`
+or `off`. Set `review.timing` and `review.minutes` explicitly as needed, remove
+the legacy policy manually, then rerun the repair. This includes policies masked
+by another layer; toggling the consumer alone does not permit automatic removal.
+
 `--fix-stale-artifacts` is how a workspace catches up after an Orbit upgrade
-drops a shipped definition. It works by content provenance — if you edited a
-seeded file, Orbit assumes you meant it and leaves it in place.
+drops a shipped definition. It works by content provenance — changes to
+template-owned fields are local edits that Orbit preserves.
 
 For routines, the two settings Orbit's own surfaces change are not edits:
 flipping `enabled` (the documented opt-in, and what the dashboard toggle
-writes) and deleting the retired `hosts:` key. A routine that differs from a
-shipped template only in those still counts as Orbit-written, so an upgraded
-workspace converges without you moving files by hand. Orbit deletes outright
+writes) and deleting the retired `hosts:` key. Comparison parses the routine,
+so comments do not count as local modifications either. A routine that differs
+from a shipped template only in those settings or comments still counts as
+Orbit-written, so an upgraded workspace converges without you moving files by
+hand. Orbit deletes outright
 only bytes it can prove it wrote; anything else it copies to
 `.retired-managed/routines/` before removing it from the active catalog.
-Changing a routine's cadence, target, policy, or description — or adding a
-comment — is a real edit and is preserved and reported.
+Changing a routine's cadence, target, policy, or description is a real edit
+and is preserved and reported; a comment-only edit remains managed.
 
 ## Task locks
 
 ```bash
 orbit task locks list                      # files held by active tasks and reservations
-orbit task locks release <reservation_id>  # operator escape hatch
+orbit task locks release <reservation_id> --confirm  # operator escape hatch
 ```
+
+The dashboard's **Locks held** card uses the same listing, including active
+reservations and distinct task counts. No-diff tasks hold no context locks;
+other holders use admission's canonical selectors and unlocked-path rules.
+Listing locks also expires old reservations and records their audit events.
 
 Release only after confirming the holding task is genuinely inactive, and only
 through this surface — never by editing the store. The full diagnostic sequence
@@ -299,6 +349,24 @@ same command is idempotent and finishes partial convergence; `needs_recovery`
 (exit 4) carries the exact retry command in `local_candidate.retry_command`.
 See the upgrades runbook for the full procedure.
 
+### Reclaim what deploys leave behind
+
+Build directories under `~/.orbit/deployments/`, older executable copies in
+`~/.orbit/bin/` (`orbit.bak-*`, `orbit.before-*`, `*.stale-*` and similar) and
+`~/.orbit/orbit.db.bak*` store copies are not removed by any other GC class.
+Once the upgrade is verified:
+
+```sh
+orbit gc deployments            # report each entry, its bytes and whether it is kept
+orbit gc deployments --confirm  # remove what the report lists as would_remove
+```
+
+Each class keeps its newest `--keep` entries (default 2). `orbit.previous`, and
+any deployment whose candidate manifest names the installed or rollback
+executable's digest, are always kept and do not count toward `--keep`. Links are
+unlinked, never followed. The upgrades runbook's "Reclaim old deployments and
+backups" section has the full rule.
+
 ## Database and layout upgrades
 
 ```bash
@@ -327,24 +395,55 @@ whether it was denied. It grows without bound until pruned. Prune requires
 ## Store retention
 
 The host store (`~/.orbit/orbit.db`) also keeps every run's audit events and
-pipeline state, and each workspace keeps the blobs those events name under
-`.orbit/state/audit/blobs/`. Two commands bound them. Both only report until
-you pass `--apply`:
+pipeline state, and the commit decision of every task transition (the task
+commit journal). Each workspace keeps the blobs those events name under
+`.orbit/state/audit/blobs/`. Three commands bound them. Each only reports
+until you pass `--apply`:
 
 ```bash
 orbit gc audit                        # rows and bytes past retention.audit_days, and unreferenced blobs
 orbit gc audit --apply                # delete them
 orbit gc runs                         # terminal runs past retention.runs_days that still keep pipeline state
 orbit gc runs --apply                 # drop that state; the run, its steps and summary stay
+orbit gc journal                      # applied commit journal rows past retention.journal_days
+orbit gc journal --apply              # delete them; unsettled rows and each task's newest stay
 orbit gc audit --older-than-days 30   # one-off window instead of the configured one
 ```
 
-`retention.audit_days` and `retention.runs_days` default to 60 days. `gc audit`
-prunes the host-wide command audit and this workspace's run audit, then removes
-blobs that no remaining audit row, run step or pipeline state names. A blob
+`retention.audit_days` and `retention.runs_days` default to 60 days. On a large
+store, consider `retention.runs_days = 30` before enabling the sweep. Values
+below 30 are refused for new config writes and command overrides because
+Reliability Pipeline echo dedupe and forecast-accuracy limiter shares need
+30 days of run state. Older global or workspace files with a shorter window
+load with an effective 30 days and a warning; startup leaves the file intact.
+Persist the correction with `orbit config set retention.runs_days 30` (add
+`--global` for the global file). Leave audit retention at 60 unless you have a reason to shorten it. `gc audit` prunes the host-wide command audit,
+this workspace's run audit, and run audit whose workspace id is no longer
+registered, then removes blobs that no remaining audit row, run step or
+pipeline state names. Another registered workspace keeps its own window. A blob
 written in the last 24 hours, or one a write in progress has marked as pending,
 is always kept. `gc runs` never touches a held run or one still in flight, so
-`orbit run show`, run history and the scoreboard keep working.
+`orbit run show`, run history and the Cost page keep working, and it reaches
+the same unregistered workspace ids. The same pass prunes the host's
+per-minute run and host resource history (`run_resource_minutes`,
+`host_resource_minutes`) and admission forecasts older than 30 days, whatever the
+run window. Auto-concurrency profiles and forecast accuracy keep their supported
+30-day window. Durable lock-denial facts and commit outcomes preserve Lock
+contention and succeeded implement_one durations after pruning; upgrade backfills
+existing evidence before GC. Health Events, Incidents, Denials, `orbit audit` and
+the diagnostics friction view lose raw history past the audit cutoff with no
+rollups. Task-store Codebase rankings, `orbit task flow` and friction stats keep
+working. See the retention runbook for each setting's history boundary.
+
+`gc journal` deletes applied task commit journal rows of this workspace, and of
+unregistered workspace ids, older than `retention.journal_days` (default 14).
+Recovery replays only prepared and committed rows; an applied row is a decision
+already published to its task, kept only to diagnose recent transitions. So
+prepared, committed and aborted rows stay, and so does each task's newest
+applied row. The window is shorter than the others because the journal grows
+fastest: at about 600 rows of about 80 KB a day, 60 days would pass 2.5 GiB. Its
+rows are selected by one read that takes no write lock, then deleted by key in
+batches. The `store-gc` routine does not run it; apply it yourself.
 
 Deletes run in batches of 1,000 rows, each its own short write transaction, so
 running workers are not starved. Freed pages stay inside the database file; each
@@ -355,9 +454,14 @@ report shows the freelist, and `VACUUM` returns it to the filesystem. Run
 sqlite3 ~/.orbit/orbit.db 'VACUUM;'
 ```
 
-`orbit doctor` reports what is reclaimable now (`store-retention`). To run both
-sweeps daily, enable the seeded `store-gc` routine ([automation.md](automation.md)).
-On a replica checkout it is owner-only and never fires.
+`orbit doctor` reports what audit and run retention could reclaim now
+(`store-retention`); it does not count journal rows. It warns
+when the store file is larger than `retention.store_warn_bytes` (default 1 GiB)
+and no store-gc routine is enabled, and it names the enable command. To run the
+audit and run sweeps daily, enable the seeded `store-gc` routine ([automation.md](automation.md)).
+On a replica checkout the same cron routine runs against that host's own store
+and does not call the owner. Enable it there when this machine is the only
+place those rows live. A delivery- or state-triggered copy stays owner-only.
 
 ## Logs
 

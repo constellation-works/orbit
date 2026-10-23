@@ -12,14 +12,7 @@ use orbit_types::workflow::{ReviewAdmission, ReviewVerdict};
 
 /// The current claimed implementation reaches the owner's review manifest
 /// before handoff acceptance, even when owner task state is empty or stale.
-#[test]
 fn a_claimed_before_landing_review_reads_the_current_implementers_summary() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_before_landing_review_reads_the_current_implementers_summary",
-    ) {
-        return;
-    }
     let current = "Outcome: success\nImplemented and validated this candidate.";
     let stale = "Outcome: failed\nAn earlier attempt failed.";
     for (owner_summary, implementation, expected) in [
@@ -96,14 +89,7 @@ fn a_claimed_before_landing_review_reads_the_current_implementers_summary() {
 /// that review, with it filed as a before-PR review, or for a head pushed
 /// after it settled, and accepts the reviewed head as before-landing
 /// evidence.
-#[test]
 fn a_claimed_pr_lands_only_at_the_head_its_before_landing_review_settled() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_pr_lands_only_at_the_head_its_before_landing_review_settled",
-    ) {
-        return;
-    }
     let mut leaf = ReviewedLeaf::admit_before_landing();
     let pulls = leaf.pair.wire.calls("orbit.task.pull");
     assert_eq!(pulls[0]["review_gate"], true, "{}", pulls[0]);
@@ -184,14 +170,7 @@ fn a_claimed_pr_lands_only_at_the_head_its_before_landing_review_settled() {
 /// [ORB-15194] A claimed leaf that has reached its before-landing review is
 /// listed as reviewing rather than implementing, and its drain admits a
 /// replacement beside it even though the leaf still holds its slot.
-#[test]
 fn a_reviewing_leaf_lets_its_full_drain_admit_a_replacement() {
-    if !isolated(
-        module_path!(),
-        "a_reviewing_leaf_lets_its_full_drain_admit_a_replacement",
-    ) {
-        return;
-    }
     let pair = Pair::with_owner_config(
         &format!(
             "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = \"{REVIEW_CREW}\"\n"
@@ -223,7 +202,10 @@ fn a_reviewing_leaf_lets_its_full_drain_admit_a_replacement() {
         .read_run_state(&leaf)
         .unwrap()
         .expect("leaf state");
-    state.record_pipeline_output("landing_review_gate_admit", json!({"applies": true}));
+    state.record_pipeline_output(
+        "landing_review_gate_admit",
+        crate::review_admission_shape::admitted_review("landing-attempt", "lineage", "HEAD"),
+    );
     pair.follower.write_run_state(&leaf, &state).unwrap();
     assert_eq!(stages(), vec![(leaf.clone(), ClaimedLeafStage::Reviewing)]);
 
@@ -241,18 +223,13 @@ fn a_reviewing_leaf_lets_its_full_drain_admit_a_replacement() {
 /// still captures before-landing review, with its review crew, for the claims
 /// of a machine `review.before_landing_hosts` lists. The probe answers per
 /// caller machine, so any other label is offered no review, and the owner's
-/// own delivery captures none.
-#[test]
+/// own delivery captures none. The captured crew is the pre-landing pool's,
+/// not the after-landing `workflow.purpose_crews.review` pool's.
 fn before_landing_hosts_capture_landing_review_only_for_listed_machines() {
-    if !isolated(
-        module_path!(),
-        "before_landing_hosts_capture_landing_review_only_for_listed_machines",
-    ) {
-        return;
-    }
     let leaf = ReviewedLeaf::admit_from(
         &format!(
-            "[review]\nbefore_landing_hosts = [\"{FOLLOWER}\"]\n\n[operation]\nreview_crew = \"{REVIEW_CREW}\"\n"
+            "[review]\nbefore_landing_hosts = [\"{FOLLOWER}\"]\n\n[workflow.purpose_crews]\n\
+             review = \"grok\"\npre_landing_review = \"{REVIEW_CREW}\"\n"
         ),
         "",
     );
@@ -262,7 +239,10 @@ fn before_landing_hosts_capture_landing_review_only_for_listed_machines() {
     assert_eq!(listed["admits"], true, "{listed}");
     assert_eq!(listed["ship"]["before_landing"], true, "{listed}");
     assert_eq!(listed["ship"]["before_pr"], false, "{listed}");
-    assert_eq!(listed["ship"]["review"]["crew"], REVIEW_CREW, "{listed}");
+    assert_eq!(
+        listed["ship"]["review"]["crew"], REVIEW_CREW,
+        "the claim's reviewer comes from the pre-landing pool: {listed}"
+    );
     assert_eq!(listed["review"]["before_landing"]["enabled"], false);
     assert_eq!(
         listed["review"]["before_landing"]["hosts"],
@@ -335,14 +315,7 @@ fn before_landing_hosts_capture_landing_review_only_for_listed_machines() {
 /// claimed leaf's admission each carry exactly one reviewer crew in the
 /// unchanged wire contract, and the pull is admitted under this build's
 /// protocol fingerprint.
-#[test]
 fn a_review_pool_owner_captures_one_reviewer_crew_per_claim() {
-    if !isolated(
-        module_path!(),
-        "a_review_pool_owner_captures_one_reviewer_crew_per_claim",
-    ) {
-        return;
-    }
     const POOL: [&str; 2] = ["grok", "sol"];
     let leaf = ReviewedLeaf::admit_from(
         "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = [\"sol\", \"grok\"]\n",
@@ -413,17 +386,10 @@ fn probe_as(owner: &OrbitRuntime, machine: &str) -> Value {
 /// captured, not against the replica's own list: the owner's check is rerun
 /// on the base and confirms the red base, and a check only the replica lists
 /// is refused as one the host does not rerun.
-#[test]
 fn a_claimed_before_landing_review_confirms_baselines_against_the_owners_commands() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_before_landing_review_confirms_baselines_against_the_owners_commands",
-    ) {
-        return;
-    }
     // Fails to build wherever it runs, base and candidate alike, so the
     // failure is held for the red base rather than counted known red.
-    let scripts = TempDir::new().unwrap();
+    let scripts = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let command = |name: &str| {
         let script = scripts.path().join(name);
         std::fs::write(
@@ -497,3 +463,14 @@ fn a_claimed_before_landing_review_confirms_baselines_against_the_owners_command
         certificate.escalation
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_claimed_before_landing_review_reads_the_current_implementers_summary_scenarios,
+    a_claimed_before_landing_review_reads_the_current_implementers_summary,
+    a_claimed_pr_lands_only_at_the_head_its_before_landing_review_settled,
+    a_reviewing_leaf_lets_its_full_drain_admit_a_replacement,
+    before_landing_hosts_capture_landing_review_only_for_listed_machines,
+    a_review_pool_owner_captures_one_reviewer_crew_per_claim,
+    a_claimed_before_landing_review_confirms_baselines_against_the_owners_commands
+);

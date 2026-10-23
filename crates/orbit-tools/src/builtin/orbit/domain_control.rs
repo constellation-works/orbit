@@ -7,7 +7,6 @@ use orbit_common::{
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::{Value, json};
 
-pub struct WorkflowAutoTool;
 pub struct RoutineControlTool;
 fn parameter(name: &str, ty: &str, required: bool, description: &str) -> ToolParam {
     ToolParam {
@@ -28,99 +27,6 @@ pub(super) fn ensure_operator_leaf(ctx: &ToolContext) -> Result<(), OrbitError> 
         ));
     }
     Ok(())
-}
-impl Tool for WorkflowAutoTool {
-    fn execution_kind(&self) -> ToolExecutionKind {
-        ToolExecutionKind::Mutating
-    }
-    fn schema(&self) -> ToolSchema {
-        let mut parameters = vec![
-            parameter("action", "string", true, "status, start, stop or resize"),
-            parameter(
-                "for_seconds",
-                "integer",
-                false,
-                "Required for start: window length in seconds, 1 through 86400 (24 hours)",
-            ),
-            parameter(
-                "concurrency",
-                "integer",
-                false,
-                "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize. The drain's only ceiling: delivery jobs impose none of their own",
-            ),
-            parameter(
-                "id",
-                "string",
-                false,
-                "Resize only: auto- or pull-drain run ID. Omitted targets the workspace's one live drain; refused when none or several are live",
-            ),
-            parameter(
-                "if_revision",
-                "integer",
-                false,
-                "Resize only: apply only if the run's worker limit is still at this revision, so a concurrent change is reported rather than overwritten",
-            ),
-            parameter(
-                "reason",
-                "string",
-                false,
-                "Resize only: note recorded with the change",
-            ),
-            parameter(
-                "complete",
-                "boolean",
-                false,
-                "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review. Does not approve proposed tasks",
-            ),
-            parameter(
-                "approve_proposed",
-                "boolean",
-                false,
-                "Start only: each pass pilots qualifying proposed tasks (tagged no-diff-expected, or with context_files and an assessed complexity) and approves into backlog those with no duplicate, already-landed, conflict or warning finding, including tasks filed during the window. Tasks tagged no-auto-approve are never approved. Others stay proposed; status reports approved and held counts. Default false",
-            ),
-            parameter(
-                "force",
-                "boolean",
-                false,
-                "Stop only: also cancel each live drain and stop its in-flight work. A pull drain's claimed leaves are stopped and their tasks return to the owner's backlog with a comment; a local drain's task runs are cancelled. A leaf that cannot be confirmed stopped keeps its claim and fails the call. Default false stops admissions only",
-            ),
-            parameter(
-                "claim_token",
-                "string",
-                false,
-                "Workspace claim token when held by another operator",
-            ),
-            parameter(
-                "workspace",
-                "string",
-                true,
-                "Exact selector returned by workspace discovery. No implicit destination.",
-            ),
-        ];
-        parameters.extend(super::model_identity_params());
-        ToolSchema {
-            name: "orbit.workflow.auto".into(),
-            description: "Observe workspace auto-drain readiness, start a bounded window, stop admissions while preserving admitted workers (or, with force, stop those workers too), or resize a running drain's worker limit. Resize keeps the run ID, deadline, completion authorization and dispatched children; a lower limit only stops new admissions and cancels nothing. Requires trusted operator authority and an explicit workspace. Start is not retry-safe: reconcile readiness and runs after a lost reply before another submission.".into(),
-            parameters,
-            builtin: true,
-        }
-    }
-    fn execute(&self, ctx: &ToolContext, mut input: Value) -> Result<Value, OrbitError> {
-        ensure_operator_leaf(ctx)?;
-        super::reject_unknown_tool_arguments(&input, &self.schema())?;
-        required_string(&input, &["workspace"], "workspace")?;
-        if required_string(&input, &["action"], "action")? == "status" {
-            reject_unknown_tool_fields(&input, &["workspace", "action", "model"])?;
-            input
-                .as_object_mut()
-                .ok_or_else(|| OrbitError::InvalidInput("expected object".into()))?
-                .remove("action");
-            input["scope"] = json!("drain");
-            super::execute_host_action(ctx, input, OrbitBuiltinAction::DesktopRead)
-        } else {
-            super::execute_host_action(ctx, input, OrbitBuiltinAction::DesktopDrain)
-        }
-    }
 }
 impl Tool for RoutineControlTool {
     fn execution_kind(&self) -> ToolExecutionKind {
@@ -201,8 +107,4 @@ pub(super) fn bounded(input: &Value) -> Result<bool, OrbitError> {
             "view must be bounded when supplied".into(),
         )),
     }
-}
-pub(super) fn bounded_params(names: &[(&str, &str, &str)]) -> Vec<ToolParam> {
-    std::iter::once(parameter("view", "string", false, "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response."))
-        .chain(names.iter().map(|(name, ty, description)| parameter(name, ty, false, description))).collect()
 }

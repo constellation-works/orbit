@@ -3,10 +3,17 @@
 use super::*;
 use orbit_store::contracts::FrictionListFilter;
 use orbit_store::friction_store::FrictionStore;
+use orbit_types::task::TaskDecision;
 use orbit_types::workflow::{FLAKY_VALIDATION_EVENT, FlakyValidation};
 
 #[test]
 fn claimed_flaky_evidence_records_history_and_reuses_local_signature() {
+    if !isolated(
+        module_path!(),
+        "claimed_flaky_evidence_records_history_and_reuses_local_signature",
+    ) {
+        return;
+    }
     let pair = Pair::with_owner_config(
         "[workflow]\nrequired_validation_commands = [\"test\"]\n",
         &[None],
@@ -80,6 +87,7 @@ fn claimed_flaky_evidence_records_history_and_reuses_local_signature() {
         owner_completion_authority: None,
         review: None,
         known_red: vec![],
+        light_delivery: Vec::new(),
     };
     // The local validator records this signature first. Accepted remote evidence
     // must reuse it, including a retried acceptance after a lost reply.
@@ -100,8 +108,8 @@ fn claimed_flaky_evidence_records_history_and_reuses_local_signature() {
         history
             .iter()
             .any(|entry| entry.event == FLAKY_VALIDATION_EVENT
-                && FlakyValidation::from_text(entry.note.as_deref().unwrap())
-                    == Some(flaky.clone()))
+                && entry.decision == Some(TaskDecision::FlakyValidation(flaky.clone()))
+                && entry.note == Some(flaky.text()))
     );
     let store = FrictionStore::open(
         owner.sqlite_store().unwrap(),

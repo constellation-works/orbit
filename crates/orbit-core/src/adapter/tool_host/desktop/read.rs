@@ -20,6 +20,7 @@ const MAX_PAGE: usize = 50;
 const MAX_RUN_PREFIX: usize = 10_000;
 const MAX_LOG_PREFIX: usize = 200;
 const LOG_BYTES: usize = 4096;
+const ANSWER_BYTES: usize = 4096;
 
 pub(super) fn read(
     runtime: &OrbitRuntime,
@@ -28,15 +29,18 @@ pub(super) fn read(
 ) -> Result<Value, OrbitError> {
     let workspace = required_string(&input, &["workspace"], "workspace")?;
     let scope = required_string(&input, &["scope"], "scope")?;
-    let limit = number(&input, "limit", 25)?;
-    if !(1..=MAX_PAGE).contains(&limit) {
+    // Drain selection has the readiness operation's own default and bounds;
+    // other desktop projections retain their smaller page budget.
+    let drain = scope == "drain";
+    let limit = number(&input, "limit", if drain { 50 } else { 25 })?;
+    if !drain && !(1..=MAX_PAGE).contains(&limit) {
         return Err(invalid("limit must be between 1 and 50"));
     }
     let mut result = match scope.as_str() {
         "tasks" => tasks(runtime, &input, limit)?,
         "task" => task(runtime, session, &input, limit)?,
         "runs" => runs(runtime, &input, limit)?,
-        "drain" => super::drain::readiness(runtime)?,
+        "drain" => super::drain::readiness(runtime, &input, limit)?,
         "routines" | "auto_tasks" | "jobs" => {
             super::automation::read(runtime, &scope, number(&input, "offset", 0)?, limit)?
         }
@@ -250,6 +254,7 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
     .map_err(super::super::json::serialize_error(
         "serialize agent invocation result",
     ))?;
+    bound_agent_answer(&mut value["agent_invocation"], input, &id)?;
     let execution_progress = json!({"state": progress.state,
         "active_step": progress.active_step.as_ref().map(|s| json!({"step_id": s.step_id,"step_index":s.step_index,"started_at":s.started_at})),
         "provider_processes": {"limit":progress.limit,"truncated":progress.truncated,
@@ -270,6 +275,79 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
             "items":logs,"total":total,"available_through":MAX_LOG_PREFIX.min(total),"excerpt_max_bytes":LOG_BYTES},
         "audit_metadata":{"complete":detail.complete,"rows_read":detail.rows_read,"row_budget":detail.row_budget}}),
     )
+}
+
+/// Bound the compact projection only; persisted and full-view answers stay intact.
+fn bound_agent_answer(invocation: &mut Value, input: &Value, id: &str) -> Result<(), OrbitError> {
+    let Some(invocation) = invocation.as_object_mut() else {
+        return Ok(());
+    };
+    let Some(answer) = invocation.get_mut("answer").and_then(Value::as_object_mut) else {
+        return Ok(());
+    };
+    // These repeat the structured answer, as in the full run projection.
+    answer.remove("final_message");
+    let mut original = std::mem::take(answer);
+    let mut omitted = Vec::new();
+    let mut truncated = false;
+    // Reserve space for a useful summary before considering other whole fields.
+    let summary = original.remove("summary");
+    for (key, mut field) in summary
+        .map(|value| ("summary".to_string(), value))
+        .into_iter()
+        .chain(original)
+    {
+        if key == "summary"
+            && let Some(text) = field.as_str()
+        {
+            // {"summary": ...} costs 12 bytes in addition to the JSON string.
+            let prefix = json_string_prefix(text, ANSWER_BYTES - 12);
+            truncated |= prefix.len() < text.len();
+            field = json!(prefix);
+        }
+        answer.insert(key.clone(), field);
+        let bytes = serde_json::to_vec(answer)
+            .map_err(super::super::json::serialize_error("compact agent answer"))?;
+        if bytes.len() > ANSWER_BYTES {
+            answer.remove(&key);
+            omitted.push(key);
+            truncated = true;
+        }
+    }
+    let summary = answer.get("summary").cloned().unwrap_or(Value::Null);
+    invocation.remove("preview");
+    invocation.remove("preview_truncated");
+    invocation.insert("summary".into(), summary);
+    invocation.insert("answer_max_bytes".into(), json!(ANSWER_BYTES));
+    invocation.insert("answer_truncated".into(), json!(truncated));
+    invocation.insert("answer_omitted_fields".into(), json!(omitted));
+    invocation.insert(
+        "answer_retrieval".into(),
+        json!({
+            "tool": "orbit.workflow.run.show",
+            "arguments": {"workspace": input["workspace"], "id": id},
+        }),
+    );
+    Ok(())
+}
+
+/// Prefix measured as a JSON string, including quotes and escaped characters.
+fn json_string_prefix(text: &str, max_bytes: usize) -> &str {
+    let mut remaining = max_bytes.saturating_sub(2);
+    let mut end = 0;
+    for (index, ch) in text.char_indices() {
+        let bytes = match ch {
+            '"' | '\\' | '\n' | '\r' | '\t' | '\u{0008}' | '\u{000c}' => 2,
+            ch if ch <= '\u{001f}' => 6,
+            ch => ch.len_utf8(),
+        };
+        if bytes > remaining {
+            break;
+        }
+        remaining -= bytes;
+        end = index + ch.len_utf8();
+    }
+    &text[..end]
 }
 
 fn pagination(offset: usize, limit: usize, returned: usize, total: usize, cap: usize) -> Value {

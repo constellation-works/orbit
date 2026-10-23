@@ -12,7 +12,7 @@ paths:
   - "crates/orbit-cli/tests/tool/claimed_review_bridge_sandbox.rs"
 related_features: [review-gate, distributed-drain, plugins, policy-sandbox]
 related_artifacts: [ORB-14260, ORB-14194, ORB-14221, ORB-14171, ORB-14321, ORB-14792]
-last_validated: 2026-10-11
+last_validated: 2026-10-18
 ---
 
 # Verify and Recover Claimed-Review Artifacts
@@ -159,8 +159,8 @@ hostname
 orbit --version
 shasum -a 256 "$(command -v orbit)"
 ssh "$OWNER" 'hostname; orbit --version; shasum -a 256 "$(command -v orbit)"'
-# review.before_pr is a workspace setting: read it for the owner workspace.
-ssh "$OWNER" orbit config get review.before_pr --workspace "$OWNER_WS" --json # expect true
+# review.timing is a workspace setting: read it for the owner workspace.
+ssh "$OWNER" orbit config get review.timing --workspace "$OWNER_WS" --json # expect before_pr
 
 # Follower: inspect the actual drain, claimed leaf and accepted owner handoff.
 orbit run show "$DRAIN_RUN" --json --no-reconcile > drain-run.json
@@ -335,6 +335,12 @@ The checks are:
   verification failed").
 - `live_refusal`: one refused call on a stale attempt, with nothing written
   on the owner.
+- `live_reviewer_repair`: an independent reviewer finding with a substantive
+  repair, its repair commit and diff, and the report's repaired finding and
+  paths.
+- `live_gate_handoff_landing`: the deterministic gate result, the accepted
+  exact-head handoff, and the landed identity, as the evidence chain above
+  requires.
 
 The record starts with every stage `NOT_VERIFIED`. Change a stage only with
 evidence. The `native_*` and `broker_scope_unit` checks record actual runs of

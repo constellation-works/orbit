@@ -26,25 +26,127 @@ use orbit_core::{
 };
 use orbit_store::compose::auto_task::cursor_state_path;
 
-use super::dispatch_admission::isolated;
-
 const MANIFEST: &str = ".orbit-managed-assets.json";
 
-#[test]
+fn routine_adoption_requires_the_seeded_name_and_preserves_collisions_across_refresh() {
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
+    let (global, workspace) = seeded_host(dir.path());
+    let catalog = workspace.join("routines");
+    let matching_path = catalog.join("task_pilot.yaml");
+    let collision_path = catalog.join("store_gc.yaml");
+    let matching_shipped = std::fs::read_to_string(&matching_path).expect("shipped task pilot");
+    let mut matching: serde_yaml::Value =
+        serde_yaml::from_str(&matching_shipped).expect("task pilot document");
+    matching["description"] = "operator-customized pilot".into();
+    matching["enabled"] = true.into();
+    matching["trigger"]["state"]["owner_machine"] = "hm_operator".into();
+    matching["trigger"]["state"]["branch"] = "operator-branch".into();
+    let matching_body = serde_yaml::to_string(&matching).expect("customized pilot");
+    std::fs::write(&matching_path, &matching_body).expect("write matching-name routine");
+
+    let mut collision: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&collision_path).expect("shipped store gc"))
+            .expect("store gc document");
+    collision["name"] = "operator-retention".into();
+    collision["description"] = "operator-authored retention".into();
+    collision["enabled"] = true.into();
+    let collision_body = serde_yaml::to_string(&collision).expect("operator routine");
+    std::fs::write(&collision_path, &collision_body).expect("write different-name routine");
+    let manifest_path = catalog.join(MANIFEST);
+    std::fs::remove_file(&manifest_path).expect("simulate a pre-provenance catalog");
+
+    let sync = || {
+        reconcile_workspace_managed_artifacts(&global, &workspace, Some(&identity()), "main", false)
+            .expect("sync routines")
+    };
+    let report = sync();
+    assert!(report.actions.iter().any(|action| {
+        action.kind == "routine"
+            && action.name == "task_pilot"
+            && action.outcome == ManagedArtifactOutcome::Migrated
+    }));
+    assert!(
+        report.actions.iter().any(|action| {
+            action.kind == "routine"
+                && action.name == "store_gc"
+                && action.outcome == ManagedArtifactOutcome::Preserved
+                && action.detail.is_some()
+        }),
+        "a differently named routine must be reported as a collision [ORB-15752]: {report:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&matching_path).expect("adopted bytes"),
+        matching_body
+    );
+    assert_eq!(
+        std::fs::read_to_string(&collision_path).expect("collision bytes"),
+        collision_body
+    );
+
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).expect("adoption manifest"))
+            .expect("parse adoption manifest");
+    assert!(manifest["assets"].get("store_gc").is_none());
+    assert!(manifest["routineProvenance"].get("store_gc").is_none());
+    let provenance = &mut manifest["routineProvenance"]["task_pilot"];
+    assert_eq!(
+        provenance["renderedDigest"],
+        sha256_hex(matching_body.as_bytes())
+    );
+    assert_eq!(
+        provenance["binding"]["name"],
+        matching["name"].as_str().expect("routine name")
+    );
+    assert_eq!(provenance["binding"]["ownerMachine"], "hm_operator");
+    assert_eq!(provenance["binding"]["branch"], "operator-branch");
+    // Simulate an adopted instance from an older release: the next sync sees
+    // a changed shipped template while the recorded on-disk digest is intact.
+    provenance["templateDigest"] = sha256_hex(b"previous shipped template").into();
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("old template provenance"),
+    )
+    .expect("record previous release");
+
+    let refreshed = sync();
+    assert!(refreshed.actions.iter().any(|action| {
+        action.kind == "routine"
+            && action.name == "task_pilot"
+            && action.outcome == ManagedArtifactOutcome::Refreshed
+    }));
+    assert!(refreshed.actions.iter().any(|action| {
+        action.kind == "routine"
+            && action.name == "store_gc"
+            && action.outcome == ManagedArtifactOutcome::Preserved
+    }));
+    let mut expected: serde_yaml::Value =
+        serde_yaml::from_str(&matching_shipped).expect("current template");
+    expected["enabled"] = matching["enabled"].clone();
+    expected["trigger"]["state"]["owner_machine"] =
+        matching["trigger"]["state"]["owner_machine"].clone();
+    expected["trigger"]["state"]["branch"] = matching["trigger"]["state"]["branch"].clone();
+    let observed: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&matching_path).expect("refreshed pilot"))
+            .expect("refreshed definition");
+    assert_eq!(
+        observed, expected,
+        "refresh must use the adopted on-disk binding"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&collision_path).expect("preserved operator routine"),
+        collision_body,
+        "a later template change must not replace the differently named file [ORB-15752]"
+    );
+}
+
 fn reconciliation_preserves_concurrent_delete_opt_out() {
-    if !isolated("workspace_seed::reconciliation_preserves_concurrent_delete_opt_out") {
-        return;
-    }
     for create_only in [false, true] {
         reconcile_during_lifecycle_change(create_only, false);
     }
 }
 
-#[test]
 fn reconciliation_preserves_concurrent_restore_provenance() {
-    if !isolated("workspace_seed::reconciliation_preserves_concurrent_restore_provenance") {
-        return;
-    }
     for create_only in [false, true] {
         reconcile_during_lifecycle_change(create_only, true);
     }
@@ -54,7 +156,8 @@ fn reconciliation_preserves_concurrent_restore_provenance() {
 /// lifecycle writer. Without exclusion, let that writer commit before sync
 /// resumes, reproducing the stale snapshot deterministically [ORB-15609].
 fn reconcile_during_lifecycle_change(create_only: bool, restoring: bool) {
-    let dir = tempfile::tempdir().expect("isolated roots");
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
     let (global, workspace) = seeded_host(dir.path());
     let runtime =
         Arc::new(OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime"));
@@ -348,7 +451,8 @@ fn snapshot(catalog: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 
 #[test]
 fn create_only_seed_creates_absent_defaults_and_never_rewrites_existing_definitions() {
-    let dir = tempfile::tempdir().expect("isolated roots");
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
     let (global, workspace) = seeded_host(dir.path());
     let routines = workspace.join("routines");
     let auto_tasks = workspace.join("auto_tasks");
@@ -466,15 +570,9 @@ fn create_only_seed_creates_absent_defaults_and_never_rewrites_existing_definiti
     );
 }
 
-#[test]
 fn implicit_runtime_open_and_workspace_init_preserve_legacy_skill_trees() {
-    if !isolated(
-        "workspace_seed::implicit_runtime_open_and_workspace_init_preserve_legacy_skill_trees",
-    ) {
-        return;
-    }
-
-    let dir = tempfile::tempdir().expect("isolated roots");
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
     let (global, workspace) = seeded_host(dir.path());
     let mut expected_files = Vec::new();
 
@@ -537,14 +635,9 @@ fn implicit_runtime_open_and_workspace_init_preserve_legacy_skill_trees() {
     }
 }
 
-#[test]
 fn settings_only_migration_waits_for_crud_and_preserves_concurrent_settings() {
-    if !isolated(
-        "workspace_seed::settings_only_migration_waits_for_crud_and_preserves_concurrent_settings",
-    ) {
-        return;
-    }
-    let dir = tempfile::tempdir().expect("isolated roots");
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
     let (global, workspace) = seeded_host(dir.path());
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
     let auto_tasks = workspace.join("auto_tasks");
@@ -657,3 +750,17 @@ fn settings_only_migration_waits_for_crud_and_preserves_concurrent_settings() {
         AutoTaskBody::Managed
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    routine_adoption_requires_the_seeded_name_and_preserves_collisions_across_refresh_scenarios,
+    routine_adoption_requires_the_seeded_name_and_preserves_collisions_across_refresh,
+    reconciliation_preserves_concurrent_delete_opt_out
+);
+
+crate::scenario_table!(
+    reconciliation_preserves_concurrent_restore_provenance_scenarios,
+    reconciliation_preserves_concurrent_restore_provenance,
+    implicit_runtime_open_and_workspace_init_preserve_legacy_skill_trees,
+    settings_only_migration_waits_for_crud_and_preserves_concurrent_settings
+);

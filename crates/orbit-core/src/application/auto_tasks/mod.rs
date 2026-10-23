@@ -15,8 +15,12 @@
 //!   native), with catch-up collapse.
 //! - [`state`] — host-local, workspace-scoped last-fired cursors.
 //! - [`scheduler`] — the evaluator called by the host tick.
-//! - `change_probe` — the `skip_if_unchanged` precondition's evidence.
+//! - `change_probe` — the `skip_if_unchanged` precondition's evidence. The
+//!   `skip_unless_blocked_candidates` precondition reads the blocked-task
+//!   triage's candidate rule (`application::task::triage_candidacy`).
 //! - [`crud`] — the shared add/list/show/update/toggle/mint domain surface.
+//! - [`listing`] — whether each listed definition fires here, and when: the
+//!   one decision every list surface renders.
 //! - [`delete`] — audited delete, and restore of a deleted shipped default.
 //! - [`settings`] — operator settings layered over bundled bodies, and the
 //!   sync migration of settings-only forks.
@@ -27,6 +31,8 @@ mod body_history;
 mod change_probe;
 pub mod crud;
 pub mod delete;
+pub mod listing;
+mod read;
 pub use orbit_automation::auto_tasks::loader;
 pub use orbit_automation::auto_tasks::schedule;
 pub mod scheduler;
@@ -35,6 +41,7 @@ pub mod state;
 
 pub use crud::{AutoTaskAddParams, AutoTaskTemplatePatch, AutoTaskUpdateParams};
 pub use delete::{AutoTaskDeleteParams, AutoTaskDeleteReport};
+pub use listing::{AutoTaskListing, AutoTaskListingRow, AutoTaskSkip};
 pub use loader::{
     AutoTaskCollection, AutoTaskLoadError, LoadedAutoTask, auto_tasks_dir, collect_auto_tasks,
     definition_path,
@@ -54,6 +61,10 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
     (
         "backlog-hygiene",
         include_str!("../../../assets/auto_tasks/backlog-hygiene.yaml"),
+    ),
+    (
+        "blocked-task-triage",
+        include_str!("../../../assets/auto_tasks/blocked-task-triage.yaml"),
     ),
     (
         "delivery-code-review",

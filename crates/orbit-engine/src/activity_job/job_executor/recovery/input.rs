@@ -31,7 +31,7 @@ pub(super) fn bind_recovery_context(
     ctx: &ExecCtx<'_>,
     input: &mut Value,
 ) -> Result<(), DispatchError> {
-    let failed_input = match &step.body {
+    let mut failed_input = match &step.body {
         JobV2StepBody::Target(target) => render_input(
             target.default_input.as_ref(),
             &ctx.input,
@@ -40,6 +40,15 @@ pub(super) fn bind_recovery_context(
         )?,
         _ => Value::Null,
     };
+    if step.id == "sync_base"
+        && failed_input
+            .get("preparation")
+            .is_some_and(|v| !v.is_null())
+    {
+        failed_input["run_id"] = Value::String(ctx.run_id.clone());
+        failed_input = crate::executor::automation::vcs::refreshed_input(ctx.host, &failed_input)
+            .map_err(|error| DispatchError::JobExecution(error.to_string()))?;
+    }
     for key in ["task_id", "task_ids", "workspace_path", "repo_root"] {
         if let Some(value) = failed_input.get(key) {
             input[key] = value.clone();
@@ -61,6 +70,27 @@ pub(super) fn bind_recovery_context(
         input["repo_root"] = workspace;
     }
     input["run_id"] = Value::String(ctx.run_id.clone());
+    // The resolved job must prove a later active host validator on this
+    // candidate. An absorbed candidate validates at git_rebase's boundary
+    // instead. Names and a caller flag alone do not establish ownership.
+    if ctx.recovery_validation_continuations.contains(&step.id)
+        && ctx.host.worker_invocation().is_none_or(|worker| {
+            failed_input.get("job_run_id").and_then(Value::as_str)
+                == Some(worker.bound_run_id.as_str())
+                && failed_input
+                    .get("completed_task_ids")
+                    .and_then(Value::as_array)
+                    .is_some_and(|ids| {
+                        ids.len() == 1 && ids[0].as_str() == Some(worker.task_id.as_str())
+                    })
+        })
+        && failed_input
+            .get("final_validation")
+            .and_then(Value::as_bool)
+            == Some(true)
+    {
+        input["final_validation"] = Value::Bool(true);
+    }
     input["failed_step_input"] = bounded_recovery_input(&ctx.run_id, failed_input);
     Ok(())
 }

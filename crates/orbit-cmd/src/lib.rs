@@ -12,18 +12,23 @@
 //! root to call them.
 //!
 //! # Role
-//! Depends on `orbit-core` (runtime/context) and composes it with
-//! `orbit-registry` where an application needs both — never the other way
-//! around. Consumed by `orbit-cli` and `orbit-web`.
-//! Command groups that
-//! orbit-core's runtime internals (tool hosts, engine hosts, bootstrap
-//! seeding) invoke remain in `orbit_core::adapter::command`; see
-//! `ARCHITECTURE.md` for the boundary.
+//! Depends on `orbit-core` (runtime/context) and `orbit-registry`. Core reads
+//! the registry read-only for store retention; this crate still assembles
+//! commands. Neither registry nor core depends on `orbit-cmd`. Consumed by
+//! `orbit-cli` and `orbit-web`. Command groups that orbit-core's runtime
+//! internals (tool hosts, engine hosts, bootstrap seeding) invoke remain in
+//! `orbit_core::adapter::command`; see `ARCHITECTURE.md` for the boundary.
+
+// A bare `cargo test` from a managed-run shell must match one from a clean shell.
+#[cfg(test)]
+orbit_common::isolate_test_process!();
 
 pub mod agent_rules;
+pub mod browser_kit;
 mod diagnostics;
 mod doctor;
 pub mod hosts;
+pub mod log_format;
 pub mod mcp_clients;
 mod migrate;
 mod registry;
@@ -38,9 +43,9 @@ mod tests;
 
 pub use diagnostics::DiagnosticsCommands;
 pub use doctor::{
-    DoctorCommands, DoctorProbe, OrphanTaskStoreRemoval, WorkspaceDoctorResult,
-    WorkspaceDoctorStatus, doctor_report_probes, doctor_row_json, provider_limit_findings,
-    run_doctor_report,
+    DoctorCommands, DoctorProbe, OrphanTaskStoreRemoval, RetiredConfigKeyRepair,
+    WorkspaceDoctorResult, WorkspaceDoctorStatus, doctor_report_probes, doctor_row_json,
+    provider_limit_findings, run_doctor_report,
 };
 pub use migrate::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
 pub use task_store::{

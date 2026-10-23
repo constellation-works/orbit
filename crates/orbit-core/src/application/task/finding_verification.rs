@@ -25,7 +25,7 @@ use serde_json::json;
 
 use super::TaskRecordUpdateParams;
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{seeded_crew_ticket, weighted_draw};
+use crate::application::job::crew_pools::{InspectionPool, seeded_crew_ticket, weighted_draw};
 
 /// The job that verifies review-filed findings.
 pub const FINDING_VERIFICATION_JOB: &str = "finding_verification_pipeline";
@@ -471,26 +471,26 @@ fn crew_named_by(crew: &Crew, label: &str) -> bool {
 
 impl OrbitRuntime {
     /// The verifier for `task` at `tier`, drawn from that tier's complexity
-    /// pool. A crew `avoid` names — the filer, or a verifier that already
-    /// judged the task — is passed over while the pool offers another. The
-    /// draw is seeded by task and tier, so a retried preparation draws the
-    /// same crew. `Ok(None)` when the tier has no enabled pool member.
+    /// pool. `verify_finding` inspects the pinned source natively, so only
+    /// crews whose provider has that surface are drawn, and a tier without
+    /// one passes to the next tier up [ORB-15792]; the assignment names the
+    /// tier drawn from. A crew `avoid` names — the filer, or a verifier that
+    /// already judged the task — is passed over while the pool offers
+    /// another. The draw is seeded by task and tier, so a retried preparation
+    /// draws the same crew. `Ok(None)` when no tier from `tier` upward has an
+    /// inspection-capable member with a ticket.
     pub(crate) fn draw_finding_verifier(
         &self,
         task: &Task,
         tier: TaskComplexity,
         avoid: &[&str],
     ) -> Result<Option<VerifierAssignment>, OrbitError> {
-        // A parked member (weight 0) holds no ticket.
-        let candidates = self
-            .configured_complexity_pool(tier)?
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|candidate| candidate.weight > 0)
-            .collect::<Vec<_>>();
-        if candidates.is_empty() {
+        let Some(InspectionPool {
+            tier, candidates, ..
+        }) = self.inspection_capable_pool(tier)?
+        else {
             return Ok(None);
-        }
+        };
         let preferred = candidates
             .iter()
             .filter(|candidate| {
@@ -515,8 +515,10 @@ impl OrbitRuntime {
         }))
     }
 
-    /// The first verifier for `task`: its tier's pool, or the default crew
-    /// when that pool names no enabled crew, as task creation falls back.
+    /// The first verifier for `task`: its tier's pool or the next one up
+    /// with an inspection-capable crew, else the default crew when it can
+    /// inspect, as task creation falls back. With none, preparation fails
+    /// with `inspection_crew_unavailable` before any verifier launches.
     pub(crate) fn first_finding_verifier(
         &self,
         task: &Task,
@@ -526,7 +528,7 @@ impl OrbitRuntime {
         if let Some(assignment) = self.draw_finding_verifier(task, tier, &[filer])? {
             return Ok(assignment);
         }
-        let crew = self.resolve_crew_for_task(None, None)?;
+        let crew = self.inspection_capable_default_crew(tier)?;
         Ok(VerifierAssignment {
             crew: crew.name,
             tier,
@@ -658,11 +660,14 @@ impl OrbitRuntime {
                                 note: Some(note.clone()),
                                 from_status: None,
                                 to_status: None,
+                                operation_id: None,
+                                decision: None,
                             }],
                             append_comments: vec![TaskComment {
                                 at: now,
                                 by: FINDING_VERIFICATION_ACTOR.to_string(),
                                 message: comment.clone(),
+                                operation_id: None,
                             }],
                             expected_status: Some(vec![prepared_status]),
                             ..Default::default()

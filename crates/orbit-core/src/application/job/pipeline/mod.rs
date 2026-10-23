@@ -54,15 +54,20 @@ use std::os::unix::process::ExitStatusExt;
 use super::run::CANCELLATION_WORKER_EXIT_AUDIT;
 
 mod admission;
+mod claude_credential;
+mod notices;
 mod submit;
 mod wait;
 mod worker;
 
-pub(crate) use admission::input_hash;
+pub(crate) use admission::{input_hash, pipeline_run_queue_position};
+pub use notices::{SubmissionKind, SubmissionNotices};
 pub(crate) use submit::{ChildPipelineAdmission, ChildSubmission, RetryKey};
 pub(crate) use submit::{PipelineSubmission, SubmittedDefinition};
 #[cfg(test)]
 pub(crate) use wait::PipelineWaitClock;
+#[cfg(feature = "test-support")]
+pub use wait::pipeline_worker_observer_completed;
 pub use wait::{
     PipelineWaitEntry, PipelineWaitResult, pipeline_wait_status_is_held,
     pipeline_wait_status_is_success,
@@ -71,12 +76,17 @@ pub(crate) use worker::command::mark_process_as_pipeline_worker_binary;
 #[cfg(feature = "test-support")]
 pub(crate) use worker::command::worker_command_override;
 pub(crate) use worker::command::{run_definition_snapshot_path, workspace_auto_run_input};
+pub(crate) use worker::exit::reconciled_worker_exit_clause;
 #[cfg(test)]
 pub(crate) use worker::log::configure_pipeline_worker_stdio;
 pub(crate) use worker::log::pipeline_worker_log_path;
 #[cfg(all(test, unix))]
 pub(crate) use worker::log::pipeline_worker_log_test_hook;
+#[cfg(all(feature = "test-support", unix))]
+pub use worker::log::pipeline_worker_log_test_hook::with_pipeline_worker_log_open_hook;
 pub(crate) use worker::supervisor::WorkerLaunchError;
+#[cfg(feature = "test-support")]
+pub use worker::supervisor::worker_reap_hook::{WorkerReapPhase, install_worker_reap_hook};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PipelineInvokeResult {

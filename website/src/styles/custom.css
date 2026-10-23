@@ -282,6 +282,42 @@ body {
   white-space: nowrap;
 }
 
+/* CLI reference rows keep both columns on their first line. Their code wraps
+   at explicit token boundaries instead of hiding command names in scroll boxes. */
+.sl-markdown-content table.orbit-cli-commands {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.sl-markdown-content table.orbit-cli-commands th,
+.sl-markdown-content table.orbit-cli-commands td {
+  vertical-align: top;
+  white-space: normal;
+}
+
+.sl-markdown-content table.orbit-cli-commands th:first-child,
+.sl-markdown-content table.orbit-cli-commands td:first-child {
+  width: 45%;
+  white-space: normal;
+}
+
+.sl-markdown-content table.orbit-cli-commands code:not(pre code) {
+  overflow-x: visible;
+  white-space: normal;
+}
+
+.sl-markdown-content table.orbit-cli-commands .orbit-cli-token {
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .sl-markdown-content table.orbit-cli-commands th,
+  .sl-markdown-content table.orbit-cli-commands td {
+    padding-inline: 0.5rem;
+  }
+}
+
 .sl-markdown-content table th,
 .sl-markdown-content table td {
   border-bottom: 1px solid var(--sl-color-hairline-light);
@@ -507,7 +543,7 @@ html:not([data-has-sidebar]) header.header {
 }
 
 /* The install command under the hero CTAs, one click to copy. Sized to its
-   content so it reads as a command, not a third button. */
+   content on wider screens so it reads as a command, not a third button. */
 .orbit-hero-install {
   align-items: center;
   background: var(--sl-color-bg-inline-code);
@@ -533,10 +569,30 @@ html:not([data-has-sidebar]) header.header {
 }
 
 /* The raw-HTML code transform inserts explicit <wbr> break points after
-   slashes. Remove them here so the fit-content box sizes to the full command;
-   the code element handles narrow screens with its own horizontal scrolling. */
+   slashes. Remove them here so the wider box sizes to the full command. */
 .orbit-hero-install code wbr {
   display: none;
+}
+
+/* Keep the command readable on phone layouts: share the row with the copy
+   control, but let the code wrap inside the single install surface. */
+@media (max-width: 47.999rem) {
+  .orbit-hero-install {
+    width: 100%;
+  }
+
+  .orbit-hero-install code:not(pre code) {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    flex: 1 1 0%;
+    max-width: none;
+    min-width: 0;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    padding: 0;
+    white-space: normal;
+  }
 }
 
 /* Inline-code styling reserves 3ch for punctuation after the code. The hero
@@ -1868,12 +1924,8 @@ a.orbit-card:focus-visible :is(h2, h3) {
 }
 
 /* Dashboard screenshots (src/assets/dashboard, from scripts/dashboard-shots):
-   a hairline frame so the dark captures sit on either theme. They are captured
-   at 2x, so the narrow drain card is held to its 1x width. */
+   a hairline frame so the dark captures sit on either theme. */
 .sl-markdown-content img[src*="dashboard-"] {
   border: 1px solid var(--sl-color-hairline-light);
   border-radius: 8px;
-}
-.sl-markdown-content img[src*="dashboard-drain-card"] {
-  width: 408px;
 }

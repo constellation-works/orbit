@@ -1,10 +1,8 @@
 //! Run detail JSON and supplementary audit projections.
 
-use orbit_core::application::job::{
-    ActivityInvocationEvidence, job_run_to_json_with_activity_provenance,
-};
-use orbit_core::runtime::audit::run::{RunAuditStep, RunProviderProcess};
-use orbit_core::{InvocationQuery, JobRun, OrbitRuntime};
+use orbit_core::application::job::{job_run_to_json_with_activity_provenance, run_display_steps};
+use orbit_core::runtime::audit::run::RunProviderProcess;
+use orbit_core::{JobRun, OrbitRuntime};
 use serde_json::{Value, json};
 
 pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Value {
@@ -14,22 +12,17 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
     let run_id = run.run_id.as_str();
     let state = or_warn(runtime.read_run_state(run_id), run_id, "pipeline state");
     let evidence = or_warn(
-        runtime.invocation_records(InvocationQuery {
-            job_run_id: Some(run.run_id.clone()),
-            limit: 1_000,
-            ..InvocationQuery::default()
-        }),
+        runtime.activity_invocation_evidence(run_id),
         run_id,
         "invocation evidence",
-    )
-    .into_iter()
-    .map(|record| ActivityInvocationEvidence {
-        activity_id: record.activity_id,
-        provider: record.agent,
-        model: record.model,
-    })
-    .collect::<Vec<_>>();
+    );
     let mut full = job_run_to_json_with_activity_provenance(run, state.as_ref(), &evidence);
+    // The shared projection leaves the submitted input and the claimed worker
+    // identity to each surface. Run detail carries the same three fields MCP
+    // already adds, so the dashboard and `orbit run show --json` name one run.
+    full["input"] = json!(run.input);
+    full["pid"] = json!(run.pid);
+    full["pid_start_time"] = json!(run.pid_start_time);
     // Child dispatches persist lineage rather than task input. Resolve their
     // runs first, then share one task-title lookup with the parent header.
     let children = state
@@ -46,18 +39,18 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         })
         .collect::<Vec<_>>();
     let titles = or_warn(
-        super::super::run_tasks::task_titles(runtime, std::iter::once(run).chain(&children)),
+        super::tasks::task_titles(runtime, std::iter::once(run).chain(&children)),
         run_id,
         "task titles",
     );
-    super::super::run_tasks::add_tasks(&mut full, run, &titles);
+    super::tasks::add_tasks(&mut full, run, &titles);
     if let Some(dispatches) = full["child_dispatches"].as_array_mut() {
         for dispatch in dispatches {
             if let Some(child) = children
                 .iter()
                 .find(|child| dispatch["child_run_id"] == child.run_id)
             {
-                super::super::run_tasks::add_tasks(dispatch, child, &titles);
+                super::tasks::add_tasks(dispatch, child, &titles);
                 // A fire-and-forget dispatch can stay submitted forever. Its
                 // checkpoint is lineage, not the child's current outcome.
                 dispatch["state"] = json!(child.state);
@@ -79,34 +72,24 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
     full["drain_last_pass"] = serde_json::to_value(
         state
             .as_ref()
-            .and_then(|state| state.drain_last_pass.as_ref()),
+            .and_then(|state| state.pull_drain.drain_last_pass.as_ref()),
     )
     .unwrap_or(Value::Null);
     // The failure chain and the cancel record are detail-only. One response
     // carries both, so the page does not fetch each child to find the cause.
-    crate::api::run_failure::attach_run_failure_context(runtime, run, state.as_ref(), &mut full);
-    // Reshape into `{run, steps}` per the dashboard contract: peel the
-    // `steps` array off the flat `job_run_to_json` output.
-    let stored_steps = full
-        .as_object_mut()
-        .and_then(|m| m.remove("steps"))
-        .unwrap_or(Value::Array(Vec::new()));
-
-    let audit_steps = or_warn(
-        runtime.collect_run_audit_steps(run_id),
-        run_id,
-        "audit steps",
-    );
-    let steps = if audit_steps.is_empty() {
-        stored_steps
-    } else {
-        Value::Array(
-            audit_steps
-                .iter()
-                .map(|step| audit_step_to_json(step, run.state))
-                .collect(),
+    super::failure::attach_run_failure_context(runtime, run, state.as_ref(), &mut full);
+    // Reshape into `{run, steps}` per the dashboard contract: the displayed
+    // steps replace the record's own `steps` in the flat projection.
+    if let Some(fields) = full.as_object_mut() {
+        fields.remove("steps");
+    }
+    let steps = run_display_steps(run, || {
+        or_warn(
+            runtime.collect_run_audit_steps(run_id),
+            run_id,
+            "audit steps",
         )
-    };
+    });
 
     // [ORB-10496] Provider subprocesses for this run's agent steps, with a
     // liveness verdict for any that have not reported an exit. Without this a
@@ -134,6 +117,23 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         run_id,
         "claimed leaves",
     );
+    // Unlike the running-leaf table, admission capacity includes launching
+    // and unsettled claims and other workspace leaves. An unreadable reading
+    // stays unknown rather than advertising an empty budget.
+    let pull_occupancy = or_warn(
+        runtime.pull_drain_occupancy(run_id),
+        run_id,
+        "pull occupancy",
+    )
+    .map(|occupancy| json!({ "occupied": occupancy.occupied, "reviewing": occupancy.reviewing }));
+    let pull_breaker = state
+        .as_ref()
+        .and_then(|state| state.pull_drain.pull_breaker.as_ref());
+    let refused_settlements = or_warn(
+        runtime.pull_drain_refused_settlements(run_id),
+        run_id,
+        "refused settlements",
+    );
 
     // A pull drain's crew window: the crews it runs and those it excluded for
     // its window, with why [ORB-13941]. Null for every other run.
@@ -144,15 +144,28 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
             None
         });
 
+    // The read-only explorers an implement or review-repair agent delegated
+    // to, with their crew, duration and spend. Empty for every other run.
+    let explore_invocations = or_warn(
+        runtime.explore_invocation_summaries(run_id),
+        run_id,
+        "explore invocations",
+    );
+
     json!({
         "run": full,
+        "explore_invocations": explore_invocations,
         "pull_claim": pull_claim,
         "claimed_leaves": claimed_leaves,
+        "pull_occupancy": pull_occupancy,
+        "pull_breaker": pull_breaker,
+        "refused_settlements": refused_settlements,
         "crew_window": crew_window,
-        "steps": steps,
+        "steps": steps.to_json(),
+        "steps_source": steps.source.as_str(),
         "provider_processes": provider_processes
             .iter()
-            .map(run_provider_process_to_json)
+            .map(RunProviderProcess::to_json)
             .collect::<Vec<_>>(),
     })
 }
@@ -167,70 +180,5 @@ fn or_warn<T: Default>(
     result.unwrap_or_else(|error| {
         tracing::warn!(run_id, section, %error, "run detail omitted a section");
         T::default()
-    })
-}
-
-fn run_provider_process_to_json(record: &RunProviderProcess) -> Value {
-    json!({
-        "run_id": record.run_id,
-        "event_id": record.event_id,
-        "ts": record.ts.map(|ts| ts.to_rfc3339()),
-        "step_id": record.step_id,
-        "step_index": record.step_index,
-        "provider": record.provider,
-        "pid": record.pid,
-        "pid_start_time": record.pid_start_time,
-        "finished": record.finished,
-        "liveness": record.liveness.as_str(),
-        "exit_code": record.exit_code,
-        "timed_out": record.timed_out,
-        "duration_ms": record.duration_ms,
-    })
-}
-
-/// Project one audit-derived step, reconciled against the run's own state.
-///
-/// [ORB-10971] Steps are rebuilt from `step_started` / `step_finished` audit
-/// events, so a run killed mid-step leaves a `step_started` with no partner
-/// and the step renders `running` forever. A cancelled parent blocked in a
-/// dispatch wait is exactly that case. A step cannot outlive its run: once the
-/// run is terminal, an unfinished step inherits the run's terminal state and is
-/// marked `interrupted` so the projection says what happened rather than
-/// implying work is still in flight.
-fn audit_step_to_json(step: &RunAuditStep, run_state: orbit_core::JobRunState) -> Value {
-    let duration_ms = match (step.started_at, step.finished_at) {
-        (Some(started), Some(finished)) => Some(
-            finished
-                .signed_duration_since(started)
-                .num_milliseconds()
-                .max(0) as u64,
-        ),
-        _ => None,
-    };
-    let unfinished = step.state.is_none();
-    let state = match step.state.as_deref() {
-        Some(state) => state.to_string(),
-        None if run_state.is_terminal() => run_state.to_string(),
-        None => "running".to_string(),
-    };
-    let outcome = match (&step.outcome, unfinished && run_state.is_terminal()) {
-        (Some(outcome), _) => Some(outcome.clone()),
-        (None, true) => Some("interrupted".to_string()),
-        (None, false) => None,
-    };
-
-    json!({
-        "step_index": step.step_index,
-        "target_type": "activity",
-        "target_id": step.step_id,
-        "state": state,
-        "started_at": step.started_at.map(|v| v.to_rfc3339()),
-        "finished_at": step.finished_at.map(|v| v.to_rfc3339()),
-        "duration_ms": duration_ms,
-        "exit_code": null,
-        "agent_response_json": null,
-        "error_code": null,
-        "error_message": step.error_message,
-        "outcome": outcome,
     })
 }

@@ -33,7 +33,8 @@ fn seed_global(global: &Path) {
 
 #[test]
 fn explicit_off_survives_opens_and_sync_then_spawns_bare_without_inner_sandbox() {
-    let dir = tempfile::tempdir().expect("isolated runtime roots");
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated runtime roots");
     let global = dir.path().join("global");
     let workspace = dir.path().join("repo/.orbit");
     std::fs::create_dir_all(&workspace).expect("workspace root");
@@ -160,6 +161,9 @@ fn dispatch_codex(
     let spec = ActivityV2Spec::AgentLoop(AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "Return the requested response envelope.".to_string(),
+        steering_instruction: None,
+        regression_risk_instruction: None,
+        explore_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,
@@ -173,6 +177,8 @@ fn dispatch_codex(
         proc_allowed_programs: None,
         proc_disallowed_programs: None,
         trusted_host_execution: false,
+        crew_env: Vec::new(),
+        crew_account: None,
     });
     let outcome = dispatch_v2_activity(V2DispatchInput {
         activity_name: "explicit_sandbox_off",

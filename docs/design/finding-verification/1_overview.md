@@ -2,14 +2,14 @@
 title: Finding Verification — Overview
 owner: claude
 last_updated: 2026-10-11
-last_validated: 2026-10-11
+last_validated: 2026-10-19
 status: Accepted
 feature: finding-verification
 doc_role: overview
 type: design
 summary: Review-filed bug findings are verified against the code by a pooled verifier crew before promotion; CONFIRMED unlocks backlog and drain admission, REJECTED closes the task with its evidence.
 tags: [finding-verification, review, automation, admission]
-paths: ["crates/orbit-core/src/application/task/finding_verification.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/finding_verification/**", "crates/orbit-core/assets/jobs/finding_verification_pipeline.yaml", "crates/orbit-core/assets/activities/*finding*.yaml", "crates/orbit-core/assets/routines/finding_verification.yaml"]
+paths: ["crates/orbit-core/src/application/task/finding_verification.rs", "crates/orbit-core/src/application/task/finding_verification_steps/**", "crates/orbit-core/assets/jobs/finding_verification_pipeline.yaml", "crates/orbit-core/assets/activities/*finding*.yaml", "crates/orbit-core/assets/routines/finding_verification.yaml"]
 related_features: [automation-triggers, review-gate, distributed-drain, routines]
 related_artifacts: [ORB-15662]
 ---
@@ -54,7 +54,7 @@ first is far cheaper, and it gives the operator the evidence either way.
 | Concern | File | Task |
 |---------|------|------|
 | Verdict schema, record, gate predicate, crew draw | [finding_verification.rs](../../../crates/orbit-core/src/application/task/finding_verification.rs) | [ORB-15662] |
-| Prepare and apply actions | [v2_host/finding_verification/](../../../crates/orbit-core/src/adapter/engine_host/v2_host/finding_verification/) | [ORB-15662] |
+| Prepare and apply actions | [application/task/finding_verification_steps/](../../../crates/orbit-core/src/application/task/finding_verification_steps/) | [ORB-15662] |
 | Job | [finding_verification_pipeline.yaml](../../../crates/orbit-core/assets/jobs/finding_verification_pipeline.yaml) | [ORB-15662] |
 | Verifier activity | [verify_finding.yaml](../../../crates/orbit-core/assets/activities/verify_finding.yaml) | [ORB-15662] |
 | State trigger (`finding_unverified`) | [member_host.rs](../../../crates/orbit-core/src/application/automation/members/member_host.rs) | [ORB-15662] |

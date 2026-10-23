@@ -111,6 +111,15 @@ spec:
     allowed_crews: []
     # ORB-14117: opt-in approval of qualifying proposed tasks each pass.
     approve_proposed: false
+    # Opt-in `--auto-fix`: completion watches each PR this run opens and
+    # repairs failed required checks and merge conflicts on it. Repair
+    # authority only; merging still needs `completion: done`. Forwarded to
+    # every leaf like `completion`.
+    auto_fix: false
+    # Core captures explicit overrides and whether mode is inherited.
+    # Inherited host policy refreshes at each admission pass.
+    auto_concurrency: null
+    auto_concurrency_source: null
     # Complexity pools are captured by Core at coordinator admission from
     # workflow configuration and low/medium/hard/xhard_complexity_crews run
     # overrides.
@@ -160,9 +169,22 @@ spec:
                 promotion_authorized: true
                 drain_promotion: "{{ steps.approvals.output.drain_promotion }}"
 
+          # Before admission, so an adopted leaf holds its slot in this pass.
+          # Resumes an owner-local delivery leaf that died after `pr_open`,
+          # so its pull request is watched and repaired again; see the
+          # activity for what qualifies.
+          - id: adopt_orphans
+            target: activity:adopt_orphaned_deliveries
+            default_input:
+              max_active_leaf_runs: "{{ input.max_active_leaf_runs }}"
+              completion: "{{ input.completion }}"
+              auto_fix: "{{ input.auto_fix }}"
+
           - id: admissible
             target: activity:classify_workspace_auto_tasks
             default_input:
+              auto_concurrency: "{{ input.auto_concurrency }}"
+              auto_concurrency_source: "{{ input.auto_concurrency_source }}"
               max_tasks: "{{ input.max_tasks }}"
               max_active_leaf_runs: "{{ input.max_active_leaf_runs }}"
               poll_sleep_seconds: "{{ input.poll_sleep_seconds }}"
@@ -189,6 +211,7 @@ spec:
                     base_branch: "{{ steps.resolve_ship_input.output.base_branch }}"
                     base_sync: "{{ steps.resolve_ship_input.output.base_sync }}"
                     completion: "{{ input.completion }}"
+                    auto_fix: "{{ input.auto_fix }}"
                     allowed_crews: "{{ input.allowed_crews }}"
             fan_in:
               join:

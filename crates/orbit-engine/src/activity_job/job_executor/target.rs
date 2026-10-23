@@ -1,6 +1,11 @@
 use super::reviewer::ReviewerInvocation;
 use super::*;
 
+/// Run-input keys the executor owns and hands every nested target of the
+/// step they belong to unchanged: a final-recovery `resume`'s context and a
+/// steering round's.
+const ENGINE_CONTEXT_KEYS: [&str; 2] = ["final_recovery_resume", STEERING_ROUND_KEY];
+
 pub(super) fn run_target(
     step: &JobV2Step,
     t: &TargetStep,
@@ -13,9 +18,12 @@ pub(super) fn run_target(
         // Recovery's rationale and refused output are opaque data. An
         // inherited input must not render template tokens inside that data;
         // the engine-owned context is inserted unchanged after rendering.
+        // A steering round's context is engine-owned the same way.
         let mut inherited_input = ctx.input.clone();
         if let Some(input) = inherited_input.as_object_mut() {
-            input.remove("final_recovery_resume");
+            for key in ENGINE_CONTEXT_KEYS {
+                input.remove(key);
+            }
         }
         render_input(
             t.default_input.as_ref(),
@@ -24,10 +32,12 @@ pub(super) fn run_target(
             t.input_schema_json.as_ref(),
         )?
     };
-    if let Some(context) = ctx.input.get("final_recovery_resume")
-        && let Some(input) = rendered_input.as_object_mut()
-    {
-        input.insert("final_recovery_resume".to_string(), context.clone());
+    for key in ENGINE_CONTEXT_KEYS {
+        if let Some(context) = ctx.input.get(key)
+            && let Some(input) = rendered_input.as_object_mut()
+        {
+            input.insert(key.to_string(), context.clone());
+        }
     }
     // A rendered activity `crew` or `crew_config_key` selects an assignment;
     // otherwise dispatch inherits the run's resolved crew.
@@ -90,8 +100,9 @@ pub(super) fn run_target(
     persist_dispatch_invocation(ctx, &step.id, &dispatched_input, &dispatch);
     if timed_out {
         record_pipeline(ctx, &step.id, dispatch.output.clone());
-        return Err(DispatchError::DeterministicActionRefused {
+        return Err(DispatchError::ReviewGateRefused {
             action: step.id.clone(),
+            refusal: orbit_types::workflow::ReviewGateRefusal::TimeoutIncomplete,
             message: "review_timeout_incomplete: reviewer exceeded its wall clock; partial report retained for continuation".into(),
         });
     }
@@ -105,6 +116,15 @@ pub(super) fn run_target(
     let (success, message) =
         reject_malformed_implementer_findings(step, t, success, message, &dispatch.output);
     let (success, message) = accept_implementer_deferral(
+        step,
+        t,
+        ctx,
+        &dispatched_input,
+        success,
+        message,
+        &mut dispatch,
+    );
+    let (success, message) = accept_implementer_owed_criteria(
         step,
         t,
         ctx,
@@ -140,6 +160,27 @@ pub(super) fn run_target(
     } else {
         (success, message)
     };
+    // Latest allowlisted diagnostics live only in `resumed_diagnostics`. A
+    // conflict in this execution already replaced both keys there, including
+    // an explicit empty list. Final recovery clears the pipeline entry, so
+    // reading it here would restore the seed from the incomplete checkpoint.
+    // A success output that already carries a key keeps it; a missing key is
+    // filled from the map. Other failed fields never enter this map.
+    if let Some(output) = dispatch.output.as_object_mut() {
+        let diagnostics = ctx
+            .resumed_diagnostics
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(diagnostics) = diagnostics.get(&step.id) {
+            for key in CONFLICT_DIAGNOSTIC_KEYS {
+                if let Some(value) = diagnostics.get(key) {
+                    output
+                        .entry(key.to_string())
+                        .or_insert_with(|| value.clone());
+                }
+            }
+        }
+    }
     record_pipeline(ctx, &step.id, dispatch.output.clone());
     Ok(StepOutcome {
         success,
@@ -190,6 +231,23 @@ fn dispatch_once(
         },
         t.activity_name.as_deref(),
     );
+    if let Err(DispatchError::RecoverableVcsConflict(conflict)) = &dispatch {
+        let diagnostic = serde_json::json!({
+            "conflicting_paths": conflict.conflicting_paths,
+            "conflicting_files": conflict.conflicting_files,
+        });
+        record_pipeline(ctx, &step.id, diagnostic.clone());
+        // Both keys, including empty lists. The pipeline copy above is what
+        // final recovery forgets; this map is what the success checkpoint reads.
+        record_conflict_diagnostics(ctx, &step.id, &diagnostic);
+        if let Err(error) = ctx
+            .host
+            .checkpoint_step_diagnostic(&ctx.run_id, &step.id, &diagnostic)
+        {
+            ctx.audit
+                .note_telemetry_failure("step_diagnostic", Some(&step.id), &error);
+        }
+    }
     let is_reviewer = reviewer.is_some();
     let timed_out = is_reviewer
         && dispatch.as_ref().is_ok_and(|outcome| {
@@ -245,7 +303,8 @@ fn report_correction(ctx: &ExecCtx<'_>, input: &Value) -> Option<String> {
 }
 
 /// Fail an implementer step whose `unfiled_findings` breaks the shape
-/// `agent_implement` declares [ORB-14927].
+/// `agent_implement` declares [ORB-14927], or whose `regression_from` is not
+/// a list of task IDs.
 ///
 /// The engine does not enforce `output_schema_json`, and the claim handoff
 /// would otherwise be the first to reject the field, after the candidate is
@@ -261,22 +320,32 @@ fn reject_malformed_implementer_findings(
     if !success || !is_implementer_step(step, target) {
         return (success, message);
     }
-    match orbit_types::workflow::unfiled_findings_shape_error(output) {
-        Some(defect) => (
+    if let Some(defect) = orbit_types::workflow::unfiled_findings_shape_error(output) {
+        return (
             false,
             Some(format!(
                 "{}: {defect}. Return `unfiled_findings` \
                  as `[{{\"title\": ..., \"description\": ...}}]`.",
                 orbit_types::workflow::CONTRACT_REFUSAL_MARKER
             )),
+        );
+    }
+    match orbit_types::workflow::implementer_regression_from(output) {
+        Err(defect) => (
+            false,
+            Some(format!(
+                "{}: {defect}. Return `regression_from` as `[\"<culprit task ID>\"]`.",
+                orbit_types::workflow::CONTRACT_REFUSAL_MARKER
+            )),
         ),
-        None => (success, message),
+        Ok(_) => (success, message),
     }
 }
 
 /// Derive an implementer step's deferred sandbox validation from the gate
-/// summary it names and Orbit's own probe in its lane, failing the step
-/// unless it is one sandbox's sanctioned case [ORB-15287] [ORB-15516]. The
+/// summary it names and Orbit's own probes in its lane, failing the step
+/// unless it is the sanctioned case: only deferral notices, of sandboxes the
+/// lane refuses [ORB-15287] [ORB-15516] [ORB-15692]. The
 /// derived record replaces the handoff in the step's output, and an owner run
 /// keeps it for the native replay before delivery. Like malformed findings,
 /// it fails here, before anything is committed.
@@ -312,6 +381,41 @@ fn accept_implementer_deferral(
                 serde_json::to_value(record),
             ) {
                 output.insert("deferred_sandbox_validation".to_string(), record);
+            }
+            (success, message)
+        }
+        Ok(None) => (success, message),
+        Err(refusal) => (false, Some(refusal)),
+    }
+}
+
+/// Admit an implementer step's criteria owed after deploy against the task
+/// pilot's post-deploy finding, failing the step for any criterion the pilot
+/// did not type. The admitted list replaces the field in the step's output.
+/// Like a refused deferral, it fails here, before anything is committed.
+fn accept_implementer_owed_criteria(
+    step: &JobV2Step,
+    target: &TargetStep,
+    ctx: &ExecCtx<'_>,
+    input: &Value,
+    success: bool,
+    message: Option<String>,
+    dispatch: &mut super::super::dispatcher::DispatchOutcome,
+) -> (bool, Option<String>) {
+    if !success || !is_implementer_step(step, target) {
+        return (success, message);
+    }
+    match crate::executor::automation::vcs::accept_implementer_owed_criteria(
+        ctx.host,
+        &ctx.run_id,
+        input,
+        &dispatch.output,
+    ) {
+        Ok(Some(owed)) => {
+            if let (Some(output), Ok(owed)) =
+                (dispatch.output.as_object_mut(), serde_json::to_value(owed))
+            {
+                output.insert(orbit_types::workflow::OWED_CRITERIA_FIELD.to_string(), owed);
             }
             (success, message)
         }
@@ -371,14 +475,10 @@ pub(super) fn persist_dispatch_invocation(
         return;
     };
 
-    if let Err(error) = ctx.host.persist_invocation_trace(
-        &ctx.run_id,
-        step_id,
-        &invocation.provider,
-        invocation.model.as_deref(),
-        input,
-        &invocation.trace,
-    ) {
+    if let Err(error) = ctx
+        .host
+        .persist_invocation_trace(&ctx.run_id, step_id, input, invocation)
+    {
         ctx.audit
             .note_telemetry_failure("invocation_trace", Some(step_id), &error);
     }

@@ -1,0 +1,49 @@
+List files that usually change alongside a repository file
+
+Usage: orbit codebase related [OPTIONS] <PATH>
+
+Arguments:
+  <PATH>
+          A repository-relative file path
+
+Options:
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --window <WINDOW>
+          Landed period ending now
+          
+          [default: 30d]
+          [possible values: 7d, 30d, 90d, all]
+
+      --min-support <MIN_SUPPORT>
+          Minimum shared landed tasks
+          
+          [default: 15]
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --top <TOP>
+          Maximum related paths (1–100)
+          
+          [default: 10]
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')

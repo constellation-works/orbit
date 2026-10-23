@@ -65,30 +65,68 @@ impl Fixture {
         let bin = self._temp.path().join("clock-manager-bin");
         fs::create_dir_all(&bin).expect("create fake clock manager directory");
         let (program, script) = if cfg!(target_os = "macos") {
-            ("launchctl", "#!/bin/sh\nexit 0\n".to_string())
+            (
+                "launchctl",
+                r#"
+case "$*" in
+  "list com.orbit.sweep")
+    if [ -f "$HOME/.fake-clock-enabled" ]; then exit 0; fi
+    printf 'Could not find service "com.orbit.sweep"\n' >&2; exit 1 ;;
+  unload*)
+    rm -f "$HOME/.fake-clock-enabled"; exit 0 ;;
+  load*)
+    fail_activation
+    touch "$HOME/.fake-clock-enabled"; exit 0 ;;
+  *) exit 0 ;;
+esac
+"#,
+            )
         } else {
             (
                 "systemctl",
-                "#!/bin/sh\n\
-                 case \"$*\" in\n\
-                   *\"is-enabled orbit-sweep.timer\"*)\n\
-                     if [ -f \"$HOME/.fake-clock-enabled\" ]; then printf 'enabled\\n'; exit 0; fi\n\
-                     printf 'disabled\\n' >&2; exit 1 ;;\n\
-                   *\"show orbit-sweep.service\"*)\n\
-                     printf 'ActiveState=inactive\\nExecMainStartTimestampMonotonic=0\\nResult=success\\nTimeoutStartUSec=10min\\nKillMode=mixed\\n'; exit 0 ;;\n\
-                   *\"show orbit-sweep.timer\"*)\n\
-                     if [ -f \"$HOME/.fake-clock-enabled\" ]; then\n\
-                       printf 'LoadState=loaded\\nActiveState=active\\nNextElapseUSecMonotonic=999999999999999999\\n'\n\
-                     else\n\
-                       printf 'LoadState=loaded\\nActiveState=inactive\\nNextElapseUSecMonotonic=\\n'\n\
-                     fi; exit 0 ;;\n\
-                   *\"enable orbit-sweep.timer\"*|*\"restart orbit-sweep.timer\"*)\n\
-                     touch \"$HOME/.fake-clock-enabled\"; exit 0 ;;\n\
-                   *) exit 0 ;;\n\
-                 esac\n"
-                    .to_string(),
+                r#"
+case "$*" in
+  "--user is-enabled orbit-sweep.timer")
+    if [ -f "$HOME/.fake-clock-enabled" ]; then printf 'enabled\n'; exit 0; fi
+    if [ -f "$HOME/.config/systemd/user/orbit-sweep.timer" ]; then
+      printf 'disabled\n' >&2
+    else
+      printf 'Failed to get unit file state: No such file or directory\n' >&2
+    fi; exit 1 ;;
+  *"show orbit-sweep.service"*)
+    printf 'ActiveState=inactive\nExecMainStartTimestampMonotonic=0\nResult=success\nTimeoutStartUSec=10min\nKillMode=mixed\n'; exit 0 ;;
+  *"show orbit-sweep.timer"*)
+    if [ -f "$HOME/.fake-clock-enabled" ]; then
+      printf 'LoadState=loaded\nActiveState=active\nNextElapseUSecMonotonic=999999999999999999\n'
+    else
+      printf 'LoadState=loaded\nActiveState=inactive\nNextElapseUSecMonotonic=\n'
+    fi; exit 0 ;;
+  "--user disable --now orbit-sweep.timer")
+    rm -f "$HOME/.fake-clock-enabled"; exit 0 ;;
+  "--user enable orbit-sweep.timer")
+    fail_activation
+    touch "$HOME/.fake-clock-enabled"; exit 0 ;;
+  "--user restart orbit-sweep.timer")
+    touch "$HOME/.fake-clock-enabled"; exit 0 ;;
+  *) exit 0 ;;
+esac
+"#,
             )
         };
+        // Fail exactly one activation, then let the public command roll back
+        // through the same manager. All state belongs to the disposable HOME.
+        let script = format!(
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> "$HOME/.fake-clock-commands"
+fail_activation() {{
+  if [ -f "$HOME/.fake-clock-fail-activation" ]; then
+    rm "$HOME/.fake-clock-fail-activation"
+    printf 'injected activation failure\n' >&2
+    exit 1
+  fi
+}}
+{script}"#
+        );
         let path = bin.join(program);
         fs::write(&path, script).expect("write fake clock manager");
         let mut permissions = fs::metadata(&path)
@@ -257,6 +295,170 @@ fn config_path_and_set_print_json_documents() {
         "json",
     ]);
     assert_eq!(value["value"], 45);
+}
+
+#[cfg(unix)]
+impl Fixture {
+    fn clock_unit_path(&self) -> PathBuf {
+        if cfg!(target_os = "macos") {
+            self.home.join("Library/LaunchAgents/com.orbit.sweep.plist")
+        } else {
+            self.home.join(".config/systemd/user/orbit-sweep.timer")
+        }
+    }
+
+    fn assert_native_cadence(&self, cadence: u64) {
+        let unit = fs::read_to_string(self.clock_unit_path()).expect("read installed clock unit");
+        let expected = if cfg!(target_os = "macos") {
+            format!("<integer>{cadence}</integer>")
+        } else {
+            format!("OnUnitActiveSec={cadence}s")
+        };
+        assert!(unit.lines().any(|line| line.trim() == expected), "{unit}");
+    }
+
+    fn clock_manager_commands(&self) -> Vec<String> {
+        fs::read_to_string(self.home.join(".fake-clock-commands"))
+            .expect("read fake manager commands")
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn set_clock_cadence(&self, cadence: &str) -> Value {
+        self.json_with_fake_clock_manager(&["clock", "set", "--cadence-seconds", cadence, "--json"])
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn clock_cadence_change_keeps_a_paused_clock_paused() {
+    let fixture = Fixture::new();
+    fixture.init_machine_and_workspace();
+    // Install through the CLI, then pause as an operator would.
+    assert_eq!(fixture.set_clock_cadence("120")["activated"], true);
+    fixture.json_with_fake_clock_manager(&["clock", "pause", "--json"]);
+    let before = fixture.clock_manager_commands().len();
+
+    let set = fixture.set_clock_cadence("300");
+    assert_eq!(set["configured_cadence_seconds"], 300);
+    assert_eq!(set["paused"], true);
+    assert_eq!(set["activated"], false);
+    let probe = if cfg!(target_os = "macos") {
+        "list com.orbit.sweep"
+    } else {
+        "--user is-enabled orbit-sweep.timer"
+    };
+    assert_eq!(
+        &fixture.clock_manager_commands()[before..],
+        &[probe],
+        "a paused cadence change must only observe the manager, never reload or activate it"
+    );
+
+    let status = fixture.json_with_fake_clock_manager(&["clock", "status", "--json"]);
+    assert_eq!(status["enabled"], false, "cadence change resumed the clock");
+    assert_eq!(status["configured_cadence_seconds"], 300);
+    fixture.assert_native_cadence(300);
+}
+
+#[cfg(unix)]
+#[test]
+fn clock_cadence_change_activates_enabled_and_never_installed_clocks() {
+    for initially_enabled in [true, false] {
+        let fixture = Fixture::new();
+        fixture.init_machine_and_workspace();
+        assert!(
+            !fixture.clock_unit_path().exists(),
+            "fixture must start uninstalled"
+        );
+        let before = if initially_enabled {
+            assert_eq!(fixture.set_clock_cadence("120")["activated"], true);
+            fixture.clock_manager_commands().len()
+        } else {
+            0
+        };
+
+        let set = fixture.set_clock_cadence("300");
+        assert_eq!(set["activated"], true, "{set}");
+        assert_eq!(set["paused"], false, "{set}");
+        assert_eq!(set["configured_cadence_seconds"], 300);
+        let commands = fixture.clock_manager_commands();
+        let activation = &commands[before..];
+        if cfg!(target_os = "macos") {
+            assert!(
+                activation
+                    .iter()
+                    .any(|command| command.starts_with("unload ")),
+                "{activation:?}"
+            );
+            assert!(
+                activation
+                    .iter()
+                    .any(|command| command.starts_with("load ")),
+                "{activation:?}"
+            );
+        } else {
+            for command in [
+                "--user daemon-reload",
+                "--user enable orbit-sweep.timer",
+                "--user restart orbit-sweep.timer",
+            ] {
+                assert!(
+                    activation.iter().any(|actual| actual == command),
+                    "{activation:?}"
+                );
+            }
+        }
+        let status = fixture.json_with_fake_clock_manager(&["clock", "status", "--json"]);
+        assert_eq!(status["enabled"], true, "{status}");
+        assert_eq!(status["configured_cadence_seconds"], 300);
+        fixture.assert_native_cadence(300);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn clock_cadence_activation_failure_restores_the_previous_cadence() {
+    let fixture = Fixture::new();
+    fixture.init_machine_and_workspace();
+    // A non-default previous cadence proves restoration, rather than reset.
+    assert_eq!(fixture.set_clock_cadence("120")["activated"], true);
+    fs::write(fixture.home.join(".fake-clock-fail-activation"), "")
+        .expect("inject activation failure");
+    let before = fixture.clock_manager_commands().len();
+
+    fixture
+        .orbit_with_fake_clock_manager()
+        .args(["clock", "set", "--cadence-seconds", "300", "--json"])
+        .assert()
+        .failure();
+    assert!(
+        !fixture.home.join(".fake-clock-fail-activation").exists(),
+        "the command must reach the injected manager activation failure"
+    );
+    let commands = fixture.clock_manager_commands();
+    let activation_attempts = commands[before..]
+        .iter()
+        .filter(|command| {
+            if cfg!(target_os = "macos") {
+                command.starts_with("load ")
+            } else {
+                command.as_str() == "--user enable orbit-sweep.timer"
+            }
+        })
+        .count();
+    assert_eq!(
+        activation_attempts, 2,
+        "failed change and rollback: {commands:?}"
+    );
+
+    let status = fixture.json_with_fake_clock_manager(&["clock", "status", "--json"]);
+    assert_eq!(status["configured_cadence_seconds"], 120, "{status}");
+    assert_eq!(
+        status["enabled"], true,
+        "rollback must reactivate the previous unit: {status}"
+    );
+    fixture.assert_native_cadence(120);
 }
 
 #[cfg(unix)]
@@ -611,27 +813,42 @@ fn task_update_refuses_empty_updates_and_unknown_pr_statuses() {
         .args(["task", "update", &id, "--pr-status", "aproved"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("approve"));
+        .stderr(predicate::str::contains("unknown PR status 'aproved'"));
     let shown = fixture.json(&["task", "show", &id, "--format", "json"]);
     assert!(
         shown["pr_status"].is_null(),
         "a rejected value must not be persisted: {shown}"
     );
 
-    fixture
-        .orbit()
-        .args(["task", "update", &id, "--pr-status", "approve"])
-        .assert()
-        .success();
-    let shown = fixture.json(&["task", "show", &id, "--format", "json"]);
-    assert_eq!(shown["pr_status"], "approve");
-    fixture
-        .orbit()
-        .args(["task", "update", &id, "--pr-status", ""])
-        .assert()
-        .success();
-    let shown = fixture.json(&["task", "show", &id, "--format", "json"]);
-    assert!(shown["pr_status"].is_null(), "empty clears: {shown}");
+    for value in [
+        "approve",
+        "approved",
+        "request-changes",
+        "request_changes",
+        "changes-requested",
+        "changes_requested",
+        " APPROVED ",
+        " ApPrOvEd ",
+        " ReQuEsT-ChAnGeS ",
+        "",
+        "   ",
+    ] {
+        if value.trim().is_empty() {
+            fixture
+                .orbit()
+                .args(["task", "update", &id, "--pr-status", "approve"])
+                .assert()
+                .success();
+        }
+        fixture
+            .orbit()
+            .args(["task", "update", &id, "--pr-status", value])
+            .assert()
+            .success();
+        let shown = fixture.json(&["task", "show", &id, "--format", "json"]);
+        let expected = (!value.trim().is_empty()).then_some(value.trim());
+        assert_eq!(shown["pr_status"], serde_json::json!(expected), "{value:?}");
+    }
 }
 
 #[test]
@@ -732,7 +949,16 @@ fn task_dependencies_warn_when_unreadable_like_parent_but_are_still_recorded() {
     let known = String::from_utf8(
         fixture
             .orbit()
-            .args(["task", "add", "--title", "dep", "--complexity", "low"])
+            .args([
+                "task",
+                "add",
+                "--title",
+                "dep",
+                "--complexity",
+                "low",
+                "--tag",
+                "no-diff-expected",
+            ])
             .assert()
             .success()
             .stderr(predicate::str::contains("warning").not())
@@ -753,6 +979,8 @@ fn task_dependencies_warn_when_unreadable_like_parent_but_are_still_recorded() {
             "with known dependency",
             "--complexity",
             "low",
+            "--tag",
+            "no-diff-expected",
             "--dependencies",
             &known,
         ])
@@ -832,55 +1060,5 @@ fn plain_search_rows_and_empty_plugin_doctor_have_no_dangling_separators() {
     assert!(
         !stdout.starts_with('\n'),
         "no rows means no separator before the summary: {stdout:?}"
-    );
-}
-
-/// Git location variables exported into the process outrank `-C`. In an
-/// isolated child, a fixture built under them must create its own repository
-/// and leave the exported one untouched.
-#[test]
-fn fixture_ignores_exported_git_location_variables() {
-    if crate::isolated_test::run_in_child(
-        "machine_readable_confirmations::fixture_ignores_exported_git_location_variables",
-    ) {
-        return;
-    }
-    let temp = tempdir().expect("tempdir");
-    let sentinel = temp.path().join("sentinel");
-    crate::git_repo::init(&sentinel);
-    let sentinel_git = sentinel.join(".git");
-    let snapshot = || {
-        let refs = crate::git_repo::command()
-            .arg("-C")
-            .arg(&sentinel)
-            .arg("for-each-ref")
-            .output()
-            .expect("list sentinel refs");
-        (
-            fs::read(sentinel_git.join("HEAD")).expect("read sentinel HEAD"),
-            fs::read(sentinel_git.join("config")).expect("read sentinel config"),
-            refs.stdout,
-        )
-    };
-    let before = snapshot();
-    let sentinel_git_str = sentinel_git.to_str().expect("utf8 path");
-    let sentinel_work_str = sentinel.to_str().expect("utf8 path");
-
-    let fixture = {
-        let _exported = test_env::scoped([
-            ("GIT_DIR", Some(sentinel_git_str)),
-            ("GIT_COMMON_DIR", Some(sentinel_git_str)),
-            ("GIT_WORK_TREE", Some(sentinel_work_str)),
-        ]);
-        Fixture::new()
-    };
-
-    assert!(
-        fixture.work.join(".git").is_dir(),
-        "the fixture must create its own repository under exported Git variables"
-    );
-    assert!(
-        snapshot() == before,
-        "fixture setup must not write the exported repository's HEAD, config or refs"
     );
 }

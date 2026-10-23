@@ -1,14 +1,17 @@
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_store::contracts::TaskCreateParams as StoreTaskCreateParams;
+use orbit_types::identity::Crew;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    Task, TaskStatus, TaskType, normalize_required_tools, normalize_task_dependencies,
-    normalize_task_tags, validate_os_tags,
+    OrchestratorModelSource, Task, TaskOrigin, TaskStatus, TaskType, normalize_required_tools,
+    normalize_task_dependencies, normalize_task_tags, validate_os_tags,
 };
 
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{random_crew_ticket, seeded_crew_ticket};
+use crate::application::job::crew_pools::{
+    CreationCrewAssignment, random_crew_ticket, seeded_crew_ticket,
+};
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::helpers::{
@@ -107,16 +110,29 @@ impl OrbitRuntime {
     ) -> Result<Task, OrbitError> {
         self.add_task_admitted_guarded(params, agent, model, action_key, None)
     }
+
     pub(crate) fn add_task_admitted_guarded(
+        &self,
+        params: TaskAddParams,
+        agent: Option<String>,
+        model: Option<String>,
+        action_key: Option<&str>,
+        digest: Option<&str>,
+    ) -> Result<Task, OrbitError> {
+        self.add_task_validated(params, agent, model, action_key, digest)
+            .map(|(task, _)| task)
+    }
+
+    pub(super) fn add_task_validated(
         &self,
         mut params: TaskAddParams,
         agent: Option<String>,
         model: Option<String>,
         action_key: Option<&str>,
         digest: Option<&str>,
-    ) -> Result<Task, OrbitError> {
+    ) -> Result<(Task, Vec<String>), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        self.validate_required_tools(&params.required_tools)?;
+        let required_tool_warnings = self.validate_required_tools(&params.required_tools)?;
 
         // [ORB-00417] Redact secrets at the single task-creation choke point
         // (shared by the dashboard POST, CLI `task add`, and the MCP task tool)
@@ -132,7 +148,14 @@ impl OrbitRuntime {
 
         let normalized_tags = normalize_task_tags(params.tags.clone());
         validate_os_tags(&normalized_tags)?;
-        params.title = title_with_provenance_prefix(&params.title, &normalized_tags);
+        let provenance_prefix = provenance_title_prefix(&normalized_tags);
+        // A system filer, or a sweep finding its provenance tag marks, is
+        // automation unless the caller stated an origin. Any other filing
+        // without one stays unset.
+        let origin = params.origin.or_else(|| {
+            (params.system_created || provenance_prefix.is_some()).then_some(TaskOrigin::Automation)
+        });
+        params.title = title_with_provenance_prefix(&params.title, provenance_prefix);
 
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
@@ -159,10 +182,12 @@ impl OrbitRuntime {
         self.validate_crew_name(params.crew.as_deref())?;
         // [ORB-12717] Crew is initially decided here, and never by a later status
         // transition. A caller-supplied crew is kept verbatim; otherwise the
-        // complexity pools (then `default_crew`) choose one for this task.
+        // purpose pool its tags name, then the complexity pools (then
+        // `default_crew`), choose one for this task.
         let mut crew_assignment = self.creation_crew_assignment(
             Some(params.complexity),
             params.crew.as_deref(),
+            &normalized_tags,
             &mut creation_crew_ticket(action_key),
         )?;
         // A crew the system chose from a setting records that setting rather
@@ -176,7 +201,14 @@ impl OrbitRuntime {
         params.crew = crew_assignment
             .as_ref()
             .map(|assignment| assignment.crew.clone());
-        params.orchestrator = self.canonical_crew_name(params.orchestrator.as_deref())?;
+        if let Some(crew) = params.crew.as_deref() {
+            // An explicit crew is kept, including one this host cannot run: it
+            // waits for a host that can. An empty intersection with the task's
+            // `os:` tags is refused here, before the task is stored.
+            self.refuse_unsatisfiable_os_crew(&normalized_tags, crew)?;
+        }
+        let orchestrator = self.canonical_crew(params.orchestrator.as_deref())?;
+        params.orchestrator = orchestrator.as_ref().map(|crew| crew.name.clone());
         if params.orchestrator.is_some()
             && !matches!(initial_status, TaskStatus::Proposed | TaskStatus::Backlog)
         {
@@ -184,6 +216,11 @@ impl OrbitRuntime {
                 "initial status {initial_status} cannot carry an orchestrator; orchestrator can only be set while proposed or backlog"
             )));
         }
+        let (orchestrator_model, orchestrator_model_source) = creation_orchestrator_model(
+            orchestrator.as_ref(),
+            params.orchestrator_model.as_deref(),
+        )?
+        .unzip();
 
         // Context selectors are stored relative to the repository root. The
         // former `--workspace-path` hint changed validation roots without
@@ -233,45 +270,66 @@ impl OrbitRuntime {
                         .as_ref()
                         .map(|assignment| assignment.source.clone()),
                     orchestrator: params.orchestrator.clone(),
+                    orchestrator_model: orchestrator_model.clone(),
+                    orchestrator_model_source,
+                    origin,
                     comments: comments.clone(),
                     context_creation: params.context_creation.authorize.clone(),
                 },
                 action_key,
                 digest,
             )?;
-            // The create contract carries no history, so the provenance entry
-            // is a second write inside the same mutation as the insert.
-            let task = match &crew_assignment {
-                Some(assignment) if !replayed => self
-                    .stores()
-                    .task_records()
-                    .update(
-                        &task.id,
-                        StoreTaskUpdateParams {
-                            actor: SYSTEM_ACTOR_LABEL.to_string(),
-                            append_history: vec![crew_assigned_history(assignment)],
-                            ..Default::default()
-                        },
-                    )
-                    .map_err(|error| {
-                        if digest.is_some() {
-                            OrbitError::DesktopWriteAccepted {
-                                task_id: task.id.clone(),
-                                reason: format!("creation provenance refresh failed: {error}"),
-                            }
-                        } else {
-                            error
-                        }
-                    })?,
-                _ => task,
-            };
+            // The insert is committed from here on, so its event is published
+            // even when the provenance write below fails.
             let event = (!replayed).then(|| OrbitEvent::TaskAdded {
                 id: task.id.clone(),
             });
+            let task = match &crew_assignment {
+                Some(assignment) if !replayed => {
+                    self.record_creation_crew_provenance(task, assignment, digest)
+                }
+                _ => Ok(task),
+            };
             Ok((task, event))
-        })?;
+        })??;
 
-        Ok(task)
+        Ok((task, required_tool_warnings))
+    }
+
+    /// Append the `crew_assigned` history entry to a task just inserted.
+    ///
+    /// The create contract carries no history, so this is a second write
+    /// after the insert has committed. Failing the create here would leave the
+    /// task behind, and an unkeyed retry would insert a duplicate, so the
+    /// created task is returned without the entry; `crew_source` on the task
+    /// still records where its crew came from. A desktop create reports the
+    /// committed id as an accepted write instead.
+    fn record_creation_crew_provenance(
+        &self,
+        task: Task,
+        assignment: &CreationCrewAssignment,
+        digest: Option<&str>,
+    ) -> Result<Task, OrbitError> {
+        let update = self.stores().task_records().update(
+            &task.id,
+            StoreTaskUpdateParams {
+                actor: SYSTEM_ACTOR_LABEL.to_string(),
+                append_history: vec![crew_assigned_history(assignment)],
+                ..Default::default()
+            },
+        );
+        match update {
+            Ok(task) => Ok(task),
+            Err(error) if digest.is_some() => Err(OrbitError::DesktopWriteAccepted {
+                task_id: task.id,
+                reason: format!("creation provenance refresh failed: {error}"),
+            }),
+            Err(error) => {
+                tracing::warn!(task_id = %task.id, %error,
+                    "task created but its crew_assigned history entry could not be written");
+                Ok(task)
+            }
+        }
     }
 }
 
@@ -292,12 +350,49 @@ fn creation_crew_ticket(
     }
 }
 
-/// Apply visible provenance at the shared task-creation boundary used by CLI,
-/// MCP, dashboard, scheduler, and internal callers. Auto-task provenance wins
-/// so scheduler-minted parent tasks keep their established title convention;
-/// finding provenance otherwise follows the fixed table above.
-fn title_with_provenance_prefix(title: &str, tags: &[String]) -> String {
-    let prefix = if tags.iter().any(|tag| tag.starts_with("auto-task:")) {
+/// Longest explicit `orchestrator_model` a create accepts.
+const MAX_ORCHESTRATOR_MODEL_LEN: usize = 128;
+
+/// The orchestrator model a new task records, and the rule that supplied
+/// it: an explicit `orchestrator_model` input, else the configured model of
+/// the resolved `orchestrator` crew, snapshotted now so a later crew-config
+/// edit never rewrites it. `None` without an orchestrator. The caller's
+/// `model` provenance input is never a source: it labels the writer, not
+/// the orchestrator.
+fn creation_orchestrator_model(
+    orchestrator: Option<&Crew>,
+    explicit: Option<&str>,
+) -> Result<Option<(String, OrchestratorModelSource)>, OrbitError> {
+    let explicit = explicit.map(str::trim).filter(|model| !model.is_empty());
+    let Some(crew) = orchestrator else {
+        return match explicit {
+            Some(_) => Err(OrbitError::InvalidInput(
+                "orchestrator_model requires an orchestrator; name the orchestrator crew too"
+                    .to_string(),
+            )),
+            None => Ok(None),
+        };
+    };
+    if let Some(model) = explicit {
+        if model.len() > MAX_ORCHESTRATOR_MODEL_LEN || model.chars().any(char::is_control) {
+            return Err(OrbitError::InvalidInput(format!(
+                "orchestrator_model must be a model id of at most {MAX_ORCHESTRATOR_MODEL_LEN} bytes without control characters"
+            )));
+        }
+        return Ok(Some((model.to_string(), OrchestratorModelSource::Explicit)));
+    }
+    let configured = crew.assignment.model.trim();
+    Ok((!configured.is_empty())
+        .then(|| (configured.to_string(), OrchestratorModelSource::CrewConfig)))
+}
+
+/// The visible provenance a task's tags name, applied at the shared
+/// task-creation boundary used by CLI, MCP, dashboard, scheduler, and internal
+/// callers. Auto-task provenance wins so scheduler-minted parent tasks keep
+/// their established title convention; finding provenance otherwise follows
+/// the fixed table above.
+fn provenance_title_prefix(tags: &[String]) -> Option<&'static str> {
+    if tags.iter().any(|tag| tag.starts_with("auto-task:")) {
         Some(AUTO_TASK_TITLE_PREFIX)
     } else {
         TASK_PROVENANCE_TITLE_PREFIXES
@@ -307,8 +402,10 @@ fn title_with_provenance_prefix(title: &str, tags: &[String]) -> String {
                     .any(|candidate| candidate == tag)
                     .then_some(*prefix)
             })
-    };
+    }
+}
 
+fn title_with_provenance_prefix(title: &str, prefix: Option<&str>) -> String {
     match prefix {
         Some(prefix) if !title.starts_with(prefix) => format!("{prefix}{title}"),
         _ => title.to_string(),

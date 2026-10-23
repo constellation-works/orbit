@@ -41,7 +41,9 @@ use orbit_types::task::{
     CANDIDATE_DISCARDED_EVENT, ContextWideningStep, ExternalRef, Task, TaskArtifact,
     TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
 };
-use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
+use orbit_types::workflow::activity_job::{
+    ActivityV2, ActivityV2Spec, AgentLoopSpec, OnDenial, Provider,
+};
 use orbit_types::workflow::{
     FailureActivityCheckpoint, FinalRecoveryDecision, JobRun, JobRunState, PipelineState,
 };
@@ -57,11 +59,18 @@ const BASE: &str = "agent-main";
 #[cfg(unix)]
 mod absorbed_candidate;
 #[cfg(unix)]
+mod auto_fix_conflict;
+#[cfg(unix)]
 mod conflict_adoption;
 #[cfg(unix)]
 mod declared_reclaim;
 #[cfg(unix)]
 mod dirty_rescue;
+#[cfg(unix)]
+mod generated_regeneration;
+mod preparation;
+mod trash;
+mod unlocked_revalidation;
 
 // ---------------------------------------------------------------------------
 // worktree_gc
@@ -79,7 +88,6 @@ struct GcRun {
     expected_task: &'static str,
 }
 
-#[test]
 fn worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones() {
     isolated(
         "worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones",
@@ -221,7 +229,6 @@ fn worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones() {
 /// task answer; a missing owner route and an owner transport failure are told
 /// apart and each carries its reason; a directory Git does not list as a
 /// worktree is kept with its remedy.
-#[test]
 fn replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest() {
     isolated(
         "replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest",
@@ -341,7 +348,6 @@ fn replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest() 
 
 /// One failed owner route must not suppress lookups to another owner in the
 /// same worktree GC sweep.
-#[test]
 fn replica_worktree_gc_fences_unreachable_owners_by_route() {
     isolated(
         "replica_worktree_gc_fences_unreachable_owners_by_route",
@@ -394,6 +400,7 @@ fn replica_worktree_gc_fences_unreachable_owners_by_route() {
                 WorktreeGcTaskLookup::Found {
                     status: TaskStatus::Done,
                     pr_status: None,
+                    status_since: None,
                 },
             );
 
@@ -425,7 +432,6 @@ fn replica_worktree_gc_fences_unreachable_owners_by_route() {
 /// string must not abort the sweep. A scoped call still classifies the run
 /// it names, and an unscoped call classifies every other worktree while the
 /// bad runs show up as failed report entries.
-#[test]
 fn worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty() {
     isolated(
         "worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty",
@@ -513,7 +519,6 @@ fn worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty() {
 /// leading `-` are refused before any checkout exists. A slash stays in the
 /// branch ref and becomes one directory component, including when
 /// `ORBIT_WORKTREE_ROOT` relocates the root. GC still matches that checkout.
-#[test]
 fn worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root() {
     isolated(
         "worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root",
@@ -640,7 +645,6 @@ fn worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root() {
 // worktree_setup: stale-checkout refusal
 // ---------------------------------------------------------------------------
 
-#[test]
 fn worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched() {
     isolated(
         "worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched",
@@ -702,7 +706,6 @@ fn worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched() {
 /// A registered checkout whose admin `HEAD` is corrupt (a crash mid-commit)
 /// cannot report its status, so setup cannot tell dirty from clean. The edits
 /// in it are unrecoverable once the checkout is force-removed.
-#[test]
 fn worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits() {
     isolated(
         "worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits",
@@ -718,7 +721,7 @@ fn worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits(
             let admin_head = git_path(&checkout.path, "HEAD");
             fs::write(&admin_head, "not a ref\n").unwrap();
             assert!(
-                Command::new("git")
+                crate::git_test_support::command()
                     .args(["status", "--porcelain"])
                     .current_dir(&checkout.path)
                     .output()
@@ -754,7 +757,6 @@ fn worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits(
 /// `origin/main` and `main` name one local landing branch. Setup's pre-check
 /// and `merge_batch_worktree_into_base` both inspect the linked checkout that
 /// holds it, including when the primary checkout is a different dirty tree.
-#[test]
 fn local_landing_precheck_uses_the_normalized_base_checkout() {
     isolated(
         "local_landing_precheck_uses_the_normalized_base_checkout",
@@ -870,7 +872,6 @@ fn local_landing_precheck_uses_the_normalized_base_checkout() {
 // Local delivery: operator-owned untracked files in the landing checkout
 // ---------------------------------------------------------------------------
 
-#[test]
 fn local_landing_preserves_unrelated_untracked_files() {
     isolated("local_landing_preserves_unrelated_untracked_files", || {
         for linked in [false, true] {
@@ -940,7 +941,6 @@ fn local_landing_preserves_unrelated_untracked_files() {
     });
 }
 
-#[test]
 fn local_landing_names_only_untracked_paths_conflicting_with_the_candidate() {
     isolated(
         "local_landing_names_only_untracked_paths_conflicting_with_the_candidate",
@@ -1015,7 +1015,6 @@ fn local_landing_names_only_untracked_paths_conflicting_with_the_candidate() {
     );
 }
 
-#[test]
 fn local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge() {
     isolated(
         "local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge",
@@ -1038,7 +1037,7 @@ fn local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge() {
                     commit_file(&fixture.repo, "README.md", "other side\n");
                     git(&fixture.repo, &["checkout", BASE]);
                     commit_file(&fixture.repo, "README.md", "base side\n");
-                    let merge = Command::new("git")
+                    let merge = crate::git_test_support::command()
                         .args(["merge", "other"])
                         .current_dir(&fixture.repo)
                         .output()
@@ -1097,24 +1096,41 @@ fn local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge() {
 // candidate_resume: a requeued task resumes its preserved candidate
 // ---------------------------------------------------------------------------
 
-/// A clean candidate that passes owner validation on the advanced base is
-/// delivered as is: no implementation step, and the run's own commit step
-/// commits exactly the candidate's change on the new base.
-#[test]
+/// A clean completed candidate is carried to the exact final gate without
+/// preliminary validation. Count native command executions and measure only
+/// the resume-to-final-gate path, excluding compilation and fixture setup.
+#[allow(clippy::print_stderr)]
 fn a_validated_candidate_is_resumed_on_the_new_base_without_implementation() {
     isolated(
         "a_validated_candidate_is_resumed_on_the_new_base_without_implementation",
         || {
             let preserved = PreservedCandidate::new("feature.txt", "feature\n");
             let base = commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
-            preserved.host.set_required_commands(&[
-                "test -f feature.txt && read line < base.txt && test \"$line\" = v2",
-            ]);
+            let trace = preserved.fixture.root.path().join("gate-trace");
+            let probes = [
+                "test -f feature.txt",
+                "read line < base.txt && test \"$line\" = v2",
+                "git diff --check",
+                "git cat-file -e HEAD:base.txt",
+            ];
+            let commands = probes.iter().enumerate().map(|(index, probe)| {
+                format!(
+                    "{probe} && printf '{index} %s %s\\n' \"$(git rev-parse HEAD)\" \"$(git status --porcelain | wc -l | tr -d ' ')\" >> '{}'",
+                    trace.display().to_string().replace('\'', "'\\''")
+                )
+            }).collect::<Vec<_>>();
+            preserved
+                .host
+                .set_required_commands(&commands.iter().map(String::as_str).collect::<Vec<_>>());
             let setup = preserved.next_setup();
             assert_eq!(setup["base_sha"], base.as_str());
-
+            let start = Instant::now();
             let resumed = preserved.resume(&setup).expect("candidate_resume");
-            assert_eq!(resumed["outcome"], "resumed_validated", "{resumed}");
+            let resume_elapsed = start.elapsed();
+            let resume_calls = fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .lines()
+                .count();
             assert_eq!(resumed["implement"], false);
             assert_eq!(resumed["source_run_id"], FAILED_RUN);
             assert_eq!(resumed["source_sha"], preserved.candidate.as_str());
@@ -1123,23 +1139,9 @@ fn a_validated_candidate_is_resumed_on_the_new_base_without_implementation() {
             assert_eq!(git(&checkout.path, &["rev-parse", "HEAD"]), base);
             assert_eq!(
                 git(&checkout.path, &["status", "--porcelain"]),
-                "?? feature.txt",
-                "the candidate is applied as uncommitted work"
+                "?? feature.txt"
             );
-            assert_resume_recorded(&preserved, "resumed_validated");
-
-            let committed = action(
-                &preserved.host,
-                "git_commit",
-                &json!({
-                    "job_run_id": NEXT_RUN,
-                    "scope": "all",
-                    "workspace_path": checkout.path,
-                    "base_ref": setup["base_ref"],
-                    "base_sha": setup["base_sha"],
-                }),
-            )
-            .expect("the run's commit step delivers the candidate");
+            let committed = preserved.commit(&setup);
             let head = committed["commit_sha"].as_str().unwrap();
             assert_eq!(
                 git(&checkout.path, &["rev-parse", &format!("{head}^")]),
@@ -1149,14 +1151,63 @@ fn a_validated_candidate_is_resumed_on_the_new_base_without_implementation() {
                 git(&checkout.path, &["show", &format!("{head}:feature.txt")]),
                 "feature"
             );
+
+            // The base moves after commit; validate the synchronized head,
+            // rather than the preserved source or the first commit.
+            let synchronized_base = commit_file(&preserved.fixture.repo, "synced.txt", "v3\n");
+            let common = json!({
+                "job_run_id": NEXT_RUN, "completed_task_ids": [RESUME_TASK],
+                "workspace_path": checkout.path, "base": BASE, "base_sync": "local",
+            });
+            let prepared = action(&preserved.host, "pr_prepare", &common).unwrap();
+            let mut sync_input = prepared.as_object().unwrap().clone();
+            sync_input.extend(common.as_object().unwrap().clone());
+            let synced = action(&preserved.host, "git_rebase", &Value::Object(sync_input)).unwrap();
+            assert_eq!(synced["base_sha"], synchronized_base);
+            let final_head = git(&checkout.path, &["rev-parse", "HEAD"]);
+            assert_ne!(final_head, head);
+            let gate_start = Instant::now();
+            let mut gate_input = setup.clone();
+            gate_input["base_sha"] = synced["base_sha"].clone();
+            let validated = preserved.validate(&gate_input).expect("final gate");
+            let gate_elapsed = gate_start.elapsed();
+            let trace = fs::read_to_string(&trace).unwrap();
+            let calls = trace.lines().count();
+            eprintln!(
+                "resume_gate_measurement {}",
+                json!({
+                    "outcome": resumed["outcome"], "commands": commands,
+                    "resume_command_calls": resume_calls, "final_command_calls": calls - resume_calls,
+                    "full_gate_passes": calls / probes.len(),
+                    "resume_ms": resume_elapsed.as_secs_f64() * 1000.0,
+                    "final_gate_ms": gate_elapsed.as_secs_f64() * 1000.0,
+                    "critical_path_ms": start.elapsed().as_secs_f64() * 1000.0,
+                    "preserved_source": preserved.candidate, "committed_head": head,
+                    "synchronized_base": synchronized_base, "tested_head": validated["tested_head"],
+                    "trace": trace,
+                })
+            );
+            // This is the regression assertion; before the fix the same
+            // native probes run four times here and four times at the gate.
+            assert_eq!(resume_calls, 0, "resume must not run a duplicate full gate");
+            assert_eq!(calls, probes.len(), "exactly one full gate");
+            for (index, line) in trace.lines().enumerate() {
+                assert_eq!(
+                    line,
+                    format!("{index} {final_head} 0"),
+                    "each gate command sees the clean synchronized head"
+                );
+            }
+            assert_eq!(validated["tested_head"], final_head);
+            assert_eq!(resumed["outcome"], "resumed_carried", "{resumed}");
+            assert_resume_recorded(&preserved, "resumed_carried");
         },
     );
 }
 
 /// A candidate an Orbit upgrade held when it refused the reviewer's `orbit`
-/// is resumed by the task's next run, as validated work: the upgrade never
+/// is resumed by the task's next run, as carried work: the upgrade never
 /// judged it.
-#[test]
 fn a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run() {
     isolated(
         "a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run",
@@ -1169,17 +1220,16 @@ fn a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run() {
             let setup = preserved.next_setup();
 
             let resumed = preserved.resume(&setup).expect("candidate_resume");
-            assert_eq!(resumed["outcome"], "resumed_validated", "{resumed}");
+            assert_eq!(resumed["outcome"], "resumed_carried", "{resumed}");
             assert_eq!(resumed["implement"], false, "{resumed}");
             assert_eq!(resumed["source_sha"], preserved.candidate.as_str());
-            assert_resume_recorded(&preserved, "resumed_validated");
+            assert_resume_recorded(&preserved, "resumed_carried");
         },
     );
 }
 
 /// A candidate held when its parent stopped waiting for the run [ORB-15643]
 /// is resumed by the task's requeued run: the cancel judged nothing.
-#[test]
 fn a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run() {
     isolated(
         "a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run",
@@ -1192,9 +1242,9 @@ fn a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run() {
             let setup = preserved.next_setup();
 
             let resumed = preserved.resume(&setup).expect("candidate_resume");
-            assert_eq!(resumed["outcome"], "resumed_validated", "{resumed}");
+            assert_eq!(resumed["outcome"], "resumed_carried", "{resumed}");
             assert_eq!(resumed["source_sha"], preserved.candidate.as_str());
-            assert_resume_recorded(&preserved, "resumed_validated");
+            assert_resume_recorded(&preserved, "resumed_carried");
         },
     );
 }
@@ -1202,7 +1252,6 @@ fn a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run() {
 /// A candidate that conflicts with the advanced base is handed to the
 /// implementer as uncommitted work with the conflict markers and paths;
 /// validation does not run on a conflicted tree.
-#[test]
 fn a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict() {
     isolated(
         "a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict",
@@ -1242,71 +1291,128 @@ fn a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict() {
     );
 }
 
-/// A clean candidate that fails owner validation is handed to the
-/// implementer with the failing command and its output.
-#[test]
+/// A carried candidate is judged at the final gate; a candidate failure
+/// retains the failing command and output for existing recovery.
 fn a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output() {
     isolated(
         "a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output",
         || {
-            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
-            commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
-            // The base has no feature.txt, so the base passes and the
-            // failure is the candidate's.
-            let command = "test ! -f feature.txt || { echo 'feature.txt is wrong' >&2; exit 3; }";
-            preserved.host.set_required_commands(&[command]);
-            let setup = preserved.next_setup();
-
-            let resumed = preserved.resume(&setup).expect("candidate_resume");
-            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
-            assert_eq!(resumed["implement"], true);
-            assert_eq!(resumed["repair"]["trigger"], "validation");
-            assert_eq!(resumed["repair"]["command"], command);
-            assert_eq!(resumed["repair"]["exit_code"], 3);
-            assert!(
-                resumed["repair"]["output"]
-                    .as_str()
-                    .unwrap()
-                    .contains("feature.txt is wrong"),
-                "{resumed}"
-            );
-            let checkout = Checkout::from_setup(&setup);
-            assert_eq!(
-                fs::read_to_string(checkout.path.join("feature.txt")).unwrap(),
-                "feature\n",
-                "the implementer starts from the candidate"
-            );
-            assert_resume_recorded(&preserved, "resumed_repaired");
+            for (case, command) in [
+                (
+                    "base-passes",
+                    "test ! -f feature.txt || { echo 'feature.txt is wrong' >&2; exit 3; }",
+                ),
+                (
+                    "disjoint",
+                    "if test -f feature.txt; then echo 'test suite::added ... FAILED'; else echo 'test suite::broken ... FAILED'; fi; exit 3",
+                ),
+                (
+                    "shared-plus-new",
+                    "echo 'test suite::broken ... FAILED'; test ! -f feature.txt || echo 'test suite::added ... FAILED'; exit 3",
+                ),
+                ("unknown", "echo 'lint is red' >&2; exit 3"),
+            ] {
+                let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+                commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
+                preserved.host.set_required_commands(&[command]);
+                let setup = preserved.next_setup();
+                let resumed = preserved.resume(&setup).expect("candidate_resume");
+                assert_eq!(resumed["outcome"], "resumed_carried", "{case}: {resumed}");
+                assert_eq!(resumed["implement"], false);
+                preserved.commit(&setup);
+                let error = preserved
+                    .validate(&setup)
+                    .expect_err("final gate rejects candidate");
+                let message = error.to_string();
+                assert!(
+                    !orbit_types::workflow::is_baseline_red_failure(None, Some(&message)),
+                    "{message}"
+                );
+                assert!(
+                    !orbit_types::workflow::is_validation_environment_failure(None, Some(&message)),
+                    "{message}"
+                );
+                let log = preserved.validation_log();
+                assert_eq!(log["command"], command);
+                assert_eq!(log["exit_code"], 3);
+                assert_eq!(log["baseline_reproduces"], false);
+                let expected = if case == "base-passes" {
+                    "feature.txt is wrong"
+                } else if case == "unknown" {
+                    "lint is red"
+                } else {
+                    "suite::added"
+                };
+                assert!(
+                    log["output"].as_str().unwrap().contains(expected),
+                    "{resumed}"
+                );
+                if case == "disjoint" || case == "shared-plus-new" {
+                    assert_eq!(log["baseline"]["failures"], json!(["test suite::broken"]));
+                    assert!(
+                        log["failures"]
+                            .as_array()
+                            .unwrap()
+                            .contains(&json!("test suite::added"))
+                    );
+                }
+                let checkout = Checkout::from_setup(&setup);
+                assert_eq!(
+                    fs::read_to_string(checkout.path.join("feature.txt")).unwrap(),
+                    "feature\n",
+                    "the implementer starts from the candidate"
+                );
+                assert_resume_recorded(&preserved, "resumed_carried");
+            }
         },
     );
 }
 
 /// A candidate whose required command fails on the base exactly as on the
 /// candidate is not handed to the implementer: no repair of the candidate
-/// can make it pass, so the run resumes it unjudged and the suite decides.
-#[test]
+/// can make it pass, so only the final gate produces the typed hold.
 fn a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implementer() {
     isolated(
         "a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implementer",
         || {
-            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
-            commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
-            preserved
-                .host
-                .set_required_commands(&["echo 'lint is red' >&2; exit 3"]);
-            let setup = preserved.next_setup();
-
-            let resumed = preserved.resume(&setup).expect("candidate_resume");
-            assert_eq!(resumed["outcome"], "resumed_unjudged", "{resumed}");
-            assert_eq!(resumed["implement"], false, "{resumed}");
-            assert!(resumed["repair"].is_null(), "{resumed}");
-            let checkout = Checkout::from_setup(&setup);
-            assert_eq!(
-                fs::read_to_string(checkout.path.join("feature.txt")).unwrap(),
-                "feature\n",
-                "the candidate is preserved"
-            );
-            assert_resume_recorded(&preserved, "resumed_unjudged");
+            for (kind, command) in [
+                (
+                    "baseline",
+                    "printf 'error: lint is red\\n  --> src/lib.rs:1:1\\n' >&2; exit 3",
+                ),
+                ("environment", "orbit-resume-fixture-missing-tool"),
+                ("signal", "kill -TERM $$"),
+            ] {
+                let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+                commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
+                preserved.host.set_required_commands(&[command]);
+                let setup = preserved.next_setup();
+                let resumed = preserved.resume(&setup).expect("candidate_resume");
+                assert_eq!(resumed["outcome"], "resumed_carried", "{resumed}");
+                assert_eq!(resumed["implement"], false);
+                assert!(resumed["repair"].is_null());
+                preserved.commit(&setup);
+                let error = preserved.validate(&setup).expect_err("final gate refuses");
+                let message = error.to_string();
+                assert_eq!(
+                    orbit_types::workflow::is_baseline_red_failure(None, Some(&message)),
+                    kind == "baseline",
+                    "{kind}: {message}"
+                );
+                assert_eq!(
+                    orbit_types::workflow::is_validation_environment_failure(None, Some(&message)),
+                    kind != "baseline",
+                    "{kind}: {message}"
+                );
+                assert_eq!(
+                    git(
+                        &Checkout::from_setup(&setup).path,
+                        &["show", "HEAD:feature.txt"]
+                    ),
+                    "feature"
+                );
+                assert_resume_recorded(&preserved, "resumed_carried");
+            }
         },
     );
 }
@@ -1314,8 +1420,7 @@ fn a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implement
 /// A handoff whose failed step is the implementation, or any step before
 /// `commit`, is unfinished. Requeue applies that candidate and runs the
 /// implementer even when owner validation would pass, and when no command
-/// is configured. A failure at `commit` still resumes as validated.
-#[test]
+/// is configured. A failure at `commit` still resumes as carried.
 fn an_implementation_failure_handoff_is_requeued_for_the_implementer() {
     isolated(
         "an_implementation_failure_handoff_is_requeued_for_the_implementer",
@@ -1340,7 +1445,7 @@ fn an_implementation_failure_handoff_is_requeued_for_the_implementer() {
             );
             assert_resume_recorded(&preserved, "resumed_repaired");
 
-            // Empty required commands used to return `resumed_validated`
+            // Empty required commands used to accept unfinished work
             // without running anything. The nested implement step and the
             // steps before it share the boundary.
             preserved.host.set_required_commands(&[]);
@@ -1366,16 +1471,18 @@ fn an_implementation_failure_handoff_is_requeued_for_the_implementer() {
             let (_setup, committed) = preserved
                 .resume_failed_step("commit", "jrun-commit")
                 .expect("commit handoff");
-            assert_eq!(committed["outcome"], "resumed_validated", "{committed}");
+            assert_eq!(committed["outcome"], "resumed_carried", "{committed}");
             assert_eq!(committed["implement"], false);
-            assert_resume_recorded(&preserved, "resumed_validated");
+            assert_resume_recorded(&preserved, "resumed_carried");
         },
     );
 }
 
-/// [ORB-15548] Resume cannot validate a known-red candidate that still skips
-/// a host path or whose durable replay reports no executed tests.
-#[test]
+/// [ORB-15548] Carried candidates still owe host and replay coverage at the
+/// final gate, including known-red commands. This fixture follows the
+/// `ORBIT_VALIDATION_SELECTION` replay request and reports executed identities:
+/// production correctly refuses a base run with a different selection or
+/// without proof that the requested test ran.
 fn resumed_known_red_candidates_must_complete_host_and_replay_coverage() {
     isolated(
         "resumed_known_red_candidates_must_complete_host_and_replay_coverage",
@@ -1389,12 +1496,30 @@ fn resumed_known_red_candidates_must_complete_host_and_replay_coverage() {
                 ("replay-zero", "", true, 0, false),
                 ("replay-executed", "", true, 3, true),
                 ("replay-deferred", notice, true, 3, false),
+                ("replay-missing", "", true, 3, false),
+                ("replay-partial", "", true, 3, false),
+                ("selection-mismatch", "", true, 3, false),
             ] {
                 let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+                let mismatch_selection = if case == "selection-mismatch" {
+                    "if [ -n \"$ORBIT_VALIDATION_SELECTION\" ]; then \
+                     selection='{\"packages\":[\"other\"],\"failing_tests\":[\"fixture\"]}'; fi; "
+                } else {
+                    ""
+                };
+                let executed_tests = match case {
+                    "replay-missing" => "",
+                    "replay-partial" => ",\"executed_tests\":[\"other\"]",
+                    "replay-zero" => ",\"executed_tests\":[]",
+                    _ => ",\"executed_tests\":[\"fixture\"]",
+                };
                 let command = format!(
-                    "printf 'test fixture ... FAILED\\n{output_notice}\\n'; \
-                     printf '{{\"schema_version\":1,\"selection\":{{\"packages\":[\"fixture\"]}},\"tests_run\":{tests_run}}}' \
-                     > \"$ORBIT_VALIDATION_SUMMARY\"; exit 2"
+                    "selection=\"$ORBIT_VALIDATION_SELECTION\"; \
+                     [ -n \"$selection\" ] || selection='{{\"packages\":[\"fixture\"]}}'; \
+                     {mismatch_selection} \
+                     printf 'test fixture ... FAILED\\n{output_notice}\\n'; \
+                     printf '{{\"schema_version\":1,\"selection\":%s,\"tests_run\":{tests_run}{executed_tests}}}' \
+                     \"$selection\" > \"$ORBIT_VALIDATION_SUMMARY\"; exit 2"
                 );
                 preserved.host.set_required_commands(&[&command]);
                 if replay {
@@ -1422,23 +1547,44 @@ fn resumed_known_red_candidates_must_complete_host_and_replay_coverage() {
                 }
                 let setup = preserved.next_setup();
                 let resumed = preserved.resume(&setup).unwrap();
-                assert_eq!(
-                    resumed["outcome"],
-                    if validated {
-                        "resumed_validated"
-                    } else {
-                        "resumed_unjudged"
-                    },
-                    "{case}: {resumed}"
-                );
-                if case == "replay-zero" {
-                    assert!(
-                        resumed["reason"]
-                            .as_str()
-                            .unwrap()
-                            .contains("replayed nothing"),
-                        "{resumed}"
+                assert_eq!(resumed["outcome"], "resumed_carried", "{case}: {resumed}");
+                assert_eq!(resumed["implement"], false);
+                preserved.commit(&setup);
+                let verdict = preserved.validate(&setup);
+                if validated {
+                    assert_eq!(
+                        verdict.unwrap()["decision"],
+                        "passed_with_known_red",
+                        "{case}"
                     );
+                } else {
+                    let error = verdict.expect_err("unexecuted coverage refuses");
+                    let message = error.to_string();
+                    if case == "replay-zero" {
+                        assert!(
+                            matches!(error, OrbitError::PolicyDenied(_)),
+                            "zero replay is refused"
+                        );
+                        assert!(message.contains("replayed nothing"), "{message}");
+                    } else {
+                        let refusal = match case {
+                            "replay-missing" => "no executed-test identity proof",
+                            "replay-partial" => "did not execute requested test",
+                            "selection-mismatch" => "the base run tested",
+                            _ => "",
+                        };
+                        if !refusal.is_empty() {
+                            assert!(message.contains(refusal), "{case}: {message}");
+                        } else {
+                            assert!(
+                                orbit_types::workflow::is_baseline_red_failure(
+                                    None,
+                                    Some(&message)
+                                ),
+                                "{case}: incomplete coverage cannot be known red: {message}"
+                            );
+                        }
+                    }
                 }
             }
         },
@@ -1448,7 +1594,6 @@ fn resumed_known_red_candidates_must_complete_host_and_replay_coverage() {
 /// A spec change since the candidate's run, or an operator discard recorded
 /// since that run began, forces a fresh implementation with the reason, and
 /// leaves the checkout untouched. A discard older than the run does not.
-#[test]
 fn a_changed_spec_or_an_operator_discard_implements_fresh() {
     isolated(
         "a_changed_spec_or_an_operator_discard_implements_fresh",
@@ -1500,7 +1645,7 @@ fn a_changed_spec_or_an_operator_discard_implements_fresh() {
             );
             let resumed = preserved.resume(&setup).expect("candidate_resume");
             assert_eq!(
-                resumed["outcome"], "resumed_validated",
+                resumed["outcome"], "resumed_carried",
                 "a discard from before the candidate's run does not apply: {resumed}"
             );
         },
@@ -1510,7 +1655,6 @@ fn a_changed_spec_or_an_operator_discard_implements_fresh() {
 /// [ORB-14450] Selectors are preparation hints, not what the task means: a
 /// task-pilot or operator edit to them after a failure preserved the
 /// candidate keeps it, while a description or criteria edit still does not.
-#[test]
 fn a_selector_only_edit_keeps_the_preserved_candidate() {
     isolated("a_selector_only_edit_keeps_the_preserved_candidate", || {
         let preserved = PreservedCandidate::new("feature.txt", "feature\n");
@@ -1520,9 +1664,9 @@ fn a_selector_only_edit_keeps_the_preserved_candidate() {
         let setup = preserved.next_setup();
 
         let resumed = preserved.resume(&setup).expect("candidate_resume");
-        assert_eq!(resumed["outcome"], "resumed_validated", "{resumed}");
+        assert_eq!(resumed["outcome"], "resumed_carried", "{resumed}");
         assert_eq!(resumed["implement"], false);
-        assert_resume_recorded(&preserved, "resumed_validated");
+        assert_resume_recorded(&preserved, "resumed_carried");
 
         preserved
             .host
@@ -1543,7 +1687,6 @@ fn a_selector_only_edit_keeps_the_preserved_candidate() {
 /// commit the hold names: no implementer, and no owner validation here — the
 /// pipeline's own validation and the fresh review judge it. A selector edit
 /// since the hold does not retire it.
-#[test]
 fn an_evidence_receipt_resumes_the_held_candidate_without_the_implementer() {
     isolated(
         "an_evidence_receipt_resumes_the_held_candidate_without_the_implementer",
@@ -1580,7 +1723,6 @@ fn an_evidence_receipt_resumes_the_held_candidate_without_the_implementer() {
 /// with a typed reason and an untouched checkout: its commit is missing, an
 /// operator discarded it, the description changed, or the receipt is not
 /// the task's latest decision.
-#[test]
 fn a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason() {
     isolated(
         "a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason",
@@ -1629,6 +1771,8 @@ fn a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason
                     note: None,
                     from_status: Some(TaskStatus::Backlog),
                     to_status: Some(TaskStatus::Blocked),
+                    operation_id: None,
+                    decision: None,
                 },
             );
             fresh("no_candidate");
@@ -1641,7 +1785,6 @@ fn a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason
 /// base for the implementer to continue, never validated here and never
 /// written to a task history that lives on the owner. Without one, or when
 /// its changes conflict with the base, the usual outcomes apply.
-#[test]
 fn a_claimed_leaf_continues_the_candidate_its_owner_kept() {
     isolated(
         "a_claimed_leaf_continues_the_candidate_its_owner_kept",
@@ -1729,7 +1872,6 @@ fn a_claimed_leaf_continues_the_candidate_its_owner_kept() {
 /// handoff on its run; the owner's next run of the task continues the
 /// candidate kept from that leaf's claim, naming the claim and machine in the
 /// task's history. A candidate kept from some other run is not resurrected.
-#[test]
 fn a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept() {
     isolated(
         "a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept",
@@ -1752,6 +1894,7 @@ fn a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept() {
                     durable_ref: None,
                     carry_failure: None,
                     interrupted_review: None,
+                    landing_stop: None,
                 },
                 fresh: None,
             };
@@ -1795,7 +1938,6 @@ fn a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept() {
 /// stopped landing preserved onto its fresh base. The implementer always gets
 /// it: a conflict to resolve against what the base gained, or a clean apply to
 /// confirm on the moved base. Neither reads nor writes the owner's task.
-#[test]
 fn a_repair_claim_resumes_its_stopped_landing_candidate_for_the_implementer() {
     isolated(
         "a_repair_claim_resumes_its_stopped_landing_candidate_for_the_implementer",
@@ -2049,6 +2191,8 @@ impl PreservedCandidate {
                 )),
                 from_status: Some(TaskStatus::InProgress),
                 to_status: Some(TaskStatus::Backlog),
+                operation_id: None,
+                decision: None,
             },
         );
     }
@@ -2090,6 +2234,40 @@ impl PreservedCandidate {
                 },
             }),
         )
+    }
+
+    fn commit(&self, setup: &Value) -> Value {
+        action(
+            &self.host,
+            "git_commit",
+            &json!({
+                "job_run_id": NEXT_RUN, "scope": "all",
+                "workspace_path": setup["workspace_path"],
+                "base_ref": setup["base_ref"], "base_sha": setup["base_sha"],
+            }),
+        )
+        .expect("commit carried candidate")
+    }
+
+    fn validate(&self, setup: &Value) -> Result<Value, OrbitError> {
+        action(
+            &self.host,
+            "candidate_validate",
+            &json!({
+                "job_run_id": NEXT_RUN, "completed_task_ids": [RESUME_TASK],
+                "workspace_path": setup["workspace_path"],
+                "base_ref": setup["base_ref"], "base_sha": setup["base_sha"],
+            }),
+        )
+    }
+
+    fn validation_log(&self) -> Value {
+        let artifacts = self.host.artifacts.lock().unwrap();
+        let log = artifacts[RESUME_TASK]
+            .iter()
+            .find(|artifact| artifact.path == format!("validation/{NEXT_RUN}/0.json"))
+            .expect("durable final validation evidence");
+        serde_json::from_slice(&log.content).unwrap()
     }
 
     fn resume(&self, setup: &Value) -> Result<Value, OrbitError> {
@@ -2141,6 +2319,8 @@ fn discard_entry(at: chrono::DateTime<Utc>) -> TaskHistoryEntry {
         note: None,
         from_status: None,
         to_status: None,
+        operation_id: None,
+        decision: None,
     }
 }
 
@@ -2148,7 +2328,6 @@ fn discard_entry(at: chrono::DateTime<Utc>) -> TaskHistoryEntry {
 // pr_prepare + git_rebase
 // ---------------------------------------------------------------------------
 
-#[test]
 fn git_rebase_decision_follows_the_checkout_state() {
     isolated("git_rebase_decision_follows_the_checkout_state", || {
         // A candidate that does not overlap the advanced base is rebased.
@@ -2174,6 +2353,88 @@ fn git_rebase_decision_follows_the_checkout_state() {
         assert_eq!(conflict.target_base_sha, conflicted.target);
         assert_eq!(conflict.original_base_sha, conflicted.base_sha);
         assert_eq!(conflict.conflicting_paths, ["README.md"]);
+        assert_eq!(
+            conflict.conflicting_files,
+            vec![orbit_common::ConflictedFile {
+                path: "README.md".to_string(),
+                deterministically_resolvable: false,
+            }]
+        );
+        // Supply real unmerged index entries whose modes and IDs prove a
+        // trivial resolution. Re-entering git_rebase diagnoses the live stop
+        // without changing the index or authorizing a merge.
+        let stages = git(&conflicted.checkout.path, &["ls-files", "--unmerged"]);
+        let entries = stages
+            .lines()
+            .map(|line| {
+                let (entry, path) = line.split_once('\t').unwrap();
+                let fields = entry.split_whitespace().collect::<Vec<_>>();
+                (
+                    fields[0].to_string(),
+                    fields[1].to_string(),
+                    fields[2].to_string(),
+                    path.to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (sources, deterministic) in [
+            ([Some(0), Some(1), Some(1)], true),
+            ([Some(0), Some(0), Some(2)], true),
+            ([Some(0), Some(1), Some(0)], true),
+            ([None, Some(1), Some(1)], true),
+            ([None, Some(1), Some(2)], false),
+        ] {
+            use std::io::Write;
+            // Clear the old stages so absent entries really are absent.
+            let mut input = format!("0 {}\tREADME.md\n", "0".repeat(entries[0].1.len()));
+            input += &sources
+                .iter()
+                .enumerate()
+                .filter_map(|(index, source)| {
+                    let content = &entries[(*source)?];
+                    Some(format!(
+                        "{} {} {}\tREADME.md\n",
+                        content.0,
+                        content.1,
+                        index + 1
+                    ))
+                })
+                .collect::<String>();
+            let mut command = crate::git_test_support::command()
+                .current_dir(&conflicted.checkout.path)
+                .args(["update-index", "--index-info"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            command
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(input.as_bytes())
+                .unwrap();
+            assert!(command.wait_with_output().unwrap().status.success());
+            let before = git(&conflicted.checkout.path, &["ls-files", "--unmerged"]);
+            let OrbitError::RecoverableVcsConflict(diagnosed) = conflicted.rebase().unwrap_err()
+            else {
+                panic!("expected the stopped rebase's structured conflict");
+            };
+            assert_eq!(
+                diagnosed.conflicting_files,
+                vec![orbit_common::ConflictedFile {
+                    path: "README.md".to_string(),
+                    deterministically_resolvable: deterministic,
+                }],
+                "stage sources: {sources:?}"
+            );
+            assert_eq!(
+                git(&conflicted.checkout.path, &["ls-files", "--unmerged"]),
+                before
+            );
+            assert!(rebase_in_progress(&conflicted.checkout.path));
+        }
+
         assert!(rebase_in_progress(&conflicted.checkout.path));
         assert!(!git(&conflicted.checkout.path, &["ls-files", "-u"]).is_empty());
 
@@ -2209,12 +2470,78 @@ fn git_rebase_decision_follows_the_checkout_state() {
     });
 }
 
+fn git_rebase_rename_delete_conflicts_remain_for_recovery() {
+    isolated(
+        "git_rebase_rename_delete_conflicts_remain_for_recovery",
+        || {
+            for candidate_renames in [true, false] {
+                let edit = |repo: &Path, rename: bool| {
+                    if rename {
+                        git(repo, &["mv", "README.md", "renamed.md"]);
+                    } else {
+                        git(repo, &["rm", "README.md"]);
+                    }
+                    git(repo, &["commit", "-m", "rename or delete"]);
+                    git(repo, &["rev-parse", "HEAD"])
+                };
+                let prepared = PreparedRebase::with_edits(
+                    "jrun-rebase-rename-delete",
+                    |repo| edit(repo, candidate_renames),
+                    |repo| edit(repo, !candidate_renames),
+                );
+                let OrbitError::RecoverableVcsConflict(conflict) = prepared.rebase().unwrap_err()
+                else {
+                    panic!("expected Git's rename/delete conflict");
+                };
+                let index = git(&prepared.checkout.path, &["ls-files", "--unmerged"]);
+                let entries = index
+                    .lines()
+                    .map(|line| {
+                        let (entry, path) = line.split_once('\t').unwrap();
+                        let fields = entry.split_whitespace().collect::<Vec<_>>();
+                        (fields[0], fields[1], fields[2], path)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(entries.len(), 2, "Git produced a missing-side conflict");
+                assert_eq!(entries[0].2, "1");
+                assert_eq!(entries[1].2, if candidate_renames { "3" } else { "2" });
+                assert_eq!(entries[0].0, entries[1].0, "unchanged mode");
+                assert_eq!(entries[0].1, entries[1].1, "unchanged content");
+                assert!(entries.iter().all(|entry| entry.3 == "renamed.md"));
+                assert_eq!(conflict.conflicting_paths, ["renamed.md"]);
+                assert_eq!(
+                    conflict.conflicting_files,
+                    vec![orbit_common::ConflictedFile {
+                        path: "renamed.md".to_string(),
+                        deterministically_resolvable: false,
+                    }]
+                );
+
+                // Re-observing the stop supplies diagnostics without resolving
+                // the rename/delete choice or certifying recovery.
+                let head = prepared.head();
+                let OrbitError::RecoverableVcsConflict(diagnosed) = prepared.rebase().unwrap_err()
+                else {
+                    panic!("expected the stopped rebase's structured conflict");
+                };
+                assert_eq!(diagnosed.conflicting_files, conflict.conflicting_files);
+                assert_eq!(
+                    git(&prepared.checkout.path, &["ls-files", "--unmerged"]),
+                    index
+                );
+                assert_eq!(prepared.head(), head);
+                assert!(rebase_in_progress(&prepared.checkout.path));
+                assert!(prepared.host.checkpoints().is_empty());
+            }
+        },
+    );
+}
+
 // ---------------------------------------------------------------------------
 // pr_conflict_recovery
 // ---------------------------------------------------------------------------
 
 #[cfg(unix)]
-#[test]
 fn conflict_recovery_leaf_completes_only_its_checkpointed_rebase() {
     isolated(
         "conflict_recovery_leaf_completes_only_its_checkpointed_rebase",
@@ -2304,7 +2631,6 @@ fn conflict_recovery_leaf_completes_only_its_checkpointed_rebase() {
 /// completes as a new host-reserved attempt instead of colliding with A. The
 /// retry then delivers B's exact evidence and nothing older.
 #[cfg(unix)]
-#[test]
 fn a_resumed_run_recovers_the_same_step_again_as_a_new_attempt() {
     isolated(
         "a_resumed_run_recovers_the_same_step_again_as_a_new_attempt",
@@ -2488,7 +2814,6 @@ fn stopped_conflict(prepared: &PreparedRebase) -> Value {
 /// removed original), continues the rebase, and widens the task's selectors
 /// with recovery provenance. Scratch under `.orbit/tmp/` is never staged.
 #[cfg(unix)]
-#[test]
 fn conflict_recovery_commits_companion_edits_with_the_resolution() {
     isolated(
         "conflict_recovery_commits_companion_edits_with_the_resolution",
@@ -2557,7 +2882,6 @@ fn conflict_recovery_commits_companion_edits_with_the_resolution() {
 /// recovery round resolves it and certifies the whole rewrite, which the
 /// retry then delivers.
 #[cfg(unix)]
-#[test]
 fn conflict_recovery_resolves_each_stop_of_a_multi_commit_rebase() {
     isolated(
         "conflict_recovery_resolves_each_stop_of_a_multi_commit_rebase",
@@ -2669,7 +2993,6 @@ fn conflict_recovery_resolves_each_stop_of_a_multi_commit_rebase() {
 /// continuation with the rebase left stopped and nothing widened. Staging
 /// stays host-owned: a provider that stages its own companion is refused.
 #[cfg(unix)]
-#[test]
 fn conflict_recovery_still_refuses_unresolved_conflicts_beside_companion_edits() {
     isolated(
         "conflict_recovery_still_refuses_unresolved_conflicts_beside_companion_edits",
@@ -2728,7 +3051,6 @@ fn conflict_recovery_still_refuses_unresolved_conflicts_beside_companion_edits()
 /// gitignored output are never attributed. The reviewer's changes widen at
 /// review settlement instead.
 #[cfg(unix)]
-#[test]
 fn agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits() {
     isolated(
         "agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits",
@@ -2784,7 +3106,6 @@ fn agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits() {
 /// trees keep the bytes the provider left. Disjoint source dirt is enough:
 /// overlap with the candidate is not what makes the edit fatal.
 #[cfg(unix)]
-#[test]
 fn provider_primary_source_edit_fails_closed_and_preserves_both_checkouts() {
     isolated(
         "provider_primary_source_edit_fails_closed_and_preserves_both_checkouts",
@@ -2866,7 +3187,6 @@ fn provider_primary_source_edit_fails_closed_and_preserves_both_checkouts() {
 /// User Git presentation settings must not hide a second edit to tracked WIP
 /// or change the fingerprints and patches needed to detect and recover it.
 #[cfg(unix)]
-#[test]
 fn user_git_diff_config_preserves_dirty_fingerprints_and_recovery() {
     isolated(
         "user_git_diff_config_preserves_dirty_fingerprints_and_recovery",
@@ -2911,7 +3231,7 @@ fn user_git_diff_config_preserves_dirty_fingerprints_and_recovery() {
             for (index, settings) in cases.iter().enumerate() {
                 // This HOME belongs only to the isolated child. Each case
                 // starts without any settings from the preceding case.
-                fs::write(&global_config, super::git_fixture::FILE_ONLY_CONFIG).unwrap();
+                fs::write(&global_config, super::git_fixture::ISOLATED_GIT_CONFIG).unwrap();
                 for (key, value) in *settings {
                     git(&fixture.repo, &["config", "--global", key, value]);
                     assert_eq!(
@@ -2999,7 +3319,6 @@ fn user_git_diff_config_preserves_dirty_fingerprints_and_recovery() {
 /// Record-store dirt on a path the run also changed is still drift. The
 /// `.orbit/` prefix alone must not excuse an intersection with the candidate.
 #[cfg(unix)]
-#[test]
 fn stationary_record_store_dirt_overlapping_the_run_fails_closed() {
     isolated(
         "stationary_record_store_dirt_overlapping_the_run_fails_closed",
@@ -3052,7 +3371,6 @@ fn stationary_record_store_dirt_overlapping_the_run_fails_closed() {
 /// primary and does not fail the provider. The provider itself only edits
 /// the assigned checkout.
 #[cfg(unix)]
-#[test]
 fn stationary_record_store_dirt_disjoint_from_the_run_stays_benign() {
     isolated(
         "stationary_record_store_dirt_disjoint_from_the_run_stays_benign",
@@ -3131,7 +3449,6 @@ fn stationary_record_store_dirt_disjoint_from_the_run_stays_benign() {
 /// untracked files change neither HEAD nor the index mtime, so no cache key can
 /// notice them.
 #[cfg(unix)]
-#[test]
 fn primary_dirtied_between_dispatches_of_one_run_is_not_provider_drift() {
     isolated(
         "primary_dirtied_between_dispatches_of_one_run_is_not_provider_drift",
@@ -3181,7 +3498,6 @@ fn primary_dirtied_between_dispatches_of_one_run_is_not_provider_drift() {
 /// ordinary attributed edit, and a real boundary failure still writes recovery
 /// that includes the directory.
 #[cfg(unix)]
-#[test]
 fn untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree() {
     isolated(
         "untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree",
@@ -3397,13 +3713,69 @@ fn untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree() {
 /// content, and the recovery store stays bounded: old attempts are pruned,
 /// the newest never is.
 #[cfg(unix)]
-#[test]
 fn repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts() {
     isolated(
         "repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts",
         || {
             const FAILURES: usize = 8;
+            let trace = TempDir::new().unwrap();
+            let events = trace.path().join("git-events.jsonl");
+            git(
+                trace.path(),
+                &[
+                    "config",
+                    "--global",
+                    "trace2.eventTarget",
+                    path_str(&events),
+                ],
+            );
+            let earlier = Fixture::new();
+            fs::write(earlier.repo.join("README.md"), "earlier row\n").unwrap();
+            git(&earlier.repo, &["config", "user.name", "Earlier Row"]);
             let fixture = Fixture::new();
+            let events: Vec<Value> = fs::read_to_string(&events)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert!(
+                events.iter().any(|event| {
+                    event["event"] == "child_start"
+                        && event["argv"]
+                            .as_array()
+                            .is_some_and(|args| args.iter().any(|arg| arg == "maintenance"))
+                }),
+                "seed preparation must still execute native automatic Git maintenance"
+            );
+            assert!(
+                !events.iter().any(|event| event["event"] == "region_enter"
+                    && event["category"] == "maintenance"
+                    && event["label"] == "detach"),
+                "pristine seed maintenance must finish before copying: a detached daemon can remove its maintenance.lock during fs::copy"
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.repo.join("README.md")).unwrap(),
+                "base\n"
+            );
+            assert_eq!(git(&fixture.repo, &["config", "user.name"]), "Orbit Test");
+            assert_eq!(
+                git(&fixture.repo, &["remote", "get-url", "origin"]),
+                path_str(&fixture.root.path().join("origin.git")),
+                "each row's remote configuration must name its own bare repository"
+            );
+            let head = git(&earlier.repo, &["rev-parse", "HEAD"]);
+            let object = earlier
+                .repo
+                .join(".git/objects")
+                .join(&head[..2])
+                .join(&head[2..]);
+            // Git can make loose objects read-only. Corrupt this row's file
+            // deliberately to detect shared inodes, rather than just unlinking it.
+            fs::set_permissions(&object, fs::Permissions::from_mode(0o600)).unwrap();
+            fs::write(object, b"damaged earlier row object").unwrap();
+            git(&fixture.repo, &["cat-file", "-e", "HEAD"]);
+            git(&fixture.repo, &["fsck", "--strict"]);
+            drop(earlier);
             let host = LifecycleHost::new(&fixture.repo);
             host.add_task("T-REPEAT", TaskStatus::Backlog);
             let setup = action(
@@ -3497,6 +3869,9 @@ fn recover(
     let spec = ActivityV2Spec::AgentLoop(AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "Resolve the stopped rebase.".to_string(),
+        steering_instruction: None,
+        regression_risk_instruction: None,
+        explore_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,
@@ -3510,6 +3885,8 @@ fn recover(
         proc_allowed_programs: None,
         proc_disallowed_programs: None,
         trusted_host_execution: false,
+        crew_env: Vec::new(),
+        crew_account: None,
     });
     dispatch_v2_activity(V2DispatchInput {
         activity_name: "pr_conflict_recovery",
@@ -3562,6 +3939,9 @@ fn dispatch_audited_linked_activity(
     let spec = ActivityV2Spec::AgentLoop(AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "Edit the assigned checkout.".to_string(),
+        steering_instruction: None,
+        regression_risk_instruction: None,
+        explore_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,
@@ -3575,6 +3955,8 @@ fn dispatch_audited_linked_activity(
         proc_allowed_programs: None,
         proc_disallowed_programs: None,
         trusted_host_execution: false,
+        crew_env: Vec::new(),
+        crew_account: None,
     });
     dispatch_v2_activity(V2DispatchInput {
         activity_name,
@@ -3618,6 +4000,20 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        thread_local! {
+            static TEMPLATE: std::cell::RefCell<Option<Fixture>> = const { std::cell::RefCell::new(None) };
+        }
+        TEMPLATE.with(|slot| {
+            let mut template = slot.borrow_mut();
+            let seed = template.get_or_insert_with(Self::fresh);
+            let root = TempDir::new().unwrap();
+            super::git_fixture::copy_template(seed.root.path(), root.path());
+            let repo = canonical(&root.path().join("repo"));
+            Self { root, repo }
+        })
+    }
+
+    fn fresh() -> Self {
         let root = TempDir::new().unwrap();
         let repo = root.path().join("repo");
         fs::create_dir_all(&repo).unwrap();
@@ -3838,6 +4234,9 @@ fn task(id: &str, status: TaskStatus) -> Task {
         crew: None,
         crew_source: None,
         orchestrator: None,
+        orchestrator_model: None,
+        orchestrator_model_source: None,
+        origin: None,
         created_at: now,
         updated_at: now,
     }
@@ -3847,6 +4246,8 @@ fn task(id: &str, status: TaskStatus) -> Task {
 /// read through, kept in memory.
 #[derive(Default)]
 struct LifecycleHost {
+    worker: Option<orbit_types::tool::WorkerInvocation>,
+    gate_source: Option<orbit_types::workflow::ValidationGateSource>,
     reclaim_patterns: Option<Vec<String>>,
     repo: PathBuf,
     provider: Option<PathBuf>,
@@ -3880,7 +4281,7 @@ struct LifecycleHost {
     /// Deterministically model an operator write immediately before landing.
     landing_write: Mutex<Option<(PathBuf, Vec<u8>)>>,
     /// Scripted answers of host-run deterministic actions, by action name.
-    stubs: Mutex<BTreeMap<String, Result<Value, String>>>,
+    stubs: Mutex<BTreeMap<String, Result<Value, DispatchError>>>,
     /// Every stubbed action call, as (action, input), in order.
     stub_calls: Mutex<Vec<(String, Value)>>,
     /// Final recovery admissions requested, in order.
@@ -3891,11 +4292,38 @@ struct LifecycleHost {
     recovery_owner_refusal: Mutex<Option<String>>,
     /// Why step recovery authorization was revoked.
     recovery_revocation: Mutex<Option<String>>,
+    /// Deterministic race after host certification and before synchronization.
+    preparation_hook: Mutex<Option<PreparationHook>>,
+    /// `workflow.unlocked_context_paths` with
+    /// `workflow.unlocked_path_validation_commands`.
+    unlocked_validation: Mutex<orbit_engine::UnlockedPathValidation>,
+    /// `workflow.generated_paths`.
+    generated_paths: Mutex<Vec<orbit_engine::GeneratedPath>>,
+    /// The host's record of each run's last fully validated tree.
+    validated_trees: Mutex<BTreeMap<String, orbit_engine::ValidatedTree>>,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
+type PreparationHook = Box<dyn FnMut(&Value) + Send>;
 
 impl LifecycleHost {
+    pub(super) fn stub(&self, action: &str, reply: Result<Value, String>) {
+        self.stubs.lock().unwrap().insert(
+            action.to_string(),
+            reply.map_err(|message| DispatchError::action_failed(action, message)),
+        );
+    }
+
+    pub(super) fn stub_calls_of(&self, action: &str) -> Vec<Value> {
+        self.stub_calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(name, _)| name == action)
+            .map(|(_, input)| input.clone())
+            .collect()
+    }
+
     fn new(repo: &Path) -> Self {
         Self {
             repo: repo.to_path_buf(),
@@ -3910,6 +4338,8 @@ impl LifecycleHost {
             provider: Some(provider.to_path_buf()),
             tasks: Mutex::new(self.tasks.lock().unwrap().clone()),
             runs: Mutex::new(self.runs.lock().unwrap().clone()),
+            unlocked_validation: Mutex::new(self.unlocked_validation.lock().unwrap().clone()),
+            generated_paths: Mutex::new(self.generated_paths.lock().unwrap().clone()),
             ..Self::default()
         }
     }
@@ -4012,6 +4442,20 @@ impl LifecycleHost {
         stored.push(artifact);
     }
 
+    fn set_unlocked_validation(&self, paths: &[&str], commands: &[&str]) {
+        *self.unlocked_validation.lock().unwrap() = orbit_engine::UnlockedPathValidation {
+            paths: paths.iter().map(ToString::to_string).collect(),
+            commands: commands.iter().map(ToString::to_string).collect(),
+        };
+    }
+
+    fn set_generated_path(&self, path: &str, command: &str) {
+        *self.generated_paths.lock().unwrap() = vec![orbit_engine::GeneratedPath {
+            path: path.to_string(),
+            command: command.to_string(),
+        }];
+    }
+
     fn set_required_commands(&self, commands: &[&str]) {
         *self.required_commands.lock().unwrap() =
             commands.iter().map(ToString::to_string).collect();
@@ -4058,7 +4502,48 @@ impl LifecycleHost {
     }
 }
 
-impl RuntimeHost for LifecycleHost {
+fn conflict_recovery_activity() -> ActivityV2 {
+    let asset = json!({
+        "schemaVersion": 2,
+        "kind": "Activity",
+        "metadata": { "name": "pr_conflict_recovery" },
+        "spec": {
+            "type": "agent_loop",
+            "description": "Resolve the stopped rebase.",
+            "instruction": "Resolve the stopped rebase.",
+            "provider": "codex",
+            "max_iterations": 1,
+            "wall_clock_timeout_seconds": 30,
+            "require_completion_envelope": true,
+            "on_denial": "terminate",
+        },
+    });
+    orbit_engine::activity_job::load_activity_asset(&asset.to_string())
+        .expect("conflict recovery fixture loads")
+        .spec
+}
+
+fn deterministic_activity(name: &str) -> ActivityV2 {
+    let asset = json!({
+        "schemaVersion": 2,
+        "kind": "Activity",
+        "metadata": { "name": name },
+        "spec": { "type": "deterministic", "description": name, "action": name, "config": {} },
+    });
+    orbit_engine::activity_job::load_activity_asset(&asset.to_string())
+        .expect("fixture activity loads")
+        .spec
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
+    fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
+        let mut environment = orbit_exec::ValidationEnvironment::launcher(
+            RuntimeHost::agent_subprocess_environment(self, &[]),
+        );
+        environment.build_output_env = vec!["BUILD_OUTPUT_DIR".into()];
+        environment
+    }
+
     fn record_direct_landing_intent(
         &self,
         _request: &orbit_types::workflow::automation::DirectLandingRequest,
@@ -4092,7 +4577,7 @@ impl RuntimeHost for LifecycleHost {
     fn admit_task_for_workflow(&self, task_id: &str, _workflow: &str) -> Result<Task, OrbitError> {
         self.admitted.lock().unwrap().push(task_id.to_string());
         self.set_status(task_id, TaskStatus::InProgress);
-        self.get_task(task_id)
+        RuntimeHost::get_task(self, task_id)
     }
 
     fn apply_task_automation_update(
@@ -4121,6 +4606,8 @@ impl RuntimeHost for LifecycleHost {
                     note: update.status_note,
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
+                    decision: None,
                 },
             );
         }
@@ -4129,6 +4616,24 @@ impl RuntimeHost for LifecycleHost {
 
     fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
         Ok(self.history(task_id))
+    }
+
+    fn get_task_artifact(
+        &self,
+        task_id: &str,
+        path: &str,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        let artifact = self
+            .artifacts
+            .lock()
+            .unwrap()
+            .get(task_id)
+            .and_then(|artifacts| artifacts.iter().find(|artifact| artifact.path == path))
+            .cloned();
+        if let Some(artifact) = &artifact {
+            artifact.validate_inline_size(task_id)?;
+        }
+        Ok(artifact)
     }
 
     fn get_task_artifacts(&self, task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
@@ -4157,6 +4662,105 @@ impl RuntimeHost for LifecycleHost {
 
     fn required_validation_commands(&self) -> Vec<String> {
         self.required_commands.lock().unwrap().clone()
+    }
+
+    fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
+        orbit_types::workflow::HostValidationGates {
+            gates: orbit_types::workflow::ValidationGates {
+                required_validation_commands: self.required_commands.lock().unwrap().clone(),
+                baseline_commands: Vec::new(),
+                light_delivery_paths: None,
+            },
+            source: self
+                .gate_source
+                .unwrap_or(orbit_types::workflow::ValidationGateSource::LocalConfig),
+        }
+    }
+
+    fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
+        self.worker.clone()
+    }
+
+    fn unlocked_path_validation(&self) -> orbit_engine::UnlockedPathValidation {
+        self.unlocked_validation.lock().unwrap().clone()
+    }
+
+    fn generated_paths(&self) -> Vec<orbit_engine::GeneratedPath> {
+        self.generated_paths.lock().unwrap().clone()
+    }
+
+    fn record_validated_tree(&self, tree: &orbit_engine::ValidatedTree) -> Result<(), OrbitError> {
+        self.validated_trees
+            .lock()
+            .unwrap()
+            .insert(tree.run_id.clone(), tree.clone());
+        Ok(())
+    }
+
+    fn validated_tree(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_engine::ValidatedTree>, OrbitError> {
+        Ok(self.validated_trees.lock().unwrap().get(run_id).cloned())
+    }
+
+    fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
+    fn register_worker_pid_namespace(&self, _pid: u32) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
+    fn claim_execution_context(&self) -> Result<orbit_engine::ClaimExecutionContext, OrbitError> {
+        let worker = self.worker.as_ref().expect("claimed fixture");
+        Ok(orbit_engine::ClaimExecutionContext {
+            footprint: vec!["file:README.md".to_string()],
+            workspace_id: worker.owner_workspace_id.clone(),
+            task_id: worker.task_id.clone(),
+            claim_id: worker.claim_id.clone(),
+            machine_id: worker.execution.machine_id.clone(),
+            run_id: worker.bound_run_id.clone(),
+            ship_mode: "pr".to_string(),
+            base_branch: "agent-main".to_string(),
+            landing_branch: "agent-main".to_string(),
+            required_commands: self.required_commands.lock().unwrap().clone(),
+        })
+    }
+
+    fn attach_task_validation_log(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        path: &str,
+        content: Vec<u8>,
+    ) -> Result<(), OrbitError> {
+        assert_eq!(
+            RuntimeHost::get_task(self, task_id)?.job_run_id.as_deref(),
+            Some(run_id)
+        );
+        let mut artifacts = self.artifacts.lock().unwrap();
+        let artifacts = artifacts.entry(task_id.to_string()).or_default();
+        artifacts.retain(|artifact| artifact.path != path);
+        artifacts.push(TaskArtifact::from_text(
+            path,
+            String::from_utf8(content).unwrap(),
+        ));
+        Ok(())
+    }
+
+    fn attach_claim_validation_log(&self, path: &str, content: Vec<u8>) -> Result<(), OrbitError> {
+        let worker = self
+            .worker
+            .as_ref()
+            .expect("claim routes evidence to its owner");
+        RuntimeHost::attach_task_validation_log(
+            self,
+            &worker.task_id,
+            &worker.bound_run_id,
+            path,
+            content,
+        )
     }
 
     fn local_machine_id(&self) -> Option<String> {
@@ -4191,10 +4795,11 @@ impl RuntimeHost for LifecycleHost {
         if let Some(answer) = self.owner_answers.lock().unwrap().get(task_id) {
             return answer.clone();
         }
-        match self.get_task(task_id) {
+        match RuntimeHost::get_task(self, task_id) {
             Ok(task) => WorktreeGcTaskLookup::Found {
                 status: task.status,
                 pr_status: task.pr_status,
+                status_since: Some(task.updated_at),
             },
             Err(_) => WorktreeGcTaskLookup::Unresolved,
         }
@@ -4272,7 +4877,25 @@ impl RuntimeHost for LifecycleHost {
             })
             .rebase_recovery_checkpoints
             .insert(step_id.to_string(), output.clone());
+        if let Some(hook) = self.preparation_hook.lock().unwrap().as_mut() {
+            hook(output);
+        }
         Ok(())
+    }
+
+    fn rebase_recovery_attempts(
+        &self,
+        run_id: &str,
+        step_id: &str,
+    ) -> Result<Vec<RebaseRecoveryAttemptScope>, OrbitError> {
+        Ok(self
+            .recovery_attempts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(run, step, _)| run == run_id && step == step_id)
+            .map(|(_, _, scope)| scope.clone())
+            .collect())
     }
 
     /// Only the newest completion recorded for a run's step vouches for it,
@@ -4333,10 +4956,7 @@ impl RuntimeHost for LifecycleHost {
             .lock()
             .unwrap()
             .push((action.to_string(), input.clone()));
-        reply.map_err(|message| DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message,
-        })
+        reply
     }
 
     /// Conflict recovery dispatched by a job draws from a complexity pool;
@@ -4544,7 +5164,7 @@ fn git_path(checkout: &Path, name: &str) -> PathBuf {
 }
 
 fn is_ancestor(repo: &Path, ancestor: &str, descendant: &str) -> bool {
-    Command::new("git")
+    crate::git_test_support::command()
         .args(["merge-base", "--is-ancestor", ancestor, descendant])
         .current_dir(repo)
         .status()
@@ -4605,6 +5225,10 @@ fn isolated_in(module: &str, test: &str, body: impl FnOnce()) {
         .stdin(Stdio::null())
         .stdout(log.try_clone().unwrap())
         .stderr(log);
+    // Stream row progress into nextest, including when it terminates the parent.
+    if module.ends_with("::absorbed_candidate") {
+        command.stderr(Stdio::inherit());
+    }
     for (name, _) in std::env::vars_os() {
         let name = name.to_string_lossy();
         if name.starts_with("ORBIT_") || name.starts_with("GIT_") {
@@ -4653,4 +5277,262 @@ impl Drop for ReapOnDrop {
         }
         let _ = self.0.wait();
     }
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_1() {
+    isolated("worktree_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones",
+                worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones,
+            ),
+            (
+                "replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest",
+                replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest,
+            ),
+            (
+                "replica_worktree_gc_fences_unreachable_owners_by_route",
+                replica_worktree_gc_fences_unreachable_owners_by_route,
+            ),
+            (
+                "worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty",
+                worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty,
+            ),
+            (
+                "worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root",
+                worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_2() {
+    isolated("worktree_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched",
+                worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched,
+            ),
+            (
+                "worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits",
+                worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits,
+            ),
+            (
+                "local_landing_precheck_uses_the_normalized_base_checkout",
+                local_landing_precheck_uses_the_normalized_base_checkout,
+            ),
+            (
+                "local_landing_preserves_unrelated_untracked_files",
+                local_landing_preserves_unrelated_untracked_files,
+            ),
+            (
+                "local_landing_names_only_untracked_paths_conflicting_with_the_candidate",
+                local_landing_names_only_untracked_paths_conflicting_with_the_candidate,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_3() {
+    isolated("worktree_contracts_3", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge",
+                local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge,
+            ),
+            (
+                "a_validated_candidate_is_resumed_on_the_new_base_without_implementation",
+                a_validated_candidate_is_resumed_on_the_new_base_without_implementation,
+            ),
+            (
+                "a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run",
+                a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run,
+            ),
+            (
+                "a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run",
+                a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run,
+            ),
+            (
+                "a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict",
+                a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_4() {
+    isolated("worktree_contracts_4", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output",
+                a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output,
+            ),
+            (
+                "a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implementer",
+                a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implementer,
+            ),
+            (
+                "an_implementation_failure_handoff_is_requeued_for_the_implementer",
+                an_implementation_failure_handoff_is_requeued_for_the_implementer,
+            ),
+            (
+                "resumed_known_red_candidates_must_complete_host_and_replay_coverage",
+                resumed_known_red_candidates_must_complete_host_and_replay_coverage,
+            ),
+            (
+                "a_changed_spec_or_an_operator_discard_implements_fresh",
+                a_changed_spec_or_an_operator_discard_implements_fresh,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_5() {
+    isolated("worktree_contracts_5", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_selector_only_edit_keeps_the_preserved_candidate",
+                a_selector_only_edit_keeps_the_preserved_candidate,
+            ),
+            (
+                "an_evidence_receipt_resumes_the_held_candidate_without_the_implementer",
+                an_evidence_receipt_resumes_the_held_candidate_without_the_implementer,
+            ),
+            (
+                "a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason",
+                a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason,
+            ),
+            (
+                "a_claimed_leaf_continues_the_candidate_its_owner_kept",
+                a_claimed_leaf_continues_the_candidate_its_owner_kept,
+            ),
+            (
+                "a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept",
+                a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_6() {
+    isolated("worktree_contracts_6", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_repair_claim_resumes_its_stopped_landing_candidate_for_the_implementer",
+                a_repair_claim_resumes_its_stopped_landing_candidate_for_the_implementer,
+            ),
+            (
+                "git_rebase_decision_follows_the_checkout_state",
+                git_rebase_decision_follows_the_checkout_state,
+            ),
+            (
+                "git_rebase_rename_delete_conflicts_remain_for_recovery",
+                git_rebase_rename_delete_conflicts_remain_for_recovery,
+            ),
+            #[cfg(unix)]
+            (
+                "conflict_recovery_leaf_completes_only_its_checkpointed_rebase",
+                conflict_recovery_leaf_completes_only_its_checkpointed_rebase,
+            ),
+            #[cfg(unix)]
+            (
+                "a_resumed_run_recovers_the_same_step_again_as_a_new_attempt",
+                a_resumed_run_recovers_the_same_step_again_as_a_new_attempt,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_7() {
+    isolated("worktree_contracts_7", || {
+        crate::git_fixture::run_scenarios(&[
+            #[cfg(unix)]
+            (
+                "conflict_recovery_commits_companion_edits_with_the_resolution",
+                conflict_recovery_commits_companion_edits_with_the_resolution,
+            ),
+            #[cfg(unix)]
+            (
+                "conflict_recovery_resolves_each_stop_of_a_multi_commit_rebase",
+                conflict_recovery_resolves_each_stop_of_a_multi_commit_rebase,
+            ),
+            #[cfg(unix)]
+            (
+                "conflict_recovery_still_refuses_unresolved_conflicts_beside_companion_edits",
+                conflict_recovery_still_refuses_unresolved_conflicts_beside_companion_edits,
+            ),
+            #[cfg(unix)]
+            (
+                "agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits",
+                agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits,
+            ),
+            #[cfg(unix)]
+            (
+                "provider_primary_source_edit_fails_closed_and_preserves_both_checkouts",
+                provider_primary_source_edit_fails_closed_and_preserves_both_checkouts,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_8() {
+    isolated("worktree_contracts_8", || {
+        crate::git_fixture::run_scenarios(&[
+            #[cfg(unix)]
+            (
+                "user_git_diff_config_preserves_dirty_fingerprints_and_recovery",
+                user_git_diff_config_preserves_dirty_fingerprints_and_recovery,
+            ),
+            #[cfg(unix)]
+            (
+                "stationary_record_store_dirt_overlapping_the_run_fails_closed",
+                stationary_record_store_dirt_overlapping_the_run_fails_closed,
+            ),
+            #[cfg(unix)]
+            (
+                "stationary_record_store_dirt_disjoint_from_the_run_stays_benign",
+                stationary_record_store_dirt_disjoint_from_the_run_stays_benign,
+            ),
+            #[cfg(unix)]
+            (
+                "primary_dirtied_between_dispatches_of_one_run_is_not_provider_drift",
+                primary_dirtied_between_dispatches_of_one_run_is_not_provider_drift,
+            ),
+            #[cfg(unix)]
+            (
+                "untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree",
+                untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn worktree_contracts_9() {
+    isolated("worktree_contracts_9", || {
+        crate::git_fixture::run_scenarios(&[
+            #[cfg(unix)]
+            (
+                "repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts",
+                repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts,
+            ),
+        ]);
+    });
 }

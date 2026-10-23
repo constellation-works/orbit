@@ -14,16 +14,24 @@ spec:
     names the blocking tasks (lock holders, the tasks behind a conflicting
     reservation, and unmet dependencies) together with any live execution
     claim holding them, plus the `conflicting_files` and `waiting_on_deps`
-    the gate last observed — it can starve on either axis.
+    the gate last observed — it can starve on either axis. The optional
+    `reservation` is the wait loop's last output; null means no attempt ran.
+    In that case it probes blockers without reserving any footprint. The
+    output carries the reservation for dispatch and cleanup on success.
+    When `expired` is true, any late reservation is released before deferral.
 
     It handles only legitimate waits that ran out of budget. A dependency
     that can never be satisfied (archived before reaching `done`, rejected,
-    or dangling) fails earlier, inside `reserve_locks`, with a
-    `task.dependencies.unsatisfiable` error and never reaches the loop.
+    or dangling) fails with a `task.dependencies.unsatisfiable` error in
+    `reserve_locks`, or in the non-reserving probe when no attempt ran.
   input_schema_json:
     type: object
     required: [task_ids]
     properties:
+      expired:
+        type: boolean
+      reservation:
+        type: [object, "null"]
       reserved:
         type: [boolean, string]
       task_ids:
@@ -44,6 +52,8 @@ spec:
     type: object
     required: [deferred]
     properties:
+      reservation:
+        type: object
       deferred:
         type: boolean
       reason:

@@ -1,0 +1,70 @@
+Show one path's rankings and the tasks behind each count
+
+Usage: orbit codebase show [OPTIONS] <PATH>
+
+Arguments:
+  <PATH>
+          A ranked key at the chosen rollup: a file, directory or crate path
+
+Options:
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --window <WINDOW>
+          Counted period ending now
+          
+          [default: 90d]
+          [possible values: 7d, 30d, 90d, all]
+
+      --min-support <MIN_SUPPORT>
+          Smallest denominator a ranked row needs
+          
+          [default: 15]
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --rollup <ROLLUP>
+          Group paths by file, parent directory or crate
+          
+          [default: file]
+          [possible values: file, dir, crate]
+
+      --nature <NATURE>
+          Count only regressions of this nature (absent: no classification)
+          
+          [possible values: broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift, unclassified, absent]
+
+      --escape <ESCAPE>
+          Count only regressions that escaped this way (absent: no classification)
+          
+          [possible values: no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic, unclassified, absent]
+
+      --layer <LAYER>
+          Count only regressions whose fix sits in this layer
+          
+          [possible values: ci_tests, docs_skills, dashboard, sandbox_policy, store_migration, vcs_delivery, config, cli_mcp, runtime_lifecycle, other, unknown]
+
+      --detected-by <DETECTED_BY>
+          Count only regressions found this way
+          
+          [possible values: delivery_review, security_review, code_review, qa_sweep, post_merge_ci, production_run, operator, other]
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')

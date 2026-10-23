@@ -170,6 +170,9 @@ impl DoctorProbe {
 /// subsystems as `Skipped`.
 pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
     DoctorProbe::many("config", |runtime, _| doctor_check_config(runtime)),
+    DoctorProbe::many("retired-config-keys", |runtime, _| {
+        super::retired_config::doctor_check_retired_config_keys(runtime)
+    }),
     DoctorProbe::one("database", doctor_check_database),
     DoctorProbe::one("disk-space", |runtime, _| doctor_check_disk_space(runtime)),
     DoctorProbe::one("search-index", |runtime, _| {
@@ -201,6 +204,9 @@ pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
     DoctorProbe::one("automation-consumers", |runtime, _| {
         doctor_check_stalled_automation(runtime)
     }),
+    DoctorProbe::one("routine-freshness", |runtime, _| {
+        doctor_check_routine_freshness(runtime)
+    }),
     DoctorProbe::one("review", |runtime, _| doctor_check_review(runtime)),
     DoctorProbe::one("forge-remote", |runtime, _| {
         doctor_check_forge_remote(runtime)
@@ -214,6 +220,9 @@ pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
     }),
     DoctorProbe::one("validation-env", |runtime, _| {
         doctor_check_validation_env(runtime)
+    }),
+    DoctorProbe::one("mid-run-steering", |runtime, _| {
+        doctor_check_mid_run_steering(runtime)
     }),
     DoctorProbe::one("orphan-task-stores", |runtime, _| {
         doctor_check_orphan_task_stores(runtime)
@@ -292,6 +301,11 @@ pub trait DoctorCommands {
     /// Cheap store write probe for health endpoints: open the store and
     /// acquire + roll back the write lock without mutating anything.
     fn health_check_store_writable(&self) -> Result<String, OrbitError>;
+
+    /// Back up each config file that still sets a retired or deprecated key,
+    /// migrating translated review settings before removal. Refuse legacy
+    /// after-landing policies before any write. A file with none is untouched.
+    fn remove_retired_config_keys(&self) -> Result<super::RetiredConfigKeyRepair, OrbitError>;
 }
 
 impl DoctorCommands for OrbitRuntime {
@@ -356,5 +370,9 @@ impl DoctorCommands for OrbitRuntime {
     fn health_check_store_writable(&self) -> Result<String, OrbitError> {
         self.check_sqlite_store_writable()?;
         Ok("store database accepts writes".to_string())
+    }
+
+    fn remove_retired_config_keys(&self) -> Result<super::RetiredConfigKeyRepair, OrbitError> {
+        super::retired_config::remove_retired_config_keys(self)
     }
 }

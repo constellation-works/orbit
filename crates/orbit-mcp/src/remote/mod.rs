@@ -4,7 +4,10 @@ mod discovery;
 mod identity;
 mod legacy;
 mod proxy;
+mod ssh;
 mod surface;
+
+pub(crate) use self::discovery::workspace_for_discovery;
 
 #[cfg(test)]
 mod tests;
@@ -20,4 +23,5 @@ pub use self::proxy::{RemoteProxyArgs, serve_mcp_remote_proxy};
 // The federated mux reuses the v1 remote argv verbatim rather than restating
 // it, so both client paths present one session shape to a destination.
 pub(crate) use self::proxy::remote_serve_command;
+pub(crate) use self::ssh::ssh_command;
 pub use self::surface::{canonical_mcp_tool_definitions, safe_mcp_tool_names};

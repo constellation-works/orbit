@@ -3,8 +3,8 @@ summary: "Activity / Job — Vision"
 type: design
 title: "Activity / Job — Vision"
 owner: codex
-last_updated: 2026-10-06
-last_validated: 2026-10-10
+last_updated: 2026-10-14
+last_validated: 2026-10-19
 status: Draft
 feature: activity-job
 doc_role: vision
@@ -21,7 +21,7 @@ This document pressure-tests where the Activity / Job substrate may go next. It 
 
 ### 1.1 How much of Activity / Job should remain public?
 
-README frames tasks, jobs, and activities as substrate. Should Orbit keep this layer mostly internal, with goals/sessions/locks as the API, or does a durable local system still need human-editable workflows?
+README describes Orbit through its task queue, delivery pipeline and audit log, and does not name jobs or activities. Should Orbit keep this layer mostly internal, with goals/sessions/locks as the API, or does a durable local system still need human-editable workflows?
 
 ### 1.2 Should `target:` grow beyond `activity:<name>`?
 
@@ -31,9 +31,12 @@ README frames tasks, jobs, and activities as substrate. Should Orbit keep this l
 
 The schema names more providers than Orbit can execute — `openai_compat` has no CLI runtime. Do we keep the closed enum and wire each runtime deliberately, or move toward a more explicit "provider capability" registry?
 
-### 1.4 Should Orbit enforce tool allowlists itself?
+### 1.4 Should tool policy extend to provider-native tools?
 
-Agent dispatch advises rather than enforces: the declared `tools:` list is delegated to the provider harness. Does the CLI agent path need a wrapper so `tools:` means the same thing everywhere?
+Orbit enforces activity tool policy at its managed MCP and `orbit tool run`
+boundaries when the provider forwards the managed envelope; provider-native
+tools remain delegated to the harness. Should the CLI agent path add a wrapper
+so activity tool policy also covers those native tools?
 
 ### 1.5 Which limits should stay structural literals?
 
@@ -106,7 +109,7 @@ None of these are research contributions. Activity / Job earns its keep only if 
 
 - [1_overview.md](./1_overview.md) — feature purpose and core concepts
 - [2_design.md](./2_design.md) — current implementation
-- [4_decisions.md](./4_decisions.md) — ADR log
+- [4_decisions.md](./4_decisions.md) — recorded design decisions and their reasoning
 - [specs/backend-resolution.md](./specs/backend-resolution.md) — retired agent backend selection and its migration
 - [specs/audit-envelope.md](./specs/audit-envelope.md) — v2 audit event tree and persistence layout
 
@@ -115,7 +118,7 @@ None of these are research contributions. Activity / Job earns its keep only if 
 - Temporal — https://temporal.io/
 - Argo Workflows — https://argo-workflows.readthedocs.io/
 - GitHub Actions — https://docs.github.com/actions
-- LangGraph — https://langchain-ai.github.io/langgraph/
+- LangGraph — https://docs.langchain.com/oss/python/langgraph/overview
 
 ---
 

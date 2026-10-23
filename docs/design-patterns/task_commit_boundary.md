@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Task/Reservation Commit Boundary"
-last_validated: 2026-10-11
+last_validated: 2026-10-19
 ---
 # Task/Reservation Commit Boundary
 
@@ -34,6 +34,10 @@ boundary **before** any bundle lock, including `with_task_write_lock`, so the tw
 always acquired in the same order; the shared helper's per-thread re-entrance makes a nested
 task lock inside an admission section run under the outer acquisition rather than deadlock.
 
+Guarded task deletion re-reads eligibility under `with_task_write_lock` and holds that
+lock through bundle deletion. Its earlier status check is only a preflight: a task that
+became active meanwhile is preserved unless the caller explicitly forces deletion.
+
 Both boundary locks prefer a waiting exclusive acquirer. An admission, recovery or
 cross-partition admission refused by shared holders queues at the lock's turnstile
 (`<lock>.turnstile`) until it takes the lock. An ordinary section passes through that turnstile
@@ -50,25 +54,61 @@ first, so it never sees a half-applied transition and still waits for an exclusi
 queued writer may wait for the few reads it enters meanwhile. A re-entrant acquisition never
 reaches either lock.
 
+A pass that makes many task reads (a search, the config view's review section) enters one shared
+section around all of them with `TaskStoreBackend::in_read_section`. Its nested reads re-enter
+that section, so the pass queues, takes the locks and writes its holder record once instead of
+once per read. Inside it, a pass must not wait on another thread's task reads or request an
+admission: either would wait behind the shared lock the pass itself holds.
+
 **One durable commit decision.** A journal row in the host store database:
 
 | Step | What happens | What a crash here means |
 |---|---|---|
-| Prepare | Durable pending marker, then a `prepared` journal row carrying the bundle-side intent | Undecided: recovery abandons it; the task is untouched |
-| Decide | **Commit point.** One SQLite transaction inserts reservations/coordination rows, checks and replaces lifecycle rows, releases the settling claim’s reservation, and flips the journal to `committed` | Decided: recovery replays the apply |
-| Apply | Truncate `events.jsonl` to the intent's recorded pre-apply length, append its events, replay summary/comments/artifact bytes and manifest, republish `task.yaml`, settle the row `applied`, drop the marker | Still decided: the next entrant replays it again |
+| Prepare | Name the task's commit lease, `<partition>/.task-commit-applying/<task>`: a file the committer keeps locked until its apply finishes, under the task's bundle lock, which it took before reading the bundle and keeps as long. Then a `prepared` journal row carrying the bundle-side intent | Undecided: recovery abandons it; the task is untouched |
+| Decide | **Commit point.** One SQLite transaction inserts reservations/coordination rows, checks and replaces lifecycle rows, releases the settling claim’s reservation, and flips the journal to `committed`. Then `task.yaml` is published without syncs, so lock-free envelope readers see the decided status | Decided: recovery replays the apply |
+| Apply | After the admission section has released the partition, still under the bundle lock and lease: truncate `events.jsonl` to the intent's recorded pre-apply length (nothing to do, and no sync, when it is already there), append its events in one write and one sync, replay summary/comments/artifact bytes and manifest, republish `task.yaml` durably, settle the row `applied`, update the registry index, then unname the lease and release the bundle | Still decided: the next entrant replays it again |
+
+Recovery reads only `prepared` and `committed` rows; an `applied` or `aborted` row is never read
+again. `orbit gc journal` deletes applied rows older than `retention.journal_days`, keeping each
+task's newest applied row. It selects candidates in one read and deletes them by key in short
+batches, and it never selects a row recovery would replay.
 
 Nothing infers the decision from bundle contents, and nothing tries to un-publish an envelope.
-Because no bundle file is touched before the commit point, a pre-commit failure has nothing to
-compensate beyond the journal row and the marker.
+Because no bundle file but `task.yaml` is touched before the apply, and that only after the
+commit point, a pre-commit failure has nothing to compensate beyond the journal row and the
+lease.
 
-**Recovery before exposure.** The marker signals interrupted publication. Ordinary operations check it again
-after acquiring their shared partition lock, so a commit that crashed while they waited cannot
-be missed. Recovery drops that shared acquisition and settles the journal exclusively before
-exposing any state — so a committed reservation whose transition has not landed is never observable, and a
-live commit blocks a reader for its (short) duration instead of showing it a half-applied task.
-A compensation or replay that fails leaves the marker in place and returns the error: the
-partition stays closed until recovery succeeds, rather than opening with unknown commit state.
+Only the prepare and the decision exclude the partition. Every file sync a commit requests is
+in its apply, after the section, so a writer to another task in the partition waits for one
+task's decision, not for its publication. Under concurrent claim
+mutations with real syncs on ext4 the exclusive hold fell from p50 ~24 ms to ~1.2 ms
+(`exclusive_claim_sections_stay_short_under_concurrent_durable_mutations`, run on demand).
+A thread that commits a task twice in one section applies the first commit before the second
+reads the bundle.
+
+**Recovery before exposure.** A dead lease signals an interrupted commit. A live committer holds
+its lease's lock from before it prepares until it has applied, and the kernel drops a dead
+process's locks but not its files, so a lease nobody holds belongs to a commit that crashed.
+Every entrant checks the partition's leases: a store read before it reads, an ordinary section
+once it holds the partition shared, an admission once it holds it exclusively. Finding a dead
+one, it drops any shared acquisition and settles the journal exclusively. An undecided row is
+abandoned, a decided one is replayed under the task's bundle lock, and a row whose lease is
+still held is left to its live committer. A bundle reader or writer that meets a dead lease
+under the bundle lock is refused until that replay, so a half-applied task is never read or
+written over. A live apply blocks full bundle reads of its own task for its duration, and no
+other task's reads or partition sections. Listings that already tolerate a bundle in flight
+may show the decided envelope while its history is still being applied.
+
+The lease's name is not synced, which keeps every sync out of the section. A host crash can
+therefore lose a lease whose decision survived, so opening a partition's boundary, which every
+process does before it reads, replays any unsettled row whose lease nobody holds. A
+compensation or replay that fails leaves the lease dead and returns the error: the partition
+stays closed until recovery succeeds, rather than opening with unknown commit state.
+
+Older versions held a `.task-commit-pending` marker for a whole commit inside the section.
+Recovery still honors and clears one they left, waiting for the partition as a reader first.
+Their readers and writers do not check leases, so only this version refuses a bundle that a
+dead lease guards.
 
 ## Integration API
 
@@ -115,7 +155,11 @@ replay semantics, and retention belong to the caller, not here.
 Internal claim lifecycle uses the same boundary. `ClaimInvocation` is supplied by trusted
 runtime code, never deserialized from tool input. Current claim, machine, immutable bound run,
 and phase are checked under exclusive serialization; the SQL decision also compares the old
-claim/state payloads before replacing them. Mutation receipts deduplicate exact retries. Recovery
+claim/state payloads before replacing them. Mutation receipts deduplicate exact retries; a
+retry replays its receipt in an ordinary section, so it does not exclude the partition's
+readers. A check across claims (a leaf run bound to another attempt, a task's release budget)
+asks SQL for the lifecycle rows that mention the run or task and decodes only those, never the
+partition's whole claim history, inside the exclusive section. Recovery
 revokes authority and refuses unresolved external merge intent; it does not infer failure from age
 or reservation expiry. Read-only claim inspection refuses pending repair rather than replaying it.
 
@@ -127,7 +171,7 @@ the decision leaves a repair obligation, never a successful partial settlement.
 Before preparing the journal, claimed evidence checks the combined artifact manifest for
 file/ancestor conflicts and verifies that existing destination parents are directories and
 replacement destinations are files. These checks run under admission and bundle locks, before
-any artifact writes or pending marker, so an impossible artifact topology cannot create a
+any artifact writes or commit lease, so an impossible artifact topology cannot create a
 durable replay obligation. Nested files and replacements retain the same recovery protocol.
 
 ## Composition and cost
@@ -166,8 +210,12 @@ actual reservation ID and expiry atomically. Idle receipts use a SQL-only transa
 there is no task bundle to publish. Receipt compaction replaces the payload with a permanent
 tombstone; it never deletes the request identity and refuses unsettled claims.
 
-The public pull/lifecycle tools remain unavailable. Generic task writes refuse active
-execution claims until the lifecycle layer supplies a claim-scoped mutation path. Frozen
+The pull and drain verbs (`orbit.task.pull`, `orbit.drain.*`) are absent from the public MCP
+tool list and reach an owner through the internal drain protocol. Generic task writes refuse
+active execution claims; claimed work writes through claim-scoped mutations. The one exception is an
+operator's comment-only update: orbit-core flags it, and `update_task_history` admits it under
+the claim only when its sole effect is appending one comment, recording no creation grant.
+Every other write inside that update still takes the ordinary fence. Frozen
 claim footprints also participate in ordinary reservation conflicts after TTL expiry.
 
 ## When to reach for it

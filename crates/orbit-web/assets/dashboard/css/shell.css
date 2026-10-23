@@ -143,6 +143,20 @@
     padding-block: 6px;
     row-gap: 4px;
   }
+  /* If the first count is itself an attention pill, it needs the same row
+     below the label as the second count. Free the max-content column so the
+     label keeps the full rail width. */
+  .rail .tab:has(> .rail-count.alert:not([hidden]) + .rail-count:not([hidden])) {
+    grid-template-columns: 17px minmax(0, 1fr);
+  }
+  .rail .tab:has(> .rail-count.alert:not([hidden]) + .rail-count:not([hidden])) > .rail-count.alert:not([hidden]) {
+    grid-column: 2 / -1;
+    justify-self: end;
+    margin-left: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .rail .tab > .rail-count + .rail-count {
     grid-column: 2 / -1;
     justify-self: end;
@@ -200,13 +214,28 @@
 }
 .rail-host .workspace-select { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; }
 
-/* When the dashboard last refreshed, in the top bar: "refreshed <destination>
-   · <time>". The host is the scope card's, so it is not repeated here. */
+/* The rail's foot, pinned below the destinations: when the dashboard last
+   refreshed ("refreshed <destination> · <time>"; the host is the scope
+   card's, so it is not repeated), then the UTC | Local clock. */
+.rail-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: sticky;
+  bottom: -12px;
+  margin-top: auto;
+  padding: 12px 2px 12px;
+  margin-bottom: -12px;
+  border-top: 1px solid var(--hair);
+  background: var(--bg-rail);
+}
+.rail .tabs { margin-bottom: 18px; }
 .rail-conn {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
+  padding: 0 8px;
   font-size: 12px;
   line-height: 1.4;
   color: var(--fg-mute);
@@ -215,10 +244,21 @@
 }
 .rail-conn .status-dot { flex: none; }
 .rail-conn .conn-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.topbar-conn .conn-host { display: none; }
-@media (max-width: 1279px) {
-  .topbar-conn { display: none; }
+.rail-conn .conn-host { display: none; }
+/* The fixed-width rail wraps the line rather than cut its time off. */
+@media (min-width: 761px) {
+  .rail-conn { align-items: flex-start; white-space: normal; }
+  .rail-conn .status-dot { margin-top: 0.35em; }
 }
+/* Specific enough to beat `.scoreboard-window-selector`, concatenated later. */
+.rail-foot .clock-zone {
+  display: flex;
+  width: 100%;
+  margin-left: 0;
+  box-sizing: border-box;
+  border-radius: 6px;
+}
+.rail-foot .clock-zone-btn { flex: 1 1 0; padding: 5px 4px; text-align: center; }
 
 .main-col {
   display: flex;
@@ -260,7 +300,14 @@
 .topbar-spacer { flex: 1 1 0; min-width: 0; }
 .topbar .refresh-btn, .topbar .global-drain-state { flex: 0 0 auto; white-space: nowrap; }
 
+/* Shrinks only while the bar is tight. From 1900px the per-window usage
+   chips are shown, and the group stays rigid so a longer list takes the
+   refresh line's spare room instead of sliding these chips. The UTC/Local
+   control sits in that same spare room from 1280px. */
 .host-resource-group { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; }
+@media (min-width: 1900px) {
+  .host-resource-group { flex: 0 0 auto; }
+}
 /* The selected host's name, so the readings are never read as another host's. */
 .host-resource-name {
   flex: 0 1 auto;
@@ -275,8 +322,10 @@
 }
 .host-resource-group.remote .host-resource-name { color: var(--accent); }
 .host-resource-chips { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; flex: 0 0 auto; }
-/* One chip per resource, sized so a new reading does not resize it.
-   Throttling changes the held chip's colour and outline, never its size. */
+/* One chip per resource, sized so a new reading does not resize it; its meter
+   sits at the chip's right edge, so the spare room stays inside the chip and
+   the chips stay evenly spaced. Throttling changes the held chip's colour and
+   outline, never its size. */
 /* A reading: its name, its value and a small bar of how full it is. */
 .host-resource {
   display: inline-flex;
@@ -298,10 +347,10 @@
 /* Room for `load 12.3× cores` and `mem 100%` beside the bar; a longer reading
    widens its chip. */
 .host-resource[data-resource="cpu"] { min-width: 11.75rem; }
-.host-resource[data-resource="memory"], .host-resource[data-resource="disk"] { min-width: 7.75rem; }
+.host-resource[data-resource="memory"], .host-resource[data-resource="disk"], .host-resource[data-resource="io"] { min-width: 7.75rem; }
 .host-resource .v { font-weight: 500; color: var(--fg); font-variant-numeric: tabular-nums; }
 .host-resource .unit { font-weight: 400; }
-.host-resource-bar { flex: none; width: 36px; height: 4px; border-radius: 2px; background: #232a33; overflow: hidden; }
+.host-resource-bar { flex: none; width: 36px; height: 4px; margin-left: auto; border-radius: 2px; background: #232a33; overflow: hidden; }
 .host-resource-fill { display: block; height: 100%; background: var(--meter); }
 .host-resource.elevated { --meter: var(--warn-fg); color: var(--warn-fg); }
 .host-resource.critical { --meter: var(--state-failed); background: var(--danger-wash); border-color: var(--danger-line); color: var(--danger-fg); }
@@ -313,6 +362,50 @@
 .host-resource .host-resource-held {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
   overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+
+/* Provider usage, set off from the host readings by a thin rule: one chip per
+   provider holding each of its windows (`claude 15% 5h | 32% 7d`), the host
+   chips' key and value without the bar. Each value has a fixed minimum width
+   (a long key is cut with an ellipsis; the title has it all), so a new reading
+   does not move the bar. A stale reading is dashed and dimmed, a gating-off one
+   dashed, and each window says so in a flag as well. Where the list would not
+   fit beside the drain label and Refresh, one summary chip (the worst reading,
+   every reading in its title) replaces it. */
+.provider-usage-chips::before { content: ""; flex: none; align-self: center; width: 1px; height: 18px; background: var(--border-strong); }
+.provider-usage { width: 6.75rem; }
+.provider-usage-item { width: auto; min-width: 6.75rem; gap: 5px; }
+.provider-usage-item .k { margin-right: 3px; }
+.provider-usage-item .v { min-width: 4ch; text-align: right; }
+.provider-usage-window { color: var(--fg-dim); }
+.provider-usage-sep { padding: 0 2px; color: var(--fg-disabled); }
+.provider-usage-more { width: 5.5rem; }
+.provider-usage .k { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.provider-usage.stale { border-style: dashed; border-color: var(--border-strong); opacity: 0.75; }
+.provider-usage.gating-off { border-style: dashed; }
+.provider-usage-flag { font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-dim); }
+.provider-usage-chips .provider-usage-summary { display: none; }
+@media (max-width: 1899px) {
+  .provider-usage-chips .provider-usage-item { display: none; }
+  .provider-usage-chips .provider-usage-summary { display: inline-flex; }
+}
+
+/* Shorter meters, gaps and chips give the usage summary chip and the io chip
+   their room, so the host's name and the connection text keep theirs. */
+@media (max-width: 1599px) {
+  .host-resource { gap: 6px; }
+  .host-resource-bar { width: 20px; }
+  .host-resource[data-resource="cpu"] { min-width: 10.25rem; }
+  .host-resource[data-resource="memory"], .host-resource[data-resource="disk"], .host-resource[data-resource="io"] { min-width: 6.75rem; }
+}
+/* While the chips still share the bar's one row, the narrowest widths drop
+   the meters (the tint still carries severity), so four host chips, the
+   divider and the summary chip leave the host's name and the refresh line
+   their room. Below 1024px the chips get their own row and keep the meters. */
+@media (min-width: 1024px) and (max-width: 1419px) {
+  .host-resource-bar { display: none; }
+  .host-resource[data-resource="cpu"] { min-width: 7.75rem; }
+  .host-resource[data-resource="memory"], .host-resource[data-resource="disk"], .host-resource[data-resource="io"] { min-width: 5.25rem; }
 }
 
 /* Below 1240px the bar tightens its spacing, so the widest destination, the
@@ -364,9 +457,17 @@
   opacity: 0.55;
 }
 
+/* The notifications opt-in reads as on while pressed; the phone layout's
+   inline-flex must not reveal it where the browser has no notifications. */
+.notify-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent-hover); }
+.topbar .notify-btn[hidden] { display: none; }
+
 /* On phones the top bar keeps the brand, Drain and Refresh on its first row
    and the host readings on a second; the rail below holds the host and
-   workspace pickers side by side over scrolling destinations and views. */
+   workspace pickers side by side over scrolling destinations and views.
+   Keep the three rail rows compact enough that the first panel or view tabs
+   start by 200px at 375px wide, including the refresh line and clock below
+   navigation. */
 @media (max-width: 760px) {
   .shell {
     position: relative;
@@ -377,20 +478,33 @@
   .rail {
     display: grid;
     grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
-    grid-template-rows: auto auto;
+    grid-template-rows: auto auto auto;
     border-right: none;
     border-bottom: 1px solid var(--hair);
     overflow: hidden;
-    padding: 6px 8px;
+    padding: 3px 8px;
     align-items: center;
-    gap: 4px 6px;
+    gap: 2px 6px;
   }
   .rail-brand svg { width: 64px; height: auto; }
   .rail-host { grid-column: 1; grid-row: 1; min-width: 0; margin-bottom: 0; align-self: start; }
   .rail-host .rail-scope-label { display: none; }
   .rail-workspace { grid-column: 2; grid-row: 1; min-width: 0; align-self: start; }
   .rail-host .workspace-select,
-  .rail-workspace .workspace-select { height: 34px; width: 100%; max-width: 100%; }
+  .rail-workspace .workspace-select { height: 30px; width: 100%; max-width: 100%; }
+  .rail-foot {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    position: static;
+    margin: 0;
+    padding: 0 2px;
+  }
+  .rail-conn { flex: 1 1 auto; padding: 0; }
+  .rail-foot .clock-zone { width: auto; flex: 0 0 auto; }
+  .rail-foot .clock-zone-btn { flex: 0 0 auto; padding: 3px 10px; }
   .rail .tabs {
     grid-column: 1 / -1;
     grid-row: 2;
@@ -398,7 +512,7 @@
     flex-wrap: nowrap;
     overflow-x: auto;
     min-width: 0;
-    margin-top: 0;
+    margin: 0;
     padding: 2px;
     gap: 2px;
     scrollbar-width: none;
@@ -437,7 +551,7 @@
     white-space: nowrap;
     flex: 0 0 auto;
   }
-  .topbar { flex-wrap: wrap; height: auto; padding: 6px 8px; row-gap: 4px; column-gap: 6px; }
+  .topbar { flex-wrap: wrap; height: auto; padding: 4px 8px; row-gap: 2px; column-gap: 6px; }
   .topbar .rail-brand { order: 0; height: 34px; }
   .topbar-spacer { display: block; order: 1; }
   .topbar .global-drain-state { order: 2; }
@@ -459,7 +573,7 @@
   .host-resource { gap: 5px; padding: 0 4px; }
   .host-resource-bar { width: 20px; }
   .host-resource[data-resource="cpu"] { min-width: 9.75rem; }
-  .host-resource[data-resource="memory"], .host-resource[data-resource="disk"] { min-width: 6.5rem; }
+  .host-resource[data-resource="memory"], .host-resource[data-resource="disk"], .host-resource[data-resource="io"] { min-width: 6.5rem; }
   .topbar .global-drain-state,
   .topbar .refresh-btn {
     display: inline-flex;
@@ -648,12 +762,13 @@ main {
   min-height: 0;
 }
 
-/* `main` has an author display rule, so make the Operations subview's
+/* `main` has an author display rule, so make the Automation and Jobs subviews'
    HTML hidden state win at every breakpoint (including the compact
    `main { ... !important }` layout below).  The router owns which
    sibling carries `hidden`; this rule only gives that state its native
    rendered and interaction semantics. */
-.tab-pane[data-tab="operations"] > main[hidden] { display: none !important; }
+.tab-pane[data-tab="operations"] > main[hidden],
+.tab-pane[data-tab="jobs"] > main[hidden] { display: none !important; }
 
 /* ORB-10972: the content column scrolls, not the document. The task
    pane's main fills the column so the dock beside it can be full height. */
@@ -744,6 +859,17 @@ main {
   color: var(--fg);
   background: #1f1f26;
 }
+
+/* A view's secondary tabs (Incidents | Events | Errors, Pipeline | Tools)
+   sit above its panels, aligned with the <main> they switch. */
+.view-tabs {
+  max-width: 1800px;
+  margin: 0 auto;
+  padding: 12px 20px 0;
+  border-bottom: none;
+}
+.view-tabs[hidden] { display: none; }
+.view-tabs:not([hidden]) ~ main { padding-top: 12px; }
 
 footer {
   padding: 24px;

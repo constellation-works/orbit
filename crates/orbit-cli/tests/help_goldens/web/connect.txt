@@ -11,7 +11,7 @@ Options:
           Local port for the tunnel. Defaults to 7878, falling back to an ephemeral port if 7878 is already in use
 
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
       --remote-port <REMOTE_PORT>
           Port the remote `orbit web serve` listens on (remote loopback)
@@ -36,12 +36,15 @@ Options:
           Possible values:
           - auto:   Decide from the sink: a table on a terminal, plain text otherwise
           - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields and no header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
           - json:   A single JSON document
           - ndjson: One complete JSON document per line
 
       --json
           Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
 
   -h, --help
           Print help (see a summary with '-h')

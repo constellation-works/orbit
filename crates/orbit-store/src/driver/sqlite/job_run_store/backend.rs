@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use orbit_common::process::identity::process_start_identity_token;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::identity::Crew;
 use orbit_types::workflow::{
@@ -20,8 +21,8 @@ use super::queries::{
 use super::state::{compact_finished_state_conn, write_state_json_conn};
 use crate::Store;
 use crate::contracts::{
-    ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunCompletion, JobRunFinalization,
-    JobRunQuery, JobRunStepParams, JobRunStoreBackend, KeyedJobRunAdmission, KeyedJobRunParams,
+    ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunFinalization, JobRunQuery,
+    JobRunStepParams, JobRunStoreBackend, KeyedJobRunAdmission, KeyedJobRunParams,
 };
 use crate::fs::path_safety::validate_path_stem;
 
@@ -125,7 +126,7 @@ fn live_lineage_run_conn(
         |row| row.get::<_, String>(0),
     )
     .optional()
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// The window read behind [`keyed_run_in_window_conn`]: one job's runs, newest
@@ -144,7 +145,7 @@ fn keyed_run_in_window_conn(
 ) -> Result<Option<String>, OrbitError> {
     let mut statement = conn
         .prepare(KEYED_RUN_WINDOW_SQL)
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let rows = statement
         .query_map(
             rusqlite::params![
@@ -154,9 +155,9 @@ fn keyed_run_in_window_conn(
             ],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     for row in rows {
-        let (run_id, input_json) = row.map_err(|error| OrbitError::Store(error.to_string()))?;
+        let (run_id, input_json) = row.map_err(sqlite_store_error)?;
         // An unreadable input cannot carry the key; it must not wedge every
         // later submission of the job.
         let matches = input_json
@@ -267,15 +268,15 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                      WHERE workspace_id=?1 AND retry_source_run_id=?2 \
                      ORDER BY created_at,run_id LIMIT ?3"
                 ))
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             let mut runs = statement
                 .query_map(
                     rusqlite::params![self.workspace_id, run_id, limit.min(1000)],
                     row_to_job_run,
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?
+                .map_err(sqlite_store_error)?
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             drop(statement);
             // One step read for every child instead of one run read (and one
             // step read) each.
@@ -299,7 +300,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| OrbitError::Store(error.to_string()))
+            .map_err(sqlite_store_error)
         })
     }
 
@@ -310,10 +311,9 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         key: &str,
     ) -> Result<KeyedJobRunAdmission, OrbitError> {
         validate_path_stem(job_id, "job")?;
-        super::super::automation::initialize(&self.store)?;
         self.store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             let conn=tx.connection();
-            let existing:Option<String>=conn.query_row("SELECT run_id FROM automation_job_keys WHERE workspace_id=?1 AND action_key=?2",rusqlite::params![self.workspace_id,key],|r|r.get(0)).optional().map_err(|e|OrbitError::Store(e.to_string()))?;
+            let existing:Option<String>=conn.query_row("SELECT run_id FROM automation_job_keys WHERE workspace_id=?1 AND action_key=?2",rusqlite::params![self.workspace_id,key],|r|r.get(0)).optional().map_err(sqlite_store_error)?;
             if let Some(id)=existing {
                 let run=get_job_run_for_workspace_conn(conn,&self.workspace_id,&id)?.ok_or_else(|| OrbitError::Store("automation run missing".into()))?;
                 if run.job_id!=job_id || run.input.as_ref()!=Some(&input) {return Err(OrbitError::InvalidInput("automation job key input changed".into()));}
@@ -324,7 +324,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             let run=JobRun {executed_on: self.executed_on.clone(),run_id:id.clone(),job_id:job_id.into(),attempt:1,state:JobRunState::Pending,scheduled_at:now,started_at:None,finished_at:None,duration_ms:None,created_at:now,pid:None,pid_start_time:None,input:Some(input.clone()),retry_source_run_id:None,knowledge_metrics:None,resolved_crew:None,crew_model:None,steps:Vec::new()};
             let state=PipelineState::new(id.clone(),job_id.into(),input.clone());
             upsert_job_run_for_workspace_conn(conn,&self.workspace_id,&run,Some(&state))?;
-            conn.execute("INSERT INTO automation_job_keys VALUES (?1,?2,?3)",rusqlite::params![self.workspace_id,key,id]).map_err(|e|OrbitError::Store(e.to_string()))?;
+            conn.execute("INSERT INTO automation_job_keys VALUES (?1,?2,?3)",rusqlite::params![self.workspace_id,key,id]).map_err(sqlite_store_error)?;
             Ok(KeyedJobRunAdmission::Admitted(Box::new(run)))
         })
     }
@@ -355,14 +355,6 @@ impl JobRunStoreBackend for SqliteJobRunStore {
     fn list_job_run_durations_filtered(&self, query: &JobRunQuery) -> Result<Vec<u64>, OrbitError> {
         self.store
             .list_job_run_durations_for_workspace(&self.workspace_id, query)
-    }
-
-    fn list_job_run_completions_filtered(
-        &self,
-        query: &JobRunQuery,
-    ) -> Result<Vec<JobRunCompletion>, OrbitError> {
-        self.store
-            .list_job_run_completions_for_workspace(&self.workspace_id, query)
     }
 
     fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
@@ -560,7 +552,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                             NotFoundKind::JobRun,
                             params.parent_run_id.clone(),
                         ),
-                        other => OrbitError::Store(other.to_string()),
+                        other => sqlite_store_error(other),
                     })?;
                 let parent_run_state = JobRunState::from_str(&parent_row.0).map_err(|error| {
                     OrbitError::Store(format!("invalid job run state: {error}"))
@@ -684,6 +676,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         }
         params.state.validate_step_state()?;
         let step = JobRunStep {
+            lock_wait_ms: params.lock_wait_ms,
             step_index: params.step_index as u32,
             target_type: params.target_type,
             target_id: params.target_id.clone(),

@@ -7,14 +7,17 @@
 //! cutoffs such as `24h` still hit), audited plugin panel reads,
 //! `/api/diagnostics/errors` (keyed by its time range and row limit), and
 //! `/api/diagnostics/friction` (keyed by month and row limit), and
-//! `/api/scoreboard` (keyed by the canonical window), and the codebase
-//! analytics scan behind `/api/codebase/analytics`, which caches typed facts
-//! rather than a response body. `/api/routines` uses a host namespace keyed by
+//! `/api/cost` (keyed by the canonical window), and the codebase
+//! analytics scan behind `/api/codebase/analytics` and the agent scorecard
+//! scan behind `/api/agents/*`, which cache typed facts rather than a response
+//! body. The agent and codebase analytics scans are served stale while one
+//! background refresh replaces them. `/api/routines` uses a host namespace keyed by
 //! definition, config and database stamps instead of a selected runtime. Every
 //! payload served from a memo reports its age in an `Age` header.
 
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
@@ -23,7 +26,7 @@ use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::Value;
 
 /// Freshness bound for the dashboard memos the 30 s poll reads: audit summary,
-/// scoreboard, diagnostics errors and diagnostics friction. A viewer's polls
+/// cost, diagnostics errors and diagnostics friction. A viewer's polls
 /// land about 31 s apart (the interval plus the refresh's own duration), so
 /// three poll intervals keep the second and third poll on the entry the first
 /// one computed. A miss scans up to 50k audit rows plus stderr blobs, so a new
@@ -31,10 +34,27 @@ use serde_json::Value;
 /// the served payload is.
 pub(crate) const DASHBOARD_POLL_MEMO_TTL: Duration = Duration::from_secs(90);
 
-/// Freshness bound for the codebase analytics scan. A miss reads every task
-/// bundle's history, and the rankings it feeds move over days, so the 30 s
-/// dashboard poll must not repeat it.
+/// Freshness bound for the codebase analytics scan. A scan rereads the
+/// bundles of tasks that changed since the last one (the rest come from the
+/// store's derived task facts), and the rankings it feeds move over days, so
+/// the 30 s dashboard poll must not repeat it.
 pub(crate) const CODEBASE_ANALYTICS_TTL: Duration = Duration::from_secs(300);
+
+/// How long past [`CODEBASE_ANALYTICS_TTL`] the analytics scan is still
+/// served while one background refresh replaces it. A day covers a dashboard
+/// left idle overnight; past it, a request waits for a scan rather than read
+/// rankings that old.
+pub(crate) const CODEBASE_ANALYTICS_STALE_LIMIT: Duration = Duration::from_secs(24 * 3600);
+
+/// Freshness bound for the agent scorecard scan. A miss reads the history
+/// and comments of every task active in the last 90 days, and the rankings
+/// move over days, so no role, window or detail change repeats it.
+pub(crate) const AGENT_SCAN_TTL: Duration = Duration::from_secs(300);
+
+/// How long past [`AGENT_SCAN_TTL`] a stale agent scan is still served while
+/// one background refresh runs. Older than this, a request waits for a fresh
+/// scan instead of reading hours-old rankings.
+pub(crate) const AGENT_SCAN_STALE_LIMIT: Duration = Duration::from_secs(3600);
 
 /// A memoized body and how long ago it was computed.
 pub(crate) struct Served<V> {
@@ -66,12 +86,17 @@ struct Slot<V> {
     /// the map lock is held, and never held across a different key's work.
     gate: tokio::sync::Mutex<()>,
     value: Mutex<Option<Cached<V>>>,
+    /// Set while a background refresh of a stale entry runs, so stale reads
+    /// start only one.
+    refreshing: AtomicBool,
 }
 
 struct Cached<V> {
     runtime: Option<Weak<OrbitRuntime>>,
     computed_at: Instant,
     ttl: Duration,
+    /// How long past `ttl` the entry may still be served stale.
+    stale_for: Duration,
     body: Arc<V>,
 }
 
@@ -112,6 +137,54 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
         self.compute(None, key, ttl, compute).await
     }
 
+    /// Like [`Self::get_or_compute`], but an entry past `ttl` and within
+    /// `stale_for` beyond it is served at once while one background refresh
+    /// replaces it. A failed refresh keeps the stale entry, and the next stale
+    /// read retries.
+    pub(crate) async fn get_or_refresh<F>(
+        &self,
+        runtime: &Arc<OrbitRuntime>,
+        key: K,
+        ttl: Duration,
+        stale_for: Duration,
+        compute: F,
+    ) -> Result<Served<V>, OrbitError>
+    where
+        F: FnOnce() -> Result<V, OrbitError> + Send + 'static,
+    {
+        let slot = self.slot((Arc::as_ptr(runtime) as usize, key));
+        if let Some(hit) = slot.hit(Some(runtime)) {
+            tracing::debug!(memo = self.label, "cache hit");
+            return Ok(hit);
+        }
+        if let Some(stale) = slot.stale(runtime) {
+            if !slot.refreshing.swap(true, Ordering::AcqRel) {
+                tracing::debug!(memo = self.label, "stale hit; refreshing in background");
+                let refresh = Arc::clone(&slot);
+                let owner = Arc::downgrade(runtime);
+                let label = self.label;
+                tokio::spawn(async move {
+                    let _gate = refresh.gate.lock().await;
+                    match tokio::task::spawn_blocking(compute).await {
+                        Ok(Ok(value)) => {
+                            refresh.store(Some(owner), ttl, stale_for, Arc::new(value));
+                        }
+                        Ok(Err(error)) => {
+                            tracing::warn!(memo = label, %error, "background refresh failed");
+                        }
+                        Err(join_err) => {
+                            tracing::warn!(memo = label, %join_err, "background refresh panicked");
+                        }
+                    }
+                    refresh.refreshing.store(false, Ordering::Release);
+                });
+            }
+            return Ok(stale);
+        }
+        self.compute_in(&slot, Some(runtime), ttl, stale_for, compute)
+            .await
+    }
+
     async fn compute<F>(
         &self,
         runtime: Option<&Arc<OrbitRuntime>>,
@@ -130,7 +203,22 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
             tracing::debug!(memo = self.label, "cache hit");
             return Ok(hit);
         }
+        self.compute_in(&slot, runtime, ttl, Duration::ZERO, compute)
+            .await
+    }
 
+    /// Compute into `slot` once while concurrent callers wait on its gate.
+    async fn compute_in<F>(
+        &self,
+        slot: &Slot<V>,
+        runtime: Option<&Arc<OrbitRuntime>>,
+        ttl: Duration,
+        stale_for: Duration,
+        compute: F,
+    ) -> Result<Served<V>, OrbitError>
+    where
+        F: FnOnce() -> Result<V, OrbitError> + Send + 'static,
+    {
         let _gate = slot.gate.lock().await;
         if let Some(hit) = slot.hit(runtime) {
             tracing::debug!(memo = self.label, "cache hit");
@@ -148,12 +236,12 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
                 )));
             }
         };
-        *slot.value.lock().unwrap_or_else(PoisonError::into_inner) = Some(Cached {
-            runtime: runtime.map(Arc::downgrade),
-            computed_at: Instant::now(),
+        slot.store(
+            runtime.map(Arc::downgrade),
             ttl,
-            body: Arc::clone(&computed),
-        });
+            stale_for,
+            Arc::clone(&computed),
+        );
         Ok(Served {
             body: computed,
             age: Duration::ZERO,
@@ -169,6 +257,7 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
             Arc::new(Slot {
                 gate: tokio::sync::Mutex::new(()),
                 value: Mutex::new(None),
+                refreshing: AtomicBool::new(false),
             })
         }))
     }
@@ -176,8 +265,21 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
 
 impl<V> Slot<V> {
     fn hit(&self, runtime: Option<&Arc<OrbitRuntime>>) -> Option<Served<V>> {
+        self.served(runtime, Cached::is_fresh)
+    }
+
+    /// An entry past its freshness bound that may still be served stale.
+    fn stale(&self, runtime: &Arc<OrbitRuntime>) -> Option<Served<V>> {
+        self.served(Some(runtime), Cached::is_servable)
+    }
+
+    fn served(
+        &self,
+        runtime: Option<&Arc<OrbitRuntime>>,
+        usable: fn(&Cached<V>) -> bool,
+    ) -> Option<Served<V>> {
         let guard = self.value.lock().unwrap_or_else(PoisonError::into_inner);
-        let cached = guard.as_ref().filter(|cached| cached.is_fresh())?;
+        let cached = guard.as_ref().filter(|cached| usable(cached))?;
         let same_runtime = match (&cached.runtime, runtime) {
             (None, None) => true,
             (Some(cached), Some(runtime)) => cached
@@ -191,6 +293,22 @@ impl<V> Slot<V> {
         })
     }
 
+    fn store(
+        &self,
+        runtime: Option<Weak<OrbitRuntime>>,
+        ttl: Duration,
+        stale_for: Duration,
+        body: Arc<V>,
+    ) {
+        *self.value.lock().unwrap_or_else(PoisonError::into_inner) = Some(Cached {
+            runtime,
+            computed_at: Instant::now(),
+            ttl,
+            stale_for,
+            body,
+        });
+    }
+
     /// Drop empty, expired or orphaned entries once no caller owns the slot.
     /// An empty slot left by a failed compute is dropped too: host input keys
     /// change with every stamped write, so retaining them would grow the map
@@ -198,7 +316,7 @@ impl<V> Slot<V> {
     fn keep(&self) -> bool {
         let guard = self.value.lock().unwrap_or_else(PoisonError::into_inner);
         guard.as_ref().is_some_and(|cached| {
-            cached.is_fresh()
+            cached.is_servable()
                 && cached
                     .runtime
                     .as_ref()
@@ -210,5 +328,10 @@ impl<V> Slot<V> {
 impl<V> Cached<V> {
     fn is_fresh(&self) -> bool {
         self.computed_at.elapsed() < self.ttl
+    }
+
+    /// Fresh, or stale within the period it may still be served.
+    fn is_servable(&self) -> bool {
+        self.computed_at.elapsed() < self.ttl + self.stale_for
     }
 }

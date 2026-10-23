@@ -1,0 +1,14 @@
+# Merge into the owning Orbit workspace's .orbit/config.toml during rollout.
+# This is repository policy, not a generic runtime/toolchain default.
+[workflow]
+required_validation_commands = []
+# A repair whose tree differs from the last fully validated one only in
+# workflow.unlocked_context_paths (Markdown by default) reruns only these.
+unlocked_path_validation_commands = ["make ci-fast"]
+
+# Conflict recovery regenerates these instead of merging them.
+[workflow.generated_paths]
+"docs/INDEX.md" = "make docs-index"
+
+[workflow.validation_env]
+build_output_env = ["CARGO_TARGET_DIR"]

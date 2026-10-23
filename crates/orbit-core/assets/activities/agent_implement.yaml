@@ -53,6 +53,13 @@ spec:
       # deferred sandbox validation names it as its `base`.
       base_sha:
         type: [string, "null"]
+      # Set by a delivery pipeline whose deterministic `validate` step runs
+      # the required commands on the final candidate after this step. The
+      # envelope then lists that captured list as
+      # `task.final_validation_commands` (absent when it is empty, or for a
+      # claim that captured no owner gates).
+      final_validation:
+        type: boolean
   output_schema_json:
     type: object
     properties:
@@ -74,6 +81,15 @@ spec:
       # Claimed mode: a task comment the implementer would have posted.
       comment:
         type: string
+      # Claimed mode: culprit task IDs the implementer would have recorded as
+      # `regression_from` relations. The handoff carries them and the owner
+      # checks and records them when it accepts the handoff. The implement
+      # step fails an output whose entries are not task IDs before any
+      # commit, push or PR.
+      regression_from:
+        type: array
+        items:
+          type: string
       # Claimed mode: findings the owner refused to file. The handoff
       # attaches them to the claimed task as `unfiled-findings.json`. The
       # engine does not enforce this schema; the implement step fails an
@@ -88,6 +104,21 @@ spec:
             title:
               type: string
             description:
+              type: string
+      # Claimed mode: required task artifacts for diff and no-diff candidates.
+      # Commit validates every bounded scratch file before attaching through
+      # the claim; names cannot collide with clean-tree reports or their logs,
+      # and cannot use the reserved review- namespace.
+      task_artifacts:
+        type: array
+        items:
+          type: object
+          required: [path, source_path]
+          additionalProperties: false
+          properties:
+            path:
+              type: string
+            source_path:
               type: string
       # Claimed no-diff evidence: the deterministic commit step imports only
       # these bounded scratch files and verifies them before delivery.
@@ -105,11 +136,11 @@ spec:
               type: string
             source_path:
               type: string
-      # A required affected-test gate whose only gap is one sandbox's
-      # deferrals: Bubblewrap on Linux, Seatbelt on macOS, or ps-denied on a
-      # macOS claimed leaf (item 7). The implementer names only the
-      # validation summary the gate wrote. The
-      # step boundary derives the record from it, runs the sandbox's probe in
+      # A required affected-test gate whose only gap is sandbox deferrals:
+      # Bubblewrap on Linux, Seatbelt on macOS, and ps-denied on a macOS
+      # claimed leaf (item 7), one kind or several. The implementer names
+      # only the validation summary the gate wrote. The
+      # step boundary derives the record from it, runs each kind's probe in
       # this lane, refuses anything but the sanctioned case before commit and
       # replaces this field with the derived record; validation replays the
       # gate outside the agent sandbox before delivery.
@@ -121,6 +152,42 @@ spec:
           summary:
             type: string
             description: Checkout-relative path of the gate's validation summary, under `.orbit/tmp/`.
+      # Claimed mode: the unchanged base already resolves the task, shown by
+      # tests that run only outside the agent sandbox. The implement step
+      # admits each selector; `claim_validate` replays them on the base on
+      # the claim host before the NoDiff handoff.
+      already_resolved:
+        type: [object, "null"]
+        required: [selectors]
+        additionalProperties: false
+        properties:
+          selectors:
+            type: array
+            items:
+              type: string
+              description: "`cargo test -p <crate> --test <target> [<filter>]`"
+      # Criteria the task pilot typed post-deploy, which only the deployed
+      # build can evidence (item 7). The implement step admits each against
+      # that finding and fails the step for any other; the delivery then
+      # settles in review until an operator records the measurement.
+      owed_criteria:
+        type: array
+        items:
+          type: object
+          required: [criterion, host, command, target]
+          additionalProperties: false
+          properties:
+            criterion:
+              type: integer
+              minimum: 1
+            host:
+              type: string
+            command:
+              type: string
+            target:
+              type: string
+            candidate_evidence:
+              type: string
       # A real blocker (item 8). The step boundary records it and stops the run.
       blocker:
         type: object
@@ -167,23 +234,55 @@ spec:
       - `comment`: any task comment or leftovers (item 11). A real blocker
         (item 8) is `result.blocker` `{kind, evidence}`, not a status write
         and not only this comment.
-    - In claimed mode, for a clean no-op or already-satisfied base, write the structured
+      - `regression_from`: when the task asks you to record a
+        `regression_from` relation, the culprit task IDs as
+        `["<task-id>"]`, with the culprit commit named in
+        `execution_summary`. The owner checks each target and records the
+        relation when it accepts the handoff.
+    - In claimed mode, for a clean no-op or already-satisfied base without
+      `no-diff-expected`, write the structured
       `no-diff.json` or `already-landed.json` report and every validation log
       under the checkout's `.orbit/tmp/`. Return `no_diff_artifacts` as
       `[{"path":"no-diff.json","source_path":".orbit/tmp/no-diff.json"}, ...]`,
       including each report-referenced log. The deterministic commit step
-      attaches these bytes through the claim and runs the existing verifier;
-      the sandboxed implementer does not call owner artifact tools. This
-      replaces the artifact-attachment requirement in item 12 for claimed mode.
-      A task tagged `no-diff-expected` needs no such report: leave the
-      worktree clean, and the commit step hands off on the tag.
+      attaches these bytes through the claim and runs the existing verifier.
+      `no_diff_artifacts` admits only the clean-tree report and its declared
+      validation logs; required task artifacts belong in `task_artifacts`.
+      This replaces the clean-tree evidence attachment in item 12 for claimed mode.
+    - In claimed mode, for both diff and no-diff candidates (including
+      `no-diff-expected`), write required task artifacts such as ledgers and
+      screenshots under the checkout's `.orbit/tmp/` and return
+      `task_artifacts` as `[{"path":"doc-duties-ledger.json","source_path":".orbit/tmp/doc-duties-ledger.json"}, ...]`.
+      The deterministic commit step validates every file and attaches it
+      through the claim. Missing, oversized, outside-scratch files, duplicate
+      artifact paths, or paths colliding with a clean-tree report or its
+      declared logs refuse the handoff; none are silently dropped. The engine's
+      `no-diff-handoff/<claim>.json` and `validation/<claim>/` names are also
+      reserved for its own checkpoint and validation logs. Paths in the
+      reserved `review-` namespace (any ASCII case, such as
+      `review-sandbox-handoff.json`) are refused too, because only the review
+      gate writes there.
+      The sandboxed implementer does not call owner artifact tools. Owner
+      mode continues to use `orbit.task.artifact.put` as item 12 requires.
+    - In claimed mode, for tasks without `no-diff-expected`, when the base
+      already resolves the task but the tests that show it run only outside
+      the agent sandbox (they skip or
+      defer here, and an affected-test gate selects none on an unchanged
+      base), also return `already_resolved` as
+      `{"selectors":["cargo test -p <crate> --test <target> [<filter>]"]}`.
+      The claim host replays each selector on the base outside the agent
+      sandbox before the NoDiff handoff. A passing replay lets the handoff
+      complete the task without a PR; a failing one fails the claim with its
+      output; an empty list, another command shape, or a selector that runs
+      no test is refused. Never set it with a diff or outside claimed mode.
     - In claimed mode, `orbit.task.add` relations must include
       `{"type":"spawned_from","target":"<claimed task ID>"}`. A review task
       minted by `delivery-code-review` or `code-review` may also give each
       finding a `regression_from` relation to the task in its workspace that
-      introduced it. `orbit.search` and `orbit.task.list` do not reach the
-      owner, so skip a duplicate search the task asks for and say so in
-      `comment`; the owner's triage dedupes filed tasks. If the owner still
+      introduced it. `orbit.search` and `orbit.task.list` reach the owner's
+      authoritative records in the claimed workspace through the run's
+      coordinator; use them for duplicate checks. Federated search scopes
+      are refused. If the owner still
       refuses a finding, return it in `unfiled_findings` as
       `[{"title":..., "description":..., "relations":[...]}]`. The handoff
       attaches these to the claimed task as `unfiled-findings.json` for the
@@ -253,10 +352,12 @@ spec:
       re-implement), `continuation` (an earlier claim committed it
       but did not deliver it — check it against the task and finish what is
       missing) or `landing` (a handed-off candidate whose landing stopped
-      because its base moved; it applied cleanly onto the current base, so
-      confirm it still builds and meets the acceptance criteria there and
-      adapt it to what the base changed). Then rerun the checks and say in
-      the summary that you repaired a resumed candidate.
+      because its base moved or a required check failed on it; it applied
+      cleanly onto the current base, so fix what `output` names, such as the
+      failed check and its signature, confirm it still builds and meets the
+      acceptance criteria there and adapt it to what the base changed). Then
+      rerun the checks and say in the summary that you repaired a resumed
+      candidate.
 
     Scope and implementation
 
@@ -287,11 +388,43 @@ spec:
     7. Follow workspace validation policy. Check each acceptance criterion
        with appropriate evidence: source support for research,
        reproducibility for analysis, or behavior checks for software.
-       Run every check required by the workspace's AGENTS.md and required
-       validation commands before handoff; do not defer a workspace-required
+       For tasks without `no-diff-expected`, run every check required by the
+       workspace's AGENTS.md and required validation commands before handoff;
+       do not defer a workspace-required
        check to review. Read required validation commands from a supplied
        delivery manifest's `required_validation_commands` or
-       `workflow.required_validation_commands`. If workspace guidance requires
+       `workflow.required_validation_commands`.
+       When `task.final_validation_commands` is present, the pipeline runs
+       each listed command itself, in order and outside the agent sandbox,
+       on the final committed candidate after base synchronization, and
+       attaches its log as delivery evidence. For a diff, do not run a
+       listed command whole or hand it off as `deferred_sandbox_validation`:
+       run focused checks (the tests, formatter or linter for what you
+       changed) that show each acceptance criterion, and every
+       workspace-required check the list does not name. Record each listed
+       command as `not_run` (pipeline final validation) in the execution
+       summary, never as passed. A clean no-op or already-landed handoff
+       skips that validation, so it runs and records every required check
+       (item 12). Without the field, you own every check.
+       For a candidate diff, when the workspace provides `make ci-guards`,
+       run it before handoff and fix every reported static guard violation, even
+       when `make ci-fast` is listed for pipeline final validation. In Rust
+       workspaces, also run `cargo fmt --all -- --check`, covering test targets
+       as well as production code. When applying rustfmt fixes, include changed
+       test files too; never restrict formatting to `src/` or library files.
+       For changed test `.rs` files, also run `rustfmt --check --edition <edition> <path> ...`
+       using the owning crate's edition. In workspaces providing
+       `ci-lint` and `scripts/build-budget.py`, mirror
+       these checks for each changed crate (`<crate>` is its package name):
+       - `scripts/build-budget.py -- cargo clippy -p <crate> --lib --bins -- -D warnings -D clippy::disallowed_methods`
+       - `scripts/build-budget.py -- cargo clippy -p <crate> --all-targets -- -D warnings -A clippy::disallowed_methods`
+       - `RUSTDOCFLAGS="-D warnings" scripts/build-budget.py -- cargo doc --no-deps -p <crate>`
+       The production pass retains the channel restriction; the all-targets
+       pass covers test targets, and rustdoc rejects broken/private links.
+       These focused checks do not replace final validation: leave whole
+       `task.final_validation_commands` entries to the pipeline, which
+       remains authoritative. Record commands and outcomes in the handoff.
+       If workspace guidance requires
        a check on another platform, record it as not run and arrange the
        evidence that guidance specifies rather than claiming it passed.
        When the workspace requires an affected-test gate, run full test
@@ -316,21 +449,22 @@ spec:
        exact command, denial, and uncertainty. Return success only for a
        complete deliverable when workspace policy permits deferring the
        check; otherwise report the validation blocker.
-       One deferral is sanctioned, in one shape per sandbox: a required
-       affected-test gate that exits 0 but prints, for tests whose nested
-       sandbox the agent sandbox refuses, only
-       `DEFERRED: bubblewrap unavailable:` notices on Linux or only
-       `SKIP: sandbox-exec cannot apply a profile:` notices on macOS; or, in
-       claimed mode on macOS only, for tests the agent sandbox refuses to
-       exec `ps` for, only `DEFERRED: ps denied:` notices. Do not fail the
-       step for it. Run the gate with its comparison base pinned to
+       One deferral is sanctioned: a required affected-test gate that exits
+       0 but prints only these notices, for tests whose sandbox the agent
+       sandbox refuses: `DEFERRED: bubblewrap unavailable:` notices on
+       Linux, `SKIP: sandbox-exec cannot apply a profile:` notices on macOS,
+       and, in claimed mode on macOS only, `DEFERRED: ps denied:` notices
+       for tests the agent sandbox refuses to exec `ps` for. One gate run
+       may print several of these kinds, as a broad macOS gate prints
+       Seatbelt and ps-denied notices together. Do not fail the step for
+       it. Run the gate with its comparison base pinned to
        `input.base_sha` and `ORBIT_VALIDATION_SUMMARY` naming a new file
        under the checkout's `.orbit/tmp/`, then return only that file's
        checkout-relative path:
        `{"deferred_sandbox_validation":{"summary":".orbit/tmp/<file>.json"}}`.
        Do not write any other field: Orbit derives the record from the
        summary the gate wrote (its command, exit status, executed tests,
-       base and notices), runs the deferring sandbox's probe in this lane
+       base and notices), runs each deferring sandbox's probe in this lane
        itself, and fails the step before commit unless the result is the
        sanctioned case; it then replays the gate outside the agent sandbox
        before delivery. A hand-written field is accepted only when it equals
@@ -342,12 +476,24 @@ spec:
        pass.
        Nothing else is deferrable: a nonzero exit, any other `SKIP:` or
        `skipping` notice, a gate that ran no tests or selected nothing,
-       notices in a lane whose probe does not refuse that sandbox, notices of
-       two kinds in one gate run, `DEFERRED: ps denied:` notices outside a
-       macOS claimed leaf, a host-required criterion, a
+       notices of a kind whose probe this lane does not refuse,
+       `DEFERRED: ps denied:` notices outside a macOS claimed leaf, a host-required criterion, a
        `baseline_red` command, and every other required command (formatting,
        lint, goldens, static-analysis extraction) keep their ordinary
        handling above.
+       A criterion the task's latest task-pilot assessment lists in
+       `post_deploy` can be evidenced only by the deployed build on the host
+       it names, so no candidate meets it before merge. Do not fail the run
+       or return a blocker for it. Gather what the candidate itself can show
+       (its own build's timings or request counts, a test server started
+       from the candidate) and return each such criterion as
+       `{"owed_criteria":[{"criterion":N,"host":"...","command":"...","target":"...","candidate_evidence":"..."}]}`,
+       copying the host and measurement command from that finding. The
+       delivery proceeds and settles in `review` until an operator records
+       the measurement. The step boundary refuses an owed criterion the
+       pilot did not type: every other unmet criterion still fails as
+       above. In the execution summary mark each owed criterion `not_run`
+       (owed after deploy), never as passed.
        Run only gates named by workspace policy. When a gate fails outside the
        delivery scope, reproduce it once on the unmodified baseline (the same
        command at the base commit or with your diff reverted). A failure there
@@ -373,8 +519,11 @@ spec:
        assumption, recurring failure, incident root cause, or non-obvious
        gotcha that took over 10 minutes.
     10. Review the deliverable and diff for accuracy, unintended changes, and
-        stale material; run required checks. Run-owned non-deliverable output
-        is only what `git status --short` adds to the
+        stale material; run required checks unless tagged `no-diff-expected`,
+        leaving a diff's `task.final_validation_commands` to the pipeline.
+        On a diff, complete item 7's early static guards and scoped Rust
+        checks after your last repair before handing off.
+        Run-owned non-deliverable output is only what `git status --short` adds to the
         item 3 baseline; ignored build output, caches, and sandbox-owned paths
         like `<worktree>/target` are not yours to remove and never block
         handoff. Write scratch, logs, and review evidence under `.orbit/tmp/`
@@ -405,6 +554,12 @@ spec:
         `execution_summary` instead). Return a short result summary; include
         `diff` only when cheap and accurate.
 
+        For `no-diff-expected`, hand off the brief's outputs and execution
+        summary with a clean worktree; no no-diff report or workspace
+        validation logs are required in either owner or claimed mode. The
+        following already-landed and genuine no-op evidence requirements
+        apply only to tasks without that tag.
+
         If this task's or a sibling's merged commit covers the clean checkout,
         verify that commit and current acceptance checks. On first attempt or
         retry, do not manufacture a change: attach `already-landed.json` and
@@ -412,11 +567,13 @@ spec:
         The already-landed report needs schema_version 1, task_id, run_id,
         tested_head, covering_commit, covering_task_id (this task or covering
         sibling), scope (title, description, acceptance_criteria, plan,
-        context_files, tags, relations, required_tools, type, comments),
-        required_commands, criteria_evidence, validation. Use flat
-        validation[] objects with sibling fields command, outcome, role,
-        log_artifact. criteria_evidence is an array of non-empty strings, one
-        per acceptance criterion in order (never objects). Each required
+        context_files, tags, relations, required_tools, type, comments; each
+        comment carries only at, by and message, so drop the receipt ids such
+        as operation_id that orbit.task.show adds), required_commands,
+        criteria_evidence, validation. Use flat validation[] objects with
+        sibling fields command, outcome, role, log_artifact. criteria_evidence
+        is an array of non-empty strings, one per acceptance criterion in
+        order (never objects). Each required
         command's validation[] entry has outcome "passed" and role
         "required"; the role vocabulary is required, expected_failure,
         excluded, superseded, diagnostic.
@@ -439,15 +596,110 @@ spec:
 
         Leave changes uncommitted; the pipeline owns commit, push, PR creation,
         and merge. Follow item 10's scratch policy. Gates read durable artifacts and
-        task state, never the execution summary as an oracle. Do not invoke another agent
-        or dispatch work. In the execution summary, map criteria to results,
+        task state, never the execution summary as an oracle. Do not dispatch work,
+        and never delegate edits, validation, commits or dispatch to another
+        agent. In the execution summary, map criteria to results,
         list validation commands as passed/failed/not run with reasons, record
         the item 11 reconciliation (delivery paths, paths outside the task's
         selectors, cleanup outcome, leftovers), and disclose risks or
         deviations.
         Do not claim skipped checks passed or incomplete work successful.
+  steering_instruction: |
+    Mid-run steering checkpoint (advisory pull)
+
+    - At each checkpoint where remaining work is still expensive — before
+      your first edit, before validation, and before any long or costly
+      phase — re-read the task with `orbit.task.show`. In claimed mode
+      (`input.claimed` is true) skip this re-read and rely on the injected
+      task instead, as the Terminal-task guard already provides.
+    - Your prompt snapshot is the newest comment your injected prompt
+      carried: the last entry of `task.comments`, or the snapshot named
+      by `task.steering` when the host delivered a steering block. Any
+      operator-authored comment after that snapshot is steering. Weigh
+      it like task text, oldest first, with later comments refining
+      earlier ones. System, automation and agent comments are not
+      steering.
+    - This re-read is advisory only, exactly like the terminal precheck.
+      It never records `steering_delivered`, never advances any
+      watermark, and no gate consumes your claim that you looked. Do
+      not write task history, a comment, or any delivery record to
+      report it, and do not treat it as delivery.
+    - Authority limits: a steering comment cannot widen your
+      `context_files`, change required validation, crew or review
+      policy, or move task lifecycle state. Those take effect only
+      through their governed writes. Weigh a comment that asks for any
+      of them, but continue under the current governed contract until
+      such a write appears.
+    - Terminal handling is unchanged: if the re-read shows the task is
+      terminal or refuses writes, stop under the Terminal-task guard.
+    - When `input.steering_round` is present, the promotion gate refused
+      to commit this run's candidate because operator steering had not
+      reached it. The checkout already holds that candidate, uncommitted:
+      continue from it rather than starting over, apply the operator
+      comments `input.steering_round.outstanding` names (carried in
+      `task.steering`, or in `task.comments` when no block leads the
+      task), and rerun the checks the change affects. The round and its
+      budget are the host's record; nothing you return spends or refunds
+      one.
+  regression_risk_instruction: |
+    Regression-risk marks
+
+    `task.regression_risk.marks` names context files whose recent
+    deliveries often regressed: `regressed` counts the tasks that touched
+    the file in the last `window_days` and were later named by a
+    regression, and `nature` and `escape` say how those regressions most
+    often happened and why the gates missed them. `lesson` is the newest
+    regression's one-line summary. A mark points at where earlier work
+    broke; it does not describe the current code, so read the file as it is
+    now and do not re-fix old bugs.
+
+    For each marked file you change, act on every category its mark lists:
+    - escape `no_test`: add a focused regression check at the public
+      CLI/API boundary for the behavior you change there.
+    - escape `test_not_selected`: run the existing tests that cover the
+      file by name, not only an affected-test selection.
+    - escape `platform_only`: name each platform or host the change
+      behaves differently on, and exercise it or record it as owed.
+    - escape `review_missed`: before handoff, re-read your diff of the file
+      against every acceptance criterion and its callers.
+    - escape `spec_ambiguous`: say in the execution summary which reading
+      of the requirement you implemented and why.
+    - escape `nondeterministic`: keep timing, ordering and environment out
+      of the change and its tests.
+    - nature `broke_existing`: run the tests of the file's existing callers.
+    - nature `defect_in_new`: cover the new paths you add, failure paths
+      included.
+    - nature `incomplete`: check each acceptance criterion against the diff.
+    - nature `merge_reintroduced`: after a rebase or base sync, re-verify
+      the touched area, and that nothing removed earlier came back.
+    - nature `contract_drift`: update the affected docs, schemas or
+      contract in the same diff.
+    - `unclassified`: no specific check; apply the ones above that fit.
+
+    `orbit.codebase.show` with the path lists the tasks behind a mark when
+    you need them. In the execution summary, say what you did for each
+    marked file you changed.
+  explore_instruction: |
+    Read-only delegation
+
+    You may hand read-only questions to a cheaper agent instead of spending
+    your own turns on them: locating code, tracing callers, summarizing a
+    module, or finding the tests that cover a path.
+    - Through Orbit: call `orbit.agent.invoke` with `prompt` (one focused
+      question), `cwd` (your worktree root or a directory inside it),
+      `wait_seconds` (up to 600) and an `idempotency_key` unique to the
+      question. A crew from the workspace's explorer pool reads your
+      worktree in a read-only sandbox and answers with `answer.summary`,
+      `answer.findings` and `answer.paths_read`. Calls, concurrent
+      explorers, timeout and answer size are budgeted per run; when a call
+      is refused, continue the work yourself.
+    - Natively: your provider's own read-only subagents (for example
+      Claude's Agent tool on a small model) are allowed for the same kind
+      of question.
+    Delegate only reading. Never delegate edits, validation, commits or
+    dispatch: you make every change, run every check and own the result. An explorer's answer is a lead, not evidence; read
+    what you rely on in the files themselves before you change or cite it.
   tool_disallow_list:
-    - orbit.agent.invoke
     - orbit.auto_task.add
     - orbit.auto_task.mint
     - orbit.auto_task.update

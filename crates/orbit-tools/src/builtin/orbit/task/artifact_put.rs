@@ -8,74 +8,62 @@ use orbit_common::tracing;
 use orbit_policy::resolve_symlinks;
 use orbit_types::policy::FsOperation;
 use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, TaskArtifact, canonical_artifact_path};
-use orbit_types::tool::{ToolParam, ToolSchema};
 use orbit_types::workflow::{REVIEW_REPORT_ARTIFACT, ReviewReport};
 use serde_json::{Map, Value, json};
 
-use crate::{OrbitBuiltinAction, Tool, ToolContext};
+use crate::{OrbitBuiltinAction, ToolContext};
+use orbit_common::governance::operation::OperationVerb;
+use orbit_common::governance::task::TaskVerb;
 
-pub struct OrbitTaskArtifactPutTool;
-
-impl Tool for OrbitTaskArtifactPutTool {
-    fn schema(&self) -> ToolSchema {
-        let mut parameters = super::super::orbit_id_params("task");
-        parameters.extend([
-            ToolParam {
-                name: "source_path".to_string(),
-                description: "Source file to store as a task artifact. Resolved against the \
-                    caller cwd, then confined to the workspace checkout after symlink \
-                    resolution. Absolute paths and symlinks that escape the workspace are \
-                    rejected. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`); \
-                    sources under `/tmp` are outside the workspace and are refused."
-                    .to_string(),
-                param_type: "string".to_string(),
-                required: true,
-            },
-            ToolParam {
-                name: "path".to_string(),
-                description:
-                    "Artifact path relative to the task artifacts directory. Defaults to the source file name."
-                        .to_string(),
-                param_type: "string".to_string(),
-                required: false,
-            },
-        ]);
-        parameters.extend(super::super::model_identity_params());
-
-        ToolSchema {
-            name: "orbit.task.artifact.put".to_string(),
-            description: "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, one delivery_examinations entry per delivery (examined and skipped paths matching its diff, verdict, rationale), examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context. A file that does not parse as the evidence schema is refused here with the parse error, so fix and re-put it; stale, unauthorized or path-mismatched evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage. A review-report.json is validated against the before-PR review report contract and refused, naming the field, when it does not match; a counterfactual control's `mutation_target` lists the files it temporarily changed, apart from the `sources` naming the checks that rejected the change.".to_string(),
-            parameters,
-            builtin: true,
-        }
+/// Authenticate the private path-free payload before ordinary spec parsing.
+pub(super) fn preempt(ctx: &ToolContext, input: &Value) -> Option<Result<Value, OrbitError>> {
+    if let Err(error) = super::super::reject_agent_field(input, "orbit.task.artifact.put") {
+        return Some(Err(error));
     }
-
-    fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
-        super::super::reject_agent_field(&input, "orbit.task.artifact.put")?;
-        // A spoke broker reads the caller-local source before crossing the
-        // hub link, then sends this path-free private payload under the same
-        // canonical tool name. The hub accepts that shape only on ssh-mcp;
-        // local/model calls must continue to supply a real source_path.
-        if input.get("artifacts").is_some() {
-            if (ctx.session_context.transport != Some(orbit_types::tool::McpTransport::SshMcp)
-                && ctx.session_context.worker_invocation.is_none())
-                || input.get("source_path").is_some()
-                || input.get("sourcePath").is_some()
-                || input.get("source-path").is_some()
-            {
-                return Err(OrbitError::InvalidInput(
-                    "preloaded task artifact payloads are accepted only from the authenticated ssh-mcp spoke connector"
-                        .to_string(),
-                ));
-            }
-            reject_unknown_tool_fields(&input, &["id", "artifacts", "model"])?;
-            return super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskUpdate);
-        }
-
-        let update_input = prepare_remote_payload(input, ctx)?;
-
-        super::super::execute_host_action(ctx, update_input, OrbitBuiltinAction::TaskUpdate)
+    if input.get("artifacts").is_none() {
+        return source_presence_error(input).map(Err);
     }
+    Some((|| {
+        if (ctx.session_context.transport != Some(orbit_types::tool::McpTransport::SshMcp)
+            && ctx.session_context.worker_invocation.is_none())
+            || ["source_path", "sourcePath", "source-path"]
+                .iter()
+                .any(|key| input.get(*key).is_some())
+        {
+            return Err(OrbitError::InvalidInput("preloaded task artifact payloads are accepted only from the authenticated ssh-mcp spoke connector".to_string()));
+        }
+        reject_unknown_tool_fields(input, &["id", "artifacts", "model"])?;
+        super::super::execute_host_action(
+            ctx,
+            input.clone(),
+            OrbitBuiltinAction::Task(TaskVerb::ArtifactPut),
+        )
+    })())
+}
+
+/// Keep the shipped source-file remedy on incomplete calls. Unknown fields
+/// on complete calls still use the registry's warn mode.
+fn source_presence_error(input: &Value) -> Option<OrbitError> {
+    let spec = TaskVerb::ArtifactPut.spec();
+    let source = spec
+        .wire_params()
+        .find(|param| param.name == "source_path")?;
+    if std::iter::once(source.name)
+        .chain(source.aliases.iter().copied())
+        .any(|key| input.get(key).is_some())
+    {
+        return None;
+    }
+    let allowed = spec
+        .wire_params()
+        .flat_map(|param| std::iter::once(param.name).chain(param.aliases.iter().copied()))
+        .collect::<Vec<_>>();
+    let result = (|| {
+        reject_unknown_tool_fields(input, &allowed)?;
+        orbit_common::protocol::tool_input::required_string(input, &["id"], "id")?;
+        Err::<(), _>(OrbitError::InvalidInput("missing `source_path`; `path` is the artifact name, and `source_path` is the local file to attach under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`)".to_string()))
+    })();
+    result.err()
 }
 
 /// Read a caller-local task artifact into the bounded, path-free payload used
@@ -84,50 +72,36 @@ impl Tool for OrbitTaskArtifactPutTool {
 pub(crate) fn prepare_remote_payload(input: Value, ctx: &ToolContext) -> Result<Value, OrbitError> {
     // This helper also runs on the worker before the private spoke payload is
     // sent, so validate here rather than relying on the local execute path.
-    reject_unknown_tool_fields(
-        &input,
-        &[
-            "id",
-            "source_path",
-            "sourcePath",
-            "source-path",
-            "path",
-            "artifact_path",
-            "artifactPath",
-            "model",
-        ],
-    )?;
-    let id = super::super::required_string(&input, &["id"], "id")?;
-    if !["source_path", "sourcePath", "source-path"]
-        .iter()
-        .any(|key| input.get(*key).is_some())
-    {
-        return Err(OrbitError::InvalidInput(
-            "missing `source_path`; `path` is the artifact name, and `source_path` is the \
-             local file to attach under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`)"
-                .to_string(),
-        ));
+    if let Some(error) = source_presence_error(&input) {
+        return Err(error);
     }
-    let source_path = super::super::required_string(
-        &input,
-        &["source_path", "sourcePath", "source-path"],
-        "source_path",
-    )?;
-    let artifact_path =
-        super::super::optional_string_alias(&input, &["path", "artifact_path", "artifactPath"])?;
-    let resolved_source_path = confine_source_path(
-        ctx,
-        &resolve_source_path(ctx.cwd.as_deref().map(Path::new), &source_path),
-    )?;
+    let input = TaskVerb::ArtifactPut.spec().parse_input(input)?;
+    let id = input.required_string("id")?;
+    let normalized_source_path = input.required_string("source_path")?;
+    // Local CLI calls select an exact filesystem name; MCP retains its
+    // shipped string normalization. Neither changes artifact-name handling.
+    let source_path = if ctx.session_context.transport.is_none() {
+        input
+            .optional_raw_string("source_path")?
+            .unwrap_or(normalized_source_path)
+    } else {
+        normalized_source_path
+    };
+    let artifact_path = input.optional_string("path")?;
+    let resolved = resolve_source_path(ctx.cwd.as_deref().map(Path::new), &source_path);
+    if let Some(error) = checkout_root_source_hint(ctx, &source_path, &resolved) {
+        return Err(error);
+    }
+    let resolved_source_path = confine_source_path(ctx, &resolved)?;
     let artifact = read_bounded_artifact(&resolved_source_path, artifact_path.as_deref())?;
     validate_review_report(&artifact)?;
 
-    // Build the TaskUpdate input from attachment and transport fields only.
-    // Future TaskUpdate fields cannot silently widen artifact.put authority.
+    // Build the attachment input from attachment and transport fields only.
+    // Future task update fields cannot silently widen artifact.put authority.
     let mut update_input = Map::new();
     update_input.insert("id".to_string(), Value::String(id));
     for key in ["model", "workspace", "_meta"] {
-        if let Some(value) = input.get(key) {
+        if let Some(value) = input.as_value().get(key) {
             update_input.insert(key.to_string(), value.clone());
         }
     }
@@ -226,6 +200,32 @@ fn resolve_source_path(cwd: Option<&Path>, source_path: &str) -> PathBuf {
         return path;
     }
     cwd.map(|cwd| cwd.join(&path)).unwrap_or(path)
+}
+
+/// A relative `source_path` is read from the caller's current directory. An
+/// agent working in a scratch folder often repeats the checkout-relative
+/// prefix, which doubles the path and misses the file. When the same relative
+/// path names a confined regular file at the checkout root, refuse and name
+/// that file's absolute path. Nothing is attached, and filename semantics stay
+/// exact. Missing at both locations keeps the ordinary read error.
+fn checkout_root_source_hint(
+    ctx: &ToolContext,
+    source_path: &str,
+    resolved: &Path,
+) -> Option<OrbitError> {
+    if Path::new(source_path).is_absolute() || resolved.exists() {
+        return None;
+    }
+    let workspace_root = ctx.workspace_root.as_deref()?.canonicalize().ok()?;
+    let candidate = confine_source_path(ctx, &workspace_root.join(source_path)).ok()?;
+    if !candidate.is_file() {
+        return None;
+    }
+    Some(OrbitError::InvalidInput(format!(
+        "source_path '{source_path}' does not exist under the current directory '{}', but the same relative path names a file at the checkout root; pass the absolute source_path '{}' instead",
+        ctx.cwd.as_deref().unwrap_or("."),
+        candidate.display()
+    )))
 }
 
 /// Symlink-safe workspace containment for a caller-local artifact source.

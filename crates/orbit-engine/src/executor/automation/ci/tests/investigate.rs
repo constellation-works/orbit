@@ -9,8 +9,9 @@ use super::super::{investigate::bound_diagnostic, query::bounded_run_log};
 fn nextest_regions_bind_only_complete_evidence_to_the_known_failed_step() {
     let prefix = "CI\tTests\t";
     let padding = format!("{prefix}PASS [ 0.001s] suite passing_test\n").repeat(32_768);
+    // The runner closes its printed command display before emitting test output.
     let raw = format!(
-        "{prefix}##[group]Run cargo nextest run\n{padding}{prefix}FAIL [ 0.123s] suite failing_test\n{prefix}──────── STDERR ────────\n{prefix}thread 'failing_test' panicked at tests/sample.rs:12:3:\n{prefix}expected a completed operation\n{padding}{prefix}##[error]Process completed with exit code 100.\n"
+        "{prefix}##[group]Run cargo nextest run\n{prefix}##[endgroup]\n{padding}{prefix}FAIL [ 0.123s] suite failing_test\n{prefix}──────── STDERR ────────\n{prefix}thread 'failing_test' panicked at tests/sample.rs:12:3:\n{prefix}expected a completed operation\n{padding}{prefix}##[error]Process completed with exit code 100.\n"
     );
     let log = bounded_run_log(&raw, 128);
     let failure = json!({"failed_jobs": [{"name": "CI", "failed_steps": [{"name": "Tests"}]}]});
@@ -48,7 +49,7 @@ fn nextest_regions_bind_only_complete_evidence_to_the_known_failed_step() {
     raw_job.source = orbit_tools::github_cli::SOURCE_JOB_API_LOG.to_string();
     assert!(bound_diagnostic(&raw_job, &failure, 42).is_some());
     let ambiguous = format!(
-        "##[group]Run earlier\n##[error]Process completed with exit code 1.\n{}",
+        "##[group]Run earlier\n##[endgroup]\n##[error]Process completed with exit code 1.\n{}",
         raw.replace(prefix, "")
     );
     let mut ambiguous = bounded_run_log(&ambiguous, 128);

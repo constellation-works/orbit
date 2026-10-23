@@ -125,7 +125,7 @@ fn prepare_pipeline_worker_log_directory(
     let (authority_path, missing, expected_authority) =
         canonical_pipeline_worker_log_parent_components(parent)?;
 
-    #[cfg(all(test, unix))]
+    #[cfg(all(any(test, feature = "test-support"), unix))]
     pipeline_worker_log_test_hook::run(
         pipeline_worker_log_test_hook::Phase::AuthorityValidated,
         &authority_path,
@@ -271,20 +271,69 @@ fn open_pipeline_worker_log_at(
     display_path: &Path,
 ) -> Result<File, OrbitError> {
     let file_name_c = pipeline_worker_component_c_string(file_name)?;
-    let flags = libc::O_CREAT | libc::O_APPEND | libc::O_RDWR | libc::O_CLOEXEC | libc::O_NOFOLLOW;
-    let fd = unsafe { libc::openat(directory.as_raw_fd(), file_name_c.as_ptr(), flags, 0o600) };
-    if fd < 0 {
-        return Err(OrbitError::Io(format!(
-            "open pipeline worker log '{}': {}",
-            display_path.display(),
-            std::io::Error::last_os_error()
-        )));
-    }
+    let flags = libc::O_APPEND | libc::O_RDWR | libc::O_CLOEXEC | libc::O_NOFOLLOW;
+    // Concurrent public retries can deliver the same pending run. On macOS,
+    // overlapping non-exclusive O_CREAT opens reproduced ENOENT despite both
+    // directory descriptors naming the same linked inode. Separate exclusive
+    // creation from opening an existing file; only EEXIST selects the latter.
+    let created = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            file_name_c.as_ptr(),
+            flags | libc::O_CREAT | libc::O_EXCL,
+            0o600,
+        )
+    };
+    let fd = if created >= 0 {
+        created
+    } else {
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::AlreadyExists {
+            return Err(worker_log_open_error(
+                "create",
+                directory,
+                display_path,
+                error,
+            ));
+        }
+        let existing = unsafe { libc::openat(directory.as_raw_fd(), file_name_c.as_ptr(), flags) };
+        if existing < 0 {
+            return Err(worker_log_open_error(
+                "open existing",
+                directory,
+                display_path,
+                std::io::Error::last_os_error(),
+            ));
+        }
+        existing
+    };
 
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-#[cfg(all(test, unix))]
+#[cfg(unix)]
+fn worker_log_open_error(
+    operation: &str,
+    directory: &File,
+    display_path: &Path,
+    error: std::io::Error,
+) -> OrbitError {
+    // Capture errno at the syscall, before diagnostic metadata reads. The held
+    // and named identities distinguish unlinked/replaced directories from a
+    // failure opening a filename in the expected still-linked directory.
+    let held = directory.metadata().map(|m| (m.dev(), m.ino(), m.nlink()));
+    let named = display_path
+        .parent()
+        .map(std::fs::symlink_metadata)
+        .map(|m| m.map(|m| (m.dev(), m.ino(), m.nlink())));
+    OrbitError::Io(format!(
+        "{operation} pipeline worker log '{}': {error}; errno={:?}; held_directory={held:?}; named_directory={named:?}",
+        display_path.display(),
+        error.raw_os_error(),
+    ))
+}
+
+#[cfg(all(any(test, feature = "test-support"), unix))]
 pub(crate) mod pipeline_worker_log_test_hook {
     use std::cell::RefCell;
     use std::path::Path;
@@ -311,6 +360,23 @@ pub(crate) mod pipeline_worker_log_test_hook {
 
     pub(crate) fn clear() {
         HOOK.with(|slot| *slot.borrow_mut() = None);
+    }
+
+    /// Rendezvous immediately before a worker log is created or opened.
+    #[cfg(feature = "test-support")]
+    pub fn with_pipeline_worker_log_open_hook<T>(
+        hook: impl FnOnce(&Path) + 'static,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        struct Clear;
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                clear();
+            }
+        }
+        install(Phase::BeforeLogOpen, hook);
+        let _guard = Clear;
+        operation()
     }
 
     pub(super) fn run(phase: Phase, path: &Path) {
@@ -431,7 +497,7 @@ pub(crate) fn configure_pipeline_worker_stdio(
     };
     let log_path = pipeline_worker_log_path(&logs_dir, run_id)?;
 
-    #[cfg(all(test, unix))]
+    #[cfg(all(any(test, feature = "test-support"), unix))]
     pipeline_worker_log_test_hook::run(
         pipeline_worker_log_test_hook::Phase::DirectoryReady,
         &logs_dir,
@@ -442,7 +508,7 @@ pub(crate) fn configure_pipeline_worker_stdio(
     #[cfg(not(unix))]
     restrict_pipeline_worker_log_directory(&logs_dir)?;
 
-    #[cfg(all(test, unix))]
+    #[cfg(all(any(test, feature = "test-support"), unix))]
     pipeline_worker_log_test_hook::run(
         pipeline_worker_log_test_hook::Phase::BeforeLogOpen,
         &log_path,

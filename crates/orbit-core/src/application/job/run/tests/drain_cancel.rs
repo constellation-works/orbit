@@ -10,9 +10,8 @@ use orbit_common::OrbitError;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_store::contracts::{
     AdmissionReceipt, AdmissionRequest, AdmissionRunContext, AdmissionShipContract,
-    AdmissionTaskSummary, ClaimMutation, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, ExecutionClaim,
-    ExecutionClaimPhase, ExecutionLocation, LocalPullAdmission, LocalPullMutation, LocalPullPhase,
-    PullDestination,
+    AdmissionTaskSummary, ClaimMutation, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
+    LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
 };
 use orbit_store::contracts::{TaskCreateParams, TaskReservationReleaseReason};
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator};
@@ -28,6 +27,7 @@ use super::{
     test_runtime, worker_checkpoint,
 };
 use crate::OrbitRuntime;
+use crate::application::test_support::{admission_receipt, admission_request};
 use crate::application::tests::run_isolated_test;
 
 #[test]
@@ -80,7 +80,7 @@ fn graceful_cancel_initialization_preserves_worker_checkpoint_and_merges_control
         assert!(!result.signal_attempted);
         let state = runtime.read_run_state(&run.run_id).unwrap().unwrap();
         assert!(state.admissions_stopped());
-        let control = state.drain_cancel.as_ref().unwrap();
+        let control = state.pull_drain.drain_cancel.as_ref().unwrap();
         assert_eq!(control.actor, "operator");
         assert_eq!(control.source, "fixture");
         assert_eq!(control.reason.as_deref(), Some("finish admitted work"));
@@ -273,6 +273,9 @@ fn in_progress_task(runtime: &OrbitRuntime, run: &JobRun) -> String {
             crew: None,
             crew_source: None,
             orchestrator: None,
+            orchestrator_model: None,
+            orchestrator_model_source: None,
+            origin: None,
             comments: Vec::new(),
             context_creation: Vec::new(),
         })
@@ -441,29 +444,26 @@ fn admission(
     let destination = destination();
     let jobs = runtime.stores().jobs();
     let request = AdmissionRequest {
-        request_id: format!("request-{}", owner.receipts.lock().unwrap().len()),
-        caller_version: "fixture".into(),
-        caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-        caller_fingerprint: None,
         caller_before_pr: false,
         review_gate: false,
-        run_context: AdmissionRunContext {
-            run_id: drain.run_id.clone(),
-            job_name: drain.job_id.clone(),
-            machine_name: None,
-        },
-        ship: AdmissionShipContract {
-            mode: "pr".into(),
-            base_branch: "agent-main".into(),
-            landing_branch: "agent-main".into(),
-            before_pr: false,
-            before_landing: false,
-            completion: "review".into(),
-            authorization_reference: None,
-            review: None,
-        },
-        crews: None,
-        os: None,
+        ..admission_request(
+            format!("request-{}", owner.receipts.lock().unwrap().len()),
+            AdmissionRunContext {
+                run_id: drain.run_id.clone(),
+                job_name: drain.job_id.clone(),
+                machine_name: None,
+            },
+            AdmissionShipContract {
+                mode: "pr".into(),
+                base_branch: "agent-main".into(),
+                landing_branch: "agent-main".into(),
+                before_pr: false,
+                before_landing: false,
+                completion: "review".into(),
+                authorization_reference: None,
+                review: None,
+            },
+        )
     };
     let record = jobs
         .allocate_pull_request(&destination, &request, 10)
@@ -471,12 +471,10 @@ fn admission(
         .unwrap();
     let id = record.request.request_id.clone();
     let claim_id = format!("claim-{id}");
-    let receipt = AdmissionReceipt {
-        schema_version: 1,
-        gates: None,
-        request: record.request.clone(),
-        machine_id: destination.execution_machine_id.clone(),
-        claim: Some(ExecutionClaim {
+    let receipt = admission_receipt(
+        record.request.clone(),
+        destination.execution_machine_id.clone(),
+        ExecutionClaim {
             claim_id: claim_id.clone(),
             task_id: format!("task-{id}"),
             request_id: id.clone(),
@@ -490,21 +488,16 @@ fn admission(
             reservation_expires_at: (Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
             repair: None,
             phase: ExecutionClaimPhase::Claimed,
-        }),
-        task: Some(AdmissionTaskSummary {
+        },
+        AdmissionTaskSummary {
             id: format!("task-{id}"),
             title: "stop-time admission".into(),
             complexity: None,
             crew: None,
             context_files: vec![],
             resume_candidate: None,
-        }),
-        invalid_candidates: vec![],
-        deferred_conflicts: vec![],
-        crew_unavailable: vec![],
-        os_unavailable: vec![],
-        queue_depth: 0,
-    };
+        },
+    );
     owner.claims.lock().unwrap().insert(claim_id);
     owner
         .receipts

@@ -63,10 +63,10 @@ pub(crate) use artifact_paths::normalize_v2_artifact_path;
 pub(crate) use artifact_paths::resolve_v2_artifact_file_path;
 pub(crate) use artifacts::review_report_history;
 use creation_grant::{append_creation_grant, creation_state, reject_forged_grant};
-use envelope_cache::EnvelopeCache;
+use envelope_cache::{EnvelopeCache, persisted_file_stamp};
 use relations::{relations_from_create_params, replace_relations};
 use sequencing::{next_event_id, next_sequence};
-pub(crate) use sidecars::task_history_from_events;
+pub(crate) use sidecars::{task_comment_from_row, task_history_from_events};
 
 pub(crate) struct TaskV2Store {
     registry: TaskRegistryStore,

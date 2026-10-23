@@ -4,8 +4,8 @@ summary: Query and interpret Orbit invocation, run, step, and activity audit his
 tags: [operations, audit, observability, debugging]
 paths: ["crates/orbit-core/src/runtime/audit/run.rs", "crates/orbit-core/src/runtime/audit/run_projection.rs", "crates/orbit-types/src/telemetry/audit_event.rs"]
 related_features: [auditability, activity-job]
-related_artifacts: [ORB-10014, ORB-10227, ORB-10228]
-last_validated: 2026-10-11
+related_artifacts: [ORB-10014, ORB-10227, ORB-10228, ORB-16383]
+last_validated: 2026-10-19
 ---
 
 # Inspect the Audit Trail
@@ -23,9 +23,16 @@ Audit events are stored in SQLite, not the JSONL process log. The global store
 - `v2_audit_events`: the run → step → activity envelope tree, keyed by `run_id`.
 
 Audit-write handling depends on the boundary. A CLI RAII guard that fails while unwinding
-warns without masking the command result. A tool implementation that succeeds but cannot
-persist its runtime audit row fails the tool call closed and does not surface a successful
-result ([ORB-10227]). A tool that already failed keeps its implementation error authoritative.
+warns without masking the command result. A tool that already failed keeps its implementation
+error authoritative. A tool that succeeds has already committed its mutation in its own
+store, which is not the global audit database, so the audit row cannot share that
+transaction. Dispatch retries the audit insert once through the store's busy timeout when
+the failure is a lock (`database is locked`). If the row still cannot be written, a
+mutating tool returns success with `audit_warning` naming the committed object
+(`committed.tool`, `committed.id`, `code` `audit_row_unpersisted`) instead of `store_error`.
+Reporting failure would not hide the committed change, and a caller that retries on the
+error creates a duplicate ([ORB-16383]; the earlier fail-closed report was [ORB-10227]).
+A read-only tool still returns its value and only logs the missing audit row.
 
 ## Query audit events
 
@@ -82,29 +89,32 @@ default, the session has only the `agent` capability; a server started with `--o
 grants `operator`. Trusted managed-envelope identity may replace `unverified`; client JSON may
 not.
 
-## Scoreboard and incident reads
+## Cost and incident reads
 
-`GET /api/scoreboard` builds a read-only summary and joins incident and metrics
-counts. It does not create or replace `state/scoreboard/summary.json`; explicit
-runtime summary generation still persists that document. Each dashboard server
-shares one computation per live workspace runtime and canonical window for 15
-seconds, including concurrent requests. Omitted `window` and `window=all` share
-an entry. A rebuilt workspace runtime starts a fresh cache namespace.
+`GET /api/cost` builds the managed-execution cost accounting for one window from
+the invocation store and writes nothing. Each dashboard server shares one
+computation per live workspace runtime and canonical window for 90 seconds,
+including concurrent requests. Omitted `window` and `window=all` share an
+entry. A rebuilt workspace runtime starts a fresh cache namespace. The retired
+`GET /api/scoreboard` returns the same body with `Deprecation` and `Sunset`
+headers until 2026-11-12. Files left under `state/scoreboard/` are never read.
 
 Cross-run incident grouping tokenizes messages once and incrementally refreshes
 only citations affected by a fold. It preserves the existing fold order,
 same-class/earlier-root checks, 60-second cascade window, and ambiguous run-ID
-handling. Both scoreboard joins and `/api/audit/incidents` use this grouping.
+handling. `/api/audit/incidents` uses this grouping.
 Tool-call aggregates use the command/subcommand/timestamp index added by the
 store migration, while retaining their existing host-global scope.
 
-Scoreboard agent cards, column headers and metric cells open Audit Events with
-`agent_family=<name>`. This applies the same family normalization as the
-scoreboard, including rows whose recorded role is a model label. The existing
-`role=<label>` Events filter still matches the exact stored role. The
-failure-incidents cell adds `status=non_success`, which includes both `failure`
-and `denied`; Events shows these filters as removable scope chips. The rows are
-raw evidence, so several rows can belong to one counted incident.
+Analytics › Cost does not rank agent families and does not open Events from a
+metric cell. Incidents still open Health › Incidents › Events (the audit event
+log, `#diagnostics/incidents/events`) through the family drill-down:
+`agent_family=<name>` applies the agent-family normalization, including rows
+whose recorded role is a model label. The existing `role=<label>` Events filter
+still matches the exact stored role. A
+failure-incident drill-down adds `status=non_success`, which includes both
+`failure` and `denied`; Events shows these filters as removable scope chips.
+The rows are raw evidence, so several rows can belong to one counted incident.
 
 Family and combined-status filters compose with the other Events filters and
 apply before `offset`/`limit`. Like execution, profile and free-text filtering,
@@ -115,7 +125,7 @@ evidence lookup and do not apply these broader filters.
 Run the capped-population timing benchmark explicitly in release mode:
 
 ```sh
-scripts/build-budget.py -- cargo test -p orbit-store --release --test incident_performance -- --ignored --nocapture
+scripts/build-budget.py -- cargo test -p orbit-store --release --test store capped_scoreboard_population_groups_within_half_a_second -- --ignored --nocapture
 ```
 
 It groups 10,000 events with 1,200 cross-run citations and asserts a 500 ms
@@ -134,12 +144,12 @@ unexpected execution errors. Tools with only denials still appear, with zero
 comparable calls and a zero rate. Inactive agent-surface calls are policy
 denials, including attempts to enable or disable an already-set inactive tool.
 
-Audit Events places status immediately after time. Actor is the recorded role;
+The Events view places status immediately after time. Actor is the recorded role;
 the column tooltip explains `unverified`, `unknown`, agent names,
 `admin`, and `hook`. Tool calls use one tool/command column, with the invocation
 command on hover, and leave the target blank when it repeats the tool.
 
-Audit Events shows the newest 50 rows and a **Load older events** button that
+The Events view shows the newest 50 rows and a **Load older events** button that
 pages back through the whole selected window. The header reads
 `50 of 19,749 in 24h` (rows shown against the window's event count from
 `/api/audit/summary`); with a status, search or other filter active the window
@@ -158,9 +168,9 @@ all values. Wider cards show those columns. Top duration ranks named tools
 only, excluding the synthetic `unknown` bucket and empty names before choosing
 the top eight.
 
-The denial badge beside Audit in the rail shows the canonical policy-decision
+The denial badge on the Health rail entry shows the canonical policy-decision
 count (`denials` in `/api/audit/summary`, split in its title into audit rows,
-`denials_sql`, and loop denials, `denials_v2`). Clicking it opens Audit Events
+`denials_sql`, and loop denials, `denials_v2`). Clicking it opens Health › Incidents › Events
 filtered to `status=denied` for the window it counted. That list holds every
 denied audit row, including the lock-contention and settlement refusals the
 count excludes, and not the loop denials, so its length can differ from the
@@ -170,7 +180,7 @@ badge.
 `total` and `recent_denials`. Evidence scans are capped at 1,000 rows per
 source, while the canonical count covers the full window.
 
-To reconcile with **Audit Events**, use the same workspace routing and cutoff
+To reconcile with the **Events** view, use the same workspace routing and cutoff
 (`since` in the summary response), select the tool, and count only its `tool`
 `run`/`run-mcp` rows. Count successes plus failures for total, failures for
 failed, denied rows separately, and classify failed rows for unexpected. Fetch

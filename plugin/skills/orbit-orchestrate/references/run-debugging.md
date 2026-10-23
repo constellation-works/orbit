@@ -116,13 +116,18 @@ available. Do not infer provider usage or token cost from the requested or
 resolved crew, and do not charge deterministic workflow wrapper steps to a
 model.
 
-Activities with a `crew_config_key` draw from that pool once per run: the task
-pilot from `workflow.low_complexity_crews`, step-failure and PR conflict
-recovery from `workflow.medium_complexity_crews`, final recovery from
-`workflow.final_recovery_crews`. The run state's `activity_crew_draws` records
-each draw, its source and the eligible members; an empty complexity pool falls
-back to `workflow.default_crew` and the source says so. Other activities use an
-explicit activity `crew` when present, otherwise the run's resolved crew.
+An explicit activity `crew` always wins. Otherwise activities with a
+`crew_config_key` draw from that pool once per run: the task pilot from
+`workflow.purpose_crews.task_pilot`, step-failure and PR conflict recovery from
+`workflow.purpose_crews.failure_recovery`, auto-fix repairs from
+`workflow.purpose_crews.auto_fix`, final recovery from
+`workflow.purpose_crews.final_recovery`. An unset purpose pool falls back to
+the pool it replaced (`low` for the pilot and auto-fix, `medium` for recovery). The run
+state's `activity_crew_draws` records each draw, its source and the eligible
+members; `orbit run show` prints them as `Activity Crew:` lines, and `--json`
+names each draw's `rule`. An empty complexity pool falls back to
+`workflow.default_crew` and the source says so. Other activities use the run's
+resolved crew.
 Check `activity_provenance` after execution to verify the effective route,
 especially after changing crew configuration.
 
@@ -207,6 +212,20 @@ the forwarded caller machine ID, which is attribution rather than an
 authenticated principal. They are deliberately **not resumable**: the
 admission covered one invocation, so submit a new one rather than resuming.
 
+### Explorer runs
+
+A run of `agent_explore_pipeline` is a read-only explorer an implement or
+review-repair agent delegated through `orbit.agent.invoke`. Its input names the
+caller as `parent_run_id` (with `parent_task_id` and `parent_activity`); the
+caller's run detail lists its explorers with state, crew, duration, tokens,
+cost and paths read. Unlike an operator invocation it runs inside the executor
+sandbox with the reviewer filesystem profile, so a sandbox denial of a write is
+the expected outcome, not a defect. If the executor sandbox is absent or
+explicitly off, the activity fails before the provider starts unless the
+provider has a read-only mode (Codex, which then runs read-only). A refused
+admission never creates a run: the calling agent got the reason as a tool
+error, and the `agent.explore` audit entry records it.
+
 For recurring signatures and known remedies, read [common-failures.md](common-failures.md) after the initial classification — keep this file focused on investigation flow; add new patterns there.
 
 ## Check Task State
@@ -229,7 +248,7 @@ orbit run events <run_id> --json | rg '<run_id>|<task_id>'
 
 Look for `input.task_ids` overlap between candidate runs, parent events that invoke/wait on another `jrun-*`, child run ids named in gate/auto/`invoke_and_wait` step output, and parent runs still `pending`/`running` after a child failed. Report the run owning the first real failure as primary, then name parent/child fallout separately.
 
-A gate or auto run that failed only because its child did records that leaf in its `--json` `root_cause` (`leaf_run_id`, `task_id`, `step`, `code`; null on a run that failed on its own), and `orbit run history --state failed --incidents` shows one row per leaf with the folded parents in `cascaded_run_ids`. A red base or a before-landing review awaiting a decision ends the run `held`, and a cancelled child ends its waiting parents `cancelled`; neither is a failure. A claimed leaf stopped by its provider's usage limit also ends `held`: its step code is `provider_limit`, its message names the provider and the reset, and the claim returns to the owner. A CI sweep whose only gaps are run-scoped retryable collection errors succeeds with outcome `deferred` and a `deferred_count`. Neither lists under `--state failed`; Incidents lists both under the `deferred` class.
+A gate or auto run that failed only because its child did records that leaf in its `--json` `root_cause` (`leaf_run_id`, `task_id`, `step`, `code`; null on a run that failed on its own), and `orbit run history --state failed --incidents` shows one row per leaf with the folded parents in `cascaded_run_ids`. `orbit run history --failures` shows one row per task and root cause instead: the root-cause run, its step and crew, the cause's first line in full, and `orbit run show` for that run (`--json`: `failures`). It cannot be combined with `--incidents`. On a drain, `orbit run show` names that same root-cause run in the failed-leaf warning, states each task's current status, and omits the `orbit job resume` line once the task has left `blocked`. A red base or a before-landing review awaiting a decision ends the run `held`, and a cancelled child ends its waiting parents `cancelled`; neither is a failure. A claimed leaf stopped by its provider's usage limit also ends `held`: its step code is `provider_limit`, its message names the provider and the reset, and the claim returns to the owner. A CI sweep whose only gaps are run-scoped retryable collection errors succeeds with outcome `deferred` and a `deferred_count`. Neither lists under `--state failed`; Incidents lists both under the `deferred` class.
 
 ## Check Git State For Workflow Failures
 

@@ -1,147 +1,35 @@
-//! The `*_to_json` projections the dashboard API serves. A task builds on the
-//! base projection and full record every read surface shares
-//! (`orbit_types::task::task_base_json`,
-//! `orbit_core::application::task::task_record_json`) and adds only the
-//! dashboard's own extras; the other projections are dashboard-local.
+//! The `*_to_json` projections the dashboard API serves. A task detail builds
+//! on the show record every read surface shares
+//! (`orbit_core::application::task::task_show_json`) and adds only the
+//! dashboard's own extras. A mutation response builds on `task_record_json`
+//! instead, so it does not carry show-only guidance. An audit event builds on
+//! the base the CLI shares (`orbit_types::telemetry::audit_event_base_json`).
+//! The job-catalog projection lives in `orbit_core::application::job`; the
+//! other projections are dashboard-local.
 
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
-use orbit_core::application::job::JobCatalogEntry;
 use orbit_core::application::task::{
-    PullRequestLinks, TaskRow, task_record_json, task_status_transition_allowed,
-    task_status_transition_required_field,
+    PullRequestLinks, TaskOsReadout, TaskRow, task_pilot_warnings, task_record_json,
+    task_show_json, task_status_transition_allowed, task_status_transition_required_field,
 };
 use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
-use orbit_core::{
-    AuditEvent, JobRun, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus,
-};
-use orbit_types::task::{TaskEnvelopeV2, task_base_json};
-use orbit_types::workflow::{JobV2Step, JobV2StepBody};
+use orbit_core::{AuditEvent, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus};
+use orbit_types::task::task_base_json;
+use orbit_types::telemetry::audit_event_base_json;
 use serde_json::{Map, Value, json};
 
 pub(crate) fn audit_event_to_json(event: &AuditEvent) -> Value {
     let actor = event.actor();
-    json!({
-        "id": event.id,
-        "execution_id": event.execution_id,
-        "timestamp": event.timestamp.to_rfc3339(),
-        "command": event.command,
-        "subcommand": event.subcommand,
-        "tool_name": event.tool_name,
-        "target_type": event.target_type,
-        "target_id": event.target_id,
-        "role": event.role,
-        // ORB-10888: the canonical actor beside the raw label. `role` stays
-        // byte-for-byte what was recorded; these are derived.
-        "actor": actor.id,
-        "actor_kind": actor.kind.to_string(),
-        "actor_vendor": actor.vendor,
-        "actor_family": actor.family,
-        "actor_model": actor.model,
-        "status": event.status.to_string(),
-        "exit_code": event.exit_code,
-        "duration_ms": event.duration_ms,
-        "working_directory": event.working_directory,
-        "arguments_json": event.arguments_json,
-        "stdout_truncated": event.stdout_truncated,
-        "stderr_truncated": event.stderr_truncated,
-        "error_message": event.error_message,
-        "host": event.host,
-        "pid": event.pid,
-        "session_id": event.session_id,
-        "workspace_id": event.workspace_id,
-        "caller_machine_id": event.caller_machine_id,
-        "caller_machine_name": event.caller_machine_name,
-        "process_machine_id": event.process_machine_id,
-        "process_machine_name": event.process_machine_name,
-        "transport": event.transport,
-        "trace_id": event.trace_id,
-        "caller_ip": event.caller_ip,
-        "effective_capabilities": event.effective_capabilities,
-        "origin_session_id": event.origin_session_id,
-        "mcp_call_id": event.mcp_call_id,
-        "lease_id": event.lease_id,
-        "task_id": event.task_id,
-        "job_run_id": event.job_run_id,
-        "activity_id": event.activity_id,
-        "step_index": event.step_index,
-    })
-}
-
-pub(crate) fn job_catalog_to_json_with_last_run(
-    job: &JobCatalogEntry,
-    last_run: Option<&JobRun>,
-) -> Value {
-    let mut value = json!({
-        "job_id": job.job_id.clone(),
-        "kind": job.kind().to_string(),
-        "state": job.state().to_string(),
-        "default_input": job.spec.default_input,
-        "max_active_runs": job.spec.max_active_runs,
-        "steps": job.spec.steps.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
-        "path": job.path.display().to_string(),
-    });
-    value["last_run_state"] = last_run
-        .map(|r| serde_json::Value::String(r.state.to_string()))
-        .unwrap_or(serde_json::Value::Null);
-    value["last_run_at"] = last_run
-        .and_then(|r| r.finished_at.or(r.started_at).or(Some(r.scheduled_at)))
-        .map(|ts| serde_json::Value::String(ts.to_rfc3339()))
-        .unwrap_or(serde_json::Value::Null);
-    value
-}
-
-fn job_v2_step_to_json(step: &JobV2Step) -> Value {
-    let mut value = json!({
-        "id": step.id.clone(),
-        "when": step.when,
-        "retry": step.retry,
-    });
-    match &step.body {
-        JobV2StepBody::TargetRef(target) => {
-            value["body"] = json!({
-                "kind": "target_ref",
-                "target": target.target.clone(),
-                "default_input": target.default_input,
-                "timeout_seconds": target.timeout_seconds,
-                "session": target.session,
-            });
-        }
-        JobV2StepBody::Target(target) => {
-            value["body"] = json!({
-                "kind": "target",
-                "default_input": target.default_input,
-                "timeout_seconds": target.timeout_seconds,
-                "session": target.session,
-                "spec": target.spec,
-            });
-        }
-        JobV2StepBody::Parallel { parallel } => {
-            value["body"] = json!({
-                "kind": "parallel",
-                "join": parallel.join,
-                "branches": parallel.branches.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
-            });
-        }
-        JobV2StepBody::FanOut { fan_out, fan_in } => {
-            value["body"] = json!({
-                "kind": "fan_out",
-                "items": fan_out.items,
-                "max_workers": fan_out.max_workers,
-                "worker": job_v2_step_to_json(&fan_out.worker),
-                "fan_in": fan_in,
-            });
-        }
-        JobV2StepBody::Loop { loop_ } => {
-            value["body"] = json!({
-                "kind": "loop",
-                "max_iterations": loop_.max_iterations,
-                "break_when": loop_.break_when,
-                "steps": loop_.steps.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
-            });
-        }
-    }
+    let mut value = audit_event_base_json(event);
+    // ORB-10888: the canonical actor beside the raw label. `role` stays
+    // byte-for-byte what was recorded; these are derived.
+    value["actor"] = json!(actor.id);
+    value["actor_kind"] = json!(actor.kind.to_string());
+    value["actor_vendor"] = json!(actor.vendor);
+    value["actor_family"] = json!(actor.family);
+    value["actor_model"] = json!(actor.model);
     value
 }
 
@@ -193,19 +81,40 @@ pub(crate) fn task_to_json_with_sidecars(
     task_row_to_json(runtime, &row, status_by_id)
 }
 
-/// The full task projection: the shared task record (every body, the
-/// sidecars, the review gate and the run-aware crew), plus the dashboard's
-/// extras — linked pull requests, the lifecycle transitions with their evidence
-/// requirements, run navigability and `readiness.preparing`. Served by
-/// `GET /api/tasks/:id` and every mutation response; the list endpoints serve
-/// [`TaskListProjection`] instead.
+/// A mutation response: [`task_record_json`] plus the dashboard extras. It does
+/// not carry the show-only `next_step` and `final_recovery` guidance.
+/// `GET /api/tasks/:id` serves [`task_detail_json`] instead. List endpoints
+/// serve [`TaskListProjection`].
 pub(crate) fn task_row_to_json(
     runtime: &OrbitRuntime,
     row: &TaskRow,
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Value, OrbitError> {
+    let object = task_record_json(runtime, row, status_by_id)?;
+    with_dashboard_extras(runtime, row, object)
+}
+
+/// `GET /api/tasks/:id`: [`task_show_json`] plus the dashboard extras — linked
+/// pull requests, the lifecycle transitions with their evidence requirements,
+/// run navigability and `readiness.preparing`.
+pub(crate) fn task_detail_json(
+    runtime: &OrbitRuntime,
+    row: &TaskRow,
+    status_by_id: &BTreeMap<String, TaskStatus>,
+) -> Result<Value, OrbitError> {
+    let object = task_show_json(runtime, row, status_by_id)?;
+    with_dashboard_extras(runtime, row, object)
+}
+
+/// Linked pull requests, lifecycle transitions, run navigability and
+/// `readiness.preparing`. These are dashboard controls, not part of the shared
+/// task record.
+fn with_dashboard_extras(
+    runtime: &OrbitRuntime,
+    row: &TaskRow,
+    mut object: Map<String, Value>,
+) -> Result<Value, OrbitError> {
     let task = &row.task;
-    let mut object = task_record_json(runtime, row, status_by_id)?;
     link_pull_requests(&mut object, task, &PullRequestLinks::new(runtime));
     object.insert(
         "status_transitions".to_string(),
@@ -264,6 +173,7 @@ pub(crate) const TASK_SUMMARY_PROJECTION: &str = "summary";
 /// the registry and the row's own `job_run_id` / `job_run_machine`.
 pub(crate) struct TaskListProjection {
     registry: ConfiguredCrewRegistryProjection,
+    os_readout: Result<TaskOsReadout, String>,
     local_machine_id: Option<String>,
     /// Read once, on the page's first proposed or backlog row.
     preparing: OnceCell<BTreeSet<String>>,
@@ -275,6 +185,7 @@ impl TaskListProjection {
     pub(crate) fn new(runtime: &OrbitRuntime) -> Self {
         Self {
             registry: runtime.configured_crew_registry_projection(),
+            os_readout: TaskOsReadout::new(runtime).map_err(|error| error.to_string()),
             local_machine_id: runtime.automation_machine_identity().map(str::to_string),
             preparing: OnceCell::new(),
             pull_request_links: PullRequestLinks::new(runtime),
@@ -291,6 +202,14 @@ impl TaskListProjection {
     ) -> Result<Value, OrbitError> {
         let task = &row.task;
         let mut object = task_to_json(task, status_by_id, &self.pull_request_links);
+        object.insert(
+            "pilot_warnings".into(),
+            json!(task_pilot_warnings(task.status, &row.comments)),
+        );
+        self.os_readout
+            .as_ref()
+            .map_err(|error| OrbitError::Execution(error.clone()))?
+            .insert_into(task, &mut object);
         for body in TASK_SUMMARY_OMITTED_BODIES {
             object.remove(body);
         }
@@ -419,64 +338,4 @@ fn explicit_task_crew(task: &Task) -> Option<&str> {
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-}
-
-pub(crate) fn task_lock_to_json(task: &TaskEnvelopeV2) -> Value {
-    json!({
-        "id": task.id,
-        "title": task.title,
-        "status": task.status.to_string(),
-        "job_run_id": task.job_run_id,
-        "crew": task.crew,
-        "crew_source": task.crew_source,
-        "orchestrator": task.orchestrator,
-        "context_files": task.context_files,
-    })
-}
-
-pub(crate) fn task_locks_json(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
-    let (tasks, locked_files) = task_locks(runtime)?;
-    let json_by_task: Vec<Value> = tasks.iter().map(task_lock_to_json).collect();
-    Ok(json!({
-        "locked_files": locked_files.iter().cloned().collect::<Vec<_>>(),
-        "by_task": json_by_task,
-        "total_locked": locked_files.len(),
-        "total_tasks": tasks.len(),
-    }))
-}
-
-fn task_locks(
-    runtime: &OrbitRuntime,
-) -> Result<(Vec<TaskEnvelopeV2>, BTreeSet<String>), OrbitError> {
-    let candidates = runtime.task_candidates(
-        &orbit_core::application::task::TaskListFilter {
-            statuses: Some(vec![TaskStatus::InProgress, TaskStatus::Review]),
-            ..Default::default()
-        },
-        usize::MAX,
-    )?;
-    let mut tasks = candidates.items;
-
-    tasks.sort_by_key(|task| {
-        (
-            task_lock_status_rank(task.status),
-            task.created_at,
-            task.id.clone(),
-        )
-    });
-
-    let locked_files: BTreeSet<String> = tasks
-        .iter()
-        .flat_map(|task| task.context_files.iter().cloned())
-        .collect();
-
-    Ok((tasks, locked_files))
-}
-
-fn task_lock_status_rank(status: TaskStatus) -> u8 {
-    match status {
-        TaskStatus::InProgress => 0,
-        TaskStatus::Review => 1,
-        _ => 2,
-    }
 }

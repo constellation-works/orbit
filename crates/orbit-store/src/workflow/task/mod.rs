@@ -116,7 +116,7 @@ pub use publication::{
     AttachmentScanOutcome, AttachmentSensitivityScanner, OmittedAttachment,
     PUBLICATION_ENVELOPE_FILE_NAME, PUBLICATION_TASKS_DIR_NAME, PublicationEnvelope,
     PublicationSnapshotMetadata, PublicationSnapshotOutcome, ScannerFailureBehavior,
-    TASK_PUBLICATION_FORMAT_VERSION, build_publication_snapshot,
+    TASK_PUBLICATION_FORMAT_VERSION,
 };
 pub use publish::{
     PublicationCallerRole, PublicationLastSuccess, PublicationPublishOutcome,

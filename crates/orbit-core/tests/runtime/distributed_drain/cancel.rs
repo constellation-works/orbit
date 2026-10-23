@@ -305,20 +305,139 @@ fn term_ignoring_owner(pgid: libc::pid_t) -> Worker {
     Worker::spawn_command(command)
 }
 
+/// Held actual waits prove that normal, error and unwind cleanup cannot
+/// release fixture resources before the child has been reaped and joined.
+fn worker_cleanup_retains_completion_and_joins_the_reaper() {
+    use std::sync::mpsc;
+
+    struct Resources {
+        pid: u32,
+        completion: Arc<std::sync::OnceLock<std::io::Result<std::process::ExitStatus>>>,
+    }
+    impl Drop for Resources {
+        fn drop(&mut self) {
+            assert!(
+                self.completion.get().is_some_and(Result::is_ok),
+                "fixture resources require successful owned-child reaping"
+            );
+            assert_worker_absent(self.pid);
+        }
+    }
+    // Rust drops fields in declaration order: the worker must complete before
+    // its fixture resources go away, including while unwinding an assertion.
+    struct Fixture {
+        _worker: Worker,
+        _resources: Resources,
+    }
+
+    for path in ["normal", "error", "unwind"] {
+        let (entered, on_entered) = mpsc::channel();
+        let (release, on_release) = mpsc::channel();
+        let mut command = std::process::Command::new("sleep");
+        command.arg("600");
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let worker = Worker::spawn_command_with_reap_hook(command, move || {
+            let _ = entered.send(());
+            // Disconnect also releases the hold if the control itself unwinds.
+            let _ = on_release.recv_timeout(WORKER_WAIT_BUDGET);
+        });
+        assert!(worker.running());
+        let pid = worker.pid;
+        let completion = Arc::clone(&worker.completion);
+        let fixture = Fixture {
+            _resources: Resources {
+                pid,
+                completion: Arc::clone(&completion),
+            },
+            _worker: worker,
+        };
+        let (returned, on_returned) = mpsc::channel();
+        let cleanup = std::thread::spawn(move || {
+            // The fixture is moved into the closure and fully dropped there;
+            // no state protected by the JoinHandle is reused after an unwind.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                || -> Result<(), &'static str> {
+                    let _fixture = fixture;
+                    match path {
+                        "error" => Err("controlled fixture error"),
+                        "unwind" => panic!("controlled fixture unwind"),
+                        _ => Ok(()),
+                    }
+                },
+            ));
+            returned.send(result).unwrap();
+        });
+        on_entered.recv_timeout(WORKER_WAIT_BUDGET).unwrap();
+        assert!(completion.get().is_none(), "actual child wait is held");
+        assert!(matches!(
+            on_returned.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        release.send(()).unwrap();
+        let result = on_returned.recv_timeout(WORKER_WAIT_BUDGET).unwrap();
+        match path {
+            "error" => assert_eq!(result.unwrap(), Err("controlled fixture error")),
+            "unwind" => assert!(result.is_err()),
+            _ => assert_eq!(result.unwrap(), Ok(())),
+        }
+        cleanup.join().unwrap();
+        assert_worker_absent(pid);
+    }
+
+    let cleanup_signals = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = Arc::clone(&cleanup_signals);
+    let worker =
+        Worker::spawn_command_with_reap_hook(std::process::Command::new("true"), move || {
+            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+    for _ in 0..3 {
+        assert!(
+            worker.stopped(),
+            "successful terminal result remains available"
+        );
+        assert!(
+            !worker.running(),
+            "terminal completion cannot become running"
+        );
+    }
+    let pid = worker.pid;
+    assert_worker_absent(pid);
+    drop(worker);
+    assert_eq!(
+        cleanup_signals.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "already-reaped cleanup must not enter the signalling path"
+    );
+    assert_worker_absent(pid);
+}
+
+fn assert_worker_absent(pid: u32) {
+    #[cfg(unix)]
+    assert_eq!(
+        orbit_common::process::identity::probe_process_liveness(pid, None),
+        orbit_common::process::identity::ProcessLiveness::Exited,
+        "owned child must be absent, not merely awaiting reap"
+    );
+    #[cfg(not(unix))]
+    let _ = pid;
+    #[cfg(target_os = "linux")]
+    assert!(
+        !Path::new("/proc").join(pid.to_string()).exists(),
+        "reaped child has no proc entry"
+    );
+}
+
 /// [ORB-13892] Cancelling a running pull drain is graceful. The request
 /// returns at once naming the leaf it waits for; the drain's next pass stops
 /// requesting and returns the claim it never launched to the owner's backlog
 /// with a comment naming the drain, while the launched leaf keeps running.
 /// Once that leaf hands off, the next pass delivers it and the drain ends
 /// `cancelled`.
-#[test]
 fn a_graceful_drain_cancel_releases_unlaunched_claims_and_waits_for_running_leaves() {
-    if !isolated(
-        module_path!(),
-        "a_graceful_drain_cancel_releases_unlaunched_claims_and_waits_for_running_leaves",
-    ) {
-        return;
-    }
     let pair = Pair::new(3);
     let drain = pair.run_drain();
     let running = pair.running_leaf(&drain, 2);
@@ -398,14 +517,7 @@ fn a_graceful_drain_cancel_releases_unlaunched_claims_and_waits_for_running_leav
 
 /// A drain owner that cannot be confirmed stopped must keep every carried
 /// claim and leave both the drain and its leaves unfinalized.
-#[test]
 fn a_forced_drain_cancel_refuses_an_unconfirmed_drain_owner() {
-    if !isolated(
-        module_path!(),
-        "a_forced_drain_cancel_refuses_an_unconfirmed_drain_owner",
-    ) {
-        return;
-    }
     let pair = Pair::new(2);
     let drain = pair.run_drain();
     let (running, worker) = pair.running_leaf_with_worker(&drain, 2);
@@ -438,14 +550,7 @@ fn a_forced_drain_cancel_refuses_an_unconfirmed_drain_owner() {
 
 /// An owner that already exited still permits forced leaf cancellation and
 /// delivery of both launched and unlaunched claim releases.
-#[test]
 fn a_forced_drain_cancel_accepts_an_already_exited_drain_owner() {
-    if !isolated(
-        module_path!(),
-        "a_forced_drain_cancel_accepts_an_already_exited_drain_owner",
-    ) {
-        return;
-    }
     let pair = Pair::new(2);
     let drain_worker = Worker::spawn();
     let drain = pair.run_drain_with_worker(drain_worker.pid);
@@ -492,14 +597,7 @@ fn a_forced_drain_cancel_accepts_an_already_exited_drain_owner() {
 /// claim is released before the leaf is cancelled, and both the running and
 /// the unlaunched claim go back to the owner's backlog with a comment naming
 /// the drain and the reason.
-#[test]
 fn a_forced_drain_cancel_stops_running_leaves_and_returns_their_tasks_to_backlog() {
-    if !isolated(
-        module_path!(),
-        "a_forced_drain_cancel_stops_running_leaves_and_returns_their_tasks_to_backlog",
-    ) {
-        return;
-    }
     let pair = Pair::new(2);
     let drain_worker = Worker::spawn();
     let drain = pair.run_drain_with_worker(drain_worker.pid);
@@ -555,14 +653,7 @@ fn a_forced_drain_cancel_stops_running_leaves_and_returns_their_tasks_to_backlog
 /// [ORB-13892] `force` stops only what the cancelled drain carries: a leaf
 /// another live drain for the same owner admitted keeps running, and its
 /// task stays claimed.
-#[test]
 fn a_forced_drain_cancel_leaves_another_live_drains_leaves_alone() {
-    if !isolated(
-        module_path!(),
-        "a_forced_drain_cancel_leaves_another_live_drains_leaves_alone",
-    ) {
-        return;
-    }
     let pair = Pair::new(2);
     let drain_worker = Worker::spawn();
     let cancelled = pair.run_owner_drain(drain_worker.pid);
@@ -594,14 +685,7 @@ fn a_forced_drain_cancel_leaves_another_live_drains_leaves_alone() {
 /// [ORB-13892] A leaf `force` cannot stop and see gone keeps its claim: no
 /// release is recorded or sent, the cancel reports it as unstopped, and the
 /// leaf's own outcome still reaches the owner when it ends.
-#[test]
 fn a_forced_drain_cancel_keeps_the_claim_of_a_leaf_it_cannot_confirm_stopped() {
-    if !isolated(
-        module_path!(),
-        "a_forced_drain_cancel_keeps_the_claim_of_a_leaf_it_cannot_confirm_stopped",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain_worker = Worker::spawn();
     let drain = pair.run_drain_with_worker(drain_worker.pid);
@@ -643,14 +727,7 @@ fn a_forced_drain_cancel_keeps_the_claim_of_a_leaf_it_cannot_confirm_stopped() {
 /// [ORB-13892] The existing MCP stop control takes `force`: it stops
 /// admissions, cancels the drain, stops its running leaf and returns the
 /// leaf's task to the owner's backlog.
-#[test]
 fn the_mcp_stop_control_with_force_stops_claimed_leaves() {
-    if !isolated(
-        module_path!(),
-        "the_mcp_stop_control_with_force_stops_claimed_leaves",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain_worker = Worker::spawn();
     let drain = pair.run_drain_with_worker(drain_worker.pid);
@@ -692,14 +769,7 @@ fn the_mcp_stop_control_with_force_stops_claimed_leaves() {
 
 /// A failed detached child does not hide the parent or prevent a later child
 /// from stopping. Both an unconfirmed worker and a missing run stay visible.
-#[test]
 fn a_forced_local_drain_cancel_reports_mixed_child_outcomes() {
-    if !isolated(
-        module_path!(),
-        "a_forced_local_drain_cancel_reports_mixed_child_outcomes",
-    ) {
-        return;
-    }
     let pair = Pair::new(0);
     let jobs = &pair.follower_jobs;
     let drain = jobs
@@ -798,3 +868,17 @@ fn a_forced_local_drain_cancel_reports_mixed_child_outcomes() {
     assert_eq!(pair.run_state(&another.run_id), JobRunState::Cancelled);
     assert_eq!(pair.run_state(&failed.run_id), JobRunState::Running);
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_graceful_drain_cancel_releases_unlaunched_claims_and_waits_for_running_leaves_scenarios,
+    worker_cleanup_retains_completion_and_joins_the_reaper,
+    a_graceful_drain_cancel_releases_unlaunched_claims_and_waits_for_running_leaves,
+    a_forced_drain_cancel_refuses_an_unconfirmed_drain_owner,
+    a_forced_drain_cancel_accepts_an_already_exited_drain_owner,
+    a_forced_drain_cancel_stops_running_leaves_and_returns_their_tasks_to_backlog,
+    a_forced_drain_cancel_leaves_another_live_drains_leaves_alone,
+    a_forced_drain_cancel_keeps_the_claim_of_a_leaf_it_cannot_confirm_stopped,
+    the_mcp_stop_control_with_force_stops_claimed_leaves,
+    a_forced_local_drain_cancel_reports_mixed_child_outcomes
+);

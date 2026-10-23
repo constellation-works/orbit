@@ -10,7 +10,8 @@ use orbit_common::OrbitError;
 use orbit_common::fs::selector::overlaps;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, TaskHistoryEntry,
+    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, TaskDecision,
+    TaskHistoryEntry,
 };
 
 use super::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
@@ -42,13 +43,15 @@ impl OrbitRuntime {
                 if added.is_empty() {
                     return Ok(());
                 }
-                let note = serde_json::to_string(&ContextFilesWidening {
+                let widening = ContextFilesWidening {
                     run_id: run_id.to_string(),
                     step,
                     activity: activity.to_string(),
                     selectors: added.clone(),
-                })
-                .map_err(|error| OrbitError::Execution(format!("encode widening note: {error}")))?;
+                };
+                let note = serde_json::to_string(&widening).map_err(|error| {
+                    OrbitError::Execution(format!("encode widening note: {error}"))
+                })?;
                 let mut context_files = task.context_files.clone();
                 context_files.extend(added.iter().cloned());
                 self.with_mutation(|| {
@@ -64,6 +67,8 @@ impl OrbitRuntime {
                                 note: Some(note.clone()),
                                 from_status: None,
                                 to_status: None,
+                                operation_id: None,
+                                decision: Some(TaskDecision::ContextFilesWidened(widening.clone())),
                             }],
                             ..Default::default()
                         },

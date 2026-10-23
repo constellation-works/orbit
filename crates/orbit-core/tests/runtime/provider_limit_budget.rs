@@ -15,8 +15,6 @@ use orbit_types::telemetry::{
 use serde_json::Value;
 use tempfile::TempDir;
 
-use super::dispatch_admission::isolated;
-
 /// A grok and an antigravity crew as the hard pool, with `workflow_extra`
 /// under `[workflow]`.
 fn config(workflow_extra: &str) -> String {
@@ -37,7 +35,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(config: &str) -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         std::fs::create_dir_all(root.path().join("global/resources/jobs")).unwrap();
         std::fs::create_dir_all(root.path().join("repo/.orbit")).unwrap();
         std::fs::write(root.path().join("repo/.orbit/config.toml"), config).unwrap();
@@ -75,6 +73,7 @@ impl Fixture {
         self.runtime
             .insert_invocation_trace_record(&InvocationInsertParams {
                 job_run_id: "fixture-run".into(),
+                account: None,
                 activity_id: "implement_one".into(),
                 agent: agent.into(),
                 provider: Some(provider.into()),
@@ -110,7 +109,7 @@ impl Fixture {
     fn readings(&self, provider: &str) -> Vec<orbit_core::application::task::ProviderLimitReading> {
         self.runtime
             .provider_limits_view(Utc::now())
-            .provider_readings(provider)
+            .provider_readings(provider, None)
             .cloned()
             .collect()
     }
@@ -157,6 +156,7 @@ impl Fixture {
         self.runtime
             .record_provider_limit(&ProviderLimitObservation {
                 provider: "grok".into(),
+                account: None,
                 model: None,
                 window: Some("session".into()),
                 exhausted,
@@ -175,13 +175,7 @@ impl Fixture {
     }
 }
 
-#[test]
 fn spend_at_the_threshold_gates_until_the_oldest_spend_ages_out() {
-    if !isolated(
-        "provider_limit_budget::spend_at_the_threshold_gates_until_the_oldest_spend_ages_out",
-    ) {
-        return;
-    }
     let fx = Fixture::new(&config("provider_limit_budgets = [\"grok:30usd/5h\"]"));
     let task = fx.task();
     // $27 of $30 in the trailing 5h is 90%; the $50 outside the window and the
@@ -198,7 +192,10 @@ fn spend_at_the_threshold_gates_until_the_oldest_spend_ages_out() {
         reading.gated && reading.gating && !reading.partial,
         "{reading:?}"
     );
-    assert_eq!(reading.threshold, 90);
+    assert_eq!(
+        serde_json::to_value(reading.threshold).unwrap(),
+        serde_json::json!(90)
+    );
     assert_eq!(reading.crews, ["groky"]);
     assert_eq!(
         reading.resets_at,
@@ -217,11 +214,7 @@ fn spend_at_the_threshold_gates_until_the_oldest_spend_ages_out() {
     );
 }
 
-#[test]
 fn spend_below_the_threshold_gates_nothing() {
-    if !isolated("provider_limit_budget::spend_below_the_threshold_gates_nothing") {
-        return;
-    }
     let fx = Fixture::new(&config("provider_limit_budgets = [\"grok:30usd/5h\"]"));
     let task = fx.task();
     fx.grok(12.0, Duration::hours(4));
@@ -239,11 +232,7 @@ fn spend_below_the_threshold_gates_nothing() {
     assert_eq!(entry["eligible"], true, "$20 of $30 is under 90%: {entry}");
 }
 
-#[test]
 fn an_empty_budget_window_reports_positive_zero() {
-    if !isolated("provider_limit_budget::an_empty_budget_window_reports_positive_zero") {
-        return;
-    }
     let fx = Fixture::new(&config("provider_limit_budgets = [\"grok:30usd/5h\"]"));
 
     let [reading] = fx.readings("grok").try_into().unwrap();
@@ -276,13 +265,7 @@ fn an_empty_budget_window_reports_positive_zero() {
     assert_eq!(json_reading["used_percent"].to_string(), "0.0");
 }
 
-#[test]
 fn a_token_budget_counts_the_providers_tokens_and_resets_with_the_oldest() {
-    if !isolated(
-        "provider_limit_budget::a_token_budget_counts_the_providers_tokens_and_resets_with_the_oldest",
-    ) {
-        return;
-    }
     let fx = Fixture::new(&config(
         "provider_limit_budgets = [\"antigravity:1000tokens/1d\"]",
     ));
@@ -319,13 +302,7 @@ fn a_token_budget_counts_the_providers_tokens_and_resets_with_the_oldest() {
     assert!(fx.readings("gemini").is_empty());
 }
 
-#[test]
 fn a_dollar_budget_marks_the_reading_partial_when_invocations_lack_a_cost() {
-    if !isolated(
-        "provider_limit_budget::a_dollar_budget_marks_the_reading_partial_when_invocations_lack_a_cost",
-    ) {
-        return;
-    }
     let fx = Fixture::new(&config("provider_limit_budgets = [\"grok:30usd/5h\"]"));
     fx.grok(27.0, Duration::hours(1));
     let [reading] = fx.readings("grok").try_into().unwrap();
@@ -346,13 +323,7 @@ fn a_dollar_budget_marks_the_reading_partial_when_invocations_lack_a_cost() {
     );
 }
 
-#[test]
 fn a_reported_reading_or_limit_failure_takes_precedence_over_the_ledger() {
-    if !isolated(
-        "provider_limit_budget::a_reported_reading_or_limit_failure_takes_precedence_over_the_ledger",
-    ) {
-        return;
-    }
     let fx = Fixture::new(&config("provider_limit_budgets = [\"grok:30usd/5h\"]"));
     let task = fx.task();
     fx.grok(29.0, Duration::hours(1));
@@ -389,3 +360,45 @@ fn a_reported_reading_or_limit_failure_takes_precedence_over_the_ledger() {
     assert_eq!(reading.source, ProviderLimitSource::Ledger, "{reading:?}");
     assert!(reading.gated, "{reading:?}");
 }
+
+/// [ORB-16371] `off` does not retune a budget reading. Spend at the default
+/// 90% still produces the same used percent and reset, and the reading does
+/// not limit the crew.
+fn an_off_override_shows_the_budget_reading_without_gating_it() {
+    let fx = Fixture::new(&config(
+        "provider_limit_budgets = [\"grok:30usd/5h\"]\n\
+         provider_limit_overrides = [\"grok:off\"]",
+    ));
+    let task = fx.task();
+    let oldest = fx.grok(12.0, Duration::hours(4));
+    fx.grok(15.0, Duration::hours(2));
+
+    let [reading] = fx.readings("grok").try_into().unwrap();
+    assert_eq!(reading.source, ProviderLimitSource::Ledger);
+    assert_eq!(reading.used_percent, Some(90.0));
+    assert!(!reading.gated, "{reading:?}");
+    assert_eq!(
+        serde_json::to_value(reading.threshold).unwrap(),
+        serde_json::json!("off")
+    );
+    assert_eq!(
+        reading.resets_at,
+        Some(oldest + Duration::hours(5)),
+        "the reset still follows the default percent"
+    );
+    let entry = fx.readiness(&task);
+    assert_eq!(entry["eligible"], true, "{entry}");
+    assert_ne!(entry["reason"], "provider_limit", "{entry}");
+}
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    spend_at_the_threshold_gates_until_the_oldest_spend_ages_out_scenarios,
+    spend_at_the_threshold_gates_until_the_oldest_spend_ages_out,
+    spend_below_the_threshold_gates_nothing,
+    an_off_override_shows_the_budget_reading_without_gating_it,
+    an_empty_budget_window_reports_positive_zero,
+    a_token_budget_counts_the_providers_tokens_and_resets_with_the_oldest,
+    a_dollar_budget_marks_the_reading_partial_when_invocations_lack_a_cost,
+    a_reported_reading_or_limit_failure_takes_precedence_over_the_ledger
+);

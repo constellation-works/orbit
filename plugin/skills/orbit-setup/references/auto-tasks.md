@@ -112,6 +112,18 @@ The shipped `code-review`, `qa-sweep` and `qa-full-sweep` defaults carry the
 block against the workspace's base branch. Delivery-triggered definitions do not need it — they
 never fire on a quiet tree.
 
+## Skipping a tick when nothing is blocked
+
+`skip_unless_blocked_candidates: true` — also a definition-file field — mints
+only when at least one blocked task's current block episode awaits triage,
+under the rule the [blocked-task triage](automation.md#blocked-task-triage)
+applies. Otherwise the tick skips with reason `no_blocked_candidates` and a
+detail naming how many blocked tasks it read. The skip is reported and kept
+on the cursor like a `skip_if_unchanged` skip, and `orbit auto-task show
+<name>` displays both the precondition and the last skip. It fails open too:
+a probe that cannot read the blocked tasks mints and records why. The
+shipped `blocked-task-triage` default carries it.
+
 ## Managing definitions
 
 ```bash
@@ -124,6 +136,19 @@ orbit auto-task delete <name> --reason "<why>"   # remove it for good
 orbit auto-task restore <name>          # reinstate a deleted shipped default
 ```
 
+In a linked worktree, `show` and `list` inspect checkout-local candidate
+definitions first and fall back by name to the registered workspace's catalog.
+`show` reports the root and file that supplied the body; its settings and plugin
+provenance come from that same catalog. A disabled or invalid local definition
+does not expose a shared replacement. Inspection accepts `.yaml` and `.yml`
+(case-insensitive extensions) and reports the actual file path. If multiple
+files in one catalog have the same name, `show` refuses the ambiguous lookup.
+Writes and `mint` still require the canonical `<name>.yaml` file and keep their
+existing checkout scope; inspecting a shared definition does not authorize
+changing or minting it from a worktree. An empty worktree catalog can be a Linux sandbox
+write anchor and does not hide workspace definitions.
+`orbit doctor` diagnoses both catalogs with their own settings and manifests.
+
 On a shipped default, `toggle` and `update` of settings fields — `enabled`,
 the schedule, dedupe, and the template's crew, priority, complexity, and added
 tags — are stored in `.orbit/auto_tasks/.orbit-auto-task-settings.json` and
@@ -135,14 +160,25 @@ fork that differs only in settings back under management.
 
 `mint` ignores the schedule, the dedupe policy, and `enabled`, and leaves the
 scheduler's cursor untouched — so it creates real work even for a disabled definition. Inspect with
-`show` first; mint only when creating that task is intended. Over MCP:
-`orbit_auto_task_add`, `orbit_auto_task_list`, `orbit_auto_task_update`, and
+`show` first; mint only when creating that task is intended.
+
+`list` and the dashboard read one state per definition. `skipped` means an
+enabled delivery definition another machine owns, so this host never admits
+work for it. Its reason is printed on stderr and carried as `skipped_reason`
+by the MCP listing and the dashboard API, where its next evaluation reads
+`unavailable`. `enabled` and `disabled` follow the effective value, so a
+`delivery-code-review` that the deprecated `after-landing` policy enables
+lists as enabled.
+
+Over MCP: `orbit_auto_task_add`, `orbit_auto_task_list`, `orbit_auto_task_update`, and
 `orbit_auto_task_mint`; `orbit_auto_task_update` with `enabled` is the
 kill-switch. Adding `expected_enabled` (the observed state) makes it a checked,
 atomic toggle that is refused when the definition no longer matches; that form
 needs operator authority and an explicit `workspace` and accepts no other
-edits. `toggle`, `delete`, `show`, `restore`, `recover`, and `reset` stay
-CLI-only.
+edits. `toggle`, `delete`, `show`, `restore`, `recover`, and `reset` are not
+on MCP; use `orbit auto-task` or `orbit tool run orbit.auto_task.<verb>`.
+`delete` and `reset` need operator authority on every surface: a
+non-interactive caller sets `ORBIT_OPERATOR=1`, which is audited.
 
 ### Deleting a definition
 
@@ -175,7 +211,7 @@ reset before it stays applied, recorded as its own audited reset.
   stays, so reseeds never overwrite it.
 
 A user-authored definition records no opt-out: delete simply removes it.
-`delete` and `restore` are CLI-only; over MCP, disable a definition instead.
+`delete` and `restore` are not on MCP; over MCP, disable a definition instead.
 
 Required tools in a template extend an allowlist activity's baseline. In a
 deny-list activity they cannot override `tool_disallow_list`. The implementing
@@ -216,9 +252,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The ten seeded definitions
+## The eleven seeded definitions
 
-`orbit workspace init` seeds all ten, disabled, except any you deleted (see
+`orbit workspace init` seeds all eleven, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -289,8 +325,11 @@ plugin being removed.
   and corrects factual drift and broken links. Each run attaches a
   `doc-duties-ledger.json` artifact recording an outcome (`clean`, `fixed`,
   `partial` or `skipped`) and attempt date per selected document, plus a
-  cumulative `state` map of every path's two latest attempts. A run reads only
-  the newest readable ledger's `state` (older ledgers without it are read
+  cumulative `state` map of every path's two latest attempts. A run discovers
+  each candidate's artifacts through the metadata-only `orbit.task.show`
+  (`field: "artifacts"`) projection and fetches a ledger only when listed, so
+  absent ledgers are skipped without a failed artifact read. It reads only
+  the newest listed ledger's `state` (older ledgers without it are read
   through the 60-run window), so attempts survive task-history truncation.
   Selection orders by the latest attempt, then `last_validated` frontmatter,
   then the git last-touched date, so a skipped document rotates to the back. A
@@ -302,6 +341,14 @@ plugin being removed.
   `no-diff-expected` so it holds a context lock while correcting drift.
 - **`backlog-hygiene`** (`medium`) — weekly. Writes one read-only report of
   stalled and untriaged tasks. It does not change task status or dispatch work.
+- **`blocked-task-triage`** (`medium`) — hourly, minted only when a block
+  episode awaits triage (`skip_unless_blocked_candidates`). Reads each
+  escalated block once and records one disposition through
+  `orbit.task.block_triage`: a mechanical block is requeued within the
+  final-recovery requeue bound it shares with final recovery, a decision
+  block gets one comment proposing two or three options with replacement
+  text, and a human-only block is reported. Tagged `no-diff-expected`; it
+  holds no operator-only tool. → [automation.md](automation.md#blocked-task-triage)
 - **`run-failure-patterns`** (`medium`) — weekly. Mines this workspace's run
   evidence, and on an owner the failure and release settlements its followers'
   claimed leaves sent (`orbit run settlements --no-reconcile`), for failures

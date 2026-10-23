@@ -8,7 +8,7 @@ Arguments:
 
 Options:
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
   -s, --step <STEP_ID>
           Show raw logs for a single activity step.id from the v2 job YAML
@@ -17,10 +17,10 @@ Options:
           Stream output until the run is terminal. JSON output is JSONL
 
       --workspace <SELECTOR>
-          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --no-reconcile
-          Report stored run records as-is: skip stale-run reconciliation, which finalizes an orphaned pending or running run as interrupted and releases its task reservations
+          Report stored run records as-is: skip stale-run reconciliation, which finalizes an orphaned pending or running run as interrupted, releases its task reservations, and settles with their owner the pull claims an ended drain or leaf left
 
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)
@@ -28,12 +28,15 @@ Options:
           Possible values:
           - auto:   Decide from the sink: a table on a terminal, plain text otherwise
           - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields and no header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
           - json:   A single JSON document
           - ndjson: One complete JSON document per line
 
       --json
           Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
 
   -h, --help
           Print help (see a summary with '-h')

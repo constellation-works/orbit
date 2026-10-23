@@ -6,6 +6,7 @@ mod inspection_tools;
 mod launcher;
 mod orchestrator;
 mod plugin_broker;
+mod prompt_file;
 mod response_diagnostics;
 /// Sandbox-aware child creation. `pub(crate)` because the deterministic
 /// `local_shell` action reuses the same spawn seam rather than growing a second
@@ -25,4 +26,7 @@ pub(super) use envelope::task_id_from_input;
 pub use inspection::is_source_inspection_checkout;
 pub use launcher::{MissingLauncher, locate_provider_launcher, missing_launcher_in};
 pub(crate) use orchestrator::run_cli_backend_for_step;
-pub use orchestrator::{activity_tool_policy_env, run_cli_backend};
+pub use orchestrator::{
+    CLAUDE_WORKER_CREDENTIAL_REMEDY, activity_tool_policy_env, claude_worker_credential_held,
+    run_cli_backend,
+};

@@ -1,9 +1,11 @@
 //! Core task lifecycle adapter and scheduler JSON projection.
 
 use crate::OrbitRuntime;
-use crate::application::task::TaskAddParams;
+use crate::application::task::{TaskAddParams, TaskListFilter};
 use chrono::{DateTime, Utc};
-use orbit_automation::auto_tasks::scheduler::{AutoTaskDispatch, ChangeProbe, InactivePluginSkip};
+use orbit_automation::auto_tasks::scheduler::{
+    AutoTaskDispatch, BlockedCandidateProbe, ChangeProbe, InactivePluginSkip,
+};
 pub use orbit_automation::auto_tasks::scheduler::{
     AutoTaskFireReport, AutoTaskSchedulerOutcome, SchedulerOptions,
 };
@@ -67,6 +69,14 @@ impl AutoTaskDispatch for CachedDispatch<'_> {
         self.runtime
             .probe_change_since_last_sweep(definition, precondition)
     }
+
+    fn probe_blocked_candidates(
+        &self,
+        definition: &AutoTaskDefinition,
+        now: DateTime<Utc>,
+    ) -> Result<BlockedCandidateProbe, OrbitError> {
+        self.runtime.probe_blocked_candidates(definition, now)
+    }
 }
 
 /// One definition as a list surface shows it.
@@ -127,6 +137,31 @@ impl AutoTaskDispatch for OrbitRuntime {
     ) -> Result<ChangeProbe, OrbitError> {
         super::change_probe::probe_change_since_last_sweep(self, precondition)
     }
+
+    fn probe_blocked_candidates(
+        &self,
+        _definition: &AutoTaskDefinition,
+        now: DateTime<Utc>,
+    ) -> Result<BlockedCandidateProbe, OrbitError> {
+        let views = self.blocked_triage_view(now)?;
+        let task_ids = views
+            .iter()
+            .filter(|view| {
+                matches!(
+                    view.candidacy,
+                    crate::application::task::TriageCandidacy::Qualifies(_)
+                )
+            })
+            .map(|view| view.task.id.clone())
+            .collect::<Vec<_>>();
+        Ok(if task_ids.is_empty() {
+            BlockedCandidateProbe::None {
+                blocked: views.len(),
+            }
+        } else {
+            BlockedCandidateProbe::Qualifying { task_ids }
+        })
+    }
 }
 
 impl OrbitRuntime {
@@ -144,7 +179,7 @@ impl OrbitRuntime {
         definition: &AutoTaskDefinition,
     ) -> Option<InactivePlugin> {
         crate::application::plugin::inactive_plugin(
-            &self.auto_task_definitions_dir(),
+            &self.auto_task_inspection_dir(definition),
             &self.auto_task_definition_path(definition),
             self.plugin_load(),
         )
@@ -186,11 +221,18 @@ impl OrbitRuntime {
     }
 
     fn auto_task_definition_path(&self, definition: &AutoTaskDefinition) -> PathBuf {
-        crate::application::auto_tasks::definition_path(&self.paths().local_dir, &definition.name)
+        self.auto_task_read_source(&definition.name)
+            .ok()
+            .flatten()
+            .map(|(_, path)| path)
+            .unwrap_or_else(|| super::loader::definition_path(&self.local_root(), &definition.name))
     }
 
-    fn auto_task_definitions_dir(&self) -> PathBuf {
-        crate::application::auto_tasks::auto_tasks_dir(&self.paths().local_dir)
+    fn auto_task_inspection_dir(&self, definition: &AutoTaskDefinition) -> PathBuf {
+        self.auto_task_definition_path(definition)
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| super::loader::auto_tasks_dir(&self.local_root()))
     }
 
     /// The id of a still-open instance of `definition`'s prior mints, if any.
@@ -224,7 +266,28 @@ pub(crate) fn open_auto_task_instances(
     runtime: &OrbitRuntime,
     name: &str,
 ) -> Result<Vec<String>, OrbitError> {
-    let tasks = runtime.list_tasks_by_tags(&[auto_task_tag(name)])?;
+    let tag = auto_task_tag(name);
+    // The generated index answers status and tag together, so a definition's
+    // closed mints, which accumulate with every batch, cost no read. A worker
+    // reads through its owner, and an index that cannot serve lists instead.
+    if runtime.worker_invocation().is_none()
+        && let Some(open) = runtime.task_candidate_keys(
+            &TaskListFilter {
+                tags: vec![tag.clone()],
+                statuses: Some(
+                    TaskStatus::ALL
+                        .into_iter()
+                        .filter(|status| is_open_instance_status(*status))
+                        .collect(),
+                ),
+                ..TaskListFilter::default()
+            },
+            usize::MAX,
+        )?
+    {
+        return Ok(open.items.into_iter().map(|key| key.id).collect());
+    }
+    let tasks = runtime.list_tasks_by_tags(&[tag])?;
     Ok(open_auto_task_instances_from_tasks(&tasks)
         .map(|task| task.id.clone())
         .collect())
@@ -236,14 +299,19 @@ pub(crate) fn open_auto_task_instances(
 pub fn open_auto_task_instances_from_tasks<'a>(
     tasks: impl IntoIterator<Item = &'a Task>,
 ) -> impl Iterator<Item = &'a Task> {
-    // `someday` is an explicit "not now" park, not an active instance
-    // [ORB-12148]: it must not block every later mint of this auto-task.
-    tasks.into_iter().filter(|task| {
-        !matches!(
-            task.status,
-            TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected | TaskStatus::Someday
-        )
-    })
+    tasks
+        .into_iter()
+        .filter(|task| is_open_instance_status(task.status))
+}
+
+/// Whether a mint in `status` is still an open instance. `someday` is an
+/// explicit "not now" park, not an active instance [ORB-12148]: it must not
+/// block every later mint of this auto-task.
+fn is_open_instance_status(status: TaskStatus) -> bool {
+    !matches!(
+        status,
+        TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected | TaskStatus::Someday
+    )
 }
 
 pub fn run_auto_task_scheduler_at(
@@ -281,7 +349,8 @@ pub(super) fn mint_task(
     // A task minted from a plugin's seeded definition carries `plugin:<ns>`
     // beside `auto-task:<name>`, so its provenance survives in task history
     // even after the plugin is removed (design §4.4).
-    let definitions_dir = runtime.auto_task_definitions_dir();
+    let definitions_dir =
+        crate::application::auto_tasks::auto_tasks_dir(&runtime.paths().local_dir);
     let path = crate::application::auto_tasks::definition_path(
         &runtime.paths().local_dir,
         &definition.name,

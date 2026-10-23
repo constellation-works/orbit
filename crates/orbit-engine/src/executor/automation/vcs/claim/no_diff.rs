@@ -1,9 +1,17 @@
 //! Clean-base delivery for claimed leaves. The report is the existing verifier's
 //! checkpoint, not an agent's skip flag; the owner rechecks it on its own base.
+//! An already-resolved outcome's named tests replay here on the base, outside
+//! the agent sandbox, after the required commands [ORB-15747].
+//!
+//! A `no-diff-expected` skip checkpoint runs nothing: no required command,
+//! deferred replay or already-resolved replay. A review, audit or sweep proves
+//! no build, and the owner exempts exactly that checkpoint from required
+//! validation, as its own pipelines skip `validate` for the tag [ORB-15764].
 use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_types::workflow::HostSandboxCommand;
 use orbit_types::workflow::handoff::{
     HandoffArtifactRef, HandoffCandidate, HandoffDelivery, TaskHandoff,
 };
@@ -16,13 +24,29 @@ use super::super::git::{
     BaseSyncMode, git_command_success, git_output, resolve_worktree_start_point,
 };
 use super::super::review_gate::revision;
+use super::already_resolved;
 use super::delivery::repository;
 use super::input::refused;
 use super::observe::{observe_with, require_clean_candidate};
 use super::validation::{attach_handoff_logs, passed_output, run_claimed_commands};
 use crate::executor::automation::vcs::commit::{
-    claimed_clean_base_checkpoint, verify_clean_tree_handoff, verify_clean_tree_handoff_at_revision,
+    NO_DIFF_EXPECTED_SKIP, claimed_clean_base_checkpoint, verify_clean_tree_handoff,
+    verify_clean_tree_handoff_at_revision,
 };
+
+/// The decision `claim_validate` records for a `no-diff-expected` skip.
+pub(super) const SKIPPED_NO_DIFF_EXPECTED: &str = NO_DIFF_EXPECTED_SKIP;
+
+/// Why that decision ran nothing, in the step's own output.
+const NO_DIFF_EXPECTED_NOTE: &str = "the task is tagged no-diff-expected and its clean base \
+     changed nothing, so no required validation command or replay ran; the owner accepts this \
+     checkpoint without validation logs";
+
+/// Whether `checkpoint` is a `no-diff-expected` skip, which carries no
+/// validation.
+fn skips_validation(checkpoint: &Value) -> bool {
+    checkpoint["decision"] == NO_DIFF_EXPECTED_SKIP
+}
 
 /// Whether the implementer returned clean-tree report scratch references.
 pub(in crate::executor::automation::vcs) fn carries_no_diff_artifacts(input: &Value) -> bool {
@@ -33,99 +57,14 @@ pub(in crate::executor::automation::vcs) fn carries_no_diff_artifacts(input: &Va
         .is_some_and(|artifacts| !artifacts.is_empty())
 }
 
-/// A sandboxed implementer cannot route artifacts to a remote owner. It
-/// returns scratch paths; the deterministic commit step reads bounded bytes
-/// through the existing artifact confinement helper and attaches them itself.
-pub(in crate::executor::automation::vcs) fn import_implementation_evidence<
-    H: RuntimeHost + ?Sized,
->(
-    host: &H,
-    task_id: &str,
-    workspace: &Path,
-    input: &Value,
-) -> Result<(), OrbitError> {
-    #[derive(serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct ScratchArtifact {
-        path: String,
-        source_path: String,
-    }
-    let Some(artifacts) = input
-        .get("implementation")
-        .and_then(|output| output.get("no_diff_artifacts"))
-        .filter(|value| !value.is_null())
-    else {
-        return Ok(());
-    };
-    let artifacts: Vec<ScratchArtifact> = serde_json::from_value(artifacts.clone())
-        .map_err(|error| refused(format!("invalid no_diff_artifacts: {error}")))?;
-    let scratch = workspace.join(".orbit/tmp");
-    let mut prepared = Vec::new();
-    let mut paths = std::collections::BTreeSet::new();
-    for artifact in artifacts {
-        if !paths.insert(artifact.path.clone()) {
-            return Err(refused("no_diff_artifacts contains duplicate paths"));
-        }
-        let payload = orbit_tools::prepare_remote_task_artifact_put(
-            json!({
-                "id": task_id, "path": artifact.path, "source_path": artifact.source_path,
-            }),
-            Some(workspace),
-            Some(&scratch),
-        )?;
-        let bytes: Vec<u8> = serde_json::from_value(payload["artifacts"][0]["content"].clone())
-            .map_err(|error| refused(format!("invalid prepared artifact: {error}")))?;
-        prepared.push((artifact.path, bytes));
-    }
-    let mut permitted = std::collections::BTreeSet::new();
-    for (path, bytes) in &prepared {
-        let logs = match path.as_str() {
-            "no-diff.json" => {
-                let report: orbit_types::workflow::handoff::NoDiffEvidence =
-                    serde_json::from_slice(bytes)
-                        .map_err(|error| refused(format!("invalid {path}: {error}")))?;
-                report
-                    .validation
-                    .into_iter()
-                    .map(|check| check.log_artifact)
-                    .collect::<Vec<_>>()
-            }
-            "already-landed.json" => {
-                let report: orbit_types::workflow::handoff::AlreadyLandedEvidence =
-                    serde_json::from_slice(bytes)
-                        .map_err(|error| refused(format!("invalid {path}: {error}")))?;
-                report
-                    .validation
-                    .into_iter()
-                    .map(|check| check.log_artifact)
-                    .collect::<Vec<_>>()
-            }
-            _ => continue,
-        };
-        permitted.insert(path.clone());
-        permitted.extend(logs);
-    }
-    if permitted.is_empty() || !paths.is_subset(&permitted) {
-        return Err(refused(
-            "no_diff_artifacts may contain only a clean-tree report and its declared validation logs",
-        ));
-    }
-    for (path, bytes) in prepared {
-        host.attach_claim_validation_log(&path, bytes)?;
-    }
-    Ok(())
-}
-
 fn checkpoint<H: RuntimeHost + ?Sized>(
     host: &H,
     task_id: &str,
     reference: &HandoffArtifactRef,
 ) -> Result<Value, OrbitError> {
     orbit_types::task::validate_relative_artifact_path(&reference.path)?;
-    let artifacts = host.get_task_artifacts(task_id)?;
-    let artifact = artifacts
-        .iter()
-        .find(|artifact| artifact.path == reference.path)
+    let artifact = host
+        .get_task_artifact(task_id, &reference.path)?
         .ok_or_else(|| refused("NoDiff verifier report is missing"))?;
     if sha256_hex(&artifact.content) != reference.sha256 {
         return Err(refused("NoDiff verifier report changed"));
@@ -134,16 +73,19 @@ fn checkpoint<H: RuntimeHost + ?Sized>(
         .map_err(|error| refused(format!("invalid NoDiff verifier report: {error}")))
 }
 
+/// Recheck the pinned checkpoint on the leaf, and return whether it is a
+/// `no-diff-expected` skip, whose handoff carries no validation.
 pub(super) fn verify_leaf<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &ClaimExecutionContext,
     workspace: &Path,
     evidence: &HandoffArtifactRef,
-) -> Result<(), OrbitError> {
+) -> Result<bool, OrbitError> {
     let report = checkpoint(host, &context.task_id, evidence)?;
     let task = host.get_task(&context.task_id)?;
     require_checkpoint_identity(&report, &task.id, &context.run_id)?;
-    verify_clean_tree_handoff(host, &[task], workspace, &context.run_id, &report)
+    verify_clean_tree_handoff(host, &[task], workspace, &context.run_id, &report)?;
+    Ok(skips_validation(&report))
 }
 
 fn require_checkpoint_identity(report: &Value, task: &str, run: &str) -> Result<(), OrbitError> {
@@ -220,6 +162,9 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
     workspace: &Path,
     input: &Value,
 ) -> Result<Value, OrbitError> {
+    // Refused before anything runs: a declaration naming nothing, or a
+    // selector outside the grammar, never reaches the host.
+    let resolved = already_resolved::declared(input)?;
     let report = claimed_clean_base_checkpoint(input)
         .ok_or_else(|| refused("a skip flag or tag alone cannot authorize a NoDiff handoff"))?;
     require_checkpoint_identity(report, &context.task_id, &context.run_id)?;
@@ -242,17 +187,39 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
         },
     )?;
     require_clean_candidate(workspace, &candidate)?;
+    if skips_validation(report) {
+        // An implementer's deferral or already-resolved selectors name tests
+        // for a gate this route does not run, so neither replays either.
+        let mut output = passed_output(context, &candidate, &[], Vec::new(), Value::Null)?;
+        output["decision"] = json!(SKIPPED_NO_DIFF_EXPECTED);
+        output["note"] = json!(NO_DIFF_EXPECTED_NOTE);
+        output["no_diff_evidence"] = serde_json::to_value(evidence)
+            .map_err(|error| OrbitError::Execution(error.to_string()))?;
+        output["already_resolved"] = json!([]);
+        return Ok(output);
+    }
     let replays = claimed_deferred_replays(host, input)?;
     let commands = with_replays(context.required_commands.clone(), &replays);
-    let (results, validation_env) = run_claimed_commands(
+    let (mut results, validation_env) = run_claimed_commands(
         host, context, workspace, input, &candidate, &commands, &replays,
     )?;
+    let resolved = resolved.unwrap_or_default();
+    results.extend(already_resolved::replay(
+        host, context, workspace, &candidate, &resolved,
+    )?);
+    require_clean_candidate(workspace, &candidate)?;
     // Commands may have changed task artifacts too; recheck the checkpoint.
     verify_leaf(host, context, workspace, &evidence)?;
     let references = attach_handoff_logs(host, context, &candidate, &results)?;
     let mut output = passed_output(context, &candidate, &references, results, validation_env)?;
     output["no_diff_evidence"] =
         serde_json::to_value(evidence).map_err(|error| OrbitError::Execution(error.to_string()))?;
+    output["already_resolved"] = json!(
+        resolved
+            .iter()
+            .map(HostSandboxCommand::host_command)
+            .collect::<Vec<_>>()
+    );
     Ok(output)
 }
 
@@ -265,7 +232,7 @@ pub fn observe_no_diff_candidate<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     handoff: &TaskHandoff,
-    base_sync: &str,
+    base_sync: BaseSyncMode,
 ) -> Result<HandoffCandidate, OrbitError> {
     let HandoffDelivery::NoDiff { evidence } = &handoff.candidate.delivery else {
         return Err(refused("NoDiff delivery required"));
@@ -273,16 +240,7 @@ pub fn observe_no_diff_candidate<H: RuntimeHost + ?Sized>(
     let report = checkpoint(host, &handoff.task_id, evidence)?;
     require_checkpoint_identity(&report, &handoff.task_id, &handoff.run_id)?;
     let submitted = &handoff.candidate;
-    let sync = match base_sync {
-        "remote" => BaseSyncMode::Remote,
-        "local" => BaseSyncMode::Local,
-        _ => {
-            return Err(refused(
-                "NoDiff observation requires a local or remote base",
-            ));
-        }
-    };
-    let base_ref = resolve_worktree_start_point(workspace, &submitted.base_branch, sync)?;
+    let base_ref = resolve_worktree_start_point(workspace, &submitted.base_branch, base_sync)?;
     let tip = revision(workspace, &base_ref)?;
     let contained = git_command_success(
         workspace,

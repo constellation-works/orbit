@@ -3,8 +3,9 @@
 use super::OrbitRuntime;
 
 impl OrbitRuntime {
-    pub fn scoring_enabled(&self) -> bool {
-        self.context.scoring_enabled()
+    /// Effective host resource throttle policy for this runtime.
+    pub fn resource_throttle_settings(&self) -> &orbit_config::ResourceThrottleSettings {
+        self.context.settings().resource_throttle()
     }
 
     /// Minutes a deferred delivery-automation reason may persist before the
@@ -96,6 +97,23 @@ impl OrbitRuntime {
             .extend_agent_environment(self.agent_environment(extras))
     }
 
+    /// [`Self::agent_session_environment`] for an agent of a crew with
+    /// `[crews.<name>] env` entries: the crew's names carry their sources'
+    /// values (runtime defaults such as `clock.env` included) and win over
+    /// `pass`, and a crew that sets one Claude credential has the other
+    /// removed. Unset sources leave their names absent.
+    pub fn crew_agent_session_environment(
+        &self,
+        crew_env: &[orbit_types::identity::CrewEnvVar],
+        extras: &[&str],
+    ) -> Vec<(String, String)> {
+        let base = self
+            .execution_env_policy()
+            .crew_agent_subprocess_env(crew_env, extras);
+        self.validation_environment()
+            .extend_agent_environment(self.validation_env_policy().agent_environment(base))
+    }
+
     /// Why required validation may not find the user's toolchain on this
     /// host, for drain submission and `orbit doctor` [ORB-13987]. `None` when
     /// no required commands are configured or the environment resolved
@@ -121,6 +139,12 @@ impl OrbitRuntime {
         self.execution_env_policy().pass_names().to_vec()
     }
 
+    /// The names a runtime default such as `clock.env` may supply: the
+    /// `execution.env.pass` names and every crew's `env` sources.
+    pub fn child_env_default_names(&self) -> Vec<String> {
+        self.execution_env_policy().default_names()
+    }
+
     /// The warning for [`Self::unset_env_pass_names`], for drain/ship starts
     /// and `orbit doctor`. `None` when every pass-listed variable is set.
     pub fn unset_env_pass_warning(&self) -> Option<String> {
@@ -131,6 +155,12 @@ impl OrbitRuntime {
     /// `[workflow] distributed_completion`: `review` or `done`.
     pub fn workflow_distributed_completion(&self) -> &str {
         self.context.settings().workflow_distributed_completion()
+    }
+
+    /// `[workflow] admission_affinity`: how far admission lets work only
+    /// the requesting executor can run lead.
+    pub fn admission_affinity(&self) -> orbit_types::task::AdmissionAffinityReach {
+        self.context.settings().admission_affinity()
     }
 
     /// `[workflow.task_pilot_freshness]`, before any routine override.
@@ -155,6 +185,43 @@ impl OrbitRuntime {
     /// before dispatching ship runs nobody explicitly asked for.
     pub fn workflow_auto_ship(&self) -> bool {
         self.context.settings().workflow_auto_ship()
+    }
+
+    /// The current last-known-good `[workflow.mid_run_steering]` settings,
+    /// refreshed at prompt and gate checkpoints. Steering defaults off.
+    pub fn mid_run_steering(&self) -> orbit_config::MidRunSteeringSettings {
+        self.current_mid_run_steering()
+    }
+
+    /// `workflow.unlocked_context_paths` as admitted: the declared context
+    /// a task's lock surface leaves out.
+    pub(crate) fn unlocked_context_paths(
+        &self,
+    ) -> &crate::runtime::task::locks::UnlockedContextPaths {
+        self.context.settings().unlocked_context_paths()
+    }
+
+    /// `workflow.light_delivery_paths`: the paths a candidate may change
+    /// and keep its `skip-review` or `skip-validation` tag [ORB-16855].
+    pub(crate) fn workflow_light_delivery_paths(&self) -> &[String] {
+        self.context.settings().light_delivery_paths()
+    }
+
+    /// `[workflow.regression_risk]` as admitted: whether implement and
+    /// review prompts mark regression-prone context files.
+    pub fn regression_risk_settings(&self) -> orbit_config::RegressionRiskSettings {
+        self.context.settings().regression_risk()
+    }
+
+    /// `[workflow.explore]` as admitted: whether implement and review-repair
+    /// runs may delegate read-only exploration, and its per-run budgets.
+    pub(crate) fn explore_settings(&self) -> orbit_config::ExploreSettings {
+        self.context.settings().explore()
+    }
+
+    /// `[workflow.tag_instructions]` as admitted.
+    pub(crate) fn tag_instruction_settings(&self) -> &orbit_config::TagInstructionSettings {
+        self.context.settings().tag_instructions()
     }
 
     /// The resolved `[operation]` review preferences (layered over the

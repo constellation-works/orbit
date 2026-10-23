@@ -57,7 +57,7 @@
 # findings, and the next claim's `resume_candidate` applies the repair and
 # hands the implementer the findings to repair from.
 #
-# ORB-13908: when the claim captured the owner's `review.before_pr`, the leaf
+# ORB-13908: when the claim captured the owner's `review.timing = before_pr`, the leaf
 # runs the same before-PR gate as `task_pr_pipeline` between base
 # synchronization and push. One fresh reviewer, with the claim's captured crew,
 # fixes what it finds as the candidate's second commit and comments a summary;
@@ -81,7 +81,7 @@
 # reviewed head, and the owner attributes the reviewer's paths when it widens
 # the footprint at acceptance, so there is no separate `review_validate`.
 #
-# ORB-14849: when the claim captured the owner's `review.before_landing`
+# ORB-14849: when the claim captured the owner's `review.timing = before_landing`
 # instead, the before-PR gate does not apply and the leaf publishes at once.
 # After `pr_open` the `landing_review*` steps review the published head while
 # hosted CI runs on it, under the same crew, budget, manifest and
@@ -118,7 +118,7 @@ spec:
   # live by `orbit run concurrency`) bounds how many of these run at once.
   max_active_runs: 0
   # ORB-13907: once step recovery is spent, a crew from
-  # `workflow.final_recovery_crews` gets one last look and returns a typed
+  # `workflow.purpose_crews.final_recovery` gets one last look and returns a typed
   # decision. `resume` reruns from the failed step or an earlier one of its
   # phase; any other decision is applied by Orbit's deterministic applier on the
   # owner, carried by the claim's failure settlement — never written here.
@@ -127,6 +127,13 @@ spec:
   # [ORB-14338] Carry a committed, unpublished candidate to a durable ref on
   # `origin` for the task's next claim, on whatever host it runs.
   failure_activity: claim_candidate_carry
+  # With steering enabled the gate reads the task's comment log and the
+  # leaf's watermark from the owner, never the replica, and an owner it
+  # cannot read fails the run before commit. With steering disabled the gate
+  # is inert.
+  steering_gate:
+    before: commit
+    round: implement_bundle
   default_input:
     task_ids: []
     base_branch: main
@@ -195,6 +202,10 @@ spec:
               # ORB-15287: the pinned delivery base a deferred sandbox
               # validation must name.
               base_sha: "{{ steps.worktree.output.base_sha }}"
+              # ORB-15963: `validate` runs the required commands on the final
+              # candidate, so the envelope lists them for the implementer to
+              # leave to it.
+              final_validation: true
               # Claimed mode: the injected envelope is the task, the agent
               # writes no owner task state, and it returns its execution
               # summary in its output for the handoff to carry.
@@ -220,6 +231,7 @@ spec:
       recovery_activity: step_failure_recovery
       target: activity:pr_prepare
       default_input:
+        authenticate_preparation: true
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
         base: "{{ input.base_branch }}"
         base_sync: "{{ input.base_sync }}"
@@ -234,8 +246,13 @@ spec:
       # `complete_no_diff` without its agent, as in task_pr_pipeline; the
       # owner applies the recorded decision with `review` completion.
       recovery_activity: pr_conflict_recovery
+      # A certified stale preparation is refreshed by the host at most twice
+      # within one 120-second budget; only real conflicts dispatch recovery.
       target: activity:git_rebase
       default_input:
+        step_id: sync_base
+        preparation: "{{ steps.prepare_branch.output }}"
+        final_validation: true
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
@@ -252,7 +269,7 @@ spec:
 
     # `review_gate_admit` and `review_gate_settle` always run so later steps
     # can read their output; they report `applies: false` when the claim
-    # captured `review.before_pr` off (a `review.before_landing` claim
+    # captured no `review.timing = before_pr` (a `before_landing` claim
     # reviews after `pr_open` instead). Transient gate and reviewer failures
     # retry, then get one diagnosed recovery before the leaf fails.
     - id: review_gate_admit
@@ -390,7 +407,7 @@ spec:
 
     # ORB-14849: the before-landing review of the published pull request.
     # The gate steps always run and report `applies: false` unless the claim
-    # captured `review.before_landing`, and for a no-diff exemption.
+    # captured `review.timing = before_landing`, and for a no-diff exemption.
     # ORB-15630: `validate` already ran the owner's required commands on this
     # head, natively outside the agent sandbox; admission hands those results
     # to the reviewer and settlement decides the gates from them.
@@ -511,7 +528,9 @@ spec:
     # No branch publication, PR or reviewer is needed for a verified clean base.
     # [ORB-14791] A `no-diff-expected` review reaches here with no report: the
     # commit step pins the tag's skip to this run and base instead, and refuses
-    # a changed worktree, since this route cannot deliver code.
+    # a changed worktree, since this route cannot deliver code. [ORB-15764]
+    # That skip runs no required command or replay here, as the owner's own
+    # pipeline skips `validate` for the tag; a verified report still does.
     - id: validate_no_diff
       when: "{{ steps.commit.output.skipped_no_diff_expected }} == true"
       target: activity:claim_validate
@@ -521,8 +540,8 @@ spec:
         base_sha: "{{ steps.worktree.output.base_sha }}"
         skipped_no_diff_expected: true
         already_landed_checkpoint: "{{ steps.commit.output }}"
-        # ORB-15287: the clean base replays a gate the implementer's sandbox
-        # deferred, as the ordinary route does.
+        # ORB-15287: a verified clean base replays a gate the implementer's
+        # sandbox deferred, as the ordinary route does.
         implementation: "{{ steps.implement_one.output }}"
 
     - id: handoff_no_diff

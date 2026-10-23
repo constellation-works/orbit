@@ -29,7 +29,7 @@ try {
     let offline = false;
     let failedPath = null;
     let failureStatus = 500;
-    let events = 15700;
+    let runningCount = 99;
     const aborted = [];
     // Use real browser fetches and Playwright request aborts; only the API
     // responses are fixture data. The shipped app, markup and CSS run intact.
@@ -55,8 +55,11 @@ try {
         case '/api/crews':
           payload = { crews: [] };
           break;
+        case '/api/job-runs':
+          payload = { items: [], total: url.searchParams.get('state') === 'active' ? runningCount : 0 };
+          break;
         case '/api/audit/summary':
-          payload = { events, failed_runs: 99, denials: 4, active_long_runs: 2, window: '24h' };
+          payload = { events: 15700, failed_runs: 99, denials: 4, active_long_runs: 2, window: '24h' };
           break;
         case '/api/workflows/auto/readiness':
           payload = { capacity: { drain_phase: 'draining', drain_run_id: 'fixture', drain_status_run_id: 'fixture', running_admitted_workers: 1, active_leaf_runs: 1, max_active_leaf_runs: 4, free_slots: 3, ends_at: new Date(Date.now() + 3600000).toISOString() }, tasks: [] };
@@ -138,14 +141,14 @@ try {
     await settled();
     assert.match((await snapshot('workspace-file-clean')).label, /refreshed Settings/);
     failedPath = '/api/config/file';
-    events = 18000;
+    runningCount = 18000;
     await refresh();
     const partial = await snapshot('workspace-file-failure');
     assert.match(partial.status, /orange/);
     assert.notEqual(partial.color, clean.color, 'A failed panel must not display the clean green dot');
     assert.match(partial.label, /Settings › Workspace file/);
     assert(!partial.label.includes('offline'), 'An HTTP panel failure must remain distinct from offline');
-    assert.equal(partial.nodes.find(node => node.id === 'rail-count-audit').text, '18.0k', 'Healthy panels must keep updating during a partial failure');
+    assert.equal(partial.nodes.find(node => node.id === 'rail-count-jobs').text, '18.0k runs', 'Healthy panels must keep updating during a partial failure');
     expectStale(partial);
     await page.screenshot({ path: path.join(evidence, `partial-${width}.png`) });
     await refresh();
@@ -154,7 +157,7 @@ try {
     await refresh();
     const recovered = await snapshot('clean-recovery');
     expectClean(recovered);
-    for (const id of ['rail-count-diag-runs', 'global-drain-state']) {
+    for (const id of ['rail-count-jobs', 'global-drain-state']) {
       const title = state => state.nodes.find(node => node.id === id).title;
       assert(title(clean), `${id} must carry its own tooltip`);
       assert.equal(title(recovered), title(clean), `Recovery must preserve the ${id} tooltip`);
@@ -165,7 +168,7 @@ try {
     // events/log panels to the connection line. Missing optional streams (404)
     // remain a clean response.
     await page.evaluate(() => { location.hash = 'runs/fixture'; });
-    await page.waitForFunction(() => document.getElementById('meta-text').textContent.startsWith('refreshed Runs'));
+    await page.waitForFunction(() => document.getElementById('meta-text').textContent.startsWith('refreshed Jobs'));
     for (const [stream, label] of [['events', 'Run events'], ['logs', 'Run logs']]) {
       failedPath = `/api/runs/fixture/${stream}`;
       await refresh();

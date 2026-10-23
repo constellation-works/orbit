@@ -148,13 +148,7 @@ fn store_report_artifacts(fixture: &Fixture, report_bytes: Vec<u8>, history_byte
 /// ORB-14360 recorded a prose-named check `not_run` and later the real
 /// command `passed`; ORB-14260 recorded a `<workspace>` placeholder and
 /// later the absolute path. Carrying the record id forward settles both.
-#[test]
 fn a_carried_record_id_settles_when_the_command_text_changes() {
-    if !super::dispatch_admission::isolated(
-        "review_record_ids::a_carried_record_id_settles_when_the_command_text_changes",
-    ) {
-        return;
-    }
     // `None`: the absolute path of the fixture's own checkout.
     for (incident, earlier, current) in [
         (
@@ -214,13 +208,7 @@ fn a_carried_record_id_settles_when_the_command_text_changes() {
 /// A revision that drops an earlier record id is refused at attach with
 /// the record named, and so is retiring a record that failed; the reviewer
 /// then corrects the report in the same attempt and it settles.
-#[test]
 fn a_revision_dropping_a_record_id_is_refused_at_attach_and_resubmitted() {
-    if !super::dispatch_admission::isolated(
-        "review_record_ids::a_revision_dropping_a_record_id_is_refused_at_attach_and_resubmitted",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     fixture.admit();
     let missing_id = fixture
@@ -367,13 +355,7 @@ fn a_revision_dropping_a_record_id_is_refused_at_attach_and_resubmitted() {
 /// Reports written without record ids attach and settle as before: a
 /// command-identity match resolves the earlier record, and a renamed command
 /// is still a dropped obligation.
-#[test]
 fn reports_without_record_ids_keep_the_command_identity_rules() {
-    if !super::dispatch_admission::isolated(
-        "review_record_ids::reports_without_record_ids_keep_the_command_identity_rules",
-    ) {
-        return;
-    }
     for (earlier, current, passes) in [
         (
             "make ci-fast",
@@ -427,13 +409,7 @@ fn reports_without_record_ids_keep_the_command_identity_rules() {
 /// so it must retain the report instead of refusing the write. Settlement
 /// still applies the id contract to a newly received report; pre-change
 /// reports without the contract marker keep their legacy behavior above.
-#[test]
 fn new_post_session_claim_reports_cannot_settle_without_unique_record_ids() {
-    if !super::dispatch_admission::isolated(
-        "review_record_ids::new_post_session_claim_reports_cannot_settle_without_unique_record_ids",
-    ) {
-        return;
-    }
     let cases = [
         (
             "missing id",
@@ -485,13 +461,7 @@ fn new_post_session_claim_reports_cannot_settle_without_unique_record_ids() {
 /// puts another under this one. The put is refused naming every record and
 /// a free id for each; the reviewer resubmits in the same attempt, and the
 /// earlier id-less record is still matched by command identity.
-#[test]
 fn an_in_flight_review_without_ids_resubmits_with_the_named_ids() {
-    if !super::dispatch_admission::isolated(
-        "review_record_ids::an_in_flight_review_without_ids_resubmits_with_the_named_ids",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     fixture.admit();
     let earlier = report(
@@ -534,3 +504,13 @@ fn an_in_flight_review_without_ids_resubmits_with_the_named_ids() {
     assert_eq!(settled["gate"], "passed");
     assert_eq!(certificate_acceptable(&certificate(&fixture)), Ok(()));
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_carried_record_id_settles_when_the_command_text_changes_scenarios,
+    a_carried_record_id_settles_when_the_command_text_changes,
+    a_revision_dropping_a_record_id_is_refused_at_attach_and_resubmitted,
+    reports_without_record_ids_keep_the_command_identity_rules,
+    new_post_session_claim_reports_cannot_settle_without_unique_record_ids,
+    an_in_flight_review_without_ids_resubmits_with_the_named_ids
+);

@@ -5,10 +5,7 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::ExecutorDefStoreBackend;
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, ExecutorType};
 
-use crate::application::executor::{
-    migrated_default_executor_for_platform, parse_default_executor_for_platform,
-    seed_default_executors_for_platform,
-};
+use crate::application::executor::seed_default_executors_for_platform;
 
 const LINUX: &str = "linux";
 
@@ -27,6 +24,7 @@ fn base_def(name: &str, executor_type: ExecutorType) -> ExecutorDef {
         env: Default::default(),
         sandbox: None,
         allow_fallback: false,
+        host_os: None,
         created_at: Some(now),
         updated_at: Some(now),
     }
@@ -65,31 +63,6 @@ impl ExecutorDefStoreBackend for InMemoryExecutorStore {
     }
 }
 
-const CLAUDE_YAML: &str = r#"schemaVersion: 2
-kind: Executor
-metadata:
-  name: claude
-spec:
-  executor_type: direct_agent
-  command: claude
-  sandbox: macos-sandbox-exec
-"#;
-
-/// Re-seeding must re-align a platform-mismatched sandbox left over from a
-/// prior install: an upgrade on Linux clears a persisted `macos-sandbox-exec`
-/// even though the executor type is unchanged.
-#[test]
-fn migrated_default_executor_realigns_platform_mismatched_sandbox_on_linux() {
-    let mut existing = base_def("claude", ExecutorType::DirectAgent);
-    existing.sandbox = Some(ExecutorSandboxKind::MacosSandboxExec);
-    let seeded = parse_default_executor_for_platform("claude", CLAUDE_YAML, LINUX).expect("seed");
-
-    let migrated = migrated_default_executor_for_platform(&existing, &seeded, LINUX)
-        .expect("re-align should produce a migrated def");
-    assert_eq!(migrated.sandbox, Some(ExecutorSandboxKind::LinuxBwrap));
-    assert_eq!(migrated.executor_type, ExecutorType::DirectAgent);
-}
-
 /// A pre-ORB-10552 Linux install is upgraded to the native backend.
 #[test]
 fn seed_default_executors_heals_leftover_macos_sandbox_on_linux() {
@@ -109,6 +82,7 @@ fn seed_default_executors_heals_leftover_macos_sandbox_on_linux() {
         Some(ExecutorSandboxKind::LinuxBwrap),
         "leftover macos-sandbox-exec must become linux-bwrap"
     );
+    assert_eq!(healed.executor_type, ExecutorType::DirectAgent);
 }
 
 /// [ORB-14342] The shipped local-shell default has no sandbox. Re-seeding an

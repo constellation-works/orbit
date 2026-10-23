@@ -1,0 +1,121 @@
+Create a new task
+
+Usage: orbit task add [OPTIONS] --title <TITLE> --complexity <COMPLEXITY>
+
+Options:
+      --parent <PARENT_ID>
+          Parent task ID for hierarchical decomposition
+
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --title <TITLE>
+          Task title
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --description <DESCRIPTION>
+          Task description
+          
+          [default: ""]
+
+      --acceptance-criteria <ACCEPTANCE_CRITERIA>
+          Acceptance criteria. Repeat the flag for multiple criteria
+
+      --dependencies <DEPENDENCIES>
+          Dependency task IDs. Repeat or comma-separate for multiple dependencies
+
+      --tag <TAGS>
+          Task tags. Repeat or comma-separate for multiple tags. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task; any other `os:` value is rejected
+
+      --required-tools <REQUIRED_TOOLS>
+          Exact canonical tool names the task adds to its agent activity baseline
+
+      --plan <PLAN>
+          Optional task plan payload. Leave blank for the executing agent or planning activity to author later
+          
+          [default: ""]
+
+      --ref <EXTERNAL_REFS>
+          External tracker reference in `system:id` form. Repeat for multiple refs
+
+      --context <CONTEXT>
+          Task context selectors. Repeat or comma-separate for multiple selectors. Prefer `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up
+
+      --allow-missing-context
+          Accept context selectors whose target does not exist yet (for work that creates the file). Each missing selector is recorded as durable creation intent for the task
+
+      --priority <PRIORITY>
+          Priority level
+          
+          [default: medium]
+          [possible values: low, medium, high, critical]
+
+      --complexity <COMPLEXITY>
+          Task complexity (low, medium, hard, or xhard)
+
+          Possible values:
+          - low
+          - medium
+          - hard
+          - xhard:  Reserved top tier for the most capable (and most expensive) crews
+
+      --type <TASK_TYPE>
+          Task type (defaults to chore)
+
+          Possible values:
+          - feature
+          - bug:      An attributable defect; lineage is recorded through typed task relations
+          - refactor
+          - chore
+
+      --status <STATUS>
+          Initial task status
+
+          Possible values:
+          - proposed: Awaiting human approval before entering the backlog
+          - backlog:  Approved and queued for work; not yet started
+          - someday:  Future-scoped — wanted but not yet actionable
+
+      --source-task <SOURCE_TASK>
+          For bug tasks: the originating task whose implementation introduced the defect
+
+      --crew <CREW>
+          Named crew to use when running this task (default: drawn from the complexity pool, else the configured default crew)
+
+      --orchestrator <ORCHESTRATOR>
+          Named crew responsible for orchestration attribution
+
+      --orchestrator-model <ORCHESTRATOR_MODEL>
+          Orchestrator's model when it differs from the orchestrator crew's configured model (default: that crew's model, recorded at creation)
+
+      --origin <ORIGIN>
+          Why the task was filed: operator_request (a human asked), orchestrator_initiative (the orchestrator decided) or automation. Omitted, it stays unset
+
+          Possible values:
+          - operator_request:        A human operator asked for the work
+          - orchestrator_initiative: An orchestrator decided the work was needed on its own
+          - automation:              Filed by automation: an auto-task, routine, sweep or other system filer
+
+      --model <MODEL>
+          Explicit agent model to persist on the task artifact
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')

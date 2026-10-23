@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Glossary: Distributed Drain"
-last_validated: 2026-10-11
+last_validated: 2026-10-19
 title: Glossary — Distributed Drain
 owner: claude
 status: Draft

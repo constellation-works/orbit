@@ -18,7 +18,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use super::format::summarize_error_message;
+use super::format::{WaitingTaskFormatter, summarize_error_message, waiting_reason};
 
 /// The coordinator job whose leaves this summarizes.
 const DRAIN_JOB: &str = "workspace_auto_pipeline";
@@ -75,8 +75,9 @@ pub(super) struct WaitingBacklog {
     /// Host resource pressure that held the last pass [ORB-13901].
     pub(super) resource_throttle: Option<ResourceThrottle>,
     pub(super) recorded_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// When the owner gave the answer the lists above report, for a pull
-    /// drain; unset for a local one, which classifies afresh each pass.
+    /// When the lists above were read: the owner's answer, for a pull drain;
+    /// for a local one, the last completed pass, set only while its latest
+    /// pass was deferred on a busy lock.
     pub(super) waiting_recorded_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Whether deferred tasks are included in `queued` (local pass semantics).
     pub(super) deferred_in_queued: bool,
@@ -152,8 +153,22 @@ impl DrainLeafSummary {
         })
     }
 
+    /// The tasks this local drain's last pass left waiting for a host of
+    /// another OS.
+    pub(super) fn host_os_waiting_task_ids(&self) -> impl Iterator<Item = &str> {
+        self.waiting
+            .excluded
+            .iter()
+            .filter(|task| task.reason.as_deref() == Some("host_os_mismatch"))
+            .map(|task| task.task_id.as_str())
+    }
+
     /// The `Leaves:` line, then a warning per failed or starved outcome.
-    pub(super) fn lines(&self, drain_state: JobRunState) -> Vec<String> {
+    pub(super) fn lines(
+        &self,
+        drain_state: JobRunState,
+        formatter: &WaitingTaskFormatter,
+    ) -> Vec<String> {
         use crate::output::color::bold;
         let mut lines = vec![format!(
             "{} admitted={} succeeded={} failed={} running={} cancelled={}{}",
@@ -195,32 +210,51 @@ impl DrainLeafSummary {
                 self.admitted,
             ));
             for leaf in &self.failed_leaves {
+                // One run id per failure: the root-cause run the retry would
+                // resume, not the drain's wrapper leaf. `resume_hint` on a
+                // resumable run's own header is a different line and stays;
+                // a finished drain never prints it.
+                let run_id = leaf.resume_run_id.as_deref().unwrap_or(&leaf.run_id);
                 let tasks = if leaf.task_ids.is_empty() {
                     "-".to_string()
                 } else {
-                    leaf.task_ids.join(",")
+                    leaf.task_ids
+                        .iter()
+                        .map(|id| formatter.task_with_status(id))
+                        .collect::<Vec<_>>()
+                        .join(",")
                 };
                 lines.push(format!(
-                    "  Failed leaf {} task={tasks} state={} error={}",
-                    leaf.run_id,
+                    "  Failed leaf {run_id} task={tasks} state={} error={}",
                     leaf.state,
                     summarize_error_message(leaf.error.as_deref()),
                 ));
-                lines.push(match &leaf.resume_run_id {
-                    Some(resume) => format!(
-                        "    retry: `orbit job resume {resume}` (or move the task back to backlog)"
-                    ),
-                    None => "    retry: move the task back to backlog".to_string(),
-                });
+                // Keep the retry only while a named task is still blocked, or
+                // its status cannot be read. A task readmitted or completed
+                // has left `blocked`, and the historical leaf must not advise
+                // resuming it.
+                let retry = leaf.task_ids.is_empty()
+                    || leaf
+                        .task_ids
+                        .iter()
+                        .any(|id| formatter.retry_still_applies(id));
+                if retry {
+                    lines.push(match &leaf.resume_run_id {
+                        Some(resume) => format!(
+                            "    retry: `orbit job resume {resume}` (or move the task back to backlog)"
+                        ),
+                        None => "    retry: move the task back to backlog".to_string(),
+                    });
+                }
             }
         }
         if let Some(throttle) = self.waiting.resource_throttle.as_ref() {
             lines.push(throttle_line(throttle, self.waiting.recorded_at));
         }
         if let Some(approvals) = &self.approvals {
-            lines.extend(approval_lines(approvals));
+            lines.extend(approval_lines(approvals, formatter));
         }
-        lines.extend(self.waiting.lines());
+        lines.extend(self.waiting.lines(formatter));
         lines
     }
 }
@@ -251,18 +285,23 @@ impl WaitingBacklog {
 
     /// The `Still waiting:` block, and for a pull drain that has found nothing
     /// claimable here several passes running, the `idle:` line that says why.
-    fn lines(&self) -> Vec<String> {
+    fn lines(&self, formatter: &WaitingTaskFormatter) -> Vec<String> {
         use crate::output::color::bold;
         if !self.has_starved_tasks() {
             return Vec::new();
         }
+        // A pull drain's lists are the owner's last answer. A local drain
+        // dates them only when it deferred a pass on a busy lock, which keeps
+        // the last completed pass's lists.
         let answered = self
             .waiting_recorded_at
             .map(|answered| {
-                format!(
-                    " (the owner answered {})",
-                    answered.format("%Y-%m-%d %H:%M:%SZ")
-                )
+                let at = answered.format("%Y-%m-%d %H:%M:%SZ");
+                if self.deferred_in_queued {
+                    format!(" (as of the last completed pass at {at})")
+                } else {
+                    format!(" (the owner answered {at})")
+                }
             })
             .unwrap_or_default();
         let mut lines = vec![format!(
@@ -273,7 +312,10 @@ impl WaitingBacklog {
             self.excluded_total,
         )];
         for task in &self.deferred {
-            lines.push(format!("  {}", waiting_line(task, "lock conflict")));
+            lines.push(format!(
+                "  {}",
+                waiting_line(task, "context_lock_conflict", formatter)
+            ));
         }
         let deferred_listed = self.deferred.len() as u64;
         if self.deferred_count() > deferred_listed {
@@ -283,7 +325,7 @@ impl WaitingBacklog {
             ));
         }
         for task in &self.excluded {
-            lines.push(format!("  {}", waiting_line(task, "excluded")));
+            lines.push(format!("  {}", waiting_line(task, "excluded", formatter)));
         }
         let listed = self.excluded.len() as u64;
         if self.excluded_total > listed {
@@ -321,8 +363,9 @@ impl WaitingBacklog {
 fn kept_off_cause(reason: &str) -> &str {
     match reason {
         "context_lock_conflict" => "footprint holds",
-        "dependency_not_done" => "unmet dependencies",
+        "dependency_not_done" | "unmet_dependency" => "unmet dependencies",
         "host_os_mismatch" => "for another OS",
+        "browser_kit_missing" => "needing a host with the browser kit",
         "native_os_required" => "needing native evidence from another OS",
         "unverified_review_finding" => "review findings awaiting verification",
         "crew_unavailable" => "needing a crew this host cannot run",
@@ -334,7 +377,7 @@ fn kept_off_cause(reason: &str) -> &str {
 
 /// The `Approved:` line for an `--approve-proposed` drain, then each held
 /// proposed task with the reason it stayed proposed.
-fn approval_lines(report: &DrainApprovalReport) -> Vec<String> {
+fn approval_lines(report: &DrainApprovalReport, formatter: &WaitingTaskFormatter) -> Vec<String> {
     let closed = if report.closed_total > 0 {
         format!(
             "; {} closed as already fixed ({})",
@@ -363,14 +406,17 @@ fn approval_lines(report: &DrainApprovalReport) -> Vec<String> {
             )
         },
     )];
-    for task in &report.held {
+    for held in &report.held {
         let task = WaitingTask {
-            task_id: task.task_id.clone(),
-            reason: task.reason.clone(),
-            blocked_by: task.blocked_by.clone(),
-            detail: task.detail.clone(),
+            task_id: held.task_id.clone(),
+            reason: held.reason.clone(),
+            blocked_by: held.blocked_by.clone(),
+            detail: held.detail.clone(),
         };
-        lines.push(format!("  {}", waiting_line(&task, "held")));
+        lines.push(format!("  {}", waiting_line(&task, "held", formatter)));
+        for finding in &held.findings {
+            lines.push(format!("    {}: {}", finding.kind, finding.text));
+        }
     }
     let listed = report.held.len() as u64;
     if report.held_total > listed {
@@ -421,21 +467,23 @@ pub(super) fn pass_refusal_line(pass: &DrainAdmissionPass) -> Option<String> {
 /// The `Still waiting:` lines for a pull drain, which has no leaf summary of
 /// its own: they come from the owner's last answer, as the drain recorded it
 /// [ORB-14475].
-pub(super) fn pass_waiting_lines(pass: &DrainAdmissionPass) -> Vec<String> {
-    waiting_backlog(pass, false).lines()
+pub(super) fn pass_waiting_lines(
+    pass: &DrainAdmissionPass,
+    formatter: &WaitingTaskFormatter,
+) -> Vec<String> {
+    waiting_backlog(pass, false).lines(formatter)
 }
 
-fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
-    let mut line = format!(
-        "Task {}: {}",
-        task.task_id,
-        task.reason.as_deref().unwrap_or(default_reason)
-    );
-    if !task.blocked_by.is_empty() {
-        line.push_str(&format!(" blocked-by={}", task.blocked_by.join(",")));
-    }
-    // A host-OS wait names the host it waits for, and a native-OS
-    // requirement the tag to add. A local-route review hold names the
+fn waiting_line(
+    task: &WaitingTask,
+    default_reason: &str,
+    formatter: &WaitingTaskFormatter,
+) -> String {
+    let reason = waiting_reason(task.reason.as_deref().unwrap_or(default_reason));
+    let mut line = format!("Task {}: {}", task.task_id, reason);
+    line.push_str(&formatter.blockers(&json!({"reason": reason, "blocked_by": task.blocked_by})));
+    // A host-OS wait names the host it waits for, a browser-kit wait the
+    // install command, and a native-OS requirement the tag to add. A local-route review hold names the
     // remedy. A verified-no-diff hold names the pilot's evidence and the
     // commits it cites, and an unverified review finding the verification
     // job to run. Other details (long repair instructions) stay in `--json`.
@@ -443,6 +491,7 @@ fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
         task.reason.as_deref(),
         Some(
             "host_os_mismatch"
+                | "browser_kit_missing"
                 | "native_os_required"
                 | "local_route_before_pr"
                 | "local_route_before_landing"
@@ -454,7 +503,10 @@ fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
         )
     ) && let Some(detail) = &task.detail
     {
-        line.push_str(&format!(" ({detail})"));
+        match formatter.host_fleet(&task.task_id) {
+            Some(fleet) => line.push_str(&format!(" ({detail}; {fleet})")),
+            None => line.push_str(&format!(" ({detail})")),
+        }
     }
     line
 }
@@ -474,8 +526,9 @@ pub(super) fn summarize_drain_leaves(
     let state = state?;
     let mut summary = DrainLeafSummary {
         waiting: last_pass_waiting(state),
-        approvals: state.drain_approvals.clone(),
+        approvals: state.pull_drain.drain_approvals.clone(),
         capacity: state
+            .pull_drain
             .drain_last_pass
             .as_ref()
             .and_then(|pass| pass.capacity.clone()),
@@ -530,6 +583,7 @@ pub(super) fn summarize_drain_leaves(
 /// on its own run state.
 fn last_pass_waiting(state: &PipelineState) -> WaitingBacklog {
     state
+        .pull_drain
         .drain_last_pass
         .as_ref()
         .map(|pass| waiting_backlog(pass, true))

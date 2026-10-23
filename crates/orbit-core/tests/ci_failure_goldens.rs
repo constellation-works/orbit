@@ -1,6 +1,9 @@
 //! Captured CI log shapes through the deterministic task-filing boundary.
 #![allow(missing_docs, clippy::unwrap_used, clippy::expect_used)]
 
+#[path = "support/git.rs"]
+mod git_test_support;
+
 orbit_common::isolate_test_process!();
 
 use std::path::{Path, PathBuf};
@@ -64,6 +67,13 @@ fn failure(log: &str, index: usize, checkout: &str) -> Value {
 }
 
 fn file(runtime: &OrbitRuntime, runs: Vec<Value>) -> Value {
+    file_result(runtime, runs).expect("file CI failure")
+}
+
+fn file_result(
+    runtime: &OrbitRuntime,
+    runs: Vec<Value>,
+) -> Result<Value, orbit_engine::DispatchError> {
     runtime.run_deterministic("file_ci_failure_tasks", &json!({}), &json!({"ci_evidence": {
         "schema_version": 2, "collected": true, "outcome_hint": "current_failures",
         "capability": {"available": true, "authenticated": true},
@@ -71,7 +81,103 @@ fn file(runtime: &OrbitRuntime, runs: Vec<Value>) -> Value {
         "heads": [{"kind": "integration", "branch": "agent-main", "current_head_sha": "1".repeat(40)}],
         "latest_runs": runs.clone(), "current_failures": runs, "stale_or_superseded": [],
         "in_flight": [], "retryable_errors": [], "collected_at": "2026-09-07T08:00:00Z"
-    }}), ToolContext::default()).expect("file CI failure")
+    }}), ToolContext::default())
+}
+
+fn retryable_error_payload(error: orbit_engine::DispatchError) -> Value {
+    let message = error.to_string();
+    let (_, payload) = message
+        .split_once("ci_failure_sweep retryable: ")
+        .unwrap_or_else(|| panic!("expected retryable CI sweep error, got {message}"));
+    serde_json::from_str(payload).expect("retryable CI sweep error payload")
+}
+
+#[test]
+fn ci_checkout_identity_gaps_are_named_at_the_filing_boundary() {
+    if !isolated("ci_checkout_identity_gaps_are_named_at_the_filing_boundary") {
+        return;
+    }
+
+    let (_root, runtime, commits) = operator_fixture("");
+    let admitted = file(
+        &runtime,
+        vec![failure("error: valid checkout identity", 0, &commits[0])],
+    );
+    assert_eq!(admitted["filed_count"], json!(1), "{admitted}");
+    assert_eq!(admitted["deferred_count"], json!(0), "{admitted}");
+
+    let cases = [
+        ("incomplete", true, true, 1),
+        ("missing", true, true, 1),
+        ("ambiguous", true, true, 1),
+        ("observed", false, true, 1),
+        ("observed", true, false, 1),
+        ("observed", true, true, 0),
+        ("observed", true, true, 2),
+    ];
+
+    for (offset, (state, provenance_complete, job_id_matches, sha_count)) in
+        cases.into_iter().enumerate()
+    {
+        let index = offset + 1;
+        let mut run = failure(
+            &format!("error: checkout identity case {offset}"),
+            index,
+            &commits[index % commits.len()],
+        );
+        run["checkout_identity"]["state"] = json!(state);
+        run["checkout_identity"]["provenance"]["complete"] = json!(provenance_complete);
+        if !job_id_matches {
+            run["checkout_identity"]["provenance"]["job_id"] = json!(99_000 + index);
+        }
+        run["actual_checkout_shas"] = match sha_count {
+            0 => json!([]),
+            1 => run["actual_checkout_shas"].clone(),
+            _ => json!([
+                commits[index % commits.len()],
+                commits[(index + 1) % commits.len()]
+            ]),
+        };
+
+        let error =
+            file_result(&runtime, vec![run]).expect_err("an identity gap must remain retryable");
+        let output = retryable_error_payload(error);
+        assert_eq!(output["outcome"], json!("retryable_error"), "{output}");
+        assert_eq!(
+            output["stage"],
+            json!("collection_or_investigation"),
+            "{output}"
+        );
+        let reason = &output["errors"][0];
+        assert_eq!(reason["stage"], json!("registration"), "{output}");
+        assert_eq!(
+            reason["operation"],
+            json!("job_evidence_identity"),
+            "{output}"
+        );
+        assert_eq!(reason["retryable"], json!(true), "{output}");
+        assert_eq!(
+            reason["message"],
+            json!(format!(
+                "checkout identity is not completely observed for this job (state={state}, state_is_observed={}, provenance.complete={provenance_complete}, provenance.job_id_matches={job_id_matches}, checkout_sha_count={sha_count}, checkout_sha_count_is_one={})",
+                state == "observed",
+                sha_count == 1
+            )),
+            "{output}"
+        );
+    }
+
+    let mut incomplete_log = failure("error: missing log evidence", 9, &commits[0]);
+    incomplete_log["log_excerpt"] = json!("");
+    incomplete_log["log_truncated"] = json!(true);
+    let error = file_result(&runtime, vec![incomplete_log])
+        .expect_err("a non-identity evidence gap must remain retryable");
+    let output = retryable_error_payload(error);
+    assert_eq!(
+        output["errors"][0]["message"],
+        json!("job diagnostic evidence is missing or truncated"),
+        "{output}"
+    );
 }
 
 fn compiler_log(code: &str, message: &str, path: &str, line: usize, column: usize) -> String {
@@ -535,6 +641,7 @@ fn archive_owner(
                     vec![TaskRelation {
                         relation_type: TaskRelationType::CoveredBy,
                         target: target.into(),
+                        regression: None,
                     }]
                 }),
                 ..Default::default()
@@ -936,7 +1043,11 @@ fn filed_golden(case: &Value) -> Value {
         let runs = logs
             .iter()
             .map(|log| {
-                let run = failure(log.as_str().unwrap(), run_index, &checkout);
+                let text = log
+                    .as_str()
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| expand_parts(log));
+                let run = failure(&text, run_index, &checkout);
                 run_index += 1;
                 run
             })
@@ -1446,8 +1557,11 @@ fn ci_failure_claimed_branch_defers_attribution_until_the_claim_settles() {
     let refused = runtime
         .update_task_as_human(
             &owner.id,
+            // A comment alone is admitted under the claim [ORB-16723]; one
+            // that also edits the task is not.
             TaskUpdateParams {
                 comment: Some("operator note while the follower holds the claim".into()),
+                tags: Some(vec!["operator-note".into()]),
                 ..Default::default()
             },
             "human:fixture".into(),
@@ -2079,10 +2193,7 @@ backend = "cli"
 /// Commit `count` empty commits on `repo` and return their ids, oldest first.
 fn commit_chain(repo: &Path, count: usize) -> Vec<String> {
     let git = |args: &[&str]| {
-        let mut command = std::process::Command::new("git");
-        orbit_common::test_env::clear_inherited_authority(|key| {
-            command.env_remove(key);
-        });
+        let mut command = crate::git_test_support::command();
         let output = command
             .args([
                 "-c",
@@ -2276,6 +2387,7 @@ fn ci_failure_released_from_pending_supersession_is_filed_naming_the_pending_run
         return;
     }
     let log = "build\tRun CI\t2026-10-07T15:10:00.0000000Z ##[group]Run cargo check --workspace\n\
+               build\tRun CI\t2026-10-07T15:10:00.0000000Z ##[endgroup]\n\
                build\tRun CI\t2026-10-07T15:10:00.0000000Z error[E0425]: cannot find value `probe_timeout` in this scope\n\
                build\tRun CI\t2026-10-07T15:10:00.0000000Z   --> crates/orbit-cmd/src/update/converge.rs:189:9\n\
                build\tRun CI\t2026-10-07T15:10:00.0000000Z ##[error]Process completed with exit code 101.\n";
@@ -2407,5 +2519,55 @@ fn ci_failure_sweep_strips_ansi_codes_and_extracts_context_files() {
     assert_eq!(
         panic_task.context_files,
         vec!["file:crates/orbit-core/src/application/job/tests/crew_pools.rs".to_string()]
+    );
+}
+
+#[test]
+fn ci_printed_test_names_and_locations_do_not_change_runtime_failure_identity() {
+    if !isolated("ci_printed_test_names_and_locations_do_not_change_runtime_failure_identity") {
+        return;
+    }
+    let (_root, runtime, commits) = operator_fixture("");
+    let emitted = "step.sh: line 8: scripts/ci-download-verified.sh: No such file or directory";
+    let printed = format!(
+        "##[group]Run verify\n  error[E0123]: printed compiler text\n   --> crates/printed/src/lib.rs:1:1\n  thread 'printed_test' panicked at crates/printed/src/lib.rs:1:1:\n  test printed_test ... FAILED\n##[endgroup]\n{emitted}\n##[error]Process completed with exit code 127.\n"
+    );
+    let first = file(&runtime, vec![failure(&printed, 0, &commits[0])]);
+    assert_eq!(first["filed_count"], 1, "{first}");
+    let task = runtime
+        .get_task(first["filed"][0]["task_id"].as_str().unwrap())
+        .unwrap();
+    assert!(task.description.contains(
+        "`step.sh: line <n>: scripts/ci-download-verified.sh: no such file or directory`"
+    ));
+    assert!(task.description.contains(emitted));
+    assert!(
+        !task.description.contains("printed_test"),
+        "printed tests are context, never repair identities"
+    );
+    assert!(
+        !task
+            .context_files
+            .iter()
+            .any(|selector| selector.contains("crates/printed")),
+        "printed locations cannot widen repair scope"
+    );
+    let later = printed
+        .replace("printed_test", "another_printed_test")
+        .replace("crates/printed", "crates/other")
+        .replace(
+            "  error[E0123]",
+            "  key\tvalue\t##[endgroup]\n  error[E0123]",
+        )
+        .replace("step.sh: line 8:", "step.sh:\tline 8:\t");
+    let later = later
+        .lines()
+        .map(|line| format!("2026-10-15T02:42:56Z {line}\n"))
+        .collect::<String>();
+    let second = file(&runtime, vec![failure(&later, 1, &commits[1])]);
+    assert_eq!(second["filed_count"], 0, "{second}");
+    assert_eq!(
+        second["skipped_existing"][0]["failure_key"], first["filed"][0]["failure_key"],
+        "printed source cannot fragment a runtime cause"
     );
 }

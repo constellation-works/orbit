@@ -1,14 +1,14 @@
-// Orbit dashboard log-tail panel (SSE stream, buffered logs, viewport resize, filters).
+// Orbit dashboard log-tail panel (SSE stream, buffered logs, filters).
 // Pure vanilla JS, split into ES modules with no build step.
 //
-// This module owns the #log-panel behavior on the Tasks tab. It is initialized
+// This module owns the #log-panel behavior on the Drain page. It is initialized
 // by a single `initLogTail();` call from app.js (the bootstrap call site is kept
 // in app.js per the extraction contract; the call still fires exactly once at
 // page load). The module exports `initLogTail` and `fitLogPanelToViewport` for
 // the two call sites that remain in app.js (`refreshDashboard` and `setActiveTab`),
-// and `setDockMode` for the router's `#auto-drain` redirect.
+// and `setDockMode` for the router to select the Drain or Log view.
 
-import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onWorkspaceChange, getHost, isHostUnavailable, withHost } from './common.js';
+import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onClockZoneChange, onWorkspaceChange, getHost, isHostUnavailable, withHost } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -25,7 +25,7 @@ const LOG_ROWS_MAX = 250;
 // more would only be rendered and thrown away.
 const LOG_BUFFERED_MAX = LOG_ROWS_RETAINED;
 let activeLogFilters = new Set(["all"]);
-let logPanelResizeWired = false;
+let logPanelPrefsWired = false;
 const LOG_STREAM_RETRY_MIN_MS = 1000;
 const LOG_STREAM_RETRY_MAX_MS = 15000;
 const LOG_STREAM_UNAVAILABLE = "log stream unavailable, retrying";
@@ -48,16 +48,12 @@ let logSnapshotRetryMs = LOG_STREAM_RETRY_MIN_MS;
 let logSnapshotAttempt = 0;
 let logVisibilityWired = false;
 
-// ORB-10972: the log lives in the Tasks tab's right dock, which has two modes
-// — Drain (the auto-drain window card above locked files, ORB-12898) and Log
-// (the tail at full dock height). The mode is a local presentation
-// preference, not shared state, so it persists to localStorage rather than
-// the URL. This supersedes ORB-10874's collapse toggle and height-resize
-// handle: a full-height dock has no height to negotiate, and the
-// always-visible bottom status bar took over the job the collapsed panel used
-// to do.
+// Overview, Start a window and Log share one dock. It sits on the Drain page and, while Tasks
+// shows, beside the task list (placeDock). The Drain route selects its view;
+// on Tasks the view is the last one chosen that Tasks offers. Agent and
+// wrapping preferences stay local to this browser.
 const LOG_PANEL_PREFS_KEY = "orbit.dashboard.logPanel";
-const DOCK_MODES = ["drain", "log"];
+const DOCK_MODES = ["drain", "start", "log"];
 
 function loadLogPanelPrefs() {
   try {
@@ -81,196 +77,8 @@ function saveLogPanelPrefs(prefs) {
 
 let logPanelPrefs = loadLogPanelPrefs();
 
-const DOCK_WIDTH_PREFS_KEY = "orbit.dashboard.dockWidth";
-const DOCK_MIN_WIDTH = 336;
 const LOG_WRAP_PREFS_KEY = "orbit.dashboard.logWrap";
 let logWrap = false;
-
-export function getDockMaxWidth() {
-  const layout = typeof document !== "undefined"
-    ? (document.querySelector(".tab-pane[data-tab=\"tasks\"] > main.tasks-layout") || document.querySelector("main.tasks-layout"))
-    : null;
-  let gridWidth;
-  if (layout && typeof layout.clientWidth === "number" && layout.clientWidth > 0) {
-    gridWidth = Math.max(0, layout.clientWidth - 60);
-  } else {
-    const vpWidth = typeof window !== "undefined" && window.innerWidth ? window.innerWidth : 1200;
-    const rail = vpWidth > 760 ? 216 : 0;
-    gridWidth = Math.max(0, Math.min(1800, vpWidth - rail) - 60);
-  }
-  return Math.round(gridWidth * 0.6);
-}
-
-export function clampDockWidth(width) {
-  const min = DOCK_MIN_WIDTH;
-  const max = Math.max(min, getDockMaxWidth());
-  return Math.min(Math.max(width, min), max);
-}
-
-export function loadDockWidthPref() {
-  try {
-    const raw = window.localStorage.getItem(DOCK_WIDTH_PREFS_KEY);
-    if (raw === null) return null;
-    const parsed = Number.parseFloat(raw);
-    if (!Number.isFinite(parsed)) return null;
-    return clampDockWidth(parsed);
-  } catch (_) {
-    return null;
-  }
-}
-
-export function saveDockWidthPref(width) {
-  try {
-    if (width === null) {
-      window.localStorage.removeItem(DOCK_WIDTH_PREFS_KEY);
-    } else {
-      window.localStorage.setItem(DOCK_WIDTH_PREFS_KEY, String(Math.round(width)));
-    }
-  } catch (_) {
-    /* localStorage unavailable */
-  }
-}
-
-export function applyDockWidth(width) {
-  const layout = document.querySelector("main.tasks-layout");
-  const splitter = $("dock-splitter");
-  if (!layout || !layout.style) return;
-  if (width === null) {
-    if (typeof layout.style.removeProperty === "function") {
-      layout.style.removeProperty("--dock-w");
-    } else if (typeof layout.style.setProperty === "function") {
-      layout.style.setProperty("--dock-w", "");
-    } else {
-      delete layout.style["--dock-w"];
-    }
-    if (splitter && typeof splitter.setAttribute === "function") {
-      const dock = $("side-dock");
-      const curW = dock && typeof dock.getBoundingClientRect === "function" && dock.getBoundingClientRect().width > 0
-        ? Math.round(dock.getBoundingClientRect().width)
-        : DOCK_MIN_WIDTH;
-      splitter.setAttribute("aria-valuenow", String(curW));
-    }
-  } else {
-    const clamped = clampDockWidth(width);
-    if (typeof layout.style.setProperty === "function") {
-      layout.style.setProperty("--dock-w", `${clamped}px`);
-    } else {
-      layout.style["--dock-w"] = `${clamped}px`;
-    }
-    if (splitter && typeof splitter.setAttribute === "function") {
-      splitter.setAttribute("aria-valuenow", String(clamped));
-    }
-  }
-}
-
-let dockResizeWired = false;
-function wireDockResize() {
-  if (dockResizeWired) return;
-  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-    dockResizeWired = true;
-    window.addEventListener("resize", () => {
-      fitLogPanelToViewport();
-    });
-  }
-}
-
-function wireDockSplitter() {
-  wireDockResize();
-  const splitter = $("dock-splitter");
-  if (!splitter || typeof splitter.addEventListener !== "function") return;
-
-  const persistedWidth = loadDockWidthPref();
-  if (persistedWidth !== null) {
-    applyDockWidth(persistedWidth);
-  } else {
-    applyDockWidth(null);
-  }
-
-  splitter.addEventListener("dblclick", () => {
-    saveDockWidthPref(null);
-    applyDockWidth(null);
-  });
-
-  splitter.addEventListener("keydown", (e) => {
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Home" && e.key !== "End") {
-      return;
-    }
-    e.preventDefault();
-    const dock = $("side-dock");
-    const currentW = loadDockWidthPref() ?? (dock && typeof dock.getBoundingClientRect === "function" && dock.getBoundingClientRect().width > 0
-      ? Math.round(dock.getBoundingClientRect().width)
-      : DOCK_MIN_WIDTH);
-    const min = DOCK_MIN_WIDTH;
-    const max = Math.max(min, getDockMaxWidth());
-
-    let nextW = null;
-    if (e.key === "ArrowLeft") {
-      nextW = clampDockWidth(currentW + 16);
-    } else if (e.key === "ArrowRight") {
-      nextW = clampDockWidth(currentW - 16);
-    } else if (e.key === "Home") {
-      nextW = min;
-    } else if (e.key === "End") {
-      nextW = max;
-    }
-
-    if (nextW !== null) {
-      saveDockWidthPref(nextW);
-      applyDockWidth(nextW);
-    }
-  });
-
-  let isDragging = false;
-  let startX = 0;
-  let startWidth = 0;
-
-  const onPointerMove = (e) => {
-    if (!isDragging) return;
-    const deltaX = startX - e.clientX;
-    const newWidth = clampDockWidth(startWidth + deltaX);
-    applyDockWidth(newWidth);
-  };
-
-  const onPointerUp = () => {
-    if (!isDragging) return;
-    isDragging = false;
-    if (splitter.classList && typeof splitter.classList.remove === "function") {
-      splitter.classList.remove("dragging");
-    }
-    if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerUp);
-    }
-
-    const dock = $("side-dock");
-    const finalW = dock && typeof dock.getBoundingClientRect === "function" && dock.getBoundingClientRect().width > 0
-      ? Math.round(dock.getBoundingClientRect().width)
-      : startWidth;
-    const clamped = clampDockWidth(finalW);
-    saveDockWidthPref(clamped);
-    applyDockWidth(clamped);
-  };
-
-  splitter.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0) return;
-    isDragging = true;
-    if (splitter.classList && typeof splitter.classList.add === "function") {
-      splitter.classList.add("dragging");
-    }
-    startX = e.clientX;
-    const dock = $("side-dock");
-    startWidth = dock && typeof dock.getBoundingClientRect === "function" && dock.getBoundingClientRect().width > 0
-      ? Math.round(dock.getBoundingClientRect().width)
-      : (loadDockWidthPref() ?? DOCK_MIN_WIDTH);
-    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-      window.addEventListener("pointermove", onPointerMove);
-      window.addEventListener("pointerup", onPointerUp);
-      window.addEventListener("pointercancel", onPointerUp);
-    }
-    if (typeof e.preventDefault === "function") e.preventDefault();
-  });
-}
 
 export function loadLogWrapPref() {
   try {
@@ -323,26 +131,78 @@ function wireLogWrapToggle() {
 // is no viewport arithmetic left — this only re-asserts the current mode.
 export function fitLogPanelToViewport() {
   applyDockMode();
-  const width = loadDockWidthPref();
-  applyDockWidth(width);
   applyLogWrap(loadLogWrapPref());
 }
 
 function applyDockMode() {
   const dock = $("side-dock");
   if (!dock) return;
-  const mode = logPanelPrefs.dockMode;
+  const modes = dockModes();
+  const mode = shownDockMode();
   dock.dataset.mode = mode;
   for (const btn of document.querySelectorAll("#dock-mode-toggle .dock-seg")) {
     const on = btn.dataset.mode === mode;
+    btn.hidden = !modes.includes(btn.dataset.mode);
     btn.classList.toggle("on", on);
     btn.setAttribute("aria-selected", on ? "true" : "false");
     btn.tabIndex = on ? 0 : -1;
   }
 }
 
-// Also the router's handle for the retired `#auto-drain` destination, which
-// now opens Tasks with the Drain mode selected.
+// One dock, two homes: the Tasks page's right column and the Drain page. It
+// moves to whichever of the two is shown, so its cards keep one renderer and
+// one set of element ids. On Tasks its first view is named Drain, since the
+// page around it is not. Start a window is the Drain page's own view: Tasks
+// starts a window from the simple card in its first view.
+const DOCK_HOMES = {
+  tasks: { slot: "tasks-dock", label: "Drain", modes: ["drain", "log"] },
+  drain: { slot: "drain-main", label: "Overview", modes: DOCK_MODES },
+};
+const dockHomeListeners = new Set();
+
+// The dock starts on the Drain page until the router first places it.
+export function dockHome() {
+  return $("side-dock")?.dataset.home || "drain";
+}
+
+function dockModes() {
+  return DOCK_HOMES[dockHome()]?.modes || DOCK_MODES;
+}
+
+// A remembered view this home does not offer (Start a window, chosen on
+// Drain) opens the first view instead of an empty pane.
+function shownDockMode() {
+  return dockModes().includes(logPanelPrefs.dockMode) ? logPanelPrefs.dockMode : "drain";
+}
+
+// Each home renders its own Start form (operations.js), so a move repaints it.
+export function onDockHomeChange(listener) {
+  dockHomeListeners.add(listener);
+  return () => dockHomeListeners.delete(listener);
+}
+
+export function placeDock(tab) {
+  const dock = $("side-dock");
+  const home = DOCK_HOMES[tab];
+  const slot = home ? $(home.slot) : null;
+  if (!dock || !slot || dock.parentNode === slot) return;
+  slot.appendChild(dock);
+  dock.dataset.home = tab;
+  const button = $("dock-tab-drain");
+  const label = button && button.querySelector(".dock-seg-label");
+  if (label) label.textContent = home.label;
+  if (button && button.dataset.drainLabel) button.setAttribute("aria-label", `${home.label}: ${button.dataset.drainLabel}`);
+  applyDockMode();
+  for (const listener of dockHomeListeners) listener(tab);
+}
+
+// On the Drain page a view is a route; on Tasks choosing one only switches it.
+export function chooseDockMode(mode) {
+  setDockMode(mode);
+  if ($("side-dock")?.dataset.home !== "tasks") window.location.hash = mode === "drain" ? "#drain" : `#drain/${mode}`;
+}
+
+// The router selects the Drain page view through this presentation handle.
 export function setDockMode(mode) {
   if (!DOCK_MODES.includes(mode)) return;
   logPanelPrefs = { ...logPanelPrefs, dockMode: mode };
@@ -354,26 +214,27 @@ function wireDockModeToggle() {
   const toggle = $("dock-mode-toggle");
   if (!toggle) return;
   for (const btn of toggle.querySelectorAll(".dock-seg")) {
-    btn.addEventListener("click", () => setDockMode(btn.dataset.mode));
+    btn.addEventListener("click", () => chooseDockMode(btn.dataset.mode));
   }
-  // Arrow keys move between the two segments, matching the window selectors;
+  // Arrow keys move between the segments, matching the window selectors;
   // Home and End jump to the first and last, as a tablist promises.
   toggle.addEventListener("keydown", (event) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
-    const idx = DOCK_MODES.indexOf(logPanelPrefs.dockMode);
+    const modes = dockModes();
+    const idx = modes.indexOf(shownDockMode());
     const next = event.key === "Home" ? 0
-      : event.key === "End" ? DOCK_MODES.length - 1
+      : event.key === "End" ? modes.length - 1
         : event.key === "ArrowLeft" ? idx - 1 : idx + 1;
-    const mode = DOCK_MODES[(next + DOCK_MODES.length) % DOCK_MODES.length];
-    setDockMode(mode);
+    const mode = modes[(next + modes.length) % modes.length];
+    chooseDockMode(mode);
     const btn = toggle.querySelector(`.dock-seg[data-mode="${mode}"]`);
     if (btn) btn.focus();
   });
 }
 
 // ORB-10972: the bottom status bar carries the newest line on every tab, not
-// just the Tasks tab where the dock is mounted. The SSE connection is opened
+// just the Drain page where the full tail is mounted. The SSE connection is opened
 // once at boot and never torn down on a tab change, so mirroring here is
 // enough to keep the bar live everywhere.
 //
@@ -439,12 +300,11 @@ function writeLogStatusBar(ev) {
   bar.classList.remove("empty");
 }
 
-function wireLogPanelResize() {
-  if (logPanelResizeWired) return;
-  logPanelResizeWired = true;
+function wireLogPanelPreferences() {
+  if (logPanelPrefsWired) return;
+  logPanelPrefsWired = true;
   wireDockModeToggle();
   applyDockMode();
-  wireDockResize();
 }
 
 // The dock and status bar are too narrow for a zone on every line, so the
@@ -477,6 +337,7 @@ function renderLogEvent(ev, isFresh) {
   row.dataset.code = ev.code || "";
   row.dataset.level = ev.level || "info";
   row.dataset.agentStdout = String(ev.agent_stdout === true);
+  row.dataset.ts = ev.ts || "";
 
   const { text: timeStr, title: timeTitle } = logTime(ev.ts);
   const tSpan = el("span", { class: "t", text: timeStr, title: timeTitle });
@@ -621,12 +482,24 @@ function clearLogView() {
   refreshLogStatusBar();
 }
 
+export function repaintLogTimes() {
+  for (const row of logRows) {
+    if (!row.dataset.ts) continue;
+    const time = row.querySelector(".t");
+    if (!time) continue;
+    const painted = logTime(row.dataset.ts);
+    time.textContent = painted.text;
+    time.title = painted.title;
+  }
+  refreshLogStatusBar();
+}
+
 export function initLogTail() {
   logHost = getHost();
+  onClockZoneChange(repaintLogTimes);
   onWorkspaceChange(restartLogTailForHost);
   wireLogVisibility();
-  wireLogPanelResize();
-  wireDockSplitter();
+  wireLogPanelPreferences();
   wireLogWrapToggle();
   fitLogPanelToViewport();
   syncLogFilterPills();
@@ -809,7 +682,8 @@ function writeLogCounts(counts) {
   const state = $("dock-log-state");
   if (!state) return;
   const level = counts.err > 0 ? "err" : counts.deny > 0 ? "deny" : counts.warn > 0 ? "warn" : "";
-  state.textContent = level ? `${counts[level]} ${level}` : "";
+  const word = { err: "error", deny: "denial", warn: "warning" }[level];
+  state.textContent = level ? `${counts[level]} ${word}${counts[level] === 1 ? "" : "s"}` : "";
   state.dataset.level = level;
 }
 

@@ -1,5 +1,6 @@
-//! A task's terminal decision closes its Orbit-authored PRs through the
-//! runtime's forge, and nothing else does.
+//! A task's terminal decision, or an operator's move back to backlog or
+//! someday, closes its Orbit-authored PRs through the runtime's forge; a new
+//! run, a failure handoff's hold and automation's own requeues do not.
 //!
 //! Each test injects a fake forge holding one repository's open PRs: the
 //! task's stale delivery PR, its `[BLOCKED]` preservation PR, and PRs that
@@ -18,6 +19,7 @@ use orbit_core::OrbitRuntime;
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, TaskPrForge};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{ExternalRef, TaskStatus};
+use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -127,7 +129,8 @@ impl Fixture {
     }
 
     fn with_config(workspace_config: Option<&str>) -> Self {
-        let root = TempDir::new().expect("create tempdir");
+        let root =
+            TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
         let global_root = root.path().join("global");
         let repo_root = root.path().join("repo");
         let workspace_root = repo_root.join(".orbit");
@@ -325,25 +328,6 @@ fn landing_through_a_commit_names_the_commit() {
 }
 
 #[test]
-fn approving_a_review_keeps_the_pr_it_was_reviewed_through() {
-    let fx = Fixture::new();
-    let task_id = fx.add_task("Approved before its PR merged");
-    let other = fx.add_task("Unrelated task");
-    fx.seed_forge(&task_id, &other);
-    // #11 is the PR the task was promoted to review with: an operator may
-    // approve before merging it, so it may still be the landing.
-    fx.record_prs(&task_id, &[13, 11]);
-    fx.move_to_review(&task_id);
-
-    fx.runtime
-        .approve_task(&task_id, None, None)
-        .expect("approve the review");
-
-    assert_eq!(fx.forge.closed_numbers(), vec![13]);
-    assert!(fx.forge.still_open().contains(&11));
-}
-
-#[test]
 fn rejecting_closes_the_tasks_orbit_prs_with_the_state_and_reason() {
     let fx = Fixture::new();
     let task_id = fx.add_task("Rejected task");
@@ -518,4 +502,331 @@ fn the_config_switch_disables_closing() {
 
     assert!(fx.forge.closed_numbers().is_empty());
     assert_eq!(fx.forge.state().lookups, 0);
+}
+
+#[test]
+fn an_operator_requeue_closes_the_tasks_undelivered_orbit_prs() {
+    let fx = Fixture::new();
+    let task_id = fx.add_task("Sent back from review");
+    let other = fx.add_task("Unrelated task");
+    fx.seed_forge(&task_id, &other);
+    fx.record_prs(&task_id, &[11, 13]);
+    fx.move_to_review(&task_id);
+
+    fx.update(json!({
+        "id": task_id,
+        "status": "backlog",
+        "note": "needs a different approach",
+        "model": "codex"
+    }));
+
+    assert_eq!(fx.forge.closed_numbers(), vec![11, 13]);
+    assert_eq!(
+        fx.forge.still_open(),
+        vec![20, 21, 22],
+        "human, other-task and non-naming PRs stay open"
+    );
+
+    // A PR opened since, which nothing delivers once the task is shelved.
+    fx.forge.open_pr(
+        14,
+        &format!("orbit/{task_id}-eeee5555"),
+        &format!("Delivers {task_id}."),
+        BOT,
+    );
+    fx.update(json!({ "id": task_id, "status": "someday", "model": "codex" }));
+    assert_eq!(fx.forge.closed_numbers(), vec![11, 13, 14]);
+}
+
+#[test]
+fn leaving_blocked_keeps_the_failure_handoff_pr_until_its_candidate_is_discarded() {
+    let fx = Fixture::new();
+    let task_id = fx.add_task("Blocked with a handoff PR");
+    let other = fx.add_task("Unrelated task");
+    fx.seed_forge(&task_id, &other);
+    fx.record_prs(&task_id, &[13]);
+    let block = |fx: &Fixture| {
+        fx.update(json!({ "id": task_id, "status": "in_progress", "model": "codex" }));
+        fx.runtime
+            .apply_task_automation_update(
+                &task_id,
+                TaskAutomationUpdate {
+                    status: Some(TaskStatus::Blocked),
+                    status_note: Some("failure handoff published PR #13".to_string()),
+                    ..TaskAutomationUpdate::default()
+                },
+            )
+            .expect("block the task");
+    };
+
+    block(&fx);
+    fx.update(json!({ "id": task_id, "status": "backlog", "model": "codex" }));
+    assert!(
+        fx.forge.closed_numbers().is_empty(),
+        "the next run resumes the handoff's candidate through its PR"
+    );
+
+    block(&fx);
+    fx.runtime
+        .update_task_with_identity(
+            &task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                discard_candidate: true,
+                ..Default::default()
+            },
+            None,
+            Some("codex".to_string()),
+        )
+        .expect("requeue discarding the candidate");
+    assert_eq!(
+        fx.forge.closed_numbers(),
+        vec![11, 13],
+        "a discarded candidate's PRs are closed"
+    );
+}
+
+#[test]
+fn automation_requeues_close_nothing() {
+    let fx = Fixture::new();
+    let task_id = fx.add_task("Held by automation");
+    let other = fx.add_task("Unrelated task");
+    fx.seed_forge(&task_id, &other);
+    fx.record_prs(&task_id, &[11]);
+    fx.update(json!({ "id": task_id, "status": "in_progress", "model": "codex" }));
+
+    fx.runtime
+        .apply_task_automation_update(
+            &task_id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Backlog),
+                status_note: Some("requeued for the next run".to_string()),
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect("requeue the task");
+
+    assert_eq!(
+        fx.runtime.get_task(&task_id).unwrap().status,
+        TaskStatus::Backlog
+    );
+    assert!(fx.forge.closed_numbers().is_empty());
+    assert_eq!(fx.forge.state().lookups, 0);
+}
+
+#[test]
+fn a_shelved_failure_handoff_pr_stays_open_across_later_shelf_moves() {
+    let fx = Fixture::new();
+    let task_id = fx.add_task("Blocked, then shelved twice");
+    let other = fx.add_task("Unrelated task");
+    fx.seed_forge(&task_id, &other);
+    fx.record_prs(&task_id, &[13]);
+    fx.update(json!({ "id": task_id, "status": "in_progress", "model": "codex" }));
+    fx.runtime
+        .apply_task_automation_update(
+            &task_id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Blocked),
+                status_note: Some("failure handoff published PR #13".to_string()),
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect("block the task");
+
+    for status in ["backlog", "someday", "backlog", "someday"] {
+        fx.update(json!({ "id": task_id, "status": status, "model": "codex" }));
+    }
+
+    assert!(
+        fx.forge.closed_numbers().is_empty(),
+        "the next run still resumes the handoff's candidate"
+    );
+}
+
+#[test]
+fn a_requeue_while_the_tasks_run_is_live_closes_nothing() {
+    let fx = Fixture::new();
+    let task_id = fx.add_task("Requeued under a live run");
+    let other = fx.add_task("Unrelated task");
+    fx.seed_forge(&task_id, &other);
+    fx.record_prs(&task_id, &[11]);
+    fx.move_to_review(&task_id);
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        fx.runtime.sqlite_store().unwrap(),
+        fx.runtime.workspace_id().unwrap(),
+    );
+    let run = jobs
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            chrono::Utc::now(),
+            Some(json!({ "task_ids": [task_id] })),
+            None,
+        )
+        .unwrap();
+    jobs.mark_job_run_running(&run.run_id, chrono::Utc::now(), std::process::id())
+        .unwrap();
+    fx.runtime
+        .apply_task_automation_update(
+            &task_id,
+            TaskAutomationUpdate {
+                job_run_id: Some(run.run_id.clone()),
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect("bind the run");
+
+    // A live run requires an explicit operator override; its PRs still stay open.
+    fx.runtime
+        .clone()
+        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .force_update_task_with_identity(
+            &task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect("force requeue under the live run");
+
+    assert!(
+        fx.forge.closed_numbers().is_empty(),
+        "a live leaf may still be landing the PR"
+    );
+}
+
+#[test]
+fn a_requeue_while_a_resumed_retry_is_live_closes_nothing() {
+    let fx = Fixture::new();
+    let task_id = fx.add_task("Requeued under a resumed retry");
+    let other = fx.add_task("Unrelated task");
+    fx.seed_forge(&task_id, &other);
+    fx.record_prs(&task_id, &[11]);
+    fx.move_to_review(&task_id);
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        fx.runtime.sqlite_store().unwrap(),
+        fx.runtime.workspace_id().unwrap(),
+    );
+    let source = jobs
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            chrono::Utc::now(),
+            Some(json!({ "task_ids": [task_id] })),
+            None,
+        )
+        .unwrap();
+    assert!(
+        jobs.finalize_job_run(
+            &source.run_id,
+            JobRunState::Interrupted,
+            chrono::Utc::now(),
+            None,
+        )
+        .unwrap(),
+        "the source run the task stays bound to is terminal"
+    );
+    fx.runtime
+        .apply_task_automation_update(
+            &task_id,
+            TaskAutomationUpdate {
+                job_run_id: Some(source.run_id.clone()),
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect("bind the interrupted source");
+    let retry = jobs
+        .insert_job_run(
+            "task_pr_pipeline",
+            2,
+            chrono::Utc::now(),
+            Some(json!({ "task_ids": [task_id] })),
+            Some(source.run_id.clone()),
+        )
+        .unwrap();
+    jobs.mark_job_run_running(&retry.run_id, chrono::Utc::now(), std::process::id())
+        .unwrap();
+    assert_eq!(
+        retry.retry_source_run_id.as_deref(),
+        Some(source.run_id.as_str())
+    );
+    assert_eq!(
+        fx.runtime.get_task(&task_id).unwrap().job_run_id.as_deref(),
+        Some(source.run_id.as_str()),
+        "resume leaves the task bound to the terminal source"
+    );
+
+    // A live run requires an explicit operator override; its PRs still stay open.
+    fx.runtime
+        .clone()
+        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .force_update_task_with_identity(
+            &task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect("force requeue under the live run");
+
+    assert_eq!(
+        fx.runtime.get_task(&task_id).unwrap().status,
+        TaskStatus::Backlog
+    );
+    assert!(
+        fx.forge.closed_numbers().is_empty(),
+        "a live retry may still be landing the PR"
+    );
+    assert!(
+        fx.forge.still_open().contains(&11),
+        "the landing PR stays open"
+    );
+}
+
+#[test]
+fn leaving_a_terminal_status_or_unshelving_closes_nothing() {
+    let fx = Fixture::new();
+    let task_id = fx.add_task("Done, then forced back");
+    let other = fx.add_task("Unrelated task");
+    fx.seed_forge(&task_id, &other);
+    fx.record_prs(&task_id, &[13, 11]);
+    fx.move_to_review(&task_id);
+    fx.runtime
+        .approve_task(&task_id, None, None)
+        .expect("approve the review");
+    assert_eq!(fx.forge.closed_numbers(), vec![13], "the landing #11 stays");
+
+    fx.runtime
+        .force_update_task_with_identity(
+            &task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect("force the task back to the backlog");
+    assert_eq!(
+        fx.forge.closed_numbers(),
+        vec![13],
+        "the landing the done transition kept stays open"
+    );
+
+    // Un-shelving puts nothing away, so it closes nothing either.
+    let shelved = fx.add_task("Shelved, then unshelved");
+    fx.update(json!({ "id": shelved, "status": "someday", "model": "codex" }));
+    fx.forge.open_pr(
+        40,
+        &format!("orbit/{shelved}-ffff6666"),
+        &format!("Delivers {shelved}."),
+        BOT,
+    );
+    fx.record_prs(&shelved, &[40]);
+    fx.update(json!({ "id": shelved, "status": "backlog", "model": "codex" }));
+    assert!(fx.forge.still_open().contains(&40));
 }

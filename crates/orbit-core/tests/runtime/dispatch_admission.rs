@@ -16,6 +16,14 @@
 //!   nears its deadline sorts ahead of same-priority backlog.
 //! - Unknown footprints [ORB-15191]: a multi-slot drain or ship waits for the
 //!   task pilot to prepare empty-context backlog work, else runs it alone.
+//! - Gap fit: under `machine.auto_concurrency.mode` `enforce` a local drain
+//!   admits only what fits under the host load forecast; `shadow` records
+//!   those decisions and admits as `off`.
+//! - A drain admission pass held out by a busy task-store lock is deferred
+//!   and retried, up to a limit, instead of failing the drain.
+//! - Submission notices: what a drain or ship start reports as it proceeds
+//!   (throttle, validation environment, host-OS backlog, unset env-pass
+//!   names, the required-validation note), and the drain stop projection.
 //!
 //! Every test re-runs itself in a child of this binary with inherited Orbit
 //! authority cleared, a disposable `HOME`, and a bounded wait.
@@ -42,15 +50,20 @@ use orbit_core::{
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
 use orbit_types::policy::Role;
-use orbit_types::task::{CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep};
+use orbit_types::task::{CONTEXT_FILES_WIDENED_EVENT, ContextWideningStep, TaskDecision};
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use orbit_types::workflow::{JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod gap_fit;
+mod lock_busy_pass;
 mod replay_crew;
 mod reservation_grants;
+mod submission_notices;
+mod task_pilot_warning;
 mod unknown_footprint;
+mod unlocked_context;
 
 /// Run `test` alone in a child of this binary with inherited Orbit authority
 /// cleared and a disposable `HOME`; `true` inside that child. The parent
@@ -71,7 +84,7 @@ fn isolated_with_ignored(test: &str, ignored: bool) -> bool {
     if std::env::var(MARKER).as_deref() == Ok(test) {
         return true;
     }
-    let home = TempDir::new().unwrap();
+    let home = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     // libtest names a test by its module path below the crate root.
     let qualified = if test.contains("::") {
         test.to_string()
@@ -94,7 +107,7 @@ fn isolated_with_ignored(test: &str, ignored: bool) -> bool {
     if ignored {
         command.arg("--ignored");
     }
-    let logs = TempDir::new().unwrap();
+    let logs = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let output = orbit_common::test_env::run_child_test(&mut command, &qualified, logs.path());
     orbit_common::test_env::assert_child_test_passed(
         &qualified,
@@ -109,7 +122,7 @@ fn isolated_with_ignored(test: &str, ignored: bool) -> bool {
 }
 
 fn runtime() -> (TempDir, OrbitRuntime, PathBuf) {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let repo = root.path().join("repo");
     let workspace = repo.join(".orbit");
@@ -204,11 +217,7 @@ fn admitted(output: &Value) -> Vec<String> {
 /// With no pilot to prepare it and no other leaf in flight it goes alone, so
 /// only work that edits nothing shares its wave ([`unknown_footprint`]
 /// covers the waits).
-#[test]
 fn empty_context_is_admitted_on_auto_ship_and_readiness_without_locks() {
-    if !isolated("empty_context_is_admitted_on_auto_ship_and_readiness_without_locks") {
-        return;
-    }
     let (_root, runtime, _repo) = runtime();
     seed(
         &runtime,
@@ -277,11 +286,7 @@ fn empty_context_is_admitted_on_auto_ship_and_readiness_without_locks() {
 
 /// The shipped documentation chore mints with a locking scope, so a drain can
 /// admit it without pilot preparation and withhold overlapping work.
-#[test]
 fn doc_duties_mints_an_admissible_locking_context() {
-    if !isolated("doc_duties_mints_an_admissible_locking_context") {
-        return;
-    }
     let (_root, runtime, _repo) = runtime();
     let definitions = runtime.paths().local_dir.join("auto_tasks");
     std::fs::create_dir_all(&definitions).unwrap();
@@ -310,11 +315,7 @@ fn doc_duties_mints_an_admissible_locking_context() {
 /// Automatic dispatch order is total: critical work first, then the
 /// corrective band (bugs and exact review-finding tags), then priority, with
 /// creation order and then the task id breaking every remaining tie.
-#[test]
 fn backlog_admission_orders_critical_then_corrective_then_priority_then_age() {
-    if !isolated("backlog_admission_orders_critical_then_corrective_then_priority_then_age") {
-        return;
-    }
     let (_root, runtime, _repo) = runtime();
     let medium_first = seed(
         &runtime,
@@ -392,11 +393,7 @@ fn backlog_admission_orders_critical_then_corrective_then_priority_then_age() {
 }
 
 /// A backlog task is admitted only once every dependency is done.
-#[test]
 fn backlog_admission_waits_for_every_dependency_to_be_done() {
-    if !isolated("backlog_admission_waits_for_every_dependency_to_be_done") {
-        return;
-    }
     let (_root, runtime, _repo) = runtime();
     let done = seed(
         &runtime,
@@ -460,11 +457,7 @@ fn backlog_admission_waits_for_every_dependency_to_be_done() {
 
 /// A backlog task whose files an in-progress task holds is withheld and
 /// reported with the holder, while unrelated work is still admitted.
-#[test]
 fn backlog_admission_excludes_work_locked_by_an_active_task() {
-    if !isolated("backlog_admission_excludes_work_locked_by_an_active_task") {
-        return;
-    }
     let (_root, runtime, repo) = runtime();
     for file in ["crates/foo/src/lib.rs", "crates/bar/src/lib.rs"] {
         let path = repo.join(file);
@@ -553,12 +546,7 @@ fn excluded_entry<'a>(output: &'a Value, task: &str) -> &'a Value {
 /// task used to take the freed lock on every pass, so the critical task never
 /// saw all of its locks free at once [ORB-14310]. Work that does not overlap
 /// the reserved surface keeps admitting throughout.
-#[test]
 fn a_lock_blocked_critical_task_is_admitted_ahead_of_overlapping_work_as_locks_free() {
-    if !isolated("a_lock_blocked_critical_task_is_admitted_ahead_of_overlapping_work_as_locks_free")
-    {
-        return;
-    }
     let (_root, runtime, repo) = runtime();
     write_files(&repo, &["a.rs", "b.rs", "free.rs"]);
     let holder_a = seed(
@@ -654,6 +642,7 @@ fn a_lock_blocked_critical_task_is_admitted_ahead_of_overlapping_work_as_locks_f
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("last pass");
     let recorded = pass
@@ -691,11 +680,7 @@ fn a_lock_blocked_critical_task_is_admitted_ahead_of_overlapping_work_as_locks_f
 /// [ORB-14310]: only critical and high-priority lock-blocked tasks reserve, at
 /// most two per pass in dispatch order, and a task ranked ahead of a reserving
 /// task is never withheld by it.
-#[test]
 fn surface_reservations_are_bounded_by_priority_count_and_rank() {
-    if !isolated("surface_reservations_are_bounded_by_priority_count_and_rank") {
-        return;
-    }
     let (_root, runtime, repo) = runtime();
     write_files(
         &repo,
@@ -788,11 +773,7 @@ fn surface_reservations_are_bounded_by_priority_count_and_rank() {
 /// An in-progress `no-diff-expected` task does not exclude overlapping backlog
 /// work. An ordinary holder still does, and the tagged task still waits on
 /// its own dependency and on that ordinary lock [ORB-14247].
-#[test]
 fn no_diff_expected_does_not_hold_a_context_lock() {
-    if !isolated("no_diff_expected_does_not_hold_a_context_lock") {
-        return;
-    }
     let (_root, runtime, repo) = runtime();
     for file in [
         "crates/review/lib.rs",
@@ -1001,11 +982,7 @@ fn ship(runtime: &OrbitRuntime, claim_token: Option<&str>) -> OrbitError {
 
 /// While an operator holds the claim, dispatch is refused to everyone else
 /// with the holder and expiry named, and the holder's own token passes.
-#[test]
 fn a_held_workspace_claim_gates_dispatch_to_its_holder() {
-    if !isolated("a_held_workspace_claim_gates_dispatch_to_its_holder") {
-        return;
-    }
     let (_root, runtime, _repo) = runtime();
     assert!(
         matches!(ship(&runtime, None), OrbitError::NotFound { .. }),
@@ -1076,11 +1053,7 @@ fn a_held_workspace_claim_gates_dispatch_to_its_holder() {
     );
 }
 
-#[test]
 fn a_replica_refuses_foreground_and_detached_replay_before_persisting_a_run() {
-    if !isolated("a_replica_refuses_foreground_and_detached_replay_before_persisting_a_run") {
-        return;
-    }
     let (_root, runtime, _repo) = runtime();
     let source = running_run(
         &runtime,
@@ -1103,11 +1076,7 @@ fn a_replica_refuses_foreground_and_detached_replay_before_persisting_a_run() {
 }
 
 /// An expired claim stops gating dispatch with no release.
-#[test]
 fn an_expired_workspace_claim_stops_gating_dispatch() {
-    if !isolated("an_expired_workspace_claim_stops_gating_dispatch") {
-        return;
-    }
     let (_root, runtime, _repo) = runtime();
     as_operator(
         &runtime,
@@ -1136,11 +1105,7 @@ fn an_expired_workspace_claim_stops_gating_dispatch() {
 
 /// ORB-13916: deterministic gate evidence must not look like a human
 /// intervention, including replay and the coupled-repair selector write.
-#[test]
 fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
-    if !isolated("review_gate_writes_system_provenance_without_borrowing_the_operator") {
-        return;
-    }
     use chrono::Utc;
     use orbit_core::ActorIdentity;
     use orbit_core::application::task::TaskUpdateParams;
@@ -1154,7 +1119,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
         ReviewVerdict::Reject,
         ReviewVerdict::AcceptWithFixes,
     ] {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("home/.orbit");
         let repo = root.path().join("repo");
         let workspace = repo.join(".orbit");
@@ -1169,7 +1134,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             .unwrap()
             .with_actor(ActorIdentity::human("human:daniel"));
         let git = |args: &[&str]| {
-            let output = std::process::Command::new("git")
+            let output = crate::git_test_support::command()
                 .args(args)
                 .current_dir(&repo)
                 .output()
@@ -1382,8 +1347,14 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             );
             assert_eq!(widened.by, "system");
             assert_eq!(widened.event, CONTEXT_FILES_WIDENED_EVENT);
-            let widening =
-                ContextFilesWidening::from_note(widened.note.as_deref().unwrap()).unwrap();
+            let Some(TaskDecision::ContextFilesWidened(widening)) = &widened.decision else {
+                panic!("the widening is a typed decision: {widened:?}");
+            };
+            assert_eq!(
+                widened.note.as_deref(),
+                Some(serde_json::to_string(widening).unwrap().as_str()),
+                "the note is unchanged beside the decision"
+            );
             assert_eq!(widening.run_id, run.run_id);
             assert_eq!(widening.step, ContextWideningStep::Review);
             assert_eq!(widening.activity, "review_gate_settle");
@@ -1412,6 +1383,8 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
 pub(super) struct PressureProbe {
     reading: Mutex<(Option<f64>, Option<f64>, DateTime<Utc>)>,
     disk: Mutex<f64>,
+    /// `/proc/pressure/io` `full avg60`; `None` is a host without PSI.
+    io: Mutex<Option<f64>>,
     samples: AtomicUsize,
 }
 
@@ -1420,6 +1393,7 @@ impl PressureProbe {
         Arc::new(Self {
             reading: Mutex::new((Some(10.0), Some(10.0), Utc::now())),
             disk: Mutex::new(10.0),
+            io: Mutex::new(None),
             samples: AtomicUsize::new(0),
         })
     }
@@ -1441,6 +1415,12 @@ impl PressureProbe {
         let mut reading = self.reading.lock().unwrap();
         reading.1 = Some(percent);
         reading.2 = at;
+    }
+
+    /// Disk I/O stall share at `percent`, observed at `at`; `None` is no PSI.
+    fn io(&self, percent: Option<f64>, at: DateTime<Utc>) {
+        *self.io.lock().unwrap() = percent;
+        self.reading.lock().unwrap().2 = at;
     }
 
     pub(super) fn cpu(&self, percent: Option<f64>) {
@@ -1474,7 +1454,9 @@ impl HostResourceProbe for PressureProbe {
         HostResourceSample {
             sampled_at: at,
             cpu_percent: cpu,
+            cpu_utilization_percent: None,
             memory_percent: memory,
+            io_full_percent: *self.io.lock().unwrap(),
             disks: paths
                 .iter()
                 .map(|path| DiskSample {
@@ -1546,7 +1528,7 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
         return;
     }
 
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -1555,7 +1537,7 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
     let mut warm = std::process::Command::new(std::env::current_exe().unwrap());
     warm.args(["--exact", &qualified, "--nocapture", "--test-threads=1"])
         .env(WARM_ROOT, root.path());
-    let logs = TempDir::new().unwrap();
+    let logs = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let output = orbit_common::test_env::run_child_test(&mut warm, &qualified, logs.path());
     orbit_common::test_env::assert_child_test_passed(
         &qualified,
@@ -1677,11 +1659,7 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
 /// Sustained memory pressure holds the local drain's wave, ship discovery
 /// and readiness until memory falls below its resume mark; a live child keeps
 /// running throughout, and unknown CPU telemetry never holds anything.
-#[test]
 fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
-    if !isolated("sustained_pressure_holds_local_admission_until_it_clears_below_resume") {
-        return;
-    }
     let probe = PressureProbe::calm();
     let (_root, runtime, _repo) = runtime();
     let runtime = runtime.with_host_resource_probe(probe.clone());
@@ -1747,6 +1725,7 @@ fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("last pass");
     let recorded = pass
@@ -1842,6 +1821,7 @@ fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
             .read_run_state(&drain)
             .unwrap()
             .unwrap()
+            .pull_drain
             .drain_last_pass
             .unwrap()
             .resource_throttle
@@ -1849,14 +1829,106 @@ fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
     );
 }
 
+/// Sustained disk I/O stall holds the local drain's wave and readiness with a
+/// typed reason until `full avg60` falls below the resume mark; a live child
+/// keeps running throughout, and a host without PSI admits as before.
+fn sustained_io_pressure_holds_local_admission_until_it_clears_below_resume() {
+    let probe = PressureProbe::calm();
+    let (_root, runtime, _repo) = runtime();
+    let runtime = runtime.with_host_resource_probe(probe.clone());
+    let running = seed(
+        &runtime,
+        Seed {
+            title: "running",
+            context_files: Some(&["file:src/running.rs"]),
+            ..Seed::default()
+        },
+    );
+    let queued = seed(
+        &runtime,
+        Seed {
+            title: "queued",
+            context_files: Some(&["file:src/queued.rs"]),
+            ..Seed::default()
+        },
+    );
+    let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+    let child = running_run(
+        &runtime,
+        "task_auto_pipeline",
+        json!({"task_ids": [running.id]}),
+    );
+
+    // A host without PSI reports no I/O reading and is not unknown telemetry.
+    let open = classify(&runtime, &drain);
+    assert_eq!(open["loose_task_ids"], json!([queued.id]), "{open}");
+    assert_eq!(open["resource_throttle"], Value::Null, "{open}");
+    assert_eq!(open["resource_telemetry_unknown"], json!([]), "{open}");
+
+    // Pressure above the 20% mark that has not been sustained holds nothing.
+    probe.io(Some(47.0), Utc::now() - chrono::Duration::seconds(12));
+    let spike = classify(&runtime, &drain);
+    assert_eq!(spike["loose_task_ids"], json!([queued.id]), "{spike}");
+
+    probe.io(Some(47.0), Utc::now());
+    let held = classify(&runtime, &drain);
+    assert_eq!(held["loose_task_ids"], json!([]), "{held}");
+    let pressure = &held["resource_throttle"]["resources"][0];
+    assert_eq!(pressure["resource"], "io full", "{held}");
+    assert_eq!(pressure["percent"], 47.0, "{held}");
+    assert_eq!(pressure["high_percent"], 20, "{held}");
+    assert_eq!(pressure["resume_percent"], 10, "{held}");
+    let recorded = runtime
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .pull_drain
+        .drain_last_pass
+        .expect("last pass")
+        .resource_throttle
+        .expect("the pass records the throttle");
+    assert_eq!(recorded.resources[0].resource, "io full");
+    let readiness = runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    assert_eq!(
+        readiness["capacity"]["resource_throttle"]["resources"][0]["resource"],
+        "io full"
+    );
+    let waiting = readiness_task(&readiness, &queued.id);
+    assert_eq!(waiting["reason"], "resource_throttled", "{waiting}");
+    assert!(
+        waiting["detail"].as_str().is_some_and(
+            |detail| detail.starts_with("io full 47% (throttled at \u{2265} 20% since ")
+        ),
+        "{waiting}"
+    );
+
+    // Between the resume and high marks the hold continues.
+    probe.io(Some(15.0), Utc::now());
+    let band = classify(&runtime, &drain);
+    assert_eq!(band["loose_task_ids"], json!([]), "{band}");
+
+    // Running work was never touched.
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        runtime.sqlite_store().unwrap(),
+        runtime.workspace_id().unwrap(),
+    );
+    assert_eq!(
+        jobs.get_job_run(&child).unwrap().unwrap().state,
+        JobRunState::Running
+    );
+
+    probe.io(Some(5.0), Utc::now());
+    let resumed = classify(&runtime, &drain);
+    assert_eq!(resumed["loose_task_ids"], json!([queued.id]), "{resumed}");
+    assert_eq!(resumed["resource_throttle"], Value::Null, "{resumed}");
+}
+
 /// With `workflow.resource_throttle.enabled = false` admission is what it was
 /// before the throttle: no sample is taken for it and pressure holds nothing.
-#[test]
 fn a_disabled_throttle_admits_under_pressure_without_sampling() {
-    if !isolated("a_disabled_throttle_admits_under_pressure_without_sampling") {
-        return;
-    }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -1898,11 +1970,7 @@ const LIGHT_TAGS: &[&str] = &["code-review", "no-diff-expected", "auto-task:code
 /// leaves start up to the reserved light budget and an implementation leaf
 /// still waits; once the budget is taken a further light leaf waits too, and
 /// readiness names the light-budget reason.
-#[test]
 fn a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget() {
-    if !isolated("a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget") {
-        return;
-    }
     let probe = PressureProbe::calm();
     let (_root, runtime, _repo) = runtime();
     let runtime = runtime.with_host_resource_probe(probe.clone());
@@ -2022,11 +2090,7 @@ fn a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget() {
 /// A minted qa-sweep or qa-full-sweep task is not CPU-light because its
 /// brief builds or runs the product; under CPU-only pressure it is held while
 /// a review auto-task is admitted from the light reservation [ORB-15766].
-#[test]
 fn a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks() {
-    if !isolated("a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks") {
-        return;
-    }
     let probe = PressureProbe::calm();
     let (_root, runtime, _repo) = runtime();
     let runtime = runtime.with_host_resource_probe(probe.clone());
@@ -2097,13 +2161,9 @@ fn a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks() {
     }
 }
 
-/// Memory and disk pressure hold light leaves like any other: an agent
-/// session costs memory and its artifacts cost disk, whatever CPU does.
-#[test]
+/// Memory, disk and I/O pressure hold light leaves like any other: an agent
+/// session costs memory and its artifacts cost disk and I/O, whatever CPU does.
 fn memory_and_disk_pressure_still_hold_light_auto_tasks() {
-    if !isolated("memory_and_disk_pressure_still_hold_light_auto_tasks") {
-        return;
-    }
     let probe = PressureProbe::calm();
     let (_root, runtime, _repo) = runtime();
     let runtime = runtime.with_host_resource_probe(probe.clone());
@@ -2151,16 +2211,16 @@ fn memory_and_disk_pressure_still_hold_light_auto_tasks() {
     probe.memory(10.0, Utc::now());
     probe.sustain(&runtime, |probe| *probe.disk.lock().unwrap() = 95.0);
     assert_held("disk");
+
+    *probe.disk.lock().unwrap() = 10.0;
+    probe.sustain(&runtime, |probe| probe.io(Some(47.0), Utc::now()));
+    assert_held("io");
 }
 
 /// A frozen delivery batch within two hours of its deadline sorts ahead of
 /// same-priority backlog, including corrective work, so it is not left to
 /// expire in the queue; one further from its deadline keeps its place.
-#[test]
 fn a_frozen_batch_near_its_deadline_sorts_ahead_of_same_priority_backlog() {
-    if !isolated("a_frozen_batch_near_its_deadline_sorts_ahead_of_same_priority_backlog") {
-        return;
-    }
     let (_root, runtime, _repo) = runtime();
     let runtime = runtime.with_automation_machine_identity(Some("hm_fixture".to_string()));
     let older = seed(
@@ -2252,11 +2312,7 @@ fn a_frozen_batch_near_its_deadline_sorts_ahead_of_same_priority_backlog() {
 /// A surface reservation follows frozen-batch expiry in the queue's order:
 /// expiry can promote ordinary work ahead of higher-priority work, or break a
 /// same-priority tie with older corrective work [ORB-15110].
-#[test]
 fn surface_reservations_follow_frozen_batch_expiry_order() {
-    if !isolated("surface_reservations_follow_frozen_batch_expiry_order") {
-        return;
-    }
     for (reserver_type, expiring_priority) in [
         (TaskType::Feature, TaskPriority::Medium),
         (TaskType::Bug, TaskPriority::High),
@@ -2432,3 +2488,139 @@ pub(super) fn admitted_frozen_batch(
     });
     assert!(store.automation_commit(&baseline, &admitted, None).unwrap());
 }
+
+/// A shutdown inside the configured horizon holds a local wave, readiness, and
+/// an unattended entry. One minute past that horizon admits, while readiness
+/// and the entry decision still name the schedule.
+fn a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_admits() {
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let repo = root.path().join("repo");
+    let workspace = repo.join(".orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(repo.join("src/queued.rs"), "fn queued() {}\n").unwrap();
+    std::fs::write(
+        global.join("config.toml"),
+        "[machine]\nhost_shutdown_hold_minutes = 30\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace)
+        .expect("runtime")
+        .with_host_resource_probe(PressureProbe::calm());
+    assert_eq!(runtime.host_shutdown_hold_minutes(), 30);
+    let queued = seed(
+        &runtime,
+        Seed {
+            context_files: Some(&["file:src/queued.rs"]),
+            ..Seed::default()
+        },
+    );
+    let schedule = |minutes: i64| {
+        orbit_core::runtime::host_signal::FixedHostSignals::scheduled(
+            orbit_core::runtime::host_signal::ScheduledShutdown {
+                mode: "reboot".into(),
+                scheduled_at: Utc::now() + chrono::Duration::minutes(minutes),
+                source: "fixture".into(),
+            },
+        )
+    };
+    let presented = |minutes: i64| {
+        runtime
+            .clone()
+            .with_host_signal_probe(Arc::new(schedule(minutes)))
+    };
+
+    let holding = presented(30);
+    let drain = running_run(&holding, "workspace_auto_pipeline", json!({}));
+    let held = classify(&holding, &drain);
+    assert_eq!(held["loose_task_ids"], json!([]), "{held}");
+    assert_eq!(held["free_slots"], 0, "{held}");
+    assert_eq!(held["host_shutdown_holding"], true, "{held}");
+    assert!(held["host_shutdown"]["scheduled_at"].is_string(), "{held}");
+    let held_pass = holding
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .pull_drain
+        .drain_last_pass
+        .expect("local pass");
+    assert_eq!(held_pass.admission_refusal, None, "{held_pass:?}");
+    let held_ready = holding
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    assert_eq!(held_ready["capacity"]["host_shutdown_holding"], true);
+    assert!(
+        held_ready["capacity"]["host_shutdown"]["scheduled_at"].is_string(),
+        "{held_ready}"
+    );
+    assert_eq!(
+        readiness_task(&held_ready, &queued.id)["reason"],
+        "host_shutdown_scheduled"
+    );
+    let refused = holding
+        .drain_entry_admission(DrainEntryPoint::ShipSweep, &[], true)
+        .unwrap();
+    assert_eq!(refused.refusal.unwrap().code(), "host_shutdown_scheduled");
+    assert!(refused.host_shutdown.is_some());
+
+    let open = presented(31);
+    let drain = running_run(&open, "workspace_auto_pipeline", json!({}));
+    let wave = classify(&open, &drain);
+    assert_eq!(wave["loose_task_ids"], json!([queued.id]), "{wave}");
+    assert_eq!(wave["host_shutdown_holding"], false, "{wave}");
+    assert!(wave["host_shutdown"]["scheduled_at"].is_string(), "{wave}");
+    let open_pass = open
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .pull_drain
+        .drain_last_pass
+        .expect("local pass");
+    assert_eq!(open_pass.admission_refusal, None, "{open_pass:?}");
+    let ready = open.workspace_auto_readiness(&[], None, 50, &[]).unwrap();
+    assert_eq!(ready["capacity"]["host_shutdown_holding"], false);
+    assert!(
+        ready["capacity"]["host_shutdown"]["scheduled_at"].is_string(),
+        "{ready}"
+    );
+    let admitted = readiness_task(&ready, &queued.id);
+    assert_ne!(admitted["reason"], "host_shutdown_scheduled", "{admitted}");
+    assert_eq!(admitted["reason"], "ready", "{admitted}");
+    let decision = open
+        .drain_entry_admission(DrainEntryPoint::ShipSweep, &[], true)
+        .unwrap();
+    assert!(decision.refusal.is_none(), "{decision:?}");
+    assert!(decision.host_shutdown.is_some(), "{decision:?}");
+}
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    empty_context_is_admitted_on_auto_ship_and_readiness_without_locks_scenarios,
+    empty_context_is_admitted_on_auto_ship_and_readiness_without_locks,
+    doc_duties_mints_an_admissible_locking_context,
+    backlog_admission_orders_critical_then_corrective_then_priority_then_age,
+    backlog_admission_waits_for_every_dependency_to_be_done,
+    backlog_admission_excludes_work_locked_by_an_active_task,
+    a_lock_blocked_critical_task_is_admitted_ahead_of_overlapping_work_as_locks_free,
+    surface_reservations_are_bounded_by_priority_count_and_rank,
+    no_diff_expected_does_not_hold_a_context_lock,
+    a_held_workspace_claim_gates_dispatch_to_its_holder,
+    a_replica_refuses_foreground_and_detached_replay_before_persisting_a_run,
+    an_expired_workspace_claim_stops_gating_dispatch
+);
+
+crate::scenario_table!(
+    review_gate_writes_system_provenance_without_borrowing_the_operator_scenarios,
+    review_gate_writes_system_provenance_without_borrowing_the_operator,
+    sustained_pressure_holds_local_admission_until_it_clears_below_resume,
+    sustained_io_pressure_holds_local_admission_until_it_clears_below_resume,
+    a_disabled_throttle_admits_under_pressure_without_sampling,
+    a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget,
+    a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks,
+    memory_and_disk_pressure_still_hold_light_auto_tasks,
+    a_frozen_batch_near_its_deadline_sorts_ahead_of_same_priority_backlog,
+    surface_reservations_follow_frozen_batch_expiry_order,
+    a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_admits
+);

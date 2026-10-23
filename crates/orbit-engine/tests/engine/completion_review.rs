@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
 use orbit_engine::{
-    DispatchError, JobOutcome, ReviewerInvocationRequest, RuntimeHost, execute_job_with_resume,
+    DispatchError, JobOutcome, ReviewerInvocationRequest, execute_job_with_resume,
     resolve_job_catalog_refs_for_execution,
 };
 use orbit_types::workflow::ReviewerInvocationEvent;
@@ -25,7 +25,6 @@ const CONFLICT_RECOVERY: &str = "test_stub_pr_conflict_recovery";
 /// head needs rebasing; the fake reviewer then fixes and certifies the new
 /// head, owner validation reruns on the reviewer commit [ORB-13989], and the
 /// pipeline republishes and completes it.
-#[test]
 fn shipped_completion_rebases_re_reviews_and_completes_the_new_head() {
     let host = CompletionReviewHost::new(1, &[]);
     let result = run(&host);
@@ -138,7 +137,6 @@ fn shipped_completion_rebases_re_reviews_and_completes_the_new_head() {
 /// again under the first re-review, so a second round reviews, republishes
 /// and completes that head: delivery continues without an operator and the
 /// task is never left blocked.
-#[test]
 fn a_repaired_conflict_after_a_re_review_re_reviews_again_and_delivers() {
     let host = CompletionReviewHost::new(2, &[1, 2]);
     let result = run(&host);
@@ -225,7 +223,6 @@ fn a_repaired_conflict_after_a_re_review_re_reviews_again_and_delivers() {
 
 /// The base moving under the second re-review as well ends at the bound: the
 /// last completion round refuses as `review_gate_stale` and nothing merges.
-#[test]
 fn a_conflict_after_the_second_re_review_stops_delivery() {
     let host = CompletionReviewHost::new(3, &[]);
     let result = run(&host);
@@ -246,7 +243,6 @@ fn a_conflict_after_the_second_re_review_stops_delivery() {
 
 /// A rebase that keeps stopping on a new conflict gets a bounded number of
 /// recovery rounds, then the step fails instead of looping.
-#[test]
 fn conflict_recovery_rounds_are_bounded_per_failure() {
     let host = CompletionReviewHost::new(2, &[0, 50]);
     let result = run(&host);
@@ -330,6 +326,8 @@ fn shipped_completion_review_job() -> orbit_types::workflow::JobV2 {
     // task-store effects with deterministic stub activities.
     let prefix = stubs(&["worktree", "commit", "prepare_branch", "sync_base"]);
     let mut job = job_asset(json!(prefix));
+    // The shipped input defaults, which execution merges under every run's input.
+    job.default_input = shipped.default_input.clone();
     for id in [
         "review_gate_admit",
         "review",
@@ -445,13 +443,16 @@ impl CompletionReviewHost {
             && *stops > 0
         {
             *stops -= 1;
-            return Err(DispatchError::RecoverableVcsConflict {
-                operation: "git_rebase".to_string(),
-                original_base_sha: "base-sha".to_string(),
-                target_base_sha: format!("rebased-base{}", round_suffix(index)),
-                conflicting_paths: vec!["src/lib.rs".to_string()],
-                diagnostic: format!("rebase stopped; {stops} later stops remain"),
-            });
+            return Err(DispatchError::RecoverableVcsConflict(Box::new(
+                orbit_common::RecoverableVcsConflict {
+                    operation: "git_rebase".to_string(),
+                    original_base_sha: "base-sha".to_string(),
+                    target_base_sha: format!("rebased-base{}", round_suffix(index)),
+                    conflicting_paths: vec!["src/lib.rs".to_string()],
+                    conflicting_files: Vec::new(),
+                    diagnostic: format!("rebase stopped; {stops} later stops remain"),
+                },
+            )));
         }
         *completions += 1;
         let output = if index < self.rebases {
@@ -542,7 +543,7 @@ fn published_head(index: usize) -> String {
     }
 }
 
-impl RuntimeHost for CompletionReviewHost {
+impl orbit_engine::test_support::NullRuntimeHost for CompletionReviewHost {
     fn run_deterministic(
         &self,
         action: &str,
@@ -649,4 +650,29 @@ impl RuntimeHost for CompletionReviewHost {
             .push(request.clone());
         Ok(None)
     }
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn completion_review_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "completion_review_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "shipped_completion_rebases_re_reviews_and_completes_the_new_head",
+                shipped_completion_rebases_re_reviews_and_completes_the_new_head,
+            ),
+            (
+                "a_repaired_conflict_after_a_re_review_re_reviews_again_and_delivers",
+                a_repaired_conflict_after_a_re_review_re_reviews_again_and_delivers,
+            ),
+            (
+                "a_conflict_after_the_second_re_review_stops_delivery",
+                a_conflict_after_the_second_re_review_stops_delivery,
+            ),
+            (
+                "conflict_recovery_rounds_are_bounded_per_failure",
+                conflict_recovery_rounds_are_bounded_per_failure,
+            ),
+        ]);
+    });
 }

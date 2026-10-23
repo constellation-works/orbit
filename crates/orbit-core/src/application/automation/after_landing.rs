@@ -1,7 +1,7 @@
 //! After-landing review: the `delivery-code-review` delivery consumer
 //! [ORB-13896] [ORB-13992].
 //!
-//! The auto-task's own `enabled` flag is the switch. `operation.review_crew`,
+//! The auto-task's own `enabled` flag is the switch. `workflow.purpose_crews.review`,
 //! when set, is the crew of every review task it mints; a pool draws one
 //! crew per batch [ORB-15195]. Nothing else performs
 //! after-landing review, so [`after_landing_health`] states in one line
@@ -33,6 +33,9 @@ use super::{
 use crate::OrbitRuntime;
 use crate::application::job::crew_pools::seeded_crew_ticket;
 use crate::application::review::crew::configured_pool_members;
+use orbit_types::task::TaskOsRequirement;
+use orbit_types::workflow::ReviewCrewPoolMember;
+use orbit_types::workflow::automation::recovery::{CrewOsHold, OsExcludedCrew};
 
 /// The auto-task definition after-landing review runs through.
 pub(crate) const AFTER_LANDING_CONSUMER: &str = "delivery-code-review";
@@ -68,7 +71,7 @@ impl OrbitRuntime {
 }
 
 /// The crews a review task minted for `definition` is drawn from instead of
-/// the template's crew: `operation.review_crew`, when this is the
+/// the template's crew: `workflow.purpose_crews.review`, when this is the
 /// after-landing consumer and the crew is set. Empty otherwise.
 fn review_crew_pool(runtime: &OrbitRuntime, definition: &AutoTaskDefinition) -> Vec<String> {
     if definition.name != AFTER_LANDING_CONSUMER {
@@ -77,42 +80,115 @@ fn review_crew_pool(runtime: &OrbitRuntime, definition: &AutoTaskDefinition) -> 
     runtime.operation_policy().review_crew.value.clone()
 }
 
-/// The crew a one-member `operation.review_crew` names, parsed from its
-/// `name[:weight]` entry the way a pool's members are, so `sol:3` is `sol`.
-fn singleton_review_crew(
+/// The positive-weight `workflow.purpose_crews.review` members a review task
+/// minted for `definition` may carry under its `os:` tags, and the members
+/// those tags exclude. Both are empty when no pool replaces the template's crew.
+fn eligible_review_pool(
     runtime: &OrbitRuntime,
-    pool: &[String],
-) -> Result<Option<String>, OrbitError> {
-    Ok(configured_pool_members(runtime, pool)?
-        .into_iter()
-        .next()
-        .map(|member| member.name))
+    definition: &AutoTaskDefinition,
+) -> Result<(Vec<ReviewCrewPoolMember>, Vec<OsExcludedCrew>), OrbitError> {
+    let pool = review_crew_pool(runtime, definition);
+    if pool.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let members = configured_pool_members(runtime, &pool, orbit_config::REVIEW_CREW_KEY)?;
+    runtime.review_pool_by_os(members, &minted_tags(runtime, definition))
+}
+
+/// The tags a review task minted for `definition` carries.
+fn minted_tags(runtime: &OrbitRuntime, definition: &AutoTaskDefinition) -> Vec<String> {
+    crate::application::auto_tasks::scheduler::template_params(runtime, definition).tags
+}
+
+/// Why no review task can be minted for `definition` under the current
+/// configuration: every positive-weight `workflow.purpose_crews.review`
+/// member's executor declares a `host_os` outside the task's `os:` tags.
+/// `None` when a positive-weight member remains, or when no pool replaces the
+/// template's crew. The evaluator holds the claimed batch on this rather than
+/// failing its mint every tick.
+pub(super) fn review_crew_hold(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+) -> Result<Option<CrewOsHold>, OrbitError> {
+    let (eligible, excluded) = eligible_review_pool(runtime, definition)?;
+    Ok(crew_os_hold(runtime, definition, &eligible, excluded))
+}
+
+fn crew_os_hold(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+    eligible: &[ReviewCrewPoolMember],
+    excluded: Vec<OsExcludedCrew>,
+) -> Option<CrewOsHold> {
+    if !eligible.is_empty() || excluded.is_empty() {
+        return None;
+    }
+    Some(CrewOsHold {
+        definition: definition.name.clone(),
+        pool_key: orbit_config::REVIEW_CREW_KEY.to_string(),
+        os_tags: TaskOsRequirement::from_tags(&minted_tags(runtime, definition))
+            .any_of
+            .iter()
+            .map(|os| os.tag())
+            .collect(),
+        excluded,
+    })
 }
 
 /// The crew the review task minted for `attempt` carries, or `None` to keep
-/// the template's. A single `operation.review_crew` member is carried by its
-/// parsed name; a pool draws one member, preferring one that implemented none
-/// of the batch's deliveries [ORB-15195]. The draw is seeded by the attempt's
-/// action key, so a retried mint carries the same crew.
+/// the template's: `workflow.purpose_crews.review` replaces it whenever set.
+/// Only members whose executor can run under the task's `os:` tags are
+/// considered. A single configured member is carried by its parsed name, so
+/// `sol:3` is `sol`; a pool draws one member, preferring one that implemented
+/// none of the batch's deliveries [ORB-15195]. The draw is seeded by the
+/// attempt's action key, so a retried mint carries the same crew while the
+/// pool and tags are unchanged. With no eligible member this refuses, naming
+/// the hold, and never substitutes another crew.
 pub(super) fn minted_review_crew(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
     attempt: &BatchAttempt,
 ) -> Result<Option<String>, OrbitError> {
     let pool = review_crew_pool(runtime, definition);
-    match pool.as_slice() {
-        [] => Ok(None),
-        [_] => singleton_review_crew(runtime, &pool),
-        _ => {
-            let implementers = delivery_implementers(runtime, &attempt.batch.deliveries);
-            Ok(runtime
-                .select_review_crew(
-                    &implementers,
-                    &mut seeded_crew_ticket(format!("review:{}", attempt.action_key)),
-                )?
-                .map(|crew| crew.name))
-        }
+    if pool.is_empty() {
+        return Ok(None);
     }
+    let (eligible, excluded) = eligible_review_pool(runtime, definition)?;
+    if let Some(hold) = crew_os_hold(runtime, definition, &eligible, excluded) {
+        return Err(OrbitError::PolicyDenied(hold.summary()));
+    }
+    if let ([only], [_]) = (eligible.as_slice(), pool.as_slice()) {
+        return Ok(Some(only.name.clone()));
+    }
+    let implementers = delivery_implementers(runtime, &attempt.batch.deliveries);
+    runtime
+        .select_review_crew(
+            &eligible,
+            &implementers,
+            &mut seeded_crew_ticket(format!("review:{}", attempt.action_key)),
+        )
+        .map(|crew| Some(crew.name))
+}
+
+/// The sentence `orbit auto-task show` and `update` print when `definition`
+/// names a crew that `workflow.purpose_crews.review` replaces on every review
+/// task it mints, or `None` when the definition's crew takes effect.
+pub(crate) fn review_crew_overrides_definition(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+) -> Option<String> {
+    let crew = definition.template.crew.as_deref()?;
+    let pool = review_crew_pool(runtime, definition);
+    if pool.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{} ({}) is set, so review tasks this definition mints carry a crew drawn from [{}]; \
+         its crew `{crew}` takes effect only while that key is unset",
+        orbit_config::REVIEW_CREW_KEY,
+        runtime.operation_policy().review_crew.source.label(),
+        pool.join(", ")
+    ))
 }
 
 /// The crews recorded on the tasks `deliveries` landed. A task this checkout
@@ -205,7 +281,7 @@ pub struct AfterLandingHealth {
     pub state: Option<String>,
     /// The crew its review tasks are minted with, when it is one crew.
     pub crew: Option<String>,
-    /// The `operation.review_crew` pool each batch's review task draws its
+    /// The `workflow.purpose_crews.review` pool each batch's review task draws its
     /// crew from, when it names more than one [ORB-15195].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub crew_pool: Vec<String>,
@@ -445,9 +521,16 @@ pub fn after_landing_health(
     }
 
     let pool = review_crew_pool(runtime, &definition);
+    let mut crew_hold = None;
     if pool.len() > 1 {
-        let candidates = configured_pool_members(runtime, &pool)
-            .and_then(|members| runtime.review_crew_candidates(&members));
+        let candidates =
+            eligible_review_pool(runtime, &definition).and_then(|(eligible, excluded)| {
+                crew_hold = crew_os_hold(runtime, &definition, &eligible, excluded);
+                match crew_hold {
+                    Some(_) => Ok(Vec::new()),
+                    None => runtime.review_crew_candidates(&eligible),
+                }
+            });
         if let Err(error) = candidates {
             health.crew_error = Some(error.to_string());
             health
@@ -456,8 +539,15 @@ pub fn after_landing_health(
         }
         health.crew_pool = pool;
     } else {
-        match singleton_review_crew(runtime, &pool) {
-            Ok(crew) => health.crew = crew.or(definition.template.crew.clone()),
+        match eligible_review_pool(runtime, &definition) {
+            Ok((eligible, excluded)) => {
+                health.crew = eligible
+                    .first()
+                    .map(|member| member.name.clone())
+                    .or_else(|| excluded.first().map(|crew| crew.crew.clone()))
+                    .or(definition.template.crew.clone());
+                crew_hold = crew_os_hold(runtime, &definition, &eligible, excluded);
+            }
             Err(error) => {
                 health.crew_error = Some(error.to_string());
                 health
@@ -475,9 +565,19 @@ pub fn after_landing_health(
         }
     }
 
+    // The recorded stall names the same hold once evaluation has met it.
+    let crew_hold_problem = crew_hold.map(|hold| {
+        format!(
+            "{}; no review task is minted until the pool or the definition's `os:` tags admit \
+             a crew, and the consumer then resumes on its own",
+            hold.summary()
+        )
+    });
+
     // Consumer state is keyed by this host's machine identity; without one
     // the ownership problem above already says why nothing is admitted.
     if runtime.automation_machine_identity().is_none() {
+        health.problems.extend(crew_hold_problem);
         return Ok(Some(health));
     }
 
@@ -512,12 +612,34 @@ pub fn after_landing_health(
         .as_ref()
         .and_then(|state| state.stall.as_ref())
     {
-        health.problems.push(format!(
-            "stalled since {} ({})",
-            stall.since.to_rfc3339(),
-            stall.reason
-        ));
-        health.stall = Some(stall.reason.clone());
+        match &stall.crew_hold {
+            Some(hold) => {
+                health.problems.push(format!(
+                    "stalled since {} ({}: {}); it resumes on its own once the pool or the \
+                     definition's `os:` tags admit a crew",
+                    stall.since.to_rfc3339(),
+                    stall.reason,
+                    hold.summary()
+                ));
+                health.stall = Some(format!("{}: {}", stall.reason, hold.summary()));
+            }
+            None => {
+                health.problems.push(format!(
+                    "stalled since {} ({})",
+                    stall.since.to_rfc3339(),
+                    stall.reason
+                ));
+                health.stall = Some(stall.reason.clone());
+            }
+        }
+    }
+    if !diagnostic
+        .state
+        .as_ref()
+        .and_then(|state| state.stall.as_ref())
+        .is_some_and(|stall| stall.crew_hold.is_some())
+    {
+        health.problems.extend(crew_hold_problem);
     }
     if BLOCKING_STATES.contains(&diagnostic.reason.as_str()) {
         let refused = if diagnostic.refusals.is_empty() {

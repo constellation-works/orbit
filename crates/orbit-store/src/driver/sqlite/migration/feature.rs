@@ -1,23 +1,24 @@
-//! Generic, namespaced schema migrations for vertical feature crates.
+//! The engine of the frozen feature ledgers (automation, review, local pull).
 //!
-//! Store owns the SQLite connection, writer serialization, and migration
-//! ledger. A feature crate owns its migration callbacks and invokes
-//! [`Store::apply_feature_migrations`] before exposing its persistence API.
-//! Feature versions are independent of Store's global schema version.
+//! Those features once kept independent registries in `feature_schema_meta`,
+//! applied lazily when a feature store first opened. Store migration v49
+//! (`absorb_feature_ledgers`) runs each registry to completion through
+//! [`apply_feature_registry`], so the ledger rows and `feature.compat.<feature>`
+//! records are exactly what a feature open wrote. The registries are frozen
+//! there: the next change to a feature table is a store ledger entry.
 //!
-//! Each migration declares whether older binaries survive it
-//! ([`FeatureMigration::additive`], [`FeatureMigration::data_only`] or
-//! [`FeatureMigration::breaking`]). Whenever a binary applies one, it leaves a
-//! [`CompatibilityRecord`] for the feature in `schema_meta`, so an older
-//! binary that meets a newer feature schema keeps working when nothing above
-//! its own registry is breaking, and otherwise refuses naming the first
-//! breaking migration it lacks. Upgrade admission reads the same declarations
-//! (`compose::compiled_compatibility`).
+//! The rows and records stay because older binaries still read them. A binary
+//! that predates v49 still runs its own feature open, which applies nothing to
+//! a feature at the version it supports, keeps working beside a newer feature
+//! schema when every newer migration is additive or data-only, and otherwise
+//! refuses naming the first breaking migration it lacks. Upgrade admission
+//! reports the frozen versions and floors ([`feature_compatibility`]).
 
-use orbit_common::OrbitError;
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use orbit_common::fs::generation::FeatureFloor;
+use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
+use orbit_common::{OrbitError, StorageLayer};
+use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::Store;
 use crate::contracts::{
     CompatibilityRecord, MigrationCompatibility, StateComponent, evaluate_newer_state,
 };
@@ -29,9 +30,9 @@ const MIGRATION_NAME_MAX_BYTES: usize = 128;
 /// outside the `migration.v` namespace the store ledger scans.
 const COMPAT_KEY_PREFIX: &str = "feature.compat.";
 
-/// One append-only migration in a feature-owned schema registry.
+/// One entry of a frozen feature registry.
 #[derive(Clone, Copy)]
-pub struct FeatureMigration {
+pub(super) struct FeatureMigration {
     version: u32,
     name: &'static str,
     compat: MigrationCompatibility,
@@ -40,10 +41,8 @@ pub struct FeatureMigration {
 
 impl FeatureMigration {
     /// A migration older binaries cannot run beside: it removes, renames or
-    /// reinterprets state they read or write. Registries must start at
-    /// version 1 and contain every version exactly once in ascending order.
-    /// Declare this when in doubt.
-    pub const fn breaking(
+    /// reinterprets state they read or write.
+    pub(super) const fn breaking(
         version: u32,
         name: &'static str,
         apply: fn(&Connection) -> Result<(), OrbitError>,
@@ -51,20 +50,10 @@ impl FeatureMigration {
         Self::declared(version, name, MigrationCompatibility::Breaking, apply)
     }
 
-    /// A migration that only adds state an older binary neither reads nor
-    /// violates when it writes: a new table or index, or a nullable column.
-    pub const fn additive(
-        version: u32,
-        name: &'static str,
-        apply: fn(&Connection) -> Result<(), OrbitError>,
-    ) -> Self {
-        Self::declared(version, name, MigrationCompatibility::Additive, apply)
-    }
-
     /// A one-time rewrite of existing rows into a shape older binaries
     /// already read and write, with no table or column change. Rows an older
     /// binary writes afterwards must stay correct for this one.
-    pub const fn data_only(
+    pub(super) const fn data_only(
         version: u32,
         name: &'static str,
         apply: fn(&Connection) -> Result<(), OrbitError>,
@@ -85,162 +74,97 @@ impl FeatureMigration {
             apply,
         }
     }
-
-    pub fn version(self) -> u32 {
-        self.version
-    }
-
-    pub fn name(self) -> &'static str {
-        self.name
-    }
-
-    /// Whether a binary without this migration must not run beside it.
-    pub fn is_breaking(self) -> bool {
-        self.compat.is_breaking()
-    }
 }
 
 /// One feature migration already committed to the shared SQLite database.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AppliedFeatureMigration {
-    pub version: u32,
-    pub name: String,
-    pub applied_at: String,
+struct AppliedFeatureMigration {
+    version: u32,
+    name: String,
 }
 
-/// One feature migration known by this binary but not yet applied.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingFeatureMigration {
-    pub version: u32,
-    pub name: String,
-}
+/// Bring `feature` to the newest version in `migrations` on `conn`, inside
+/// the caller's transaction.
+///
+/// Each pending migration body runs, then its `feature_schema_meta` row and
+/// the feature's compatibility record are written, as a feature open did. A
+/// gap, a changed migration name, or a newer on-disk feature schema whose
+/// compatibility record names a breaking migration this registry lacks fails
+/// closed before a body runs; a newer schema with none is left as it is.
+pub(super) fn apply_feature_registry(
+    conn: &Connection,
+    feature: &str,
+    migrations: &[FeatureMigration],
+) -> Result<(), OrbitError> {
+    validate_feature_identifier(feature)?;
+    validate_registry(feature, migrations)?;
+    let applied = read_applied_migrations(conn, feature)?;
+    validate_applied_ledger(conn, feature, migrations, &applied)?;
+    let current_version = applied.last().map_or(0, |entry| entry.version);
 
-/// Validated view of one feature's independent schema ledger.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FeatureSchemaStatus {
-    pub feature: String,
-    pub current_version: u32,
-    pub applied: Vec<AppliedFeatureMigration>,
-    pub pending: Vec<PendingFeatureMigration>,
-}
-
-impl Store {
-    /// Apply every pending migration for `feature` in order.
-    ///
-    /// Each migration callback and its ledger row commit in one `BEGIN
-    /// IMMEDIATE` transaction. Earlier successful migrations remain committed
-    /// when a later migration fails, while that failing migration leaves
-    /// neither partial schema nor a ledger row. A gap, a changed migration
-    /// name, or a newer on-disk feature schema whose compatibility record
-    /// names a breaking migration this binary lacks fails closed before a
-    /// callback runs; a newer schema with none is left as it is.
-    pub fn apply_feature_migrations(
-        &self,
-        feature: &str,
-        migrations: &[FeatureMigration],
-    ) -> Result<(), OrbitError> {
-        validate_feature_identifier(feature)?;
-        validate_registry(feature, migrations)?;
-
-        // Avoid taking Store's serialized writer for migrations already
-        // validated as applied. The transaction-local re-read below remains
-        // authoritative and handles another process advancing the same
-        // feature between this status read and lock acquisition.
-        let current_version = self
-            .feature_schema_status(feature, migrations)?
-            .current_version;
-        let pending_offset = usize::try_from(current_version).map_err(|error| {
-            OrbitError::Migration(format!(
-                "feature schema version {current_version} for '{feature}' cannot index this migration registry: {error}"
-            ))
+    for migration in migrations
+        .iter()
+        .filter(|migration| migration.version > current_version)
+    {
+        (migration.apply)(conn)?;
+        conn.execute(
+            "INSERT INTO feature_schema_meta(feature, version, name, applied_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                feature,
+                i64::from(migration.version),
+                migration.name,
+                crate::now_string(),
+            ],
+        )
+        .map_err(|error| {
+            sqlite_error(
+                StorageLayer::Migration,
+                &error,
+                format!(
+                    "failed to record feature migration '{feature}' v{} ({}): {error}",
+                    migration.version, migration.name
+                ),
+            )
         })?;
-
-        for migration in migrations.iter().skip(pending_offset) {
-            let applied_now =
-                self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-                let conn = tx.connection();
-                let applied = read_applied_migrations(conn, feature)?;
-                validate_applied_ledger(conn, feature, migrations, &applied)?;
-
-                let current_version = applied.last().map_or(0, |entry| entry.version);
-                if current_version >= migration.version {
-                    return Ok(false);
-                }
-                let expected = current_version.checked_add(1).ok_or_else(|| {
-                    OrbitError::Migration(format!(
-                        "feature schema version overflow for '{feature}'"
-                    ))
-                })?;
-                if migration.version != expected {
-                    return Err(OrbitError::Migration(format!(
-                        "feature migration registry for '{feature}' cannot apply v{} after v{current_version}; expected v{expected}",
-                        migration.version
-                    )));
-                }
-
-                (migration.apply)(conn)?;
-                conn.execute(
-                    "INSERT INTO feature_schema_meta(feature, version, name, applied_at)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![
-                        feature,
-                        i64::from(migration.version),
-                        migration.name,
-                        crate::now_string(),
-                    ],
-                )
-                .map_err(|error| {
-                    OrbitError::Migration(format!(
-                        "failed to record feature migration '{feature}' v{} ({}): {error}",
-                        migration.version, migration.name
-                    ))
-                })?;
-                write_compat_record(conn, feature, migrations, migration.version)?;
-                Ok(true)
-            })?;
-
-            if applied_now {
-                orbit_common::tracing::info!(
-                    target: "orbit.store.sqlite",
-                    feature,
-                    version = migration.version,
-                    name = migration.name,
-                    "applied feature schema migration",
-                );
-            }
-        }
-
-        Ok(())
+        write_compat_record(conn, feature, migrations, migration.version)?;
+        orbit_common::tracing::info!(
+            target: "orbit.store.sqlite",
+            feature,
+            version = migration.version,
+            name = migration.name,
+            "applied feature schema migration",
+        );
     }
+    Ok(())
+}
 
-    /// Inspect and validate one feature's schema ledger without mutating it.
-    pub fn feature_schema_status(
-        &self,
-        feature: &str,
-        migrations: &[FeatureMigration],
-    ) -> Result<FeatureSchemaStatus, OrbitError> {
-        validate_feature_identifier(feature)?;
-        validate_registry(feature, migrations)?;
-        self.with_read_connection(|conn| {
-            let applied = read_applied_migrations(conn, feature)?;
-            validate_applied_ledger(conn, feature, migrations, &applied)?;
-            let current_version = applied.last().map_or(0, |entry| entry.version);
-            let pending = migrations
+/// What upgrade admission reports for each frozen feature registry: the
+/// newest version and the newest migration older binaries cannot run beside.
+/// Older binaries still compare both.
+pub(super) fn feature_compatibility(
+    registries: &[(&'static str, &[FeatureMigration])],
+) -> Vec<(&'static str, u32, FeatureFloor)> {
+    registries
+        .iter()
+        .map(|(feature, migrations)| {
+            let newest = migrations.last().map_or(0, |migration| migration.version);
+            let floor = migrations
                 .iter()
-                .filter(|migration| migration.version > current_version)
-                .map(|migration| PendingFeatureMigration {
-                    version: migration.version,
-                    name: migration.name.to_string(),
-                })
-                .collect();
-            Ok(FeatureSchemaStatus {
-                feature: feature.to_string(),
-                current_version,
-                applied,
-                pending,
-            })
+                .rev()
+                .find(|migration| migration.compat.is_breaking())
+                .map_or(
+                    FeatureFloor {
+                        version: 0,
+                        name: None,
+                    },
+                    |migration| FeatureFloor {
+                        version: migration.version,
+                        name: Some(migration.name.to_string()),
+                    },
+                );
+            (*feature, newest, floor)
         })
-    }
+        .collect()
 }
 
 fn read_applied_migrations(
@@ -249,36 +173,27 @@ fn read_applied_migrations(
 ) -> Result<Vec<AppliedFeatureMigration>, OrbitError> {
     let mut statement = conn
         .prepare(
-            "SELECT version, name, applied_at
+            "SELECT version, name
              FROM feature_schema_meta
              WHERE feature = ?1
              ORDER BY version ASC",
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let rows = statement
         .query_map([feature], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
     let mut applied = Vec::new();
     for row in rows {
-        let (version, name, applied_at) =
-            row.map_err(|error| OrbitError::Store(error.to_string()))?;
+        let (version, name) = row.map_err(sqlite_store_error)?;
         let version = u32::try_from(version).map_err(|error| {
             OrbitError::Migration(format!(
                 "feature migration ledger for '{feature}' contains invalid version {version}: {error}"
             ))
         })?;
-        applied.push(AppliedFeatureMigration {
-            version,
-            name,
-            applied_at,
-        });
+        applied.push(AppliedFeatureMigration { version, name });
     }
     Ok(applied)
 }
@@ -410,9 +325,13 @@ fn write_compat_record(
         params![compat_key(feature), record.encode()?, crate::now_string()],
     )
     .map_err(|error| {
-        OrbitError::Migration(format!(
-            "failed to record feature schema compatibility for '{feature}' at v{version}: {error}"
-        ))
+        sqlite_error(
+            StorageLayer::Migration,
+            &error,
+            format!(
+                "failed to record feature schema compatibility for '{feature}' at v{version}: {error}"
+            ),
+        )
     })?;
     Ok(())
 }
@@ -481,5 +400,5 @@ pub(super) fn apply_feature_schema_ledger(conn: &Connection) -> Result<(), Orbit
             END;
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }

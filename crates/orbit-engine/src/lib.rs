@@ -28,11 +28,22 @@
 //! orbit-common, orbit-agent, orbit-exec, orbit-store, orbit-tools
 //! → `orbit-engine` → orbit-core
 
+#[cfg(test)]
+#[path = "../tests/support/git.rs"]
+mod git_test_support;
+
 pub mod activity_job;
-/// Scoped hooks for downstream integration fixtures, enabled only in tests.
+/// Scoped hooks and the null host base for test fixtures, enabled only in tests.
 #[cfg(feature = "test-support")]
 pub mod test_support {
     pub use crate::activity_job::cli_runner::with_cli_supervision_clock;
+    pub use crate::activity_job::job_executor::loop_clock::with_loop_clock;
+    pub use crate::context::NullRuntimeHost;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub use crate::executor::automation::vcs::with_host_target_removal_hook;
+    pub use crate::executor::automation::vcs::{
+        with_prerequisite_clock, with_remote_probe_backoff, with_vcs_retry_wait,
+    };
 }
 mod condition;
 mod context;
@@ -43,35 +54,41 @@ mod template;
 mod tests;
 
 pub use activity_job::{
-    DispatchError, DispatchOutcome, JobOutcome, LinuxRuntimeWriteAuthority, ResolvedCliExecutor,
-    ResolvedSandbox, ResolvedShellExecutor, SandboxMask, V2AuditWriter, V2DispatchInput,
-    V2SqliteSink, dispatch_error_to_orbit, dispatch_v2_activity, execute_job_with_resume,
-    load_activity_asset, resolve_crew_settings, resolve_job_catalog_refs_for_execution,
-    validate_job, validate_job_deterministic_actions,
+    DispatchError, DispatchInvocationTrace, DispatchOutcome, JobOutcome,
+    LinuxRuntimeWriteAuthority, ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor,
+    SandboxMask, V2AuditWriter, V2DispatchInput, V2SqliteSink, dispatch_error_to_orbit,
+    dispatch_v2_activity, execute_job_with_resume, load_activity_asset, resolve_crew_settings,
+    resolve_job_catalog_refs_for_execution, validate_job, validate_job_deterministic_actions,
 };
 pub use context::{
     ClaimExecutionContext, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
-    FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingStep,
-    HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun, PrConfig,
-    RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
+    FinalRecoveryApplication, FinalRecoveryApplied, GeneratedPath, HandoffLandingContext,
+    HandoffLandingStep, HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle,
+    PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig, RebaseRecoveryAttemptScope,
+    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
     ReviewReportCorrectionRequest, ReviewerInvocationRequest, RuntimeHost,
-    STEP_RECOVERY_DECISION_SCHEMA_VERSION, ScratchGcEntry, ScratchGcReport, StepRecoveryAdmission,
-    StepRecoveryDecisionRead, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
-    StepRecoveryVerdict, TaskActivityUpdate, TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT,
+    STEP_RECOVERY_DECISION_SCHEMA_VERSION, ScratchGcEntry, ScratchGcReport, SteeringGateReading,
+    SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,
+    StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, StepRecoveryVerdict, TaskActivityUpdate,
+    TaskAutomationUpdate, UnlockedPathValidation, ValidatedTree, WORKFLOW_RUN_FAILED_EVENT,
     WORKFLOW_RUN_INTERRUPTED_EVENT, WorktreeGcTaskLookup, baseline_red_hold_update,
     blocked_workflow_failure_update, blocked_workflow_interruption_update,
 };
 pub use executor::automation::ci::log_signature as ci_log_signature;
 pub use executor::automation::ci::run_event as ci_run_event;
 pub use executor::automation::execute_action as execute_deterministic_action;
+pub use executor::automation::review::normalize_review_decision;
 pub use executor::automation::vcs::claim::{
-    observe_candidate, observe_no_diff_candidate, observe_published_candidate,
+    observe_accepted_published_handoff, observe_candidate, observe_no_diff_candidate,
+    observe_published_candidate,
 };
+pub use executor::automation::vcs::git::BaseSyncMode;
 pub use executor::automation::vcs::review_gate;
+pub use executor::automation::vcs::run_private_operation as run_private_vcs_operation;
 pub use executor::automation::vcs::{
-    BaselineHoldStatus, ClaimedKnownRed, KnownRedUnconfirmed, WorktreeGcOptions,
+    BaselineHoldStatus, ClaimedKnownRed, KnownRedUnconfirmed, PullRequestStatus, WorktreeGcOptions,
     WorktreeGcRecovery, WorktreeGcResult, WorktreeReclaimReport, baseline_hold_status,
-    collect_worktrees, fetch_remote_base, recorded_baseline_hold_status, run_deferral_probe,
-    run_worktree_has_reclaim_output, run_worktree_paths, validate_claim_new_paths,
-    verify_claimed_known_red,
+    collect_worktrees, fetch_remote_base, judge_light_delivery, recorded_baseline_hold_status,
+    run_deferral_probe, run_worktree_has_reclaim_output, run_worktree_paths,
+    validate_claim_new_paths, verify_claimed_known_red, verify_claimed_known_red_base,
 };

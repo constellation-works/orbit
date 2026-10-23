@@ -74,7 +74,7 @@ impl Fixture {
             ReviewTiming::BeforeLanding => "before_landing",
             _ => "before_pr",
         };
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("global");
         let repo = root.path().join("repo");
         let workspace = repo.join(".orbit");
@@ -101,10 +101,7 @@ impl Fixture {
         )
         .unwrap();
         let git = |args: &[&str]| {
-            let mut command = std::process::Command::new("git");
-            orbit_common::test_env::clear_inherited_authority(|key| {
-                command.env_remove(key);
-            });
+            let mut command = crate::git_test_support::command();
             let output = command.args(args).current_dir(&repo).output().unwrap();
             assert!(output.status.success(), "git {args:?}: {output:?}");
         };
@@ -219,7 +216,7 @@ impl Fixture {
             .unwrap();
     }
 
-    fn report(&self, verdict: &str) {
+    pub(super) fn report(&self, verdict: &str) {
         self.put_report(&json!({
             "schema_version": REVIEW_CONTRACT_VERSION,
             "attempt_id": self.input["admission"]["attempt_id"],
@@ -291,13 +288,7 @@ fn a_captured_pool_reviews_with_a_crew_that_did_not_implement_the_task() {
     );
 }
 
-#[test]
 fn settled_negative_verdicts_are_successful_calls_with_decision_detail() {
-    if !super::dispatch_admission::isolated(
-        "review_gate_audit::settled_negative_verdicts_are_successful_calls_with_decision_detail",
-    ) {
-        return;
-    }
     // The persisted legacy spelling is still accepted and projected using
     // the current verdict contract.
     for (report, verdict) in [("changes_required", "reject"), ("incomplete", "incomplete")] {
@@ -334,13 +325,7 @@ fn settled_negative_verdicts_are_successful_calls_with_decision_detail() {
     }
 }
 
-#[test]
 fn uncovered_landings_succeed_and_exhausted_admissions_are_denied() {
-    if !super::dispatch_admission::isolated(
-        "review_gate_audit::uncovered_landings_succeed_and_exhausted_admissions_are_denied",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     fixture.admit();
     // The reviewer runs past the candidate's ten minutes without a verdict:
@@ -450,13 +435,7 @@ fn uncovered_landings_succeed_and_exhausted_admissions_are_denied() {
     );
 }
 
-#[test]
 fn execution_failures_have_messages_and_remain_unexpected() {
-    if !super::dispatch_admission::isolated(
-        "review_gate_audit::execution_failures_have_messages_and_remain_unexpected",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     let mut input = fixture.input.clone();
     input["base_sha"] = json!("missing-git-object");
@@ -491,3 +470,11 @@ fn execution_failures_have_messages_and_remain_unexpected() {
         assert_eq!(classify(&row), FailureClass::Unexpected);
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    settled_negative_verdicts_are_successful_calls_with_decision_detail_scenarios,
+    settled_negative_verdicts_are_successful_calls_with_decision_detail,
+    uncovered_landings_succeed_and_exhausted_admissions_are_denied,
+    execution_failures_have_messages_and_remain_unexpected
+);

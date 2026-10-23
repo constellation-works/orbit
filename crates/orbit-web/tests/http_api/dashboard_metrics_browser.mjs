@@ -1,6 +1,6 @@
 // Usage: node dashboard_metrics_browser.mjs /path/to/playwright/index.mjs .orbit/tmp/metrics-browser
-// Health › Metrics (ORB-15746) through the shipped app, router, renderer and
-// CSS: duration and completion trends, series toggles, statistic and table
+// Analytics › Metrics (ORB-15746) through the shipped app, router, renderer and
+// CSS: duration, completion and defect trends, series toggles, statistic and table
 // views, hover and keyboard tooltips, window changes, the empty window with
 // its widen action, and a 390px phone.
 import assert from 'node:assert/strict';
@@ -36,11 +36,11 @@ function trendWindow(key) {
 }
 
 // Hard runs dip in bucket 5 to a single run; bucket 9 has none at all.
-function durations(key) {
+function durations(key, outcome = 'succeeded') {
   const { count, window, start } = trendWindow(key);
   if (key === '1h') {
     return {
-      window, truncated: false,
+      window, outcome, truncated: false,
       buckets: Array.from({ length: count }, (_, i) => ({ start: start(i), all: null, low: null, medium: null, hard: null, other_runs: 0 })),
       current: { all: null, low: null, medium: null, hard: null, xhard: null, unset: null },
       previous: { all: stats(3, 20), low: null, medium: null, hard: null, xhard: null, unset: null },
@@ -55,9 +55,12 @@ function durations(key) {
       hard: i === 5 ? stats(1, 8) : stats(3, 45 + i), other_runs: i === 5 ? 2 : 0,
     };
   });
+  if (outcome === 'all') {
+    buckets[5] = { ...buckets[5], all: stats(19, 12), hard: stats(11, 3) };
+  }
   return {
-    window, truncated: false, buckets,
-    current: { all: stats(200, 43.9), low: stats(56, 43), medium: stats(70, 41.5), hard: stats(60, 47), xhard: stats(4, 70), unset: stats(10, 25) },
+    window, outcome, truncated: false, buckets,
+    current: { all: outcome === 'all' ? stats(210, 30) : stats(200, 43.9), low: stats(56, 43), medium: stats(70, 41.5), hard: stats(60, 47), xhard: stats(4, 70), unset: stats(10, 25) },
     previous: { all: stats(180, 30.1), low: stats(50, 24.3), medium: stats(60, 31), hard: stats(55, 35), xhard: null, unset: null },
     actors: [
       { actor: 'codex / gpt-6.1-sol', ...stats(126, 42.1), previous_avg: minutes(23.9), trend: buckets.map((_, i) => (i === 9 ? null : minutes(35 + i))) },
@@ -65,6 +68,7 @@ function durations(key) {
       { actor: 'gemini / gemini-3.8-flash-high', ...stats(3, 25), previous_avg: null, trend: buckets.map(() => null) },
     ],
     slowest: [
+      ...(outcome === 'all' ? [{ ts: start(5), actor: 'codex / gpt-6.1-sol', complexity: 'hard', duration_ms: minutes(300), task_id: 'ORB-15702' }] : []),
       { ts: start(3), actor: 'claude / claude-opus-5-5', complexity: 'hard', duration_ms: minutes(185), task_id: 'ORB-15700' },
       { ts: start(7), actor: 'codex / gpt-6.1-sol', complexity: 'medium', duration_ms: minutes(140), task_id: 'ORB-15701' },
     ],
@@ -91,7 +95,33 @@ function completions(key) {
   };
 }
 
+const ORIGINS = ['code-review', 'full-code-review', 'delivery-code-review', 'qa-sweep', 'qa-full-sweep', 'security-review',
+  'ci-failure-sweep', 'scanning-sweep', 'review-reconciliation', 'friction-curation', 'other'];
+
+// Bucket 3 holds a fix-for-a-fix filed by a full code review; bucket 9 is empty.
+function defects(key) {
+  const { count, window, start } = trendWindow(key);
+  const counts = (fixForFix, regression, unattributed, origin) => ({
+    total: fixForFix + regression + unattributed,
+    lineage: { fix_for_fix: fixForFix, regression, unattributed },
+    origin: Object.fromEntries(ORIGINS.map(name => [name, origin[name] || 0])),
+  });
+  return {
+    window,
+    lineages: ['fix_for_fix', 'regression', 'unattributed'],
+    origins: ORIGINS,
+    buckets: Array.from({ length: count }, (_, i) => ({
+      start: start(i),
+      ...(i === 9 ? counts(0, 0, 0, {}) : i === 3 ? counts(1, 1, 1, { 'full-code-review': 2, 'friction-curation': 1 }) : counts(0, 1, 1, { 'qa-sweep': 1, other: 1 })),
+    })),
+    current: counts(4, 10, 6, { 'code-review': 5, 'full-code-review': 6, 'qa-sweep': 4, 'scanning-sweep': 2, other: 3 }),
+    previous: counts(2, 8, 6, { 'code-review': 6, 'qa-sweep': 6, other: 4 }),
+  };
+}
+
 const requests = [];
+// An older host has no defect trend; set to serve its 404.
+let defectsMissing = false;
 function payloadFor(url) {
   switch (url.pathname) {
     case '/api/workspaces': return [{ id: 'ws_fixture', name: 'fixture', status: 'active', is_default: true }];
@@ -99,10 +129,14 @@ function payloadFor(url) {
     case '/api/workflows/auto/readiness': return { capacity: {}, tasks: [] };
     case '/api/diagnostics/implement_one':
       requests.push(`implement_one?since=${url.searchParams.get('since')}`);
-      return durations(url.searchParams.get('since'));
+      requests.push(`outcome=${url.searchParams.get('outcome')}`);
+      return durations(url.searchParams.get('since'), url.searchParams.get('outcome'));
     case '/api/diagnostics/completions':
       requests.push(`completions?since=${url.searchParams.get('since')}`);
       return completions(url.searchParams.get('since'));
+    case '/api/diagnostics/defects':
+      requests.push(`defects?since=${url.searchParams.get('since')}`);
+      return defects(url.searchParams.get('since'));
     case '/api/tasks/completion-by-complexity': return {
       by_complexity: [
         { complexity: 'unset', total: 762, statuses: [{ status: 'done', count: 641 }, { status: 'rejected', count: 86 }, { status: 'archived', count: 35 }] },
@@ -115,6 +149,11 @@ function payloadFor(url) {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
+  if (defectsMissing && url.pathname === '/api/diagnostics/defects') {
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'not found' }));
+    return;
+  }
   if (url.pathname.startsWith('/api/')) {
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify(payloadFor(url)));
@@ -140,7 +179,7 @@ try {
   page.on('console', message => {
     if (message.type() === 'error' && !/EventSource|Failed to load resource/.test(message.text())) errors.push(message.text());
   });
-  await page.goto(`${origin}#diagnostics/metrics`);
+  await page.goto(`${origin}#analytics/metrics`);
   const body = page.locator('#metrics-body');
   await body.locator('.mx-sc').first().waitFor();
   await page.evaluate(async () => { await document.fonts.ready; });
@@ -154,7 +193,7 @@ try {
   assert.match(cards[0].delta, /▲ 46% slower/);
   assert.match(cards[0].delta, /vs prev 24h 30\.1m/);
   assert.ok(cards.every(card => card.pressed === 'true'));
-  assert.equal(await page.locator('#diagnostics-main').evaluate(node => getComputedStyle(node).display), 'none', 'the list panel is swapped out');
+  assert.equal(await page.locator('.tab-pane.active').getAttribute('data-tab'), 'analytics', 'Metrics opens under Analytics');
   assert.match(await page.locator('#metrics-count').textContent(), /200 runs · 276 done · window 24h/);
   pass('duration cards', { cards });
 
@@ -243,6 +282,39 @@ try {
   await page.keyboard.press('Tab');
   pass('completed trend', { doneCards });
 
+  // Defects tab: lineage and origin groupings over the same buckets.
+  await body.getByRole('tab', { name: 'Defects' }).click();
+  assert.equal(await body.getByRole('tab', { name: 'Defects' }).getAttribute('aria-selected'), 'true');
+  const groups = body.getByRole('group', { name: 'Group by' });
+  assert.equal(await groups.getByRole('button', { name: 'Lineage' }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await body.locator('.mx-sc').count(), 4, 'total plus three lineages');
+  assert.equal(await body.locator('.mx-sc-value').first().textContent(), '20');
+  assert.equal(await body.locator('.mx-sc .bad').count(), 3, 'a rise in defects reads as worse; unattributed is flat');
+  assert.equal(await body.locator('.mx-bars .mx-bar-col').count(), 25);
+  assert.equal(await body.locator('.mx-bars .mx-bar-col').nth(3).locator('.mx-s-fix_for_fix').evaluate(node => parseFloat(node.style.height) > 0), true);
+  assert.equal(await body.locator('.mx-bars .mx-bar-col').nth(4).locator('.mx-s-fix_for_fix').evaluate(node => parseFloat(node.style.height)), 0);
+  await body.locator('.mx-sc.mx-s-unattributed').click();
+  assert.equal(await body.locator('.mx-sc.mx-s-unattributed').getAttribute('aria-pressed'), 'false');
+  assert.equal(await body.locator('.mx-bars .mx-bar-col').nth(4).locator('.mx-s-unattributed').evaluate(node => parseFloat(node.style.height)), 0, 'a hidden series leaves the stack');
+  await page.screenshot({ path: path.join(evidence, 'defects-lineage-1440.png'), fullPage: true, animations: 'disabled' });
+
+  await groups.getByRole('button', { name: 'Origin' }).click();
+  assert.equal(await body.locator('.mx-sc').count(), 9, 'total plus seven named finders and Other');
+  // Scanning sweeps, friction curation and untagged fold into Other.
+  assert.equal(await body.locator('.mx-sc.mx-s-other .mx-sc-value').textContent(), '5');
+  assert.equal(await body.locator('.mx-bars .mx-bar-col').nth(3).locator('.mx-s-full-code-review').evaluate(node => parseFloat(node.style.height) > 0), true);
+  await hoverColumns.nth(3).hover();
+  assert.match(await tip.textContent(), /fix-for-a-fix 1/);
+  await page.mouse.move(5, 5);
+  await page.screenshot({ path: path.join(evidence, 'defects-origin-1440.png'), fullPage: true, animations: 'disabled' });
+  await body.getByRole('button', { name: 'Table', exact: true }).click();
+  assert.equal(await body.locator('.mx-trend-view thead th').count(), 13, 'bucket, total and every origin the API sends');
+  await body.getByRole('button', { name: 'Chart', exact: true }).click();
+  await groups.getByRole('button', { name: 'Lineage' }).click();
+  assert.equal(await body.locator('.mx-sc.mx-s-unattributed').getAttribute('aria-pressed'), 'false', 'each grouping keeps its own hidden series');
+  await body.locator('.mx-sc.mx-s-unattributed').click();
+  pass('defects trend');
+
   // Detail cards.
   assert.equal(await body.locator('.mx-actors tbody tr').count(), 3);
   assert.equal(await body.locator('.mx-actors tbody tr.mx-dim').count(), 1, 'a three-run actor is dimmed');
@@ -258,10 +330,10 @@ try {
   await body.getByRole('tab', { name: 'implement_one duration' }).click();
   await page.locator('#metrics-window-selector [data-window="7d"]').click();
   await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('window 7d'));
-  assert.ok(requests.includes('implement_one?since=7d') && requests.includes('completions?since=7d'));
+  assert.ok(requests.includes('implement_one?since=7d') && requests.includes('completions?since=7d') && requests.includes('defects?since=7d'));
   assert.match(await body.locator('.mx-sc-sub').first().textContent(), /vs prev 7d/);
   assert.equal(await body.locator('.mx-volume .mx-vol-col').count(), 29, '6-hour buckets');
-  assert.match(await body.locator('.mx-notes').textContent(), /6-hour buckets/);
+  assert.match(await body.locator('.mx-chart .mx-notes').textContent(), /6-hour buckets/);
   pass('window change');
 
   // An empty window offers the next wider one.
@@ -272,6 +344,42 @@ try {
   await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('window 24h'));
   assert.equal(await page.locator('#metrics-window-selector [data-window="24h"]').getAttribute('aria-selected'), 'true');
   pass('empty window widens');
+
+  // Outcome selection fetches the whole duration payload and survives navigation/reload.
+  const outcomeButtons = body.getByRole('group', { name: 'Run outcome' });
+  assert.equal(await outcomeButtons.getByRole('button', { name: 'Succeeded', exact: true }).getAttribute('aria-pressed'), 'true');
+  assert.match(await body.locator('.mx-trend-view > .mx-notes').textContent(), /successful runs with a committed candidate/);
+  const succeededHardBar = await body.locator('.mx-volume .mx-vol-col').nth(5).locator('.mx-s-hard').evaluate(node => node.style.height);
+  await outcomeButtons.getByRole('button', { name: 'All', exact: true }).click();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('210 runs'));
+  assert.ok(requests.includes('outcome=all'));
+  assert.equal(new URLSearchParams(new URL(page.url()).hash.split('?')[1]).get('outcome'), 'all');
+  assert.equal(await body.locator('.mx-sc-value').first().textContent(), '30.0m');
+  assert.equal(await body.locator('.mx-slow-dur').first().textContent(), '5h 00m');
+  const allHardBar = await body.locator('.mx-volume .mx-vol-col').nth(5).locator('.mx-s-hard').evaluate(node => node.style.height);
+  assert.ok(parseFloat(allHardBar) > parseFloat(succeededHardBar), 'run bars use filtered bucket counts');
+  assert.match(await body.locator('.mx-trend-view > .mx-notes').textContent(), /all implement_one invocations/);
+  await body.locator('.mx-hover-col').nth(5).hover();
+  assert.match(await body.locator('.mx-tip').textContent(), /All runs×19/);
+  await page.mouse.move(5, 5);
+  await body.getByRole('button', { name: 'Table', exact: true }).click();
+  assert.match(await body.locator('.mx-trend-view tbody tr').nth(19).textContent(), /3\.0m \(11\)/);
+  await page.locator('#metrics-window-selector [data-window="7d"]').click();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('210 runs') && document.getElementById('metrics-count').textContent.includes('window 7d'));
+  assert.equal(await outcomeButtons.getByRole('button', { name: 'All', exact: true }).getAttribute('aria-pressed'), 'true');
+  await page.locator('#metrics-window-selector [data-window="24h"]').click();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('210 runs') && document.getElementById('metrics-count').textContent.includes('window 24h'));
+  await page.reload();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('210 runs'));
+  assert.equal(await outcomeButtons.getByRole('button', { name: 'All', exact: true }).getAttribute('aria-pressed'), 'true');
+  await outcomeButtons.getByRole('button', { name: 'Succeeded', exact: true }).click();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('200 runs'));
+  await page.goBack();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('210 runs'));
+  await page.goForward();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('200 runs'));
+  assert.equal(await body.locator('.mx-slow-dur').first().textContent(), '3h 05m');
+  pass('outcome toggle, filtered values, URL reload and history');
 
   // Phone width: no sideways page scroll, tables scroll inside their cards.
   await page.setViewportSize({ width: 390, height: 1400 });
@@ -285,9 +393,25 @@ try {
   await page.screenshot({ path: path.join(evidence, 'metrics-390.png'), fullPage: true, animations: 'disabled' });
   pass('phone layout', phone);
 
+  await body.getByRole('tab', { name: 'Defects' }).click();
+  await body.getByRole('group', { name: 'Group by' }).getByRole('button', { name: 'Origin' }).click();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'nine origin cards fit a phone');
+  await page.screenshot({ path: path.join(evidence, 'defects-origin-390.png'), fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+
+  // A host without the defect trend keeps the other trends.
+  defectsMissing = true;
+  await page.locator('#metrics-window-selector [data-window="7d"]').click();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('window 7d'));
+  assert.equal(await body.locator('.mx-empty').count(), 1, 'the Defects tab explains itself');
+  assert.equal(await body.getByRole('button', { name: /^Widen to/ }).count(), 0, 'a wider window would not help');
+  await body.getByRole('tab', { name: 'Tasks completed' }).click();
+  assert.equal(await body.locator('.mx-bars .mx-bar-col').count(), 29, 'completions still render');
+  pass('older host without defects');
+
   assert.deepEqual(errors, [], 'no browser errors');
   fs.writeFileSync(path.join(evidence, 'metrics-assertions.json'), JSON.stringify({ passed: true, assertions }, null, 2));
-  console.log(`PASS: ${assertions.length} Health › Metrics scenarios.`);
+  console.log(`PASS: ${assertions.length} Analytics › Metrics scenarios.`);
 } catch (error) {
   await page?.screenshot({ path: path.join(evidence, 'failure.png'), fullPage: true });
   throw error;

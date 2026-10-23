@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Canonical Audit Actor Identity"
 tags: ["auditability"]
-last_validated: 2026-10-11
+last_validated: 2026-10-19
 ---
 
 # Spec: Canonical Audit Actor Identity
@@ -89,9 +89,10 @@ silent reinterpretation of history.
 
 Bump the version when a label's canonical resolution changes — a new alias, a re-kinded
 label, a corrected family. Do **not** bump it for a model that an existing rule already
-resolves. A bump requires a new append-only ledger migration that calls
-`backfill_audit_actor_identity`, which re-derives exactly the rows whose stamped version
-is not current. Map history: v2 (migration v18 `audit_actor_alias_v2`) promoted `fable`
+resolves. A bump requires a new append-only ledger migration with its own private
+backfill helper, which re-derives exactly the rows whose stamped version is not current.
+The shipped v16 and v18 helpers are private to their versions; their current domain-map
+calls remain valid because they stamp the derivation version on every affected row. Map history: v2 (migration v18 `audit_actor_alias_v2`) promoted `fable`
 from a shorthand alias to a family rule so versioned Fable labels resolve to `claude`.
 
 ## Persistence

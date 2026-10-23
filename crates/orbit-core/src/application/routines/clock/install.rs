@@ -11,7 +11,10 @@ use super::converge::clear_clock_reload_pending;
 use super::manager::{ClockCommandRunner, ClockPlatform, ManagerCommand, NativeClockCommandRunner};
 use super::program::split_systemd_exec_start;
 use super::settings::{ClockSettings, LAUNCHD_LABEL, SYSTEMD_UNIT, load_clock_settings};
-use super::status::{query_systemd_clock_details, systemd_unschedulable_error};
+use super::status::{
+    monotonic_usec, query_systemd_clock_details, systemd_schedulability_with_health,
+    systemd_unschedulable_error,
+};
 
 const LAUNCHD_PLIST_TEMPLATE: &str = include_str!("../../../../assets/clock/com.orbit.sweep.plist");
 const SYSTEMD_SERVICE_TEMPLATE: &str = include_str!("../../../../assets/clock/orbit-sweep.service");
@@ -105,9 +108,12 @@ pub(super) fn validated_sweep_log_path(global_root: &Path) -> Result<PathBuf, Or
 pub struct ClockInstallReport {
     /// Unit files written.
     pub files_written: Vec<PathBuf>,
-    /// True when the unit was activated successfully. On systemd this also
-    /// means the manager reported it active with a finite future trigger.
+    /// True when the unit was activated successfully. On systemd this means
+    /// the timer is schedulable, including a healthy in-flight oneshot sweep.
     pub activated: bool,
+    /// True when the clock was paused, so the units were rewritten for the next
+    /// enable and nothing was activated: a pause is not a failed activation.
+    pub paused: bool,
     /// Follow-up commands to run manually when activation failed or was
     /// unavailable (e.g. no user systemd session).
     pub manual_steps: Vec<String>,
@@ -132,7 +138,7 @@ const CLOCK_ENV_TEMPLATE: &str = "\
 
 /// Create the comment-only `clock.env` when absent; never touch an existing
 /// one. Returns its path and whether this call created it.
-fn ensure_clock_env_file(global_root: &Path) -> Result<(PathBuf, bool), OrbitError> {
+pub(super) fn ensure_clock_env_file(global_root: &Path) -> Result<(PathBuf, bool), OrbitError> {
     let path = orbit_common::security::operator_env::clock_env_file_path(global_root);
     match orbit_common::fs::io::write_new_private_text(&path, CLOCK_ENV_TEMPLATE) {
         Ok(()) => Ok((path, true)),
@@ -196,6 +202,7 @@ fn install_launchd(
         manual_steps: launchd_manual_steps(activated, &plist_path),
         files_written: vec![plist_path],
         activated,
+        paused: false,
         env_file: PathBuf::new(),
         env_file_created: false,
     })
@@ -288,7 +295,9 @@ fn install_systemd(
     let restarted = enabled && runner.run(&restart).unwrap_or(false);
     let activated = if restarted {
         let details = query_systemd_clock_details(runner)?;
-        if !details.is_schedulable() {
+        let (schedulable, _) =
+            systemd_schedulability_with_health(runner, Some(&details), monotonic_usec());
+        if !schedulable {
             return Err(systemd_unschedulable_error("restart completed"));
         }
         true
@@ -300,6 +309,7 @@ fn install_systemd(
         manual_steps: systemd_manual_steps(activated),
         files_written,
         activated,
+        paused: false,
         env_file: PathBuf::new(),
         env_file_created: false,
     })
@@ -403,7 +413,7 @@ pub(crate) fn systemd_service_path(home: &Path) -> PathBuf {
     systemd_user_unit_dir(home).join(format!("{SYSTEMD_UNIT}.service"))
 }
 
-fn systemd_timer_path(home: &Path) -> PathBuf {
+pub(super) fn systemd_timer_path(home: &Path) -> PathBuf {
     systemd_user_unit_dir(home).join(format!("{SYSTEMD_UNIT}.timer"))
 }
 

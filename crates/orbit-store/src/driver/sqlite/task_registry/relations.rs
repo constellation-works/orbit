@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     CYCLIC_RELATION_TYPES, TaskEnvelopeV2, TaskRelation, TaskRelationEdge, TaskRelationType,
@@ -86,14 +87,14 @@ impl TaskRegistryStore {
                 "SELECT 1 FROM task_bundle_relations
                  WHERE source_task_id = ?1 AND relation_type = ?2 AND target_task_id = ?3",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         unresolved
             .into_iter()
             .map(|edge| {
                 let relation_type = relation_type_name(edge.relation_type);
                 let indexed = indexed
                     .exists(params![edge.source, relation_type, edge.target])
-                    .map_err(|e| OrbitError::Store(e.to_string()))?;
+                    .map_err(sqlite_store_error)?;
                 Ok(DanglingRelationTarget {
                     partition_id: partition_id.clone(),
                     source_task_id: edge.source,
@@ -120,7 +121,7 @@ impl TaskRegistryStore {
                  WHERE workspace_id = ?1 AND source_task_id = ?2 AND relation_type = ?3
                  ORDER BY target_task_id ASC",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(
                 params![
@@ -130,9 +131,9 @@ impl TaskRegistryStore {
                 ],
                 |row| row.get::<_, String>(0),
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 }
 
@@ -389,7 +390,7 @@ fn reachable_cycle_family_edges(
     for batch in seed_ids.chunks(CYCLE_WALK_SEED_BATCH_SIZE) {
         let mut stmt = conn
             .prepare(&reachable_cycle_family_sql(batch.len()))
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(params_from_iter(batch.iter()), |row| {
                 Ok((
@@ -398,10 +399,9 @@ fn reachable_cycle_family_edges(
                     row.get::<_, String>(2)?,
                 ))
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         for row in rows {
-            let (source, relation_type, target) =
-                row.map_err(|e| OrbitError::Store(e.to_string()))?;
+            let (source, relation_type, target) = row.map_err(sqlite_store_error)?;
             edges.push(TaskRelationEdge {
                 source,
                 relation_type: parse_relation_type_name(&relation_type)

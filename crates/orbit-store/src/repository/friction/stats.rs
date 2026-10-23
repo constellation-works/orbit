@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 use super::queries::encode_timestamp;
@@ -39,15 +40,15 @@ pub(super) fn status_counts(
             "SELECT status, COUNT(*) FROM friction_records
              WHERE workspace_id = ?1 GROUP BY status",
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let rows = statement
         .query_map(rusqlite::params![workspace_id], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let mut by_status = BTreeMap::new();
     for row in rows {
-        let (status, count) = row.map_err(|error| OrbitError::Store(error.to_string()))?;
+        let (status, count) = row.map_err(sqlite_store_error)?;
         by_status.insert(status, count.max(0) as u64);
     }
     Ok(StatusCounts { by_status })
@@ -70,44 +71,30 @@ pub(super) fn resolved_in_window(
             rusqlite::params![workspace_id, encode_timestamp(start), encode_timestamp(end)],
             |row| row.get(0),
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     Ok(count.max(0) as u64)
 }
 
-/// Record counts grouped by reporting model label, optionally windowed.
+/// Record counts grouped by reporting model label.
 pub(super) fn counts_by_model(
     conn: &Connection,
     workspace_id: &str,
-    since: Option<DateTime<Utc>>,
 ) -> Result<Vec<FrictionReportedCount>, OrbitError> {
-    let (sql, params): (&str, Vec<rusqlite::types::Value>) = match since {
-        Some(since) => (
-            "SELECT model, COUNT(*) FROM friction_records
-             WHERE workspace_id = ?1 AND created_at >= ?2 GROUP BY model",
-            vec![
-                rusqlite::types::Value::Text(workspace_id.to_string()),
-                rusqlite::types::Value::Text(encode_timestamp(since)),
-            ],
-        ),
-        None => (
+    let mut statement = conn
+        .prepare(
             "SELECT model, COUNT(*) FROM friction_records
              WHERE workspace_id = ?1 GROUP BY model",
-            vec![rusqlite::types::Value::Text(workspace_id.to_string())],
-        ),
-    };
-    let mut statement = conn
-        .prepare(sql)
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        )
+        .map_err(sqlite_store_error)?;
     let rows = statement
-        .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+        .query_map([workspace_id], |row| {
             Ok(FrictionReportedCount {
                 model: row.get::<_, String>(0)?,
                 count: row.get::<_, i64>(1)?.max(0) as u64,
             })
         })
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
-    rows.map(|row| row.map_err(|error| OrbitError::Store(error.to_string())))
-        .collect()
+        .map_err(sqlite_store_error)?;
+    rows.map(|row| row.map_err(sqlite_store_error)).collect()
 }
 
 /// `(tag, model) -> count`, the input to the per-tag rate table.
@@ -124,7 +111,7 @@ pub(super) fn counts_by_tag_and_model(
              WHERE t.workspace_id = ?1
              GROUP BY t.tag, r.model",
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let rows = statement
         .query_map(rusqlite::params![workspace_id], |row| {
             Ok((
@@ -133,7 +120,6 @@ pub(super) fn counts_by_tag_and_model(
                 row.get::<_, i64>(2)?.max(0) as u64,
             ))
         })
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
-    rows.map(|row| row.map_err(|error| OrbitError::Store(error.to_string())))
-        .collect()
+        .map_err(sqlite_store_error)?;
+    rows.map(|row| row.map_err(sqlite_store_error)).collect()
 }

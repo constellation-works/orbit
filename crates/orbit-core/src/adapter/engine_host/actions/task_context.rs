@@ -1,0 +1,380 @@
+use std::path::Path;
+
+use orbit_common::text::floor_char_boundary;
+use orbit_engine::{DispatchError, WORKFLOW_RUN_FAILED_EVENT};
+use orbit_types::task::{
+    LIGHT_DELIVERY_TAGS, SKIP_VALIDATION_TAG, Task, TaskComment, TaskHistoryEntry,
+    refuses_implementer_writes,
+};
+use serde_json::Value;
+
+use orbit_common::fs::selector::canonical_selector_in_workspace;
+
+use crate::OrbitRuntime;
+use crate::application::task::context_workspace_root;
+use crate::runtime::run_input::singular_task_id_from_input;
+
+/// Ceiling on the number of comments surfaced to an implementing agent.
+///
+/// Comments are unbounded in principle (an orchestrator can post any number of
+/// refinements), but the envelope is a single JSON payload handed to an agent
+/// invocation. The newest comments are the ones that can supersede the
+/// description (see [ORB-11327]), so truncation must drop the oldest entries
+/// first and say so rather than silently dropping the entries that matter.
+const MAX_TASK_COMMENTS: usize = 20;
+
+/// Ceiling on the total size, in bytes, of the retained comment bodies.
+///
+/// Applied after [`MAX_TASK_COMMENTS`] as a second, size-based cut: a handful
+/// of very long comments could still blow out the envelope even under the
+/// count cap. Comment creation accepts any non-empty message, so the last
+/// retained comment can exceed this on its own; the projection then cuts the
+/// body itself rather than shipping it whole (see [ORB-11338]).
+const MAX_TASK_COMMENTS_BYTES: usize = 16 * 1024;
+
+/// Marker appended to a comment body cut down to fit
+/// [`MAX_TASK_COMMENTS_BYTES`]. Its own bytes count against the budget, and it
+/// carries no variable-length detail so the cut point is computable in one
+/// pass.
+const COMMENT_TRUNCATION_MARKER: &str = "\n\n[comment truncated to fit the envelope byte budget]";
+
+pub(crate) fn associated_task_ids(input: &Value) -> Vec<String> {
+    let mut task_ids = Vec::new();
+    if let Some(task_id) = input.get("task_id").and_then(Value::as_str) {
+        push_unique_task_id(&mut task_ids, task_id);
+    }
+    if let Some(items) = input.get("task_ids").and_then(Value::as_array) {
+        for item in items {
+            if let Some(task_id) = item.as_str() {
+                push_unique_task_id(&mut task_ids, task_id);
+            }
+        }
+    }
+    if let Some(items) = input.get("tasks").and_then(Value::as_array) {
+        for item in items {
+            if let Some(task_id) = item.as_str() {
+                push_unique_task_id(&mut task_ids, task_id);
+                continue;
+            }
+            if let Some(task_id) = item
+                .get("id")
+                .and_then(Value::as_str)
+                .or_else(|| item.get("task_id").and_then(Value::as_str))
+            {
+                push_unique_task_id(&mut task_ids, task_id);
+            }
+        }
+    }
+    task_ids
+}
+
+pub(crate) fn task_context_for_agent_input(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    step_id: &str,
+    input: &Value,
+) -> Result<Option<Value>, DispatchError> {
+    let Some(task_id) = singular_task_id_from_input(input) else {
+        return Ok(None);
+    };
+    let task = runtime.get_task(task_id).map_err(|err| {
+        DispatchError::CliInvocationFailed(format!(
+            "load task `{task_id}` for agent envelope: {err}"
+        ))
+    })?;
+    let task_history = runtime.get_task_history(task_id).map_err(|err| {
+        DispatchError::CliInvocationFailed(format!(
+            "load task `{task_id}` history for agent envelope: {err}"
+        ))
+    })?;
+    let comments = runtime.get_task_comments(task_id).map_err(|err| {
+        DispatchError::CliInvocationFailed(format!(
+            "load task `{task_id}` comments for agent envelope: {err}"
+        ))
+    })?;
+    let mut context = agent_task_context_json(
+        &task,
+        &task_history,
+        &comments,
+        input,
+        &runtime.paths().repo_root,
+    );
+    // [ORB-16855] A `skip-validation` task leaves no command to the
+    // pipeline while it stays within the light-delivery paths; the tag's
+    // instruction says what to run when it does not.
+    if !task
+        .tags
+        .iter()
+        .any(|tag| tag == "no-diff-expected" || tag == SKIP_VALIDATION_TAG)
+        && let Some(commands) = final_validation_commands(runtime, input)
+        && let Some(map) = context.as_object_mut()
+    {
+        map.insert("final_validation_commands".to_string(), commands.into());
+    }
+    let light_tags = LIGHT_DELIVERY_TAGS
+        .iter()
+        .filter(|tag| task.tags.iter().any(|carried| carried == *tag))
+        .collect::<Vec<_>>();
+    if !light_tags.is_empty()
+        && let Some(map) = context.as_object_mut()
+    {
+        map.insert(
+            "light_delivery".to_string(),
+            serde_json::json!({
+                "tags": light_tags,
+                "paths": runtime.host_validation_gates().light_delivery_paths(),
+            }),
+        );
+    }
+    if runtime.mid_run_steering().enabled
+        && let Some(steering) = runtime
+            .steer_task_prompt(run_id, step_id, &task, &comments)
+            .map_err(|error| {
+                DispatchError::CliInvocationFailed(format!(
+                    "deliver steering for task `{task_id}` (run {run_id}, step `{step_id}`): \
+                     {error}"
+                ))
+            })?
+    {
+        // The block leads the task context, ahead of the frozen task.
+        let mut steered = serde_json::Map::new();
+        steered.insert("steering".to_string(), steering);
+        if let Value::Object(map) = context {
+            steered.extend(map);
+        }
+        context = Value::Object(steered);
+    }
+    Ok(Some(context))
+}
+
+/// The `regression_risk` section for the task `input` names, as the prompt
+/// `run_id` builds for `activity_name` shows it, or `None` when marks are
+/// off, no `file:` selector qualifies, or the input names no single task.
+/// Marks are advisory, so a scan that fails is logged and yields none rather
+/// than refusing the dispatch.
+pub(crate) fn regression_risk_for_agent_input(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    activity_name: &str,
+    input: &Value,
+) -> Option<Value> {
+    let task_id = singular_task_id_from_input(input)?;
+    let section = runtime.get_task(task_id).and_then(|task| {
+        let selectors = envelope_context_files(&task, input, &runtime.paths().repo_root);
+        runtime.regression_risk_section(task_id, &selectors, run_id, activity_name)
+    });
+    section.unwrap_or_else(|error| {
+        tracing::warn!(%task_id, %run_id, %error, "regression risk: marks unavailable");
+        None
+    })
+}
+
+/// The required commands this invocation's pipeline runs itself on the final
+/// candidate, for an implementer that need not run them first. Only a
+/// delivery pipeline whose deterministic final validation follows the
+/// implementer or managed pre-publication conflict recovery sets
+/// `final_validation` on its input. The job executor proves the resolved
+/// validation continuation before forwarding conflict recovery's flag.
+/// Absorbed synchronization validates at
+/// the host rebase boundary before no-diff settlement.
+fn final_validation_commands(runtime: &OrbitRuntime, input: &Value) -> Option<Vec<String>> {
+    if input.get("final_validation").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    let commands = runtime.captured_final_validation_commands();
+    (!commands.is_empty()).then_some(commands)
+}
+
+fn agent_task_context_json(
+    task: &Task,
+    task_history: &[TaskHistoryEntry],
+    comments: &[TaskComment],
+    input: &Value,
+    fallback_repo_root: &Path,
+) -> Value {
+    let workspace_path = input
+        .get("workspace_path")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let repo_root = input
+        .get("repo_root")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let context_files = envelope_context_files(task, input, fallback_repo_root);
+
+    // `json!` with a braced literal always yields `Value::Object`; the fallback
+    // arm keeps this total so the agent context never panics on a malformed
+    // literal, and takes the map by value instead of cloning it.
+    let mut context = match serde_json::json!({
+        "id": task.id.clone(),
+        "status": task.status.cli_name(),
+        "terminal": refuses_implementer_writes(task.status),
+        "title": task.title.clone(),
+        "description": task.description.clone(),
+        "acceptance_criteria": task.acceptance_criteria.clone(),
+        "plan": task.plan.clone(),
+        "context_files": context_files,
+        "tags": task.tags.clone(),
+        "required_tools": task.required_tools.clone(),
+        "external_refs": task.external_refs.clone(),
+        "workspace_path": workspace_path,
+        "repo_root": repo_root,
+        "scratch_dir": scratch_dir_for_context(
+            workspace_path.as_deref(),
+            repo_root.as_deref(),
+            fallback_repo_root,
+        ),
+    }) {
+        Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+
+    if !task.execution_summary.trim().is_empty() {
+        context.insert(
+            "execution_summary".to_string(),
+            Value::String(task.execution_summary.clone()),
+        );
+    }
+    if let Some(status_note) = workflow_failure_status_note(task_history) {
+        context.insert(
+            "status_note".to_string(),
+            Value::String(status_note.to_string()),
+        );
+    }
+
+    let bounded_comments = bounded_task_comments(comments);
+    context.insert(
+        "comments".to_string(),
+        serde_json::to_value(&bounded_comments.comments)
+            .unwrap_or_else(|_| Value::Array(Vec::new())),
+    );
+    if bounded_comments.omitted_count > 0 || bounded_comments.body_truncated {
+        context.insert("comments_truncated".to_string(), Value::Bool(true));
+    }
+    if bounded_comments.omitted_count > 0 {
+        context.insert(
+            "comments_omitted_count".to_string(),
+            Value::Number(bounded_comments.omitted_count.into()),
+        );
+    }
+
+    Value::Object(context)
+}
+
+/// The task's selectors as the envelope carries them, canonical against this
+/// run's root.
+///
+/// The envelope carries the task's full declared footprint: a selector for
+/// a file the task is about to create is scope the implementer needs, and
+/// dropping it here would hand the agent a narrower boundary than the one
+/// its locks and reservations protect [ORB-12490]. A selector that cannot
+/// be canonicalized against this run's root — an unreadable worktree path,
+/// or a declaration written against another checkout — is passed through
+/// verbatim for the same reason; the envelope reports scope, it does not
+/// decide it.
+fn envelope_context_files(task: &Task, input: &Value, fallback_repo_root: &Path) -> Vec<String> {
+    let workspace_path = input.get("workspace_path").and_then(Value::as_str);
+    let context_root = context_workspace_root(fallback_repo_root, workspace_path);
+    task.context_files
+        .iter()
+        .map(|entry| {
+            canonical_selector_in_workspace(entry, &context_root).unwrap_or_else(|_| entry.clone())
+        })
+        .collect()
+}
+
+/// The comment projection for one envelope: the retained comments plus what
+/// had to be cut to hold them to [`MAX_TASK_COMMENTS_BYTES`].
+struct BoundedTaskComments {
+    /// Retained comments, still in chronological order. The last body may have
+    /// been cut down; every other body is verbatim.
+    comments: Vec<TaskComment>,
+    /// How many oldest entries were dropped entirely.
+    omitted_count: usize,
+    /// Whether the last retained body was cut down to fit the budget.
+    body_truncated: bool,
+}
+
+/// Keep the newest comments within [`MAX_TASK_COMMENTS`] and
+/// [`MAX_TASK_COMMENTS_BYTES`], dropping the oldest entries first so a
+/// superseding refinement never falls off the envelope.
+///
+/// Dropping entries cannot get under the byte budget once a single comment is
+/// left, and that comment is the newest — the one that can supersede the
+/// description — so it is kept and its body is cut instead ([ORB-11338]).
+fn bounded_task_comments(comments: &[TaskComment]) -> BoundedTaskComments {
+    let count_start = comments.len().saturating_sub(MAX_TASK_COMMENTS);
+    let mut kept = &comments[count_start..];
+
+    while kept.len() > 1 {
+        let total_bytes: usize = kept.iter().map(|comment| comment.message.len()).sum();
+        if total_bytes <= MAX_TASK_COMMENTS_BYTES {
+            break;
+        }
+        kept = &kept[1..];
+    }
+
+    let omitted_count = comments.len() - kept.len();
+    let mut kept = kept.to_vec();
+    // Only reachable with one comment left: the loop above exits early once the
+    // retained window fits, so a longer window is already under budget.
+    let body_truncated = match kept.as_mut_slice() {
+        [only] if only.message.len() > MAX_TASK_COMMENTS_BYTES => {
+            only.message = truncate_comment_body(&only.message);
+            true
+        }
+        _ => false,
+    };
+
+    BoundedTaskComments {
+        comments: kept,
+        omitted_count,
+        body_truncated,
+    }
+}
+
+/// Cut `message` so the result, marker included, fits
+/// [`MAX_TASK_COMMENTS_BYTES`]. The cut lands on a UTF-8 character boundary at
+/// or below the budget, so a multi-byte character is dropped rather than split.
+fn truncate_comment_body(message: &str) -> String {
+    let budget = MAX_TASK_COMMENTS_BYTES.saturating_sub(COMMENT_TRUNCATION_MARKER.len());
+    let cut = floor_char_boundary(message, budget);
+    format!("{}{COMMENT_TRUNCATION_MARKER}", &message[..cut])
+}
+
+fn workflow_failure_status_note(task_history: &[TaskHistoryEntry]) -> Option<&str> {
+    task_history.iter().rev().find_map(|entry| {
+        (entry.event == WORKFLOW_RUN_FAILED_EVENT)
+            .then_some(entry.note.as_deref())
+            .flatten()
+            .filter(|note| !note.trim().is_empty())
+    })
+}
+
+fn scratch_dir_for_context(
+    workspace_path: Option<&str>,
+    repo_root: Option<&str>,
+    fallback_repo_root: &Path,
+) -> String {
+    let root = workspace_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(Path::new)
+        .or_else(|| {
+            repo_root
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(Path::new)
+        })
+        .unwrap_or(fallback_repo_root);
+    orbit_common::fs::path::orbit_scratch_dir(root)
+        .display()
+        .to_string()
+}
+
+fn push_unique_task_id(task_ids: &mut Vec<String>, task_id: &str) {
+    let task_id = task_id.trim();
+    if !task_id.is_empty() && !task_ids.iter().any(|existing| existing == task_id) {
+        task_ids.push(task_id.to_string());
+    }
+}

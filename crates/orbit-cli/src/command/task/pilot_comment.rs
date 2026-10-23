@@ -11,14 +11,12 @@ fn assessment_summary(comment: &TaskComment) -> Option<String> {
     if comment.by != "task-pilot" {
         return None;
     }
-    let (header, body) = comment.message.split_once('\n')?;
-    let operation = header
-        .trim_end_matches('\r')
-        .strip_prefix("operation_id=")?;
+    let receipt = comment.receipt()?;
+    let operation = receipt.operation_id;
     if operation.len() != 64 || !operation.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
-    let receipt: Value = serde_json::from_str(body).ok()?;
+    let receipt: Value = serde_json::from_str(receipt.body).ok()?;
     let assessment = receipt.get("assessment")?;
     let text = |field: &str| {
         assessment

@@ -13,14 +13,15 @@ use crate::command::{Block, CommandOut, Execute, Payload};
 use super::drain_summary::{
     pass_refusal_line, pass_throttle_line, pass_waiting_lines, summarize_drain_leaves,
 };
-use super::format::{RunRootCause, format_backlog_exclusion_lines, format_root_cause_lines};
+use super::format::{
+    RunRootCause, WaitingTaskFormatter, format_backlog_exclusion_lines, format_root_cause_lines,
+};
 use super::job::cli_job_run_to_json_with_activity_provenance;
 use super::lock_holders::waiting_lock_holders;
 use super::steps::{
-    RunDisplaySteps, RunRead, RunStepRecord, StepSource, activity_provenance_lines, filtered_steps,
-    legacy_step_to_json, resolve_run, resolve_run_step, run_display_steps, run_header_text,
-    run_header_text_with_lock_holders, run_step_record_to_json, step_record_payload,
-    step_summary_table,
+    RunDisplaySteps, RunRead, StepSource, activity_provenance_lines, resolve_run, resolve_run_step,
+    run_display_steps, run_header_text_with_lock_holders, run_step_record_to_json,
+    step_record_payload, step_summary_table,
 };
 
 /// `CatalogReferenceLayer::layer` for a definition this binary ships.
@@ -28,7 +29,7 @@ const SHIPPED_CATALOG_LAYER: &str = "shipped";
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"run\":<job-run>,\"pull_claim\":<claim|null>,\"crew_window\":<window|null>,\"catalog_layers\":[{\"reference\":\"job:…|activity:…\",\"layer\":\"workspace|shipped|plugin:<ns>|explicit\",\"shadows\":[…]}],\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",\"stopped_descendants\":[...],\"blocked_on_stopped_descendant\":<descendant|null>,...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none; a run that ended `success` or `cancelled` cannot resume, so `.step_output_pointers` maps each step index whose output `.pipeline` holds to the JSON pointer of that entry, in place of its `.step_outputs` copy. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail. The `#` column of the table is one-based and Duration is human-readable (`3h 39m 51s`); `.steps[].step_index` stays zero-based and every duration stays in milliseconds. A step from the audit trail is numbered in the order steps started, which is not the position `.pipeline_state.step_output_pointers` and `.step_outputs` key by when an earlier step was skipped (by `when:` or by resume); `-s` reads that step's output by its id, not by index. A run whose record holds only a run-level step (an interrupted run's) shows its audit steps instead. The Catalog: lines name only layers other than `shipped` unless `--verbose` is given; `.catalog_layers` always lists every reference. `.pull_claim` (the Claim: line) names the owner task and claim a follower's claimed leaf executes, whether its outcome reached the owner, and its `failure_class` once a failure or release is recorded (`candidate` and `task_input` block the owner's task; `operator_cancel`, `provider`, `environment`, `owner_route`, `baseline_red`, `transient` and `base_conflict` release it to the backlog); it is null for every other run. `.drain_summary` is set for an auto drain only (the Leaves: line): admitted/succeeded/failed/running/cancelled leaf counts, `failed_leaves`, and the backlog its last pass left `waiting`, plus `capacity` (workspace `active_leaf_runs`, `inherited_leaf_runs` outside this coordinator, and `max_active_leaf_runs`, sampled before the last admission wave; the Capacity: line) and `resource_throttle` when host resource pressure held that pass (the Throttled: line, shown for pull drains too from `.pipeline_state.drain_last_pass`); a drain's own `.run.state` says the coordinator ran, not that its leaves shipped. `.pipeline_state.drain_last_pass` also records a pull drain's `last_pass_error`, `consecutive_pass_failures`, and sticky `degraded` warning; after three consecutive failed passes it stops admitting and keeps settling until its window closes. Its `admission_refusal` (the Requests held: line) says why the last pass requested no claim although the window was open: `circuit_open` (the failure breaker is open), `circuit_half_open` (it waits for this drain's claims to settle before one probe claim), `settlement_refused`, `no_runnable_crew`, `host_suppressed`, or the owner's probe refusal. `.pipeline_state.pull_breaker` (the Breaker: line) is the failure breaker while it is open or half-open: it opens after three claims in a row settle as failures (released claims and Orbit's refusals of an implementer's handoff do not count), with `failures`, their `failure_classes` newest first, `opened_at` and `half_open_at`, when it admits one probe claim; a probe that succeeds closes it and one that fails reopens it with twice the wait. It is absent while closed. A pull drain's Throttled: line is this host's own pressure; the owner's throttle never holds a pull claim. `.claimed_leaves` lists a pull drain's launched leaves that are still running (the Claimed leaves: lines), each with its `stage`: `implementing`, or `reviewing` once it is in the before-landing review of its open PR, when the drain admits a replacement beside it, up to its concurrency; it is empty for every other run; `.refused_settlements` (the Settlement refused: lines) lists recorded outcomes the owner refused while still holding their claims, each with the owner's `reason`, `refusals`, `retry_after` and `remedy`: the drain requests no new claim while one is held, retries it with backoff (at most every 15 minutes), and `orbit run auto --stop` retries it at once; `.crew_window` (the Crews: lines) is a pull drain's runnable crews and the crews it excluded for its window, each with `source` (`preflight`, `provider_unavailable`, `leaf_released` or `provider_limit`) and `reason`, and `auth_exclusions` (provider, host, excluded_at, error_class, relogin_hint, credential_source and next_probe_at). Declared auth probes may re-admit these crews in the same window, and a `provider_limit` exclusion carries `until` (its Crews: line reads `(provider_limit until <time>)`) and lifts by itself then, in the same window; other exclusions last until the next drain. It is null for every other run; a pull drain being cancelled gracefully stays `running` with `.run.drain_cancel` set (the Cancelling: line) until those leaves finish and settle. An Agent: line marked `blocked=stopped-descendant` (`.provider_processes[].blocked_on_stopped_descendant`) is a live agent waiting on a descendant that has stayed stopped past the supervisor's threshold and is still stopped; `.stopped_descendants` lists every such descendant the supervisor reported, and whether it ended it.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
+    after_help = "JSON: {\"run\":<job-run>,\"pull_claim\":…,\"crew_window\":…,\"catalog_layers\":[…],\"pipeline_state\":…,\"steps\":[…],\"steps_source\":\"record|audit\",\"provider_processes\":[…]}, or {\"run_id\",\"job_id\",\"step\",\"step_output\"} with -s.\nThe State: line is `.run.state`. Table step numbers are one-based; JSON `step_index` is zero-based and durations are milliseconds.\nField reference: docs/runbooks/stuck-job-runs.md (Read `orbit run show` output).\n\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
 )]
 pub struct RunShowArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.
@@ -39,8 +40,9 @@ pub struct RunShowArgs {
     pub step_id: Option<String>,
 
     /// Report stored run records as-is: skip stale-run reconciliation, which
-    /// finalizes an orphaned pending or running run as interrupted and
-    /// releases its task reservations
+    /// finalizes an orphaned pending or running run as interrupted, releases
+    /// its task reservations, and settles with their owner the pull claims an
+    /// ended drain or leaf left
     #[arg(long)]
     pub no_reconcile: bool,
 
@@ -70,7 +72,25 @@ pub(crate) fn run_show_payload(
     verbose: bool,
 ) -> CommandOut {
     let run = resolve_run(runtime, run_id, read)?;
-    let state = runtime.read_run_state(&run.run_id)?;
+    // An unreadable checkpoint is one section, as on HTTP and MCP. The run
+    // record, steps, and provider processes stay readable; failing the whole
+    // command hid them behind a store error.
+    let (state, checkpoint_unreadable) = match runtime.read_run_state(&run.run_id) {
+        Ok(state) => (state, false),
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.cli.run",
+                run_id = %run.run_id,
+                %error,
+                "pipeline checkpoint unreadable; run shown without it"
+            );
+            eprintln!(
+                "warning: pipeline checkpoint unreadable for {}; run shown without it: {error}",
+                run.run_id
+            );
+            (None, true)
+        }
+    };
 
     if let Some(step_id) = step_id {
         let step = resolve_run_step(runtime, &run, step_id)?;
@@ -89,6 +109,13 @@ pub(crate) fn run_show_payload(
         .unwrap_or_else(|error| {
             tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id, %error, "recovery attempts unreadable");
             orbit_core::runtime::audit::run::RunRecoveryAttempts::unavailable()
+        });
+
+    let tag_instructions = runtime
+        .collect_run_tag_instructions(&run.run_id)
+        .unwrap_or_else(|error| {
+            tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id, %error, "tag instructions unreadable");
+            orbit_core::runtime::audit::tag_instructions::RunTagInstructions::unavailable()
         });
 
     let RunDisplaySteps {
@@ -153,9 +180,10 @@ pub(crate) fn run_show_payload(
             tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id, %error, "pull drain crew window unreadable; drain shown without it");
             None
         });
-    let doc = json!({
+    let mut doc = json!({
         "run": run_projection,
         "recovery_attempts": recovery.to_json(),
+        "tag_instructions": tag_instructions.to_json(),
         "pull_claim": pull_claim,
         "claimed_leaves": claimed_leaves,
         "refused_settlements": refused_settlements,
@@ -185,6 +213,39 @@ pub(crate) fn run_show_payload(
     });
 
     let mut header = run_header_text_with_lock_holders(&run, state.as_ref(), &lock_holders);
+    if checkpoint_unreadable {
+        header.push_str(&format!(
+            "\n{} pipeline checkpoint unreadable; pipeline state omitted",
+            crate::output::color::bold("Warning:"),
+        ));
+    }
+    if run.job_id == "workspace_auto_pipeline" {
+        let mode = runtime.run_auto_concurrency(&run.run_id)?;
+        header.push_str(&format!(
+            "\nAuto-concurrency: {} ({}; host currently {}).",
+            mode["mode"].as_str().unwrap_or("off"),
+            mode["source"].as_str().unwrap_or("configured"),
+            mode["configured_mode"].as_str().unwrap_or("off")
+        ));
+        doc["run"]["auto_concurrency"] = mode;
+    }
+    // What limited the drain's admission passes, local or pull.
+    if let Some(counters) = state
+        .as_ref()
+        .and_then(|state| state.pull_drain.drain_pass_counters.as_ref())
+    {
+        header.push_str(&format!(
+            "\n{} {}",
+            crate::output::color::bold("Admission passes:"),
+            counters.describe()
+        ));
+    }
+
+    if let Some(line) = review_layer_line(&doc["run"]["review_layer"]) {
+        header.push('\n');
+        header.push_str(&line);
+    }
+
     for attempt in &recovery.attempts {
         header.push_str(&format!(
             "\nRecovery: {} at {}: {}{}",
@@ -198,14 +259,30 @@ pub(crate) fn run_show_payload(
                 .unwrap_or_default(),
         ));
     }
+    for line in tag_instructions.header_lines() {
+        header.push('\n');
+        header.push_str(&line);
+    }
+    let mut displayed_build_budget_waits = HashSet::new();
     for process in &provider_processes {
-        if let Some(waits) = &process.build_budget_waits {
-            header.push_str(&format!(
-                "\nBuild-budget waits ({}): count {}; total {:.3}s; longest {:.3}s; queued wall {:.3}s; deadline extended {:.3}s.",
-                process.step_id.as_deref().unwrap_or("agent"), waits.count,
-                waits.total_ms as f64 / 1000.0, waits.longest_ms as f64 / 1000.0,
-                waits.queued_wall_ms as f64 / 1000.0, waits.deadline_extension_ms as f64 / 1000.0,
-            ));
+        let Some(waits) = &process.build_budget_waits else {
+            continue;
+        };
+        if waits.count == 0 && waits.deadline_extension_ms == 0 {
+            continue;
+        }
+        let line = format!(
+            "Build-budget waits ({}): count {}; total {:.3}s; longest {:.3}s; queued wall {:.3}s; deadline extended {:.3}s.",
+            process.step_id.as_deref().unwrap_or("agent"),
+            waits.count,
+            waits.total_ms as f64 / 1000.0,
+            waits.longest_ms as f64 / 1000.0,
+            waits.queued_wall_ms as f64 / 1000.0,
+            waits.deadline_extension_ms as f64 / 1000.0,
+        );
+        if displayed_build_budget_waits.insert(line.clone()) {
+            header.push('\n');
+            header.push_str(&line);
         }
     }
     for id in orbit_core::application::job::job_run_task_ids(&run) {
@@ -270,17 +347,43 @@ pub(crate) fn run_show_payload(
         header.push_str(&exclusion_lines.join("\n"));
     }
     if let Some(summary) = &drain_summary {
+        let waiting_formatter = WaitingTaskFormatter::new(runtime)
+            .with_host_fleet(runtime, summary.host_os_waiting_task_ids());
         header.push('\n');
-        header.push_str(&summary.lines(run.state).join("\n"));
+        header.push_str(&summary.lines(run.state, &waiting_formatter).join("\n"));
     } else if let Some(pass) = state
         .as_ref()
-        .and_then(|state| state.drain_last_pass.as_ref())
+        .and_then(|state| state.pull_drain.drain_last_pass.as_ref())
     {
         // A pull drain records its passes too, without a leaf summary.
+        let waiting_formatter = WaitingTaskFormatter::new(runtime);
         for line in pass_throttle_line(pass)
             .into_iter()
             .chain(pass_refusal_line(pass))
-            .chain(pass_waiting_lines(pass))
+            .chain(pass_waiting_lines(pass, &waiting_formatter))
+        {
+            header.push('\n');
+            header.push_str(&line);
+        }
+    }
+    if let Some(state) = &state {
+        let forecast = json!(
+            state
+                .pull_drain
+                .drain_last_pass
+                .as_ref()
+                .and_then(|pass| pass.admission_forecast.as_ref())
+        );
+        let last_forecast = json!(state.pull_drain.drain_last_forecast);
+        let origin = super::admission_forecast::ForecastOrigin {
+            run_id: Some(&run.run_id),
+            ended: run.state.is_terminal(),
+            none_live: false,
+        };
+        for line in
+            super::admission_forecast::admission_lines(&forecast, &last_forecast, &origin, |id| {
+                runtime.get_task(id).ok().map(|task| task.title)
+            })
         {
             header.push('\n');
             header.push_str(&line);
@@ -288,12 +391,19 @@ pub(crate) fn run_show_payload(
     }
     if let Some(pass) = state
         .as_ref()
-        .and_then(|state| state.drain_last_pass.as_ref())
+        .and_then(|state| state.pull_drain.drain_last_pass.as_ref())
     {
         if let Some(error) = &pass.last_pass_error {
+            // A local drain records a pass only when it deferred it on a busy
+            // task-store lock; the next pass retries.
+            let label = if run.job_id == orbit_core::application::distributed::PULL_DRAIN_JOB {
+                "Pull pass warning:"
+            } else {
+                "Admission pass deferred:"
+            };
             header.push_str(&format!(
                 "\n{} consecutive_failures={} last_pass_error={error}",
-                crate::output::color::bold("Pull pass warning:"),
+                crate::output::color::bold(label),
                 pass.consecutive_pass_failures,
             ));
         }
@@ -303,7 +413,10 @@ pub(crate) fn run_show_payload(
     }
     // [ORB-15639] An open or half-open pull breaker: its failures, their
     // classes and when it next admits a probe claim. Absent while closed.
-    if let Some(breaker) = state.as_ref().and_then(|state| state.pull_breaker.as_ref()) {
+    if let Some(breaker) = state
+        .as_ref()
+        .and_then(|state| state.pull_drain.pull_breaker.as_ref())
+    {
         header.push_str(&format!(
             "\n{} {}",
             crate::output::color::bold("Breaker:"),
@@ -342,6 +455,21 @@ pub(crate) fn run_show_payload(
         ],
     )
     .into())
+}
+
+/// The `Review:` line: the review layer before landing the run captured and
+/// what decided it [ORB-16572].
+fn review_layer_line(layer: &Value) -> Option<String> {
+    let timing = layer["timing"].as_str()?;
+    let origin = match layer["source"].as_str().unwrap_or("unknown") {
+        orbit_types::workflow::REVIEW_RUN_OPTION_SOURCE => "run option --review".to_string(),
+        "claim" => "the owner's claim".to_string(),
+        source => format!("workspace policy, {source}"),
+    };
+    Some(format!(
+        "{} {timing} ({origin})",
+        crate::output::color::bold("Review:")
+    ))
 }
 
 /// Where to resume a failed pipeline run whose failure came from a child run.
@@ -428,7 +556,22 @@ fn collect_failed_leaf_causes_from(
             Err(OrbitError::NotFound { .. }) => continue,
             Err(error) => return Err(error),
         };
-        let child_state = runtime.read_run_state(&child.run_id)?;
+        let child_state = match runtime.read_run_state(&child.run_id) {
+            Ok(state) => state,
+            Err(error) => {
+                tracing::warn!(
+                    target: "orbit.cli.run",
+                    run_id = %child.run_id,
+                    %error,
+                    "pipeline checkpoint unreadable; run shown without it"
+                );
+                eprintln!(
+                    "warning: pipeline checkpoint unreadable for {}; run shown without it: {error}",
+                    child.run_id
+                );
+                None
+            }
+        };
         collect_failed_leaf_causes_from(
             runtime,
             &child,
@@ -455,9 +598,11 @@ fn collect_failed_leaf_causes_from(
     // the one that failed, even when the stored step only wraps that failure.
     let audit_steps = runtime.collect_run_audit_steps(&run.run_id)?;
     let audit_error = audit_steps.iter().rev().find(|step| {
-        step.error_message
-            .as_deref()
-            .is_some_and(|message| !message.is_empty())
+        step.state.as_deref() != Some("skipped")
+            && step
+                .error_message
+                .as_deref()
+                .is_some_and(|message| !message.is_empty())
     });
     let stored_error = run.steps.iter().rev().find(|step| {
         step.state != JobRunState::Skipped
@@ -506,7 +651,7 @@ fn claimed_leaf_lines(
 ) -> String {
     let mut lines = String::new();
     if !run.state.is_terminal()
-        && let Some(cancel) = state.and_then(|state| state.drain_cancel.as_ref())
+        && let Some(cancel) = state.and_then(|state| state.pull_drain.drain_cancel.as_ref())
     {
         lines.push_str(&format!(
             "\n{} waiting for {} leaves (requested by {} at {}{}); `orbit run cancel {} --confirm --force` stops them",
@@ -768,33 +913,4 @@ fn live_provider_process_lines(processes: &[RunProviderProcess]) -> String {
             lines
         })
         .collect()
-}
-
-pub(crate) fn legacy_logs_summary_payload(
-    runtime: &OrbitRuntime,
-    run_id: &str,
-    step_id: Option<&str>,
-) -> CommandOut {
-    let run = runtime.show_job_run(run_id)?;
-    let steps = filtered_steps(&run, step_id)?;
-
-    let values = steps
-        .iter()
-        .map(|step| legacy_step_to_json(step))
-        .collect::<Vec<_>>();
-    let records = steps
-        .iter()
-        .map(|step| RunStepRecord::from_job_step(step))
-        .collect::<Vec<_>>();
-
-    let mut header = run_header_text(&run);
-    header.push('\n');
-    Ok(Payload::blocks(
-        Value::Array(values),
-        vec![
-            Block::text(header),
-            Block::table(step_summary_table(&records)),
-        ],
-    )
-    .into())
 }

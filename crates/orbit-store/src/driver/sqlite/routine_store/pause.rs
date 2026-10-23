@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{TransactionBehavior, params};
 
 use super::RoutinePauseRecord;
@@ -20,7 +21,7 @@ impl Store {
                      VALUES (?1, ?2, ?3)",
                     params![routine_name, now, actor],
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             Ok(inserted > 0)
         })
     }
@@ -34,7 +35,7 @@ impl Store {
                     "DELETE FROM routine_pauses WHERE routine_name = ?1",
                     params![routine_name],
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             Ok(deleted > 0)
         })
     }
@@ -44,7 +45,7 @@ impl Store {
         let conn = self.read()?;
         let mut stmt = conn
             .prepare("SELECT routine_name, paused_at, actor FROM routine_pauses")
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map([], |row| {
                 Ok(RoutinePauseRecord {
@@ -53,10 +54,10 @@ impl Store {
                     actor: row.get(2)?,
                 })
             })
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let mut pauses = BTreeMap::new();
         for row in rows {
-            let pause = row.map_err(|error| OrbitError::Store(error.to_string()))?;
+            let pause = row.map_err(sqlite_store_error)?;
             pauses.insert(pause.routine_name.clone(), pause);
         }
         Ok(pauses)

@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "RAII Guard Pattern"
-last_validated: 2026-10-09
+last_validated: 2026-10-19
 ---
 # RAII Guard Pattern
 
@@ -23,7 +23,7 @@ Four shapes in the codebase carry distinct lessons.
 
 ## Reference: `AuditGuard` — record the scope's outcome once
 
-From `crates/orbit-cli/src/audit_middleware.rs:29`:
+From `crates/orbit-cli/src/audit_middleware.rs:27`:
 
 ```rust
 pub struct AuditGuard<'a> {
@@ -55,7 +55,7 @@ impl Drop for AuditGuard<'_> {
 
 Patterns to copy:
 
-- **Default to the "bad" outcome.** Status starts as `Failure`/`-1`; scope exits without an explicit `mark_*` correctly reflect "process died mid-command."
+- **Default to the "bad" outcome.** Status starts as `Failure`/`-1`; returning or unwinding without an explicit `mark_*` retains that failure outcome. Abrupt process termination does not run `Drop`, so the guard cannot emit an audit record on that path.
 - **Mutation methods on `&mut self`, not constructor params.** Caller updates the outcome as it learns; `Drop` reads final state.
 - **`catch_unwind` around the side effect.** A panic *during audit emission* can't double-panic the unwind.
 
@@ -92,7 +92,7 @@ Patterns to copy:
 
 ## Reference: `SignalHandlerGuard` — restore global state
 
-From `crates/orbit-exec/src/supervision/signal.rs`:
+From `crates/orbit-common/src/process/supervisor/signal_guard.rs`:
 
 ```rust
 pub(super) struct SignalHandlerGuard {
@@ -130,7 +130,7 @@ impl Drop for SignalHandlerGuard {
 
 Concurrent waits overlap. A slot only ever holds a pid that leads its own live process group (never our own group), the handler re-checks that before each `killpg`, and the waiter releases the slot the moment the child is reaped — a reaped pid can be reused by an unrelated group leader, and a fan-out to it would signal processes Orbit never spawned.
 
-Both runner entry points install the guard before calling the sandbox's spawn operation, then register the returned child's group. A signal received before registration stays pending; the wait loop checks it before its first blocking wait and terminates and reaps the group. `SupervisedChild` keeps the guard through relay and pipe setup, so error cleanup also kills and reaps before the last guard can restore and re-raise. If spawn fails before creating a child, the guard still restores and re-raises any pending signal. Callers of `supervise_child` already own a spawned child; supervision installs the handler before pipe setup, but the caller owns the preceding spawn window. A caller that spawns through a sandbox wrapper and does post-spawn work (the plugin callback bind) uses `spawn_supervised_cancellable`, which installs the guard before running its spawn closure, so that work is inside the protected window (ORB-15096).
+`SupervisedChild::spawn_guarded` installs the guard before running its spawn closure, then registers the returned child's group; every `orbit-exec` runner spawn path goes through it (`run_supervised`, `spawn_owned_supervised_cancellable`, and `run_process_streaming_stdout`). A signal received before registration stays pending; the wait loop checks it before its first blocking wait and terminates and reaps the group. `SupervisedChild` keeps the guard through relay and pipe setup, so error cleanup also kills and reaps before the last guard can restore and re-raise. If spawn fails before creating a child, the guard still restores and re-raises any pending signal. Callers of `supervise_child` already own a spawned child; a supervision request with `intercept_signals` installs the handler before pipe setup, but the caller owns the preceding spawn window. A caller that spawns through a sandbox wrapper and does post-spawn work (the plugin callback bind) uses `spawn_supervised_cancellable`, which installs the guard before running its spawn closure, so that work is inside the protected window (ORB-15096).
 
 Patterns to copy:
 
@@ -141,21 +141,25 @@ Patterns to copy:
 
 ## Reference: `FileLockGuard` — resource held until `Drop`
 
-From `crates/orbit-store/src/fs/lock/mod.rs`:
+From `crates/orbit-common/src/fs/file_lock/acquisition.rs`:
 
 ```rust
 #[must_use = "the advisory lock is released as soon as the guard is dropped"]
-pub(crate) struct FileLockGuard {
-    _file: File,
+pub struct FileLockGuard {
+    file: File,
+    clear_holder_on_drop: bool,
+    shared_record: Option<PathBuf>,
+    hold: Option<HoldReport>,
 }
 ```
 
 Patterns to copy:
 
 - **Hold the resource in a field.** `FileLockGuard` keeps the locked `File`
-  alive in `_file`; dropping the file releases the OS advisory lock. There is
-  no separate explicit release path to call or duplicate.
+  alive in `file`; `Drop` clears holder metadata and reports a long hold before
+  dropping the file releases the OS advisory lock. There is no separate
+  explicit release path to call or duplicate.
 
 ---
 
-**Note on test fixtures.** Several test files use small `EnvVarGuard` / `TempDir` structs that save-and-restore env vars or `remove_dir_all` on drop. They follow the pattern but are too thin to be reference-grade; lift from a production guard above when writing new ones.
+**Note on test fixtures.** Several test files use small fixtures that restore process or filesystem state on drop. Process-environment changes go through `ScopedEnv` in `orbit_common::test_env`, which restores the saved values on drop. The other fixtures follow the pattern but are too thin to be reference-grade; lift from a production guard above when writing new ones.

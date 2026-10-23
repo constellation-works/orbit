@@ -128,12 +128,6 @@ impl StoppedDescendantWatch {
         }
     }
 
-    /// When the next sample is due. A supervisor that blocks in a wait ends
-    /// the wait here and calls [`Self::poll`].
-    pub fn next_sample_at(&self) -> Instant {
-        self.next_sample
-    }
-
     /// Sample `root`'s tree when a sample is due, and end every descendant
     /// that has stayed stopped across the threshold. Returns what it ended or
     /// failed to end; empty when nothing was due.

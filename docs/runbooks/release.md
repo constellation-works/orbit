@@ -4,7 +4,7 @@ summary: Cut and verify an Orbit release across agent plugins, Cargo, GitHub art
 tags: [operations, release, plugins, npm, signing]
 paths: [".github/workflows/release.yml", "plugin/**", "npm/**", "scripts/release-check.sh"]
 related_features: [orbit-docs-plugin]
-last_validated: 2026-10-09
+last_validated: 2026-10-19
 ---
 
 # Release Orbit
@@ -29,15 +29,29 @@ key whose public half matches
 [`npm/release-signing.pub`](../../npm/release-signing.pub). The release
 workflow signs `orbit-checksums.txt` as `orbit-checksums.txt.sig`;
 `install.sh`, the npm postinstall, and `orbit update` authenticate
-that signature before trusting release-hosted SHA-256 values.
+that signature before trusting release-hosted SHA-256 values. The same key
+signs `orbit-desktop-checksums.txt` for the desktop app, which the app's update
+check verifies before it offers an update
+([desktop/README.md](../../desktop/README.md#auto-update)). The app carries its
+own copy of the Rust trust set, so it is the fourth trust set in the rotation
+below.
 
-All three shipped release-signing trust sets contain only `orbit-release-key-3`,
+The desktop release jobs run on every release tag unless the repository
+variable `ORBIT_DESKTOP_RELEASE` is `false`. The Linux bundles need no other
+secret. The macOS bundle needs six Apple signing and notarization secrets.
+Without all six, the release skips only macOS and warns which secrets are
+missing. The account steps and the secret list are in
+[desktop/README.md](../../desktop/README.md#one-time-setup).
+
+All four shipped release-signing trust sets contain only `orbit-release-key-3`,
 valid through `2029-12-31` and not revoked: [`install.sh`](../../install.sh),
-[`npm/scripts/install-binary.js`](../../npm/scripts/install-binary.js), and
+[`npm/scripts/install-binary.js`](../../npm/scripts/install-binary.js),
 [`orbit-common::security::release::TRUSTED_RELEASE_KEYS`](../../crates/orbit-common/src/security/release.rs)
-(used by `orbit update` and bundled Bubblewrap verification). No successor is
-pre-staged. Ship successor trust in all three surfaces before signing releases
-with that key.
+(used by `orbit update` and bundled Bubblewrap verification), and the desktop
+app's copy in [`desktop/src/update/trust.rs`](../../desktop/src/update/trust.rs).
+[`scripts/check-installer-pubkey.sh`](../../scripts/check-installer-pubkey.sh)
+fails CI when any of them disagree. No successor is pre-staged. Ship successor
+trust in all four surfaces before signing releases with that key.
 
 Key IDs are generation labels, not dates. During verification the installers
 try each known public key, then reject a matching key when its `not_after`
@@ -71,6 +85,10 @@ an empty date remains optional.
      `npx -y @orbit-tools/cli@<version> mcp serve`. Do not use `@latest`.
    - Run `cargo update --workspace` to refresh `Cargo.lock` without
      third-party dependency drift.
+   - Update `[package].version` in
+     [`desktop/Cargo.toml`](../../desktop/Cargo.toml) and run
+     `cargo update --workspace --manifest-path desktop/Cargo.toml`. The
+     desktop build fails when this version doesn't match the tag.
 
    For a major version bump, first follow
    [RELEASING.md's CHANGELOG archiving policy](../../RELEASING.md#changelog-archiving).
@@ -96,6 +114,15 @@ an empty date remains optional.
    [`scripts/smoke-npm-install.sh`](../../scripts/smoke-npm-install.sh)
    (`orbit init`, `workspace init`, or `mcp serve`), land the script
    update on the same commit as the tag.
+
+   Before publishing, run `scripts/smoke-npm-install.sh --local-package-check`
+   to pack and inspect the local npm payload without lifecycle scripts, then
+   `scripts/smoke-npm-install.sh --local-binary-check target/debug/orbit`
+   against `make build`'s candidate. The functional smoke uses fake source
+   credentials and isolated host/workspace roots to check credential rejection,
+   explicit `ORBIT_ROOT` MCP discovery and fail-closed agent authority. These
+   modes do not fetch the unpublished version or prove its install/signature
+   chain; the default smoke still provides that proof after npm publication.
 
 6. **Commit and merge the release preparation to `agent-main`.** Keep the
    Cargo, npm, and `server.json` version bumps, lockfile refresh, and any smoke
@@ -129,7 +156,15 @@ an empty date remains optional.
      [linux-sandbox.md](linux-sandbox.md));
    - update the Homebrew tap;
    - smoke the tagged shell installer and search help on macOS and Ubuntu;
-   - smoke the bundled-Bubblewrap fallback on Ubuntu 22.04.
+   - smoke the bundled-Bubblewrap fallback on Ubuntu 22.04;
+   - unless `ORBIT_DESKTOP_RELEASE` is `false`, build the Linux `.deb` and
+     `.AppImage` for x86_64 and arm64 and, when all six Apple secrets are
+     present, the signed and notarized universal macOS `.dmg`, then attach
+     exactly the bundles built with `orbit-desktop-version.txt` and their
+     signed `orbit-desktop-checksums.txt`. `desktop-preflight` decides which
+     legs run. A missing secret skips only macOS, with a warning naming it.
+     A failed Linux leg holds back the desktop assets until it's fixed and
+     re-run. These jobs run beside the CLI release and never block it.
 
    Review the result of every job, but treat CI as informational on
    `agent-main`: no job is a merge gate. Failures are queued for asynchronous
@@ -169,6 +204,40 @@ an empty date remains optional.
 11. **Submit the Cursor marketplace listing manually.** See
     [Cursor marketplace listing](#cursor-marketplace-listing).
 
+## Desktop backfill
+
+A release whose desktop jobs were skipped or never ran (v0.29.0 shipped
+without desktop bundles) can get them later without a new tag. In Actions,
+open the `release` workflow and choose **Run workflow** on a branch that
+carries the current workflow, with `tag` set to the existing release tag. The
+manual run:
+
+- runs only `desktop-preflight`, `build-desktop` and `publish-desktop`, never
+  a CLI build, the Homebrew tap or the installer smokes;
+- refuses a tag that isn't `vMAJOR.MINOR.PATCH` or has no GitHub Release;
+- checks out the tag's source and builds it with the current workflow, so the
+  tag's `desktop/Cargo.toml` version must still match the tag;
+- ignores `ORBIT_DESKTOP_RELEASE`, since the run is itself the request;
+- adds macOS only when all six Apple secrets are present, as a tag push does;
+- attaches missing assets under the same rules as a release: published bytes
+  are never replaced, and a published manifest that doesn't match the
+  available bundles stops it before any upload.
+
+A release that already carries a Linux-only manifest can't gain a macOS bundle
+this way. That is a manifest conflict by design: fix forward, and macOS ships
+in the next release.
+
+A backfill, a tag-push publish, and a rerun for the same tag attach assets one
+at a time. The publisher already uploading finishes, and the others wait. The
+waiting run then sees the finished manifest, so a full plan that follows a
+Linux-only publish stops before uploading the macOS disk image. A different
+tag publishes on its own. Each waiting attempt stays queued until the active
+publisher finishes.
+
+Running a backfill against a real release is an operator decision. Check the
+release's assets afterwards with the verification commands in
+[desktop/README.md](../../desktop/README.md#releases).
+
 ## Cursor marketplace listing
 
 Cursor's curated catalog is human-reviewed. The tag workflow, GitHub Release,
@@ -190,6 +259,7 @@ version exist:
    `npx -y @orbit-tools/cli@<version> mcp serve`.
 4. If review stalls, escalate to `marketplace-publishing@cursor.com`. Do not
    send that mail from CI or assume a public catalog push API exists.
+
 ## Publish the Official MCP Registry record
 
 After the GitHub Release and its matching `@orbit-tools/cli` version are
@@ -297,17 +367,21 @@ Normal rotation uses an overlap window:
 
 1. Generate the successor keypair offline, with independent private-key
    custody. Add the public half to **every** trust set in `install.sh`,
-   [`npm/scripts/install-binary.js`](../../npm/scripts/install-binary.js)
-   and [`orbit-common::security::release::TRUSTED_RELEASE_KEYS`](../../crates/orbit-common/src/security/release.rs)
+   [`npm/scripts/install-binary.js`](../../npm/scripts/install-binary.js),
+   [`orbit-common::security::release::TRUSTED_RELEASE_KEYS`](../../crates/orbit-common/src/security/release.rs)
+   and [`desktop/src/update/trust.rs`](../../desktop/src/update/trust.rs)
    with the same new key ID and expiry (`not_after` / npm `notAfter`).
 2. Publish a release and npm package still signed by the old key that ship
-   both old and successor trust in the shell installer, npm installer, and
-   native binary. Verify all three trust sets before switching the signer.
+   both old and successor trust in the shell installer, npm installer,
+   native binary and desktop app, with the desktop jobs on (and the Apple
+   secrets present, for macOS) so the desktop app updates to the new trust. Verify all four trust sets before
+   switching the signer. A desktop app older than this release reports the
+   first successor-signed update as rejected, and must be updated by hand.
 3. Update `ORBIT_RELEASE_SIGNING_KEY_PEM` and
    [`npm/release-signing.pub`](../../npm/release-signing.pub), then cut the
    first release signed by the successor.
 4. After the overlap window, remove the old key or mark its revocation date
-   (`revoked_at` / npm `revokedAt`) in all three trust sets.
+   (`revoked_at` / npm `revokedAt`) in all four trust sets.
 
 Emergency revocation only protects users who upgrade: already-published npm
 packages retain their embedded trust sets. Publish a patch signed by a
@@ -328,6 +402,7 @@ same acknowledgement and record format, and does not honor
 [`scripts/release-check.sh`](../../scripts/release-check.sh) compares:
 
 - `[workspace.package].version` in `Cargo.toml`;
+- `[package].version` in `desktop/Cargo.toml`;
 - `.version` in `npm/package.json`;
 - `.version` in the Claude, Codex, and Agent Plugins 1.0 manifests;
 - the server name, package identity, launch arguments, and both version fields

@@ -38,22 +38,22 @@ fn failure_text(observed: &Observed) -> String {
     }
 }
 
-#[test]
 fn a_validate_repair_is_committed_by_the_host_and_retried_on_that_head() {
-    if !isolated(
-        "step_recovery::repair_commit::a_validate_repair_is_committed_by_the_host_and_retried_on_that_head",
-    ) {
-        return;
-    }
     let fixture = fixture();
     // A claimed leaf's `validate` has step recovery too, and the same commit.
-    for (name, claimed) in [("owner_repair", false), ("claimed_repair", true)] {
+    for (name, claimed, recovery_model) in [
+        ("owner_repair", false, Some(RECOVERY_MODEL)),
+        ("claimed_repair", true, Some(RECOVERY_MODEL)),
+        ("owner_unknown_model", false, None),
+        ("claimed_unknown_model", true, None),
+    ] {
         let observed = run(
             &fixture,
             &Case {
                 name,
                 producer: REPAIR,
                 claimed,
+                recovery_model,
                 prepare: commit_candidate,
                 before: vec![committed()],
                 ..Case::default()
@@ -90,14 +90,20 @@ fn a_validate_repair_is_committed_by_the_host_and_retried_on_that_head() {
             git_stdout(worktree, &["show", &format!("{retried}:candidate.txt")]),
             "fixed"
         );
-        // Orbit's process identity commits; the author and trailers record
-        // the recovery that made the change.
+        // Orbit's process identity commits; the author names the recovery
+        // activity's resolved model (or its historical fallback), and the
+        // trailers record the recovery that made the change [ORB-16768].
         assert_eq!(
             git_stdout(
                 worktree,
                 &["show", "-s", "--format=%an <%ae>|%cn <%ce>", retried]
             ),
-            "orbit-recovery <orbit-recovery@orbit.local>|orbit <orbit@orbit.local>",
+            format!(
+                "{} <orbit-recovery@orbit.local>|orbit <orbit@orbit.local>",
+                recovery_model
+                    .map(|model| format!("orbit[{model}]"))
+                    .unwrap_or_else(|| "orbit-recovery".to_string())
+            ),
             "{name}"
         );
         let message = git_stdout(worktree, &["show", "-s", "--format=%B", retried]);
@@ -123,7 +129,11 @@ fn a_validate_repair_is_committed_by_the_host_and_retried_on_that_head() {
                 committed(),
                 (
                     "review_gate_admit",
-                    json!({"applies": true, "attempt_id": "attempt-0", "head_sha": "0".repeat(40)}),
+                    crate::review_admission_shape::admitted_review(
+                        "attempt-0",
+                        "lineage",
+                        &"0".repeat(40),
+                    ),
                 ),
             ],
             ..Case::default()
@@ -174,17 +184,11 @@ fn a_validate_repair_is_committed_by_the_host_and_retried_on_that_head() {
     assert_eq!(uncommitted.attempts_saw[1].1, "M candidate.txt");
 }
 
-#[test]
 fn a_repair_the_host_must_not_commit_is_refused_by_name_and_nothing_is_committed() {
-    if !isolated(
-        "step_recovery::repair_commit::a_repair_the_host_must_not_commit_is_refused_by_name_and_nothing_is_committed",
-    ) {
-        return;
-    }
     let fixture = fixture();
     let admitted_review = (
         "review_gate_admit",
-        json!({"applies": true, "attempt_id": "attempt-1", "head_sha": "HEAD"}),
+        crate::review_admission_shape::admitted_review("attempt-1", "lineage", "HEAD"),
     );
     let settled_review = ("review_gate_settle", json!({"reviewed_head_sha": "HEAD"}));
     let mut no_diff = committed();
@@ -259,3 +263,10 @@ fn a_repair_the_host_must_not_commit_is_refused_by_name_and_nothing_is_committed
         );
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_validate_repair_is_committed_by_the_host_and_retried_on_that_head_scenarios,
+    a_validate_repair_is_committed_by_the_host_and_retried_on_that_head,
+    a_repair_the_host_must_not_commit_is_refused_by_name_and_nothing_is_committed
+);

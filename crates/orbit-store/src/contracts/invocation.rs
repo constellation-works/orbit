@@ -5,6 +5,11 @@ use orbit_types::telemetry::InvocationTrace;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct InvocationQuery {
+    /// Only successful job runs that committed a candidate, with this
+    /// invocation the final one inside a successful activity step's execution interval.
+    /// Missing outcome evidence, no-diff runs and earlier retry attempts are excluded.
+    #[serde(default)]
+    pub succeeded_candidate_only: bool,
     pub since: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
     /// Workspace the invocations were recorded under. Run ids are minted per
@@ -31,6 +36,11 @@ pub struct InvocationInsertParams {
     /// family. `None` for a caller that does not know it [ORB-14699].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// The crew account the invocation ran under: a crew that sets `env` and
+    /// so runs on its own credential, whose budget reads only its spend.
+    /// `None` for the provider's default login [ORB-17288].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     pub model: Option<String>,
     pub task_ids: Vec<String>,
     pub trace: InvocationTrace,
@@ -72,6 +82,10 @@ pub struct InvocationRecord {
     /// (`orbit_common::model::pricing`). `None` when no price row covers
     /// this model/date.
     pub derived_cost_usd: Option<f64>,
+    /// The crew account the invocation ran under, when its crew sets `env`;
+    /// `None` for the provider's default login [ORB-17288].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 /// Workspace and date window for reconciliation-safe invocation accounting reads.
@@ -119,22 +133,6 @@ pub struct ProviderLedgerEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ActivityInvocationMetrics {
     pub activity_id: String,
-    pub agent: String,
-    pub model: Option<String>,
-    pub invocation_count: u64,
-    pub total_input_tokens: u64,
-    pub total_cache_read_tokens: u64,
-    pub total_cache_create_tokens: u64,
-    pub total_output_tokens: u64,
-    pub total_tokens: u64,
-    pub avg_tokens: f64,
-    pub p50_tokens: u64,
-    pub p95_tokens: u64,
-    pub total_tool_calls: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct AgentInvocationMetrics {
     pub agent: String,
     pub model: Option<String>,
     pub invocation_count: u64,

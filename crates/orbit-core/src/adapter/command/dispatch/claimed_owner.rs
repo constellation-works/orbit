@@ -16,6 +16,7 @@
 //! each checked against that scope before anything reaches the owner:
 //!
 //! - `orbit.task.show` and the artifact calls name the claimed task;
+//! - `orbit.search` and `orbit.task.list` read only the claimed workspace;
 //! - `orbit.task.add` names the claimed task as `spawned_from`, and any other
 //!   relation only as `regression_from`: the owner, which holds the claimed
 //!   task's tags, allows that only for a review task's findings;
@@ -156,7 +157,7 @@ pub(super) fn bridge_through(
             ))
         });
     };
-    let request = match bridged_input(binding, name, input, cwd, workspace_root) {
+    let request = match bridged_input(binding, name, input, cwd, workspace_root, entry_point) {
         Ok(request) => request,
         Err(error) => return Some(ClaimedOwnerRoute::Refused(error)),
     };
@@ -245,6 +246,7 @@ fn bridged_input(
     input: &Value,
     cwd: &Path,
     workspace_root: &Path,
+    entry_point: ToolEntryPoint,
 ) -> Result<Value, OrbitError> {
     let mut input = input.clone();
     if let Some(object) = input.as_object_mut() {
@@ -269,8 +271,18 @@ fn bridged_input(
     if name != PUT {
         return Ok(input);
     }
-    let prepared =
-        orbit_tools::prepare_remote_task_artifact_put(input, Some(cwd), Some(workspace_root))?;
+    // The nested process's trusted entry point selects source-string semantics;
+    // the broker payload cannot choose CLI versus local MCP preparation.
+    let transport = match entry_point {
+        ToolEntryPoint::Cli => None,
+        ToolEntryPoint::Mcp => Some(orbit_types::tool::McpTransport::Local),
+    };
+    let prepared = orbit_tools::prepare_remote_task_artifact_put(
+        input,
+        Some(cwd),
+        Some(workspace_root),
+        transport,
+    )?;
     let artifact = prepared["artifacts"]
         .get(0)
         .cloned()
@@ -426,6 +438,20 @@ pub(super) fn execute_brokered(
         );
     }
     let owner_input = match tool {
+        "orbit.search" | "orbit.task.list" => {
+            // These are workspace reads, unlike the task-scoped show/artifact
+            // calls. The binding supplies the destination; search cannot fan
+            // out into any other workspace on the owner.
+            if object.keys().any(|key| key.starts_with('_')) {
+                return Err(denied(
+                    "internal fields are not accepted for workspace reads",
+                ));
+            }
+            if tool == "orbit.search" {
+                crate::runtime::check_worker_search_scope(&input)?;
+            }
+            input.clone()
+        }
         TASK_SHOW => {
             accept_fields(object, &["id", "fields", "field", "run_id", "model"])?;
             require_claimed_task(object, binding)?;

@@ -1,9 +1,18 @@
 //! Shared JSON projection for persisted job runs.
 
-use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, PipelineState, run_id_role};
+use std::collections::HashMap;
+
+use orbit_common::OrbitError;
+use orbit_types::workflow::{
+    CrewPurpose, FINAL_RECOVERY_CREWS_KEY, JobRun, JobRunState, JobRunStep, PipelineState,
+    run_id_role,
+};
 use serde_json::{Value, json};
 
+use crate::OrbitRuntime;
 use crate::runtime::run_input::carried_task_ids;
+
+use super::display_steps::RunDisplayStep;
 
 /// Durable provider/model evidence for one completed agent invocation.
 ///
@@ -15,6 +24,40 @@ pub struct ActivityInvocationEvidence {
     pub activity_id: String,
     pub provider: String,
     pub model: Option<String>,
+}
+
+/// Every activity crew draw the run froze, with the rule that chose it: the
+/// purpose's own pool, the fallback an unset purpose keeps, or the pool key
+/// the activity named. A draw that fell back to `workflow.default_crew` says
+/// so.
+fn activity_crew_draws_json(state: Option<&PipelineState>) -> Value {
+    Value::Array(
+        state
+            .into_iter()
+            .flat_map(|state| &state.activity_crew_draws)
+            .map(|(key, draw)| {
+                let rule = if draw.source.starts_with("workflow.default_crew") {
+                    "default_crew"
+                } else if CrewPurpose::from_purpose_key(key).is_some() {
+                    if draw.source.starts_with(key.as_str()) {
+                        "purpose_pool"
+                    } else {
+                        "purpose_unset_fallback"
+                    }
+                } else if key == FINAL_RECOVERY_CREWS_KEY {
+                    "final_recovery_pool"
+                } else {
+                    "complexity_pool"
+                };
+                json!({
+                    "key": key,
+                    "crew": draw.crew,
+                    "rule": rule,
+                    "source": draw.source,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// Task identities recorded in submitted run input, without any task-store reads.
@@ -72,19 +115,19 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     )
     .unwrap_or_else(|_| Value::Array(Vec::new()));
     let drain_worker_limit = state
-        .and_then(|state| state.drain_worker_limit.as_ref())
+        .and_then(|state| state.pull_drain.drain_worker_limit.as_ref())
         .and_then(|limit| serde_json::to_value(limit).ok())
         .unwrap_or(Value::Null);
     let drain_admissions_stop = state
-        .and_then(|state| state.drain_admissions_stop.as_ref())
+        .and_then(|state| state.pull_drain.drain_admissions_stop.as_ref())
         .and_then(|stop| serde_json::to_value(stop).ok())
         .unwrap_or(Value::Null);
     let drain_window_extension = state
-        .and_then(|state| state.drain_window_extension.as_ref())
+        .and_then(|state| state.pull_drain.drain_window_extension.as_ref())
         .and_then(|extension| serde_json::to_value(extension).ok())
         .unwrap_or(Value::Null);
     let drain_cancel = state
-        .and_then(|state| state.drain_cancel.as_ref())
+        .and_then(|state| state.pull_drain.drain_cancel.as_ref())
         .and_then(|cancel| serde_json::to_value(cancel).ok())
         .unwrap_or(Value::Null);
     // Read before the terminal filter below: an invocation's result is most
@@ -143,21 +186,31 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
             "crew": run.resolved_crew,
             "model": run.crew_model,
         },
-        "steps": run.steps.iter().map(|step| json!({
-            "step_index": step.step_index,
-            "target_type": step.target_type.to_string(),
-            "target_id": step.target_id,
-            "state": step.state.to_string(),
-            "started_at": step.started_at.map(|value| value.to_rfc3339()),
-            "finished_at": step.finished_at.map(|value| value.to_rfc3339()),
-            "duration_ms": step.duration_ms,
-            "exit_code": step.exit_code,
-            "agent_response_json": step.agent_response_json,
-            "error_code": step.error_code,
-            "error_message": step.error_message,
-        })).collect::<Vec<_>>(),
+        "activity_crew_draws": activity_crew_draws_json(state_for_agent_result),
+        // The record's own steps, exactly as stored. A surface that renders
+        // a run's steps chooses them with `run_display_steps`.
+        "steps": run.steps.iter().map(|step| RunDisplayStep::from_job_step(step).to_json()).collect::<Vec<_>>(),
         "created_at": run.created_at.to_rfc3339(),
     });
+    if run.job_id == "workspace_auto_pipeline"
+        && let Some(input) = run.input.as_ref()
+        && let Some(mode) = input.get("auto_concurrency").and_then(Value::as_str)
+    {
+        value["auto_concurrency"] = json!({
+            "mode": mode,
+            "source": input.get("auto_concurrency_source").and_then(Value::as_str).unwrap_or("explicit"),
+        });
+    }
+    // [ORB-16572] The captured review layer and what decided it: workspace
+    // policy, or the run's `--review` option.
+    if let Some(admission) = run
+        .input
+        .as_ref()
+        .and_then(|input| orbit_types::workflow::ReviewAdmission::from_run_input(input).ok())
+        .flatten()
+    {
+        value["review_layer"] = crate::application::review::review_layer_json(&admission);
+    }
     value["task_ids"] = json!((!task_ids.is_empty()).then_some(task_ids));
     value["drain_window_extension"] = drain_window_extension;
     // [ORB-14777] Pass-listed variables the submitting process did not hold.
@@ -167,10 +220,74 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
             .map(|state| state.env_pass_unset.as_slice())
             .unwrap_or_default()
     );
+    // Crews whose `env` sources the submitting process did not hold. Names
+    // only.
+    value["crew_env_unset"] = json!(
+        state_for_agent_result
+            .map(|state| state.crew_env_unset.as_slice())
+            .unwrap_or_default()
+    );
     // [ORB-15202] The leaf a cascaded failure echoes; null for a run that
     // failed on its own.
     value["root_cause"] = json!(state_for_agent_result.and_then(|state| state.root_cause.as_ref()));
     value
+}
+
+/// Pipeline states for one run-list page, read in one store round-trip.
+///
+/// Every surface that lists runs projects each row with its own state, so a
+/// listing reports the same child dispatches, waiting reasons, trigger and
+/// drain controls as the run itself. The read also covers each listed run's
+/// retry source, whose dispatches a lineage view needs even when that source
+/// is not on the page.
+#[derive(Debug, Default)]
+pub struct JobRunListStates {
+    states: HashMap<String, Option<PipelineState>>,
+}
+
+impl JobRunListStates {
+    /// The persisted state of a run the page read, if it has one.
+    pub fn state(&self, run_id: &str) -> Option<&PipelineState> {
+        self.states.get(run_id).and_then(Option::as_ref)
+    }
+
+    /// Each listed run's state, in listing order.
+    pub fn for_runs<'a>(&'a self, runs: &[JobRun]) -> Vec<Option<&'a PipelineState>> {
+        runs.iter().map(|run| self.state(&run.run_id)).collect()
+    }
+
+    /// The shared row for a listed run, projected with its state.
+    pub fn row(&self, run: &JobRun) -> Value {
+        job_run_to_json(run, self.state(&run.run_id))
+    }
+}
+
+impl OrbitRuntime {
+    /// Read the pipeline states a run-list page projects: the listed runs'
+    /// and their retry sources'. An empty page reads nothing. A failed read
+    /// is returned, so each surface keeps its own policy for a listing
+    /// without states.
+    pub fn read_job_run_list_states(
+        &self,
+        runs: &[JobRun],
+    ) -> Result<JobRunListStates, OrbitError> {
+        let mut run_ids = runs
+            .iter()
+            .map(|run| run.run_id.clone())
+            .chain(
+                runs.iter()
+                    .filter_map(|run| run.retry_source_run_id.clone()),
+            )
+            .collect::<Vec<_>>();
+        if run_ids.is_empty() {
+            return Ok(JobRunListStates::default());
+        }
+        run_ids.sort_unstable();
+        run_ids.dedup();
+        Ok(JobRunListStates {
+            states: self.read_run_states(&run_ids)?,
+        })
+    }
 }
 
 /// Add activity-level provider/model evidence to the stable job-run projection.

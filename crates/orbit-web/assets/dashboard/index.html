@@ -13,8 +13,9 @@
     <a class="skip-link" id="skip-link" href="#tasks-main">Skip to content</a>
     <div class="shell">
       <!-- The bar spans the window: the brand, the selected host's live
-           readings, Drain, when the dashboard last refreshed, and Refresh.
-           The destination heading stays for assistive tech. -->
+           readings, Drain and Refresh. When the dashboard last refreshed and
+           the UTC/Local clock sit at the foot of the rail. The destination
+           heading stays for assistive tech. -->
       <header class="topbar">
           <div class="rail-brand">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 82 24" role="img" aria-label="Orbit">
@@ -23,11 +24,12 @@
             </svg>
           </div>
           <h1 class="crumb visually-hidden" id="topbar-crumb">Tasks</h1>
-          <!-- Live readings for the selected host: load relative to cores, memory
-               and disk. The group names that host. Each chip is sized for its
+          <!-- Live readings for the selected host: load relative to cores, memory,
+               disk and (where the host reports it) disk I/O stall, then, past a
+               divider, its provider usage. The group names that host. Each chip is sized for its
                widest usual reading, so a new reading or a throttle verdict does
-               not move the bar. The windowed counts sit on the rail (failed runs
-               on Runs, events on Audit). -->
+               not move the bar. The counts sit on the rail (live runs
+               on Jobs, denials on Health). -->
           <div class="host-resource-group" id="host-resource-group" role="group" aria-label="Live resources of the serving host">
             <span class="host-resource-name" id="host-resource-name" aria-hidden="true">serving host</span>
             <div class="host-resource-chips" id="host-resource-chips" aria-live="polite">
@@ -35,20 +37,23 @@
               <span class="host-resource unknown" data-resource="memory" role="group" aria-label="memory unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">mem</span><span class="v">-</span></span>
               <span class="host-resource unknown" data-resource="disk" role="group" aria-label="disk unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">disk</span><span class="v">-</span></span>
             </div>
+            <!-- The same host's provider usage, one chip per provider with each
+                 of its windows (a single summary chip on narrow bars); it
+                 follows the host chips' poll. -->
+            <div class="host-resource-chips provider-usage-chips" id="provider-usage-chips" role="group" aria-label="Provider usage of the selected host">
+              <span class="host-resource provider-usage unknown" role="group" aria-label="Provider usage unavailable" title="Provider usage unavailable"><span class="k">usage</span><span class="v">-</span></span>
+            </div>
           </div>
           <span class="topbar-spacer"></span>
-          <button id="global-drain-state" class="global-drain-state" type="button" title="Open Drain card" hidden><span class="drain-dot" aria-hidden="true"></span><span class="global-drain-label">Draining</span><span class="global-drain-running" id="global-drain-running"></span></button>
-          <div class="rail-conn topbar-conn">
-            <span id="conn-status" class="status-dot orange"></span>
-            <span class="conn-text"><span id="conn-host" class="conn-host"></span><span id="meta-text">connecting&hellip;</span></span>
-          </div>
+          <a id="global-drain-state" class="global-drain-state" href="#drain" title="Open Drain" hidden><span class="drain-dot" aria-hidden="true"></span><span class="global-drain-label">Draining</span><span class="global-drain-running" id="global-drain-running"></span></a>
+          <!-- Opt-in browser notifications for a drain end or a new hold while
+               this tab is in the background; shown where notifications exist. -->
+          <button id="notify-btn" class="refresh-btn notify-btn" type="button" aria-pressed="false" title="Notify me when a drain ends or a task is held while this tab is in the background" hidden><svg class="refresh-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 8a5 5 0 0 1 10 0c0 4 1.5 5.5 2 6H3c.5-.5 2-2 2-6M8.5 17a1.5 1.5 0 0 0 3 0"/></svg><span class="refresh-label">Notify</span></button>
           <button id="refresh-btn" class="refresh-btn" type="button" title="Refresh dashboard"><svg class="refresh-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 8a6 6 0 1 0 0 4M16 3v5h-5"/></svg><span class="refresh-label">Refresh</span></button>
       </header>
-      <!-- ORB-10972: the top-level nav is a left rail. It keeps the `.tab` /
-           `.subtab` classes and the `#diag-subtabs` id the router selects on,
-           so every prior hash route resolves unchanged — only the nav's
-           position and presentation moved. Diagnostics' subtabs are visible
-           children here instead of a second row hidden inside the tab. -->
+      <!-- ORB-10972: the top-level nav is a left rail of `.tab` destinations.
+           A destination's `.subtab` views are its children here, shown while
+           it is open; the router selects on these classes and ids. -->
       <nav class="rail" aria-label="Dashboard sections">
         <!-- The host and workspace pickers head the rail: they scope every
              view, so they belong above the destinations they scope, not below
@@ -60,21 +65,26 @@
           <div class="rail-group">
             <div class="rail-group-label">Work</div>
           <button class="tab" data-tab="tasks" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h9"/></svg><span class="rail-label">Tasks</span><span class="rail-count" id="rail-count-tasks"></span></button>
-          <button class="tab" data-tab="runs" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4.5l9 5.5-9 5.5z"/></svg><span class="rail-label">Runs</span><span class="rail-count" id="rail-count-diag-runs"></span></button>
+          <button class="tab" data-tab="jobs" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4.5l9 5.5-9 5.5z"/></svg><span class="rail-label">Jobs</span><span class="rail-count" id="rail-count-jobs"></span></button>
+          <button class="tab" data-tab="drain" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h12l-4 6v5l-4 2v-7z"/></svg><span class="rail-label">Drain</span></button>
           </div>
 
           <div class="rail-group">
             <div class="rail-group-label">Observe</div>
-          <button class="tab" data-tab="audit" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 3h9l3 3v11H4z"/><path d="M7 9h6M7 12h4"/></svg><span class="rail-label">Audit</span><span class="rail-count" id="rail-count-audit"></span><span class="rail-count alert" id="rail-count-audit-denials" hidden></span></button>
-          <button class="tab" data-tab="diagnostics" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12l4-6 3 4 3-6 4 8"/><path d="M2 16h14"/></svg><span class="rail-label">Health</span><span class="rail-count" id="rail-count-diagnostics"></span><span class="rail-count alert" id="rail-count-routine-failures" hidden></span></button>
+          <button class="tab" data-tab="diagnostics" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12l4-6 3 4 3-6 4 8"/><path d="M2 16h14"/></svg><span class="rail-label">Health</span><span class="rail-count" id="rail-count-diagnostics"></span><span class="rail-count alert" id="rail-count-denials" hidden></span><span class="rail-count alert" id="rail-count-routine-failures" hidden></span></button>
             <nav class="subtabs rail-subtabs" id="diag-subtabs" aria-label="Health views">
               <button class="subtab" data-subtab="incidents" type="button">Incidents<span class="rail-count" id="rail-count-diag-incidents"></span></button>
               <button class="subtab" data-subtab="doctor" type="button">Doctor</button>
-              <button class="subtab" data-subtab="errors" type="button">Errors<span class="rail-count" id="rail-count-diag-errors"></span></button>
-              <button class="subtab" data-subtab="reliability" type="button">Reliability<span class="rail-count" id="rail-count-diag-reliability"></span></button>
-              <button class="subtab" data-subtab="metrics" type="button">Metrics<span class="rail-count" id="rail-count-diag-metrics"></span></button>
-              <button class="subtab" data-subtab="scoreboard" type="button">Scoreboard<span class="rail-count" id="rail-count-diag-scoreboard"></span></button>
             </nav>
+          <button class="tab" data-tab="analytics" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 16V10M10 16V4M15 16v-8"/><path d="M2.5 16.5h15"/></svg><span class="rail-label">Analytics</span></button>
+            <nav class="subtabs rail-subtabs" id="analytics-subtabs" aria-label="Analytics views">
+              <button class="subtab" data-subtab="metrics" type="button">Metrics</button>
+              <button class="subtab" data-subtab="reliability" type="button">Reliability</button>
+              <button class="subtab" data-subtab="codebase" type="button">Codebase</button>
+              <button class="subtab" data-subtab="resources" type="button">Resources</button>
+              <button class="subtab" data-subtab="cost" type="button">Cost</button>
+            </nav>
+          <button class="tab" data-tab="agents" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="2.5"/><circle cx="14" cy="8" r="2"/><path d="M2.5 16c.5-3 2.3-4.5 4.5-4.5s4 1.5 4.5 4.5"/><path d="M12 12.2c.6-.4 1.3-.7 2-.7 1.8 0 3.1 1.3 3.5 4"/></svg><span class="rail-label">Agents</span></button>
           </div>
 
           <div class="rail-group">
@@ -83,7 +93,6 @@
             <nav class="subtabs rail-subtabs" id="operations-subtabs" aria-label="Automation views">
               <button class="subtab active" data-subtab="routines" type="button">Routines<span class="rail-count" id="rail-count-ops-routines"></span></button>
               <button class="subtab" data-subtab="auto-tasks" type="button">Auto-tasks<span class="rail-count" id="rail-count-ops-auto-tasks"></span></button>
-              <button class="subtab" data-subtab="jobs" type="button">Jobs<span class="rail-count" id="rail-count-ops-jobs"></span></button>
             </nav>
           <button class="tab" data-tab="knowledge" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h5a2 2 0 0 1 2 2v10a2 2 0 0 0-2-2H4z"/><path d="M16 4h-5a2 2 0 0 0-2 2v10a2 2 0 0 1 2-2h5z"/></svg><span class="rail-label">Knowledge</span><span class="rail-count" id="rail-count-knowledge"></span></button>
           <button class="tab" data-tab="plugins" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3v3M13 3v3"/><rect x="4" y="6" width="12" height="7" rx="1.5"/><path d="M10 13v4"/></svg><span class="rail-label">Plugins</span><span class="rail-count" id="rail-count-plugins"></span></button>
@@ -97,6 +106,19 @@
               <button class="subtab" data-subtab="system" type="button">System</button>
               <button class="subtab" data-subtab="hosts" type="button">Hosts</button>
             </nav>
+          </div>
+        </div>
+
+        <!-- The rail's foot: when the dashboard last refreshed, then the
+             UTC/Local clock every time on the page follows. -->
+        <div class="rail-foot">
+          <div class="rail-conn">
+            <span id="conn-status" class="status-dot orange"></span>
+            <span class="conn-text"><span id="conn-host" class="conn-host"></span><span id="meta-text">connecting&hellip;</span></span>
+          </div>
+          <div class="scoreboard-window-selector clock-zone" role="group" aria-label="Time zone">
+            <button type="button" class="scoreboard-window-seg clock-zone-btn on" data-zone="utc" aria-pressed="true" title="Show times in UTC, matching the CLI">UTC</button>
+            <button type="button" class="scoreboard-window-seg clock-zone-btn" data-zone="local" aria-pressed="false" title="Show times in this browser's zone">Local</button>
           </div>
         </div>
       </nav>
@@ -121,14 +143,42 @@
               </div>
               <div class="task-search-wrap">
                 <svg class="task-search-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="M17 17l-3.6-3.6"/></svg>
-                <input type="search" id="task-search" placeholder="Filter by ID or title" autocomplete="off" spellcheck="false" aria-label="Search tasks by ID or title" aria-describedby="task-lookup-status" title="Press Enter on a task ID to open it, even outside this list or workspace" />
-                <kbd class="task-search-key" aria-hidden="true">/</kbd>
+                <input type="search" id="task-search" placeholder="Search by ID or title" autocomplete="off" spellcheck="false" aria-label="Search tasks by ID or title" aria-describedby="task-lookup-status" title="Press Enter on a task ID to open it, even outside this list or workspace" />
+                <button type="button" id="task-search-clear" aria-label="Clear task search and open result" title="Clear search and dismiss the open task">Clear</button>
                 <span id="task-lookup-status" class="task-lookup-status" role="status"></span>
               </div>
+              <button type="button" id="task-create-open" class="action primary" aria-controls="task-create-panel" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New task</button>
             </header>
             <div class="controls">
               <div id="task-filter" role="group" aria-label="Filter tasks by status"></div>
             </div>
+            <section id="task-create-panel" class="task-create" aria-labelledby="task-create-heading" hidden>
+              <h3 id="task-create-heading">Propose a task</h3>
+              <p>New tasks await approval before they can run.</p>
+              <form id="task-create-form">
+                <fieldset id="task-create-fields">
+                  <label for="task-create-workspace">Workspace</label>
+                  <select id="task-create-workspace" required></select>
+                  <label for="task-create-title">Title</label>
+                  <input id="task-create-title" required maxlength="32768" aria-describedby="task-create-feedback" />
+                  <label for="task-create-description">Description</label>
+                  <textarea id="task-create-description" rows="3" maxlength="32768"></textarea>
+                  <label for="task-create-complexity">Assessed complexity</label>
+                  <select id="task-create-complexity" required>
+                    <option value="">Select complexity</option><option value="low">Low</option><option value="medium">Medium</option><option value="hard">Hard</option><option value="xhard">Extra hard</option>
+                  </select>
+                  <label for="task-create-criteria">Acceptance criteria (one per line)</label>
+                  <textarea id="task-create-criteria" required rows="3" aria-describedby="task-create-feedback"></textarea>
+                </fieldset>
+                <p id="task-create-feedback" role="status" aria-live="polite" tabindex="-1"></p>
+                <a id="task-create-success" hidden></a>
+                <div class="task-create-actions">
+                  <button type="submit" id="task-create-submit" class="action save">Create proposed task</button>
+                  <button type="button" id="task-create-new" class="action" hidden>New proposal</button>
+                  <button type="button" id="task-create-cancel" class="action cancel">Cancel</button>
+                </div>
+              </form>
+            </section>
             <div class="filter-summary visually-hidden" id="task-filter-summary" role="status" aria-live="polite"></div>
             <nav class="task-pagination" aria-label="Task pages">
               <button id="tasks-previous" type="button" disabled>Previous</button>
@@ -144,41 +194,93 @@
             </div>
           </section>
         </div>
-        <div class="dock-splitter" id="dock-splitter" role="separator" aria-orientation="vertical" tabindex="0" title="Resize dock" aria-label="Resize dock" aria-valuenow="336" aria-valuemin="336"></div>
-        <!-- ORB-10972: the right column is a two-mode dock. Drain carries the
-             auto-drain window card (ORB-12898) above the per-task file locks;
-             Log hosts the orbit.log tail at full dock height. The column width
-             is identical in both modes, so switching never reflows the task
-             table beside it. -->
+        <!-- The Drain page's dock (Start a window, Locks held, Log) moves here
+             while Tasks shows; it gives way to the task pane when one opens. -->
+        <div class="tasks-dock" id="tasks-dock"></div>
+        <div class="task-pane-resizer" id="task-pane-resizer" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="task-detail-pane" aria-label="Resize the task detail pane" aria-valuemin="25" aria-valuemax="70" aria-valuenow="42" title="Drag, or use the arrow keys, to resize; double-click to reset"></div>
+        <aside class="task-detail-pane" id="task-detail-pane" aria-label="Task detail" hidden>
+          <div class="task-detail-body" id="task-detail-body"></div>
+        </aside>
+      </main>
+    </section>
+    <section class="tab-pane" data-tab="drain" tabindex="0" role="region" aria-labelledby="topbar-crumb">
+      <main class="drain-layout" id="drain-main">
         <div class="col-log" id="side-dock" data-mode="drain">
+          <div class="drain-page-head">
+            <p class="drain-page-title" aria-hidden="true">Drain</p>
+            <p class="drain-page-sub">Admit approved backlog in timed windows, within what this host can carry.</p>
+          </div>
           <div class="dock-head">
-            <div class="dock-seg-group" id="dock-mode-toggle" role="tablist" aria-label="Right dock mode">
-              <button type="button" role="tab" class="dock-seg on" id="dock-tab-drain" data-mode="drain" aria-selected="true" aria-controls="dock-pane-drain" tabindex="0">Drain <span id="dock-drain-state" class="dock-drain-state"></span></button>
+            <div class="dock-seg-group" id="dock-mode-toggle" role="tablist" aria-label="Drain views">
+              <button type="button" role="tab" class="dock-seg on" id="dock-tab-drain" data-mode="drain" aria-selected="true" aria-controls="dock-pane-drain" tabindex="0"><span class="dock-seg-label">Overview</span> <span id="dock-drain-state" class="dock-drain-state"></span></button>
+              <button type="button" role="tab" class="dock-seg" id="dock-tab-start" data-mode="start" aria-selected="false" aria-controls="dock-pane-start" tabindex="-1">Start a window</button>
               <button type="button" role="tab" class="dock-seg" id="dock-tab-log" data-mode="log" aria-selected="false" aria-controls="dock-pane-log" tabindex="-1">Log <span id="dock-log-state" class="dock-log-state"></span></button>
             </div>
           </div>
+          <!-- A Start's result and its no-retry warning. On Drain it sits above
+               every view, so the receipt stays in sight when Start opens
+               Overview; in the Tasks dock operations.js moves it under the
+               dock's Start card. -->
+          <div class="operation-feedback" id="auto-drain-operation-feedback" role="status" aria-live="polite"></div>
 
           <div class="dock-pane" id="dock-pane-drain" role="tabpanel" aria-labelledby="dock-tab-drain" data-pane="drain">
-            <section class="panel drain-card" id="auto-drain-panel" aria-labelledby="auto-drain-title">
-              <header>
-                <h2 class="drain-title" id="auto-drain-title">Auto-drain</h2>
-                <span class="drain-phase" id="auto-drain-phase"><span class="drain-dot" id="auto-drain-dot" aria-hidden="true"></span><span id="auto-drain-phase-label">—</span></span>
-              </header>
-              <div class="body" id="auto-drain-body">
-                <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
+            <div class="drain-banner" id="drain-banner" hidden></div>
+            <div class="drain-summary" id="drain-summary" role="group" aria-label="Drain summary" hidden></div>
+            <div class="drain-columns">
+              <div class="drain-col drain-col-main">
+                <section class="panel drain-card" id="auto-drain-panel" aria-labelledby="auto-drain-title">
+                  <header>
+                    <h2 class="drain-title" id="auto-drain-title">Auto-drain</h2>
+                    <span class="drain-phase" id="auto-drain-phase"><span class="drain-dot" id="auto-drain-dot" aria-hidden="true"></span><span id="auto-drain-phase-label">—</span></span>
+                    <span class="drain-when" id="auto-drain-when"></span>
+                  </header>
+                  <div class="body" id="auto-drain-body">
+                    <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
+                  </div>
+                </section>
+                <section class="panel drain-started-card" id="drain-started-panel" aria-labelledby="drain-started-title" hidden>
+                  <header><h2 class="drain-title" id="drain-started-title">How this window was started</h2><span class="count">From the run's recorded inputs</span></header>
+                  <div class="body" id="drain-started-body"></div>
+                </section>
+                <section class="panel drain-pull-card" id="drain-pull-panel" aria-labelledby="drain-pull-title" hidden>
+                  <header><h2 class="drain-title" id="drain-pull-title">Pulling from the owner</h2><span class="count">Workspace capacity and running claims</span></header>
+                  <div class="body" id="drain-pull-body"></div>
+                </section>
+                <section class="panel drain-waits-card" id="drain-waits-panel" aria-labelledby="drain-waits-title">
+                  <header><h2 class="drain-title" id="drain-waits-title">Why tasks are waiting</h2><span class="count">Snapshot · can change before admission</span></header>
+                  <div class="body" id="drain-waits-body"></div>
+                  <div class="body" id="drain-pass-body"></div>
+                </section>
               </div>
-              <div class="operation-feedback" id="auto-drain-operation-feedback" role="status" aria-live="polite"></div>
-            </section>
+              <div class="drain-col drain-col-side">
+                <section class="panel drain-fleet-card" id="drain-fleet-panel" aria-labelledby="drain-fleet-title" hidden>
+                  <header><h2 class="drain-title" id="drain-fleet-title">Fleet drains</h2></header>
+                  <div class="body" id="drain-fleet-body"></div>
+                </section>
+                <!-- The Tasks dock's simple Start card; the Drain page starts a
+                     window from its own Start a window view. -->
+                <section class="panel drain-start-card" id="auto-drain-quick-start" aria-labelledby="auto-drain-quick-start-title" hidden>
+                  <header>
+                    <h2 class="drain-title" id="auto-drain-quick-start-title">Start a window</h2>
+                    <span class="drain-start-sub" id="auto-drain-quick-start-sub"></span>
+                  </header>
+                  <div class="body" id="auto-drain-quick-start-body"></div>
+                </section>
+                <section class="panel" id="locks-panel" aria-labelledby="locks-title">
+                  <header><h2 class="drain-title" id="locks-title">Locks held</h2><span class="count" id="locks-count">0 files · 0 tasks</span></header>
+                  <div class="body" id="locks-body"></div>
+                </section>
+              </div>
+            </div>
+          </div>
+
+          <div class="dock-pane" id="dock-pane-start" role="tabpanel" aria-labelledby="dock-tab-start" data-pane="start">
             <section class="panel drain-start-card" id="auto-drain-start" aria-labelledby="auto-drain-start-title" hidden>
               <header>
                 <h2 class="drain-title" id="auto-drain-start-title">Start a window</h2>
                 <span class="drain-start-sub" id="auto-drain-start-sub"></span>
               </header>
               <div class="body" id="auto-drain-start-body"></div>
-            </section>
-            <section class="panel" id="locks-panel">
-              <header><h2 class="drain-title">Locked files</h2><span class="count" id="locks-count">0 files / 0 tasks</span></header>
-              <div class="body" id="locks-body"></div>
             </section>
           </div>
 
@@ -210,83 +312,6 @@
         </div>
       </main>
     </section>
-    <section class="tab-pane" data-tab="audit" tabindex="0" role="region" aria-labelledby="topbar-crumb">
-      <main class="tasks-layout audit-layout" id="audit-main">
-        <div class="audit-primary">
-          <section class="panel" id="audit-pane">
-            <header><span id="audit-title">Audit events</span><span class="count" id="audit-count">-</span></header>
-            <nav class="subtabs" id="audit-subtabs">
-              <button class="subtab" data-subtab="events" type="button">Events</button>
-              <button class="subtab" data-subtab="codebase" type="button">Codebase</button>
-            </nav>
-            <div class="controls" id="audit-events-controls">
-              <input type="search" id="audit-search" placeholder="Search command, tool, target..." autocomplete="off" spellcheck="false" />
-              <div id="audit-scope-chips" class="scope-chips" aria-label="Active audit scope"></div>
-              <div id="audit-filter"></div>
-            </div>
-            <div class="body scoreboard-table-wrap" id="audit-body" tabindex="0" role="region" aria-label="Audit events">
-              <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
-                <div class="skeleton skeleton-row"></div>
-                <div class="skeleton skeleton-row" style="width: 80%"></div>
-                <div class="skeleton skeleton-row" style="width: 70%"></div>
-              </div>
-            </div>
-            <div class="codebase-head" id="audit-codebase-controls" style="display: none;">
-              <div class="codebase-intro">
-                <p class="codebase-purpose">Which paths are costly for agents to change: how often the tasks that declared a path regressed, missed their footprint, got blocked or were rejected.</p>
-                <div class="codebase-meta-row">
-                  <span class="codebase-meta" id="codebase-meta"></span>
-                  <details class="codebase-how">
-                    <summary><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>“Declared” is not the landed diff</summary>
-                    <p>A task counts against a path when its <code>context_files</code> name it, widened selectors included. What the merged commit actually changed is not read. Rates count distinct tasks, so a path does not lead just because many tasks touch it.</p>
-                  </details>
-                </div>
-              </div>
-              <div class="codebase-controls">
-                <div class="codebase-ctl" role="group" aria-labelledby="codebase-window-label">
-                  <span class="codebase-ctl-label" id="codebase-window-label">Window</span>
-                  <div class="codebase-segs" id="codebase-window">
-                    <button type="button" class="codebase-seg" data-value="7d" aria-pressed="false">7d</button>
-                    <button type="button" class="codebase-seg" data-value="30d" aria-pressed="false">30d</button>
-                    <button type="button" class="codebase-seg on" data-value="90d" aria-pressed="true">90d</button>
-                    <button type="button" class="codebase-seg" data-value="all" aria-pressed="false">All</button>
-                  </div>
-                </div>
-                <div class="codebase-ctl" role="group" aria-labelledby="codebase-rollup-label">
-                  <span class="codebase-ctl-label" id="codebase-rollup-label">Group by</span>
-                  <div class="codebase-segs" id="codebase-rollup">
-                    <button type="button" class="codebase-seg on" data-value="file" aria-pressed="true">File</button>
-                    <button type="button" class="codebase-seg" data-value="dir" aria-pressed="false">Directory</button>
-                    <button type="button" class="codebase-seg" data-value="crate" aria-pressed="false">Crate</button>
-                  </div>
-                </div>
-                <div class="codebase-ctl" role="group" aria-labelledby="codebase-min-label">
-                  <span class="codebase-ctl-label" id="codebase-min-label">Min. tasks per path</span>
-                  <div class="codebase-stepper">
-                    <button type="button" id="codebase-min-down" aria-label="Fewer tasks per path">−</button>
-                    <output id="codebase-min-support" aria-live="polite">15</output>
-                    <button type="button" id="codebase-min-up" aria-label="More tasks per path">+</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="body codebase-body" id="audit-codebase-body" tabindex="0" role="region" aria-label="Codebase analytics" style="display: none;">
-              <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
-                <div class="skeleton skeleton-row"></div>
-                <div class="skeleton skeleton-row" style="width: 80%"></div>
-              </div>
-            </div>
-          </section>
-        </div>
-        <div class="audit-side" id="audit-summary-column">
-          <section class="panel" id="audit-summary-panel">
-            <header><span id="audit-summary-title">Audit summary 24h</span></header>
-            <div class="body" id="audit-summary-body" tabindex="0" role="region" aria-labelledby="audit-summary-title" style="padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; background: var(--bg);">
-            </div>
-          </section>
-        </div>
-      </main>
-    </section>
     <section class="tab-pane" data-tab="run-detail" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <main style="grid-template-columns: 1fr;">
         <section class="panel" id="run-detail-panel">
@@ -311,7 +336,53 @@
         </section>
       </main>
     </section>
+    <section class="tab-pane" data-tab="jobs" tabindex="0" role="region" aria-labelledby="topbar-crumb">
+      <nav class="subtabs view-tabs" id="jobs-subtabs" aria-label="Jobs views">
+        <button class="subtab active" data-subtab="live" type="button">Live</button>
+        <button class="subtab" data-subtab="history" type="button">History</button>
+        <button class="subtab" data-subtab="catalogue" type="button">Catalogue</button>
+      </nav>
+      <main class="operations-layout jobs-layout" id="jobs-live-main">
+        <section class="panel">
+          <header><span>Live</span><span class="count" id="jobs-live-count">-</span></header>
+          <div class="body" id="jobs-live-body">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
+          </div>
+        </section>
+      </main>
+      <main class="jobs-layout" id="jobs-history-main" hidden>
+        <section class="panel" id="runs-panel">
+          <header><span>History</span><span class="count" id="runs-count">-</span></header>
+          <div class="body" id="runs-body" tabindex="0" role="region" aria-label="Runs">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
+              <div class="skeleton skeleton-row"></div>
+              <div class="skeleton skeleton-row" style="width: 80%"></div>
+            </div>
+          </div>
+        </section>
+      </main>
+      <main class="operations-layout jobs-layout" id="jobs-catalogue-main" hidden>
+        <section class="panel" id="jobs-panel">
+          <header>
+            <span>Catalogue</span>
+            <span class="count" id="jobs-count">-</span>
+          </header>
+          <div class="operation-feedback" id="job-operation-feedback" role="status" aria-live="polite"></div>
+          <div class="body" id="jobs-body">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
+          </div>
+        </section>
+      </main>
+    </section>
     <section class="tab-pane" data-tab="diagnostics" tabindex="0" role="region" aria-labelledby="topbar-crumb">
+      <!-- Health answers "what is broken now". Incidents has three views:
+           incident signatures, the raw audit event log and the error feed.
+           The router shows this bar only on Incidents. -->
+      <nav class="subtabs view-tabs" id="incidents-views" aria-label="Incidents views">
+        <button class="subtab" data-view="incidents" type="button">Incidents</button>
+        <button class="subtab" data-view="events" type="button">Events</button>
+        <button class="subtab" data-view="errors" type="button">Errors</button>
+      </nav>
       <main class="tasks-layout" id="diagnostics-main" style="grid-template-columns: minmax(0, 1fr);">
         <div style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="diagnostics-panel">
@@ -325,18 +396,52 @@
                 <div class="skeleton skeleton-row" style="width: 75%"></div>
               </div>
             </div>
-            <div class="body" id="runs-body" tabindex="0" role="region" aria-label="Runs">
-              <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
-                <div class="skeleton skeleton-row"></div>
-                <div class="skeleton skeleton-row" style="width: 80%"></div>
-              </div>
-            </div>
           </section>
         </div>
       </main>
+      <!-- Health › Incidents › Events: the audit log. It opens on failures
+           and denials, since nearly every row is a successful poll. -->
+      <main id="diagnostics-events-main" style="grid-template-columns: minmax(0, 1fr); display: none;">
+        <section class="panel" id="audit-pane">
+          <header><span id="audit-title">Events</span><span class="count" id="audit-count">-</span></header>
+          <div class="controls" id="audit-events-controls">
+            <input type="search" id="audit-search" placeholder="Search command, tool, target..." autocomplete="off" spellcheck="false" aria-label="Search audit events by command, tool, or target" />
+            <div id="audit-scope-chips" class="scope-chips" aria-label="Active audit scope"></div>
+            <div id="audit-filter"></div>
+          </div>
+          <div class="body scoreboard-table-wrap" id="audit-body" tabindex="0" role="region" aria-label="Audit events">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
+              <div class="skeleton skeleton-row"></div>
+              <div class="skeleton skeleton-row" style="width: 80%"></div>
+              <div class="skeleton skeleton-row" style="width: 70%"></div>
+            </div>
+          </div>
+        </section>
+      </main>
+      <!-- ORB-14830: `orbit doctor` for the selected workspace on the selected
+           host. Read-only: the panel runs the checks on open and on Refresh,
+           and offers each remediation's commands to copy; repairs stay CLI. -->
+      <main id="diagnostics-doctor-main" style="grid-template-columns: 1fr; display: none;">
+        <section class="panel" id="doctor-panel">
+          <header>
+            <span>Doctor</span>
+            <span class="count" id="doctor-count">-</span>
+          </header>
+          <div class="scoreboard-controls" id="doctor-controls">
+            <span class="scoreboard-controls-meta doctor-meta" id="doctor-meta">Not run yet</span>
+            <span class="scoreboard-controls-spacer"></span>
+            <button class="action preview" id="doctor-refresh" type="button" title="Run orbit doctor again (read-only)">Refresh</button>
+          </div>
+          <div class="body doctor-body" id="doctor-body" tabindex="0" role="region" aria-label="Doctor checks" aria-live="polite"></div>
+        </section>
+      </main>
+    </section>
+    <section class="tab-pane" data-tab="analytics" tabindex="0" role="region" aria-labelledby="topbar-crumb">
+      <!-- Analytics answers "how is delivery trending". Each view brings its
+           own full-width <main>; Reliability has a Pipeline and a Tools view. -->
       <!-- ORB-15746: implement_one duration and task completion trends over
            the shared window, by complexity, with the per-actor tables. -->
-      <main id="diagnostics-metrics-main" style="grid-template-columns: 1fr; display: none;">
+      <main id="analytics-metrics-main" style="grid-template-columns: 1fr; display: none;">
         <section class="panel" id="metrics-panel">
           <header>
             <span>Metrics</span>
@@ -359,28 +464,14 @@
           <div class="body metrics-body" id="metrics-body" tabindex="0" role="region" aria-label="Metrics"></div>
         </section>
       </main>
-      <!-- ORB-14830: `orbit doctor` for the selected workspace on the selected
-           host. Read-only: the panel runs the checks on open and on Refresh,
-           and offers each remediation's commands to copy; repairs stay CLI. -->
-      <main id="diagnostics-doctor-main" style="grid-template-columns: 1fr; display: none;">
-        <section class="panel" id="doctor-panel">
-          <header>
-            <span>Doctor</span>
-            <span class="count" id="doctor-count">-</span>
-          </header>
-          <div class="scoreboard-controls" id="doctor-controls">
-            <span class="scoreboard-controls-meta doctor-meta" id="doctor-meta">Not run yet</span>
-            <span class="scoreboard-controls-spacer"></span>
-            <button class="action preview" id="doctor-refresh" type="button" title="Run orbit doctor again (read-only)">Refresh</button>
-          </div>
-          <div class="body doctor-body" id="doctor-body" tabindex="0" role="region" aria-label="Doctor checks" aria-live="polite"></div>
-        </section>
-      </main>
-      <!-- ORB-10588: pipeline reliability. Like the scoreboard it replaces the
-           two-column diagnostics layout with its own full-width <main>. Every
-           rate rendered here states its window (panel header) and its n (in
-           the cell itself); small-n cells are withheld rather than rounded. -->
-      <main id="diagnostics-reliability-main" style="grid-template-columns: 1fr; display: none;">
+      <nav class="subtabs view-tabs" id="reliability-views" aria-label="Reliability views">
+        <button class="subtab" data-view="pipeline" type="button">Pipeline</button>
+        <button class="subtab" data-view="tools" type="button">Tools</button>
+      </nav>
+      <!-- ORB-10588: Reliability › Pipeline. Every rate rendered here states
+           its window (panel header) and its n (in the cell itself); small-n
+           cells are withheld rather than rounded. -->
+      <main id="analytics-reliability-main" style="grid-template-columns: 1fr; display: none;">
         <section class="panel" id="reliability-panel">
           <header>
             <span>Pipeline reliability</span>
@@ -419,22 +510,97 @@
           <div class="body" id="reliability-activities" style="padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; background: var(--bg);"></div>
         </section>
       </main>
-      <!-- Scoreboard is a diagnostics-shaped view, so it lives under the
-           Diagnostics tab as a subtab rather than a top-level nav entry. Its
-           markup (and every id scoreboard.js renders into) is unchanged by the
-           move; only the container and its visibility toggle are new. -->
-      <main id="diagnostics-scoreboard-main" style="grid-template-columns: 1fr; display: none;">
-        <section class="panel" id="scoreboard-panel">
+      <!-- Reliability › Tools: tool-call failure rates from the audit
+           summary. Selecting a tool opens its events under Health. -->
+      <main id="analytics-tools-main" style="grid-template-columns: 1fr; display: none;">
+        <section class="panel" id="audit-summary-panel">
+          <header><span id="audit-summary-title">Tool calls</span></header>
+          <div class="body" id="audit-summary-body" tabindex="0" role="region" aria-labelledby="audit-summary-title">
+          </div>
+        </section>
+      </main>
+      <main id="analytics-codebase-main" style="grid-template-columns: minmax(0, 1fr); display: none;">
+        <section class="panel" id="codebase-panel">
+          <header><span>Codebase</span></header>
+          <div class="codebase-head" id="codebase-controls">
+            <div class="codebase-intro">
+              <p class="codebase-purpose">Which paths are costly for agents to change: how often the tasks that declared a path regressed, missed their footprint, got blocked or were rejected.</p>
+              <div class="codebase-meta-row">
+                <span class="codebase-meta" id="codebase-meta"></span>
+                <details class="codebase-how">
+                  <summary><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>“Declared” is not the landed diff</summary>
+                  <p>A task counts against a path when its <code>context_files</code> name it, widened selectors included. The path rankings do not read what the merged commit actually changed; the Repository file search does, and Agents › Pilots grades task-pilot selectors against it. Rates count distinct tasks, so a path does not lead just because many tasks touch it.</p>
+                </details>
+              </div>
+            </div>
+            <div class="codebase-controls">
+              <div class="codebase-ctl" role="group" aria-labelledby="codebase-window-label">
+                <span class="codebase-ctl-label" id="codebase-window-label">Window</span>
+                <div class="codebase-segs" id="codebase-window">
+                  <button type="button" class="codebase-seg" data-value="7d" aria-pressed="false">7d</button>
+                  <button type="button" class="codebase-seg" data-value="30d" aria-pressed="false">30d</button>
+                  <button type="button" class="codebase-seg on" data-value="90d" aria-pressed="true">90d</button>
+                  <button type="button" class="codebase-seg" data-value="all" aria-pressed="false">All</button>
+                </div>
+              </div>
+              <div class="codebase-ctl" role="group" aria-labelledby="codebase-rollup-label">
+                <span class="codebase-ctl-label" id="codebase-rollup-label">Group by</span>
+                <div class="codebase-segs" id="codebase-rollup">
+                  <button type="button" class="codebase-seg on" data-value="file" aria-pressed="true">File</button>
+                  <button type="button" class="codebase-seg" data-value="dir" aria-pressed="false">Directory</button>
+                  <button type="button" class="codebase-seg" data-value="crate" aria-pressed="false">Crate</button>
+                </div>
+              </div>
+              <div class="codebase-ctl" role="group" aria-labelledby="codebase-min-label">
+                <span class="codebase-ctl-label" id="codebase-min-label">Min. tasks per path</span>
+                <div class="codebase-stepper">
+                  <button type="button" id="codebase-min-down" aria-label="Fewer tasks per path">−</button>
+                  <output id="codebase-min-support" aria-live="polite">15</output>
+                  <button type="button" id="codebase-min-up" aria-label="More tasks per path">+</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <section class="codebase-related" aria-labelledby="codebase-related-title">
+            <h3 id="codebase-related-title">What changes alongside a file?</h3>
+            <form id="codebase-related-form" class="codebase-related-search">
+              <label for="codebase-path-search">Repository file</label>
+              <input id="codebase-path-search" type="search" autocomplete="off" placeholder="Start typing a path…" aria-controls="codebase-path-options">
+              <button type="submit" class="action">Find related files</button>
+            </form>
+            <div id="codebase-path-options" class="codebase-path-options" aria-label="Matching paths"></div>
+            <div id="codebase-related-results" aria-live="polite"></div>
+          </section>
+          <div class="body codebase-body" id="codebase-body" tabindex="0" role="region" aria-label="Codebase analytics">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
+              <div class="skeleton skeleton-row"></div>
+              <div class="skeleton skeleton-row" style="width: 80%"></div>
+            </div>
+          </div>
+        </section>
+      </main>
+      <!-- Analytics › Resources: this host's delivery resource profiles, the
+           per-minute curves admission forecasts with, for the selected workspace. -->
+      <main id="analytics-resources-main" style="grid-template-columns: 1fr; display: none;">
+        <section class="panel" id="resources-panel">
           <header>
-            <span>Scoreboard</span>
-            <span class="count" id="scoreboard-count">-</span>
+            <span>Resource profiles</span>
+            <span class="count" id="resources-count">-</span>
+          </header>
+          <div class="body resources-body" id="resources-body" tabindex="0" role="region" aria-label="Resource profiles"></div>
+        </section>
+      </main>
+      <!-- Analytics › Cost: managed-execution cost and token usage. -->
+      <main id="analytics-cost-main" style="grid-template-columns: 1fr; display: none;">
+        <section class="panel" id="scoreboard-orchestration-panel">
+          <header>
+            <span>Managed execution cost &amp; token usage</span>
+            <span class="count" id="scoreboard-orchestration-count">—</span>
           </header>
           <div class="scoreboard-controls" id="scoreboard-controls">
             <div class="scoreboard-control-group">
               <span class="scoreboard-control-label">window</span>
-              <!-- Window selector — click a segment to refetch the
-                   scoreboard scoped to that window. Wired in ORB-00337. -->
-              <div class="scoreboard-window-selector" id="scoreboard-window-selector" role="tablist" aria-label="Scoreboard time window">
+              <div class="scoreboard-window-selector" id="scoreboard-window-selector" role="tablist" aria-label="Cost time window">
                 <button type="button" role="tab" class="scoreboard-window-seg" data-window="1h" aria-selected="false" tabindex="-1">1h</button>
                 <button type="button" role="tab" class="scoreboard-window-seg on" data-window="24h" aria-selected="true" tabindex="0">24h</button>
                 <button type="button" role="tab" class="scoreboard-window-seg" data-window="7d" aria-selected="false" tabindex="-1">7d</button>
@@ -442,23 +608,7 @@
                 <button type="button" role="tab" class="scoreboard-window-seg" data-window="all" aria-selected="false" tabindex="-1">all</button>
               </div>
             </div>
-            <span class="scoreboard-controls-spacer"></span>
-            <span class="scoreboard-controls-meta" id="scoreboard-meta">-</span>
           </div>
-          <div id="scoreboard-narrative" class="scoreboard-narrative"></div>
-          <div id="scoreboard-agent-strip" class="scoreboard-agent-strip"></div>
-          <div class="body scoreboard-table-wrap" id="scoreboard-body">
-            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
-              <div class="skeleton skeleton-row"></div>
-              <div class="skeleton skeleton-row" style="width: 70%"></div>
-            </div>
-          </div>
-        </section>
-        <section class="panel" id="scoreboard-orchestration-panel">
-          <header>
-            <span>Managed execution cost &amp; token usage</span>
-            <span class="count" id="scoreboard-orchestration-count">—</span>
-          </header>
           <div class="body" id="scoreboard-orchestration">
             <div class="empty-state">
               <div class="icon">✧</div>
@@ -466,9 +616,39 @@
             </div>
           </div>
         </section>
-        <section class="panel" id="scoreboard-insights-panel">
-          <header><span>Insights</span><span class="count" id="scoreboard-insights-count">—</span></header>
-          <div id="scoreboard-insights"></div>
+      </main>
+    </section>
+    <!-- Observe › Agents: one scorecard per agent role, ranked by crew and
+         model, with who each problem counts against. The role tabs carry
+         their ranked-row counts; js/agents.js renders every role. -->
+    <section class="tab-pane" data-tab="agents" tabindex="0" role="region" aria-labelledby="topbar-crumb">
+      <nav class="subtabs view-tabs" id="agents-roles" aria-label="Agent roles">
+        <button class="subtab active" data-view="orchestrators" type="button">Orchestrators<span class="agents-role-count" id="agents-count-orchestrators"></span></button>
+        <button class="subtab" data-view="implementers" type="button">Implementers<span class="agents-role-count" id="agents-count-implementers"></span></button>
+        <button class="subtab" data-view="reviewers" type="button">Reviewers<span class="agents-role-count" id="agents-count-reviewers"></span></button>
+        <button class="subtab" data-view="pilots" type="button">Pilots<span class="agents-role-count" id="agents-count-pilots"></span></button>
+      </nav>
+      <main id="agents-main" style="grid-template-columns: minmax(0, 1fr);">
+        <section class="panel" id="agents-panel">
+          <header>
+            <span id="agents-title">Orchestrators</span>
+            <span class="count" id="agents-count">—</span>
+          </header>
+          <div class="scoreboard-controls agents-controls" id="agents-controls">
+            <p class="agents-purpose">One row per crew and model, ranked by one shared score. Every problem counts against exactly one role, or is not scored; cost and time are shown beside the score, never in it.</p>
+            <div class="scoreboard-control-group">
+              <span class="scoreboard-control-label">window</span>
+              <div class="scoreboard-window-selector" id="agents-window-selector" role="tablist" aria-label="Agent scorecard window">
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="1h" aria-selected="false" tabindex="-1">1h</button>
+                <button type="button" role="tab" class="scoreboard-window-seg on" data-window="24h" aria-selected="true" tabindex="0">24h</button>
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="7d" aria-selected="false" tabindex="-1">7d</button>
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="30d" aria-selected="false" tabindex="-1">30d</button>
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="all" aria-selected="false" tabindex="-1" title="all is served as 90 days, the scan's reach">all (90d)</button>
+              </div>
+            </div>
+            <span class="scoreboard-controls-meta" id="agents-meta"></span>
+          </div>
+          <div class="body agents-body" id="agents-body" tabindex="0" role="region" aria-label="Agent scorecard"></div>
         </section>
       </main>
     </section>
@@ -505,18 +685,6 @@
           </div>
         </section>
       </main>
-      <main class="operations-layout operations-jobs-layout" id="operations-jobs-main" hidden>
-        <section class="panel" id="jobs-panel">
-          <header>
-            <span>Jobs</span>
-            <span class="count" id="jobs-count">-</span>
-          </header>
-          <div class="operation-feedback" id="job-operation-feedback" role="status" aria-live="polite"></div>
-          <div class="body" id="jobs-body">
-            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
-          </div>
-        </section>
-      </main>
     </section>
     <section class="tab-pane" data-tab="knowledge" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <main style="grid-template-columns: minmax(0, 1fr) minmax(380px, 1fr);">
@@ -540,7 +708,7 @@
             </div>
           </div>
           <div class="controls">
-            <input type="search" id="friction-search" placeholder="Search frictions..." autocomplete="off" spellcheck="false" />
+            <input type="search" id="friction-search" placeholder="Search frictions..." autocomplete="off" spellcheck="false" aria-label="Search frictions" />
             <label class="friction-filter-control" for="friction-status-filter">
               <span>Show</span>
               <select id="friction-status-filter" aria-controls="frictions-body">

@@ -1,16 +1,33 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+// Workspace names differ from their ids, so a chip that shows the id is caught.
+const WORKSPACE_NAMES = { one: 'Orbit fixture', two: 'Second fixture' };
+
+// The Events workspace chip names the selected workspace as the header picker
+// does; the id stays in the request scope.
+async function assertWorkspaceChipName(page, name) {
+  const chipValue = () => page.locator('#audit-scope-chips [data-chip="workspace"] .scope-chip-v').textContent();
+  await page.waitForFunction(expected =>
+    document.querySelector('#audit-scope-chips [data-chip="workspace"] .scope-chip-v')?.textContent === expected, name, { timeout: 5000 })
+    .catch(async () => { throw new Error(`The Events workspace chip must name the workspace "${name}": ${await chipValue()}`); });
+  if (await page.locator('#workspace-select').count()) {
+    const picked = await page.locator('#workspace-select option:checked').textContent();
+    if (picked !== name) throw new Error(`The header picker must show the selected workspace as "${name}": ${picked}`);
+  }
+}
+
 // Drive scope chips and their downstream actions through the full shipped app.
 export async function assertWorkspaceScope(browser, origin, evidence) {
+  await assertWorkspaceHostTransitions(browser, origin, evidence);
   for (const workspaceCount of [1, 2]) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     let reliabilityEvidence = null;
     try {
-      await page.goto(`${origin}/#audit?role=operator`);
-      await page.evaluate(async workspaceCount => {
+      await page.goto(`${origin}/#diagnostics/incidents/events?role=operator`);
+      await page.evaluate(async ([workspaceCount, names]) => {
         const task = { id: 'SCOPE-1', title: 'Workspace scope fixture', status: 'review', priority: 'medium' };
         const claim = {
           claim_id: 'scope-claim', task_id: task.id, phase: 'handed_off', unsettled: true,
@@ -31,8 +48,10 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
         const reliabilityReport = (host, label) => {
           const runs = host === 'beta' ? 5 : 17;
           const workspace = `${host}-only-workspace`;
-          const counts = { total: runs, succeeded: runs - 2, failed: 2, cancelled: 0, skipped: 0, in_flight: 0, unknown: 0 };
-          const rate = { numerator: 2, denominator: runs, denominator_label: 'settled runs', value: 2 / runs, low_sample: true };
+          const counts = globalThis.reliabilityAccounting?.counts
+            || { total: runs, succeeded: runs - 2, failed: 2, cancelled: 0, skipped: 0, held: 0, in_flight: 0, unknown: 0 };
+          const rate = globalThis.reliabilityAccounting?.rate
+            || { numerator: 2, denominator: runs, denominator_label: 'settled runs', value: 2 / runs, low_sample: true };
           return {
             scope: 'fleet',
             window: { label, since: '2026-10-10T00:00:00Z', until: '2026-10-11T00:00:00Z', bucket: '1h' },
@@ -56,7 +75,8 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
               'reliability-meta', 'reliability-count'].map(id => [id, text(id)])),
           };
         };
-        window.confirm = () => true;
+        globalThis.scopeConfirmations = [];
+        window.confirm = message => { globalThis.scopeConfirmations.push(message); return true; };
         globalThis.EventSource = class { close() {} };
         globalThis.fetch = async (url, options = {}) => {
           const parsed = new URL(url, window.location.href);
@@ -85,19 +105,42 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
               resolve(status === 200 ? respond(reliabilityReport(host, label)) : respond({ error: `${host} reliability unavailable` }, status)) }));
           }
           if (pathname === '/api/workspaces') return respond(['one', 'two'].slice(0, workspaceCount)
-            .map(id => ({ id, name: id, status: 'active', is_default: id === 'one' })));
-          if (pathname === '/api/tasks' || pathname === '/api/tasks/all') return respond({ items: [task], total: 1 });
+            .map(id => ({ id, name: names[id], status: 'active', is_default: id === 'one' })));
+          if (pathname === '/api/tasks' || pathname === '/api/tasks/all') return respond({ items: [task, { id: 'PROPOSAL-1', title: 'Approve the proposed dashboard task', status: 'proposed', priority: 'medium' }], total: 2 });
           if (pathname === `/api/tasks/${task.id}`) return respond(task);
           if (pathname === '/api/audit') return respond([]);
           if (pathname === '/api/crews') return respond({ crews: [] });
           if (pathname === '/api/routines') return respond({
             machine_name: 'fixture', capabilities: { routine_toggle: allowed }, clock: {},
-            routines: [{ name: 'scope-routine', source: 'one', target: 'job:fixture', enabled: routineEnabled }],
+            routines: [{ name: 'scope-routine', source: names.one, target: 'job:fixture', enabled: routineEnabled }],
           });
+          if (pathname === '/api/fleet/drains') return respond({ items: [{
+            workspace_id: 'one', workspace_name: 'Fixture workspace', phase: drainRunId ? 'draining' : 'idle',
+            slots_used: drainRunId ? 1 : 0, slots_ceiling: 4, eligible_count: 1, holds: [],
+          }] });
+          if (pathname === '/api/runs/scope-drain') return respond({ run: {
+            run_id: 'scope-drain', state: 'running', job_id: 'workspace_auto_pipeline',
+            drain_last_pass: { queued: 3, deferred_total: 1, excluded_total: 2, recorded_at: '2026-10-18T20:00:00Z' },
+          }, steps: [] });
           if (pathname === '/api/workflows/auto/readiness') return respond({
-            controls_authorized: true, tasks: [],
+            controls_authorized: true, total: 2, tasks: [
+              { task_id: 'READY-1', eligible: true },
+              { task_id: 'WAIT-1', eligible: false, reason: 'unmet_dependency' },
+            ],
             capacity: { active_leaf_runs: 0, max_active_leaf_runs: 4, free_slots: 4,
-              drain_run_id: drainRunId, drain_phase: drainRunId ? 'draining' : 'idle' },
+              drain_run_id: drainRunId, drain_phase: drainRunId ? 'draining' : 'idle',
+              ends_at: drainRunId ? new Date(Date.now() + 3600000).toISOString() : null,
+              admitted_workers: 3, running_admitted_workers: 1,
+              last_admission_forecast: {
+                mode: 'enforce', forecast_at: '2026-10-18T20:00:00Z',
+                cpu_peak: { minute: 10, value: 3, percent: 60 },
+                memory_peak: { minute: 5, value: 1000, percent: 40 },
+                headroom: { admit_cpu_percent: 89, admit_memory_percent: 74 },
+                series: { bucket_minutes: 5,
+                  cpu_percent: [20, 40, 60, 50, 40, 30, 20, 20, 20, 20, 20, 20, 20],
+                  memory_percent: [30, 40, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35] },
+                admitted: [], skipped: [],
+              } },
           });
           if (pathname === '/api/distributed/claims') return respond({
             owner_workspace: true, claims: [claim],
@@ -106,7 +149,7 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
           return respond({ items: [], total: 0 });
         };
         await import('/app.js');
-      }, workspaceCount);
+      }, [workspaceCount, WORKSPACE_NAMES]);
       const chip = page.locator('#audit-scope-chips [data-chip="workspace"]');
       await chip.waitFor({ state: 'visible' });
       if (workspaceCount === 1) {
@@ -126,12 +169,13 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
           throw new Error('Removing a multi-workspace chip must select and persist aggregate scope');
         }
         await page.locator('#workspace-select').selectOption('one');
-        await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('audit?role=operator'));
+        await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/incidents/events?role=operator'));
         await chip.waitFor({ state: 'visible' });
       }
+      await assertWorkspaceChipName(page, WORKSPACE_NAMES.one);
       await page.locator('#audit-scope-chips [data-chip="actor"]').click();
       await page.locator('#audit-scope-chips [data-chip="actor"]').waitFor({ state: 'detached' });
-      if (!(await chip.isVisible())) throw new Error('Removing an Audit filter must retain the workspace chip');
+      if (!(await chip.isVisible())) throw new Error('Removing an Events filter must retain the workspace chip');
 
       await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('operations/routines'));
       const routine = page.locator('#routines-body .operation-switch');
@@ -141,24 +185,98 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
       await page.locator('#routine-operation-feedback.success').waitFor({ state: 'visible' });
       if (await page.locator('#routines-body .operations-readonly-note').count()) throw new Error('Single-workspace actions must not show an aggregate read-only note');
 
-      await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('tasks'));
-      await page.locator('#dock-mode-toggle [data-mode="drain"]').click();
+      // Routes are exercised through the shipped router, including in-place
+      // legacy normalization. Every page retains a real link to Drain.
+      for (const [legacy, expected] of [
+        ['auto-drain', '#drain'], ['operations/auto-drain', '#drain'],
+        ['tasks/drain', '#drain'], ['tasks/log', '#drain/log'],
+        ['tasks?dock=drain', '#drain'], ['tasks?dock=log', '#drain/log'],
+      ]) {
+        await page.evaluate(async route => (await import('/js/router.js')).setActiveTab(route), legacy);
+        if (new URL(page.url()).hash !== expected || !await page.locator('.tab-pane[data-tab="drain"]').isVisible()) {
+          throw new Error(`Legacy drain route ${legacy} did not reach ${expected}: ${page.url()}`);
+        }
+        const mode = await page.locator('#side-dock').getAttribute('data-mode');
+        if (mode !== (expected.endsWith('/log') ? 'log' : 'drain')) throw new Error(`Wrong Drain view for ${legacy}: ${mode}`);
+      }
+      for (const route of ['tasks', 'jobs/live', 'drain', 'diagnostics/incidents', 'analytics/metrics',
+        'operations/routines', 'knowledge/frictions', 'plugins', 'config/effective']) {
+        await page.evaluate(async route => (await import('/js/router.js')).setActiveTab(route), route);
+        const indicator = page.locator('#global-drain-state');
+        if (!await indicator.isVisible() || await indicator.getAttribute('href') !== '#drain') {
+          throw new Error(`Drain chip must link to #drain on ${route}`);
+        }
+      }
+      await page.evaluate(() => { location.hash = '#tasks?dock=log'; });
+      await page.waitForFunction(() => location.hash === '#drain/log');
+      await page.locator('#dock-tab-drain').click();
+      await page.waitForFunction(() => location.hash === '#drain');
+      await page.locator('#log-statusbar-open').click();
+      await page.waitForFunction(() => location.hash === '#drain/log');
+      await page.locator('.tab[data-tab="drain"]').click();
+      await page.locator('#drain-waits-body').filter({ hasText: 'waits on deps' }).waitFor();
+      await page.locator('#drain-fleet-body .fleet-drains').waitFor();
+      await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('drain'));
+      await page.locator('#dock-mode-toggle [data-mode="start"]').click();
+      await page.waitForFunction(() => location.hash === '#drain/start');
       const start = page.locator('#auto-drain-start-body .drain-start');
       const stop = page.locator('#auto-drain-body .drain-stop');
       await start.waitFor({ state: 'visible' });
       if (!(await start.isEnabled()) || !(await stop.isEnabled())) throw new Error('Drain controls must remain enabled after chip interaction');
+      for (const width of [1440, 375]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.screenshot({ path: path.join(evidence, `drain-controls-dark-${width}.png`), animations: 'disabled' });
+      }
+      await page.setViewportSize({ width: 1280, height: 900 });
       await start.click();
       await page.locator('#auto-drain-operation-feedback.success').waitFor({ state: 'visible' });
+      // A started window returns the dock to the Overview that reports it.
+      await page.waitForFunction(() => location.hash === '#drain');
+      await page.locator('#drain-pass-body').filter({ hasText: '3 queued · 1 deferred · 2 excluded' }).waitFor();
+      if (await page.locator('#auto-drain-panel .drain-forecast-spark').count() !== 2) throw new Error('Drain must show both forecast sparklines');
+      const passLink = new URL(await page.locator('#drain-pass-body a').getAttribute('href'), page.url());
+      if (passLink.hash !== '#runs?run_id=scope-drain' || passLink.searchParams.get('workspace') !== 'one') {
+        throw new Error(`Admission run link lost its scope: ${passLink}`);
+      }
+      for (const width of [1440, 375]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.locator('#dock-pane-drain').evaluate(node => { node.scrollTop = 0; });
+        await page.screenshot({ path: path.join(evidence, `drain-window-dark-${width}.png`), animations: 'disabled' });
+      }
+      const confirmations = await page.evaluate(() => globalThis.scopeConfirmations);
+      if (!confirmations.some(message => message.includes('Start'))) throw new Error('Starting a window must confirm');
       await stop.click();
       await page.locator('#auto-drain-operation-feedback.success').waitFor({ state: 'visible' });
+      await page.locator('#drain-pass-body').filter({ hasText: 'No active admission window.' }).waitFor();
+      if (!(await page.evaluate(() => globalThis.scopeConfirmations)).some(message => /Stop/.test(message))) {
+        throw new Error('Stopping admissions must confirm');
+      }
 
-      await page.locator('#tasks-body [data-key="task-SCOPE-1"] > .title').click();
+      await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('tasks'));
+      await page.locator('#tasks-body [data-key="task-PROPOSAL-1"] .task-quick.approve').waitFor();
+      await page.getByText('Awaiting approval', { exact: true }).waitFor();
+      for (const width of [1440, 375]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.screenshot({ path: path.join(evidence, `tasks-approval-dark-${width}.png`), animations: 'disabled' });
+      }
+      await page.setViewportSize({ width: 1280, height: 900 });
+      // Tasks carries the dock beside the list: the Auto-drain status card, the
+      // simple Start card and the locks, not the Drain page's waits and fleet
+      // cards or its Start a window view.
+      await page.locator('#tasks-main #side-dock #auto-drain-panel').waitFor({ state: 'visible' });
+      await page.locator('#tasks-main #side-dock #auto-drain-quick-start').waitFor({ state: 'visible' });
+      await page.locator('#tasks-main #side-dock #locks-panel').waitFor({ state: 'visible' });
+      if (await page.locator('#tasks-main #drain-waits-panel').isVisible() || await page.locator('#tasks-main #drain-fleet-panel').isVisible()) throw new Error('The Tasks dock must leave the waits and fleet cards on Drain');
+      if (await page.locator('#tasks-main #dock-mode-toggle [data-mode="start"]').isVisible() || await page.locator('#tasks-main #auto-drain-start').isVisible()) throw new Error('The Tasks dock must leave Start a window on Drain');
+      await page.locator('#tasks-body [data-key="task-SCOPE-1"] .title').click();
+      if (await page.locator('#tasks-main #side-dock').isVisible()) throw new Error('An open task takes the dock\'s place');
+      await page.locator('#task-detail-body').getByRole('tab', { name: 'Delivery' }).click();
       await page.locator('button.claim-action.approve').click();
       await page.locator('button.claim-action.revoke').waitFor({ state: 'visible' });
-      await page.locator('input.claim-reason[data-reason-for="revoke"]').fill('Scope regression');
+      await page.locator('input.claim-reason[data-reason-for~="revoke"]').fill('Scope regression');
       await page.locator('button.claim-action.revoke').click();
       await page.locator('button.claim-action.revoke').waitFor({ state: 'detached' });
-      await page.locator('input.claim-reason[data-reason-for="recover"]').fill('Scope regression');
+      await page.locator('input.claim-reason[data-reason-for~="recover"]').fill('Scope regression');
       await page.locator('button.claim-action.recover[data-status="backlog"]').click();
       await page.locator('button.claim-action.recover').first().waitFor({ state: 'detached' });
       const requests = await page.evaluate(() => globalThis.scopeRequests);
@@ -170,34 +288,42 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
         throw new Error(`Actions must succeed with workspace=one: ${JSON.stringify(requests)}`);
       }
       if (workspaceCount > 1) {
-        await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/incidents'));
+        await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('analytics/metrics'));
         const railPositions = async () => page.locator('.rail .tab, .rail .subtab').evaluateAll(nodes =>
           nodes.map(node => ({ route: node.dataset.tab || node.dataset.subtab, top: node.getBoundingClientRect().top })));
         const initialRailPositions = await railPositions();
         const note = page.locator('#workspace-scope-note');
 
-        await page.locator('#diag-subtabs [data-subtab="reliability"]').click();
+        await page.locator('#analytics-subtabs [data-subtab="reliability"]').click();
         await note.waitFor({ state: 'visible' });
         if (!(await note.textContent()).includes('Workspace filter inactive')
           || await note.getAttribute('aria-hidden') !== 'false') {
           throw new Error('Reliability must expose the workspace-filter note visually and to assistive technology');
         }
         const reliabilityPositions = await railPositions();
+        // Tools reads the per-workspace audit summary, so the workspace
+        // filter applies there again.
+        await page.locator('#reliability-views [data-view="tools"]').click();
+        await note.waitFor({ state: 'hidden' });
+        await page.locator('#reliability-views [data-view="pipeline"]').click();
+        await note.waitFor({ state: 'visible' });
 
-        await page.locator('#diag-subtabs [data-subtab="scoreboard"]').click();
-        await page.locator('#diag-subtabs [data-subtab="scoreboard"].active').waitFor({ state: 'visible' });
+        await page.locator('#analytics-subtabs [data-subtab="cost"]').click();
+        await page.locator('#analytics-subtabs [data-subtab="cost"].active').waitFor({ state: 'visible' });
         await note.waitFor({ state: 'hidden' });
         if (await note.getAttribute('aria-hidden') !== 'true') {
-          throw new Error('The workspace-filter note must be hidden from assistive technology outside Reliability');
+          throw new Error('The workspace-filter note must be hidden from assistive technology outside Reliability › Pipeline');
         }
-        const scoreboardPositions = await railPositions();
-        for (const [label, positions] of [['Reliability', reliabilityPositions], ['Scoreboard', scoreboardPositions]]) {
+        const costPositions = await railPositions();
+        for (const [label, positions] of [['Reliability', reliabilityPositions], ['Cost', costPositions]]) {
           if (positions.length !== initialRailPositions.length || positions.some((entry, index) =>
             entry.route !== initialRailPositions[index].route || Math.abs(entry.top - initialRailPositions[index].top) > 0.1)) {
             throw new Error(`Opening ${label} must not move dashboard rail entries: ${JSON.stringify({ initialRailPositions, positions })}`);
           }
         }
+        const accounting = await assertReliabilityAccounting(page, evidence);
         reliabilityEvidence = await assertReliabilityScope(page);
+        reliabilityEvidence.accounting = accounting;
       }
       if (errors.length) throw new Error(errors.join('\n'));
       fs.writeFileSync(path.join(evidence, `workspace-scope-${workspaceCount}.json`), JSON.stringify({ passed: true, workspaceCount, requests, reliability: reliabilityEvidence }, null, 2));
@@ -209,6 +335,211 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
     }
   }
   console.log('Single-workspace scope preservation and multi-workspace chip clearing passed.');
+}
+
+// Switch through the real host picker: a shared id must not leave the Events
+// chip with the previous host's removal control or clear the sole workspace.
+export async function assertWorkspaceHostTransitions(browser, origin, evidence) {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    await page.goto(`${origin}/?workspace=one#diagnostics/incidents/events`);
+    await page.evaluate(async () => {
+      globalThis.EventSource = class { close() {} };
+      globalThis.hostScopeRequests = [];
+      globalThis.fetch = async url => {
+        const parsed = new URL(url, location.href);
+        const host = parsed.pathname.startsWith('/api/on/beta/') ? 'beta' : 'alpha';
+        const pathname = parsed.pathname.replace('/api/on/beta', '/api');
+        let payload = { items: [], total: 0 };
+        if (pathname === '/api/hosts') payload = { hosts: [
+          { name: 'alpha', machine_id: 'hm_alpha', local: true },
+          { name: 'beta', machine_id: 'hm_beta', local: false },
+        ] };
+        if (pathname === '/api/hosts/beta/connection') payload = { reachable: true, forward_writes: { authorized: true } };
+        if (pathname === '/api/workspaces') payload = (host === 'beta' ? ['one'] : ['one', 'two'])
+          .map(id => ({ id, name: `${host} workspace ${id}`, status: 'active', is_default: id === 'one' }));
+        if (pathname === '/api/audit') {
+          globalThis.hostScopeRequests.push({ host, workspace: parsed.searchParams.get('workspace') });
+          payload = [];
+        }
+        if (pathname === '/api/crews') payload = { crews: [] };
+        if (pathname === '/api/routines') payload = { routines: [], clock: {} };
+        if (host === 'beta' && pathname === '/api/workspaces') {
+          return new Promise(resolve => {
+            globalThis.releaseHostWorkspaces = () => resolve(new Response(JSON.stringify(payload), { status: 200 }));
+          });
+        }
+        return new Response(JSON.stringify(payload), { status: 200 });
+      };
+      await import('/app.js');
+    });
+    const chip = page.locator('#audit-scope-chips [data-chip="workspace"]');
+    await assertWorkspaceChipName(page, 'alpha workspace one');
+    if (await chip.locator('.scope-chip-x').count() !== 1) throw new Error('The multi-workspace host must offer chip removal');
+    // Retain the old node to exercise its listener even after the host rebuild
+    // detaches it (an already queued activation must also preserve sole scope).
+    await chip.evaluate(node => { globalThis.retiredWorkspaceChip = node; });
+    await page.locator('#host-select').selectOption('beta');
+    await page.waitForFunction(() => typeof globalThis.releaseHostWorkspaces === 'function');
+    const pendingScope = () => page.evaluate(async () => {
+      const common = await import('/js/common.js');
+      // Exercise the shipped request path while destination discovery is held.
+      await common.fetchJson('/api/audit');
+      return { workspace: common.getWorkspace(), url: location.href, request: globalThis.hostScopeRequests.at(-1) };
+    });
+    const beforeClick = await pendingScope();
+    const pendingInteractive = await chip.evaluate(node => node.matches('button, [role="button"]') || node.tabIndex >= 0 || !!node.querySelector('.scope-chip-x'));
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.screenshot({ path: path.join(evidence, `events-host-loading-dark-${width}.png`), animations: 'disabled' });
+    }
+    await chip.click();
+    const afterClick = await pendingScope();
+    await page.evaluate(() => globalThis.retiredWorkspaceChip.click());
+    const afterRetiredClick = await pendingScope();
+    // Always release the response, including on a pre-fix assertion failure.
+    await page.evaluate(() => globalThis.releaseHostWorkspaces());
+    if (beforeClick.workspace !== 'one' || beforeClick.request.host !== 'beta' || beforeClick.request.workspace !== 'one'
+      || JSON.stringify(afterClick) !== JSON.stringify(beforeClick)
+      || JSON.stringify(afterRetiredClick) !== JSON.stringify(beforeClick)) {
+      throw new Error(`Chip interaction while destination workspaces are loading must preserve state, request scope and URL: ${JSON.stringify({ beforeClick, afterClick, afterRetiredClick })}`);
+    }
+    if (pendingInteractive) throw new Error('The Events workspace chip must have no remove control while destination workspaces are loading');
+    await page.waitForFunction(() => !document.querySelector('#workspace-select'));
+    await assertWorkspaceChipName(page, 'beta workspace one');
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.screenshot({ path: path.join(evidence, `events-host-single-dark-${width}.png`), animations: 'disabled' });
+    }
+    if (await chip.evaluate(node => node.matches('button, [role="button"]') || node.tabIndex >= 0 || !!node.querySelector('.scope-chip-x'))) {
+      throw new Error('Switching to a sole workspace with the same id must remove the Events chip removal control');
+    }
+    await chip.click();
+    await page.evaluate(() => globalThis.retiredWorkspaceChip.click());
+    const scope = await page.evaluate(async () => {
+      const common = await import('/js/common.js');
+      return { workspace: common.getWorkspace(), multi: common.isMultiWorkspace(), url: new URL(location.href).searchParams.get('workspace') };
+    });
+    if (scope.workspace !== 'one' || scope.multi || scope.url !== 'one') {
+      throw new Error(`Interacting with current or retired chips must preserve the sole workspace: ${JSON.stringify(scope)}`);
+    }
+    await page.evaluate(() => { globalThis.hostScopeRequests = []; });
+    await page.locator('#refresh-btn').click();
+    await page.waitForFunction(() => globalThis.hostScopeRequests.length > 0);
+    const requests = await page.evaluate(() => globalThis.hostScopeRequests);
+    if (requests.some(request => request.host !== 'beta' || request.workspace !== 'one')) {
+      throw new Error(`Events requests must retain the destination host and sole workspace: ${JSON.stringify(requests)}`);
+    }
+    // Return to the multi-workspace host with the same selected id. Its chip
+    // must regain removal and the picker must be able to restore concrete scope.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.locator('#host-select').selectOption('');
+    await assertWorkspaceChipName(page, 'alpha workspace one');
+    if (await chip.locator('.scope-chip-x').count() !== 1) throw new Error('Returning to a multi-workspace host must restore chip removal');
+    await chip.click();
+    await chip.waitFor({ state: 'detached' });
+    if (await page.locator('#workspace-select').inputValue() !== ''
+      || await page.evaluate(async () => (await import('/js/common.js')).getWorkspace()) !== null
+      || new URL(page.url()).searchParams.get('workspace') !== 'all') {
+      throw new Error('Removing the destination multi-workspace chip must select aggregate scope in state, picker and URL');
+    }
+    await page.locator('#workspace-select').selectOption('two');
+    await assertWorkspaceChipName(page, 'alpha workspace two');
+    if (errors.length) throw new Error(`Host workspace transitions raised browser errors: ${errors.join('; ')}`);
+    fs.writeFileSync(path.join(evidence, 'events-host-scope-result.json'), JSON.stringify({ beforeClick, afterClick, afterRetiredClick, scope, requests, errors,
+      transitions: ['multi alpha/one → single beta/one', 'single beta/one → multi alpha/one', 'remove → aggregate → alpha/two'] }, null, 2));
+  } finally {
+    await page.close();
+  }
+}
+
+// Exercise held accounting through the shipped app's public fetch/render path.
+// The captured incident populations must reconcile without changing their rates.
+async function assertReliabilityAccounting(page, evidenceDirectory) {
+  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('analytics/reliability'));
+  const cases = [
+    { name: 'captured-7d', window: '7d',
+      counts: { total: 7060, succeeded: 6555, failed: 431, cancelled: 54, skipped: 0, held: 13, in_flight: 7, unknown: 0 },
+      settled: 6986, excluded: 74, display: '6.2% (n=6986)' },
+    { name: 'captured-30d', window: '30d',
+      counts: { total: 16790, succeeded: 14880, failed: 1710, cancelled: 171, skipped: 0, held: 22, in_flight: 7, unknown: 0 },
+      settled: 16590, excluded: 200, display: '10.3% (n=16590)' },
+    { name: 'all-excluded-states', window: '7d',
+      counts: { total: 38, succeeded: 25, failed: 5, cancelled: 1, skipped: 2, held: 2, in_flight: 1, unknown: 2 },
+      settled: 30, excluded: 8, display: '16.7% (n=30)' },
+    { name: 'held-only', window: '7d',
+      counts: { total: 13, succeeded: 0, failed: 0, cancelled: 0, skipped: 0, held: 13, in_flight: 0, unknown: 0 },
+      settled: 0, excluded: 13, display: 'n/a' },
+    { name: 'zero-excluded-low-sample', window: '7d',
+      counts: { total: 3, succeeded: 2, failed: 1, cancelled: 0, skipped: 0, held: 0, in_flight: 0, unknown: 0 },
+      settled: 3, excluded: 0, display: '1/3 · n too small', lowSample: true },
+    { name: 'rolled-up-wrappers', window: '24h',
+      counts: { total: 9, succeeded: 4, failed: 1, cascaded: 2, cancelled: 1, skipped: 0, held: 1, in_flight: 0, unknown: 0 },
+      settled: 5, excluded: 2, display: '1/5 · n too small', lowSample: true },
+  ];
+  const observations = [];
+  const failures = [];
+  for (const scenario of cases) {
+    const rate = { numerator: scenario.counts.failed, denominator: scenario.settled,
+      denominator_label: 'settled runs', value: scenario.settled ? scenario.counts.failed / scenario.settled : null,
+      low_sample: scenario.lowSample || false };
+    await page.evaluate(({ counts, rate }) => {
+      globalThis.reliabilityAccounting = { counts, rate };
+    }, { counts: scenario.counts, rate });
+    await page.locator(`#reliability-window-selector [data-window="${scenario.window}"]`).click();
+    await page.evaluate(async () => (await import('/js/reliability.js')).fetchAndRenderReliability());
+    const shown = await page.evaluate(() => {
+      const tiles = Object.fromEntries(Array.from(document.querySelectorAll('#reliability-summary .rel-tile')).map(tile => [
+        tile.querySelector('.rel-tile-label').textContent,
+        { value: tile.querySelector('.rel-tile-value, .rel-rate').textContent,
+          title: tile.querySelector('.rel-rate')?.title, hint: tile.querySelector('.rel-tile-hint').textContent },
+      ]));
+      return { tiles, note: document.getElementById('reliability-denominator-note').textContent,
+        count: document.getElementById('reliability-count').textContent,
+        scope: document.getElementById('reliability-scope-badge').textContent };
+    });
+    const runs = shown.tiles['Runs in window'];
+    const failureRate = shown.tiles['Job-run failure rate'];
+    const cascaded = scenario.counts.cascaded || 0;
+    const accounting = cascaded > 0
+      ? runs.hint.match(/^(\d+) settled · (\d+) rolled up · (\d+) not counted$/)
+      : runs.hint.match(/^(\d+) settled · (\d+) not counted$/);
+    const settledShown = accounting ? Number(accounting[1]) : NaN;
+    const excludedShown = accounting ? Number(accounting[cascaded > 0 ? 3 : 2]) : NaN;
+    const rolledShown = cascaded > 0 && accounting ? Number(accounting[2]) : 0;
+    if (runs.value !== String(scenario.counts.total) || !accounting
+      || settledShown !== scenario.settled || excludedShown !== scenario.excluded || rolledShown !== cascaded
+      || Number(runs.value) !== settledShown + rolledShown + excludedShown) {
+      failures.push(`${scenario.name}: Runs in window must reconcile total = settled + rolled up + excluded: ${JSON.stringify(runs)}`);
+    }
+    if (!shown.note.includes('rolled into that leaf')
+      || !shown.note.includes('numerator') || !shown.note.includes('denominator')
+      || (cascaded > 0 && !shown.note.includes(`${cascaded} wrapper`))) {
+      failures.push(`${scenario.name}: the denominator note must state that wrapper echoes roll into the leaf and sit outside the rate: ${shown.note}`);
+    }
+    const explainedExcluded = shown.note.match(/(\d+) further run/);
+    if (!['held', 'cancelled', 'skipped', 'flight', 'unrecognized'].every(state => shown.note.includes(state))
+      || (scenario.excluded > 0 ? Number(explainedExcluded?.[1]) !== scenario.excluded : !shown.note.includes('No cancelled'))) {
+      failures.push(`${scenario.name}: the denominator explanation must account for every excluded state: ${shown.note}`);
+    }
+    if (failureRate.value !== scenario.display
+      || failureRate.hint !== `${scenario.counts.failed} failed of ${scenario.settled} settled runs`
+      || (scenario.settled > 0 && !failureRate.title.startsWith(`${rate.numerator} / ${rate.denominator} `))
+      || shown.count !== `${scenario.counts.total} runs / ${scenario.window}` || shown.scope !== 'Fleet-wide') {
+      failures.push(`${scenario.name}: failure-rate counts, rounding, low-sample handling and scope must remain unchanged: ${JSON.stringify(shown)}`);
+    }
+    observations.push({ scenario, rate, shown,
+      originalMissing: scenario.counts.total - scenario.settled
+        - scenario.counts.cancelled - scenario.counts.skipped - scenario.counts.in_flight - scenario.counts.unknown });
+  }
+  fs.writeFileSync(path.join(evidenceDirectory, 'reliability-accounting.json'), JSON.stringify({ observations, failures }, null, 2));
+  if (failures.length) throw new Error(failures.join('\n'));
+  await page.evaluate(() => { delete globalThis.reliabilityAccounting; });
+  await page.locator('#reliability-window-selector [data-window="24h"]').click();
+  await page.evaluate(async () => (await import('/js/reliability.js')).fetchAndRenderReliability());
+  return observations;
 }
 
 // Reliability's report belongs to one host and window. A replacement read that
@@ -236,7 +567,7 @@ async function assertReliabilityScope(page) {
   };
   const evidence = {};
 
-  await page.locator('#diag-subtabs [data-subtab="reliability"]').click();
+  await page.locator('#analytics-subtabs [data-subtab="reliability"]').click();
   await reportNames('alpha-only-workspace');
   const alpha = await view();
   if (alpha.report['reliability-count'] !== '17 runs / 24h' || !alpha.report['reliability-meta'].includes('unreadable')

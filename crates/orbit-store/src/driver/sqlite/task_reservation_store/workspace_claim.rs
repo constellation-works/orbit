@@ -15,6 +15,7 @@
 
 use chrono::{Duration, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use super::{expire_reservations_in_scope, reservation_scope_clause};
@@ -102,7 +103,7 @@ impl Store {
                         claim_token,
                     ],
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
 
             Ok(WorkspaceClaimAcquireResult {
                 acquired: true,
@@ -215,7 +216,7 @@ impl Store {
                         release_metadata,
                     ],
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
 
             Ok(WorkspaceClaimReleaseResult {
                 released: affected > 0,
@@ -332,7 +333,7 @@ fn load_active_claim(
             },
         )
         .optional()
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
     let Some((claim_id, workspace_id, actor, created_at, expires_at, diagnostics, claim_token)) =
         row

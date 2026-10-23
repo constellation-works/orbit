@@ -31,6 +31,9 @@ pub(crate) fn sample_bundle(id: &str) -> TaskBundleV2 {
             crew: None,
             crew_source: None,
             orchestrator: None,
+            orchestrator_model: None,
+            orchestrator_model_source: None,
+            origin: None,
             relations: Vec::new(),
             tags: vec!["task-artifacts".to_string()],
             required_tools: Vec::new(),
@@ -55,6 +58,8 @@ pub(crate) fn sample_bundle(id: &str) -> TaskBundleV2 {
             note: None,
             from_status: None,
             to_status: Some(TaskStatus::Backlog),
+            operation_id: None,
+            decision: None,
         }],
         comments: vec![TaskCommentRowV2 {
             schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
@@ -62,6 +67,7 @@ pub(crate) fn sample_bundle(id: &str) -> TaskBundleV2 {
             at: now,
             by: "daniel".to_string(),
             body: "Looks good.".to_string(),
+            operation_id: None,
         }],
         artifact_manifest: None,
     }

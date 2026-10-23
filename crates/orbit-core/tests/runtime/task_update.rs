@@ -6,14 +6,80 @@ use orbit_types::task::{TaskArtifact, TaskComplexity, TaskStatus};
 use orbit_types::workflow::REVIEW_REPORT_HISTORY_ARTIFACT;
 use orbit_types::workflow::automation::{COVERAGE_ARTIFACT, EVIDENCE_AUTHORITY_ARTIFACT};
 
-#[test]
-fn guarded_start_and_activity_notes_redact_before_persistence() {
-    if !super::dispatch_admission::isolated(
-        "task_update::guarded_start_and_activity_notes_redact_before_persistence",
-    ) {
-        return;
+fn activity_updates_refuse_replica_writes_and_preserve_owner_updates() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let owner = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let task = owner
+        .add_task(TaskAddParams {
+            title: "Activity coordination fence".into(),
+            status: Some(TaskStatus::InProgress),
+            ..Default::default()
+        })
+        .unwrap();
+    let before = owner.get_task(&task.id).unwrap();
+    let history = owner.get_task_history(&task.id).unwrap();
+    let comments = owner.get_task_comments(&task.id).unwrap();
+    let replica = owner
+        .clone()
+        .with_coordination_write_owner(Some("owner-machine".into()));
+    let ordinary_refusal = replica
+        .update_task_with_identity(&task.id, TaskUpdateParams::default(), None, None)
+        .expect_err("ordinary task writes must refuse the replica");
+    let update = orbit_engine::TaskActivityUpdate {
+        status: TaskStatus::Review,
+        expected_status: TaskStatus::InProgress,
+        execution_summary: Some("Activity summary".into()),
+        comment: Some("Activity comment".into()),
+        note: Some("Activity transition".into()),
+        agent: None,
+        model: Some("codex".into()),
+        calling_run_id: None,
+    };
+    for result in [
+        replica.update_task_from_activity(&task.id, update.clone()),
+        orbit_engine::RuntimeHost::update_task_from_activity(&replica, &task.id, update.clone()),
+    ] {
+        let error = result.expect_err("activity updates must refuse the replica");
+        let OrbitError::CapabilityRefused(reason) = &error else {
+            panic!("expected the replica capability refusal, got {error:?}");
+        };
+        assert!(
+            reason.contains("owner-machine"),
+            "refusal must name the owner"
+        );
+        assert_eq!(error.to_string(), ordinary_refusal.to_string());
     }
-    let root = tempfile::tempdir().unwrap();
+    let persisted = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    assert_eq!(persisted.get_task(&task.id).unwrap(), before);
+    assert_eq!(persisted.get_task_history(&task.id).unwrap(), history);
+    assert_eq!(persisted.get_task_comments(&task.id).unwrap(), comments);
+
+    orbit_engine::RuntimeHost::update_task_from_activity(&owner, &task.id, update)
+        .expect("the owner host can apply the same activity update");
+    let persisted = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let updated = persisted.get_task(&task.id).unwrap();
+    assert_eq!(updated.status, TaskStatus::Review);
+    assert_eq!(updated.execution_summary, "Activity summary");
+    assert_eq!(
+        persisted.get_task_comments(&task.id).unwrap().len(),
+        comments.len() + 1
+    );
+    assert!(
+        persisted
+            .get_task_history(&task.id)
+            .unwrap()
+            .iter()
+            .any(|event| event.to_status == Some(TaskStatus::Review)
+                && event.note.as_deref() == Some("Activity transition"))
+    );
+}
+
+fn guarded_start_and_activity_notes_redact_before_persistence() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -81,14 +147,8 @@ fn guarded_start_and_activity_notes_redact_before_persistence() {
     }
 }
 
-#[test]
 fn rejected_artifacts_leave_status_document_and_history_unchanged() {
-    if !super::dispatch_admission::isolated(
-        "task_update::rejected_artifacts_leave_status_document_and_history_unchanged",
-    ) {
-        return;
-    }
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -189,14 +249,8 @@ fn rejected_artifacts_leave_status_document_and_history_unchanged() {
     );
 }
 
-#[test]
 fn automation_persists_returned_summary_crew_and_run_history_without_status_change() {
-    if !super::dispatch_admission::isolated(
-        "task_update::automation_persists_returned_summary_crew_and_run_history_without_status_change",
-    ) {
-        return;
-    }
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -241,3 +295,153 @@ fn automation_persists_returned_summary_crew_and_run_history_without_status_chan
                     == Some("persisted returned summary from run fixture-run"))
     );
 }
+
+fn pr_status_updates_share_admission_and_trim_before_storage() {
+    use serde_json::json;
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Review decision admission".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let before = runtime.get_task(&task.id).unwrap();
+    let history = runtime.get_task_history(&task.id).unwrap();
+    let comments = runtime.get_task_comments(&task.id).unwrap();
+    let error = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": task.id, "pr_status": "aproved", "title": "must not persist",
+                "comment": "must not persist", "model": "codex"
+            }),
+            None,
+            Some("codex".into()),
+        )
+        .expect_err("MCP typo must be refused atomically");
+    assert!(matches!(error, OrbitError::InvalidInput(_)), "{error}");
+    assert!(
+        error.to_string().contains("unknown PR status 'aproved'"),
+        "{error}"
+    );
+    assert_eq!(runtime.get_task(&task.id).unwrap(), before);
+    assert_eq!(runtime.get_task_history(&task.id).unwrap(), history);
+    assert_eq!(runtime.get_task_comments(&task.id).unwrap(), comments);
+
+    for (value, normalized) in [
+        ("approve", "APPROVED"),
+        ("approved", "APPROVED"),
+        ("request-changes", "CHANGES_REQUESTED"),
+        ("request_changes", "CHANGES_REQUESTED"),
+        ("changes-requested", "CHANGES_REQUESTED"),
+        ("changes_requested", "CHANGES_REQUESTED"),
+        (" APPROVED ", "APPROVED"),
+        (" ApPrOvEd ", "APPROVED"),
+        (" ReQuEsT-ChAnGeS ", "CHANGES_REQUESTED"),
+        ("", ""),
+        ("   ", ""),
+    ] {
+        assert_eq!(
+            orbit_engine::normalize_review_decision(value),
+            normalized,
+            "{value:?}"
+        );
+        if value.trim().is_empty() {
+            runtime
+                .update_task_with_identity(
+                    &task.id,
+                    TaskUpdateParams {
+                        pr_status: Some(Some("approve".into())),
+                        ..Default::default()
+                    },
+                    None,
+                    None,
+                )
+                .unwrap();
+        }
+        runtime
+            .execute_tool_command(
+                "orbit.task.update",
+                json!({
+                    "id": task.id, "pr_status": value, "model": "codex"
+                }),
+                None,
+                Some("codex".into()),
+            )
+            .unwrap();
+        let expected = (!value.trim().is_empty()).then(|| value.trim().to_string());
+        assert_eq!(
+            runtime.get_task(&task.id).unwrap().pr_status,
+            expected,
+            "MCP {value:?}"
+        );
+        // The direct runtime boundary must not depend on adapter parsing.
+        if value.trim().is_empty() {
+            runtime
+                .update_task_with_identity(
+                    &task.id,
+                    TaskUpdateParams {
+                        pr_status: Some(Some("approve".into())),
+                        ..Default::default()
+                    },
+                    None,
+                    None,
+                )
+                .unwrap();
+        }
+        runtime
+            .update_task_with_identity(
+                &task.id,
+                TaskUpdateParams {
+                    pr_status: Some(Some(value.into())),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            runtime.get_task(&task.id).unwrap().pr_status,
+            expected,
+            "runtime {value:?}"
+        );
+    }
+    runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": task.id, "pr_status": "approve", "model": "codex"
+            }),
+            None,
+            Some("codex".into()),
+        )
+        .unwrap();
+    runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                pr_status: Some(None),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(runtime.get_task(&task.id).unwrap().pr_status, None);
+}
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    activity_updates_refuse_replica_writes_and_preserve_owner_updates_scenarios,
+    activity_updates_refuse_replica_writes_and_preserve_owner_updates,
+    guarded_start_and_activity_notes_redact_before_persistence,
+    rejected_artifacts_leave_status_document_and_history_unchanged,
+    automation_persists_returned_summary_crew_and_run_history_without_status_change,
+    pr_status_updates_share_admission_and_trim_before_storage
+);

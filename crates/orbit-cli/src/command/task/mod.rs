@@ -1,8 +1,6 @@
-mod add;
 mod archive;
 pub(crate) mod artifact;
 pub mod artifacts;
-pub(crate) mod blocked_next_step;
 mod command;
 mod eligible;
 mod export;
@@ -10,6 +8,7 @@ pub(crate) mod flow;
 mod import;
 mod lint;
 mod list;
+pub(crate) mod operation;
 pub(crate) mod output;
 mod pilot_comment;
 mod publication;
@@ -17,9 +16,13 @@ mod recheck_blocked;
 pub(crate) mod reconcile_review;
 mod reindex;
 pub(crate) mod review_reset;
-pub(crate) mod show;
-pub(crate) mod update;
+mod settle_merged;
+mod show;
+pub(crate) mod support;
 
+pub(crate) use show::{final_recovery_text, next_step_text, owed_criteria_lines};
+
+pub(crate) use command::TaskInvocation;
 pub use command::{TaskCommand, TaskSubcommand};
 pub use publication::TaskPublicationSubcommand;
 
@@ -34,22 +37,6 @@ pub(crate) fn mutation_identity(model: Option<String>) -> (Option<String>, Optio
         .ok()
         .filter(|value| !value.trim().is_empty());
     (agent, model)
-}
-
-/// Warn, without refusing, about dependency ids this machine cannot read.
-///
-/// A dependency may legitimately be recorded before its target exists here
-/// (another workspace or host owns it), so this mirrors the `--parent`
-/// warning: the value is stored either way, and a typo is still visible.
-fn warn_unreadable_dependencies(runtime: &orbit_core::OrbitRuntime, dependencies: &[String]) {
-    for id in dependencies {
-        if runtime
-            .dependency_task_is_readable(id)
-            .is_ok_and(|readable| !readable)
-        {
-            eprintln!("warning: dependency task '{id}' was not found; recording it anyway");
-        }
-    }
 }
 
 #[cfg(test)]

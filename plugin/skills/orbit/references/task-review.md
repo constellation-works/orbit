@@ -1,6 +1,13 @@
-# Reviewing a task
+# Reviewing a delivered diff
 
-Review someone else's work and surface issues in your review summary. Read-only: **never** use `orbit.task.update` to transition the reviewed task's lifecycle — approval requires the authorized operator or human decision, not the reviewing agent.
+Review someone else's delivered diff and surface issues in your review summary. Read-only: **never** use `orbit.task.update` to transition the reviewed task's lifecycle — approval requires the authorized operator or human decision, not the reviewing agent.
+
+A review auto-task tagged `no-diff-expected` follows its own brief. In owner or
+claimed mode, it runs no workspace gates or required validation commands and
+attaches no `no-diff.json` or workspace validation logs. Run only commands the
+brief requires, including reproducing a finding when requested; retain the
+brief's evidence artifacts and execution summary. The build and test guidance
+below applies to reviewing a delivered diff, not to these auto-tasks.
 
 ## Load context
 
@@ -9,6 +16,8 @@ Review someone else's work and surface issues in your review summary. Read-only:
 ## Two stages, in order
 
 **Stage 1 — spec compliance.** Does the change satisfy every acceptance criterion? Is anything missing, or added beyond scope? Are there interpretation gaps? If stage 1 fails, report those findings and stop; stage 2 is wasted effort on a change that has to come back anyway.
+
+For a diff that changes something a user sees (dashboard, web pages, docs site, desktop app UI), stage 1 includes the visual evidence. List the task's artifacts with `orbit.task.show` (`field: "artifacts"`), fetch the screenshots with `orbit.task.artifact.get` and look at them against the criteria: each changed view, in every theme it supports, and at 375px when the layout is responsive ([task-execution.md](task-execution.md#screenshots-of-a-ui-change)). Missing screenshots without a stated reason, such as no browser kit on the host, are missing evidence: record a spec-compliance finding. This applies whether or not the task is tagged `ui`.
 
 **Stage 2 — quality**, only once stage 1 passes: maintainability, patterns, performance, test-coverage gaps, risks, edge cases, security.
 

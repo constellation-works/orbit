@@ -8,6 +8,11 @@ license.workspace = true
 [package.metadata.orbit]
 stability = "internal"
 
+[features]
+# The CLI process-test harness enables this only through orbit-cli's
+# dev-dependency. Release builds omit dev-dependencies and debug-only seams.
+test-release-api-base = []
+
 [lints]
 workspace = true
 
@@ -35,5 +40,6 @@ tracing.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+orbit-common = { path = "../orbit-common", features = ["test-support"] }
 rsa.workspace = true
 sha2.workspace = true

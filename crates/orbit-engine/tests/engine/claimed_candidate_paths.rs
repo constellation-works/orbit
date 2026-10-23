@@ -4,14 +4,13 @@
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use orbit_engine::validate_claim_new_paths;
 use tempfile::tempdir;
 
 /// Protected names must be refused even when Git's candidate tree was made
 /// on a host that distinguishes case and the admission selector covers them.
-#[test]
 fn claimed_candidate_protected_names_ignore_ascii_case_on_every_host() {
     let temp = tempdir().unwrap();
     let repo = temp.path();
@@ -106,7 +105,6 @@ fn claimed_candidate_protected_names_ignore_ascii_case_on_every_host() {
     assert_eq!(fs::read_to_string(repo.join("doc.md")).unwrap(), "base\n");
 }
 
-#[test]
 fn claimed_candidate_type_changes_refuse_non_regular_files_without_widening_existing_paths() {
     for (base_mode, candidate_mode, accepted) in [
         ("100644", "120000", false),
@@ -183,10 +181,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
 }
 
 fn git_with_input(repo: &Path, args: &[&str], input: &[u8]) -> String {
-    let mut command = Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
+    let mut command = crate::git_test_support::command();
     let mut child = command
         .arg("-C")
         .arg(repo)
@@ -214,4 +209,15 @@ fn git_with_input(repo: &Path, args: &[&str], input: &[u8]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn candidate_path_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "candidate_path_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            ("claimed_candidate_protected_names_ignore_ascii_case_on_every_host", claimed_candidate_protected_names_ignore_ascii_case_on_every_host),
+            ("claimed_candidate_type_changes_refuse_non_regular_files_without_widening_existing_paths", claimed_candidate_type_changes_refuse_non_regular_files_without_widening_existing_paths),
+        ]);
+    });
 }

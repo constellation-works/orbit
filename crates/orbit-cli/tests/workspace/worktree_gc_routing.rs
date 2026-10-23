@@ -50,12 +50,14 @@ use tempfile::tempdir;
 
 use crate::fixture_crew;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod host_output;
+
 struct Workspace {
     repo: PathBuf,
     orbit_dir: PathBuf,
 }
 
-#[test]
 fn reclaim_dry_run_reports_pattern_bytes_doctor_warns_and_confirm_preserves_the_checkout() {
     let temp = tempdir().unwrap();
     let home = temp.path().join("home");
@@ -128,19 +130,29 @@ fn reclaim_dry_run_reports_pattern_bytes_doctor_warns_and_confirm_preserves_the_
         .find(|row| row["check"] == "worktree-reclaim")
         .unwrap();
     assert_eq!(row["status"], "warning", "{row}");
-    assert!(
-        row["remediation"]
-            .as_str()
-            .unwrap()
-            .contains("orbit gc worktrees --reclaim")
-    );
+    let remediation = row["remediation"].as_str().unwrap();
+    assert!(remediation.contains("orbit gc worktrees --reclaim"));
     assert!(
         worktree.join("target/output").exists(),
         "doctor never reclaims output"
     );
-    let output = command(&repo, &home)
-        .env("ORBIT_OPERATOR", "1")
-        .args(["gc", "worktrees", "--reclaim", "--confirm", "--json"])
+    // `--confirm` is governed, so the printed command must carry the operator
+    // override. Pasted from a plain shell without it, the operator's own
+    // command was refused (dk-server-2, 2026-10-09). Run it as printed.
+    let printed = remediation
+        .split('`')
+        .find(|command| command.contains("--confirm"))
+        .unwrap_or_else(|| panic!("no confirming command in {remediation}"));
+    let mut words = printed.split_whitespace().peekable();
+    let mut reclaim = command(&repo, &home);
+    while let Some((name, value)) = words.peek().and_then(|word| word.split_once('=')) {
+        reclaim.env(name, value);
+        words.next();
+    }
+    assert_eq!(words.next(), Some("orbit"), "{printed}");
+    let output = reclaim
+        .args(words)
+        .arg("--json")
         .assert()
         .success()
         .get_output()
@@ -158,7 +170,6 @@ fn reclaim_dry_run_reports_pattern_bytes_doctor_warns_and_confirm_preserves_the_
     );
 }
 
-#[test]
 fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspaces_worktree() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -216,6 +227,11 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
 
     let (worktree_a, _task_a) = seed_eligible_worktree(&workspace_a, &home, "A");
     let (worktree_b, task_b) = seed_eligible_worktree(&workspace_b, &home, "B");
+    // Own all dispatched workers through assertions and unwind. HostOutput
+    // drops first, settling its deliberately active passive fixture owner.
+    let mut routine_runs = crate::routine_runs::RoutineRuns::new(temp, &home, &[&repo_a, &repo_b]);
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let host_output = host_output::HostOutput::seed(&workspace_b, &home);
     assert!(worktree_a.exists(), "workspace A fixture worktree missing");
     assert!(worktree_b.exists(), "workspace B fixture worktree missing");
     let expected_worktree_b = worktree_b
@@ -227,6 +243,10 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
     // needing to fabricate a backdated run record.
     zero_worktree_gc_age_floor(&home);
     enable_worktree_gc_routine(&workspace_b);
+    let routine_path = workspace_b.orbit_dir.join("routines/worktree_gc.yaml");
+    let routine_definition = fs::read(&routine_path).unwrap();
+    let pipeline_path = home.join(".orbit/resources/jobs/worktree_gc_pipeline.yaml");
+    let pipeline_definition = fs::read(&pipeline_path).unwrap();
 
     // Fire the sweep from workspace A's checkout — the "non-current"
     // workspace relative to B, whose routine is the one that must dispatch.
@@ -271,6 +291,7 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
     // minute so the next sweep has a natural due slot without waiting for the
     // wall clock to cross a boundary.
     let baseline = fire_sweep();
+    routine_runs.retain_sweep(&baseline);
     assert!(
         routine_report(&baseline, "worktree-gc-workspace-b").is_some(),
         "sweep never evaluated workspace B's worktree_gc routine: {baseline}"
@@ -279,6 +300,7 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
     make_routine_due(&home, "worktree-gc-workspace-b");
 
     let fired = fire_sweep();
+    routine_runs.retain_sweep(&fired);
     let report = routine_report(&fired, "worktree-gc-workspace-b").unwrap_or_else(|| {
         panic!(
             "sweep never evaluated workspace B's worktree_gc routine on the second pass: {fired}"
@@ -350,6 +372,61 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
         }),
         "reap output did not attribute the removal to workspace B's fixture worktree: {reap}"
     );
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        host_output.assert_reports(reap, "reclaimed");
+        host_output.assert_controls();
+        let bytes = host_output.reclaimed_bytes(reap);
+        assert!(bytes > 0);
+        test_env::record_scenario_pass(&format!("host-output-routine-first {reap}"));
+
+        // Move only the isolated scheduler fixture's completed slot into the
+        // past, retaining its run receipt, to deterministically admit a second
+        // slot without a wall-clock minute wait or changing the routine.
+        let connection = rusqlite::Connection::open(home.join(".orbit/orbit.db")).unwrap();
+        assert_eq!(
+            connection
+                .execute(
+                    "UPDATE routine_fires SET slot = ?1 WHERE routine_name = ?2",
+                    rusqlite::params![
+                        (Utc::now() - ChronoDuration::minutes(2)).to_rfc3339(),
+                        "worktree-gc-workspace-b"
+                    ],
+                )
+                .unwrap(),
+            1
+        );
+        make_routine_due(&home, "worktree-gc-workspace-b");
+        let repeated = fire_sweep();
+        routine_runs.retain_sweep(&repeated);
+        let report = routine_report(&repeated, "worktree-gc-workspace-b").unwrap();
+        assert!(
+            matches!(
+                report["action"].as_str(),
+                Some("fired") | Some("retry_fired")
+            ),
+            "{repeated}"
+        );
+        let run_id = report["run_id"].as_str().unwrap();
+        assert_ne!(run_id, gc_run_id);
+        wait_until(Duration::from_secs(20), || {
+            run_json(&repo_b, &home, &["run", "show", run_id, "--json"])["run"]["state"]
+                == "success"
+        });
+        let repeated_run = run_json(&repo_b, &home, &["run", "show", run_id, "--json"]);
+        assert_eq!(repeated_run["run"]["state"], "success", "{repeated_run}");
+        let repeated_reap = &repeated_run["pipeline_state"]["pipeline"]["reap"];
+        host_output.assert_reports(repeated_reap, "absent");
+        host_output.assert_controls();
+        assert_eq!(repeated_reap["bytes_reclaimed"], 0, "{repeated_reap}");
+        test_env::record_scenario_pass(&format!("host-output-routine-repeat {repeated_reap}"));
+        drop(host_output);
+    }
+    assert_eq!(fs::read(routine_path).unwrap(), routine_definition);
+    assert_eq!(fs::read(pipeline_path).unwrap(), pipeline_definition);
+    routine_runs
+        .settle()
+        .expect("all fixture GC workers exited");
 }
 
 fn register_workspace(repo: &Path, home: &Path, name: &str) -> Workspace {
@@ -373,76 +450,91 @@ fn register_workspace(repo: &Path, home: &Path, name: &str) -> Workspace {
     }
 }
 
+/// Seed archived task/run facts through the registered public runtime and
+/// reap the real recorded owner. Only isolated mutable fixture rows call it.
+pub(super) fn seed_archived_run(orbit_dir: &Path, home: &Path, label: &str) -> (String, String) {
+    // This state is setup for GC, not a job-launch assertion. Use the CLI's
+    // public registered-runtime composition so machine identity, task prefix
+    // and workspace binding stay identical to the CLI path. In particular,
+    // a bare Core runtime would leave a fresh allocator at its default prefix.
+    use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_core::runtime::OrbitRuntimeRoots;
+    use orbit_engine::RuntimeHost;
+    use orbit_types::workflow::JobRunState;
+
+    let runtime = RegisteredRuntimeFactory::open_resolved_roots(OrbitRuntimeRoots {
+        global_root: home.join(".orbit"),
+        shared_root: orbit_dir.to_path_buf(),
+        local_root: orbit_dir.to_path_buf(),
+    })
+    .expect("registered GC fixture runtime");
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: format!("GC fixture task {label}"),
+            complexity: orbit_types::task::TaskComplexity::Low,
+            ..Default::default()
+        })
+        .expect("GC fixture task");
+    runtime
+        .archive_task(&task.id)
+        .expect("archive GC fixture task");
+    let task_id = task.id.to_string();
+    let now = Utc::now();
+    let run = runtime
+        .insert_job_run(
+            "gc_fixture_pipeline",
+            1,
+            now,
+            Some(serde_json::json!({"task_id": task_id, "crew": "sol"})),
+            None,
+        )
+        .expect("GC fixture run");
+    // A terminal record alone is insufficient: GC retains a run whose owner
+    // may still be alive. Give the setup run a real, immediately owned child
+    // and record its identity before releasing and reaping it.
+    let mut owner_command = std::process::Command::new("/bin/sh");
+    test_env::clear_inherited_authority(|name| {
+        owner_command.env_remove(name);
+    });
+    let mut owner = crate::child_guard::ChildGuard::new(
+        owner_command
+            .args(["-c", "read -r release; exit 0"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("GC fixture owner"),
+    );
+    assert!(
+        runtime
+            .mark_job_run_running(&run.run_id, now, owner.id())
+            .expect("start GC fixture run")
+            .owns_execution()
+    );
+    assert!(
+        runtime
+            .finalize_job_run(&run.run_id, JobRunState::Success, now, Some(0))
+            .expect("finish GC fixture run")
+    );
+    drop(owner.stdin.take());
+    let mut status = None;
+    test_env::wait_until("GC fixture owner to exit", || {
+        status = owner.try_wait().expect("poll GC fixture owner");
+        status.is_some()
+    });
+    assert!(status.expect("GC fixture owner exited").success());
+    let run_id = run.run_id;
+    drop(runtime);
+    (run_id, task_id)
+}
+
 /// Create a task settled to `archived` (one of the three GC-eligible terminal
 /// statuses), a job run naming it via the legacy singular `task_id` input
 /// field, and a real, clean git worktree at the exact path GC resolves for
 /// that run — the same shape `setup_worktree` produces for a live task.
 fn seed_eligible_worktree(workspace: &Workspace, home: &Path, label: &str) -> (PathBuf, String) {
-    let task = run_json(
-        &workspace.repo,
-        home,
-        &[
-            "task",
-            "add",
-            "--title",
-            &format!("GC fixture task {label}"),
-            "--complexity",
-            "low",
-            "--json",
-        ],
-    );
-    let task_id = task["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("task add reported no id: {task}"))
-        .to_string();
-    run_success(&workspace.repo, home, &["task", "archive", &task_id]);
-
-    let fixture_job = workspace.repo.join(format!("gc-fixture-{label}.yaml"));
-    fs::write(
-        &fixture_job,
-        r#"schemaVersion: 2
-kind: Job
-metadata:
-  name: gc_fixture_pipeline
-spec:
-  state: enabled
-  kind: workflow
-  steps:
-    - id: nap
-      default_input:
-        seconds: 0
-      spec:
-        type: deterministic
-        action: sleep
-        config: {}
-"#,
-    )
-    .expect("write fixture job asset");
-    let run = run_json(
-        &workspace.repo,
-        home,
-        &[
-            "run",
-            "job",
-            fixture_job.to_str().expect("fixture job path is utf-8"),
-            "--input",
-            &format!("task_id={task_id}"),
-            // Select the crew enabled by the shared fixture configuration,
-            // independent of which agent CLIs the host happens to provide.
-            "--input",
-            "crew=sol",
-            "--wait",
-            "--json",
-        ],
-    );
-    assert_eq!(
-        run["state"], "success",
-        "fixture job run did not settle: {run}"
-    );
-    let run_id = run["run_id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("run job reported no run_id: {run}"))
-        .to_string();
+    let (run_id, task_id) = seed_archived_run(&workspace.orbit_dir, home, label);
 
     let worktree = workspace
         .repo
@@ -596,7 +688,6 @@ fn command(cwd: &Path, home: &Path) -> assert_cmd::Command {
     command
 }
 
-#[test]
 fn direct_gc_cli_previews_refuses_dirty_and_reclaims_only_the_selected_worktree() {
     let temp = tempdir().unwrap();
     let home = temp.path().join("home");
@@ -709,4 +800,20 @@ fn direct_gc_cli_previews_refuses_dirty_and_reclaims_only_the_selected_worktree(
         run_json(&repo_a, &home, &["task", "show", &task_a, "--json"])["status"],
         "archived"
     );
+}
+
+#[test]
+fn worktree_gc_contracts() {
+    if crate::isolated_test::run_in_child("worktree_gc_routing::worktree_gc_contracts") {
+        return;
+    }
+    for (name, check) in [
+        ("reclaim_dry_run_reports_pattern_bytes_doctor_warns_and_confirm_preserves_the_checkout", reclaim_dry_run_reports_pattern_bytes_doctor_warns_and_confirm_preserves_the_checkout as fn()),
+        ("routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspaces_worktree", routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspaces_worktree as fn()),
+        ("direct_gc_cli_previews_refuses_dirty_and_reclaims_only_the_selected_worktree", direct_gc_cli_previews_refuses_dirty_and_reclaims_only_the_selected_worktree as fn()),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
 }

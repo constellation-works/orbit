@@ -10,7 +10,7 @@ use super::support::{format_required_tool_input_summary, tool_status};
 #[derive(Args)]
 pub struct ToolListArgs {
     /// Include inactive tools that are hidden from the default agent surface
-    #[arg(long, alias = "include-hidden")]
+    #[arg(long)]
     pub all: bool,
 }
 

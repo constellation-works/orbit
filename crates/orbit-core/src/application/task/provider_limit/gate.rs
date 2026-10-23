@@ -3,19 +3,29 @@
 //!
 //! The host's provider-limit store holds the latest reading of each usage
 //! window (`runtime::engine::invocation`). A reading gates the crews of its
-//! provider — or, when it names a model, only the crews on that model — while
+//! provider account — or, when it names a model, only the crews on that
+//! model — while
 //! it is live and either exhausted or used at or above the provider's
-//! `workflow.provider_limit_*` threshold. It is live until the reset it
-//! reported; one with no reset lives for its window's length, or an hour when
-//! that is unknown, and an exhausted error reading with no reset for the first
-//! backoff a usage-limit hold uses. Nothing has to probe the provider again:
+//! `workflow.provider_limit_*` threshold. An override of `provider:off`
+//! records and shows the reading and gates nothing. A reading is live until
+//! the reset it reported; one with no reset lives for its window's length, or
+//! an hour when that is unknown, and an exhausted error reading with no reset
+//! for the first backoff a usage-limit hold uses. Nothing has to probe the
+//! provider again:
 //! the next admission pass after that simply draws the crew again.
 //!
+//! [ORB-17288] A crew that sets `env` is its own account: only readings taken
+//! under it, and its own budget, gate it, and a reading of the provider's
+//! default login gates only the provider's crews without `env`. A crew
+//! account's threshold is its own override, else its provider's.
+//!
 //! Limited crews are removed from a task's draw before it is made. A task
-//! drawn from a pool or the default falls back to the unlimited members of
-//! its complexity pool, never to the workspace default. A task whose own
-//! crew is its explicit choice waits under `wait`, and under `pool` is drawn
-//! from that pool too. When nothing unlimited is left the task waits, and the
+//! drawn from a purpose pool falls back to the unlimited members of that
+//! pool first, keeping their weights. A task drawn from a pool, a purpose or
+//! the default then falls back to the unlimited members of its complexity
+//! pool, never to the workspace default. A task whose own crew is its
+//! explicit choice waits under `wait`, and under `pool` is drawn from that
+//! complexity pool too. When nothing unlimited is left the task waits, and the
 //! local drain's backlog snapshot reports it as `provider_limit`. Only
 //! delivery admission is gated; an explicit run-input crew is the operator's
 //! call and records the limit it ran against instead.
@@ -24,15 +34,17 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_config::{ProviderLimitExplicitCrews, ProviderLimitPolicy};
+use orbit_config::{ProviderLimitExplicitCrews, ProviderLimitPolicy, ProviderLimitThreshold};
 use orbit_types::identity::Crew;
 use orbit_types::task::Task;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
-use orbit_types::workflow::{ProviderFailureClass, ProviderFailureHold};
+use orbit_types::workflow::{ProviderFailureClass, ProviderFailureHold, provider_account_label};
 
 use super::ledger::PARTIAL_NOTE;
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{CapturedCrewPools, CrewCandidate};
+use crate::application::job::crew_pools::{
+    CapturedCrewPools, CrewCandidate, PURPOSE_SOURCE_PREFIX, automatic_crew_source,
+};
 use crate::runtime::run_input::non_empty;
 use crate::runtime::task::provider_hold::{base_backoff, same_provider};
 
@@ -44,6 +56,7 @@ const UNKNOWN_WINDOW_LIFETIME: Duration = Duration::minutes(60);
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ProviderLimit {
     provider: String,
+    account: Option<String>,
     model: Option<String>,
     window: Option<String>,
     used_percent: Option<f64>,
@@ -68,9 +81,17 @@ impl ProviderLimit {
         if until <= now {
             return None;
         }
-        let threshold = policy.threshold(&observation.provider);
+        // `off` is the operator's way to keep using a provider whose plan
+        // window is exhausted while paid credits remain. The reading stays
+        // in the store; this gate simply does not act on it.
+        let ProviderLimitThreshold::Percent(threshold) =
+            policy.account_threshold(&observation.provider, observation.account.as_deref())
+        else {
+            return None;
+        };
         reading_at_limit(observation, threshold).then(|| Self {
             provider: observation.provider.clone(),
+            account: observation.account.clone(),
             model: observation.model.clone(),
             window: observation.window.clone(),
             used_percent: observation.used_percent,
@@ -80,13 +101,19 @@ impl ProviderLimit {
         })
     }
 
-    /// Whether the limit applies to `crew`: same provider, and the limit's
-    /// model, when it names one, is the crew's.
+    /// Whether the limit applies to `crew`: same provider account, and the
+    /// limit's model, when it names one, is the crew's.
     fn covers(&self, crew: &Crew) -> bool {
-        reading_covers(&self.provider, self.model.as_deref(), crew)
+        reading_covers(
+            &self.provider,
+            self.account.as_deref(),
+            self.model.as_deref(),
+            crew,
+        )
     }
 
-    /// `<provider> <window> at <used>% (limit <threshold>%) until <reset>`.
+    /// `<provider>[/<account>] <window> at <used>% (limit <threshold>%) until
+    /// <reset>`.
     pub(crate) fn describe(&self) -> String {
         let window = self
             .window
@@ -103,7 +130,7 @@ impl ProviderLimit {
         };
         format!(
             "{} {window} {usage}{partial} (limit {}%) until {}",
-            self.provider,
+            provider_account_label(&self.provider, self.account.as_deref()),
             self.threshold,
             self.until.to_rfc3339()
         )
@@ -134,10 +161,18 @@ pub(super) fn reading_at_limit(observation: &ProviderLimitObservation, threshold
                 .is_some_and(|used| used >= f64::from(threshold)))
 }
 
-/// Whether a reading of `provider`, scoped to `model` when it names one,
-/// applies to `crew`.
-pub(super) fn reading_covers(provider: &str, model: Option<&str>, crew: &Crew) -> bool {
+/// Whether a reading of `provider`'s `account`, scoped to `model` when it
+/// names one, applies to `crew`. [ORB-17288] A crew account's reading
+/// applies only to that crew, and the default login's (`None`) only to the
+/// provider's crews without `env`.
+pub(super) fn reading_covers(
+    provider: &str,
+    account: Option<&str>,
+    model: Option<&str>,
+    crew: &Crew,
+) -> bool {
     same_provider(Some(&crew.assignment.provider), Some(provider))
+        && crew.account() == account
         && model.is_none_or(|model| {
             crew.assignment
                 .model
@@ -220,7 +255,7 @@ impl OrbitRuntime {
     pub(crate) fn provider_limit_gate(&self, now: DateTime<Utc>) -> ProviderLimitGate {
         match self.provider_limit_observations(now) {
             Ok(observations) => {
-                ProviderLimitGate::new(&observations, self.context.settings().provider_limit(), now)
+                ProviderLimitGate::new(&observations, &self.provider_limit_policy(), now)
             }
             Err(error) => {
                 tracing::warn!("could not read this host's provider usage limits: {error}");
@@ -230,13 +265,11 @@ impl OrbitRuntime {
     }
 
     /// Whether `task`'s crew is its own choice — an explicit assignment or a
-    /// legacy pin — rather than a pool's or the default's.
+    /// legacy pin — rather than a purpose pool's, a complexity pool's, or the
+    /// default's.
     pub(crate) fn explicit_task_crew(&self, task: &Task) -> Result<bool, OrbitError> {
         let source = self.task_crew_source(task)?;
-        if source
-            .as_deref()
-            .is_some_and(|source| source == "default" || source.starts_with("pool:"))
-        {
+        if source.as_deref().is_some_and(automatic_crew_source) {
             return Ok(false);
         }
         Ok(self
@@ -283,6 +316,34 @@ impl OrbitRuntime {
                 unlimited,
                 format!("{source}; provider limit: {}", gate.skipped(&skipped)),
             ));
+        }
+        // A collapsed `purpose:` assignment names only the chosen member.
+        // Retry that pool's other enabled members, weights included, before
+        // the complexity pool. A draw that already lists the pool is left
+        // alone. The run allowlist is applied by the caller.
+        if source.starts_with(PURPOSE_SOURCE_PREFIX)
+            && let Some((pool, pool_source)) = self.purpose_assignment_candidates(task)?
+        {
+            let permitted = pool
+                .into_iter()
+                .filter(|candidate| drawable(candidate))
+                .collect::<Vec<_>>();
+            skipped.extend(
+                permitted
+                    .iter()
+                    .filter(|candidate| limited(candidate))
+                    .map(|candidate| candidate.crew.clone()),
+            );
+            let unlimited = permitted
+                .into_iter()
+                .filter(|candidate| !limited(candidate))
+                .collect::<Vec<_>>();
+            if !unlimited.is_empty() {
+                return Ok(LimitedDraw::Narrowed(
+                    unlimited,
+                    format!("{pool_source}; provider limit: {}", gate.skipped(&skipped)),
+                ));
+            }
         }
         // No default fallback: the default is usually the most expensive
         // crew and often shares a provider with the pool.

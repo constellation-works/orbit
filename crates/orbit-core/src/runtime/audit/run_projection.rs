@@ -52,6 +52,7 @@ pub(super) fn audit_steps_from_events(events: &[RunAuditEvent]) -> Vec<RunAuditS
                 let index = steps.len();
                 index_by_id.insert(step_id.to_string(), index);
                 steps.push(RunAuditStep {
+                    lock_wait_ms: None,
                     step_index: index as u32,
                     step_id: step_id.to_string(),
                     started_at: event.timestamp,
@@ -72,6 +73,7 @@ pub(super) fn audit_steps_from_events(events: &[RunAuditEvent]) -> Vec<RunAuditS
                 step.finished_at = event.timestamp;
                 match event.body_kind.as_deref() {
                     Some("step_finished") => {
+                        step.lock_wait_ms = event.raw.get("lock_wait_ms").and_then(Value::as_u64);
                         let outcome = event
                             .raw
                             .get("outcome")
@@ -134,6 +136,7 @@ pub(super) fn audit_step_attempts_from_events(events: &[RunAuditEvent]) -> Vec<R
                 let start = starts.entry(step_id).or_insert((index, None));
                 let outcome = event.raw.get("outcome").and_then(Value::as_str);
                 attempts.push(RunAuditStep {
+                    lock_wait_ms: event.raw.get("lock_wait_ms").and_then(Value::as_u64),
                     step_index: start.0,
                     step_id: step_id.to_string(),
                     started_at: start.1,

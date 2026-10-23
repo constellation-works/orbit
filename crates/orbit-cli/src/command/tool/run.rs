@@ -49,7 +49,8 @@ pub struct ToolRunArgs {
     /// record array instead of the envelope's own top-level keys. Task
     /// writes (add/update/reject) return the record without append-heavy
     /// `comments` and `history`; naming those fields here requests them
-    /// from the tool.
+    /// from the tool. A present `audit_warning` is retained because it reports
+    /// a committed write whose audit row could not be saved.
     #[arg(long, value_delimiter = ',', conflicts_with = "full")]
     pub fields: Vec<String>,
     /// Return the tool's full unfiltered JSON output. This still expands
@@ -219,13 +220,14 @@ impl Execute for ToolRunArgs {
             self.model,
             session_context,
         )?;
-        let output = crate::command::task::show::attach_bound_workspace_identity(
+        let output = crate::command::task::support::attach_bound_workspace_identity(
             &self.name,
             &input,
             owner.as_ref(),
             output,
         )?;
-        let output = shape_tool_output(&self.name, output, self.full, &self.fields)?;
+        let bare_field = answers_with_bare_field(&self.name, &input)?;
+        let output = shape_tool_output(&self.name, output, self.full, &self.fields, bare_field)?;
 
         Ok(Payload::document(output).into())
     }
@@ -320,11 +322,29 @@ fn requests_write_sidecar(fields: &[String]) -> bool {
         .any(|field| WRITE_SIDECAR_FIELDS.contains(&field.as_str()))
 }
 
+/// Whether the tool answered its request's single-field projection with the bare
+/// field value rather than a keyed object. `orbit.task.show` does for every field
+/// except `terminal`, which keeps its `{"terminal": …}` key. The field list uses
+/// the handler's `fields`-before-`field` precedence.
+pub(crate) fn answers_with_bare_field(tool_name: &str, input: &Value) -> Result<bool, OrbitError> {
+    if tool_name != "orbit.task.show" {
+        return Ok(false);
+    }
+    Ok(matches!(
+        optional_csv_or_string_list_alias(input, &["fields", "field"])?.as_deref(),
+        Some([field]) if field != "terminal"
+    ))
+}
+
+/// `bare_field` is [`answers_with_bare_field`] for this request: the tool's own
+/// projection already selected one field, so an object output is that field's
+/// value, not a record to filter.
 pub(crate) fn shape_tool_output(
     tool_name: &str,
     output: Value,
     full: bool,
     fields: &[String],
+    bare_field: bool,
 ) -> Result<Value, OrbitError> {
     if full {
         return Ok(output);
@@ -337,7 +357,7 @@ pub(crate) fn shape_tool_output(
         // A single-field tool projection returns the raw value (`["comments"]`
         // → the comments array). CLI `--fields` is an object-key filter, so
         // re-wrap that value before selecting.
-        let output = wrap_single_field_value(output, fields);
+        let output = wrap_single_field_value(output, fields, bare_field);
         let shaped = filter_top_level_fields(output, fields);
         ensure_write_sidecars_present(tool_name, fields, &shaped)?;
         return Ok(shaped);
@@ -416,9 +436,9 @@ fn project_task_list_output<S: AsRef<str>>(value: Value, fields: &[S]) -> Value 
     Value::Object(object)
 }
 
-fn wrap_single_field_value(output: Value, fields: &[String]) -> Value {
+fn wrap_single_field_value(output: Value, fields: &[String], bare_field: bool) -> Value {
     match fields {
-        [field] if !matches!(output, Value::Object(_)) => {
+        [field] if bare_field || !matches!(output, Value::Object(_)) => {
             let mut map = Map::new();
             map.insert(field.clone(), output);
             Value::Object(map)
@@ -428,13 +448,17 @@ fn wrap_single_field_value(output: Value, fields: &[String]) -> Value {
 }
 
 fn filter_top_level_fields(value: Value, fields: &[String]) -> Value {
+    let mut retained_fields = fields.to_vec();
+    if !retained_fields.iter().any(|field| field == "audit_warning") {
+        retained_fields.push("audit_warning".to_string());
+    }
     match value {
-        Value::Object(map) => Value::Object(select_fields(map, fields)),
+        Value::Object(map) => Value::Object(select_fields(map, &retained_fields)),
         Value::Array(items) => Value::Array(
             items
                 .into_iter()
                 .map(|item| match item {
-                    Value::Object(map) => Value::Object(select_fields(map, fields)),
+                    Value::Object(map) => Value::Object(select_fields(map, &retained_fields)),
                     other => other,
                 })
                 .collect(),

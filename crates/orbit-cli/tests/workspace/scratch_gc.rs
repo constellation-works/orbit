@@ -10,7 +10,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
-use serde_json::Value;
+use orbit_core::OrbitRuntime;
+use orbit_engine::RuntimeHost;
+use orbit_types::workflow::PipelineState;
+use rusqlite::{Connection, params};
+use serde_json::{Value, json};
 
 use crate::fixture_crew;
 
@@ -61,22 +65,106 @@ impl Fixture {
         self.work.join(".orbit/tmp")
     }
 
+    fn runtime(&self) -> OrbitRuntime {
+        OrbitRuntime::from_roots(&self.home.join(".orbit"), &self.work.join(".orbit")).unwrap()
+    }
+
+    fn db(&self) -> Connection {
+        Connection::open(self.home.join(".orbit/orbit.db")).unwrap()
+    }
+
+    fn workspace_id(&self) -> String {
+        let config: Value =
+            serde_yaml::from_slice(&fs::read(self.work.join(".orbit/config.yaml")).unwrap())
+                .unwrap();
+        config["workspace_id"].as_str().unwrap().to_owned()
+    }
+
+    fn seed_retrying_run(&self) {
+        let shown = self
+            .orbit()
+            .args(["workspace", "show", "--format", "json"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let routing: Value = serde_json::from_slice(&shown).unwrap();
+        assert_eq!(routing["registered"], true);
+        assert_eq!(
+            routing["checkout"]["repo_root"],
+            self.work.canonicalize().unwrap().to_str().unwrap()
+        );
+        assert_eq!(
+            routing["checkout"]["orbit_dir"],
+            self.work
+                .join(".orbit")
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .unwrap()
+        );
+        let runtime = self.runtime();
+        let input = json!({"artifact": ".orbit/tmp/from-input"});
+        // Persist a sleeping attempt directly: no worker or timing race is
+        // needed. The live fixture PID also prevents unrelated reconciliation.
+        self.db().execute(
+            "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,created_at,pid) VALUES (?1,?2,'fixture',1,'retrying',?3,'2020-01-01T00:00:00Z','2020-01-01T00:00:00Z',?4)",
+            params!["jrun-scratch-retrying", self.workspace_id(), input.to_string(), std::process::id()],
+        ).unwrap();
+        let mut state = PipelineState::new("jrun-scratch-retrying".into(), "fixture".into(), input);
+        state.record_pipeline_output("saved", json!({"artifact": self.tmp().join("from-state")}));
+        runtime
+            .write_run_state("jrun-scratch-retrying", &state)
+            .unwrap();
+    }
+
     /// Run the shipped worktree GC job and return the reap step's output.
     fn gc(&self, inputs: &[&str]) -> Value {
         let mut command = self.orbit();
-        command.env("ORBIT_OPERATOR", "1").args([
-            "run",
-            "job",
-            "worktree_gc_pipeline",
-            "--wait",
-            "--json",
-        ]);
+        command
+            .env("ORBIT_OPERATOR", "1")
+            .args(["run", "job", "worktree_gc_pipeline", "--json"]);
+        // Retain the shipped default's real CLI --wait/output contract. The
+        // override matrix needs the same actual detached jobs, but can observe
+        // them through the public wait API at its admitted one-second cadence.
+        if inputs.is_empty() {
+            command.arg("--wait");
+        }
         for input in inputs {
             command.args(["--input", input]);
         }
         let output = command.assert().success().get_output().stdout.clone();
         let run: Value = serde_json::from_slice(&output).unwrap();
-        run["pipeline"]["reap"].clone()
+        if inputs.is_empty() {
+            return run["pipeline"]["reap"].clone();
+        }
+        let runtime = orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
+            orbit_core::runtime::OrbitRuntimeRoots {
+                global_root: self.home.join(".orbit"),
+                shared_root: self.work.join(".orbit"),
+                local_root: self.work.join(".orbit"),
+            },
+        )
+        .expect("registered scratch GC runtime");
+        let waited = runtime
+            .wait_pipeline_runs(
+                &[run["run_id"]
+                    .as_str()
+                    .expect("submitted GC run")
+                    .to_string()],
+                30,
+                1,
+                None,
+            )
+            .expect("wait for the actual submitted scratch GC job");
+        let entry = waited
+            .results
+            .into_iter()
+            .next()
+            .expect("scratch GC wait entry");
+        assert_eq!(entry.status, "success", "scratch GC job failed: {entry:?}");
+        entry.pipeline.expect("scratch GC pipeline")["reap"].clone()
     }
 }
 
@@ -114,7 +202,6 @@ fn entry<'a>(scratch: &'a Value, tmp: &Path, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no report for {name}: {scratch}"))
 }
 
-#[test]
 fn prunes_entries_older_than_the_window_and_never_follows_symlinks() {
     let fixture = Fixture::new();
     let tmp = fixture.tmp();
@@ -202,7 +289,6 @@ fn prunes_entries_older_than_the_window_and_never_follows_symlinks() {
     assert_eq!(fs::read_dir(&tmp).unwrap().count(), 0);
 }
 
-#[test]
 fn a_negative_window_is_refused_before_anything_is_removed() {
     let fixture = Fixture::new();
     fs::create_dir_all(fixture.tmp()).unwrap();
@@ -222,6 +308,80 @@ fn a_negative_window_is_refused_before_anything_is_removed() {
         .assert()
         .failure();
     assert!(fixture.tmp().join("stale").exists());
+}
+
+#[test]
+fn retrying_runs_preserve_input_and_saved_state_references() {
+    if crate::isolated_test::run_in_child(
+        "scratch_gc::retrying_runs_preserve_input_and_saved_state_references",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.seed_retrying_run();
+    fs::create_dir_all(fixture.tmp()).unwrap();
+    for name in ["from-input", "from-state"] {
+        // fs::write closes each entry before GC observes it.
+        fs::write(fixture.tmp().join(name), name).unwrap();
+        age(&fixture.tmp().join(name), 48);
+    }
+    for inputs in [&[][..], &["scratch_older_than_hours=0"][..]] {
+        fs::write(fixture.tmp().join("unrelated"), b"idle").unwrap();
+        age(&fixture.tmp().join("unrelated"), 48);
+        let reap = fixture.gc(inputs);
+        let scratch = &reap["scratch"];
+        for name in ["from-input", "from-state"] {
+            assert_eq!(fs::read(fixture.tmp().join(name)).unwrap(), name.as_bytes());
+            assert_eq!(entry(scratch, &fixture.tmp(), name)["action"], "skipped");
+        }
+        assert_eq!(scratch["entries_skipped"], 2, "{reap}");
+        assert_eq!(scratch["entries_removed"], 1, "{reap}");
+        assert!(!fixture.tmp().join("unrelated").exists());
+        let state: String = fixture
+            .db()
+            .query_row(
+                "SELECT state FROM job_runs WHERE run_id = 'jrun-scratch-retrying'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            state, "retrying",
+            "GC must preserve sleeping attempts without reconciling them"
+        );
+    }
+}
+
+#[test]
+fn unreadable_retrying_inventory_or_state_prevents_all_scratch_deletion() {
+    if crate::isolated_test::run_in_child(
+        "scratch_gc::unreadable_retrying_inventory_or_state_prevents_all_scratch_deletion",
+    ) {
+        return;
+    }
+    for corrupt_state in [false, true] {
+        let fixture = Fixture::new();
+        fixture.seed_retrying_run();
+        fs::create_dir_all(fixture.tmp()).unwrap();
+        for name in ["from-input", "from-state", "unrelated"] {
+            fs::write(fixture.tmp().join(name), name).unwrap();
+            age(&fixture.tmp().join(name), 48);
+        }
+        let runtime = fixture.runtime();
+        let sql = if corrupt_state {
+            "UPDATE job_run_states SET pipeline_state_json = '{' WHERE run_id = 'jrun-scratch-retrying'"
+        } else {
+            "UPDATE job_runs SET input_json = '{' WHERE run_id = 'jrun-scratch-retrying'"
+        };
+        assert_eq!(fixture.db().execute(sql, []).unwrap(), 1);
+        // Use the public GC host boundary so corrupt inventory cannot be
+        // rejected earlier by the CLI's own run submission or observation.
+        let error = RuntimeHost::gc_scratch(&runtime, 0).unwrap_err();
+        assert!(matches!(error, orbit_core::OrbitError::Store(_)), "{error}");
+        for name in ["from-input", "from-state", "unrelated"] {
+            assert_eq!(fs::read(fixture.tmp().join(name)).unwrap(), name.as_bytes());
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -305,5 +465,25 @@ mod held {
         let after = fixture.gc(&[]);
         assert_eq!(after["scratch"]["entries_removed"], 2, "{after}");
         assert_eq!(fs::read_dir(&tmp).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn scratch_gc_contracts() {
+    if crate::isolated_test::run_in_child("scratch_gc::scratch_gc_contracts") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "prunes_entries_older_than_the_window_and_never_follows_symlinks",
+            prunes_entries_older_than_the_window_and_never_follows_symlinks as fn(),
+        ),
+        (
+            "a_negative_window_is_refused_before_anything_is_removed",
+            a_negative_window_is_refused_before_anything_is_removed as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
     }
 }

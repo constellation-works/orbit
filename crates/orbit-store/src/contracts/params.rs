@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use orbit_types::identity::OrbitId;
 use orbit_types::task::{
-    ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskHistoryEntry, TaskPriority,
-    TaskRelation, TaskStatus, TaskType,
+    ExternalRef, OrchestratorModelSource, TaskArtifact, TaskComment, TaskComplexity, TaskDecision,
+    TaskHistoryEntry, TaskOrigin, TaskPriority, TaskRelation, TaskStatus, TaskType,
 };
 use orbit_types::workflow::JobRunState;
 use serde::{Deserialize, Serialize};
@@ -43,6 +43,15 @@ pub struct TaskCreateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew_source: Option<String>,
     pub orchestrator: Option<String>,
+    /// The orchestrator's model resolved at creation; never updated later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_model: Option<String>,
+    /// Which rule supplied `orchestrator_model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_model_source: Option<OrchestratorModelSource>,
+    /// Why the task was filed; absent on legacy creation contracts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<TaskOrigin>,
     pub comments: Vec<TaskComment>,
     /// Exact canonical `context_files` selectors an operator surface accepted
     /// for creation under `allow_missing_context`. Recorded as the task's
@@ -86,6 +95,8 @@ pub struct TaskDocumentUpdateParams {
     /// Assignment provenance updated with the selected crew.
     pub crew_source: Option<Option<String>>,
     pub orchestrator: Option<Option<String>>,
+    /// Replacement origin. An origin is set, never cleared.
+    pub origin: Option<TaskOrigin>,
     /// Exact canonical selectors of the replacement `context_files` an
     /// operator surface newly authorized for creation. The task's creation
     /// grant is recomputed and recorded in the same bundle commit whenever
@@ -110,6 +121,11 @@ pub struct TaskHistoryUpdateParams {
     /// go stale in the gap. `None` keeps the unconditional last-writer-wins
     /// behavior every other caller relies on.
     pub expected_status: Option<Vec<TaskStatus>>,
+    /// Set only by `orbit-core` for a write it authorized as a human
+    /// operator's. While an execution claim protects the task, the store
+    /// admits such a write only when its sole effect is appending exactly one
+    /// comment; every other unscoped write stays refused [ORB-16723].
+    pub operator_comment: bool,
 }
 
 /// One task-bundle mutation whose freshness guard, durable receipt, history
@@ -149,6 +165,8 @@ pub struct AtomicTaskMutationParams {
     pub audit_note: String,
     /// Additional decision records committed before the operation receipt.
     pub append_history: Vec<TaskHistoryEntry>,
+    /// Typed decision recorded on the operation's own history event.
+    pub decision: Option<TaskDecision>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -492,6 +510,10 @@ pub struct JobRunQuery {
     /// `terminal_only`; combining this with `terminal_only` yields no rows.
     pub active_only: bool,
     pub created_since: Option<DateTime<Utc>>,
+    /// Inclusive lower bound on run recency: `finished_at`, else `started_at`,
+    /// else `created_at`. Applied before ordering, limiting and step hydration,
+    /// independently of `created_since` and `order_by`.
+    pub recency_since: Option<DateTime<Utc>>,
     pub limit: Option<usize>,
     /// Which timestamp `limit` truncates against. Defaults to `CreatedAt` so
     /// existing CLI/history callers keep their current ordering.
@@ -513,6 +535,7 @@ impl Default for JobRunQuery {
             terminal_only: false,
             active_only: false,
             created_since: None,
+            recency_since: None,
             limit: None,
             order_by: JobRunOrder::default(),
             include_steps: true,
@@ -694,6 +717,9 @@ pub struct DesktopTaskMutationParams {
     pub crew_source: Option<Option<String>>,
     pub comment: Option<String>,
     pub status: Option<TaskStatus>,
+    /// History committed with the receipt, before it: work the application
+    /// must finish after the write even if its first attempt never runs.
+    pub append_history: Vec<TaskHistoryEntry>,
 }
 
 /// One coherent desktop task read under the ordinary shared bundle read lock.

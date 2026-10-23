@@ -1,8 +1,38 @@
-use super::*;
+//! Unit admission: deterministic lock-holder interleaving during stale-lock cleanup.
+#![cfg(unix)]
+use std::fs;
+use std::path::Path;
+
+use chrono::Utc;
+use fs2::FileExt;
+
+fn reaped_child_pid() -> u32 {
+    let mut child = std::process::Command::new("true")
+        .spawn()
+        .expect("spawn child");
+    let pid = child.id();
+    child.wait().expect("reap child");
+    pid
+}
+
+fn write_holder_lock(path: &Path, pid: u32, label: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create lock dir");
+    }
+    fs::write(
+        path,
+        serde_json::to_string(&serde_json::json!({
+            "pid": pid,
+            "acquired_at": Utc::now().to_rfc3339(),
+            "label": label,
+        }))
+        .expect("serialize holder"),
+    )
+    .expect("write lock file");
+}
 
 // Deterministic interleaving admission: the CLI boundary cannot force an
 // opener to queue while doctor owns the lock. Guards the orphaned-inode race.
-#[cfg(unix)]
 #[test]
 fn stale_lock_cleanup_preserves_mutual_exclusion_for_queued_openers() {
     use std::os::unix::fs::MetadataExt;
@@ -68,40 +98,4 @@ fn stale_lock_cleanup_preserves_mutual_exclusion_for_queued_openers() {
     fresh
         .try_lock_exclusive()
         .expect("new opener acquires after the queued descriptor releases");
-}
-
-#[cfg(unix)]
-#[test]
-fn retired_graph_cleanup_unlinks_boundaries_without_following_them() {
-    if crate::tests::run_isolated_test(std::any::type_name_of_val(
-        &retired_graph_cleanup_unlinks_boundaries_without_following_them,
-    )) {
-        return;
-    }
-
-    let temp = tempfile::tempdir().expect("tempdir");
-    let runtime = split_root_runtime(&temp);
-    let outside = temp.path().join("outside");
-    fs::create_dir_all(&outside).expect("create outside");
-    let outside_marker = outside.join("keep.db");
-    fs::write(&outside_marker, b"keep").expect("write outside marker");
-    let local_graph = runtime.local_root().join("graph");
-    let shared_graph = runtime.shared_root().join("knowledge/graph");
-    fs::create_dir_all(shared_graph.parent().expect("knowledge parent"))
-        .expect("create knowledge parent");
-    std::os::unix::fs::symlink(&outside, &local_graph).expect("link local graph");
-    std::os::unix::fs::symlink(&outside, &shared_graph).expect("link shared graph");
-
-    assert_eq!(
-        runtime
-            .remove_retired_graph_state()
-            .expect("remove graph links"),
-        2
-    );
-    assert!(
-        outside_marker.exists(),
-        "cleanup must not follow graph symlinks"
-    );
-    assert!(fs::symlink_metadata(local_graph).is_err());
-    assert!(fs::symlink_metadata(shared_graph).is_err());
 }

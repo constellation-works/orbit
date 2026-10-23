@@ -2,6 +2,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::text::floor_char_boundary;
+use orbit_types::task::SKIP_VALIDATION_TAG;
 use orbit_types::workflow::ReviewTiming;
 use orbit_types::workflow::handoff::{
     HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition,
@@ -14,6 +15,7 @@ use crate::executor::automation::input::input_string_field;
 
 use super::super::git::{git_output, git_output_raw};
 use super::super::handoff::reports_failure;
+use super::super::light_delivery::light_delivery_decision;
 use super::input::{refused, required_workspace};
 use super::no_diff;
 use super::observe::{observe, require_clean_candidate};
@@ -26,9 +28,12 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
     let context = host.claim_execution_context()?;
     let workspace_path = required_workspace(input)?;
     let candidate = observe(&workspace_path, &context, input)?;
-    if let HandoffDelivery::NoDiff { evidence } = &candidate.delivery {
-        no_diff::verify_leaf(host, &context, &workspace_path, evidence)?;
-    }
+    let no_diff_expected = match &candidate.delivery {
+        HandoffDelivery::NoDiff { evidence } => {
+            no_diff::verify_leaf(host, &context, &workspace_path, evidence)?
+        }
+        _ => false,
+    };
     let validated: HandoffCandidate = input
         .get("candidate")
         .cloned()
@@ -56,13 +61,38 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
             OrbitError::InvalidInput(format!("invalid validation references: {error}"))
         })?
         .unwrap_or_default();
-    if validation.is_empty() && !context.required_commands.is_empty() {
+    // [ORB-15764] A `no-diff-expected` skip ran no command, and the owner
+    // exempts exactly that checkpoint from required validation.
+    // [ORB-16855] So does a `skip-validation` candidate that changes only
+    // the owner's light-delivery paths; the owner re-judges it on acceptance.
+    let light = validation.is_empty()
+        && !context.required_commands.is_empty()
+        && !no_diff_expected
+        && light_delivery_decision(
+            host,
+            &workspace_path,
+            &candidate.base.commit,
+            &candidate.candidate.commit,
+            std::slice::from_ref(&context.task_id),
+            SKIP_VALIDATION_TAG,
+        )?
+        .is_some_and(|decision| decision.applies());
+    if validation.is_empty() && !context.required_commands.is_empty() && !no_diff_expected && !light
+    {
         return Err(refused(
             "a typed handoff carries its captured required validation; none was supplied",
         ));
     }
-    let mut execution_summary =
-        handoff_execution_summary(input, &candidate, !validation.is_empty())?;
+    let checks = if !validation.is_empty() {
+        HandoffChecks::Passed
+    } else if no_diff_expected {
+        HandoffChecks::NoDiffExpected
+    } else if light {
+        HandoffChecks::LightDelivery
+    } else {
+        HandoffChecks::NoneConfigured
+    };
+    let mut execution_summary = handoff_execution_summary(input, &candidate, checks)?;
     let unfiled = attach_unfiled_findings(host, &context, input)?;
     if unfiled.attached > 0 {
         execution_summary.push_str(&format!(
@@ -81,6 +111,51 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
         ));
     }
     let review = handoff_review(input, &candidate)?;
+    // The implement step admitted these against the pilot's post-deploy
+    // finding; the owner admits them again when it accepts the handoff.
+    let owed_criteria = implementation_output(input)
+        .map(orbit_types::workflow::OwedCriterion::from_output)
+        .transpose()
+        .map_err(|defect| {
+            OrbitError::InvalidInput(format!("invalid implementer output: {defect}"))
+        })?
+        .unwrap_or_default();
+    let regression_from = implementation_output(input)
+        .map(orbit_types::workflow::implementer_regression_from)
+        .transpose()
+        .map_err(|defect| {
+            OrbitError::InvalidInput(format!("invalid implementer output: {defect}"))
+        })?
+        .unwrap_or_default();
+    if regression_from.contains(&context.task_id) {
+        return Err(refused(
+            "the implementer named the claimed task as its own regression culprit",
+        ));
+    }
+    if !regression_from.is_empty() {
+        execution_summary.push_str(&format!(
+            "\n\nRegression attributed to {}; the owner records each as this task's \
+             `regression_from` relation when it accepts this handoff.",
+            regression_from
+                .iter()
+                .map(|target| format!("`{target}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !owed_criteria.is_empty() {
+        execution_summary.push_str(&format!(
+            "\n\nOwed after deploy: {}.",
+            owed_criteria
+                .iter()
+                .map(|owed| format!(
+                    "criterion {} on {} (`{}`, target {})",
+                    owed.criterion, owed.host, owed.command, owed.target
+                ))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+    }
 
     let handoff = TaskHandoff {
         schema_version: 1,
@@ -100,6 +175,8 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
             &candidate.candidate.commit,
         )?
         .1,
+        owed_criteria,
+        regression_from,
     };
     host.record_claim_handoff(&handoff)?;
 
@@ -234,6 +311,20 @@ fn handoff_review(
 /// reader, and the handoff travels to the owner in one coordination call.
 const MAX_HANDOFF_SUMMARY_BYTES: usize = 64 * 1024;
 
+/// What the handoff's validation logs show, for its execution summary.
+#[derive(Debug, Clone, Copy)]
+enum HandoffChecks {
+    /// Every captured required command passed and its log is pinned.
+    Passed,
+    /// The owner requires no command.
+    NoneConfigured,
+    /// A `no-diff-expected` skip, which runs no command [ORB-15764].
+    NoDiffExpected,
+    /// A `skip-validation` candidate within the light-delivery paths, which
+    /// runs no command [ORB-16855].
+    LightDelivery,
+}
+
 /// The `execution_summary` the typed handoff carries to the owner.
 ///
 /// Acceptance writes the handoff's summary over the owner's
@@ -253,15 +344,27 @@ const MAX_HANDOFF_SUMMARY_BYTES: usize = 64 * 1024;
 /// first line reports `Outcome: failed` is refused here, as the owner would
 /// refuse it, so a failed implementation is never handed off as delivered
 /// work.
-pub(in crate::executor::automation::vcs) fn handoff_execution_summary(
+fn handoff_execution_summary(
     input: &Value,
     candidate: &HandoffCandidate,
-    validated: bool,
+    checks: HandoffChecks,
 ) -> Result<String, OrbitError> {
-    let validation = if validated {
-        "required validation passed on the exact candidate and the owner holds every captured log"
-    } else {
-        "no required validation commands are configured, so no check ran"
+    let validation = match checks {
+        HandoffChecks::Passed => {
+            "required validation passed on the exact candidate and the owner holds every \
+             captured log"
+        }
+        HandoffChecks::NoneConfigured => {
+            "no required validation commands are configured, so no check ran"
+        }
+        HandoffChecks::NoDiffExpected => {
+            "the task is tagged no-diff-expected and changed nothing, so no required \
+             validation ran"
+        }
+        HandoffChecks::LightDelivery => {
+            "the task is tagged skip-validation and every changed path matches \
+             `workflow.light_delivery_paths`, so no required validation ran"
+        }
     };
     let delivered = format!(
         "Claimed execution delivered candidate {} on base {}; {validation}.",

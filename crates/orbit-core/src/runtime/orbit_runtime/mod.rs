@@ -2,16 +2,20 @@
 //! identity, host probes, persistence, configuration, and internal accessors.
 
 mod accessors;
+mod admission_policy;
 mod build;
 mod config;
 mod host;
 mod identity;
 mod persistence;
+mod validation_warning;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use super::host_resource::HostResourceMonitor;
+use super::host_resource::forecast::HostLoadProbe;
+use super::host_resource::profile::ResourceProfileCache;
 use super::host_signal::HostSignalProbe;
 use super::task_pr_forge::TaskPrForge;
 use super::workspace::binding::WorkspaceRuntimeBinding;
@@ -19,9 +23,18 @@ use super::workspace::catalog;
 use super::{builder, event_bus};
 use crate::context::OrbitContext;
 
+/// Configuration reload supplied by the composition root. Runtime policy
+/// refreshes may call it after config files change, but runtime never opens
+/// config layers itself.
+pub(crate) type RuntimeConfigLoader =
+    Arc<dyn Fn() -> Result<orbit_config::ResolvedConfig, orbit_common::OrbitError> + Send + Sync>;
+
 /// One-shot callback for the next orphaned-leaf reconciliation on a runtime.
 type OrphanReconcileCallback = Box<dyn FnOnce() + Send>;
 type OrphanReconcileHook = Arc<Mutex<Option<OrphanReconcileCallback>>>;
+pub(crate) type ValidatedTrees =
+    Arc<Mutex<std::collections::BTreeMap<String, orbit_engine::ValidatedTree>>>;
+pub(crate) type PrRepairChecks = Arc<Mutex<std::collections::BTreeMap<u64, std::time::Instant>>>;
 
 #[derive(Clone)]
 pub struct OrbitRuntime {
@@ -48,6 +61,19 @@ pub struct OrbitRuntime {
     /// This binary's own by default; a fixture composes another so one process
     /// can stand in for a host of each OS.
     host_os: Option<orbit_types::task::HostOs>,
+    /// Registered remote hosts by machine id with their recorded operating
+    /// system, supplied by the registry-owning composition layer.
+    /// Registration alone does not make a host serve this workspace: a
+    /// registered host counts for creation-time complexity draws only when
+    /// this workspace's own claim records show it pulled work recently (see
+    /// `serving_host_oses`). Admission and activity draws keep checking
+    /// only [`Self::host_os`]. Empty on a standalone runtime, which then
+    /// draws exactly as a single-host owner always has.
+    registered_host_oses: Vec<(String, orbit_types::task::HostOs)>,
+    /// The home whose headless browser kit admission reads for `ui` tasks.
+    /// `None` is the current user's, read again on every admission pass; a
+    /// fixture points it at a home it controls.
+    browser_kit_home: Option<std::path::PathBuf>,
     /// One shared base-run budget per owner claim settlement. Leaves five
     /// minutes of the routed call's fifteen for observation, cleanup and reply.
     pub(crate) claim_known_red_budget: std::time::Duration,
@@ -63,6 +89,15 @@ pub struct OrbitRuntime {
     /// decision. `gh` by default; tests inject a fake.
     task_pr_forge: Arc<dyn TaskPrForge>,
     host_resources: Arc<HostResourceMonitor>,
+    /// The host's resource profiles, shared by clones and kept across
+    /// admission passes until a delivery finishes.
+    resource_profiles: Arc<ResourceProfileCache>,
+    admission_policy: Arc<Mutex<Option<admission_policy::CachedPolicy>>>,
+    admission_policy_snapshot: Option<Arc<admission_policy::AdmissionPolicy>>,
+    config_loader: RuntimeConfigLoader,
+    /// The host's measured load for the forecast baseline. It keeps only the
+    /// previous CPU tick reading that utilization is measured against.
+    host_load: Arc<HostLoadProbe>,
     pub event_log: event_bus::EventLog,
     /// Outcome of the [ORB-10012] workspace-layout pre-flight that ran when
     /// this runtime opened (empty `applied` when the layout was already
@@ -73,6 +108,15 @@ pub struct OrbitRuntime {
     /// The pull-refill boundary test persists a graceful cancel there. Empty
     /// in production. Instance-scoped so concurrent tests cannot collide.
     orphan_reconcile_hook: OrphanReconcileHook,
+    /// The last tree each run passed full required validation on
+    /// [ORB-16784]. Held in this process only, where no agent can write it:
+    /// a run resumed by another process validates its next candidate in
+    /// full. Shared by clones.
+    pub(crate) validated_trees: ValidatedTrees,
+    /// When an `--auto-fix` drain last found each pull request it may repair
+    /// out of run without a blocker, so a pass does not ask the forge again
+    /// before the recheck interval. Held in this process; shared by clones.
+    pub(crate) pr_repair_checks: PrRepairChecks,
     /// Test-only seam for approve/start/reject: after the locked `get_task`,
     /// mutate the named task so compare-and-set can observe a lost race.
     /// Instance-scoped so concurrent `cargo test` threads cannot collide on

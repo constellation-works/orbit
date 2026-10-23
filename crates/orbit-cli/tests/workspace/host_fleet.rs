@@ -59,7 +59,7 @@ impl Fleet {
             bin,
             routes,
         };
-        fleet.local = fleet.install("local-home", "local-box", "LB");
+        fleet.local = fleet.prepare_install("local-home", "local-box", "LB");
         git_repo::init(&fleet.local_repo);
         fleet.orbit_ok(
             &fleet.local_repo,
@@ -70,37 +70,38 @@ impl Fleet {
 
     /// Initialize another installation with a workspace of its own.
     pub(crate) fn install(&self, dir: &str, machine_name: &str, prefix: &str) -> Install {
+        let install = self.prepare_install(dir, machine_name, prefix);
+        let repo = install.repo();
+        git_repo::init(&repo);
+        let args = ["workspace", "init", "--name", &format!("{dir}-ws")];
+        let output = self
+            .orbit_in(&install.home, &repo, &args)
+            .output()
+            .expect("spawn orbit");
+        assert!(
+            output.status.success(),
+            "{args:?} failed for {dir}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        install
+    }
+
+    // The local fleet registers local-repo below. It needs the same real
+    // identity/configuration, without an unused second workspace at home/repo.
+    fn prepare_install(&self, dir: &str, machine_name: &str, prefix: &str) -> Install {
         let home = self.temp.path().join(dir);
         fs::create_dir_all(&home).expect("create install home");
-        let repo = home.join("repo");
-        git_repo::init(&repo);
-        let run = |cwd: &Path, args: &[&str]| {
-            let output = self
-                .orbit_in(&home, cwd, args)
-                .output()
-                .expect("spawn orbit");
-            assert!(
-                output.status.success(),
-                "{args:?} failed for {dir}: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        };
-        run(
-            &home,
-            &[
-                "init",
-                "--non-interactive",
-                "--machine-name",
-                machine_name,
-                "--task-prefix",
-                prefix,
-            ],
-        );
+        let root = home.join(".orbit");
+        orbit_common::fs::io::create_private_dir_all(&root).expect("private install root");
+        orbit_config::seed_default_config(&root.join("config.toml"), None).expect("install config");
+        orbit_registry::ensure_machine_identity(&root, || {
+            Ok(orbit_registry::NewMachineIdentity {
+                name: machine_name.into(),
+                task_prefix: prefix.into(),
+            })
+        })
+        .expect("install machine identity");
         crate::fixture_crew::configure_sol(&home.join(".orbit"));
-        run(
-            &repo,
-            &["workspace", "init", "--name", &format!("{dir}-ws")],
-        );
         let config: toml::Value = fs::read_to_string(home.join(".orbit/config.toml"))
             .expect("read config")
             .parse()

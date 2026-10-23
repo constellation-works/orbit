@@ -2,11 +2,14 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, TimeZone, Utc};
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{JobRun, JobRunState, JobRunStep, JobTargetType, V2AuditEventInsertParams};
+use orbit_core::{
+    JobRun, JobRunState, JobRunStep, JobTargetType, OrbitRuntime, V2AuditEventInsertParams,
+};
 use orbit_types::task::is_valid_orb_task_id;
 use orbit_types::workflow::{
-    ChildDispatch, DrainCancelRequest, PipelineState, TaskCancellationPolicy,
+    ChildDispatch, DrainCancelRequest, PipelineState, RunRootCause, TaskCancellationPolicy,
 };
+use orbit_types::workspace::WorkspaceCheckout;
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
@@ -323,6 +326,229 @@ fn run_tasks_are_projected_over_http_without_per_row_task_reads() {
     );
 }
 
+fn add_workspace(fixture: &Fixture, id: &str, name: &str) -> OrbitRuntime {
+    let path = orbit_registry::workspace_registry::registry_path_for(&fixture.global);
+    let mut registry = orbit_registry::workspace_registry::load_registry_from(&path).unwrap();
+    let mut workspace = registry.workspaces[0].clone();
+    workspace.id = id.into();
+    workspace.name = name.into();
+    let repo = fixture.path(name);
+    let work = repo.join(".orbit");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(
+        work.join("config.yaml"),
+        format!("schema_version: 1\nworkspace_id: {id}\n"),
+    )
+    .unwrap();
+    let checkout = WorkspaceCheckout::owner(id.into(), repo, work);
+    registry.workspaces.push(workspace.clone());
+    registry.checkouts.push(checkout.clone());
+    orbit_registry::workspace_registry::save_registry_to(&registry, &path).unwrap();
+    orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
+        &fixture.global,
+        &workspace,
+        &checkout,
+    )
+    .unwrap()
+}
+
+fn seed_workspace_run(
+    runtime: &OrbitRuntime,
+    id: &str,
+    job: &str,
+    state: JobRunState,
+    offset_ms: i64,
+    created: DateTime<Utc>,
+    task_id: &str,
+) -> JobRun {
+    let ts = created + chrono::Duration::milliseconds(offset_ms);
+    let run = JobRun {
+        run_id: id.to_string(),
+        job_id: job.to_string(),
+        attempt: 1,
+        state,
+        scheduled_at: ts,
+        created_at: ts,
+        started_at: Some(ts),
+        finished_at: state.is_terminal().then_some(ts),
+        duration_ms: None,
+        pid: None,
+        pid_start_time: None,
+        input: Some(json!({"task_id": task_id})),
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+        executed_on: None,
+    };
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &run, None)
+        .unwrap();
+    run
+}
+
+/// History splits a task's runs per attempt from `parent_run_id` and names a
+/// cascaded failure's leaf from `root_cause`, so both run lists carry them.
+#[test]
+fn run_lists_link_listed_children_and_name_a_cascaded_failure_leaf() {
+    isolated(
+        "runs::run_lists_link_listed_children_and_name_a_cascaded_failure_leaf",
+        || {
+            let fixture = Fixture::new();
+            let other = add_workspace(&fixture, "ws_http_runs_other", "other");
+            let created = Utc::now() - chrono::Duration::seconds(1);
+            let seed = |id, job, state, offset_ms| {
+                let mut run = fixture.seed_run(id, job, state);
+                run.created_at = created + chrono::Duration::milliseconds(offset_ms);
+                run.scheduled_at = run.created_at;
+                run.started_at = Some(run.created_at);
+                run.finished_at = state.is_terminal().then_some(run.created_at);
+                run.input = Some(json!({"task_id": "ORB-1"}));
+                fixture.save_run(&run);
+                run
+            };
+            let gate = seed("jrun-gate", "task_gate_pipeline", JobRunState::Failed, 0);
+            let leaf = seed("jrun-leaf", "task_pr_pipeline", JobRunState::Failed, 1);
+            let mut retry = seed("jrun-retry", "task_gate_pipeline", JobRunState::Running, 10);
+            retry.retry_source_run_id = Some(gate.run_id.clone());
+            fixture.save_run(&retry);
+            let retry_leaf = seed(
+                "jrun-retry-leaf",
+                "task_pr_pipeline",
+                JobRunState::Running,
+                11,
+            );
+            let cause = RunRootCause {
+                leaf_run_id: leaf.run_id.clone(),
+                task_id: Some("ORB-1".into()),
+                step: Some("implement".into()),
+                code: Some("provider_unavailable".into()),
+            };
+            let mut state = PipelineState::new(gate.run_id.clone(), gate.job_id.clone(), json!({}));
+            state.record_child_dispatch(ChildDispatch::submitted(
+                leaf.run_id.clone(),
+                leaf.job_id.clone(),
+                "invoke_and_wait".into(),
+                true,
+                false,
+                leaf.created_at,
+            ));
+            state.root_cause = Some(cause.clone());
+            fixture
+                .runtime
+                .write_run_state(&gate.run_id, &state)
+                .unwrap();
+            // Resume copies the source checkpoint, including its dispatches.
+            // The retry then admits its own child without owning the old one.
+            let mut retry_state = state.clone();
+            retry_state.run_id = retry.run_id.clone();
+            retry_state.root_cause = None;
+            retry_state.record_child_dispatch(dispatch(&retry_leaf));
+            write_state(&fixture, &retry, &retry_state);
+            let server = fixture.server(false);
+            for path in ["/api/job-runs?limit=10", "/api/job-runs/all?limit=10"] {
+                let page = json_ok(server.get(path));
+                let rows = page["items"].as_array().unwrap();
+                assert_eq!(rows.len(), 4, "{path}");
+                assert_eq!(rows[0]["run_id"], retry_leaf.run_id, "newest first: {path}");
+                assert_eq!(
+                    rows[1]["run_id"], retry.run_id,
+                    "retry precedes source: {path}"
+                );
+                let row = |id: &str| {
+                    page["items"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|row| row["run_id"] == id)
+                        .unwrap_or_else(|| panic!("{path} lists {id}"))
+                        .clone()
+                };
+                assert_eq!(
+                    row(&leaf.run_id)["parent_run_id"],
+                    gate.run_id.as_str(),
+                    "{path}"
+                );
+                assert_eq!(row(&gate.run_id)["parent_run_id"], Value::Null, "{path}");
+                assert_eq!(row(&retry.run_id)["parent_run_id"], Value::Null, "{path}");
+                assert_eq!(
+                    row(&retry_leaf.run_id)["parent_run_id"],
+                    retry.run_id,
+                    "{path}"
+                );
+                assert_eq!(row(&gate.run_id)["state"], "failed", "{path}");
+                assert_eq!(row(&leaf.run_id)["state"], "failed", "{path}");
+                assert_eq!(row(&retry.run_id)["state"], "running", "{path}");
+                assert_eq!(row(&retry_leaf.run_id)["state"], "running", "{path}");
+                assert_eq!(row(&gate.run_id)["root_cause"], json!(cause), "{path}");
+                assert_eq!(row(&leaf.run_id)["root_cause"], Value::Null, "{path}");
+                assert_eq!(row(&retry.run_id)["root_cause"], Value::Null, "{path}");
+            }
+            // A page boundary must not let a retry claim an inherited child
+            // merely because its source is outside the loaded page.
+            for path in ["/api/job-runs?limit=3", "/api/job-runs/all?limit=3"] {
+                let page = json_ok(server.get(path));
+                let rows = page["items"].as_array().unwrap();
+                assert_eq!(rows.len(), 3, "{path}");
+                assert_eq!(rows[2]["run_id"], leaf.run_id, "{path}");
+                assert_eq!(rows[2]["parent_run_id"], Value::Null, "{path}");
+                assert_eq!(rows[0]["parent_run_id"], retry.run_id, "{path}");
+            }
+
+            // When multiple workspaces merge and a parent run falls outside
+            // the response limit while its child remains, the child's
+            // parent_run_id must be null instead of naming the cut parent.
+            let _other1 = seed_workspace_run(
+                &other,
+                "jrun-other-1",
+                "task_pr_pipeline",
+                JobRunState::Success,
+                2,
+                created,
+                "ORB-2",
+            );
+            let _other2 = seed_workspace_run(
+                &other,
+                "jrun-other-2",
+                "task_pr_pipeline",
+                JobRunState::Success,
+                3,
+                created,
+                "ORB-2",
+            );
+
+            let page = json_ok(server.get("/api/job-runs/all?limit=5"));
+            let rows = page["items"].as_array().unwrap();
+            assert_eq!(rows.len(), 5, "top 5 merged across workspaces");
+            assert!(
+                !rows.iter().any(|row| row["run_id"] == gate.run_id),
+                "older parent gate run was pushed past limit"
+            );
+            let leaf_row = rows
+                .iter()
+                .find(|row| row["run_id"] == leaf.run_id)
+                .expect("child leaf run remains in top 5");
+            assert_eq!(
+                leaf_row["parent_run_id"],
+                Value::Null,
+                "parent_run_id must be null when parent is cut from cross-workspace response"
+            );
+            for row in rows {
+                if let Some(parent) = row.get("parent_run_id").and_then(Value::as_str) {
+                    assert!(
+                        rows.iter().any(|r| r["run_id"] == parent),
+                        "every non-null parent_run_id must name a listed run, got {parent} for {}",
+                        row["run_id"]
+                    );
+                }
+            }
+        },
+    );
+}
+
 #[test]
 fn job_run_list_filters_by_task_job_and_since() {
     isolated("runs::job_run_list_filters_by_task_job_and_since", || {
@@ -523,6 +749,7 @@ fn write_state(fixture: &Fixture, run: &JobRun, state: &PipelineState) {
 fn save_step(fixture: &Fixture, run: &JobRun, message: &str) {
     let now = at(5, 40);
     let step = JobRunStep {
+        lock_wait_ms: None,
         step_index: 15,
         target_type: JobTargetType::Activity,
         target_id: "landing_review".into(),
@@ -545,6 +772,145 @@ fn save_step(fixture: &Fixture, run: &JobRun, message: &str) {
             &step,
         )
         .unwrap();
+}
+
+fn save_record_step(fixture: &Fixture, run: &JobRun, step: &JobRunStep) {
+    fixture
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_step_for_workspace(
+            &fixture.runtime.workspace_id().unwrap(),
+            &run.run_id,
+            step,
+        )
+        .unwrap();
+}
+
+/// One `step_started` or `step_finished` event in a run's audit trail.
+fn insert_step_audit(fixture: &Fixture, run_id: &str, step_id: &str, body_kind: &str, minute: u32) {
+    let ts = at(6, minute);
+    let event_id = format!("evt-{run_id}-{step_id}-{body_kind}");
+    fixture
+        .runtime
+        .insert_v2_audit_event(&V2AuditEventInsertParams {
+            workspace_id: fixture.runtime.workspace_id().unwrap(),
+            event_id: event_id.clone(),
+            source: "v2_envelope".into(),
+            schema_version: 1,
+            event_type: "activity.progress".into(),
+            ts,
+            run_id: run_id.into(),
+            agent_identity: "fixture".into(),
+            parent_event_id: None,
+            workspace_path: None,
+            payload_json: json!({
+                "event_id": event_id,
+                "body_kind": body_kind,
+                "step_id": step_id,
+                "outcome": "success",
+                "lock_wait_ms": 42,
+                "ts": ts,
+            })
+            .to_string(),
+        })
+        .unwrap();
+}
+
+/// [ORB-15897] The run detail chooses its steps by the rule every run view
+/// shares and names their source. A record with activity steps answers over
+/// the audit trail; a run-level-only record defers to the trail, whose step
+/// the run died in reads as interrupted rather than running.
+#[test]
+fn run_detail_steps_follow_the_shared_rule_and_name_their_source() {
+    isolated(
+        "runs::run_detail_steps_follow_the_shared_rule_and_name_their_source",
+        || {
+            let fixture = Fixture::new();
+            let step = |target_type, target_id: &str, state, lock_wait_ms| JobRunStep {
+                lock_wait_ms,
+                step_index: 0,
+                target_type,
+                target_id: target_id.into(),
+                started_at: Some(at(6, 0)),
+                finished_at: Some(at(6, 1)),
+                duration_ms: Some(60_000),
+                exit_code: None,
+                agent_response_json: None,
+                state,
+                error_code: (state == JobRunState::Interrupted).then(|| "worker_terminated".into()),
+                error_message: None,
+            };
+
+            let interrupted = fixture.seed_run(
+                "jrun-20261010-0600",
+                "task_pr_pipeline",
+                JobRunState::Interrupted,
+            );
+            save_record_step(
+                &fixture,
+                &interrupted,
+                &step(
+                    JobTargetType::Job,
+                    "task_pr_pipeline",
+                    JobRunState::Interrupted,
+                    None,
+                ),
+            );
+            insert_step_audit(&fixture, &interrupted.run_id, "prepare", "step_started", 0);
+            insert_step_audit(&fixture, &interrupted.run_id, "prepare", "step_finished", 1);
+            insert_step_audit(
+                &fixture,
+                &interrupted.run_id,
+                "implement",
+                "step_started",
+                2,
+            );
+
+            let recorded = fixture.seed_run(
+                "jrun-20261010-0610",
+                "task_pr_pipeline",
+                JobRunState::Success,
+            );
+            save_record_step(
+                &fixture,
+                &recorded,
+                &step(
+                    JobTargetType::Activity,
+                    "prepare",
+                    JobRunState::Success,
+                    Some(7),
+                ),
+            );
+            insert_step_audit(&fixture, &recorded.run_id, "prepare", "step_started", 0);
+            insert_step_audit(&fixture, &recorded.run_id, "prepare", "step_finished", 1);
+            insert_step_audit(&fixture, &recorded.run_id, "unrecorded", "step_started", 2);
+
+            let server = fixture.server(false);
+            let detail = json_ok(server.get(&format!("/api/runs/{}", interrupted.run_id)));
+            assert_eq!(detail["steps_source"], "audit", "{detail}");
+            assert_eq!(detail["run"]["error_code"], "worker_terminated");
+            assert!(detail["run"].get("steps").is_none(), "{detail}");
+            let steps = detail["steps"].as_array().unwrap();
+            assert_eq!(steps.len(), 2, "{detail}");
+            assert_eq!(steps[0]["state"], "success");
+            assert_eq!(steps[0]["lock_wait_ms"], 42);
+            assert_eq!(steps[1]["target_id"], "implement");
+            assert_eq!(steps[1]["state"], "interrupted");
+            assert_eq!(steps[1]["outcome"], "interrupted");
+
+            let detail = json_ok(server.get(&format!("/api/runs/{}", recorded.run_id)));
+            assert_eq!(detail["steps_source"], "record", "{detail}");
+            let steps = detail["steps"].as_array().unwrap();
+            assert_eq!(
+                steps.len(),
+                1,
+                "the record answers, not the trail: {detail}"
+            );
+            assert_eq!(steps[0]["target_id"], "prepare");
+            assert_eq!(steps[0]["lock_wait_ms"], 7);
+        },
+    );
 }
 
 fn insert_cancel_audit(fixture: &Fixture, run_id: &str, ts: DateTime<Utc>) {
@@ -676,7 +1042,7 @@ fn failure_chain_names_the_deepest_descendant_and_projects_cancellation() {
                 drain_run.job_id.clone(),
                 json!({}),
             );
-            drain_state.drain_cancel = Some(DrainCancelRequest {
+            drain_state.pull_drain.drain_cancel = Some(DrainCancelRequest {
                 actor: "dashboard".into(),
                 source: "web".into(),
                 reason: Some("operator stopped the drain".into()),
@@ -795,6 +1161,394 @@ fn failure_chain_names_the_deepest_descendant_and_projects_cancellation() {
                     "at": actor_finished,
                 })
             );
+        },
+    );
+}
+
+/// [ORB-16330] Run detail projects provider children through the shared
+/// `RunProviderProcess::to_json` (activity and stuck-descendant fields, no
+/// `run_id`) and names the same worker identity MCP already puts on the run.
+#[test]
+fn run_detail_projects_shared_provider_processes_and_worker_identity() {
+    isolated(
+        "runs::run_detail_projects_shared_provider_processes_and_worker_identity",
+        || {
+            let fixture = Fixture::new();
+            let mut run = fixture.seed_run(
+                "jrun-provider-identity",
+                "task_auto_pipeline",
+                JobRunState::Running,
+            );
+            run.pid = Some(4242);
+            run.pid_start_time = Some("v1:4242".into());
+            run.input = Some(json!({"task_id": "ORB-1"}));
+            fixture.save_run(&run);
+            let workspace = fixture.runtime.workspace_id().unwrap();
+            let seed = |event_id: &str, ts: &str, parent: Option<&str>, body: Value| {
+                let mut payload = json!({
+                    "schemaVersion": 1,
+                    "event_type": "test.event",
+                    "event_id": event_id,
+                    "ts": ts,
+                    "run_id": run.run_id,
+                    "agent_identity": "codex",
+                    "parent_event_id": parent,
+                });
+                let object = payload.as_object_mut().unwrap();
+                for (key, value) in body.as_object().unwrap().clone() {
+                    object.insert(key, value);
+                }
+                fixture
+                    .runtime
+                    .insert_v2_audit_event(&V2AuditEventInsertParams {
+                        workspace_id: workspace.clone(),
+                        event_id: event_id.into(),
+                        source: "v2_envelope".into(),
+                        schema_version: 1,
+                        event_type: "test.event".into(),
+                        ts: ts.parse::<DateTime<Utc>>().unwrap(),
+                        run_id: run.run_id.clone(),
+                        agent_identity: "codex".into(),
+                        parent_event_id: parent.map(str::to_string),
+                        workspace_path: None,
+                        payload_json: payload.to_string(),
+                    })
+                    .unwrap();
+            };
+            seed(
+                "evt-step",
+                "2026-10-10T08:00:00Z",
+                None,
+                json!({"body_kind": "step_started", "step_id": "invoke"}),
+            );
+            seed(
+                "evt-process",
+                "2026-10-10T08:00:01Z",
+                Some("evt-step"),
+                json!({
+                    "body_kind": "cli_invocation_process",
+                    "provider": "codex",
+                    "pid": 4242,
+                    "pid_start_time": "v1:4242",
+                    "run_id": "decoy-process-run",
+                }),
+            );
+            seed(
+                "evt-activity",
+                "2026-10-10T08:00:11Z",
+                Some("evt-step"),
+                json!({
+                    "body_kind": "cli_invocation_activity",
+                    "provider": "codex",
+                    "observed_bytes": 512,
+                    "latest_message": "Reading the sweep clock config.",
+                    "latest_message_truncated": true,
+                }),
+            );
+            seed(
+                "evt-stopped",
+                "2026-10-10T08:00:12Z",
+                Some("evt-step"),
+                json!({
+                    "body_kind": "cli_invocation_stopped_descendant",
+                    "pid": 4243,
+                    "command": "sleep-forever",
+                    "ended": false,
+                    "error": "permission denied",
+                    "stopped_ms": 600000,
+                }),
+            );
+
+            let server = fixture.server(false);
+            let detail = json_ok(server.get(&format!("/api/runs/{}", run.run_id)));
+            assert_eq!(detail["run"]["pid"], 4242, "{detail}");
+            assert_eq!(detail["run"]["pid_start_time"], "v1:4242", "{detail}");
+            assert_eq!(detail["run"]["input"]["task_id"], "ORB-1", "{detail}");
+            let processes = detail["provider_processes"].as_array().unwrap();
+            assert_eq!(processes.len(), 1, "{detail}");
+            let process = &processes[0];
+            assert!(
+                process.get("run_id").is_none(),
+                "process objects omit run_id: {process}"
+            );
+            for key in [
+                "last_activity_at",
+                "latest_message",
+                "latest_message_truncated",
+                "stdout_blob_ref",
+                "build_budget_waits",
+                "stopped_descendants",
+                "blocked_on_stopped_descendant",
+            ] {
+                assert!(process.get(key).is_some(), "missing {key}: {process}");
+            }
+            assert_eq!(process["provider"], "codex");
+            assert_eq!(process["pid"], 4242);
+            assert_eq!(process["step_id"], "invoke");
+            assert_eq!(process["latest_message"], "Reading the sweep clock config.");
+            assert_eq!(process["latest_message_truncated"], true);
+            assert_eq!(process["last_activity_at"], "2026-10-10T08:00:11+00:00");
+            assert!(process["stdout_blob_ref"].is_null());
+            assert!(process["build_budget_waits"].is_null());
+            // A pid that is not a live child cannot be blocked; the key is
+            // still present, and the seeded descendant is listed beside it.
+            assert!(
+                process["blocked_on_stopped_descendant"].is_null(),
+                "{process}"
+            );
+            assert_eq!(process["stopped_descendants"][0]["pid"], 4243);
+            assert_eq!(
+                process["stopped_descendants"][0]["command"],
+                "sleep-forever"
+            );
+            assert_eq!(process["stopped_descendants"][0]["ended"], false);
+        },
+    );
+}
+
+/// A drain that holds requests must expose its live breaker and refused
+/// settlements over HTTP, including after the run ends. Healthy and ordinary
+/// runs retain the same response shape with no hold records.
+#[test]
+fn run_detail_exposes_pull_request_holds() {
+    isolated("runs::run_detail_exposes_pull_request_holds", || {
+        use orbit_store::compose::workspace_job_run_store;
+        use orbit_store::contracts::{
+            AdmissionRequest, LocalPullPhase, PullDestination, SettlementRefusal,
+        };
+        use orbit_types::workflow::PullBreaker;
+
+        let fixture = Fixture::new();
+        let drain = fixture.seed_run(
+            "jrun-request-holds",
+            "workspace_pull_pipeline",
+            JobRunState::Running,
+        );
+        let healthy = fixture.seed_run(
+            "jrun-healthy-pull",
+            "workspace_pull_pipeline",
+            JobRunState::Running,
+        );
+        let ordinary = fixture.seed_run("jrun-ordinary", "fixture", JobRunState::Success);
+        let breaker = PullBreaker {
+            failures: 3,
+            failure_classes: vec!["candidate".into(), "task_input".into()],
+            opened_at: at(8, 0),
+            half_open_at: at(8, 15),
+        };
+        let mut state = PipelineState::new(drain.run_id.clone(), drain.job_id.clone(), json!({}));
+        state.pull_drain.pull_breaker = Some(breaker.clone());
+        write_state(&fixture, &drain, &state);
+
+        let workspace = fixture.runtime.workspace_id().unwrap();
+        let store = fixture.runtime.sqlite_store().unwrap();
+        let jobs = workspace_job_run_store(store.clone(), workspace.clone());
+        let destination = PullDestination {
+            owner_machine_id: "hm_owner".into(),
+            owner_workspace_id: "ws_owner".into(),
+            selector: "owner/workspace".into(),
+            execution_machine_id: "hm_follower".into(),
+        };
+        let request: AdmissionRequest = serde_json::from_value(json!({
+            "request_id": "request-hold-fixture",
+            "caller_version": env!("CARGO_PKG_VERSION"), "caller_schema": 1,
+            "run_context": { "run_id": drain.run_id, "job_name": drain.job_id, "machine_name": "follower" },
+            "ship": { "mode": "pr", "base_branch": "agent-main", "landing_branch": "agent-main", "completion": "review" },
+        })).unwrap();
+        let mut admission = jobs
+            .allocate_pull_request(&destination, &request, 4)
+            .unwrap()
+            .unwrap();
+        // Seed a persisted refused delivery without contacting another host.
+        admission.phase = LocalPullPhase::Settling;
+        admission.leaf_run_id = Some("jrun-refused-leaf".into());
+        admission.settlement_refusal = Some(SettlementRefusal {
+            reason: "owner validation commands missing".into(),
+            refusals: 2,
+            first_refused_at: at(8, 1),
+            last_refused_at: at(8, 2),
+            retry_after: at(8, 3),
+        });
+        store.connection().lock().unwrap().execute(
+            "UPDATE local_pull_admissions SET leaf_run_id=?1, record_json=?2 WHERE workspace_id=?3 AND request_id=?4",
+            (admission.leaf_run_id.as_deref(), serde_json::to_string(&admission).unwrap(), &workspace, &request.request_id),
+        ).unwrap();
+        let expected_settlements = serde_json::to_value(
+            fixture
+                .runtime
+                .pull_drain_refused_settlements(&drain.run_id)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(expected_settlements.as_array().unwrap().len(), 1);
+        assert_eq!(
+            expected_settlements[0]["reason"],
+            "owner validation commands missing"
+        );
+        assert!(
+            expected_settlements[0]["remedy"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty())
+        );
+
+        let server = fixture.server(false);
+        for run in [&healthy, &ordinary] {
+            let detail = json_ok(server.get(&format!("/api/runs/{}", run.run_id)));
+            assert_eq!(detail.get("pull_breaker"), Some(&Value::Null), "{detail}");
+            assert_eq!(
+                detail.get("refused_settlements"),
+                Some(&json!([])),
+                "{detail}"
+            );
+        }
+        for terminal in [false, true] {
+            if terminal {
+                let mut ended = drain.clone();
+                ended.state = JobRunState::Cancelled;
+                ended.finished_at = Some(Utc::now());
+                fixture.save_run(&ended);
+            }
+            let detail = json_ok(server.get(&format!("/api/runs/{}", drain.run_id)));
+            assert_eq!(detail["pull_breaker"], json!(breaker), "{detail}");
+            assert_eq!(
+                detail["refused_settlements"], expected_settlements,
+                "{detail}"
+            );
+        }
+    });
+}
+
+/// The HTTP budget must use the allocator's workspace occupancy, including
+/// claims with no running leaf, without adding a bound claim to its leaf twice.
+#[test]
+fn pull_budget_tracks_allocator_through_launch_review_and_settlement() {
+    isolated(
+        "runs::pull_budget_tracks_allocator_through_launch_review_and_settlement",
+        || {
+            use orbit_store::compose::workspace_job_run_store;
+            use orbit_store::contracts::{
+                AdmissionRequest, LocalPullMutation, LocalPullPhase, PullDestination,
+                SettlementRefusal,
+            };
+            use orbit_types::workflow::ReviewGateAdmissionOutput;
+
+            let fixture = Fixture::new();
+            let drain = fixture.seed_run(
+                "jrun-budget",
+                "workspace_pull_pipeline",
+                JobRunState::Running,
+            );
+            let state = PipelineState::new(drain.run_id.clone(), drain.job_id.clone(), json!({}));
+            write_state(&fixture, &drain, &state);
+            let workspace = fixture.runtime.workspace_id().unwrap();
+            let store = fixture.runtime.sqlite_store().unwrap();
+            let jobs = workspace_job_run_store(store.clone(), workspace.clone());
+            let destination = PullDestination {
+                owner_machine_id: "hm_owner".into(),
+                owner_workspace_id: "ws_owner".into(),
+                selector: "owner/workspace".into(),
+                execution_machine_id: "hm_follower".into(),
+            };
+            let request: AdmissionRequest = serde_json::from_value(json!({
+                "request_id": "budget-claim",
+                "caller_version": env!("CARGO_PKG_VERSION"), "caller_schema": 1,
+                "run_context": { "run_id": drain.run_id, "job_name": drain.job_id, "machine_name": "follower" },
+                "ship": { "mode": "pr", "base_branch": "agent-main", "landing_branch": "agent-main", "completion": "review" },
+            })).unwrap();
+            let server = fixture.server(false);
+            let probes = std::cell::Cell::new(0);
+            let check = |occupied: usize, reviewing: usize, running: usize| {
+                let detail = json_ok(server.get(&format!("/api/runs/{}", drain.run_id)));
+                assert_eq!(
+                    detail["pull_occupancy"],
+                    json!({"occupied": occupied, "reviewing": reviewing})
+                );
+                assert_eq!(detail["claimed_leaves"].as_array().unwrap().len(), running);
+                let authoritative = jobs.drain_leaf_occupancy().unwrap();
+                assert_eq!(
+                    (authoritative.occupied, authoritative.reviewing),
+                    (occupied, reviewing)
+                );
+                // Exercise actual allocation too: with N=1, exactly one review
+                // may earn a replacement. Release every successful probe.
+                let mut probe = request.clone();
+                probes.set(probes.get() + 1);
+                probe.request_id = format!("budget-probe-{}", probes.get());
+                let admitted = jobs.allocate_pull_request(&destination, &probe, 1).unwrap();
+                assert_eq!(
+                    admitted.is_some(),
+                    occupied.saturating_sub(reviewing.min(1)) < 1
+                );
+                if admitted.is_some() {
+                    jobs.mutate_local_pull(
+                        &destination,
+                        &probe.request_id,
+                        &LocalPullMutation::Refuse("fixture probe complete".into()),
+                    )
+                    .unwrap();
+                }
+            };
+            let mut admission = jobs
+                .allocate_pull_request(&destination, &request, 1)
+                .unwrap()
+                .unwrap();
+            let persist = |admission: &orbit_store::contracts::LocalPullAdmission| {
+                store.connection().lock().unwrap().execute(
+                    "UPDATE local_pull_admissions SET leaf_run_id=?1, record_json=?2 WHERE workspace_id=?3 AND request_id=?4",
+                    (admission.leaf_run_id.as_deref(), serde_json::to_string(admission).unwrap(), &workspace, &request.request_id),
+                ).unwrap();
+            };
+            admission.phase = LocalPullPhase::Launching;
+            persist(&admission);
+            check(1, 0, 0);
+
+            let mut leaf = fixture.seed_run(
+                "jrun-budget-leaf",
+                "task_claimed_pr_pipeline",
+                JobRunState::Running,
+            );
+            admission.leaf_run_id = Some(leaf.run_id.clone());
+            admission.phase = LocalPullPhase::Launched;
+            persist(&admission);
+            check(1, 0, 1);
+
+            let mut leaf_state =
+                PipelineState::new(leaf.run_id.clone(), leaf.job_id.clone(), json!({}));
+            leaf_state.record_pipeline_output(
+                "landing_review_gate_admit",
+                serde_json::to_value(ReviewGateAdmissionOutput::PreflightPassed {
+                    lineage_key: "fixture".into(),
+                })
+                .unwrap(),
+            );
+            write_state(&fixture, &leaf, &leaf_state);
+            check(1, 1, 1);
+
+            leaf.state = JobRunState::Success;
+            leaf.finished_at = Some(Utc::now());
+            fixture.save_run(&leaf);
+            admission.phase = LocalPullPhase::Settling;
+            admission.settlement_refusal = Some(SettlementRefusal {
+                reason: "owner evidence missing".into(),
+                refusals: 1,
+                first_refused_at: at(8, 1),
+                last_refused_at: at(8, 1),
+                retry_after: at(8, 2),
+            });
+            persist(&admission);
+            check(1, 0, 0);
+
+            admission.phase = LocalPullPhase::Settled;
+            persist(&admission);
+            check(0, 0, 0);
+
+            // A leaf outside this drain still competes for the same capacity,
+            // while remaining absent from this drain's running claims table.
+            fixture.seed_run("jrun-other-leaf", "task_pr_pipeline", JobRunState::Running);
+            check(1, 0, 0);
+            let ordinary = fixture.seed_run("jrun-non-pull", "fixture", JobRunState::Success);
+            let detail = json_ok(server.get(&format!("/api/runs/{}", ordinary.run_id)));
+            assert_eq!(detail["pull_occupancy"], Value::Null);
         },
     );
 }

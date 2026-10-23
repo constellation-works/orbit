@@ -40,9 +40,9 @@ pub use build::{
 };
 pub use callback::{
     CallbackResolution, ORBIT_PLUGIN_CALLBACK_ENV, ORBIT_PLUGIN_CALLBACK_FD_ENV, ORBIT_PLUGIN_ENV,
-    PLUGIN_CALLBACK_FD, PluginCallbackIdentity, PluginCallbackSession, invalid_callback_credential,
-    mismatched_callback_credential, resolve_plugin_callback, resolve_plugin_callback_session,
-    retired_callback_credential, stale_plugin_callback_session_count, unidentified_plugin_child,
+    PLUGIN_CALLBACK_FD, PluginCallbackIdentity, PluginCallbackSession, resolve_plugin_callback,
+    resolve_plugin_callback_session, retired_callback_credential,
+    stale_plugin_callback_session_count, unidentified_plugin_child,
 };
 pub use envelope::{
     PLUGIN_ENVELOPE_SCHEMA_VERSION, parse_response, take_delivered_plugin_secret_names,
@@ -54,7 +54,7 @@ pub use loader::{
     PluginLoadError, PluginValidationPolicy, ResolvedPluginTool, first_party_source,
     fs_write_root_covers, load_plugin_dir, manifest_digest, manifest_refusal,
     physical_with_missing_tail, plugin_symlink_refusal, refuse_covering_fs_write_roots,
-    refuse_plugin_tree_symlinks, validate_loaded_plugin,
+    refuse_plugin_tree_symlinks, resolve_plugin_definitions, validate_loaded_plugin,
 };
 pub use mcp::{McpBackend, McpExpectedTool};
 pub use migrate::{SidecarManifest, load_sidecar_manifest, migrate_sidecars};

@@ -1,11 +1,11 @@
 ---
 type: pattern
 summary: "Crate-Boundary Error Translation"
-last_validated: 2026-10-11
+last_validated: 2026-10-19
 ---
 # Crate-Boundary Error Translation
 
-Each crate defines its own typed error (`thiserror`-derived) for internal use; `OrbitError` in `orbit-common` is the workspace-public error surface. A single translation function — `*_error_to_orbit` — lives next to the typed error and is called at every cross-crate boundary via `.map_err(...)`.
+When a crate needs to preserve error distinctions for its callers, define a crate-owned typed error (often `thiserror`-derived) and keep it typed internally. Translate that error to the workspace-public `OrbitError` from `orbit-common` at the crate boundary with a single `*_error_to_orbit` function next to the error; callers use `.map_err(...)`. The registered boundary errors follow this pattern; `orbit-types` has the separate `From` exception described below.
 
 ```rust
 // In crate-foo:
@@ -53,12 +53,20 @@ and codes exactly like the variant it refines:
   failure from `io::Error` kinds (`From<io::Error>`, `OrbitError::storage_io`)
   or SQLite codes (`storage::sqlite::sqlite_error`). It reads and codes as the
   `Io`, `Store` or `Migration` error named by `layer`. Query it with
-  `is_readonly_or_access_failure()` and `storage_layer()`.
+  `is_readonly_or_access_failure()` and `storage_layer()`. Wrap a
+  `rusqlite::Error` with `.map_err(sqlite_store_error)`, or `sqlite_error` to
+  add context; `OrbitError::Store(e.to_string())` drops the class.
 - `ClaimRefused { kind, message }`: an owner claim or handoff refusal. It reads
   and codes as `InvalidInput`. Query it with `claim_refusal()`.
 - `ExecutionTimeout { timeout_ms, message }`: an execution failure caused by a
   deadline. It reads and codes as `Execution`. Query it with `is_timeout()`,
   which also covers `ProcessTimeout`.
+- `PrivateVcs(PrivateVcsFailure { operation, class, message })`: a failed
+  private automation VCS operation. The engine reads the provider's stderr
+  once, where the process failed, into a `PrivateVcsFailureClass`. It reads,
+  codes and serializes as `Execution`. Query it with `private_vcs_failure()`.
+  An Orbit diagnostic that reports such a failure keeps its class only when
+  it is rebuilt from the cause; plain `Execution` text is never transient.
 
 Each wildcard match in another crate must name the new variant wherever it
 names the twin, because `OrbitError` is `#[non_exhaustive]` and an unnamed
@@ -93,19 +101,9 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
         unavailable @ DispatchError::DeterministicActionUnavailable { .. } => {
             OrbitError::JobValidation(unavailable.to_string())
         }
-        DispatchError::RecoverableVcsConflict {
-            operation,
-            original_base_sha,
-            target_base_sha,
-            conflicting_paths,
-            diagnostic,
-        } => OrbitError::RecoverableVcsConflict(Box::new(RecoverableVcsConflict {
-            operation,
-            original_base_sha,
-            target_base_sha,
-            conflicting_paths,
-            diagnostic,
-        })),
+        DispatchError::RecoverableVcsConflict(conflict) => {
+            OrbitError::RecoverableVcsConflict(conflict)
+        }
         DispatchError::TaskCompletionLiveRun { task_id, run_id } => {
             OrbitError::TaskCompletionLiveRun { task_id, run_id }
         }

@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.31.0 — 2026-10-22
+
+### Breaking Changes
+
+- **Executor census migration**: opening a workspace applies SQLite v55 (`executor_census`). The migration is additive at runtime but changes persisted storage; upgrade hosts together. Rust callers must replace `automatic_dispatch_cmp_for_host` and `AdmissionOrdering.owner_os` with the affinity/census inputs. ([ORB-17304])
+- **Crew accounts migration**: opening a workspace applies SQLite v56 (`provider_crew_accounts`). Environment-backed crews now have separate account identities → explicitly allow those crews when an allow-list previously relied on their provider's default account. ([ORB-17288])
+- **Handoff storage compatibility**: SQLite v57 moves handoff settlements into a sidecar and guards stale inline writers. Older binaries reopened afterward are read-only; already-running intermediate writers reject handoffs → upgrade and restart Orbit clients, including long-lived MCP servers, to resume writes. Rust settlement constructors and exhaustive matches also need updates. ([ORB-17530])
+- **Workspace source credentials**: fresh workspace registration rejects Git origins containing embedded credentials; discovery redacts legacy values without rewriting registrations → use credential-free origins and a credential helper. ([ORB-17222])
+- **External-merge Rust API**: `ClaimMutation` adds `SettleExternalMerge`; downstream exhaustive matches must handle the new variant. ([ORB-17078])
+
+### Highlights
+
+- **Crew-specific provider accounts**: environment-backed crews have separate usage limits, holds, auth exclusions and budget targets. Crews without an environment retain the provider's default account. ([ORB-17288])
+- **Scarcity-aware task admission**: distributed and owner-local drains use a live executor census to prioritize work that fewer eligible hosts can run, with a workspace setting for affinity reach. ([ORB-17304])
+- **Drain controls**: the dashboard composer covers local and pull drains, auto-run options, recorded settings and pull claim stages. ([ORB-17302])
+- **Task detail navigation**: context files have a dedicated tab beside History, Runs, Artifacts and Comments, with the existing editor and keyboard navigation. ([ORB-17508])
+
+## 0.30.0 — 2026-10-20
+
+### Breaking Changes
+
+- **Distributed pull compatibility**: the pull request fingerprint now covers browser-kit and forecast-fit admission fields, so an owner and followers on different builds refuse each other → upgrade every host together. ([ORB-16627])
+- **`plugin.legacy_callback_identity` removed**: the legacy environment-token and process-ancestry callback authentication is gone, and the key now only warns → plugin backends must preserve the inherited callback descriptor. ([ORB-16772])
+
+### Highlights
+
+- **Read-only exploration**: implementing and review-repair agents can ask an explorer crew bounded code-reading questions in the same worktree. The explorer runs read-only under a restricted tool policy and returns the paths it read with its answer. ([ORB-16814])
+- **Mid-run steering**: an opt-in setting delivers operator comments added after dispatch into managed agent runs. Orbit reruns a bounded checkpoint and holds promotion until the run has consumed the new guidance, including on claimed work. ([ORB-16601])
+- **Agent scorecards**: evidence-linked scorecards rank orchestrators, implementers, reviewers and pilots, with drill-down to the tasks and runs behind each score. The dashboard has role tabs, and `orbit agents` and `orbit.agents.*` expose the same scores. ([ORB-16952])
+- **Drain readiness and failure history**: `orbit run readiness` and `orbit run show` name admitted and waiting tasks and why they wait, and `orbit run history --failures` reports each leaf failure once by root cause, with a link to its logs. ([ORB-16918])
+- **Host resource analytics**: Analytics charts host CPU and memory profiles alongside forecast accuracy and measured delivery peaks, so operators can see where forecasts miss when tuning auto-concurrency. ([ORB-16616])
+- **Desktop fleet awareness**: the desktop tray watches registered remote hosts and notifies when a drain ends or a task is held. Linux `.deb` and `.AppImage` bundles for x86_64 and arm64 are attached to the release. ([ORB-16646])
+
+## 0.29.0 — 2026-10-18
+
+### Breaking Changes
+
+- **`orbit logs` removed**: the hidden top-level `orbit logs <run-id>` compatibility command is gone → use `orbit run show` for steps and `orbit run logs` for raw output. ([ORB-16506])
+- **`orbit run ship-local` removed**: the hidden refusal-only alias now fails as an unknown command → use `orbit run ship --mode local`. ([ORB-16505])
+- **`orbit tool list --include-hidden` removed**: the hidden alias no longer parses → use `orbit tool list --all`. ([ORB-16456])
+- **Scoreboard API reduced**: `GET /api/scoreboard` now returns the `GET /api/cost` subset with deprecation headers, dropping `agents`, `highlights`, `notable_completions` and `coverage`, until its 2026-11-12 sunset → read `/api/cost`. `scoring.enabled` is ignored. ([ORB-15922])
+- **Forecast memory threshold must sit below the throttle**: config load now rejects `machine.auto_concurrency.admit_memory_percent` (default 75) at or above `workflow.resource_throttle.memory_high_percent`, even with auto-concurrency off → keep the throttle above 75 or lower the admit percent. ([ORB-15769])
+
+### Highlights
+
+- **Muse Code executor**: Meta's Muse Code joins the built-in executors as the `muse` lane on macOS, with a seeded crew, `orbit init` detection and sandbox grants for its state directories. Existing crews and pools are unchanged. ([ORB-16577])
+- **Forecast-based admission**: with `machine.auto_concurrency.mode` set to `shadow` or `enforce`, drains fit deliveries against measured CPU and memory profiles and shared host reservations. `orbit run profiles --accuracy` reports how good the forecasts were, and `orbit run auto --auto-concurrency` picks the mode per window. ([ORB-15772])
+- **Fleet drain overview**: the dashboard's All workspaces view shows every registered host and workspace's drain, with phase, slots in use, eligible work and the most common wait reason. Clicking a row switches to that host and workspace. ([ORB-16360])
+- **Review for one run**: `orbit run auto|ship --review before-pr|before-landing` adds a review layer to a single run without changing workspace policy. It can only strengthen the configured review, and run details show the layer used. ([ORB-16572])
+- **Auto-fix PR blockers**: `orbit run auto --auto-fix` repairs a delivery PR's failed required checks and branch conflicts through the existing recovery and validation path. It never merges; `--complete` stays the merge authority. ([ORB-16070])
+- **Post-deploy criteria stay owed**: criteria that can only be measured on the deployed build are recorded as owed instead of failing the delivery, and repair handoffs or ordinary completion can't drop them. ([ORB-16514])
+
 ## 0.28.3 — 2026-10-12
 
 ### Highlights

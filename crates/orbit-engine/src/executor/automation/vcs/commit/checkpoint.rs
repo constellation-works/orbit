@@ -10,12 +10,17 @@ use crate::context::RuntimeHost;
 
 use super::super::super::input::input_string_field;
 use super::super::git::{git_command_success, git_output};
-use super::{already_landed, no_diff, tagged_no_diff};
+use super::already_landed::{self, AlreadyLanded};
+use super::clean_tree::Verifier;
+use super::no_diff::{self, NoDiff};
+use super::tagged_no_diff;
 
 /// Accept a clean tree at the pinned HEAD only with structured evidence: a
 /// run's no-diff claim for this task and HEAD [ORB-13145], or a verified
 /// covering delivery. A stale artifact of one kind never shadows valid
-/// evidence of the other; when both fail, both refusals are reported.
+/// evidence of the other, including a definite inline-size refusal. Unknown
+/// artifact-read outcomes still refuse; when both routes fail, both refusals
+/// are reported.
 pub(super) fn verify_clean_tree<H: RuntimeHost + ?Sized>(
     host: &H,
     task: &orbit_types::task::Task,
@@ -23,20 +28,29 @@ pub(super) fn verify_clean_tree<H: RuntimeHost + ?Sized>(
     run_id: &str,
     base_sha: &str,
 ) -> Result<Value, OrbitError> {
-    let artifacts = host.get_task_artifacts(&task.id)?;
-    let has = |path: &str| artifacts.iter().any(|artifact| artifact.path == path);
-    if !has(no_diff::ARTIFACT) {
-        return already_landed::verify(host, task, workspace_path, run_id, base_sha);
-    }
-    let no_diff_error = match no_diff::verify(host, task, workspace_path, run_id, base_sha) {
-        Ok(checkpoint) => return Ok(checkpoint),
-        Err(error) => error,
+    let no_diff_error = match host.get_task_artifact(&task.id, no_diff::ARTIFACT) {
+        Ok(None) => {
+            return AlreadyLanded::verify(host, task, workspace_path, run_id, base_sha);
+        }
+        Ok(Some(_)) => match NoDiff::verify(host, task, workspace_path, run_id, base_sha) {
+            Ok(checkpoint) => return Ok(checkpoint),
+            Err(error @ (OrbitError::Execution(_) | OrbitError::InvalidInput(_))) => error,
+            Err(error) => return Err(error),
+        },
+        // Named reads reject oversized persisted reports as invalid input.
+        // That is a definite refusal of this route, not a failed transport.
+        Err(error @ OrbitError::InvalidInput(_)) => error,
+        Err(error) => return Err(error),
     };
-    if !has(already_landed::ARTIFACT) {
-        return Err(no_diff_error);
+    match host.get_task_artifact(&task.id, already_landed::ARTIFACT) {
+        Ok(None) => Err(no_diff_error),
+        Ok(Some(_)) => AlreadyLanded::verify(host, task, workspace_path, run_id, base_sha)
+            .map_err(|error| OrbitError::Execution(format!("{no_diff_error}; {error}"))),
+        Err(error @ OrbitError::InvalidInput(_)) => {
+            Err(OrbitError::Execution(format!("{no_diff_error}; {error}")))
+        }
+        Err(error) => Err(error),
     }
-    already_landed::verify(host, task, workspace_path, run_id, base_sha)
-        .map_err(|error| OrbitError::Execution(format!("{no_diff_error}; {error}")))
 }
 
 /// The commit checkpoint a no-diff promotion or completion must recheck, when
@@ -62,7 +76,7 @@ pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff<H: Runtime
 ) -> Result<(), OrbitError> {
     match checkpoint.get("decision").and_then(Value::as_str) {
         Some(no_diff::DECISION) => {
-            no_diff::verify_handoff(host, tasks, workspace_path, run_id, checkpoint)
+            NoDiff::verify_handoff(host, tasks, workspace_path, run_id, checkpoint)
         }
         Some(tagged_no_diff::DECISION) => match tasks {
             [task] => tagged_no_diff::verify_handoff(task, workspace_path, checkpoint),
@@ -70,7 +84,7 @@ pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff<H: Runtime
                 "a no-diff-expected checkpoint covers exactly one task".into(),
             )),
         },
-        _ => already_landed::verify_handoff(host, tasks, workspace_path, run_id, checkpoint),
+        _ => AlreadyLanded::verify_handoff(host, tasks, workspace_path, run_id, checkpoint),
     }
 }
 
@@ -102,10 +116,10 @@ pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff_at_revisio
 ) -> Result<(), OrbitError> {
     match checkpoint["decision"].as_str() {
         Some(no_diff::DECISION) => {
-            no_diff::verify_handoff_at_revision(host, task, workspace, run_id, checkpoint)
+            NoDiff::verify_handoff_at_revision(host, task, workspace, run_id, checkpoint)
         }
         Some(already_landed::DECISION) => {
-            already_landed::verify_handoff_at_revision(host, task, workspace, run_id, checkpoint)
+            AlreadyLanded::verify_handoff_at_revision(host, task, workspace, run_id, checkpoint)
         }
         Some(tagged_no_diff::DECISION) => {
             tagged_no_diff::verify_handoff_at_revision(task, checkpoint)
@@ -181,19 +195,29 @@ pub(super) fn head_descends_from_pin(
     )
 }
 
-/// Accept only the exact repair HEAD observed during this run's final
-/// recovery, after its resume decision was durably applied. A descendant of
-/// that repair or an unrelated worktree gains no permission from the record.
+/// Accept only the exact repair HEAD observed during final recovery, after its
+/// resume decision was durably applied. A descendant of that repair or an
+/// unrelated worktree gains no permission from the record.
+///
+/// The receipt is read from the run executing this step (`input.run_id`). A
+/// generic resume keeps the worktree's original batch as `checkpoint_owner`,
+/// while its own final recovery records the receipt in the resumed run's
+/// state. That receipt counts only when the executing run is a bounded
+/// same-job retry descendant of the checkpoint owner, the receipt was recorded
+/// on that chain, and the task is still bound to the checkpoint owner.
 pub(super) fn head_matches_final_recovery<H: RuntimeHost + ?Sized>(
     host: &H,
-    run_id: &str,
+    input: &Value,
+    checkpoint_owner: &str,
     task_id: &str,
     workspace_path: &Path,
     base_sha: &str,
     head_sha: &str,
 ) -> Result<bool, OrbitError> {
+    let active_run_id =
+        input_string_field(input, "run_id").unwrap_or_else(|| checkpoint_owner.to_string());
     let Some(checkpoint) = host
-        .read_run_state(run_id)?
+        .read_run_state(&active_run_id)?
         .and_then(|state| state.final_recovery)
     else {
         return Ok(false);
@@ -210,11 +234,23 @@ pub(super) fn head_matches_final_recovery<H: RuntimeHost + ?Sized>(
     let Some(repair) = checkpoint.repair_commit else {
         return Ok(false);
     };
-    Ok(repair.head_sha == head_sha
-        && repair.head_sha_before != head_sha
-        && repair.workspace_path == workspace_path.canonicalize()?
-        && head_descends_from_pin(workspace_path, base_sha, &repair.head_sha_before)?
-        && head_descends_from_pin(workspace_path, &repair.head_sha_before, head_sha)?)
+    if repair.head_sha != head_sha
+        || repair.head_sha_before == head_sha
+        || repair.workspace_path != workspace_path.canonicalize()?
+        || !head_descends_from_pin(workspace_path, base_sha, &repair.head_sha_before)?
+        || !head_descends_from_pin(workspace_path, &repair.head_sha_before, head_sha)?
+    {
+        return Ok(false);
+    }
+    if active_run_id == checkpoint_owner {
+        return Ok(true);
+    }
+    let Some(chain) = super::super::resume::retry_chain_to(host, &active_run_id, checkpoint_owner)?
+    else {
+        return Ok(false);
+    };
+    Ok(chain.contains(&checkpoint.key.run_id)
+        && host.get_task(task_id)?.job_run_id.as_deref() == Some(checkpoint_owner))
 }
 
 /// Reject anything that is not a full Git object id.

@@ -2,8 +2,8 @@ use orbit_types::identity::OrbitId;
 
 use super::paths::ContextCreationAuthorization;
 use orbit_types::task::{
-    ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskHistoryEntry, TaskPriority,
-    TaskRelation, TaskStatus, TaskType,
+    ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskHistoryEntry, TaskOrigin,
+    TaskPriority, TaskRelation, TaskStatus, TaskType,
 };
 
 #[derive(Default, Clone)]
@@ -37,6 +37,7 @@ pub(crate) struct TaskRecordUpdateParams {
     pub(crate) crew: Option<Option<String>>,
     pub(crate) crew_source: Option<Option<String>>,
     pub(crate) orchestrator: Option<Option<String>>,
+    pub(crate) origin: Option<TaskOrigin>,
     pub(crate) status_event: Option<String>,
     pub(crate) status_note: Option<String>,
     pub(crate) append_history: Vec<TaskHistoryEntry>,
@@ -48,6 +49,10 @@ pub(crate) struct TaskRecordUpdateParams {
     /// persisted status. Setting it does not itself constitute a history
     /// change — it only constrains one.
     pub(crate) expected_status: Option<Vec<TaskStatus>>,
+    /// The update entry point authorized this write as a human operator's
+    /// comment-only update; the store admits it under an execution claim
+    /// only when its sole effect is one comment [ORB-16723].
+    pub(crate) operator_comment: bool,
 }
 
 impl TaskRecordUpdateParams {
@@ -74,6 +79,7 @@ impl TaskRecordUpdateParams {
             || self.crew.is_some()
             || self.crew_source.is_some()
             || self.orchestrator.is_some()
+            || self.origin.is_some()
     }
 
     pub(super) fn has_history_changes(&self) -> bool {
@@ -120,10 +126,18 @@ pub struct TaskAddParams {
     pub crew_source: Option<String>,
     /// Named crew responsible for orchestration attribution, not execution.
     pub orchestrator: Option<String>,
+    /// The orchestrator's model when the session runs one other than the
+    /// `orchestrator` crew's configured model. Omitted, creation snapshots
+    /// the crew's configured model; it requires an orchestrator.
+    pub orchestrator_model: Option<String>,
+    /// Why the task was filed, as the caller stated it. `None` stays unset
+    /// for an interactive filing; a `system_created` filing or a sweep finding
+    /// its provenance tag marks records [`TaskOrigin::Automation`] instead.
+    pub origin: Option<TaskOrigin>,
     /// Creation intent an operator surface's selector screening established
-    /// for `context_files` ([`OrbitRuntime::authorize_missing_context`]).
+    /// for `context_files` ([`OrbitRuntime::add_task_screened`]).
     ///
-    /// [`OrbitRuntime::authorize_missing_context`]: crate::OrbitRuntime::authorize_missing_context
+    /// [`OrbitRuntime::add_task_screened`]: crate::OrbitRuntime::add_task_screened
     pub context_creation: ContextCreationAuthorization,
 }
 
@@ -151,6 +165,8 @@ impl Default for TaskAddParams {
             crew: None,
             crew_source: None,
             orchestrator: None,
+            orchestrator_model: None,
+            origin: None,
             context_creation: ContextCreationAuthorization::default(),
         }
     }
@@ -180,10 +196,15 @@ pub struct TaskUpdateParams {
     pub source_task_id: Option<Option<String>>,
     pub planned_by: Option<Option<String>>,
     pub implemented_by: Option<Option<String>>,
+    /// Review decision understood by the merge gate, matched without case.
+    /// Surrounding whitespace is trimmed; case and alias spelling are preserved.
+    /// `Some(None)` or an empty string clears; `None` leaves it unchanged.
     pub pr_status: Option<Option<String>>,
     pub job_run_id: Option<Option<String>>,
     pub crew: Option<Option<String>>,
     pub orchestrator: Option<Option<String>>,
+    /// Replacement origin. An origin can be corrected but not cleared.
+    pub origin: Option<TaskOrigin>,
     pub context_files: Option<Vec<String>>,
     /// Creation intent an operator surface's selector screening established
     /// for the replacement `context_files`. Ignored without `context_files`.
@@ -195,6 +216,67 @@ pub struct TaskUpdateParams {
     pub discard_candidate: bool,
     /// Allow replacing tags when the replacement list drops a system identity tag (`ci-failure:*`).
     pub allow_drop_system_tags: bool,
+}
+
+impl TaskUpdateParams {
+    /// Whether the update's only requested effect is appending its comment:
+    /// the one shape an execution claim admits from an operator [ORB-16723].
+    pub(super) fn is_comment_only(&self) -> bool {
+        let Self {
+            // Transport context and flags that change nothing on their own.
+            trusted_artifact_origin: _,
+            context_creation: _,
+            allow_drop_system_tags: _,
+            title,
+            description,
+            acceptance_criteria,
+            dependencies,
+            relations,
+            tags,
+            plan,
+            execution_summary,
+            comment,
+            status,
+            priority,
+            complexity,
+            task_type,
+            source_task_id,
+            planned_by,
+            implemented_by,
+            pr_status,
+            job_run_id,
+            crew,
+            orchestrator,
+            origin,
+            context_files,
+            upsert_artifacts,
+            discard_candidate,
+        } = self;
+        comment.is_some()
+            && title.is_none()
+            && description.is_none()
+            && acceptance_criteria.is_none()
+            && dependencies.is_none()
+            && relations.is_none()
+            && tags.is_none()
+            && plan.is_none()
+            && execution_summary.is_none()
+            && status.is_none()
+            && priority.is_none()
+            && complexity.is_none()
+            && task_type.is_none()
+            && source_task_id.is_none()
+            && planned_by.is_none()
+            && implemented_by.is_none()
+            && pr_status.is_none()
+            && job_run_id.is_none()
+            && crew.is_none()
+            && orchestrator.is_none()
+            && origin.is_none()
+            && context_files.is_none()
+            && upsert_artifacts.is_empty()
+            && !discard_candidate
+    }
 }
 
 impl From<TaskUpdateParams> for TaskRecordUpdateParams {
@@ -220,6 +302,7 @@ impl From<TaskUpdateParams> for TaskRecordUpdateParams {
             job_run_id: p.job_run_id,
             crew: p.crew,
             orchestrator: p.orchestrator,
+            origin: p.origin,
             context_files: p.context_files,
             context_creation: p.context_creation.authorize,
             upsert_artifacts: p.upsert_artifacts,

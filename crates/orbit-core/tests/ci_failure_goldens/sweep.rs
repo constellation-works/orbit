@@ -160,6 +160,34 @@ impl Workspace {
         self.publish_red_run("agent-main", "push", &head, run_id, &[job_id], log);
     }
 
+    /// GitHub's dependency updater has neither a repository checkout nor a
+    /// bindable repository diagnostic, even when its job exits unsuccessfully.
+    fn dependabot_update(&mut self, run_id: u64, status: &str, branch: &str) {
+        let run = json!({
+            "databaseId": run_id, "workflowName": "Dependabot Updates",
+            "displayTitle": "cargo in /desktop for glib - Update #1",
+            "status": status, "conclusion": if status == "completed" { json!("failure") } else { Value::Null },
+            "event": "dynamic", "headBranch": branch, "headSha": self.head,
+            "createdAt": "2026-10-10T07:00:00Z", "updatedAt": "2026-10-10T07:01:00Z",
+            "url": format!("https://github.com/acme/orbit/actions/runs/{run_id}"),
+        });
+        let mut view = run.clone();
+        view["jobs"] = json!([{
+            "databaseId": run_id * 10, "name": "Dependabot", "status": "completed",
+            "conclusion": "failure", "steps": [
+                {"number": 1, "name": "Update dependencies", "status": "completed", "conclusion": "failure"}
+            ],
+        }]);
+        write_json(&self.state.join(format!("run-{run_id}.json")), &view);
+        std::fs::write(
+            self.state.join(format!("run-{run_id}.log")),
+            "Dependabot\tUpdate dependencies\tsecurity_update_not_possible\n",
+        )
+        .unwrap();
+        self.runs.insert(0, run);
+        write_json(&self.state.join("runs.json"), &json!(self.runs));
+    }
+
     /// Publish a completed red `CI` run, newer than every earlier one, whose
     /// failed jobs each serve `log` for every log read.
     fn publish_red_run(
@@ -259,10 +287,7 @@ fn write_json(path: &Path, value: &Value) {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let mut command = std::process::Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command.args(args).current_dir(dir).output().unwrap();
     assert!(output.status.success(), "git {args:?}: {output:?}");
 }
@@ -299,6 +324,116 @@ fn open_sweep_tasks(runtime: &OrbitRuntime) -> Vec<orbit_types::task::Task> {
         .filter(|task| task.tags.iter().any(|tag| tag == "ci-failure-sweep"))
         .filter(|task| task.status == orbit_types::task::TaskStatus::Proposed)
         .collect()
+}
+
+#[test]
+fn ci_dynamic_dependabot_updates_are_audited_without_retrying() {
+    if !isolated_with_fake_gh("sweep::ci_dynamic_dependabot_updates_are_audited_without_retrying") {
+        return;
+    }
+    let mut workspace = Workspace::new();
+    workspace.dependabot_update(8_200, "completed", "agent-main");
+    let (evidence, filed) = workspace.sweep();
+    assert_eq!(
+        evidence["outcome_hint"], "no_current_failure",
+        "{evidence:#}"
+    );
+    assert_eq!(
+        filed.expect("the only red run is a managed updater")["outcome"],
+        "no_current_failure"
+    );
+    // Mixed-state jobs and unscanned branches must also be excluded before
+    // probes or investigation spend their budgets.
+    workspace.dependabot_update(8_201, "in_progress", "agent-main");
+    workspace.dependabot_update(8_202, "completed", "updater/unknown");
+    let (evidence, filed) = workspace.sweep();
+    assert_eq!(
+        evidence["outcome_hint"], "no_current_failure",
+        "{evidence:#}"
+    );
+    for key in [
+        "current_failures",
+        "branch_failures",
+        "deferred",
+        "in_flight",
+        "retryable_errors",
+    ] {
+        assert_eq!(evidence[key], json!([]), "{key}: {evidence:#}");
+    }
+    assert_eq!(
+        evidence["truncation"]["current_failures_investigation_attempted"],
+        0
+    );
+    assert_eq!(evidence["truncation"]["retired_refs"], json!([]));
+    assert_eq!(evidence["truncation"]["unverified_refs"], json!([]));
+    let output = filed.expect("updater failures must not make filing retryable");
+    assert_eq!(output["outcome"], "no_current_failure");
+    let skipped = output["audit"]["skipped_runs"].as_array().unwrap();
+    assert_eq!(skipped.len(), 3, "{output:#}");
+    for run_id in [8_200, 8_201, 8_202] {
+        let entry = skipped.iter().find(|run| run["run_id"] == run_id).unwrap();
+        assert_eq!(entry["reason"], "github_managed_dependabot_update");
+        assert!(!entry["evidence"].as_str().unwrap().is_empty());
+    }
+    let calls = std::fs::read_to_string(workspace.state.join("calls")).unwrap();
+    assert!(
+        !calls.lines().any(|call| call.starts_with("run view ")),
+        "{calls}"
+    );
+    assert!(open_sweep_tasks(&workspace.runtime).is_empty());
+}
+
+#[test]
+fn ci_dependabot_updates_do_not_hide_repository_or_dependabot_pr_failures() {
+    if !isolated_with_fake_gh(
+        "sweep::ci_dependabot_updates_do_not_hide_repository_or_dependabot_pr_failures",
+    ) {
+        return;
+    }
+    let mut workspace = Workspace::new();
+    let log = [
+        "HEAD is now at {checkout} Merge into agent-main",
+        "##[group]Run cargo test",
+        "##[endgroup]",
+        "thread 'repository_regression' panicked at src/lib.rs:9:5:",
+        "assertion `left == right` failed",
+        "error: test failed",
+        "##[error]Process completed with exit code 101.",
+    ]
+    .map(|line| format!("{JOB_NAME}\t{FAILED_STEP}\t2026-10-10T06:37:01Z {line}\n"))
+    .concat();
+    workspace.push_red_run(8_210, 9_210, &log);
+    let branch = "dependabot/cargo/example-1.2.3";
+    git(
+        &workspace.repo,
+        &["push", "-q", "origin", &format!("HEAD:refs/heads/{branch}")],
+    );
+    let head = workspace.head.clone();
+    workspace.publish_red_run(branch, "pull_request", &head, 8_211, &[9_211], &log);
+    workspace.dependabot_update(8_212, "completed", "agent-main");
+
+    let (evidence, filed) = workspace.sweep();
+    assert_eq!(evidence["outcome_hint"], "current_failures", "{evidence:#}");
+    let current = evidence["current_failures"].as_array().unwrap();
+    assert_eq!(current.len(), 2, "{evidence:#}");
+    assert!(current.iter().any(|run| run["run_id"] == 8_210));
+    assert!(current.iter().any(|run| run["run_id"] == 8_211
+        && run["event"] == "pull_request"
+        && run["head_branch"] == branch));
+    let output = filed.expect("the repository failure is filed despite the updater failure");
+    assert_eq!(output["outcome"], "current_failures", "{output:#}");
+    let tasks = open_sweep_tasks(&workspace.runtime);
+    assert_eq!(tasks.len(), 1, "{output:#}");
+    for run_id in [8_210, 8_211] {
+        assert!(
+            tasks[0]
+                .description
+                .contains(&format!("/actions/runs/{run_id}")),
+            "{}",
+            tasks[0].description
+        );
+    }
+    assert_eq!(output["audit"]["skipped_runs"][0]["run_id"], 8_212);
 }
 
 /// B4/W4: agent-main stays red on a new push every sweep and no diagnostic
@@ -391,6 +526,7 @@ fn ci_retired_ref_candidates_do_not_starve_an_agent_main_failure() {
     let log = [
         "HEAD is now at {checkout} Merge into agent-main",
         "##[group]Run cargo nextest run --workspace",
+        "##[endgroup]",
         "        FAIL [   0.120s] orbit-core::ci_failure_goldens sweep::landing_red",
         "thread 'sweep::landing_red' panicked at crates/orbit-core/tests/sweep.rs:9:5:",
         "assertion `left == right` failed",

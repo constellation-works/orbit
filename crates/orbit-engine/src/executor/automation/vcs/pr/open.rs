@@ -1,21 +1,24 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::{KNOWN_RED_VALIDATION_EVENT, KnownRedValidation};
+use orbit_types::task::TaskHistoryEntry;
+use orbit_types::workflow::{
+    FLAKY_VALIDATION_EVENT, FlakyValidation, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
+};
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
-use super::super::super::input::{
-    input_string_field, json_number_to_string, required_input_string,
-};
-use super::super::base_obsolescence::ensure_base_can_still_land;
+use super::super::super::input::{input_string_field, required_input_string};
+use super::super::base::obsolescence::ensure_base_can_still_land;
 use super::super::freshness::branch_freshness_against_ref;
 use super::super::git::git_output;
 use super::super::handoff::{
     FailedHandoffPhase, HandoffContext, load_handoff_context, record_failed_handoff,
 };
 use super::super::operations;
+use super::answers::{PullRequestStatus, PullRequestSummary, read_pr_status};
 use super::body::{
     GITHUB_PR_BODY_BYTE_LIMIT, bound_pr_body, build_batch_pr_body, default_pr_title,
     render_known_red_section,
@@ -30,6 +33,20 @@ pub(in crate::executor::automation) fn pr_open<H: RuntimeHost + Sync + ?Sized>(
         Ok(mut output) => {
             output["superseded_pull_request"] =
                 supersede_prior_pull_request(host, &context.workspace_path, input, &output);
+            // A reused pull request was opened by this lineage, whose create
+            // already closed the tasks' other ones.
+            output["closed_stale_pull_requests"] = if output["pr_created"] == true {
+                close_earlier_task_pull_requests(
+                    host,
+                    &context.workspace_path,
+                    &context.tasks,
+                    output["pr_number"].as_str().unwrap_or_default(),
+                    output["pr_url"].as_str(),
+                    output["head"].as_str().unwrap_or_default(),
+                )
+            } else {
+                json!([])
+            };
             Ok(output)
         }
         Err(failure) => {
@@ -93,6 +110,27 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>();
 
+    if let Some(admission) =
+        super::super::candidate_resume::source_repair::publication_admission(host, input)
+            .map_err(|e| Box::new((FailedHandoffPhase::PrLookup, e)))?
+    {
+        let binding = &admission;
+        super::source_identity::verify_publication(host, context, binding, head, base)
+            .map_err(|e| Box::new((FailedHandoffPhase::PrLookup, e)))?;
+        return Ok(pr_output(PrOutput {
+            decision: "reused",
+            pr_created: false,
+            pr_reused: true,
+            pr_number: binding.pull_request.clone(),
+            pr_url: Some(binding.pull_request_url.clone()),
+            base,
+            head,
+            base_ref,
+            base_sha,
+            freshness: &freshness,
+        }));
+    }
+
     let title = input_string_field(input, "title")
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| default_pr_title(&context.tasks));
@@ -109,8 +147,38 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                 pr_opener_model.as_deref(),
             )
         });
-    let body = with_known_red(host, body, context, base_sha, input);
-    let body = with_flaky(host, body, context, base_sha, input);
+    let known_red = collect_validation_records(
+        host,
+        context,
+        base_sha,
+        input,
+        (KNOWN_RED_VALIDATION_EVENT, "known_red"),
+        KnownRedValidation::from_entry,
+        |record| ValidationRecord {
+            command: &record.command,
+            run_id: &record.run_id,
+            base_sha: &record.base_sha,
+            tested_head: &record.tested_head,
+            valid: true,
+        },
+    );
+    let body = append_section(body, render_known_red_section(&known_red));
+    let flaky = collect_validation_records(
+        host,
+        context,
+        base_sha,
+        input,
+        (FLAKY_VALIDATION_EVENT, "flaky"),
+        FlakyValidation::from_entry,
+        |record| ValidationRecord {
+            command: &record.command,
+            run_id: &record.run_id,
+            base_sha: &record.base_sha,
+            tested_head: &record.tested_head,
+            valid: record.valid(),
+        },
+    );
+    let body = append_section(body, super::body::render_flaky_section(&flaky));
     let body = bound_pr_body(with_review_fixes(body, input), &context.tasks);
     // A failed create may already have taken effect. Reconcile by head before
     // every retry; the private create operation must remain single-shot.
@@ -150,14 +218,16 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                     Ok(created) => created,
                     Err(error)
                         if attempt < operations::GITHUB_TRANSIENT_ATTEMPTS
-                            && operations::is_transient_github_failure(&error.to_string()) =>
+                            && operations::is_transient(&error) =>
                     {
                         tracing::warn!(
                             attempt,
                             head,
                             "reconciling pull request creation after a transient GitHub failure"
                         );
-                        std::thread::sleep(operations::GITHUB_TRANSIENT_RETRY_DELAY);
+                        super::super::remote_probe::fixed_wait(
+                            operations::GITHUB_TRANSIENT_RETRY_DELAY,
+                        );
                         attempt += 1;
                         continue;
                     }
@@ -225,16 +295,15 @@ fn supersede_prior_pull_request<H: RuntimeHost + ?Sized>(
     let prior_branch = input_string_field(resumed, "prior_pull_request_head")
         .or_else(|| input_string_field(resumed, "source_branch"))
         .unwrap_or_default();
-    let status = match host.run_private_vcs_operation(
-        operations::PR_STATUS,
-        json!({"pr": prior, "workspace_path": workspace_path}),
-    ) {
-        Ok(status) => status,
+    let pull_request = match read_pr_status(host, workspace_path, &prior) {
+        Ok(pull_request) => pull_request,
         Err(error) => return close_failed(&prior, number, error),
     };
-    let pull_request = &status["pull_request"];
-    let state = pull_request["state"].as_str().unwrap_or_default();
-    let head = pull_request["headRefName"].as_str().unwrap_or_default();
+    let state = pull_request.state.as_deref().unwrap_or_default();
+    let head = pull_request
+        .exact_head_branch
+        .as_deref()
+        .unwrap_or_default();
     if !state.eq_ignore_ascii_case("open") {
         return outcome("not_open", format!("pull request #{prior} is {state}"));
     }
@@ -271,6 +340,138 @@ fn supersede_prior_pull_request<H: RuntimeHost + ?Sized>(
         }
         Err(error) => close_failed(&prior, number, error),
     }
+}
+
+/// Close every other open delivery pull request of the tasks this run
+/// published, once it created its own, so each task keeps only that one.
+///
+/// A fresh attempt of a re-admitted task opens its own pull request on a new
+/// branch, and the earlier attempt's, a `[BLOCKED]` failure-handoff one
+/// included, would otherwise stay open beside it with nothing watching it.
+/// Re-admission is what ends the failure handoff's hold on its pull request,
+/// so it is closed here too. A pull request qualifies only on the same terms
+/// a terminal decision closes one by: an `orbit/<TASK-ID>-…` head branch, a
+/// body naming the task, and an author among `pr.delivery_authors` (when
+/// that is empty, the author of the pull request this run published). Only
+/// open pull requests are listed, so a merged one is never touched, and
+/// branches are kept. `pr.close_on_terminal = false` turns this off. Best
+/// effort: a failed lookup or close is reported and logged, never a step
+/// failure.
+pub(in crate::executor::automation::vcs) fn close_earlier_task_pull_requests<
+    H: RuntimeHost + ?Sized,
+>(
+    host: &H,
+    workspace_path: &std::path::Path,
+    tasks: &[orbit_types::task::Task],
+    kept: &str,
+    kept_url: Option<&str>,
+    head: &str,
+) -> Value {
+    let config = host.pr_config();
+    if !config.close_superseded || kept.is_empty() || tasks.is_empty() {
+        return json!([]);
+    }
+    let listed = match host
+        .run_private_vcs_operation(
+            operations::PR_LIST_OPEN,
+            json!({ "workspace_path": workspace_path }),
+        )
+        .and_then(|response| PullRequestSummary::list_from_response(&response))
+    {
+        Ok(listed) => listed,
+        Err(error) => {
+            tracing::warn!(
+                pr = kept,
+                error = %error,
+                "could not list open pull requests to close the tasks' earlier ones"
+            );
+            return json!([{
+                "decision": "lookup_failed",
+                "detail": format!(
+                    "the tasks' earlier pull requests may still be open beside #{kept}: {error}"
+                ),
+            }]);
+        }
+    };
+    let authors = if config.delivery_authors.is_empty() {
+        listed
+            .iter()
+            .find(|pull_request| pull_request.number.as_deref() == Some(kept))
+            .and_then(|pull_request| pull_request.author.clone())
+            .into_iter()
+            .collect::<Vec<_>>()
+    } else {
+        config.delivery_authors.clone()
+    };
+    let authored = |author: Option<&str>| {
+        author.is_some_and(|author| {
+            authors
+                .iter()
+                .any(|delivery| delivery.eq_ignore_ascii_case(author))
+        })
+    };
+    let new_pr = kept_url.map_or_else(|| format!("#{kept}"), |url| format!("#{kept} ({url})"));
+    let mut outcomes = Vec::new();
+    for pull_request in &listed {
+        let (Some(number), Some(branch)) = (
+            pull_request.number.as_deref(),
+            pull_request.head_branch.as_deref(),
+        ) else {
+            continue;
+        };
+        if number == kept || !authored(pull_request.author.as_deref()) {
+            continue;
+        }
+        let body = pull_request.body.as_deref().unwrap_or_default();
+        let Some(task) = tasks.iter().find(|task| {
+            orbit_types::task::names_task_delivery_pull_request(branch, body, &task.id)
+        }) else {
+            continue;
+        };
+        let comment = format!(
+            "Superseded by {new_pr}.\n\nA newer delivery attempt of task {} published on \
+             `{head}`. Orbit closed this pull request so the task has one open pull request. \
+             The branch is kept.",
+            task.id
+        );
+        let (decision, detail) = match host.run_private_vcs_operation(
+            operations::PR_CLOSE,
+            json!({"pr": number, "comment": comment, "workspace_path": workspace_path}),
+        ) {
+            Ok(_) => {
+                tracing::info!(
+                    task_id = %task.id,
+                    closed = number,
+                    pr = kept,
+                    "closed a task's earlier delivery pull request for this run's"
+                );
+                ("closed", format!("superseded by {new_pr}"))
+            }
+            Err(error) => {
+                tracing::warn!(
+                    task_id = %task.id,
+                    stale = number,
+                    pr = kept,
+                    error = %error,
+                    "could not close a task's earlier delivery pull request"
+                );
+                (
+                    "close_failed",
+                    format!(
+                        "pull request #{number} is still open beside #{kept}; close it by hand: \
+                         {error}"
+                    ),
+                )
+            }
+        };
+        outcomes.push(json!({
+            "number": number,
+            "task_id": task.id,
+            "decision": decision,
+            "detail": detail,
+        }));
+    }
+    Value::Array(outcomes)
 }
 
 fn close_failed(prior: &str, number: &str, error: OrbitError) -> Value {
@@ -333,76 +534,84 @@ pub(in crate::executor::automation::vcs) fn open_or_reuse_unchecked<H: RuntimeHo
     Ok((number, viewed_url.or_else(|| Some(url.to_string())), true))
 }
 
-/// [ORB-15375] `body` with the required validation this run found red on the
-/// base too, for this run, base and checked-out head, one per command (the
-/// latest): the delivered tasks' known-red history notes, then the
-/// `known_red` records of a claimed leaf's validation output, handed in as
-/// `claim_validation` [ORB-15427], since a claimed leaf cannot write the
-/// owner's task history.
-fn with_known_red<H: RuntimeHost + ?Sized>(
+/// Borrowed fields used to admit and deduplicate either kind of evidence.
+struct ValidationRecord<'a> {
+    command: &'a str,
+    run_id: &'a str,
+    base_sha: &'a str,
+    tested_head: &'a str,
+    valid: bool,
+}
+
+/// Keep the latest matching record per command, from delivered tasks' history
+/// followed by a claimed leaf's handed validation output. Claimed leaves cannot
+/// write the owner's task history.
+fn collect_validation_records<H: RuntimeHost + ?Sized, T: DeserializeOwned>(
     host: &H,
-    body: String,
     context: &HandoffContext,
     base_sha: &str,
     input: &Value,
-) -> String {
+    (event, key): (&str, &str),
+    parse: fn(&TaskHistoryEntry) -> Option<T>,
+    fields: impl Fn(&T) -> ValidationRecord<'_>,
+) -> Vec<T> {
+    let kind = key.replace('_', "-");
     let head = match git_output(&context.workspace_path, &["rev-parse", "HEAD"]) {
         Ok(head) => head,
         Err(error) => {
-            tracing::warn!("pr_open could not read HEAD for known-red validation: {error}");
-            return body;
+            tracing::warn!("pr_open could not read HEAD for {kind} validation: {error}");
+            return Vec::new();
         }
     };
     let mut records = BTreeMap::new();
+    let mut insert_matching = |record| {
+        let evidence = fields(&record);
+        if evidence.valid
+            && evidence.run_id == context.batch_id
+            && evidence.base_sha == base_sha
+            && evidence.tested_head == head
+        {
+            records.insert(evidence.command.to_string(), record);
+        }
+    };
     for task in &context.tasks {
         let history = match host.get_task_history(&task.id) {
             Ok(history) => history,
             Err(error) => {
                 tracing::warn!(
                     task_id = task.id,
-                    "pr_open could not read task history for known-red validation: {error}"
+                    "pr_open could not read task history for {kind} validation: {error}"
                 );
                 continue;
             }
         };
         for record in history
             .iter()
-            .filter(|entry| entry.event == KNOWN_RED_VALIDATION_EVENT)
-            .filter_map(|entry| {
-                entry
-                    .note
-                    .as_deref()
-                    .and_then(KnownRedValidation::from_text)
-            })
-            .filter(|record| {
-                record.run_id == context.batch_id
-                    && record.base_sha == base_sha
-                    && record.tested_head == head
-            })
+            .filter(|entry| entry.event == event)
+            .filter_map(parse)
         {
-            records.insert(record.command.clone(), record);
+            insert_matching(record);
         }
     }
-    let handed = input
+    if let Some(handed) = input
         .get("claim_validation")
-        .and_then(|validation| validation.get("known_red"))
+        .and_then(|validation| validation.get(key))
         .filter(|value| !value.is_null())
-        .cloned()
-        .map(serde_json::from_value::<Vec<KnownRedValidation>>)
-        .transpose()
-        .unwrap_or_else(|error| {
-            tracing::warn!("pr_open ignored a malformed known_red input: {error}");
-            None
-        })
-        .unwrap_or_default();
-    for record in handed.into_iter().filter(|record| {
-        record.run_id == context.batch_id
-            && record.base_sha == base_sha
-            && record.tested_head == head
-    }) {
-        records.insert(record.command.clone(), record);
+    {
+        match serde_json::from_value::<Vec<T>>(handed.clone()) {
+            Ok(handed) => {
+                for record in handed {
+                    insert_matching(record);
+                }
+            }
+            Err(error) => tracing::warn!("pr_open ignored a malformed {key} input: {error}"),
+        }
     }
-    match render_known_red_section(&records.into_values().collect::<Vec<_>>()) {
+    records.into_values().collect()
+}
+
+fn append_section(body: String, section: Option<String>) -> String {
+    match section {
         Some(section) => format!("{}\n\n{section}\n", body.trim_end()),
         None => body,
     }
@@ -414,13 +623,12 @@ fn with_known_red<H: RuntimeHost + ?Sized>(
 /// visible where it is published. Without any applicable sections the body
 /// is unchanged.
 fn with_review_fixes(body: String, input: &Value) -> String {
-    match input_string_field(input, "review_fixes")
-        .map(|section| section.trim().to_string())
-        .filter(|section| !section.is_empty())
-    {
-        Some(section) => format!("{}\n\n{section}\n", body.trim_end()),
-        None => body,
-    }
+    append_section(
+        body,
+        input_string_field(input, "review_fixes")
+            .map(|section| section.trim().to_string())
+            .filter(|section| !section.is_empty()),
+    )
 }
 
 /// Refuse to publish when the checked-out head or the pinned base differ from
@@ -466,30 +674,17 @@ fn view_pr<H: RuntimeHost + ?Sized>(
     workspace_path: &std::path::Path,
     selector: &str,
 ) -> Result<(String, Option<String>), OrbitError> {
-    let value = host.run_private_vcs_operation(
+    let response = host.run_private_vcs_operation(
         operations::PR_VIEW,
         json!({ "pr": selector, "workspace_path": workspace_path }),
     )?;
-    let pull_request = value.get("pull_request").ok_or_else(|| {
+    let pull_request = PullRequestStatus::from_view_response(&response)?;
+    let pr_number = pull_request.number_selector.ok_or_else(|| {
         OrbitError::Execution(
-            "private automation VCS PR view did not return pull_request metadata".to_string(),
+            "private automation VCS PR view did not return a PR number".to_string(),
         )
     })?;
-    let pr_number = pull_request
-        .get("number")
-        .and_then(json_number_to_string)
-        .ok_or_else(|| {
-            OrbitError::Execution(
-                "private automation VCS PR view did not return a PR number".to_string(),
-            )
-        })?;
-    let pr_url = pull_request
-        .get("url")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    Ok((pr_number, pr_url))
+    Ok((pr_number, pull_request.url))
 }
 
 fn find_pr_by_head<H: RuntimeHost + ?Sized>(
@@ -497,42 +692,29 @@ fn find_pr_by_head<H: RuntimeHost + ?Sized>(
     workspace_path: &std::path::Path,
     head: &str,
 ) -> Result<Option<(String, Option<String>)>, OrbitError> {
-    let value = host.run_private_vcs_operation(
+    let response = host.run_private_vcs_operation(
         operations::PR_LIST,
         json!({ "head": head, "state": "open", "workspace_path": workspace_path }),
     )?;
-    let pull_requests = value
-        .get("pull_requests")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            OrbitError::Execution(
-                "private automation VCS PR list did not return pull_requests metadata".to_string(),
-            )
-        })?;
+    let pull_requests = PullRequestSummary::list_from_response(&response)?;
 
     let mut matching_pr_number = None;
     for pull_request in pull_requests {
-        let listed_head = pull_request
-            .get("headRefName")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                OrbitError::Execution(
-                    "private automation VCS PR list returned a pull request without headRefName"
-                        .to_string(),
-                )
-            })?;
+        let listed_head = pull_request.head_branch.as_deref().ok_or_else(|| {
+            OrbitError::Execution(
+                "private automation VCS PR list returned a pull request without headRefName"
+                    .to_string(),
+            )
+        })?;
         if listed_head != head {
             continue;
         }
-        let pr_number = pull_request
-            .get("number")
-            .and_then(json_number_to_string)
-            .ok_or_else(|| {
-                OrbitError::Execution(
-                    "private automation VCS PR list returned a matching pull request without a number"
-                        .to_string(),
-                )
-            })?;
+        let pr_number = pull_request.number.ok_or_else(|| {
+            OrbitError::Execution(
+                "private automation VCS PR list returned a matching pull request without a number"
+                    .to_string(),
+            )
+        })?;
         if matching_pr_number.replace(pr_number).is_some() {
             return Err(OrbitError::Execution(format!(
                 "private automation VCS PR list returned multiple open pull requests for head branch '{head}'"
@@ -573,61 +755,4 @@ fn pr_output(output: PrOutput<'_>) -> Value {
         "commits_behind": output.freshness.commits_behind,
         "commits_ahead": output.freshness.commits_ahead,
     })
-}
-
-/// Include flaky names and the captured replay evidence from this run/head/base.
-fn with_flaky<H: RuntimeHost + ?Sized>(
-    host: &H,
-    body: String,
-    context: &HandoffContext,
-    base_sha: &str,
-    input: &Value,
-) -> String {
-    use orbit_types::workflow::{FLAKY_VALIDATION_EVENT, FlakyValidation};
-    let Ok(head) = git_output(&context.workspace_path, &["rev-parse", "HEAD"]) else {
-        return body;
-    };
-    let mut records = BTreeMap::new();
-    for task in &context.tasks {
-        match host.get_task_history(&task.id) {
-            Ok(history) => {
-                for record in history
-                    .iter()
-                    .filter(|entry| entry.event == FLAKY_VALIDATION_EVENT)
-                    .filter_map(|entry| entry.note.as_deref().and_then(FlakyValidation::from_text))
-                {
-                    records.insert(record.command.clone(), record);
-                }
-            }
-            Err(error) => {
-                tracing::warn!("pr_open could not read flaky validation history: {error}")
-            }
-        }
-    }
-    if let Some(handed) = input
-        .get("claim_validation")
-        .and_then(|validation| validation.get("flaky"))
-    {
-        match serde_json::from_value::<Vec<FlakyValidation>>(handed.clone()) {
-            Ok(handed) => {
-                for record in handed {
-                    records.insert(record.command.clone(), record);
-                }
-            }
-            Err(error) => tracing::warn!("pr_open ignored malformed flaky evidence: {error}"),
-        }
-    }
-    let records = records
-        .into_values()
-        .filter(|record| {
-            record.valid()
-                && record.run_id == context.batch_id
-                && record.base_sha == base_sha
-                && record.tested_head == head
-        })
-        .collect::<Vec<_>>();
-    match super::body::render_flaky_section(&records) {
-        Some(section) => format!("{}\n\n{section}\n", body.trim_end()),
-        None => body,
-    }
 }

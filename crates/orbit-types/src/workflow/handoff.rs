@@ -51,14 +51,14 @@ pub struct HandoffCandidate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HandoffReviewDisposition {
-    /// The claim's contract captured `review.before_pr = false`: no reviewed
+    /// The claim's contract captured no review before landing: no reviewed
     /// SHA, verdict or reviewer artifact exists, and none is invented.
     NotRequired,
     /// The leaf ran the before-PR gate the claim's contract captured
     /// [ORB-13895].
     BeforePr(Box<HandoffReviewEvidence>),
     /// The leaf reviewed its open pull request before handing it off, as
-    /// the claim's contract captured `review.before_landing` [ORB-14849].
+    /// the claim's contract captured `review.timing = before_landing` [ORB-14849].
     BeforeLanding(Box<HandoffReviewEvidence>),
 }
 
@@ -103,7 +103,7 @@ pub struct HandoffReview {
 }
 
 impl HandoffReview {
-    /// The disposition of a claim admitted with `review.before_pr = false`.
+    /// The disposition of a claim admitted with no review before landing.
     pub fn not_required() -> Self {
         Self {
             policy: ReviewTiming::None,
@@ -149,6 +149,18 @@ pub struct TaskHandoff {
     /// Recomputed from Git by the follower and independently by the owner.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footprint_widening: Vec<String>,
+    /// Criteria the task pilot typed post-deploy that this delivery owes
+    /// until the deployed build is measured. The owner admits each against
+    /// its own pilot finding when it accepts the handoff.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owed_criteria: Vec<super::OwedCriterion>,
+    /// Culprit tasks the claimed implementer attributed this task's
+    /// regression to (its `regression_from` output). A claimed worker cannot
+    /// write its task's relations, so the owner checks each target against
+    /// its own workspace and records the `regression_from` relations when it
+    /// accepts the handoff.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regression_from: Vec<String>,
 }
 
 /// Captured command output in an owner-accessible task artifact, never an agent reply.
@@ -168,8 +180,9 @@ pub struct HandoffValidationLog {
     pub output: String,
     /// [ORB-15427] Set on a failed command whose failing tests the leaf's
     /// own base run fails too. The owner accepts a non-zero log only with
-    /// this report, and only after its own run of the base shares every
-    /// failure it names.
+    /// this report. When the host OSes match or either is unknown, its base
+    /// run must share every failure named; when both known OSes differ, the
+    /// owner checks base-branch history without running the base command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub known_red: Option<HandoffKnownRed>,
     /// Original failure and passing isolated replay on this exact candidate.
@@ -178,8 +191,11 @@ pub struct HandoffValidationLog {
 }
 
 /// A claimed leaf's report that a required command failed only with tests
-/// its base fails too [ORB-15427]. It is the leaf's claim, never proof: the
-/// owner reruns the command on this base itself before it accepts the log.
+/// its base fails too [ORB-15427]. It is the leaf's claim, never proof. When
+/// the host OSes match or either is unknown, the owner reruns the command on
+/// this base before it accepts the log. When both OSes are known and differ,
+/// the owner checks that the base is still on its captured base-branch history
+/// and accepts the follower's reported failures for that OS without a base run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HandoffKnownRed {
@@ -267,7 +283,8 @@ pub enum LandingAttemptState {
     Dispatched,
     /// Merged and completed against verified external evidence.
     Merged,
-    /// Stopped with durable evidence; a repair needs fresh validation and a new handoff.
+    /// Stopped with durable evidence; an operator may retry a healthy authorized
+    /// handoff. A candidate repair needs fresh validation and a new handoff.
     Stopped,
 }
 
@@ -290,6 +307,61 @@ pub struct LandingAttempt {
     pub evidence: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// [ORB-16890] Times a task returns to the backlog because its handed-off
+/// candidate fails its own required check at landing, after its one
+/// automatic repair leaf, before the next such stop blocks it.
+pub const LANDING_REPAIR_BUDGET: usize = 2;
+
+/// History event of a landing stop that ended the claim and returned the
+/// task to the backlog, keeping its candidate for the next run's repair.
+pub const LANDING_REPAIR_REQUEUED_EVENT: &str = "landing_repair_requeued";
+
+/// Status event recorded when Orbit settles a task to `done` from its
+/// delivery pull request merged outside Orbit. Like the delivery pipeline's
+/// own completion, the settlement is not an edge of the status table: the
+/// forge's merge, not a caller's claim, is its evidence. The owner's claim
+/// journal records it too, when it settles a revoked handoff's claim in the
+/// same commit.
+pub const EXTERNAL_MERGE_SETTLED_EVENT: &str = "external_merge_settled";
+
+/// History event of the landing stop that found the task's landing repair
+/// budget spent and blocked it. Requeues before it no longer count.
+pub const LANDING_REPAIR_EXHAUSTED_EVENT: &str = "landing_repair_exhausted";
+
+/// The landing repair requeues that count against a task's budget, from its
+/// history event names in order: those after its last exhaustion, which an
+/// operator answered by unblocking the task.
+pub fn landing_repairs_spent<'a>(events: impl IntoIterator<Item = &'a str>) -> usize {
+    events.into_iter().fold(0, |spent, event| match event {
+        LANDING_REPAIR_REQUEUED_EVENT => spent + 1,
+        LANDING_REPAIR_EXHAUSTED_EVENT => 0,
+        _ => spent,
+    })
+}
+
+/// An operator's compare-and-reserve request for the same immutable handoff.
+/// No pipeline input or replacement authority is accepted by this operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LandingRetryRequest {
+    pub handoff_id: String,
+    pub expected_candidate_commit: String,
+    pub expected_base_commit: String,
+    pub expected_latest_attempt: u32,
+    pub expected_latest_state: LandingAttemptState,
+    pub reason: String,
+    pub request_key: String,
+}
+
+/// Durable outbox receipt, committed with the reserved attempt before submission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LandingRetryReceipt {
+    pub request: LandingRetryRequest,
+    pub actor: String,
+    pub attempt: u32,
+    pub created_at: DateTime<Utc>,
 }
 
 /// Existing no-diff delivery contract shared with the local verifier.
@@ -340,10 +412,84 @@ pub struct NoDiffCheck {
     pub log_artifact: String,
 }
 
+/// A claimed implementer's outcome that its unchanged base already resolves
+/// the task, naming the tests that show it [ORB-15747]. Those tests run only
+/// outside the agent sandbox, so the claim host replays each on the base
+/// before the NoDiff handoff: a failing replay fails the claim, and a
+/// declaration that names nothing, or a selector that runs no test, never
+/// settles done. It travels in the implementer's output as
+/// [`ALREADY_RESOLVED_FIELD`], beside the clean-tree report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AlreadyResolved {
+    /// `cargo test -p <crate> --test <target> [<filter>]` selectors.
+    pub selectors: Vec<String>,
+}
+
+/// The implementer output field that carries an [`AlreadyResolved`].
+pub const ALREADY_RESOLVED_FIELD: &str = "already_resolved";
+
+impl AlreadyResolved {
+    /// The declaration in an implementer's `output`, if it makes one.
+    pub fn from_output(output: &serde_json::Value) -> Result<Option<Self>, String> {
+        match output.get(ALREADY_RESOLVED_FIELD) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(value) => serde_json::from_value(value.clone())
+                .map(Some)
+                .map_err(|error| {
+                    format!(
+                        "`{ALREADY_RESOLVED_FIELD}` must be `{{\"selectors\": [\"cargo test -p \
+                         <crate> --test <target> [<filter>]\", ...]}}`: {error}"
+                    )
+                }),
+        }
+    }
+
+    /// Admit every selector as one integration test target in the closed
+    /// [`HostSandboxCommand`](super::HostSandboxCommand) grammar, since each
+    /// runs on the claim host outside any agent sandbox. An exact required
+    /// command is not a selector: validation already runs it, and it need not
+    /// run a test.
+    pub fn admit(&self) -> Result<Vec<super::HostSandboxCommand>, String> {
+        if self.selectors.is_empty() {
+            return Err(format!(
+                "`{ALREADY_RESOLVED_FIELD}` names no test selectors, so nothing would show the \
+                 base resolves the task"
+            ));
+        }
+        let mut admitted: Vec<super::HostSandboxCommand> = Vec::new();
+        for selector in &self.selectors {
+            let command = super::HostSandboxCommand::admit(selector, &[]).map_err(|refusal| {
+                format!(
+                    "`{ALREADY_RESOLVED_FIELD}` selector `{selector}` is not admitted ({}): {}; \
+                     a selector is `cargo test -p <crate> --test <target> [<filter>]`",
+                    refusal.reason.as_str(),
+                    refusal.detail
+                )
+            })?;
+            if admitted.contains(&command) {
+                return Err(format!(
+                    "`{ALREADY_RESOLVED_FIELD}` names selector `{selector}` twice"
+                ));
+            }
+            admitted.push(command);
+        }
+        Ok(admitted)
+    }
+}
+
 pub fn already_landed_scope(
     task: &crate::task::Task,
     comments: &[crate::task::TaskComment],
 ) -> serde_json::Value {
+    // A comment's scope is what it says; a receipt id is bookkeeping, and
+    // leaving it out keeps one scope across Orbit versions.
+    let comments = comments
+        .iter()
+        .map(|comment| {
+            serde_json::json!({"at": comment.at, "by": comment.by, "message": comment.message})
+        })
+        .collect::<Vec<_>>();
     serde_json::json!({
         "title": task.title, "description": task.description,
         "acceptance_criteria": task.acceptance_criteria, "plan": task.plan,

@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-10-10
-last_validated: 2026-10-09
+last_updated: 2026-10-21
+last_validated: 2026-10-20
 status: Accepted
 feature: auto-tasks
 doc_role: overview
@@ -42,9 +42,11 @@ becomes just the first definition.
 - **Definition** — a `.orbit/auto_tasks/<name>.yaml` record; `name` is identity.
   Modeled on the file-backed routine convention (directory scan, fail-closed
   parse, `deny_unknown_fields`), not the SQLite-indexed artifact convention.
-- **Schedule (cadence)** — a 5-field `cron` or an `every_minutes` interval, in
-  the definition's `schedule` field. Catch-up always collapses: a downtime gap
-  mints one make-up task, not one per slot. Cadence is per-definition data, not
+- **Schedule (cadence)** — a 5-field `cron`, an `every_minutes` interval, or a
+  `deliveries_landed` trigger in the definition's `schedule` field. Time-based
+  catch-up always collapses: a downtime gap mints one make-up task, not one per
+  slot. Delivery triggers use verified landings and coverage checkpoints.
+  Cadence is per-definition data, not
   a knob in the identity `config.yaml` ([L-0014] keeps runtime config out of
   `config.yaml`).
 - **Time cursor** — per-definition last-fired state for cron and interval
@@ -57,6 +59,18 @@ becomes just the first definition.
   minted task and tick report, with time cursors for cron/interval definitions
   and durable batch/receipt state for delivery-trigger definitions. Auto-tasks
   are shown on the Operations auto-task panel, not on the routines surface.
+- **Listing state** — whether a definition fires on this host is decided once,
+  in `OrbitRuntime::auto_task_listing_state`, and `orbit auto-task list`, MCP
+  `orbit.auto_task.list` (plain and bounded) and `GET /api/auto-tasks` render
+  that decision. It carries the effective enabled state (the toggle, or for
+  one release the deprecated `after-landing` policy), the skip reason when it
+  never fires here — its seeding plugin is off, or it is an enabled delivery
+  definition another machine owns — and the schedule state with the next due
+  slot. The CLI labels the row `inactive`, `skipped`, `enabled` or `disabled`
+  and prints each skip reason on stderr. The bounded view and the dashboard
+  show `scheduled`, `waiting`, `never_observed`, `disabled` or `unavailable`.
+  A definition owned elsewhere, an unreadable cursor file or a schedule that
+  cannot be projected reads `unavailable` on its own row only.
 - **Dedupe & provenance** — each minted task carries an `auto-task:<name>` tag;
   `skip_if_open` uses that tag to avoid firing while a prior instance is open.
 - **Manual mint** — `orbit auto-task mint <name>` mints one task from a
@@ -92,7 +106,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These ten YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These eleven YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -163,7 +177,10 @@ definition of the same name.
   (keyed on `qa-full-sweep-rollup`) reads to skip a tick when nothing has
   landed since.
 - `doc-duties` — disabled-by-default daily validation of the
-  least-recently-attempted tracked documentation. Each run attaches a
+  least-recently-attempted tracked documentation. Candidates exclude generated
+  and historical records, including paths in the repository's link-check or
+  doc-index exclusion list, when present; each candidate is checked against
+  that list before selection. Each run attaches a
   `doc-duties-ledger.json` artifact with an outcome (`clean`, `fixed`,
   `partial`, `skipped`) and attempt date per selected document. Each ledger
   also carries a cumulative `state` map holding every path's two latest
@@ -205,11 +222,18 @@ definition of the same name.
   orphaned in-progress/review, aged proposed, and dependency-unblocked idle
   tasks. Its execution summary recommends human follow-up without changing task
   status or dispatching work.
+- `blocked-task-triage` — disabled-by-default hourly reader of escalated
+  blocks. Its `skip_unless_blocked_candidates` precondition mints only when a
+  block episode awaits triage and otherwise records a `no_blocked_candidates`
+  skip; the minted chore records one disposition per episode through
+  `orbit.task.block_triage`, whose requeue shares final recovery's requeue
+  bound ([distributed drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)).
 - `delivery-code-review` — disabled-by-default review of newly landed
   deliveries. Its `enabled` flag is the after-landing review switch
   [ORB-13992]; the deprecated `operation.review_policy = after-landing`
   enables a copy no operator has configured, which `list` and `show` report
-  as `effective_enabled`. The former `delivery-qa` default is retired and is not seeded;
+  as `effective_enabled`. The dashboard groups and toggles by that effective
+  value and keeps the raw flag as the compare-and-set token. The former `delivery-qa` default is retired and is not seeded;
   hands-on QA stays with `qa-sweep` (recent changes) and `qa-full-sweep`
   (the whole product at one commit).
 
@@ -220,7 +244,7 @@ Orbit's own checkout also carries extra `.orbit/auto_tasks/` files that are
 encode this repository's branches and gates. Re-init preserves them:
 
 - `model-price-audit`, `release-prep`, `skill-validation`, and
-  this repository's enabled copies of catalog names such as `code-review` and
+  this repository's configured copies of catalog names such as `code-review` and
   `security-review`.
 - `qa-full-sweep`, this repository's Orbit-specific pre-release sign-off
   ([runbook](../../runbooks/qa-full-sweep.md)). It predates the generic
@@ -258,6 +282,8 @@ encode this repository's branches and gates. Re-init preserves them:
 - ORB-15327 — Added the disabled, product-agnostic `qa-full-sweep`
   coordinator default with per-area surface-QA chores and a roll-up release
   decision.
+- ORB-17245 — Added the disabled hourly `blocked-task-triage` default and the
+  `skip_unless_blocked_candidates` precondition.
 - ORB-11115 / ORB-11383 — Retired the shipped CI-failure auto-task;
   runner workflows only emit fail-open run/job/commit provenance, while the
   host-owned `ci_failure_sweep` routine performs durable CI-failure filing.

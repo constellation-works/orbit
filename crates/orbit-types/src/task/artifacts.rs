@@ -5,11 +5,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::identity::{OrbitId, is_valid_adr_id, is_valid_friction_id};
-use crate::task::{ExternalRef, TaskComplexity, TaskError, TaskPriority, TaskStatus, TaskType};
+use crate::task::{
+    ExternalRef, RegressionClassification, TaskComplexity, TaskError, TaskPriority, TaskStatus,
+    TaskType,
+};
 
 pub const TASK_ARTIFACT_SCHEMA_VERSION: u32 = 1;
-/// Minimum numeric width used when minting task ids. Parsers accept wider ids.
-pub const ORB_TASK_ID_WIDTH: usize = 5;
 /// Maximum representable allocator value, no longer the five-digit boundary.
 pub const ORB_TASK_ID_MAX: u32 = u32::MAX;
 
@@ -60,17 +61,14 @@ pub fn validate_orb_task_id(id: &str) -> Result<(), TaskError> {
     )))
 }
 
-pub fn format_orb_task_id(value: u32) -> Result<String, TaskError> {
-    format_task_id("ORB", value)
-}
-
 pub fn format_task_id(prefix: &str, value: u32) -> Result<String, TaskError> {
     if !is_valid_task_id_prefix(prefix) {
         return Err(TaskError::Invalid(format!(
             "task id prefix '{prefix}' must be 2-5 uppercase ASCII letters and must not use a reserved artifact namespace"
         )));
     }
-    Ok(format!("{prefix}-{value:0ORB_TASK_ID_WIDTH$}"))
+    // Minted ids are zero-padded to at least five digits. Parsers accept wider ids.
+    Ok(format!("{prefix}-{value:05}"))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -106,6 +104,16 @@ pub struct TaskEnvelopeV2 {
     /// Named crew responsible for task orchestration, distinct from execution crew.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orchestrator: Option<String>,
+    /// Orchestrator's model, recorded once when the task was created with an
+    /// orchestrator; absent on legacy records and tasks without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_model: Option<String>,
+    /// Which rule supplied `orchestrator_model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_model_source: Option<crate::task::OrchestratorModelSource>,
+    /// Why the task was filed; absent on legacy and unstated filings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::task::TaskOrigin>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relations: Vec<TaskRelation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -165,6 +173,10 @@ pub struct TaskRelation {
     #[serde(rename = "type")]
     pub relation_type: TaskRelationType,
     pub target: OrbitId,
+    /// Nature and escape classification, accepted only on `regression_from`.
+    /// Absent on legacy links and on links filed without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regression: Option<RegressionClassification>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -207,6 +219,14 @@ pub fn validate_task_relations_for_source(
     }
     for relation in relations {
         validate_target_for(relation.relation_type, &relation.target)?;
+        if relation.regression.is_some()
+            && relation.relation_type != TaskRelationType::RegressionFrom
+        {
+            return Err(TaskError::Invalid(format!(
+                "task relation {:?} -> '{}' must not carry a `regression` classification; only regression_from accepts one",
+                relation.relation_type, relation.target
+            )));
+        }
         if relation.target == source_id {
             return Err(TaskError::Invalid(format!(
                 "task relation from '{source_id}' must not target itself"
@@ -309,6 +329,10 @@ pub struct TaskEventRowV2 {
     pub from_status: Option<TaskStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_status: Option<TaskStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<super::TaskDecision>,
 }
 
 impl TaskEventRowV2 {
@@ -341,6 +365,8 @@ pub struct TaskCommentRowV2 {
     pub at: DateTime<Utc>,
     pub by: String,
     pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
 }
 
 impl TaskCommentRowV2 {

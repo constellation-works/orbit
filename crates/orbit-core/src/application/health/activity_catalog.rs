@@ -6,11 +6,14 @@
 //! never ran the registry tool-allowlist check. Catalog construction does
 //! both, so a workspace `spec.backend: http` (or a removed tool name) could
 //! fail every job run while doctor reported the activity catalog healthy.
+//! Names are also checked within each root: duplicates block loading even
+//! when another root shadows them, while cross-root overrides remain legal.
 //!
 //! Discovery is confined to each configured catalog root: links below a root
 //! are reported rather than followed, and only regular files are read or
 //! rewritten, so a linked or special entry can neither redirect the repair
-//! outside the catalog nor stall the scan.
+//! outside the catalog nor stall the scan. Traversal failures report the
+//! affected path rather than treating an unavailable inspection as healthy.
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -19,7 +22,9 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_common::fs::open_read_only_no_follow;
-use orbit_engine::activity_job::{load_activity_catalog_asset, validate_catalog_activity_tools};
+use orbit_engine::activity_job::{
+    CatalogError, load_activity_catalog_asset, validate_catalog_activity_tools,
+};
 
 use crate::OrbitRuntime;
 use crate::application::managed_assets::{ConfinedAssetPath, resolve_confined_asset_path};
@@ -55,7 +60,8 @@ pub(crate) struct ActivityCatalogFault {
 }
 
 /// Inspect every production catalog directory with the same load + tool
-/// validation catalog construction uses. Missing directories are skipped.
+/// validation and per-root duplicate-name rules catalog construction uses.
+/// Missing directories and retired definitions are skipped.
 pub(crate) fn collect_activity_catalog_faults(
     runtime: &OrbitRuntime,
 ) -> (usize, Vec<ActivityCatalogFault>) {
@@ -64,9 +70,10 @@ pub(crate) fn collect_activity_catalog_faults(
     let entries = activity_catalog_entries(runtime);
     let scanned = entries.len();
     let mut faults = Vec::new();
+    let mut names = BTreeMap::<(PathBuf, String), PathBuf>::new();
     for entry in entries {
-        let path = match entry {
-            CatalogEntry::File { path, .. } => path,
+        let (root, path) = match entry {
+            CatalogEntry::File { root, path } => (root, path),
             CatalogEntry::Refused { path, reason } => {
                 faults.push(ActivityCatalogFault {
                     name: file_stem_name(&path),
@@ -88,7 +95,25 @@ pub(crate) fn collect_activity_catalog_faults(
             continue;
         };
         match inspect_activity_file(&path, &raw, &registered) {
-            ActivityInspection::Healthy | ActivityInspection::RetiredSkipped => {}
+            ActivityInspection::Healthy(name) => {
+                let key = (root, name.clone());
+                if let Some(first) = names.get(&key) {
+                    let error = CatalogError::DuplicateName {
+                        name: name.clone(),
+                        first: first.clone(),
+                        second: path.clone(),
+                    };
+                    faults.push(ActivityCatalogFault {
+                        name,
+                        path,
+                        detail: error.to_string(),
+                        repair_command: None,
+                    });
+                } else {
+                    names.insert(key, path);
+                }
+            }
+            ActivityInspection::RetiredSkipped => {}
             ActivityInspection::Fault(fault) => faults.push(fault),
         }
     }
@@ -109,10 +134,9 @@ pub(crate) fn repair_retired_activity_backends(
         let (root, path) = match entry {
             CatalogEntry::File { root, path } => (root, path),
             CatalogEntry::Refused { path, reason } => {
-                report.skipped.push(RetiredActivityBackendSkip {
-                    path,
-                    reason: reason.to_string(),
-                });
+                report
+                    .skipped
+                    .push(RetiredActivityBackendSkip { path, reason });
                 continue;
             }
         };
@@ -148,7 +172,7 @@ pub(crate) fn repair_retired_activity_backends(
             BackendRepairClass::UnrelatedMalformed => {
                 if !matches!(
                     inspect_activity_file(&path, &raw, &registered),
-                    ActivityInspection::Healthy | ActivityInspection::RetiredSkipped
+                    ActivityInspection::Healthy(_) | ActivityInspection::RetiredSkipped
                 ) {
                     report.skipped.push(RetiredActivityBackendSkip {
                         path,
@@ -164,7 +188,7 @@ pub(crate) fn repair_retired_activity_backends(
 
 #[derive(Debug)]
 enum ActivityInspection {
-    Healthy,
+    Healthy(String),
     RetiredSkipped,
     Fault(ActivityCatalogFault),
 }
@@ -185,7 +209,7 @@ fn inspect_activity_file(path: &Path, raw: &str, registered_tools: &[&str]) -> A
                     repair_command: None,
                 });
             }
-            ActivityInspection::Healthy
+            ActivityInspection::Healthy(asset.name)
         }
         Err(error) => {
             let backend = spec_backend_value(raw);
@@ -377,8 +401,8 @@ const NOT_REGULAR: &str =
 enum CatalogEntry {
     /// A regular YAML file reached without crossing a link below `root`.
     File { root: PathBuf, path: PathBuf },
-    /// A link or special entry that is reported instead of followed or read.
-    Refused { path: PathBuf, reason: &'static str },
+    /// An unsafe or unreadable entry reported instead of followed or read.
+    Refused { path: PathBuf, reason: String },
 }
 
 /// Enumerate every production catalog root. Configured roots are resolved as
@@ -396,13 +420,28 @@ fn activity_catalog_entries(runtime: &OrbitRuntime) -> Vec<CatalogEntry> {
 /// Walk `dir` using each entry's own file type, so links are never traversed
 /// (which also makes a linked directory cycle impossible to revisit).
 fn collect_catalog_entries(root: &Path, dir: &Path, entries: &mut BTreeMap<PathBuf, CatalogEntry>) {
-    let Ok(read_dir) = std::fs::read_dir(dir) else {
-        return;
+    let read_dir = match std::fs::read_dir(dir) {
+        Ok(read_dir) => read_dir,
+        Err(error) => {
+            record_catalog_io_fault(dir, "list directory", error, entries);
+            return;
+        }
     };
-    for entry in read_dir.flatten() {
+    for entry in read_dir {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                record_catalog_io_fault(dir, "read directory entry", error, entries);
+                continue;
+            }
+        };
         let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                record_catalog_io_fault(&path, "inspect entry type", error, entries);
+                continue;
+            }
         };
         if file_type.is_dir() {
             collect_catalog_entries(root, &path, entries);
@@ -429,8 +468,27 @@ fn collect_catalog_entries(root: &Path, dir: &Path, entries: &mut BTreeMap<PathB
         };
         entries
             .entry(path.clone())
-            .or_insert(CatalogEntry::Refused { path, reason });
+            .or_insert(CatalogEntry::Refused {
+                path,
+                reason: reason.to_string(),
+            });
     }
+}
+
+fn record_catalog_io_fault(
+    path: &Path,
+    operation: &str,
+    error: std::io::Error,
+    entries: &mut BTreeMap<PathBuf, CatalogEntry>,
+) {
+    entries
+        .entry(path.to_path_buf())
+        .or_insert_with(|| CatalogEntry::Refused {
+            path: path.to_path_buf(),
+            reason: format!(
+                "cannot {operation}: {error}; check catalog permissions and availability, then rerun `orbit doctor`"
+            ),
+        });
 }
 
 fn is_yaml(path: &Path) -> bool {

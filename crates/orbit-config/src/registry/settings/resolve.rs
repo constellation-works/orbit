@@ -31,7 +31,73 @@ pub(super) fn resolve_reclaim(raw: Option<Vec<String>>) -> Result<Vec<String>, O
     Ok(patterns)
 }
 
-/// Built-in `workflow.final_recovery_crews`: the strongest reasoning crews, so
+/// `workflow.unlocked_context_paths`: unset is Markdown anywhere in the
+/// workspace; `[]` locks every declared entry.
+pub(super) fn resolve_unlocked_context_paths(
+    raw: Option<Vec<String>>,
+) -> Result<Vec<String>, OrbitError> {
+    let patterns = raw.unwrap_or_else(|| vec!["**/*.md".to_string()]);
+    for pattern in &patterns {
+        orbit_common::fs::path_glob::RelativePathGlob::new(pattern).map_err(|error| {
+            OrbitError::InvalidInput(format!("workflow.unlocked_context_paths: {error}"))
+        })?;
+    }
+    Ok(patterns)
+}
+
+/// `workflow.light_delivery_paths`: unset is Orbit's documentation and CI
+/// default; `[]` lets no candidate keep a light-delivery tag [ORB-16855].
+pub(super) fn resolve_light_delivery_paths(
+    raw: Option<Vec<String>>,
+) -> Result<Vec<String>, OrbitError> {
+    let patterns = raw.unwrap_or_else(|| {
+        orbit_types::task::DEFAULT_LIGHT_DELIVERY_PATHS
+            .iter()
+            .map(|pattern| (*pattern).to_string())
+            .collect()
+    });
+    orbit_common::fs::path_filter::PathFilter::new(
+        orbit_types::task::LIGHT_DELIVERY_PATHS_KEY,
+        &patterns,
+    )?;
+    Ok(patterns)
+}
+
+/// `workflow.unlocked_path_validation_commands`: blank entries are dropped,
+/// so a list of only blanks keeps full validation like an unset key.
+pub(super) fn resolve_unlocked_path_validation_commands(
+    raw: Option<Vec<String>>,
+) -> Result<Vec<String>, OrbitError> {
+    Ok(raw
+        .unwrap_or_default()
+        .into_iter()
+        .map(|command| command.trim().to_string())
+        .filter(|command| !command.is_empty())
+        .collect())
+}
+
+/// `workflow.generated_paths`: each key a relative path glob, each value a
+/// non-empty command. Unset regenerates nothing.
+pub(super) fn resolve_generated_paths(
+    raw: Option<BTreeMap<String, String>>,
+) -> Result<BTreeMap<String, String>, OrbitError> {
+    let mut resolved = BTreeMap::new();
+    for (pattern, command) in raw.unwrap_or_default() {
+        orbit_common::fs::path_glob::RelativePathGlob::new(&pattern).map_err(|error| {
+            OrbitError::InvalidInput(format!("workflow.generated_paths: {error}"))
+        })?;
+        let command = command.trim();
+        if command.is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "workflow.generated_paths: '{pattern}' names an empty command"
+            )));
+        }
+        resolved.insert(pattern, command.to_string());
+    }
+    Ok(resolved)
+}
+
+/// Built-in `workflow.purpose_crews.final_recovery`: the strongest reasoning crews, so
 /// the last automated look at a failed task is the most capable one.
 pub(crate) const DEFAULT_FINAL_RECOVERY_CREWS: &[&str] = &["sol:100", "opus:20"];
 
@@ -87,17 +153,64 @@ pub(super) fn normalize_logins(raw: Vec<String>) -> Vec<String> {
 /// cold workspace build and test gate, still bounded below a typical activity.
 pub(super) const DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES: u32 = 45;
 
-/// Default `retention.audit_days` and `retention.runs_days`.
-const DEFAULT_RETENTION_DAYS: u32 = 60;
+/// Default `execution.agent_stall_minutes`: long enough that a provider
+/// thinking quietly is not cut off, short enough that a wedged one does not
+/// hold a deploy for hours. Zero disables the check.
+pub(super) const DEFAULT_AGENT_STALL_MINUTES: u32 = 30;
 
-pub(super) fn resolve_retention_days(raw: Option<u32>, key: &str) -> Result<u32, OrbitError> {
+/// Default `retention.audit_days` and `retention.runs_days`.
+pub(super) const DEFAULT_RETENTION_DAYS: u32 = 60;
+
+/// Default `retention.journal_days`. Recovery never reads an applied journal
+/// row, so the window only keeps recent commit decisions for diagnosis; at
+/// about 600 rows of about 80 KB a day, 60 days would let the table pass
+/// 2.5 GiB before anything went.
+pub(super) const DEFAULT_JOURNAL_RETENTION_DAYS: u32 = 14;
+
+/// Default `retention.store_warn_bytes`: 1 GiB. A host store past this with
+/// store GC disabled is worth a warning; a normal fixture store is not.
+/// Zero is allowed and warns for any non-empty store file.
+pub(super) const DEFAULT_STORE_WARN_BYTES: u64 = 1024 * 1024 * 1024;
+
+pub(super) fn resolve_retention_days(
+    raw: Option<u32>,
+    key: &str,
+    default: u32,
+) -> Result<u32, OrbitError> {
     const MAX_DAYS: u32 = 36_500;
     match raw {
+        Some(value) if key == "retention.runs_days" && value < 30 => {
+            // Older releases recommended 14 days. Keep those persisted
+            // files loadable so operators can repair them through config set.
+            // ConfigStore refuses new writes below the floor separately.
+            tracing::warn!(
+                key,
+                stored_days = value,
+                effective_days = 30,
+                "stored run retention is below the supported minimum; using 30 days; \
+                 persist the correction with orbit config set retention.runs_days 30 \
+                 (add --global for the global config)"
+            );
+            Ok(30)
+        }
         Some(value) if value == 0 || value > MAX_DAYS => Err(OrbitError::InvalidInput(format!(
             "{key} has invalid value {value}; expected 1..={MAX_DAYS}"
         ))),
         Some(value) => Ok(value),
-        None => Ok(DEFAULT_RETENTION_DAYS),
+        None => Ok(default),
+    }
+}
+
+/// Admit `execution.agent_stall_minutes`. Zero disables the stall check and
+/// leaves only the wall-clock deadline. A day is the ceiling.
+pub(super) fn resolve_agent_stall_minutes(raw: Option<u32>) -> Result<u32, OrbitError> {
+    const MAX_MINUTES: u32 = 1440;
+    match raw {
+        Some(value) if value > MAX_MINUTES => Err(OrbitError::InvalidInput(format!(
+            "execution.agent_stall_minutes has invalid value {value}; expected 0..={MAX_MINUTES}"
+        ))),
+        Some(value) => Ok(value),
+        None => Ok(DEFAULT_AGENT_STALL_MINUTES),
     }
 }
 
@@ -155,6 +268,43 @@ pub(super) fn resolve_worker_tasks_max(raw: Option<u32>) -> Result<u32, OrbitErr
         )),
         Some(value) => Ok(value),
         None => Ok(DEFAULT_WORKER_TASKS_MAX),
+    }
+}
+
+/// Default `machine.host_shutdown_hold_minutes`: long enough for work admitted
+/// now to finish, short enough that a reboot scheduled for tomorrow does not
+/// idle the host all day.
+pub(super) const DEFAULT_HOST_SHUTDOWN_HOLD_MINUTES: u32 = 180;
+
+/// Admit a positive shutdown-hold horizon. There is no upper bound: a host
+/// that wants a longer quiet period before a reboot may set one.
+pub(super) fn resolve_host_shutdown_hold_minutes(raw: Option<u32>) -> Result<u32, OrbitError> {
+    match raw {
+        Some(0) => Err(OrbitError::InvalidInput(
+            "machine.host_shutdown_hold_minutes has invalid value 0; expected >= 1".to_string(),
+        )),
+        Some(value) => Ok(value),
+        None => Ok(DEFAULT_HOST_SHUTDOWN_HOLD_MINUTES),
+    }
+}
+
+/// Default `workflow.mid_run_steering.max_rounds`.
+const DEFAULT_MID_RUN_STEERING_MAX_ROUNDS: u8 = 2;
+
+/// Each steering round re-dispatches an agent step, so a run may spend at
+/// most this many before it holds instead.
+const MAX_MID_RUN_STEERING_ROUNDS: u8 = 10;
+
+pub(super) fn resolve_mid_run_steering_max_rounds(raw: Option<u8>) -> Result<u8, OrbitError> {
+    match raw {
+        Some(value) if value == 0 || value > MAX_MID_RUN_STEERING_ROUNDS => {
+            Err(OrbitError::InvalidInput(format!(
+                "workflow.mid_run_steering.max_rounds has invalid value {value}; expected \
+                 1..={MAX_MID_RUN_STEERING_ROUNDS}"
+            )))
+        }
+        Some(value) => Ok(value),
+        None => Ok(DEFAULT_MID_RUN_STEERING_MAX_ROUNDS),
     }
 }
 
@@ -367,7 +517,7 @@ pub(super) fn resolve_cpu_light_leaves(raw: Option<u8>) -> Result<u8, OrbitError
     }
 }
 
-pub(super) fn resolve_percent(raw: Option<u8>, default: u8, key: &str) -> Result<u8, OrbitError> {
+pub(crate) fn resolve_percent(raw: Option<u8>, default: u8, key: &str) -> Result<u8, OrbitError> {
     let value = raw.unwrap_or(default);
     if (1..=100).contains(&value) {
         Ok(value)
@@ -376,4 +526,70 @@ pub(super) fn resolve_percent(raw: Option<u8>, default: u8, key: &str) -> Result
             "{key} must be in 1..=100"
         )))
     }
+}
+
+/// A `workflow.regression_risk.*` count: `default` when unset, else
+/// `1..=max`.
+pub(super) fn resolve_bounded_count(
+    raw: Option<u32>,
+    default: u32,
+    max: u32,
+    key: &str,
+) -> Result<u32, OrbitError> {
+    resolve_bounded_range(raw, default, 1, max, key)
+}
+
+/// A bounded setting whose representation or behavior requires a minimum.
+pub(super) fn resolve_bounded_range(
+    raw: Option<u32>,
+    default: u32,
+    min: u32,
+    max: u32,
+    key: &str,
+) -> Result<u32, OrbitError> {
+    let value = raw.unwrap_or(default);
+    if (min..=max).contains(&value) {
+        Ok(value)
+    } else {
+        Err(OrbitError::InvalidInput(format!(
+            "{key} has invalid value {value}; expected {min}..={max}"
+        )))
+    }
+}
+
+/// Admit output locators without allowing them to replace execution identity.
+pub(super) fn resolve_build_output_env(
+    raw: Option<Vec<String>>,
+) -> Result<Vec<String>, OrbitError> {
+    let mut names = BTreeSet::new();
+    for raw in raw.unwrap_or_default() {
+        let name = raw.trim();
+        let mut chars = name.chars();
+        let valid = chars
+            .next()
+            .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
+            && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric());
+        let identity = name.to_ascii_uppercase();
+        let reserved = identity.starts_with("ORBIT_")
+            || matches!(
+                identity.as_str(),
+                "PATH"
+                    | "HOME"
+                    | "USER"
+                    | "LOGNAME"
+                    | "SHELL"
+                    | "TMPDIR"
+                    | "TMP"
+                    | "TEMP"
+                    | "PWD"
+                    | "OLDPWD"
+            );
+        if !valid || reserved {
+            return Err(OrbitError::InvalidInput(format!(
+                "workflow.validation_env.build_output_env contains invalid or reserved output variable '{name}'"
+            )));
+        }
+        names.insert(name.to_string());
+    }
+    Ok(names.into_iter().collect())
 }

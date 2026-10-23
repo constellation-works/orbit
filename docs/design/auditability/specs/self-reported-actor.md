@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Self-Reported Actor Identity for Unauthenticated MCP Calls"
 tags: ["auditability"]
-last_validated: 2026-10-09
+last_validated: 2026-10-20
 ---
 
 # Spec: Self-Reported Actor Identity for Unauthenticated MCP Calls
@@ -12,20 +12,19 @@ database (as of 2026-08-16; not re-verified in this checkout), `subcommand = 'ru
 splits 1373 `unverified` against 112 attributed
 (`agent` 64, `codex` 27, `claude-opus-5` 15, `sonnet` 4, `opus` 2).
 
-The cause is structural, not a bug in the trust check. `audit_role_label_for_entry_point`
+For standalone MCP sessions the cause is structural, not a bug in the trust check. `audit_role_label_for_entry_point`
 returns `unverified` for any MCP call outside a managed run context, and
 `resolve_agent_identity_for_entry_point` additionally drops agent and model to `None` — so
 the whole identity triple is lost. Both read `ORBIT_MANAGED_RUN_CONTEXT` + `ORBIT_RUN_ID`,
-which are injected in exactly one place: `provenance_env` on the engine CLI-runner spawn
-path. But `orbit mcp serve` is started by the MCP *client* from that client's own config,
-so it never inherits them. The CLI runner configures no MCP for its children; managed runs
-drive agents over the CLI. MCP is therefore effectively the interactive surface, and an
-interactive session cannot satisfy the managed-run trust boundary by construction. The 112
-attributed calls are the narrow case where a managed run's agent child spawned its own MCP
-server and passed the environment down.
+which `provenance_env` supplies on managed spawn paths. A standalone `orbit mcp serve`
+started from a client's own config has no managed envelope and remains unverified.
+Managed agents can also use MCP: the CLI runner configures an Orbit MCP server for
+Codex children and provides a run-scoped plugin broker. Brokered calls derive trusted
+identity from the run's dispatch record, not from the client's self-reported claim.
+The historical counts above do not describe the current CLI/MCP traffic split.
 
-The consequence for metrics: any per-agent tool-call fail rate silently excludes ~92% of
-that agent's MCP traffic while presenting itself as a complete denominator.
+The consequence for that historical window: a per-agent tool-call fail rate based only
+on trusted identity excluded the unverified traffic from its denominator.
 
 [ORB-10890] makes that traffic attributable-but-labelled instead of anonymous, by adding a
 second field. It does not make it trusted.
@@ -112,9 +111,8 @@ producers have no claim to supply and should not have to name the field.
 
 ## Aggregates
 
-`get_audit_tool_call_counts_by_attribution` covers the same rows as
-`get_audit_tool_call_counts_by_role` and classifies each into exactly one of three disjoint
-buckets:
+`get_audit_tool_call_counts_by_attribution` covers every tool-call row in the window and
+classifies each into exactly one of three disjoint buckets:
 
 | attribution | condition | grouped on |
 |---|---|---|
@@ -124,9 +122,8 @@ buckets:
 
 Because the buckets are disjoint and every row lands in one, the three denominators a
 caller needs are all readable from one result set: filter on `attribution` for
-authenticated-only or self-reported-only, sum for combined. Their total equals the
-role-grouped denominator over the same rows, so the new view neither drops nor
-double-counts anything.
+authenticated-only or self-reported-only, sum for combined. Their total is the window's
+tool-call count, so the view neither drops nor double-counts anything.
 
 The same actor may appear under two attributions — one agent, half of whose traffic Orbit
 could authenticate. Those rows are not duplicates to merge. Merging them is exactly how an

@@ -66,3 +66,13 @@ pub fn default_host_resource_probe() -> Arc<dyn HostResourceProbe> {
         .get_or_init(|| Arc::new(platform::NativeProbe::default()))
         .clone()
 }
+
+/// Native probe with an injected procfs root and cache clock for fixture observations.
+/// Linux reads `loadavg`, `stat`, `meminfo`, and `pressure/io` beneath this root.
+#[doc(hidden)]
+pub fn host_resource_probe_with_proc_root(
+    root: PathBuf,
+    now: Arc<dyn Fn() -> Instant + Send + Sync>,
+) -> Arc<dyn HostResourceProbe> {
+    Arc::new(platform::NativeProbe::with_proc_root(root, now))
+}

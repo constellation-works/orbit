@@ -1,0 +1,65 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: adopt_orphaned_deliveries
+spec:
+  type: deterministic
+  description: >
+    Resume each owner-local delivery leaf (`task_pr_pipeline`) whose worker
+    died after it opened its pull request and promoted its task to `review`,
+    so landing review, completion and auto-fix continue on that pull request
+    instead of waiting for an operator. A leaf qualifies when its run ended
+    within 24 hours of its last recorded activity (not at an upgrade boundary,
+    which the clock resumes), is not a claimed execution and not itself a
+    resumed attempt, has no retry yet, its pull request is still
+    open on the head branch it opened it on, every task it carries is still in
+    `review`, this drain holds the `completion` and `auto_fix` authority the
+    leaf was started with, and the ordinary checkpoint resume accepts it. At
+    most as many leaves are resumed as the drain has free slots; a stopped
+    drain or a pass held by host resource pressure resumes none. Each adoption
+    or final skip is decided once and audited. The step never fails on a
+    store or forge error: one leaf's error defers it, and a pass that cannot
+    read its candidates or slots reports `pass_error` and adopts nothing.
+    A drain started with `auto_fix` then repairs, within the slots adoption
+    left free, each Orbit pull request that conflicts with its base or has a
+    failed required check while its task (in `review`, or blocked or requeued
+    by its own delivery) has no live run: it resumes the task's newest failed,
+    timed-out or interrupted delivery leaf at its completion step with
+    `auto_fix` granted, so the auto-fix crew takes the task's footprint
+    locks, pushes to the same branch and the leaf completes the existing pull
+    request under its own `completion` grant. An operator hold or
+    `no-auto-approve` tag, or a leaf started with `--complete` under a drain
+    without `--complete`, is never repaired. Pull requests not opened by a
+    delivery identity on the task's branch and spent per-pull request auto-fix
+    budgets are also never repaired. Its result is reported under
+    `auto_fix` (`started`, `skipped`, and `pass_error`).
+  input_schema_json:
+    type: object
+    properties:
+      max_active_leaf_runs:
+        type: number
+        minimum: 1
+      completion:
+        type: string
+      auto_fix:
+        type: boolean
+  output_schema_json:
+    type: object
+    required: [adopted, skipped]
+    properties:
+      adopted:
+        type: array
+        items:
+          type: object
+      skipped:
+        type: array
+        items:
+          type: object
+      pass_error:
+        type: string
+      resource_throttle:
+        type: object
+      auto_fix:
+        type: object
+  action: adopt_orphaned_deliveries
+  config: {}

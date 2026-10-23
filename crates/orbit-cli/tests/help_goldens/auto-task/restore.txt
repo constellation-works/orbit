@@ -1,0 +1,33 @@
+Reinstate a deleted shipped default with its shipped content
+
+Usage: orbit auto-task restore [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          Shipped default name
+
+Options:
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')

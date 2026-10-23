@@ -4,7 +4,7 @@ type: design
 title: "Task Artifacts — Vision"
 owner: codex
 last_updated: 2026-10-04
-last_validated: 2026-10-10
+last_validated: 2026-10-19
 status: Draft
 feature: task-artifacts
 doc_role: vision
@@ -95,7 +95,7 @@ the owning host through [remote-access](../remote-access/1_overview.md) and
 [federated-mcp](../federated-mcp/1_overview.md), so the multi-writer registry
 remains superseded.
 
-The draft [task-publication](../task-publication/1_overview.md) design uses a
+The accepted [task-publication](../task-publication/1_overview.md) design uses a
 dedicated private Git repository for a narrower purpose: one declared owner
 publishes immutable task-bundle snapshots for remote durability, read-only
 inspection, and explicit recovery. It does not revive shared allocation,
@@ -145,7 +145,7 @@ Orbit tasks should feel local and inspectable without forcing every user into a 
 ### 4.1 Orbit-internal
 
 - [docs/design/CONVENTIONS.md](../CONVENTIONS.md) - design folder layout and ADR rules.
-- [docs/design/task-publication/](../task-publication/1_overview.md) - draft one-way publication proposal using a dedicated private repository while preserving one task authority.
+- [docs/design/task-publication/](../task-publication/1_overview.md) - accepted one-way publication design using a dedicated private repository while preserving one task authority.
 - [docs/design/orbit-search/](../orbit-search/) - per-field indexing of task text.
 - [docs/POSITIONING.md](../../POSITIONING.md) - product doctrine that currently treats task IDs as local search keys.
 

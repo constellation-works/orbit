@@ -1,0 +1,49 @@
+Rebuild the task search index from the task store
+
+Usage: orbit search reindex [OPTIONS]
+
+Options:
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --kind <KIND>
+          Restrict results to one corpus kind
+          
+          [default: all]
+          [possible values: task, friction, all]
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+      --limit <LIMIT>
+          Maximum total results returned (across all kinds when --kind all; round-robin per kind to ensure fair representation)
+          
+          [default: 10]
+
+      --tag <TAGS>
+          Filter by tag (AND semantics). Applies to task and friction results
+
+      --all
+          Include every status for the queried kind. Task defaults to proposed/backlog/in-progress/review/blocked; --all adds done/rejected/archived/someday. Friction defaults to open; --all adds triaged/resolved
+
+      --status <STATUS>
+          Explicit per-kind status override, e.g. task:open,friction:open. task:open covers proposed/backlog/in-progress/review/blocked. Overrides --all for the named kind
+
+  -h, --help
+          Print help (see a summary with '-h')

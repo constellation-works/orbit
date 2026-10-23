@@ -35,7 +35,7 @@ use crate::application::task::{
 impl OrbitRuntime {
     /// Admit a failed run's final recovery, recording it in the run's state so
     /// it never runs again for this run or any run resumed from it. Skips when
-    /// `workflow.final_recovery_crews` is empty, the run already spent it, or
+    /// `workflow.purpose_crews.final_recovery` is empty, the run already spent it, or
     /// the run is no longer running.
     pub(crate) fn admit_run_final_recovery(
         &self,
@@ -64,7 +64,7 @@ fn admit(
 ) -> Result<FinalRecoveryAdmission, OrbitError> {
     if runtime.context.settings().final_recovery_crews().is_empty() {
         return Ok(skipped(
-            "final recovery is disabled: `workflow.final_recovery_crews` is []",
+            "final recovery is disabled: `workflow.purpose_crews.final_recovery` is []",
         ));
     }
     // A claimed leaf's task belongs to its owner; the owner re-reads it when
@@ -225,7 +225,17 @@ fn apply(
             .ok()
             .flatten()
     };
-    let outcome = match runtime.apply_final_recovery(&request, Some(&output)) {
+    // Only the engine's own classification carries `infrastructure`.
+    let infra =
+        application
+            .infrastructure
+            .map(|class| orbit_types::workflow::TransientInfraBlock {
+                schema_version: 1,
+                run_id: checkpoint.key.run_id.clone(),
+                failed_step_id: application.failed_step_id.clone(),
+                class,
+            });
+    let outcome = match runtime.apply_classified_final_recovery(&request, Some(&output), infra) {
         Ok(outcome) => outcome,
         Err(error) => {
             let Some(outcome) = recorded() else {
@@ -316,8 +326,12 @@ fn record_decision(
                 checkpoint.resume_context = application.resume_context.clone();
             }
             if let Some(from) = application.resume_step_index {
-                state.step_states.retain(|index, _| *index < from);
-                state.step_outputs.retain(|index, _| *index < from);
+                // Keep host history evidence available to the replay's exact
+                // candidate check. Validation and review never belong here.
+                let keep =
+                    |index: &u32| *index < from || application.preserved_steps.contains(index);
+                state.step_states.retain(|index, _| keep(index));
+                state.step_outputs.retain(|index, _| keep(index));
                 state.compound_outputs.retain(|index, _| *index < from);
             }
             state.updated_at = Utc::now();

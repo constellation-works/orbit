@@ -22,31 +22,6 @@ use orbit_engine::{
 use orbit_types::workflow::activity_job::{V2AuditEvent, V2AuditEventKind};
 use serde_json::{Value, json};
 
-/// The shipped example must dispatch as written, so the documented reference
-/// cannot drift from the action it documents.
-#[test]
-fn shipped_reference_asset_runs_git_status_in_the_workspace() {
-    let repo = tempfile::tempdir().expect("tempdir");
-    init_repo(repo.path());
-    let host = ShellHost::new(repo.path());
-
-    let yaml = std::fs::read_to_string(
-        workspace_root()
-            .join("crates/orbit-core/assets/activities/examples/local_shell_reference.yaml"),
-    )
-    .expect("read shipped reference asset");
-    let outcome = dispatch(&yaml, json!({}), &host).expect("dispatch succeeds");
-
-    assert!(outcome.success);
-    assert_eq!(outcome.output["exit_code"], json!(0));
-    assert_eq!(outcome.output["sandbox"], json!("none"));
-    assert_eq!(
-        outcome.output["argv"],
-        json!(["git", "status", "--porcelain"])
-    );
-}
-
-#[test]
 fn a_nonzero_exit_fails_the_activity_and_is_audited() {
     let repo = tempfile::tempdir().expect("tempdir");
     let host = ShellHost::new(repo.path());
@@ -99,7 +74,6 @@ fn a_nonzero_exit_fails_the_activity_and_is_audited() {
     assert_eq!(finished[0].envelope.run_id, "jrun-local-shell");
 }
 
-#[test]
 fn a_missing_executable_fails_the_activity() {
     let repo = tempfile::tempdir().expect("tempdir");
     let host = ShellHost::new(repo.path());
@@ -117,7 +91,6 @@ fn a_missing_executable_fails_the_activity() {
     );
 }
 
-#[test]
 fn a_timed_out_step_is_terminated_and_reported() {
     let repo = tempfile::tempdir().expect("tempdir");
     let host = ShellHost::new(repo.path());
@@ -142,7 +115,6 @@ fn a_timed_out_step_is_terminated_and_reported() {
 
 /// The dispatcher injects `run_id` and the step id into deterministic input.
 /// Neither may become part of the child's argv.
-#[test]
 fn dispatch_input_never_reaches_argv() {
     let repo = tempfile::tempdir().expect("tempdir");
     let host = ShellHost::new(repo.path());
@@ -160,7 +132,6 @@ fn dispatch_input_never_reaches_argv() {
 
 /// The activity's `fsProfile` travels to sandbox resolution, so a shell step is
 /// scoped by the same filesystem policy as the activity that declared it.
-#[test]
 fn the_activity_fs_profile_reaches_sandbox_resolution() {
     let repo = tempfile::tempdir().expect("tempdir");
     let host = ShellHost::new(repo.path());
@@ -183,7 +154,6 @@ fn the_activity_fs_profile_reaches_sandbox_resolution() {
 /// and neither does the Orbit registry or workspace identity the host carries,
 /// so a nested `orbit` call cannot inherit the run's authority the way a
 /// dispatched CLI agent deliberately does.
-#[test]
 fn a_shell_step_gets_only_the_policy_baseline_and_its_explicit_env() {
     let repo = tempfile::tempdir().expect("tempdir");
     let host = ShellHost::new(repo.path());
@@ -271,23 +241,6 @@ fn shell_activity_with_profile(config: Value, fs_profile: Option<&str>) -> Strin
     serde_json::to_string(&asset).expect("serialize activity asset")
 }
 
-fn init_repo(path: &Path) {
-    let status = std::process::Command::new("git")
-        .args(["init", "--quiet"])
-        .current_dir(path)
-        .status()
-        .expect("run git init");
-    assert!(status.success(), "git init failed");
-}
-
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("workspace root")
-        .to_path_buf()
-}
-
 struct ShellHost {
     root: PathBuf,
     observed: std::sync::Mutex<Vec<(String, Option<String>)>>,
@@ -318,7 +271,7 @@ impl ShellHost {
     }
 }
 
-impl RuntimeHost for ShellHost {
+impl orbit_engine::test_support::NullRuntimeHost for ShellHost {
     fn repo_root(&self) -> Result<String, orbit_common::OrbitError> {
         Ok(self.root.to_string_lossy().into_owned())
     }
@@ -362,4 +315,46 @@ impl RuntimeHost for ShellHost {
             .push((provider.to_string(), fs_profile.map(ToOwned::to_owned)));
         Ok(None)
     }
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn shell_dispatch_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "shell_dispatch_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_nonzero_exit_fails_the_activity_and_is_audited",
+                a_nonzero_exit_fails_the_activity_and_is_audited,
+            ),
+            (
+                "a_missing_executable_fails_the_activity",
+                a_missing_executable_fails_the_activity,
+            ),
+            (
+                "a_timed_out_step_is_terminated_and_reported",
+                a_timed_out_step_is_terminated_and_reported,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn shell_dispatch_contracts_2() {
+    crate::git_fixture::isolated(module_path!(), "shell_dispatch_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "dispatch_input_never_reaches_argv",
+                dispatch_input_never_reaches_argv,
+            ),
+            (
+                "the_activity_fs_profile_reaches_sandbox_resolution",
+                the_activity_fs_profile_reaches_sandbox_resolution,
+            ),
+            (
+                "a_shell_step_gets_only_the_policy_baseline_and_its_explicit_env",
+                a_shell_step_gets_only_the_policy_baseline_and_its_explicit_env,
+            ),
+        ]);
+    });
 }

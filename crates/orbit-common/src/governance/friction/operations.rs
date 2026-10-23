@@ -1,46 +1,66 @@
 //! The friction operation registry — every friction verb, declared once.
 //!
-//! Adding a friction verb is a [`FrictionVerb`] variant, one spec const listed
-//! in [`FRICTION_OPERATIONS`], and one handler arm in `orbit-core`. Consumer
-//! surfaces iterate this table.
+//! Adding a friction verb is one entry in the `operation_registry!` list
+//! below plus its spec const. The compiler then names every surface table that
+//! owes a decision about it: the handler in `orbit-core`, the CLI renderer, and
+//! any other exhaustive per-verb table. Consumer surfaces iterate [`FRICTION`].
 //!
 //! **Every string below is shipped contract.** Tool names and parameter names
 //! are the MCP wire; CLI flag spellings and help text are the argv surface.
 //! Changing one is a consumer-visible break, not a rename.
 
 use crate::governance::operation::{
-    CliArgKind, CliBinding, CliRender, Description, OperationSpec, ParamSpec, ParamType,
-    find_by_name,
+    CliArgKind, CliBinding, CliHelp, Description, Effect, NounSpec, OperationSpec, ParamSpec,
+    ParamType, RETIRED_AGENT_FIELD, Redaction, UnknownFields, operation_registry,
 };
 use orbit_types::tool::McpToolScope;
 
 use super::title::FRICTION_TITLE_MAX_CHARS;
 use super::{friction_tag_aliases_literal, friction_tags_literal};
 
-/// Every verb the friction noun supports.
-///
-/// This enum is the join between the spec table here and the handler table in
-/// `orbit-core`: adding a variant makes both [`FrictionVerb::spec`] and the
-/// runtime handler `match` fail to compile until the verb is fully wired.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FrictionVerb {
-    /// Append a friction report.
-    Add,
-    /// List friction records.
-    List,
-    /// Show one friction record.
-    Show,
-    /// Compute friction rates.
-    Stats,
-    /// List configured taxonomy tags.
-    Tags,
-    /// Update triage metadata.
-    Update,
-    /// Mark a record resolved.
-    Resolve,
-    /// Move a record into the workspace that owns it.
-    Rehome,
+operation_registry! {
+    noun: FRICTION;
+    /// Every verb the friction noun supports.
+    ///
+    /// This enum is the join between the spec table here and the handler table in
+    /// `orbit-core`: adding a variant makes the runtime handler `match` and every
+    /// other exhaustive surface table fail to compile until the verb is wired.
+    pub enum FrictionVerb;
+    /// The friction operations, in `orbit friction --help` order. Within a
+    /// spec, parameter order is the order both `--help` and the MCP tool schema
+    /// list parameters.
+    pub const FRICTION_OPERATIONS;
+    {
+        /// Append a friction report.
+        Add => ADD,
+        /// List friction records.
+        List => LIST,
+        /// Show one friction record.
+        Show => SHOW,
+        /// Compute friction rates.
+        Stats => STATS,
+        /// List configured taxonomy tags.
+        Tags => TAGS,
+        /// Update triage metadata.
+        Update => UPDATE,
+        /// Mark a record resolved.
+        Resolve => RESOLVE,
+        /// Move a record into the workspace that owns it.
+        Rehome => REHOME,
+    }
 }
+
+/// The friction noun.
+pub const FRICTION: NounSpec<FrictionVerb> = NounSpec {
+    cli_name: "friction",
+    tool_prefix: "orbit.friction",
+    cli_about: "Report, list, and triage friction records",
+    audit_target_type: "friction",
+    audit_target_param: "id",
+    tool_only_registration: crate::governance::operation::ToolOnlyRegistration::Inactive,
+    cli_groups: &[],
+    operations: FRICTION_OPERATIONS,
+};
 
 /// A friction operation specification.
 pub type FrictionOperation = OperationSpec<FrictionVerb>;
@@ -48,80 +68,63 @@ pub type FrictionOperation = OperationSpec<FrictionVerb>;
 /// Opt-in `friction.list` response mode that returns records and guidance.
 pub const FRICTION_LIST_RESPONSE_MODE_WITH_NOTES: &str = "with_notes";
 
-impl FrictionVerb {
-    /// This verb's specification.
-    pub fn spec(self) -> &'static FrictionOperation {
-        match self {
-            FrictionVerb::Add => &ADD,
-            FrictionVerb::List => &LIST,
-            FrictionVerb::Show => &SHOW,
-            FrictionVerb::Stats => &STATS,
-            FrictionVerb::Tags => &TAGS,
-            FrictionVerb::Update => &UPDATE,
-            FrictionVerb::Resolve => &RESOLVE,
-            FrictionVerb::Rehome => &REHOME,
-        }
-    }
-
-    /// The verb's short name (`add`), which is also its CLI subcommand and its
-    /// audit `subcommand` label.
-    pub fn as_str(self) -> &'static str {
-        self.spec().name
-    }
-
-    /// The verb's fully-qualified tool name (`orbit.friction.add`).
-    pub fn tool_name(self) -> &'static str {
-        self.spec().tool_name
-    }
-}
-
-/// The friction operation registry.
-///
-/// Declaration order is contract: it is the order `orbit friction --help` lists
-/// subcommands. Within a spec, parameter order is the order both `--help` and
-/// the MCP tool schema list parameters.
-pub const FRICTION_OPERATIONS: &[FrictionOperation] =
-    &[ADD, LIST, SHOW, STATS, TAGS, UPDATE, RESOLVE, REHOME];
-
 const ADD: FrictionOperation = FrictionOperation {
     verb: FrictionVerb::Add,
-    name: "add",
+    cli_path: &["add"],
     tool_name: "orbit.friction.add",
     tool_description: "Append a friction report",
     cli_about: "Append a friction report",
-    params: &[
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
         ParamSpec {
             name: "body",
+            aliases: &["description"],
             param_type: ParamType::String,
             required: true,
             preserve_empty: false,
+            default: None,
+            redact: Redaction::FreeText,
             mcp_description: Some(BODY_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: flag("body"),
                 help: BODY_HELP,
             }),
         },
         ParamSpec {
             name: "title",
+            aliases: &[],
             param_type: ParamType::String,
             required: false,
             preserve_empty: false,
+            default: None,
+            redact: Redaction::FreeText,
             mcp_description: Some(ADD_TITLE_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: flag("title"),
                 help: ADD_TITLE_CLI_HELP,
             }),
         },
         ParamSpec {
             name: "tags",
+            aliases: &["tag"],
             param_type: ParamType::StringList,
             required: false,
             preserve_empty: false,
+            default: None,
+            redact: Redaction::None,
             mcp_description: Some(Description::Computed(add_tags_description)),
             cli: Some(CliBinding {
+                required: false,
                 kind: CliArgKind::Flag {
                     long: "tag",
                     delimiter: Some(','),
+                    aliases: &[],
+                    visible_aliases: &[],
+                    value_name: None,
+                    multiple: false,
                 },
                 help: Description::Static(
                     "Friction taxonomy tag; repeat or comma-separate for multiple tags",
@@ -130,47 +133,62 @@ const ADD: FrictionOperation = FrictionOperation {
         },
         ParamSpec {
             name: "during_task",
+            aliases: &["task_id"],
             param_type: ParamType::String,
             required: false,
             preserve_empty: false,
+            default: None,
+            redact: Redaction::None,
             mcp_description: Some(DURING_TASK_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: flag("during-task"),
                 help: DURING_TASK_HELP,
             }),
         },
         ParamSpec {
             name: "model",
+            aliases: &[],
             param_type: ParamType::String,
             required: true,
             preserve_empty: false,
+            default: None,
+            redact: Redaction::None,
             mcp_description: Some(Description::Static(
                 "Required agent family for attribution (`codex`, `claude`, `gemini`, or `grok`)",
             )),
             cli: Some(CliBinding {
+                required: false,
                 kind: flag("model"),
                 help: Description::Static(
                     "Agent family to attribute the record to (`codex`, `claude`, `gemini`, or `grok`)",
                 ),
             }),
         },
-    ],
-    rejects_agent_field: true,
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[RETIRED_AGENT_FIELD],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
-    cli_render: CliRender::Record,
 };
 
 const LIST: FrictionOperation = FrictionOperation {
     verb: FrictionVerb::List,
-    name: "list",
+    cli_path: &["list"],
     tool_name: "orbit.friction.list",
     tool_description: "List friction records. Returns a JSON record array by default. Set `response_mode` to `with_notes` for a stable `{records, notes}` object.",
     cli_about: "List friction records",
-    params: &[
+    cli_help: CliHelp::NONE,
+    effect: Effect::Read,
+    params: &[&[
         text_param("model", "Optional model filter"),
-        text_param(
-            "status",
-            "Optional status filter: open, triaged, or resolved",
+        defaulted(
+            text_param(
+                "status",
+                "Status filter: open, triaged or resolved, comma-separated for several, or `all` for every status. Omitted, every status is listed",
+            ),
+            "open,triaged",
+            "Status filter: open, triaged or resolved, comma-separated for several, or `all` for every status",
         ),
         text_param("tag", "Optional tag filter"),
         text_param(
@@ -185,79 +203,106 @@ const LIST: FrictionOperation = FrictionOperation {
         text_param("to", "Optional RFC3339 upper bound for created_at"),
         count_param("limit", "Optional maximum number of records to return"),
         count_param("offset", "Optional number of records to skip"),
+        defaulted(
+            text_param(
+                "order",
+                "Creation-time order: `oldest` or `newest` first. Omitted, oldest first",
+            ),
+            "newest",
+            "Creation-time order: `oldest` or `newest` first",
+        ),
         ParamSpec {
             name: "response_mode",
+            aliases: &[],
             param_type: ParamType::String,
             required: false,
             preserve_empty: false,
+            default: None,
+            redact: Redaction::None,
             mcp_description: Some(Description::Static(
                 "Optional response shape: `with_notes` returns `{records, notes}`; omit for the legacy record array",
             )),
             cli: None,
         },
-    ],
-    rejects_agent_field: false,
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     // Agents list frictions through `orbit.search` with `kind: friction` and
     // no query; this verb backs the CLI listing and the dashboard.
     mcp_scope: None,
-    cli_render: CliRender::RecordTable,
 };
 
 const SHOW: FrictionOperation = FrictionOperation {
     verb: FrictionVerb::Show,
-    name: "show",
+    cli_path: &["show"],
     tool_name: "orbit.friction.show",
     tool_description: "Fetch a single friction record by id",
     cli_about: "Show a single friction record",
-    params: &[BARE_ID_PARAM],
-    rejects_agent_field: false,
+    cli_help: CliHelp::NONE,
+    effect: Effect::Read,
+    params: &[&[BARE_ID_PARAM]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     // `list` already returns the record bodies an agent needs; fetching one by
     // id is a human/dashboard follow-up and stays on the CLI surface.
     mcp_scope: None,
-    cli_render: CliRender::Record,
 };
 
 const STATS: FrictionOperation = FrictionOperation {
     verb: FrictionVerb::Stats,
-    name: "stats",
+    cli_path: &["stats"],
     tool_name: "orbit.friction.stats",
     tool_description: "Compute friction rates from the friction and task stores",
     cli_about: "Compute friction rates",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Read,
     params: &[],
-    rejects_agent_field: false,
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     // Aggregate administration stays off the MCP surface.
     mcp_scope: None,
-    cli_render: CliRender::AlwaysJson,
 };
 
 const TAGS: FrictionOperation = FrictionOperation {
     verb: FrictionVerb::Tags,
-    name: "tags",
+    cli_path: &["tags"],
     tool_name: "orbit.friction.tags",
     tool_description: "List configured friction taxonomy tags",
     cli_about: "List configured friction taxonomy tags",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Read,
     params: &[],
-    rejects_agent_field: false,
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     // The taxonomy is already spelled out in the `add`/`update` tag parameter
     // descriptions, so a separate advertised lookup earns nothing.
     mcp_scope: None,
-    cli_render: CliRender::TagList,
 };
 
 const UPDATE: FrictionOperation = FrictionOperation {
     verb: FrictionVerb::Update,
-    name: "update",
+    cli_path: &["update"],
     tool_name: "orbit.friction.update",
     tool_description: "Update triage metadata for a friction record. A non-empty `rehome_to` moves the record into that registered workspace after the other edits apply: the owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID (returned as `rehomed_as`), and this record is resolved with a pointer to it. Set `move` to false to only record the `rehome_to` disposition",
     cli_about: "Update triage metadata for a friction record",
-    params: &[
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
         ParamSpec {
             name: "id",
+            aliases: &[],
             param_type: ParamType::String,
             required: true,
             preserve_empty: false,
+            default: None,
+            redact: Redaction::None,
             mcp_description: Some(FRICTION_ID_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: CliArgKind::Positional,
                 help: FRICTION_ID_HELP,
             }),
@@ -265,114 +310,158 @@ const UPDATE: FrictionOperation = FrictionOperation {
         text_param("status", "Optional status: open, triaged, or resolved"),
         ParamSpec {
             name: "tags",
+            aliases: &["tag"],
             param_type: ParamType::StringList,
             required: false,
             preserve_empty: false,
+            default: None,
+            redact: Redaction::None,
             mcp_description: Some(Description::Computed(update_tags_description)),
             cli: Some(CliBinding {
+                required: false,
                 kind: CliArgKind::Flag {
                     long: "tag",
                     delimiter: Some(','),
+                    aliases: &[],
+                    visible_aliases: &[],
+                    value_name: None,
+                    multiple: false,
                 },
                 help: Description::Static(
                     "Optional replacement taxonomy tag; repeat or comma-separate for multiple tags",
                 ),
             }),
         },
-        text_param("body", "Optional replacement markdown body"),
+        ParamSpec {
+            name: "body",
+            aliases: &[],
+            param_type: ParamType::String,
+            required: false,
+            preserve_empty: false,
+            default: None,
+            redact: Redaction::FreeText,
+            mcp_description: Some(UPDATE_BODY_HELP),
+            cli: Some(CliBinding {
+                required: false,
+                kind: flag("body"),
+                help: UPDATE_BODY_HELP,
+            }),
+        },
         ParamSpec {
             name: "rehome_to",
+            aliases: &[],
             param_type: ParamType::String,
             required: false,
             preserve_empty: true,
+            default: None,
+            redact: Redaction::None,
             mcp_description: Some(REHOME_TO_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: flag("rehome-to"),
-                help: REHOME_TO_HELP,
+                help: REHOME_TO_CLI_HELP,
             }),
         },
         ParamSpec {
             name: "move",
+            aliases: &[],
             param_type: ParamType::Boolean,
             required: false,
             preserve_empty: false,
+            default: None,
+            redact: Redaction::None,
             mcp_description: Some(MOVE_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: flag("move"),
-                help: MOVE_HELP,
+                help: MOVE_CLI_HELP,
             }),
         },
         ParamSpec {
             name: "title",
+            aliases: &[],
             param_type: ParamType::String,
             required: false,
             preserve_empty: true,
+            default: None,
+            redact: Redaction::FreeText,
             mcp_description: Some(UPDATE_TITLE_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: flag("title"),
                 help: UPDATE_TITLE_CLI_HELP,
             }),
         },
-    ],
-    rejects_agent_field: false,
+    ]],
+    at_least_one_of: &["status", "tags", "body", "title", "rehome_to"],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
-    cli_render: CliRender::Record,
 };
 
 const RESOLVE: FrictionOperation = FrictionOperation {
     verb: FrictionVerb::Resolve,
-    name: "resolve",
+    cli_path: &["resolve"],
     tool_name: "orbit.friction.resolve",
     tool_description: "Mark a friction record as resolved",
     cli_about: "Mark a friction record as resolved",
-    params: &[BARE_ID_PARAM],
-    rejects_agent_field: false,
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[BARE_ID_PARAM]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     // Resolution is an operator decision taken through the CLI / dashboard.
     mcp_scope: None,
-    cli_render: CliRender::Record,
 };
 
 const REHOME: FrictionOperation = FrictionOperation {
     verb: FrictionVerb::Rehome,
-    name: "rehome",
+    cli_path: &["rehome"],
     tool_name: "orbit.friction.rehome",
     tool_description: "Move an unresolved friction record into the registered workspace that owns it. The owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID; this record is resolved with a pointer to it",
     cli_about: "Move a friction record into the registered workspace that owns it",
-    params: &[
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
         ParamSpec {
             name: "id",
+            aliases: &[],
             param_type: ParamType::String,
             required: true,
             preserve_empty: false,
+            default: None,
+            redact: Redaction::None,
             mcp_description: Some(FRICTION_ID_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: CliArgKind::Positional,
                 help: FRICTION_ID_HELP,
             }),
         },
         ParamSpec {
             name: "to_workspace",
+            aliases: &[],
             param_type: ParamType::String,
             required: true,
             preserve_empty: false,
+            default: None,
+            redact: Redaction::None,
             mcp_description: Some(TO_WORKSPACE_HELP),
             cli: Some(CliBinding {
+                required: false,
                 kind: flag("to-workspace"),
                 help: TO_WORKSPACE_HELP,
             }),
         },
-    ],
-    rejects_agent_field: false,
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
     // Agents move a record with `orbit.friction.update` `rehome_to`; this verb
     // remains the CLI spelling of the same move.
     mcp_scope: None,
-    cli_render: CliRender::Record,
 };
-
-/// Look up a friction operation by its short verb name.
-pub fn friction_operation(name: &str) -> Option<&'static FrictionOperation> {
-    find_by_name(FRICTION_OPERATIONS, name)
-}
 
 const FRICTION_ID_HELP: Description = Description::Static("Friction record ID, e.g. FYYYY-MM-NNN");
 const BODY_HELP: Description =
@@ -383,11 +472,18 @@ const ADD_TITLE_HELP: Description = Description::Computed(add_title_description)
 const ADD_TITLE_CLI_HELP: Description = Description::Computed(add_title_cli_help);
 const UPDATE_TITLE_HELP: Description = Description::Computed(update_title_description);
 const UPDATE_TITLE_CLI_HELP: Description = Description::Computed(update_title_cli_help);
+const UPDATE_BODY_HELP: Description = Description::Static("Optional replacement markdown body");
 const REHOME_TO_HELP: Description = Description::Static(
     "Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless `move` is false. An empty string clears a recorded disposition",
 );
 const MOVE_HELP: Description = Description::Static(
     "With `rehome_to`: false records the `rehome_required` disposition without moving, for a workspace that is not registered here; defaults to true",
+);
+const REHOME_TO_CLI_HELP: Description = Description::Static(
+    "Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless --move false. An empty string clears a recorded disposition",
+);
+const MOVE_CLI_HELP: Description = Description::Static(
+    "With --rehome-to: false records the rehome-required disposition without moving, for a workspace that is not registered here; defaults to true",
 );
 const TO_WORKSPACE_HELP: Description =
     Description::Static("Registered name or ID of the workspace that owns this friction");
@@ -403,11 +499,15 @@ const DURING_TASK_HELP: Description = Description::Static(
 /// description was already the spelled-out form.
 const BARE_ID_PARAM: ParamSpec = ParamSpec {
     name: "id",
+    aliases: &[],
     param_type: ParamType::String,
     required: true,
     preserve_empty: false,
+    default: None,
+    redact: Redaction::None,
     mcp_description: Some(Description::Static("friction ID")),
     cli: Some(CliBinding {
+        required: false,
         kind: CliArgKind::Positional,
         help: FRICTION_ID_HELP,
     }),
@@ -417,26 +517,49 @@ const BARE_ID_PARAM: ParamSpec = ParamSpec {
 const fn text_param(name: &'static str, description: &'static str) -> ParamSpec {
     ParamSpec {
         name,
+        aliases: &[],
         param_type: ParamType::String,
         required: false,
         preserve_empty: false,
+        default: None,
+        redact: Redaction::None,
         mcp_description: Some(Description::Static(description)),
         cli: Some(CliBinding {
+            required: false,
             kind: flag(name),
             help: Description::Static(description),
         }),
     }
 }
 
+/// A parameter whose omitted flag sends `default`, with CLI help that leaves
+/// out the omitted-field behaviour the tool description states, since
+/// `--help` shows the default itself.
+const fn defaulted(
+    mut param: ParamSpec,
+    default: &'static str,
+    cli_help: &'static str,
+) -> ParamSpec {
+    param.default = Some(default);
+    if let Some(binding) = &mut param.cli {
+        binding.help = Description::Static(cli_help);
+    }
+    param
+}
+
 /// A `--<name> <NAME>` flag carrying a non-negative integer (pagination).
 const fn count_param(name: &'static str, description: &'static str) -> ParamSpec {
     ParamSpec {
         name,
+        aliases: &[],
         param_type: ParamType::Integer,
         required: false,
         preserve_empty: false,
+        default: None,
+        redact: Redaction::None,
         mcp_description: Some(Description::Static(description)),
         cli: Some(CliBinding {
+            required: false,
             kind: flag(name),
             help: Description::Static(description),
         }),
@@ -444,10 +567,7 @@ const fn count_param(name: &'static str, description: &'static str) -> ParamSpec
 }
 
 const fn flag(long: &'static str) -> CliArgKind {
-    CliArgKind::Flag {
-        long,
-        delimiter: None,
-    }
+    CliArgKind::flag(long)
 }
 
 fn add_title_description() -> String {

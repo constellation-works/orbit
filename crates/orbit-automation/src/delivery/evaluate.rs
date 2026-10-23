@@ -186,7 +186,10 @@ fn evaluate_pass(
             return diagnostic(store, consumer, "retry_backoff", Some(state));
         }
 
-        state = admit_active(store, host, &state)?;
+        state = match admit_active(store, host, &request, &state)? {
+            Admission::Admitted(admitted) => admitted,
+            Admission::Held(held) => return Ok(held),
+        };
     }
 
     // Proven-covered prefixes are not debt. Retire them before backpressure so
@@ -346,7 +349,10 @@ fn evaluate_pass(
     next.active = Some(attempt);
     state = commit(store, &state, next, None)?;
 
-    state = admit_active(store, host, &state)?;
+    state = match admit_active(store, host, &request, &state)? {
+        Admission::Admitted(admitted) => admitted,
+        Admission::Held(held) => return Ok(held),
+    };
 
     diagnostic(
         store,
@@ -360,16 +366,29 @@ fn evaluate_pass(
     )
 }
 
-/// Hand the claimed attempt to Core and record the durable action id it resolved.
+/// What admitting the claimed attempt left behind.
+enum Admission {
+    /// The action was minted and its id recorded.
+    Admitted(AutomationState),
+    /// The host holds the claim; the consumer is stalled until it clears.
+    Held(AutomationDiagnostic),
+}
+
+/// Hand the claimed attempt to Core and record the durable action id it
+/// resolved, unless the host holds it under the current configuration.
 fn admit_active(
     store: &dyn AutomationStoreBackend,
     host: &dyn DeliveryHost,
+    request: &Evaluation<'_>,
     state: &AutomationState,
-) -> Result<AutomationState, AutomationError> {
+) -> Result<Admission, AutomationError> {
     let active = state
         .active
         .as_ref()
         .ok_or_else(|| AutomationError::Deferred("missing_claim".into()))?;
+    if let Some(hold) = host.admission_hold(active)? {
+        return stall::held(store, host, request, state, hold).map(Admission::Held);
+    }
     let id = host.admit(active)?;
 
     let mut next = state.clone();
@@ -378,5 +397,5 @@ fn admit_active(
         attempt.state = BatchState::Admitted;
     }
 
-    commit(store, state, next, None)
+    commit(store, state, next, None).map(Admission::Admitted)
 }

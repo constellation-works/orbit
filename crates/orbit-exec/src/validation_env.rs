@@ -22,7 +22,7 @@
 //! The probe runs `<shell> -i -l -c "exec /bin/sh -c '<printer>'"`, reading
 //! interactive rc files as well as profiles. Startup failure, nonzero exit,
 //! timeout or a missing marker triggers a fallback to `<shell> -l -c …`.
-//! `workflow.validation_env.interactive = false` uses only that login probe.
+//! `workflow.validation_env.shell_probe = "login"` uses only that login probe.
 //! Each attempt has a bounded timeout and null stdin. The printer writes a
 //! marker and then one NUL-terminated record per toolchain variable, ignoring
 //! banners and rc output. Successful probes ignore stderr (including bash's
@@ -150,6 +150,13 @@ pub struct ValidationEnvPolicy {
     pub path: Vec<String>,
     /// How [`Self::path`] combines with the resolved PATH.
     pub path_mode: ValidationPathMode,
+    /// Output variables bound to managed host output by validation runners.
+    /// Empty means no output allocation or environment override.
+    pub build_output_env: Vec<String>,
+    /// When false (the default), a runner that binds a host validation
+    /// target forces `CARGO_INCREMENTAL=0`. True is the operator opt-in:
+    /// the runner leaves `CARGO_INCREMENTAL` untouched.
+    pub cargo_incremental: bool,
 }
 
 impl Default for ValidationEnvPolicy {
@@ -159,6 +166,8 @@ impl Default for ValidationEnvPolicy {
             interactive: true,
             path: Vec::new(),
             path_mode: ValidationPathMode::Prepend,
+            build_output_env: Vec::new(),
+            cargo_incremental: false,
         }
     }
 }
@@ -424,6 +433,16 @@ pub struct ValidationEnvironment {
     pub config_path: Vec<String>,
     /// How [`Self::config_path`] was applied.
     pub path_mode: ValidationPathMode,
+    /// Workspace-selected variables for managed host output.
+    pub build_output_env: Vec<String>,
+    /// Managed output directory after the host runner binds it.
+    pub build_output_dir: Option<PathBuf>,
+    /// Canonical source namespace of the managed output.
+    pub build_output_source: Option<PathBuf>,
+    /// Operator opt-in copied from [`ValidationEnvPolicy::cargo_incremental`].
+    /// Host runners read it when they bind output; resolution itself does not
+    /// set `CARGO_INCREMENTAL`.
+    pub cargo_incremental: bool,
 }
 
 impl ValidationEnvironment {
@@ -440,6 +459,10 @@ impl ValidationEnvironment {
             login_shell_enabled: false,
             config_path: Vec::new(),
             path_mode: ValidationPathMode::Prepend,
+            build_output_env: Vec::new(),
+            build_output_dir: None,
+            build_output_source: None,
+            cargo_incremental: false,
         }
     }
 
@@ -513,6 +536,10 @@ impl ValidationEnvironment {
             login_shell_enabled: policy.login_shell,
             config_path,
             path_mode: policy.path_mode,
+            build_output_env: policy.build_output_env.clone(),
+            build_output_dir: None,
+            build_output_source: None,
+            cargo_incremental: policy.cargo_incremental,
         }
     }
 
@@ -617,8 +644,8 @@ impl ValidationEnvironment {
         }
         if !self.login_shell_enabled && self.source == ValidationEnvSource::LauncherFallback {
             return Some(format!(
-                "login-shell resolution is disabled (`workflow.validation_env.login_shell = \
-                 false`) and `workflow.validation_env.path` is empty, so required validation \
+                "login-shell resolution is disabled (`workflow.validation_env.shell_probe = \
+                 off`) and `workflow.validation_env.path` is empty, so required validation \
                  runs with whatever PATH launched the worker: PATH={path} (source: \
                  launcher_fallback)."
             ));
@@ -785,7 +812,3 @@ fn account_home() -> Option<PathBuf> {
         .map(|(_, home)| home)
         .filter(|home| home.is_absolute())
 }
-
-#[cfg(all(test, unix))]
-#[path = "tests/validation_env.rs"]
-mod tests;

@@ -32,7 +32,7 @@ struct FailingPipeline<'a> {
     failure_status: TaskStatus,
 }
 
-impl RuntimeHost for FailingPipeline<'_> {
+impl orbit_engine::test_support::NullRuntimeHost for FailingPipeline<'_> {
     fn run_deterministic(
         &self,
         action: &str,
@@ -208,6 +208,7 @@ fn fail_pipeline(
         .complete_job_run_step(
             run,
             &JobRunStepParams {
+                lock_wait_ms: None,
                 step_index: 1,
                 target_type: JobTargetType::Activity,
                 target_id: "implement".to_string(),
@@ -244,13 +245,7 @@ fn fail_pipeline(
     (before, attempts)
 }
 
-#[test]
 fn a_later_resume_target_records_the_downgrade_on_the_task() {
-    if !super::super::dispatch_admission::isolated(
-        "final_recovery::terminalization::a_later_resume_target_records_the_downgrade_on_the_task",
-    ) {
-        return;
-    }
     let fixture = fixture("[\"sol\"]");
     let task = fixture.task();
     let run = fixture.pipeline_run(&task, "task_pr_pipeline");
@@ -299,13 +294,7 @@ fn a_later_resume_target_records_the_downgrade_on_the_task() {
     );
 }
 
-#[test]
 fn a_requeue_survives_failed_run_terminalization_even_if_the_outcome_write_fails() {
-    if !super::super::dispatch_admission::isolated(
-        "final_recovery::terminalization::a_requeue_survives_failed_run_terminalization_even_if_the_outcome_write_fails",
-    ) {
-        return;
-    }
     for job in ["task_pr_pipeline", "task_local_pipeline"] {
         for failure_status in [TaskStatus::InProgress, TaskStatus::Backlog] {
             for lose_outcome in [false, true] {
@@ -376,16 +365,10 @@ fn a_requeue_survives_failed_run_terminalization_even_if_the_outcome_write_fails
     }
 }
 
-#[test]
 fn other_final_recovery_outcomes_survive_failed_run_terminalization() {
-    if !super::super::dispatch_admission::isolated(
-        "final_recovery::terminalization::other_final_recovery_outcomes_survive_failed_run_terminalization",
-    ) {
-        return;
-    }
     let fixture = fixture("[\"sol\"]");
     let git = |args: &[&str]| {
-        let output = orbit_common::fs::git::run_git(&fixture.repo, args).unwrap();
+        let output = crate::git_test_support::run(&fixture.repo, args).unwrap();
         assert!(output.success, "git {args:?}: {}", output.stderr);
         output.stdout.trim().to_string()
     };
@@ -478,13 +461,7 @@ fn other_final_recovery_outcomes_survive_failed_run_terminalization() {
     }
 }
 
-#[test]
 fn failure_cleanup_still_blocks_backlog_without_a_current_requeue_from_that_run() {
-    if !super::super::dispatch_admission::isolated(
-        "final_recovery::terminalization::failure_cleanup_still_blocks_backlog_without_a_current_requeue_from_that_run",
-    ) {
-        return;
-    }
     for case in [
         "ordinary backlog",
         "another run requeued",
@@ -540,3 +517,12 @@ fn failure_cleanup_still_blocks_backlog_without_a_current_requeue_from_that_run(
         );
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_later_resume_target_records_the_downgrade_on_the_task_scenarios,
+    a_later_resume_target_records_the_downgrade_on_the_task,
+    a_requeue_survives_failed_run_terminalization_even_if_the_outcome_write_fails,
+    other_final_recovery_outcomes_survive_failed_run_terminalization,
+    failure_cleanup_still_blocks_backlog_without_a_current_requeue_from_that_run
+);

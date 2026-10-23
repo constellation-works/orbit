@@ -16,6 +16,16 @@
 //! reads the scope's `memory.events` / `pids.events` counters to tell a
 //! resource-limit failure apart from any other one.
 //!
+//! Every Linux worker, contained or not, also starts with an
+//! `oom_score_adj` of at least [`WORKER_OOM_SCORE_ADJ`], inherited by
+//! everything it spawns. The user manager runs at 100 (systemd's
+//! `user@.service`) with almost no memory of its own, so a host-wide OOM whose
+//! worst offender was already killed otherwise picks it next: on 2026-10-12 the
+//! kernel killed the user `systemd`, and every worker scope went with it.
+//! Scope units take no `OOMScoreAdjust=` (it is an exec setting systemd only
+//! applies to processes it forks), so the launched process sets the value on
+//! itself before `systemd-run` execs, and the worker keeps it.
+//!
 //! `machine.worker_cpu_quota` (percent of one core, off at 0) adds `CPUQuota=`
 //! so one leaf cannot take every core. systemd applies it only where the user
 //! manager delegates the cpu controller; elsewhere the property is accepted
@@ -24,9 +34,9 @@
 //! By default, disabled or unavailable containment (containers, sandboxes
 //! without a user bus) launches workers uncontained with one warning per
 //! process. Platforms without systemd (macOS) launch uncontained silently:
-//! there is nothing to warn about. `machine.worker_containment_strict=true` or the CLI's
-//! `--strict-worker-containment` refuses an unavailable scope before spawning
-//! the worker. Strict mode requires `machine.worker_containment=true`.
+//! there is nothing to warn about. `machine.worker_containment = "strict"` or
+//! the CLI's `--strict-worker-containment` refuses an unavailable scope before
+//! spawning the worker; the flag is refused while containment is `off`.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -51,6 +61,11 @@ pub(crate) const WORKER_CONTAINMENT_UNAVAILABLE_ERROR_CODE: &str = "worker_conta
 const SCOPE_UNIT_PREFIX: &str = "orbit-worker-";
 const SCOPE_UNIT_SUFFIX: &str = ".scope";
 const SYSTEMD_RUN: &str = "systemd-run";
+/// The kernel OOM preference every worker launches with, well above the
+/// user manager's 100 and the default 0 of the drain or service that launched
+/// it, so a worker process is always killed before them.
+#[cfg(target_os = "linux")]
+pub(crate) const WORKER_OOM_SCORE_ADJ: i32 = 500;
 /// Inherited by a coordinator's child workers so one CLI invocation keeps its
 /// containment policy for every leaf it admits.
 pub(crate) const STRICT_WORKER_CONTAINMENT_ENV: &str = "ORBIT_WORKER_CONTAINMENT_STRICT";
@@ -131,20 +146,16 @@ pub(crate) fn contain_worker_command_with_availability(
     let Some(limits) = limits else {
         if strict {
             return Err(orbit_common::OrbitError::WorkerContainmentUnavailable {
-                reason: "machine.worker_containment=false".into(),
+                reason: "machine.worker_containment=off".into(),
             });
         }
         if systemd_expected {
-            warn_uncontained("machine.worker_containment is false", warned);
+            warn_uncontained("machine.worker_containment is off", warned);
         }
-        return Ok(base);
+        return Ok(prefer_as_oom_victim(base));
     };
-    match availability.unwrap_or_else(user_scope_availability) {
-        Ok(()) => Ok(scoped_worker_command(
-            &base,
-            &scope_unit_name(run_id),
-            limits,
-        )),
+    let command = match availability.unwrap_or_else(user_scope_availability) {
+        Ok(()) => scoped_worker_command(&base, &scope_unit_name(run_id), limits),
         Err(reason) => {
             if strict {
                 return Err(orbit_common::OrbitError::WorkerContainmentUnavailable { reason });
@@ -152,9 +163,47 @@ pub(crate) fn contain_worker_command_with_availability(
             if systemd_expected {
                 warn_uncontained(&reason, warned);
             }
-            Ok(base)
+            base
         }
+    };
+    Ok(prefer_as_oom_victim(command))
+}
+
+/// Raise the launched process's `oom_score_adj` to [`WORKER_OOM_SCORE_ADJ`]
+/// before it execs, never lowering a higher inherited value. Best-effort: a
+/// process that cannot write its own score still launches.
+#[cfg(target_os = "linux")]
+fn prefer_as_oom_victim(mut command: Command) -> Command {
+    use std::os::unix::process::CommandExt;
+
+    let inherited = std::fs::read_to_string("/proc/self/oom_score_adj")
+        .ok()
+        .and_then(|value| value.trim().parse::<i32>().ok())
+        .unwrap_or(0);
+    // Formatted here: the child between fork and exec may only make
+    // async-signal-safe calls, so it writes these bytes and allocates nothing.
+    let value = inherited.max(WORKER_OOM_SCORE_ADJ).to_string().into_bytes();
+    // SAFETY: the hook only calls open, write and close, which are
+    // async-signal-safe, on memory captured before the fork.
+    unsafe {
+        command.pre_exec(move || {
+            let fd = libc::open(
+                c"/proc/self/oom_score_adj".as_ptr(),
+                libc::O_WRONLY | libc::O_CLOEXEC,
+            );
+            if fd >= 0 {
+                let _ = libc::write(fd, value.as_ptr().cast(), value.len());
+                libc::close(fd);
+            }
+            Ok(())
+        });
     }
+    command
+}
+
+#[cfg(not(target_os = "linux"))]
+fn prefer_as_oom_victim(command: Command) -> Command {
+    command
 }
 
 fn warn_uncontained(reason: &str, warned: &Once) {
@@ -389,6 +438,151 @@ impl WorkerScopeCgroup {
             tasks_max: limit("pids.max"),
         })
     }
+
+    /// Rebuild the scope a supervisor recorded for a worker it launched
+    /// [ORB-17179]. Only a worker-scope unit whose cgroup directory sits under
+    /// the cgroup v2 root and ends in that unit is accepted, so a recorded
+    /// value can never point the counter reads anywhere else.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn from_recorded(unit: &str, directory: &str) -> Option<Self> {
+        let directory = PathBuf::from(directory);
+        let contained = directory.starts_with("/sys/fs/cgroup")
+            && directory.components().all(|component| {
+                matches!(
+                    component,
+                    std::path::Component::RootDir | std::path::Component::Normal(_)
+                )
+            });
+        (contained
+            && unit.starts_with(SCOPE_UNIT_PREFIX)
+            && unit.ends_with(SCOPE_UNIT_SUFFIX)
+            && directory.file_name().is_some_and(|name| name == unit))
+        .then(|| Self {
+            unit: unit.to_string(),
+            directory,
+        })
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn from_recorded(_unit: &str, _directory: &str) -> Option<Self> {
+        None
+    }
+
+    /// The scope's systemd unit name.
+    pub(crate) fn unit(&self) -> &str {
+        &self.unit
+    }
+
+    /// The scope's cgroup directory.
+    pub(crate) fn directory(&self) -> &std::path::Path {
+        &self.directory
+    }
+
+    /// The scope's OOM-kill and refused-fork counters, zero or not. `None`
+    /// when neither counter file can be read, as once systemd has removed
+    /// the scope's cgroup.
+    pub(crate) fn counters(&self) -> Option<ScopeCounters> {
+        let read = |name: &str| std::fs::read_to_string(self.directory.join(name)).ok();
+        let oom_kills = read("memory.events").map(|events| event_count(&events, "oom_kill"));
+        let tasks_refused = read("pids.events").map(|events| event_count(&events, "max"));
+        (oom_kills.is_some() || tasks_refused.is_some()).then_some(ScopeCounters {
+            oom_kills,
+            tasks_refused,
+        })
+    }
+
+    /// The unit's state and result while the systemd user manager still
+    /// holds it, as `state=<ActiveState>, result=<Result>`. `None` once the
+    /// manager has collected the unit, or when it cannot be asked.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn unit_result(&self) -> Option<String> {
+        use orbit_common::process::bounded::run_bounded_capped_typed;
+        use std::time::Duration;
+
+        let mut command = Command::new("systemctl");
+        command.args([
+            "--user",
+            "show",
+            &self.unit,
+            "--property=LoadState",
+            "--property=ActiveState",
+            "--property=Result",
+        ]);
+        let output = run_bounded_capped_typed(&mut command, Duration::from_secs(5), 4096).ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let property = |key: &str| {
+            stdout
+                .lines()
+                .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        };
+        if property("LoadState") != Some("loaded") {
+            return None;
+        }
+        Some(format!(
+            "state={}, result={}",
+            property("ActiveState").unwrap_or("unknown"),
+            property("Result").unwrap_or("unknown"),
+        ))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn unit_result(&self) -> Option<String> {
+        None
+    }
+
+    /// The scope's cumulative CPU time and current non-reclaimable memory, or
+    /// `None` when its cgroup is gone or a counter is unreadable.
+    ///
+    /// Memory is `memory.current - file + shmem` from `memory.stat`:
+    /// `memory.current` also counts page cache charged to the scope, which
+    /// the kernel can drop (25-68% of live dk-server-1 scopes on 2026-10-12).
+    /// `file` includes tmpfs and shared memory, which cannot be dropped, so
+    /// `shmem` is added back.
+    pub(crate) fn usage(&self) -> Option<ScopeUsage> {
+        let read = |name: &str| std::fs::read_to_string(self.directory.join(name)).ok();
+        let cpu_usage_usec = stat_value(&read("cpu.stat")?, "usage_usec")?;
+        let current: u64 = read("memory.current")?.trim().parse().ok()?;
+        let memory_stat = read("memory.stat")?;
+        let file = stat_value(&memory_stat, "file")?;
+        let shmem = stat_value(&memory_stat, "shmem").unwrap_or(0);
+        Some(ScopeUsage {
+            cpu_usage_usec,
+            memory_bytes: current.saturating_sub(file).saturating_add(shmem),
+        })
+    }
+}
+
+/// A worker scope's limit counters as read, each `None` when its file was
+/// unreadable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ScopeCounters {
+    /// `memory.events` `oom_kill`: processes the kernel OOM-killed in the scope.
+    pub(crate) oom_kills: Option<u64>,
+    /// `pids.events` `max`: forks refused at the scope's task limit.
+    pub(crate) tasks_refused: Option<u64>,
+}
+
+/// One reading of a worker scope's resource counters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ScopeUsage {
+    /// `cpu.stat` `usage_usec`: CPU time the scope used since it was created.
+    pub(crate) cpu_usage_usec: u64,
+    /// `memory.current - file + shmem`, in bytes.
+    pub(crate) memory_bytes: u64,
+}
+
+/// The value of `key` in a cgroup flat-keyed file (`<key> <value>` lines).
+fn stat_value(content: &str, key: &str) -> Option<u64> {
+    content
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .find(|(name, _)| *name == key)
+        .and_then(|(_, value)| value.trim().parse().ok())
 }
 
 impl ScopeLimitBreach {
@@ -420,10 +614,5 @@ impl ScopeLimitBreach {
 
 /// The value of `key` in a cgroup `*.events` file (`<key> <count>` lines).
 pub(crate) fn event_count(events: &str, key: &str) -> u64 {
-    events
-        .lines()
-        .filter_map(|line| line.split_once(' '))
-        .find(|(name, _)| *name == key)
-        .and_then(|(_, count)| count.trim().parse().ok())
-        .unwrap_or(0)
+    stat_value(events, key).unwrap_or(0)
 }

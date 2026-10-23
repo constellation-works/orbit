@@ -1,6 +1,7 @@
 use clap::{Args, Subcommand};
 use orbit_cmd::{
-    DoctorCommands, OrphanTaskStoreRemoval, WorkspaceDoctorResult, WorkspaceDoctorStatus,
+    DoctorCommands, OrphanTaskStoreRemoval, RetiredConfigKeyRepair, WorkspaceDoctorResult,
+    WorkspaceDoctorStatus,
 };
 use orbit_core::{DOCTOR_FINDINGS_MESSAGE_PREFIX, OrbitError, OrbitRuntime};
 use orbit_types::policy::{DEFAULT_POLICY_NAME, FsOperation};
@@ -27,6 +28,10 @@ pub struct DoctorCommand {
     /// Scan every database page with SQLite quick_check; default checks only read the header and schema.
     #[arg(long)]
     pub deep: bool,
+
+    /// Print only failures and warnings.
+    #[arg(long)]
+    pub problems: bool,
 
     /// Clear dead holder records under the lock, preserving lock files, before diagnosing the workspace.
     #[arg(long)]
@@ -59,6 +64,10 @@ pub struct DoctorCommand {
     /// Delete this Orbit root and workspace's own state-routine attempt pins that no consumer or live run still names. Legacy shared pins, other roots' and workspaces' pins, in-use pins and unrecognized refs are kept and reported. Refuses while a routine sweep runs.
     #[arg(long)]
     pub fix_automation_pins: bool,
+
+    /// Back up config.toml and remove retired, deprecated or unknown keys, preserving translated review settings. Refuses legacy after-landing policies until manually migrated.
+    #[arg(long)]
+    pub fix_retired_config_keys: bool,
 
     /// Confirm a destructive repair. Required by --fix-orphan-task-stores, which deletes partition directories and their task bundles.
     #[arg(long)]
@@ -99,7 +108,16 @@ impl Execute for DoctorCommand {
                     .to_string(),
             ));
         }
-        let mut results = Vec::new();
+        let mut results = vec![WorkspaceDoctorResult {
+            duration_ms: 0,
+            check_name: "resource-throttle".to_string(),
+            status: WorkspaceDoctorStatus::Info,
+            message: format!(
+                "CPU source: {}",
+                runtime.resource_throttle_settings().cpu_source
+            ),
+            remediation: None,
+        }];
         if self.fix_state_directory_permissions {
             let started = std::time::Instant::now();
             let repaired = runtime.repair_state_directory_permissions()?;
@@ -222,6 +240,19 @@ impl Execute for DoctorCommand {
                 remediation: None,
             });
         }
+        if self.fix_retired_config_keys {
+            let started = std::time::Instant::now();
+            let repair = runtime.remove_retired_config_keys()?;
+            let message = retired_config_key_repair_message(&repair);
+            eprintln!("{message}");
+            results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                check_name: "fix-retired-config-keys".to_string(),
+                status: WorkspaceDoctorStatus::Ok,
+                message,
+                remediation: None,
+            });
+        }
         results.extend(orbit_cmd::run_doctor_report(runtime, self.deep));
         let failures = results
             .iter()
@@ -236,7 +267,28 @@ impl Execute for DoctorCommand {
             .iter()
             .map(orbit_cmd::doctor_row_json)
             .collect::<Vec<_>>();
+
+        let summary = format!("{failures} failure(s), {warnings} warning(s).");
+        eprintln!("{summary}");
         let mut blocks = Vec::new();
+
+        results.sort_by_key(|row| match row.status {
+            WorkspaceDoctorStatus::Error => 0,
+            WorkspaceDoctorStatus::Warning => 1,
+            WorkspaceDoctorStatus::Ok => 2,
+            WorkspaceDoctorStatus::Info => 3,
+            WorkspaceDoctorStatus::Skipped => 4,
+        });
+
+        if self.problems {
+            results.retain(|row| {
+                matches!(
+                    row.status,
+                    WorkspaceDoctorStatus::Error | WorkspaceDoctorStatus::Warning
+                )
+            });
+        }
+
         {
             use crate::output::table::{Column, Table};
             let mut table = Table::new(vec![
@@ -244,7 +296,11 @@ impl Execute for DoctorCommand {
                 Column::new("STATUS").fixed(),
                 Column::new("DETAILS"),
             ])
-            .empty_message("no workspace checks ran");
+            .empty_message(if self.problems {
+                "no problems found"
+            } else {
+                "no workspace checks ran"
+            });
             for row in &results {
                 use comfy_table::Cell;
                 table.add_row(vec![
@@ -261,8 +317,6 @@ impl Execute for DoctorCommand {
                     "\n{}",
                     crate::output::color::text("Workspace healthy.", Role::Ok)
                 )));
-            } else {
-                eprintln!("\n{failures} failure(s), {warnings} warning(s).");
             }
         }
 
@@ -301,7 +355,7 @@ fn findings_audit_message(results: &[WorkspaceDoctorResult], warnings: usize) ->
 
 /// `orbit doctor fs-access`: the active policy's read and modify verdicts for
 /// one path under one fsProfile, without running anything.
-pub(crate) fn fs_access(runtime: &OrbitRuntime, profile: &str, path: &str) -> CommandOut {
+fn fs_access(runtime: &OrbitRuntime, profile: &str, path: &str) -> CommandOut {
     let def = runtime
         .get_policy_def(DEFAULT_POLICY_NAME)?
         .ok_or_else(|| {
@@ -374,6 +428,29 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
         // An executor without a `command` (e.g. `local-shell`) launches no
         // provider CLI, so availability does not apply rather than failing.
         let cli_available = def.command.as_ref().map(|_| launcher.is_some());
+        // A declared `host_os` that excludes this host is not a missing
+        // binary. An omitted declaration keeps the path probe.
+        let unsupported_on_this_os = def.host_os.as_ref().is_some_and(|hosts| {
+            !orbit_types::task::HostOs::current().is_some_and(|host| hosts.contains(&host))
+        });
+        let availability = if unsupported_on_this_os {
+            Some("unsupported on this OS")
+        } else {
+            match cli_available {
+                Some(true) => Some("installed"),
+                Some(false) => Some("not installed"),
+                None => None,
+            }
+        };
+        let found = if unsupported_on_this_os {
+            "unsupported"
+        } else {
+            match cli_available {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "-",
+            }
+        };
         let sandbox = def.sandbox.map_or("unspecified", |kind| kind.as_str());
         let readiness = (sandbox == "linux-bwrap")
             .then_some(linux_probe.as_ref())
@@ -402,6 +479,7 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
             "command": def.command,
             "args": def.args,
             "cli_available": cli_available,
+            "availability": availability,
             "launcher": launcher.as_ref().map(|path| path.display().to_string()),
             "sandbox": def.sandbox,
             "sandbox_ready": readiness.map(|probe| probe.available),
@@ -419,12 +497,7 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
             def.name.clone(),
             def.executor_type.to_string(),
             def.command.clone().unwrap_or_else(|| "-".to_string()),
-            match cli_available {
-                Some(true) => "yes",
-                Some(false) => "no",
-                None => "-",
-            }
-            .to_string(),
+            found.to_string(),
             sandbox.to_string(),
             readiness.map_or_else(
                 || "-".to_string(),
@@ -466,6 +539,48 @@ fn orphan_task_store_removal_message(removed: &OrphanTaskStoreRemoval) -> String
          ({} task bundle(s)).",
         removed.empty_partitions, removed.populated_partitions, removed.task_bundles
     )
+}
+
+/// Render `--fix-retired-config-keys`: which replacement keys were written,
+/// which keys were removed, and the backup written beside each edited file.
+/// An empty repair changed nothing.
+fn retired_config_key_repair_message(repair: &RetiredConfigKeyRepair) -> String {
+    if repair.removed.is_empty() && repair.written.is_empty() {
+        return "No retired, deprecated or unknown config keys were present.".to_string();
+    }
+    let mut groups: Vec<(String, String, Vec<&str>)> = Vec::new();
+    for entry in &repair.removed {
+        let config = entry.config_path.display().to_string();
+        let backup = entry.backup_path.display().to_string();
+        if let Some(group) = groups.iter_mut().find(|group| group.0 == config) {
+            group.2.push(entry.key.as_str());
+        } else {
+            groups.push((config, backup, vec![entry.key.as_str()]));
+        }
+    }
+    let detail = groups
+        .iter()
+        .map(|(config, backup, keys)| {
+            format!("{} from {config} (backup {backup})", keys.join(", "))
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let count = repair.removed.len();
+    let removed = format!(
+        "Removed {count} retired, deprecated or unknown config key{}: {detail}",
+        if count == 1 { "" } else { "s" }
+    );
+    let written = repair
+        .written
+        .iter()
+        .map(|entry| format!("{} in {}", entry.key, entry.config_path.display()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    match (count, written.is_empty()) {
+        (_, true) => format!("{removed}."),
+        (0, false) => format!("Rewrote deprecated config values: {written}."),
+        (_, false) => format!("{removed}; wrote their replacements first: {written}."),
+    }
 }
 
 /// Render `--fix-automation-pins`'s outcome: what it reclaimed, why the rest

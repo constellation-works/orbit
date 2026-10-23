@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_cmd::hosts::{self, HostWorkspaceRoute, TaskIdRoute};
 use orbit_common::governance::authorization::{CallerCapabilities, CallerEnvelope};
+use orbit_common::governance::task::TaskVerb;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_mcp::McpSessionAuthority;
 use orbit_mcp::federated::{MachineQualifiedSelector, is_id_routed_tool};
@@ -21,8 +22,8 @@ use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::{Map, Value, json};
 
 use super::run::RunSubcommand;
+use super::task::TaskInvocation;
 use super::task::TaskSubcommand;
-use super::task::artifact::TaskArtifactSubcommand;
 use super::tool::ToolSubcommand;
 use super::{Cli, CommandOut, Commands, Payload};
 
@@ -73,7 +74,7 @@ pub(crate) fn preflight(cli: &mut Cli) -> Result<Preflight, OrbitError> {
         && let RunSubcommand::Auto(auto) = &mut run.command
     {
         if let Some(pull) = auto.pull.as_mut() {
-            *pull = pull_selector(&global_root, auto.host.as_deref(), pull)?;
+            *pull = hosts::pull_selector(&global_root, auto.host.as_deref(), pull)?;
         }
         return Ok(Preflight::Local);
     }
@@ -149,11 +150,10 @@ fn may_route(cli: &Cli) -> bool {
 fn requested_host(command: &Commands) -> Option<String> {
     let host = match command {
         Commands::Task(task) => match &task.command {
-            TaskSubcommand::Show(args) => args.routing.host.as_deref(),
-            TaskSubcommand::Update(args) => args.routing.host.as_deref(),
-            TaskSubcommand::Artifact(command) => command.routing.host.as_deref(),
-            TaskSubcommand::ReviewReset(args) => args.routing.host.as_deref(),
-            TaskSubcommand::ReconcileReview(command) => command.routing.host.as_deref(),
+            // A registry-derived verb takes `--host` as a CLI-only parameter.
+            TaskSubcommand::Operation(TaskInvocation::Registry(invocation)) => {
+                invocation.input.get("host").and_then(Value::as_str)
+            }
             _ => None,
         },
         Commands::Tool(tool) => match &tool.command {
@@ -178,14 +178,15 @@ fn explicit_root(cli: &Cli) -> bool {
 /// The id an id-routed `orbit task` subcommand addresses.
 fn routed_command_id(command: &TaskSubcommand) -> Option<&str> {
     match command {
-        TaskSubcommand::Show(args) => Some(&args.id),
-        TaskSubcommand::Update(args) => Some(&args.id),
-        TaskSubcommand::Artifact(artifact) => Some(match &artifact.command {
-            TaskArtifactSubcommand::Put(args) => &args.id,
-            TaskArtifactSubcommand::Get(args) => &args.id,
-        }),
-        TaskSubcommand::ReviewReset(args) => Some(&args.id),
-        TaskSubcommand::ReconcileReview(command) => Some(command.command.task_id()),
+        // A registry-derived verb routes by id when its tool does.
+        TaskSubcommand::Operation(TaskInvocation::Registry(invocation))
+            if matches!(
+                invocation.spec.verb,
+                TaskVerb::Update | TaskVerb::ArtifactPut
+            ) || is_id_routed_tool(invocation.spec.tool_name) =>
+        {
+            invocation.target_id()
+        }
         _ => None,
     }
 }
@@ -248,27 +249,6 @@ fn set_workspace_value(cli: &mut Cli, selector: String) -> Result<(), OrbitError
     Ok(())
 }
 
-/// `--pull` with or without `--host`. Orbit never picks the owner host itself.
-fn pull_selector(global_root: &Path, host: Option<&str>, pull: &str) -> Result<String, OrbitError> {
-    let Some(host) = host.map(str::trim).filter(|host| !host.is_empty()) else {
-        if pull.trim().parse::<MachineQualifiedSelector>().is_err() {
-            return Err(OrbitError::UnknownSelector(format!(
-                "'{pull}' is not a host-qualified selector; name the owner with `--host <host>` \
-                 (see `orbit host list`), or pass the full selector federated discovery lists \
-                 (`orbit_workspace_list`)"
-            )));
-        }
-        return Ok(pull.trim().to_string());
-    };
-    match hosts::resolve_host_workspace(global_root, host, pull)? {
-        HostWorkspaceRoute::Remote { selector, .. } => Ok(selector),
-        HostWorkspaceRoute::Local { .. } => Err(OrbitError::CapabilityRefused(format!(
-            "`--pull` pulls from another host's workspace, and '{host}' is this machine; run \
-             plain `orbit run auto` to drain a local backlog"
-        ))),
-    }
-}
-
 /// The authority a routed call asks for: an operator only when this process
 /// resolves as one and declares no agent. An agent never propagates
 /// `--operator`; the destination's own rules decide the rest.
@@ -290,12 +270,23 @@ struct RoutedCall {
 }
 
 enum Render {
-    TaskShow { fields: Vec<String> },
-    TaskWrite { verb: &'static str },
-    ArtifactGet { out: Option<PathBuf> },
+    TaskShow {
+        fields: Vec<String>,
+    },
+    TaskWrite {
+        verb: &'static str,
+    },
+    ArtifactGet {
+        out: Option<PathBuf>,
+    },
     ReviewReset,
+    Requeue,
     Reconcile,
-    ToolRun { full: bool, fields: Vec<String> },
+    ToolRun {
+        full: bool,
+        fields: Vec<String>,
+        bare_field: bool,
+    },
 }
 
 fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> {
@@ -316,12 +307,14 @@ fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> 
                     &mut input,
                     &args.fields,
                 )?;
+                let bare_field = super::tool::answers_with_bare_field(&args.name, &input)?;
                 Ok(RoutedCall {
                     name: args.name.clone(),
                     input,
                     render: Render::ToolRun {
                         full: args.full,
                         fields: args.fields.clone(),
+                        bare_field,
                     },
                 })
             }
@@ -333,77 +326,112 @@ fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> 
 
 fn task_call(command: &TaskSubcommand, holder: &HostEntry) -> Result<RoutedCall, OrbitError> {
     Ok(match command {
-        TaskSubcommand::Show(args) => {
-            let fields = args
-                .fields
-                .iter()
-                .flat_map(|field| field.split(','))
-                .map(str::trim)
-                .filter(|field| !field.is_empty())
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>();
-            let mut input = json!({ "id": args.id });
-            if !fields.is_empty() {
-                input["fields"] = json!(fields);
-            }
-            RoutedCall {
-                name: "orbit.task.show".into(),
-                input,
-                render: Render::TaskShow { fields },
-            }
-        }
-        TaskSubcommand::Update(args) => RoutedCall {
-            name: "orbit.task.update".into(),
-            input: args.remote_tool_input(&holder.ssh)?,
-            render: Render::TaskWrite { verb: "Updated" },
-        },
-        TaskSubcommand::Artifact(artifact) => match &artifact.command {
-            TaskArtifactSubcommand::Put(args) => {
-                let mut input = json!({
-                    "id": args.id,
-                    "source_path": args.source_path,
-                });
-                if let Some(path) = &args.artifact_path {
-                    input["path"] = json!(path);
+        TaskSubcommand::Operation(TaskInvocation::Registry(invocation)) => match invocation
+            .spec
+            .verb
+        {
+            TaskVerb::Show => {
+                let id = invocation.target_id().unwrap_or_default();
+                let fields = invocation
+                    .input
+                    .get("fields")
+                    .and_then(Value::as_array)
+                    .map(|fields| {
+                        fields
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(ToOwned::to_owned)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let mut input = json!({ "id": id });
+                if !fields.is_empty() {
+                    input["fields"] = json!(fields);
                 }
-                if let (_, Some(model)) = super::task::mutation_identity(args.model.clone()) {
-                    input["model"] = json!(model);
+                RoutedCall {
+                    name: invocation.spec.tool_name.into(),
+                    input,
+                    render: Render::TaskShow { fields },
                 }
-                // The bytes cross, never the path: the source is read here,
-                // confined to the current directory.
+            }
+            TaskVerb::Update => RoutedCall {
+                name: invocation.spec.tool_name.into(),
+                input: super::task::operation::remote_update_input(&invocation.input, &holder.ssh)?,
+                render: Render::TaskWrite { verb: "Updated" },
+            },
+            TaskVerb::ArtifactPut => {
+                let mut input = invocation.input.clone();
+                input.shift_remove("host");
+                let model = input
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+                if let (_, Some(model)) = super::task::mutation_identity(model) {
+                    input.insert("model".into(), json!(model));
+                }
                 let cwd = std::env::current_dir()?;
                 RoutedCall {
-                    name: "orbit.task.artifact.put".into(),
+                    name: invocation.spec.tool_name.into(),
                     input: orbit_cmd::prepare_remote_task_artifact_put(
-                        input,
+                        Value::Object(input),
                         Some(&cwd),
                         Some(&cwd),
+                        None,
                     )?,
                     render: Render::TaskWrite {
                         verb: "Stored an artifact on",
                     },
                 }
             }
-            TaskArtifactSubcommand::Get(args) => RoutedCall {
-                name: "orbit.task.artifact.get".into(),
-                input: json!({ "id": args.id, "path": args.path }),
+            TaskVerb::ArtifactGet => RoutedCall {
+                name: invocation.spec.tool_name.into(),
+                input: json!({ "id": invocation.input.get("id"), "path": invocation.input.get("path") }),
                 render: Render::ArtifactGet {
-                    out: args.out.clone(),
+                    out: invocation
+                        .input
+                        .get("out")
+                        .and_then(Value::as_str)
+                        .map(PathBuf::from),
                 },
             },
-        },
-        TaskSubcommand::ReviewReset(args) => RoutedCall {
-            name: "orbit.task.review_reset".into(),
-            input: args.tool_input(),
-            render: Render::ReviewReset,
-        },
-        TaskSubcommand::ReconcileReview(command) => RoutedCall {
-            name: "orbit.task.reconcile_review".into(),
-            input: command.command.tool_input(),
-            render: Render::Reconcile,
+            TaskVerb::ReviewReset => RoutedCall {
+                name: invocation.spec.tool_name.into(),
+                input: without_host(&invocation.input),
+                render: Render::ReviewReset,
+            },
+            TaskVerb::ReconcileReview => RoutedCall {
+                name: invocation.spec.tool_name.into(),
+                input: without_host(&invocation.input),
+                render: Render::Reconcile,
+            },
+            TaskVerb::Requeue => RoutedCall {
+                name: invocation.spec.tool_name.into(),
+                input: without_host(&invocation.input),
+                render: Render::Requeue,
+            },
+            TaskVerb::RetryHandoff
+            | TaskVerb::LocksList
+            | TaskVerb::LocksReserve
+            | TaskVerb::LocksRelease
+            | TaskVerb::Add
+            | TaskVerb::List
+            | TaskVerb::Eligible
+            | TaskVerb::Lint
+            | TaskVerb::BlockTriage
+            | TaskVerb::Reject
+            | TaskVerb::Delete => {
+                return Err(not_routable());
+            }
         },
         _ => return Err(not_routable()),
     })
+}
+
+/// A verb's tool input without the CLI-only `--host` it was routed by.
+fn without_host(input: &Map<String, Value>) -> Value {
+    let mut input = input.clone();
+    input.shift_remove("host");
+    Value::Object(input)
 }
 
 fn not_routable() -> OrbitError {
@@ -499,12 +527,20 @@ fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> Comma
             super::task::review_reset::REVIEW_RESET_TEXT,
         )
         .into()),
+        Render::Requeue => {
+            let text = super::task::operation::requeue_text(&value);
+            Ok(Payload::detail(with_host(value, holder), text).into())
+        }
         Render::Reconcile => {
             let text = super::task::reconcile_review::reconciliation_text(&value);
             Ok(Payload::detail(with_host(value, holder), text).into())
         }
-        Render::ToolRun { full, fields } => {
-            let shaped = super::tool::shape_tool_output(name, value, full, &fields)?;
+        Render::ToolRun {
+            full,
+            fields,
+            bare_field,
+        } => {
+            let shaped = super::tool::shape_tool_output(name, value, full, &fields, bare_field)?;
             Ok(Payload::document(shaped).into())
         }
     }
@@ -512,6 +548,7 @@ fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> Comma
 
 /// The human view of a routed `task show`: the task's own fields and where
 /// they were read, without the local-only sidecars a remote answer lacks.
+/// `Next:` and `Final Recovery:` use the same words as the local show.
 fn task_summary(task: &Value, holder: &HostEntry) -> String {
     let text = |key: &str| task.get(key).and_then(Value::as_str).unwrap_or_default();
     let mut lines = vec![
@@ -559,6 +596,23 @@ fn task_summary(task: &Value, holder: &HostEntry) -> String {
     let tags = list("tags");
     if !tags.is_empty() {
         lines.push(format!("Tags: {}", tags.join(", ")));
+    }
+    if let Some(next) = task.get("next_step") {
+        lines.push(format!("Next: {}", super::task::next_step_text(next)));
+    }
+    if let Some(record) = task.get("final_recovery") {
+        lines.push(format!(
+            "Final Recovery: {}",
+            super::task::final_recovery_text(record)
+        ));
+    }
+    if let Some(owed) = task.get("owed_criteria") {
+        lines.push("Owed After Deploy:".into());
+        lines.extend(
+            super::task::owed_criteria_lines(owed)
+                .into_iter()
+                .map(|line| format!("  {line}")),
+        );
     }
     lines.join("\n")
 }

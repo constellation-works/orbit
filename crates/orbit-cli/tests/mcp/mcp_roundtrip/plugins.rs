@@ -86,7 +86,6 @@ fn bind_socket_in(dir: &Path, name: &str) -> UnixListener {
 }
 
 #[cfg(unix)]
-#[test]
 fn brokered_plugin_calls_audit_only_caller_owned_failures() {
     if !orbit_exec::macos_sandbox_test_guard(
         "brokered_plugin_calls_audit_only_caller_owned_failures",
@@ -130,10 +129,42 @@ fn check_brokered_plugin_audit(scope: &str) {
     // an absolute path below a managed run's scratch tempdir exceeds it.
     let socket = "fixture-broker.sock";
     let listener = bind_socket_in(&workspace.work, socket);
+    listener
+        .set_nonblocking(true)
+        .expect("configure fixture broker accept deadline");
     let server = std::thread::spawn(move || {
+        let expected_calls = [
+            "tool run CLI",
+            "derived plugin CLI",
+            "successful MCP call",
+            "MCP bad-plan failure",
+            "MCP busy failure",
+            "tool run bad-plan failure",
+            "explicit-workspace tool run",
+        ];
         let mut requests = Vec::new();
-        for index in 0..7 {
-            let (mut stream, _) = listener.accept().expect("accept forwarded call");
+        for (index, call) in expected_calls.iter().enumerate() {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        panic!("timed out waiting for brokered call {} ({call})", index + 1);
+                    }
+                    Err(error) => {
+                        panic!(
+                            "failed accepting brokered call {} ({call}): {error}",
+                            index + 1
+                        );
+                    }
+                }
+            };
             let mut header = [0u8; 4];
             stream.read_exact(&mut header).expect("request header");
             let size = u32::from_be_bytes(header) as usize;
@@ -148,6 +179,8 @@ fn check_brokered_plugin_audit(scope: &str) {
                 json!({"schema_version":1,"ok":false,"error":{
                     "code":"bad_plan","message":"invalid post","retryable":false,
                     "detail":{"at":"posts[0]"}}})
+            } else if index == 6 {
+                json!({"schema_version":1,"ok":true,"output":{"value":8}})
             } else {
                 json!({"schema_version":1,"ok":true,"output":{"value":7}})
             };
@@ -230,7 +263,8 @@ fn check_brokered_plugin_audit(scope: &str) {
     );
     assert_eq!(
         serde_json::from_slice::<Value>(&explicit.stdout).expect("explicit workspace output"),
-        direct
+        json!({"value": 8}),
+        "explicit-workspace call must return the distinct fake-broker reply"
     );
     let requests = server.join().expect("fixture broker thread");
     assert_eq!(requests.len(), 7);
@@ -341,7 +375,6 @@ fn assert_caller_failure_rows(workspace: &McpWorkspace, tool: &str, before: i64,
 }
 
 #[cfg(unix)]
-#[test]
 fn managed_global_plugin_tool_refusals_are_audited() {
     if !orbit_exec::macos_sandbox_test_guard("managed_global_plugin_tool_refusals_are_audited") {
         return;
@@ -435,7 +468,6 @@ fn managed_global_plugin_tool_refusals_are_audited() {
 }
 
 #[cfg(unix)]
-#[test]
 fn unreachable_host_read_is_audited_once_by_cli() {
     let workspace = McpWorkspace::init();
     // The audit schema is opened lazily. Exercise an audited built-in before
@@ -465,7 +497,6 @@ fn unreachable_host_read_is_audited_once_by_cli() {
 }
 
 #[cfg(unix)]
-#[test]
 fn unbrokered_plugin_refusals_are_audited_once_over_mcp_and_cli() {
     for scope in ["workspace", "global"] {
         let workspace = McpWorkspace::init();
@@ -537,7 +568,6 @@ fn unbrokered_plugin_refusals_are_audited_once_over_mcp_and_cli() {
 }
 
 #[cfg(unix)]
-#[test]
 fn exec_plugin_error_reaches_mcp_caller_as_structured_content() {
     if !orbit_exec::macos_sandbox_test_guard(
         "exec_plugin_error_reaches_mcp_caller_as_structured_content",
@@ -569,7 +599,6 @@ fn exec_plugin_error_reaches_mcp_caller_as_structured_content() {
 }
 
 #[cfg(unix)]
-#[test]
 fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not() {
     if !orbit_exec::macos_sandbox_test_guard(
         "an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not",
@@ -630,11 +659,8 @@ fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not()
             "{\"subject\":\"cli\"}",
         ],
     );
-    let stdout = String::from_utf8_lossy(&run.stdout);
-    assert!(
-        stdout.contains("\"subject\": \"cli\"") || stdout.contains("cli"),
-        "{stdout}"
-    );
+    let run_output: Value = serde_json::from_slice(&run.stdout).expect("CLI output is JSON");
+    assert_eq!(run_output["echo"]["input"]["subject"], "cli");
 
     let listed = run_orbit(&workspace, &["tool", "list", "--format", "json"]);
     let listed = String::from_utf8_lossy(&listed.stdout);
@@ -675,7 +701,6 @@ fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not()
 /// One live session observes lifecycle changes through both name translation
 /// and tools/list, while unrelated calls keep the manifest-derived cache hot.
 #[cfg(unix)]
-#[test]
 fn a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface() {
     if !orbit_exec::macos_sandbox_test_guard(
         "a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface",
@@ -787,6 +812,167 @@ fn a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface() {
     );
 }
 
+/// Definitions gate the whole plugin, even though they do not declare tools.
+/// Compare one live server with new processes after edits to every kind.
+#[cfg(unix)]
+fn a_live_session_refreshes_definition_admission_and_membership() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Discovery and built-in calls never execute the plugin backend, so this
+    // fixture needs no nested Seatbelt probe.
+    let workspace = McpWorkspace::init();
+    let source = write_plugin(&workspace.home, "definitionscache");
+    let definitions = [
+        (
+            "activities",
+            "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: probe\nspec:\n  type: deterministic\n  description: Fixture activity.\n  action: sleep\n  config: {}\n",
+        ),
+        (
+            "jobs",
+            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: probe\nspec:\n  state: enabled\n  steps:\n    - id: probe\n      target: activity:probe\n",
+        ),
+        (
+            "routines",
+            "schemaVersion: 1\nname: probe\ndescription: Fixture routine.\nenabled: false\ntrigger:\n  cron: '0 * * * *'\ntarget: job:probe\n",
+        ),
+        (
+            "auto_tasks",
+            "schemaVersion: 1\nname: probe\ndescription: Fixture auto-task.\nenabled: false\nschedule:\n  cron: '0 * * * *'\ntemplate:\n  title: Fixture task\n  description: Fixture task description.\n",
+        ),
+    ];
+    let manifest_path = source.join("plugin.yaml");
+    let mut manifest = std::fs::read_to_string(&manifest_path).expect("manifest");
+    manifest.push_str("  definitions:\n");
+    for (kind, body) in definitions {
+        std::fs::create_dir_all(source.join(kind)).expect("definition directory");
+        std::fs::write(source.join(kind).join("probe.yaml"), body).expect("valid definition");
+        manifest.push_str(&format!("    {kind}: [{kind}/*.yaml]\n"));
+    }
+    // Literal paths must also notice disappearance and repair.
+    std::fs::create_dir_all(source.join("literal")).expect("literal directory");
+    std::fs::write(source.join("literal/probe.yaml"), definitions[0].1)
+        .expect("literal definition");
+    manifest = manifest.replace(
+        "activities/*.yaml]",
+        "activities/*.yaml, literal/probe.yaml]",
+    );
+    std::fs::write(&manifest_path, manifest).expect("manifest with definitions");
+    run_orbit(
+        &workspace,
+        &[
+            "plugin",
+            "add",
+            source.to_str().expect("source"),
+            "--enable",
+        ],
+    );
+    let shown = run_orbit(
+        &workspace,
+        &["plugin", "show", "definitionscache", "--format", "json"],
+    );
+    let shown: Value = serde_json::from_slice(&shown.stdout).expect("plugin record");
+    let installed = PathBuf::from(shown["install_path"].as_str().expect("install path"));
+    let installed_manifest =
+        std::fs::read(installed.join("plugin.yaml")).expect("installed manifest");
+
+    let log_path = workspace.home.join("definition-surface.log");
+    let log = std::fs::File::create(&log_path).expect("server log");
+    let child = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["mcp", "serve"])
+        .env("RUST_LOG", "orbit.mcp.plugin=debug")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(log))
+        .spawn()
+        .map(ChildGuard::new)
+        .expect("start live MCP session");
+    let mut client = McpClient::new(child);
+    workspace.initialize(&mut client);
+    let assert_surface = |client: &mut McpClient, active: bool| {
+        let names = advertised_tool_names(client);
+        let fresh = advertised_tool_names(&mut workspace.serve());
+        let has_tool = |names: &[String]| names.iter().any(|name| name == "definitionscache_echo");
+        assert_eq!(has_tool(&fresh), active, "fresh admission: {fresh:?}");
+        assert_eq!(
+            has_tool(&names),
+            has_tool(&fresh),
+            "live admission: {names:?}"
+        );
+    };
+    let rebuilds = || {
+        std::fs::read_to_string(&log_path)
+            .expect("server log")
+            .lines()
+            .filter(|line| line.contains("rebuilding plugin MCP surface"))
+            .count()
+    };
+    assert_surface(&mut client, true);
+    let before = rebuilds();
+    client.call_tool_ok("orbit_task_list", json!({}));
+    client.call_tool_ok("orbit_workspace_list", json!({}));
+    assert_surface(&mut client, true);
+    assert_eq!(
+        rebuilds(),
+        before,
+        "unchanged definitions and unrelated audit writes reuse admission"
+    );
+
+    for (kind, body) in definitions {
+        let path = installed.join(kind).join("probe.yaml");
+        let modified = std::fs::metadata(&path)
+            .expect("metadata")
+            .modified()
+            .expect("mtime");
+        let invalid = body
+            .replacen("schemaVersion: 2", "schemaVersion: 9", 1)
+            .replacen("schemaVersion: 1", "schemaVersion: 9", 1);
+        std::fs::write(&path, invalid).expect("invalidate definition without changing its length");
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .expect("open definition")
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .expect("restore mtime");
+        assert_surface(&mut client, false);
+        // Also warm a server while the contribution is already invalid.
+        let mut initially_refused = workspace.serve();
+        assert_surface(&mut initially_refused, false);
+        std::fs::write(&path, body).expect("repair definition");
+        assert_surface(&mut client, true);
+        assert_surface(&mut initially_refused, true);
+
+        let permissions = std::fs::metadata(&path).expect("metadata").permissions();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
+            .expect("deny reads");
+        assert!(
+            std::fs::read(&path).is_err(),
+            "fixture must actually make {kind} unreadable"
+        );
+        assert_surface(&mut client, false);
+        std::fs::set_permissions(&path, permissions).expect("restore reads");
+        assert_surface(&mut client, true);
+
+        let added = installed.join(kind).join("added.yaml");
+        std::fs::write(&added, "[invalid definition").expect("add invalid wildcard member");
+        assert_surface(&mut client, false);
+        std::fs::rename(&added, added.with_extension("disabled")).expect("remove wildcard member");
+        assert_surface(&mut client, true);
+    }
+    let literal = installed.join("literal/probe.yaml");
+    let missing = literal.with_extension("disabled");
+    std::fs::rename(&literal, &missing).expect("remove literal definition");
+    assert_surface(&mut client, false);
+    std::fs::rename(&missing, &literal).expect("restore literal definition");
+    assert_surface(&mut client, true);
+    assert_eq!(
+        std::fs::read(installed.join("plugin.yaml")).expect("manifest"),
+        installed_manifest
+    );
+    let before = rebuilds();
+    assert_surface(&mut client, true);
+    assert_eq!(rebuilds(), before, "repaired definitions remain reusable");
+}
+
 /// Add a `mcp_scope: global` tool beside the fixture's workspace-scoped one.
 fn add_global_tool(source: &Path) {
     let manifest = source.join("plugin.yaml");
@@ -800,7 +986,6 @@ fn add_global_tool(source: &Path) {
 }
 
 #[cfg(unix)]
-#[test]
 fn a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_host() {
     if !orbit_exec::macos_sandbox_test_guard(
         "a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_host",
@@ -945,7 +1130,6 @@ fn write_callback_plugin_with_scope(
 /// backend's good behaviour or the inherited `ORBIT_ALLOWED_TOOLS` value
 /// (design docs/design/plugins/1_scope.md §4.2).
 #[cfg(unix)]
-#[test]
 fn a_plugin_callback_reaches_only_its_granted_orbit_tools() {
     if !orbit_exec::macos_sandbox_test_guard(
         "a_plugin_callback_reaches_only_its_granted_orbit_tools",
@@ -1113,7 +1297,6 @@ fn callback_probe_input(tool: &str, forge: Option<&str>) -> String {
 /// admit a tool outside the recorded allowlist, and a recorded tool still
 /// runs (design docs/design/plugins/1_scope.md §4.2).
 #[cfg(unix)]
-#[test]
 fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
     if !orbit_exec::macos_sandbox_test_guard(
         "a_plugin_child_cannot_forge_its_orbit_tools_allowlist",
@@ -1187,7 +1370,6 @@ fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
 /// remains is the one the host wrote into the callback session, which the
 /// child cannot reach at all (design §4.2, §4.3) [ORB-12801].
 #[cfg(unix)]
-#[test]
 fn a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling() {
     if !orbit_exec::macos_sandbox_test_guard(
         "a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling",
@@ -1265,7 +1447,6 @@ fn a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling() {
 /// workspace path, including deny mode. Read the actual credential the host
 /// gives the sandboxed backend, rather than its informational environment.
 #[cfg(unix)]
-#[test]
 fn a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling() {
     if !orbit_exec::macos_sandbox_test_guard(
         "a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling",
@@ -1377,7 +1558,6 @@ fn a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling() {
 /// namespace variable. Clearing the *session* does not admit anything either
 /// — a confined child with no credential is refused outright [ORB-12798].
 #[cfg(unix)]
-#[test]
 fn a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist() {
     if !orbit_exec::macos_sandbox_test_guard(
         "a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist",
@@ -1526,7 +1706,6 @@ fn write_setsid_callback_plugin(home: &Path, namespace: &str, requested: &str) -
 /// sandbox (design §4.2, §4.3) [ORB-12798].
 // Linux: Landlock and real setsid descendants prove callback authority survives session escape.
 #[cfg(target_os = "linux")]
-#[test]
 #[allow(clippy::print_stderr)]
 fn a_plugin_child_cannot_shed_its_callback_session_with_setsid() {
     if !setsid_available() {
@@ -1638,7 +1817,6 @@ fn setsid_available() -> bool {
 /// and proxies `<ns>.<verb>` to it, so a plugin that already ships an MCP
 /// server needs no rewrite (design §4.2).
 #[cfg(unix)]
-#[test]
 #[allow(clippy::print_stderr)]
 fn an_mcp_backend_plugin_is_advertised_and_proxied() {
     if !orbit_exec::macos_sandbox_test_guard("an_mcp_backend_plugin_is_advertised_and_proxied") {
@@ -1691,7 +1869,6 @@ const MCP_SECRET_SHA256: &str = "32c4c9e0712924bce14ea13f1713eda001770562d70a31c
 /// the value appears in no MCP response, no `plugin show` output, and no audit
 /// row — which records the delivered secret's name only.
 #[cfg(unix)]
-#[test]
 #[allow(clippy::print_stderr)]
 fn an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it() {
     if !orbit_exec::macos_sandbox_test_guard(
@@ -1812,7 +1989,6 @@ const MCP_ROTATION_SECRET: &str = "orbit-mcp-rotation-9e1f03a2";
 /// record each outcome by name. Neither value reaches an MCP response or an
 /// audit row.
 #[cfg(unix)]
-#[test]
 #[allow(clippy::print_stderr)]
 fn an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value() {
     if !orbit_exec::macos_sandbox_test_guard(
@@ -2018,7 +2194,6 @@ fn write_probe_plugin(home: &Path, namespace: &str) -> PathBuf {
 /// grant exists for still runs [ORB-12777].
 // Linux: Landlock denies writes to Orbit authority roots while permitted callbacks still execute.
 #[cfg(target_os = "linux")]
-#[test]
 fn a_plugin_holding_orbit_tools_cannot_write_orbits_own_roots() {
     let workspace = McpWorkspace::init();
     let source = write_probe_plugin(&workspace.home, "probe");
@@ -2092,5 +2267,152 @@ fn a_plugin_holding_orbit_tools_cannot_write_orbits_own_roots() {
             "{} was modified by the confined plugin",
             target.display()
         );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn plugin_failure_auditing() {
+    for (name, check) in [
+        (
+            "brokered_plugin_calls_audit_only_caller_owned_failures",
+            brokered_plugin_calls_audit_only_caller_owned_failures as fn(),
+        ),
+        (
+            "managed_global_plugin_tool_refusals_are_audited",
+            managed_global_plugin_tool_refusals_are_audited as fn(),
+        ),
+        (
+            "unreachable_host_read_is_audited_once_by_cli",
+            unreachable_host_read_is_audited_once_by_cli as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn plugin_errors_and_discovery() {
+    for (name, check) in [
+        (
+            "unbrokered_plugin_refusals_are_audited_once_over_mcp_and_cli",
+            unbrokered_plugin_refusals_are_audited_once_over_mcp_and_cli as fn(),
+        ),
+        (
+            "exec_plugin_error_reaches_mcp_caller_as_structured_content",
+            exec_plugin_error_reaches_mcp_caller_as_structured_content as fn(),
+        ),
+        (
+            "an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not",
+            an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn live_plugin_configuration() {
+    for (name, check) in [
+        (
+            "a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface",
+            a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface as fn(),
+        ),
+        (
+            "a_live_session_refreshes_definition_admission_and_membership",
+            a_live_session_refreshes_definition_admission_and_membership as fn(),
+        ),
+        (
+            "a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_host",
+            a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_host
+                as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn callback_tool_authorization() {
+    for (name, check) in [
+        (
+            "a_plugin_callback_reaches_only_its_granted_orbit_tools",
+            a_plugin_callback_reaches_only_its_granted_orbit_tools as fn(),
+        ),
+        (
+            "a_plugin_child_cannot_forge_its_orbit_tools_allowlist",
+            a_plugin_child_cannot_forge_its_orbit_tools_allowlist as fn(),
+        ),
+        (
+            "a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling",
+            a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn callback_identity_confinement() {
+    for (name, check) in [
+        (
+            "a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling",
+            a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling as fn(),
+        ),
+        (
+            "a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist",
+            a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist as fn(),
+        ),
+        (
+            "an_mcp_backend_plugin_is_advertised_and_proxied",
+            an_mcp_backend_plugin_is_advertised_and_proxied as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn plugin_backend_secrets() {
+    for (name, check) in [
+        (
+            "an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it",
+            an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it as fn(),
+        ),
+        (
+            "an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value",
+            an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_callback_and_root_confinement() {
+    for (name, check) in [
+        (
+            "a_plugin_child_cannot_shed_its_callback_session_with_setsid",
+            a_plugin_child_cannot_shed_its_callback_session_with_setsid as fn(),
+        ),
+        (
+            "a_plugin_holding_orbit_tools_cannot_write_orbits_own_roots",
+            a_plugin_holding_orbit_tools_cannot_write_orbits_own_roots as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
     }
 }

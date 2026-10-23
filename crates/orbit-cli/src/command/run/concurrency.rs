@@ -9,12 +9,27 @@ use crate::command::{CommandOut, Execute, Payload};
 
 #[derive(Args)]
 #[command(
-    about = "Change how many tasks a running drain keeps in flight",
+    about = "Retune a running drain's admission ceiling",
     after_help = "Adjusts the worker ceiling of a live `orbit run auto` window, or of a replica's \
 `orbit run auto --pull` drain, in place. The run ID, its deadline, its completion authorization, \
 and every child it has already dispatched are preserved — this is the supported alternative to \
-cancelling the drain and submitting a replacement. The ceiling is the only bound on the drain's \
-tasks; the delivery jobs impose none of their own.\n\nRaising the ceiling takes effect on the \
+cancelling the drain and submitting a replacement.\n\n\
+Owner/local drains count every in-flight child against N.\n\
+A pull drain uses N as an admission ceiling with before-landing review\n\
+credit. Before each claim it counts\n\
+`occupied - min(reviewing, N)` against N.\n\
+A leaf counts as reviewing after the owner's persisted before-landing\n\
+admission has `applies=true`; validation and publishing before that\n\
+boundary count as implementing. Later review revalidation and handoff\n\
+remain reviewing.\n\
+The credit is capped at N, but reviewing leaves can exceed N as\n\
+replacements reach review.\n\
+With an unchanged N and no pre-existing excess, occupied leaves stay at\n\
+most 2N and implementing leaves at most N.\n\
+Lowering N preserves running leaves, so existing excess can remain\n\
+temporarily.\n\
+See `orbit run show` for stage counts. Review rebuilds still compete for\n\
+repository build-budget slots.\n\nRaising the ceiling takes effect on the \
 next admission pass. Lowering it stops new admissions until enough children finish; it never \
 cancels or shortens a task already in flight.\n\n`--if-revision` makes the change conditional: \
 pass the revision `orbit run show` reported and a concurrent adjustment is refused rather than \
@@ -27,7 +42,7 @@ pub struct RunConcurrencyArgs {
     /// Job run ID of the drain to retune
     pub run_id: String,
 
-    /// New number of tasks the drain may keep in flight
+    /// New admission ceiling; pull drains apply bounded before-landing review credit
     #[arg(long = "set", value_name = "N")]
     pub set: u32,
 

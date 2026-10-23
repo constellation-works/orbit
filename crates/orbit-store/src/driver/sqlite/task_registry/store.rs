@@ -1,14 +1,13 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use orbit_common::OrbitError;
-use orbit_common::storage::sqlite::is_readonly_or_access_sqlite_error;
+use orbit_common::storage::sqlite::{
+    is_readonly_or_access_sqlite_error, sqlite_error, sqlite_store_error,
+};
+use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::{Connection, OpenFlags};
 
-use super::schema::{
-    apply_schema, assert_readable_schema, assert_registry_user_version, ensure_compatible_schema,
-    registry_user_version,
-};
+use super::schema::{assert_readable_schema, migrate_writable};
 use crate::driver::sqlite::read_pool::{ReadGuard, ReadPool};
 use crate::fs::path_safety::normalize_path;
 
@@ -23,28 +22,6 @@ fn workspaces_dir_of(path: &Path) -> PathBuf {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
     normalize_path(&registry_dir).join("workspaces")
-}
-
-/// Whether the bundle root already holds a task partition. Partitions are
-/// created only through an open registry, so one that predates the registry's
-/// schema means the registry holding its allocator was lost or replaced.
-fn holds_partitions(workspaces_dir: &Path) -> Result<bool, OrbitError> {
-    let entries = match std::fs::read_dir(workspaces_dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(OrbitError::Io(error.to_string())),
-    };
-    for entry in entries {
-        let entry = entry.map_err(|error| OrbitError::Io(error.to_string()))?;
-        if entry
-            .file_type()
-            .map_err(|error| OrbitError::Io(error.to_string()))?
-            .is_dir()
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 /// Task registry handle: one writer connection behind a mutex plus a
@@ -62,14 +39,17 @@ pub struct TaskRegistryStore {
     /// (see [`crate::driver::sqlite::read_pool`]).
     readers: Option<Arc<ReadPool>>,
     pub(super) workspaces_dir: PathBuf,
+    /// Opened read-only before the registry adopted its ledger, so tables
+    /// the registry baseline creates may be missing.
+    pub(super) pre_ledger: bool,
 }
 
 impl TaskRegistryStore {
     pub fn open(path: &Path) -> Result<Self, OrbitError> {
         let opened = orbit_common::storage::sqlite::open_private(path)?;
         let workspaces_dir = workspaces_dir_of(path);
-        let mut conn = opened.connection;
-        let read_only = opened.read_only;
+        let conn = opened.connection;
+        let mut read_only = opened.read_only;
         if !read_only {
             orbit_common::storage::sqlite::create_private_dir_all(&workspaces_dir)?;
         }
@@ -96,29 +76,41 @@ impl TaskRegistryStore {
                     "could not set synchronous=FULL on a read-only task registry; continuing for reads"
                 );
             } else {
-                return Err(OrbitError::Store(format!(
-                    "failed to set synchronous=FULL: {error}"
-                )));
+                return Err(sqlite_error(
+                    StorageLayer::Store,
+                    &error,
+                    format!("failed to set synchronous=FULL: {error}"),
+                ));
             }
         }
-        // Setup, migration and recovery all need a write transaction, so a
-        // registry opened for observation is either already readable as-is or
-        // reported as needing writable storage. Attempting them here is how a
-        // read-only mount produced `attempt to write a readonly database`.
+        // Adoption and migration need a write transaction, so a registry
+        // opened for observation is either already readable as-is or reported
+        // as needing writable storage. Attempting them here is how a read-only
+        // mount produced `attempt to write a readonly database`.
+        let mut pre_ledger = false;
         if read_only {
-            assert_readable_schema(&conn, path)?;
-        } else {
-            if registry_user_version(&conn)? < super::REGISTRY_SCHEMA_VERSION {
-                apply_schema(&conn, holds_partitions(&workspaces_dir)?)?;
-            }
-            ensure_compatible_schema(&mut conn, path)?;
-            assert_registry_user_version(&conn)?;
+            pre_ledger = assert_readable_schema(&conn, path)?.pre_ledger;
+        } else if migrate_writable(&conn, path, &workspaces_dir)?
+            .is_some_and(|forward| !forward.writable)
+        {
+            // A newer registry this binary may only read: pin the writer as
+            // `Store::open` does, and route reads through it.
+            conn.pragma_update(None, "query_only", true)
+                .map_err(|error| {
+                    sqlite_error(
+                        StorageLayer::Store,
+                        &error,
+                        format!("failed to hold a newer task registry read-only: {error}"),
+                    )
+                })?;
+            read_only = true;
         }
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             readers: (!read_only).then(|| Arc::new(ReadPool::new(path.to_path_buf()))),
             workspaces_dir,
+            pre_ledger,
         })
     }
 
@@ -135,12 +127,13 @@ impl TaskRegistryStore {
     pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
         let workspaces_dir = workspaces_dir_of(path);
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
-        assert_readable_schema(&conn, path)?;
+            .map_err(sqlite_store_error)?;
+        let readable = assert_readable_schema(&conn, path)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             readers: None,
             workspaces_dir,
+            pre_ledger: readable.pre_ledger,
         })
     }
 
@@ -155,9 +148,7 @@ impl TaskRegistryStore {
                 Ok(ReadGuard::pooled(generation, connection, pool))
             }
             None => {
-                let guard = self
-                    .conn
-                    .lock()
+                let guard = orbit_common::fs::lock_wait::mutex(&self.conn)
                     .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
                 Ok(ReadGuard::Writer(guard))
             }

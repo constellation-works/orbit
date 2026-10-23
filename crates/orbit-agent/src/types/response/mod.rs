@@ -10,8 +10,6 @@ use orbit_common::OrbitError;
 use orbit_types::telemetry::ToolCallTrace;
 use serde_json::Value;
 
-#[cfg(test)]
-pub use envelope::parse_and_validate_response;
 pub use envelope::{DeclaredResponseFailure, ParsedStdout};
 pub use limit::{provider_usage_limit, provider_usage_limit_details};
 pub use protocol_schema::response_envelope_json_schema_arg;
@@ -38,6 +36,7 @@ const PROVIDER_AUTH_FAILURE_PHRASES: &[&str] = &[
     "invalid api key",
     "invalid_api_key",
     "api key not valid",
+    "api key is not scoped to a workspace",
 ];
 
 /// Whether a provider's own failure text says it could not authenticate, so
@@ -104,6 +103,8 @@ pub struct AgentInvocationSpec {
     pub runtime_key: &'static str,
     pub program: String,
     pub args: Vec<String>,
+    /// The prompt bytes the provider must receive: on stdin unless
+    /// `prompt_file_flag` names a file transport.
     pub stdin: Vec<u8>,
     pub stdout_schema_json: Option<Value>,
     pub required_env_vars: &'static [&'static str],
@@ -111,6 +112,12 @@ pub struct AgentInvocationSpec {
     /// applied over the `[execution.env]` allowlist, so an outer process
     /// cannot forward a different value.
     pub fixed_env: &'static [(&'static str, &'static str)],
+    /// For a CLI that cannot read its prompt from stdin: the flag that takes
+    /// a prompt file path. The runner then writes `stdin` to a private
+    /// regular file in the run's scratch directory, appends `<flag> <path>`
+    /// to argv, sends nothing on stdin, and deletes the file when the
+    /// invocation ends, so the prompt never reaches argv. [ORB-16577]
+    pub prompt_file_flag: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

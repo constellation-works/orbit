@@ -31,6 +31,7 @@ orbit run extend <run-id> --for 4h         # lengthen a live drain's window in p
 orbit run readiness                        # explain current auto-drain eligibility, read-only
 orbit run readiness <task-id> --json        # explain selected task IDs as JSON
 orbit run ship <task-id> --complete  # ... and also carry it through to `done`
+orbit run ship <task-id> --review before-landing # ... and review the PR before it lands
 orbit run ship-sweep --dry-run      # what every registered workspace would ship
 ```
 
@@ -46,13 +47,48 @@ before shipping it again.
 The window bounds only the *start* of new work — a task already shipping when
 it expires still finishes.
 
-It keeps `--concurrency` tasks in flight (5 by default) and re-lists the whole
-backlog every pass, so a slot is refilled as soon as its own task finishes and a
-task filed mid-window starts without waiting for the batch around it. That
-number is a workspace-wide bound: workers left running by stopped coordinators,
-explicit `run ship` deliveries, and unsettled pull admissions all consume slots.
-A wrapper and its delivery consume one slot together. The delivery jobs impose
-no active-run limit of their own, so size the ceiling to what the host can carry.
+It re-lists the whole backlog every pass, so a slot is refilled as soon as its
+own task finishes and a task filed mid-window starts without waiting for the
+batch around it. For owner/local drains, `--concurrency` (5 by default) is a
+workspace-wide bound: workers left running by stopped coordinators, explicit
+`run ship` deliveries, and unsettled pull admissions all consume slots. A
+wrapper and its delivery consume one slot together. Delivery jobs impose no
+active-run limit of their own.
+
+A replica's pull drain uses `--concurrency` as an admission ceiling with capped
+before-landing review credit. Before each claim it counts
+`occupied - min(reviewing, N)` against N. A leaf becomes reviewing after the
+owner's persisted before-landing admission has `applies=true`; validation and
+publishing before then count as implementing, while later review revalidation
+and handoff remain reviewing. The credit is capped at N, but reviewing leaves
+can exceed N as replacements reach review. With an unchanged N and no
+pre-existing excess, total occupied leaves stay at most 2N and implementing
+leaves at most N. Lowering N preserves running leaves, so existing excess can
+remain temporarily. `orbit run show` reports the leaf stages. Review rebuilds
+still compete for repository build-budget slots, so N is not a hard total-live
+task cap for pull drains.
+
+Resource forecasting is an additional admission check, not a replacement for
+that worker ceiling. Global `machine.auto_concurrency.mode` defaults to `off`;
+`shadow` records what forecast fit would do while admitting as `off`, and
+`enforce` uses forecast CPU/memory fit within the free slots left by the ceiling
+and resource throttle. Inspect read-only `orbit run profiles` for delivery
+profiles and sparse fallback, `orbit run profiles --accuracy` for forecast
+error and shadow decisions, and `orbit run show <drain-run-id> --json` for the
+recorded pass. For one local drain, `orbit run auto --auto-concurrency <MODE>`
+selects an explicit mode (`off`, `shadow` or `enforce`); omitting the flag
+follows `machine.auto_concurrency.mode` each admission pass. MCP
+`orbit_workflow_auto` `action: "start"` accepts the same `auto_concurrency`
+values. Explicit overrides and inheritance source (`explicit` or `configured`)
+survive restart/resume without writing configuration. Host thresholds and
+provider-limit policy refresh next pass; unchanged config is cached by mtime,
+and invalid config warns and retains the previous policies. Run show and readiness expose
+`mode`, `source`, and the current `configured_mode`. Pull drains refuse this
+override; set the executor host's mode instead. No profiles means forecasting
+adds no restriction. Preserve operator policy when explaining waits: this
+per-drain choice does not authorize starting work or changing machine settings,
+host thresholds, or the worker ceiling. Settings and limits:
+[configuration.md](../../orbit-setup/references/configuration.md#common-settings).
 
 That ceiling is adjustable while the drain runs. `orbit run concurrency <run-id>
 --set N` (MCP: `orbit_workflow_auto` with `action: "resize"` and `concurrency`;
@@ -106,6 +142,13 @@ a ceiling of N, it admits at most N-K new tasks (zero when K exceeds N).
 new work. The `Leaves:` outcomes remain those of the displayed coordinator's
 own children; inherited work is not counted as its success or failure.
 
+An admission pass that times out on a busy task-store lock (`lock_busy`) is
+skipped, not fatal: `run show` reads `Admission pass deferred:
+consecutive_failures=N last_pass_error=...`, naming the lock's holder, and
+the next pass retries after the poll interval. Ten in a row fail the drain
+with that error; find the holder in `orbit.jsonl` before restarting it. Any
+other admission error still fails the drain at once.
+
 A drain's own `State: success` says the coordinator ran, not that its leaves
 shipped: it dispatches them detached. Read the `Leaves:` line on `orbit run
 show <drain-run-id>` (JSON: `drain_summary`) for admitted / succeeded / failed
@@ -130,7 +173,8 @@ for an auto drain it is opt-in and scoped to that run's window:
   choosing one.
 - A backlog task whose crew is excluded is **skipped, not remapped**. It stays in
   `backlog` on its own crew, and `orbit run readiness --allow-crew ...` reports it
-  as `crew_not_allowed` with the crew it would have run as. Moving that work to a
+  as `crew_not_allowed` with the crew it would have run as. Without `--allow-crew`,
+  readiness applies the live drain's own set (`capacity.allowed_crews`). Moving that work to a
   permitted crew is an operator decision — reassign the task, then it drains
   normally. Everything permitted keeps filling the slots at the usual rate.
 - It governs only what this drain *starts*. Tasks another invocation already has
@@ -166,8 +210,26 @@ task as ready or waiting, naming unmet dependency IDs/statuses, context-lock
 holders, live child-run claims, capacity saturation, and — with `--allow-crew`
 — crew exclusion. It never creates a run, reconciles stale runs, reserves
 files, or mutates a task.
+Without `--concurrency`, the snapshot's ceiling is the live local drain's,
+including an `orbit run concurrency` retune (`capacity.limit_source`
+`run_control`, or `run_input` when the drain still has its submitted value).
+When no local drain is live, a live pull drain supplies that ceiling the same
+way (`pull_run_control` or `pull_run_input`), and text adds a `Leaf ceiling:`
+line naming the pull run. Otherwise the ceiling is 5 (`default`). An explicit
+`--concurrency` is `requested` and wins over both. `capacity.max_active_leaf_runs`
+and `capacity.free_slots` use that ceiling, so a follower pull drain submitted
+at 3 is not reported against the default of 5.
 Its answer can change immediately after the snapshot, so `eligible` means
 "would be admitted by this snapshot", never a guarantee that work will start.
+
+It also names a scheduled host shutdown or reboot and its mode. Within
+`machine.host_shutdown_hold_minutes` (default 180), tasks report
+`host_shutdown_scheduled` and new unattended admissions hold; running workers
+are left alone. A later schedule is reported while admissions continue. Pull
+drains report the same hold as `Pull drain requests held:`. Report the time and
+configured window, and wait or follow an explicit operator instruction; do not
+cancel the schedule or override the hold automatically. See
+[authorization.md](authorization.md#keep-authorized-work-moving).
 
 Two of its answers separate contention from capacity:
 
@@ -190,6 +252,13 @@ Two of its answers separate contention from capacity:
   reserving task reports `context_lock_conflict` with a `detail` saying it
   reserves. At most two tasks reserve per pass; work that does not overlap a
   reserved surface admits normally.
+- `published_delivery` (text: `resuming published delivery (PR #N)`) marks a
+  backlog task whose final-recovery requeue kept its pull request. Its next
+  run adopts that branch and pull request before it edits anything, so it is
+  admitted past other tasks' context locks rather than waiting on
+  `context_lock_conflict`. Before any agent of that run that may edit, the run
+  takes the task's own footprint locks, waiting while another task holds them,
+  so two writers never share a file.
 - `unverified_review_finding` means the workspace sets
   `review.verify_findings = true` and a review-filed bug has no CONFIRMED
   verdict for its current material. Claim and evidence-selector edits require
@@ -246,7 +315,8 @@ orbit run task-pilot <id> <id>                  # audit exactly these
 orbit run job task_pilot_pipeline --input 'task_ids=["<id>"]' --json
 ```
 
-The shipped pilot steps draw their crew from `workflow.low_complexity_crews`.
+The shipped pilot steps draw their crew from `workflow.purpose_crews.task_pilot`,
+or from `workflow.low_complexity_crews` while that is unset.
 Neither a `--crew` flag nor `--input crew=<name>` changes those steps. Inspect
 the effective job and that pool before promising a provider; see
 [crew selection](loop.md#select-an-allowed-crew).
@@ -257,8 +327,11 @@ diff. It also excludes a task already named by the durable prepare checkpoint
 of an active pilot run and reports the owning run ID, so a later discovery run
 can inspect new work without repeating the expensive assessment. Explicit
 `task_ids` audits exactly the named tasks, including ones that already have
-selectors, but refuses an ID already prepared by an active run; inspect or
-resume the named run instead.
+selectors, while excluding tasks held by another active run as
+`already_preparing` with `prepared_by_run_ids`. Preparation continues for the
+free named tasks. Apply settles each held task as `superseded` with reason
+`piloted_elsewhere`; if every named task is held, the run succeeds without
+agent work. Inspect or resume the owning run for that task's assessment.
 
 At the prepare activity boundary, an omitted optional `base_branch` is bound as
 an empty string. Prepare treats an omitted or empty value as the registered
@@ -283,9 +356,28 @@ path that did not exist at prepare.
 The pilot agent inspection is read-only; its deterministic apply step mutates
 validated task selectors. It runs five
 partitions concurrently, and returns selector proposals plus duplicate,
-already-landed, dependency, and conflicting-decision warnings. An enabled
-workspace routine may already run the zero-input job every few hours — an extra
-run before a large dispatch is still appropriate.
+already-landed, dependency, and conflicting-decision warnings. The shipped
+workspace routine is disabled by default and uses a `preparation_eligible`
+state trigger, not a periodic cron: each tick fingerprints eligible tasks and
+queues those without a fresh assessment after the 2-minute debounce or the
+10-minute maximum wait. A material change can make a task due again; an
+unchanged backlog stays quiet. Inspect the workspace's actual `task_pilot.yaml`
+before relying on that cadence, because a customized routine or preserved
+legacy cron definition can differ from the shipped seed.
+
+A local drain (`orbit run auto`, the dashboard start, MCP
+`orbit.workflow.auto`) warns when no task pilot will prepare its tasks on this
+machine: the workspace declares no `preparation_eligible` routine, or its
+routine names another `owner_machine`, is disabled, or is paused here
+(`orbit routine resume <name>`). The warning names the workspace, the machine
+and the fix. It is a `Warning:` line at start, `task_pilot_warning` on every
+admission pass (`drain_last_pass` in `orbit run show --json`), and
+`capacity.task_pilot_warning` in readiness while the window is open. The
+dashboard shows it in the Fleet drains row, the Drain card and the drain's run
+detail. Without the warning, tasks that need an assessment show only
+`task_pilot_preparation_required`, and that wait never clears. A pull drain
+does not warn, because its owner prepares the work.
+
 The task-pilot pipeline never promotes tasks or dispatches them; promotion and
 shipping remain separate operator-authorized steps.
 
@@ -335,8 +427,8 @@ state if it still lacks selectors. Do not re-pilot the whole backlog for it.
 - **A selector added mid-run binds only reservations requested after it.** It
   cannot retroactively revoke a reservation a concurrent run already holds.
 - **Inspect and repair stale reservations** with `orbit task locks list` and
-  `orbit task locks release <reservation_id>` — never by editing the store. The
-  signature to match first is in [common-failures.md](common-failures.md).
+  `orbit task locks release <reservation_id> --confirm` — never by editing
+  the store. The signature to match first is in [common-failures.md](common-failures.md).
 
 ## Large tasks and hierarchy
 
@@ -364,9 +456,58 @@ orbit run show <run-id> --json
 orbit task update <task-id> --status backlog   # only once you know a rerun can succeed
 ```
 
-For blocks caused by a missing provider launcher, `orbit task recheck-blocked`
-reports whether the launcher now resolves. Its `--confirm` option requeues only
-the cleared launcher blocks; it leaves implementation failures blocked.
+Every blocked-to-backlog return, including a plain
+`orbit task update <task-id> --status backlog`, runs the same publication
+pre-flight as `orbit task requeue`. Once the task's run has stopped, an
+operator can use `orbit task requeue <task-id> --reason '<why>'` (MCP
+`orbit.task.requeue`) to resume that candidate; while the run is live the
+requeue is refused, since its failure handoff may still be publishing. Add
+`--discard-candidate` to close the task's undelivered Orbit PRs and rerun fresh,
+which a changed task specification requires; `orbit task update <task-id>
+--status backlog --discard-candidate` is the same discard and closure without a
+recorded requeue decision. A claimed leaf that failed or escalated with a
+committed candidate publishes no `[BLOCKED]` PR; the owner keeps its candidate
+(the task's `claim_candidate_kept` history event), and the same requeue reports
+and resumes it (`resumes.source: claim`) under the same specification and
+discard rules.
+
+For blocks caused by a missing provider launcher or by transient
+infrastructure (a busy lock, a locked task store), `orbit task recheck-blocked`
+reports whether the condition cleared. Its `--confirm` option requeues only
+the cleared blocks, a transient one onto its published candidate once its run
+has stopped; it leaves implementation failures blocked, and a transient block
+a human commented on, or whose publication did not authenticate, for
+`orbit task requeue`.
+
+## Retry a stopped owner landing
+
+A healthy accepted handoff can keep its native leaf binding while its owner landing
+stops on a provider gate. Inspect the owner's distributed claim panel, original stop,
+latest landing attempt and provider state. Do not resume or rebind the foreign leaf
+just to retry landing. Only a trusted operator may request a same-handoff retry:
+
+```bash
+orbit task retry-handoff <handoff-id> --owner-workspace <owner-workspace-id> \
+  --candidate <accepted-commit> --base <accepted-base> \
+  --attempt <latest-attempt> --state stopped \
+  --reason '<why the same candidate can land now>' --request <saved-request-key>
+```
+
+The MCP equivalent is `orbit.task.retry_handoff` with `workspace`, `handoff_id`,
+`expected_candidate_commit`, `expected_base_commit`, `expected_latest_attempt`,
+`expected_latest_state`, `reason`, and `request_key`. The workspace must be the owner's
+logical workspace ID or absolute checkout path. This is operator-only and unavailable
+inside a managed run. The dashboard offers **Retry landing** with the same expectations
+and retains its replay key in browser storage.
+
+Reuse the key and exact inputs after a lost reply. The durable receipt reserves one
+attempt atomically and resolves the same run on replay. Only a stopped landing or an
+uncertain intent with no live owner job qualifies. The normal landing job reconciles
+external intent before any merge: an already-merged exact candidate is observed and
+completed without a repeated merge. Every native certificate, review, required check,
+remote identity/head/base, lease and merge-certainty gate remains in force. Original
+stopped evidence stays in history. Changed or invalidated work needs its own repair
+and fresh handoff; the retry accepts no `auto_fix`, raw pipeline input or head override.
 
 ## Multi-operator workspaces
 
@@ -429,7 +570,10 @@ as `ship-sweep`.
   required checks are respected and never bypassed; pending checks may use
   GitHub auto-merge, but enabling auto-merge is not success. A closed or blocked
   PR, a refused auto-merge, or an expired wait leaves the task in `review`.
-- Validated `no-diff-expected` work completes without a PR.
+- Completed `no-diff-expected` work completes without a PR. In owner or claimed
+  mode, it runs only commands its own brief requires, with no workspace gates,
+  required validation commands, or `no-diff.json` and workspace validation logs.
+  No-op implementations without the tag still need validated no-diff evidence.
 - `run auto --complete` is blanket authorization for every task the drain admits
   during its whole window, including work filed after it starts. Do not use it
   where the user authorized only the currently visible backlog.
@@ -476,6 +620,93 @@ configuration.
   is not piloted again until it changes.
 - `--approve-proposed` with `--pull` is refused before anything is submitted:
   a follower does not approve another host's tasks.
+
+### Per-run review
+
+`orbit run ship --review before-pr|before-landing` and `orbit run auto --review
+...` (MCP `orbit_workflow_ship` and `orbit_workflow_auto` `start` with `review`)
+add a second-agent review before landing to one run. Use it when the user asks
+for review on specific work and the workspace applies none. It only adds review
+and never changes configuration:
+
+- If workspace policy already applies the same layer, the option is accepted
+  unchanged. If policy applies the other layer, it is refused, naming the key
+  and its source.
+- It is refused before anything is submitted when
+  the effective reviewer pool resolves no crew (`workflow.purpose_crews.pre_landing_review`
+  when non-empty, falling back to `workflow.purpose_crews.review`), on local-only
+  delivery (`--mode local`, or a local ship mode for a drain), and with `--pull`,
+  where the owner decides review for its claims.
+- A drain with the option holds tasks routed to local-only delivery in the
+  backlog instead of starting them. Child runs inherit the layer, and a resume
+  keeps it.
+- `orbit run show` prints the captured layer and its origin on the `Review:`
+  line (`.run.review_layer` in JSON).
+- After-landing review stays the `delivery-code-review` auto-task.
+
+### Auto-fix authorization
+
+`orbit run auto --auto-fix` is the explicit authorization for one drain to
+repair the pull requests its own runs opened. It is default-off, never enabled
+by configuration, and independent of `--complete`. It authorizes repair only:
+`--auto-fix` alone never merges, and only `--complete` takes a task to `done`.
+It cannot be combined with `--pull` or `--stop`.
+
+- The completion watcher detects the blockers; no second watcher exists. Pending
+  checks wait. Failed required checks are repaired by the job's
+  `step_failure_recovery`, with the failed head's error signature and log
+  excerpt as evidence. Conflicts are repaired by `pr_conflict_recovery` against
+  the current base.
+- A missing protected check may trigger one infrastructure rerun without an
+  agent: the forge must read effective classic and ruleset policy with integration
+  identity, bind the PR, repository, base, head, workflow, event and latest attempt,
+  and read complete workflow source, jobs and logs proving a direct dependency on
+  a failed API-read prerequisite with an explicit HTTP 502, 503 or 504. Literal
+  names and a bounded single-axis literal matrix are supported; ambiguous or
+  dynamic dependencies hold. The workflow blob must match the event base and
+  exact PR head, proving the merge-ref DAG; changed definitions hold.
+  Credential/permission diagnostics veto recovery.
+- The owner reserves that rerun in the primary task's durable history under its
+  write lock before mutation, separately from the agent-repair budget. One
+  infrastructure rerun is allowed per repository/PR across heads, resumes and
+  siblings. Original evidence, the reply and current-attempt observations are
+  retained under `auto-fix/<run>/infrastructure-<workflow-run>-*.json`. A lost reply
+  is reconciled by observation, never another mutation. A second failure, missing
+  protected result, superseded attempt, changed policy or identity, or completion
+  deadline expiry holds the PR. Repair-only authority still cannot merge.
+- Approvals, permissions, administrative rules, unknown or unreadable evidence,
+  infrastructure failures outside that narrow prerequisite case, and optional
+  failures alone launch no agent; the leaf stops in `review` with the reason.
+- The repair goes through the ordinary commit, required final validation and
+  lease-checked push. The watcher then re-checks the new head, and a reviewed
+  head goes back through re-review before it can merge.
+- The crew comes from `workflow.purpose_crews.auto_fix`, else
+  `workflow.low_complexity_crews`, through the run's frozen pool draw,
+  restricted by `--allow-crew`. Conflict recovery uses this pool too
+  under `--auto-fix`. Task complexity and crew are never changed, and nothing
+  escalates.
+- Every attempt is written to the primary task's history with the PR, head,
+  blocker, attempt number, crew and draw source before any agent runs. A PR
+  head gets at most one repair per blocker across polls, restarts and
+  owner/follower overlap. Each PR has at most three repairs in total. When they
+  are spent, the leaf stops with `auto_fix_budget_exhausted` and lists the
+  attempts.
+- Closed or merged PRs and superseded heads get no repair.
+- A blocked Orbit PR whose task no run is delivering any more is repaired out
+  of run. Each `--auto-fix` drain pass hands it back to the task's newest
+  failed, timed-out or interrupted leaf, rewound to completion, when the task
+  is in `review` or was blocked or requeued by that leaf's own delivery. The
+  same ledger bounds it, each hand-back is recorded as `pr_auto_fix_out_of_run`,
+  and `orbit run readiness` lists live repairs and the latest drain pass's
+  skipped candidates under `out_of_run_auto_fix`. Skips carry `state: "skipped"`,
+  the PR, reason, detail, observation time and whether the drain is still live;
+  a blocker is null when the refusal preceded a forge read. Read the full
+  persisted pass with `orbit run show <drain-run> --step adopt_orphans --json`
+  under `step_output.auto_fix.skipped`. Capacity and resource holds name the
+  candidates without forge reads; the scan covers every task in `review`,
+  `blocked` or `backlog` that records a PR, not a window of recent leaves. A write-free pass scans and persists nothing.
+  Operator holds, `no-auto-approve` tasks, PRs not opened by Orbit and a leaf
+  started with `--complete` under a drain without it are left alone.
 
 Submission stays asynchronous, so a `--complete` run's eventual outcome is not
 known when the command returns — confirm with `orbit run show <run_id>` and

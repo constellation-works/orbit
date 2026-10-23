@@ -23,6 +23,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::params;
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 
 use crate::Store;
 
@@ -32,7 +33,7 @@ use crate::contracts::{
 
 impl Store {
     /// Lists every job run created in `[since, until)` for one workspace,
-    /// projected to `(job_id, state, created_at)`.
+    /// projected to `(run_id, job_id, state, created_at)`.
     ///
     /// Unlike [`Store::list_job_runs_for_workspace`], this does not read step
     /// rows, input payloads, or model attribution — a reliability window can
@@ -57,14 +58,14 @@ impl Store {
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT job_id, state, created_at
+                SELECT run_id, job_id, state, created_at
                 FROM job_runs
                 WHERE workspace_id = ?1 AND created_at >= ?2 AND created_at < ?3
                 ORDER BY created_at DESC, run_id ASC
                 LIMIT ?4
                 "#,
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         // Over-fetch by one so a full page can be distinguished from a page
         // that happens to end exactly on the cap.
@@ -74,17 +75,18 @@ impl Store {
                 params![workspace_id, since.to_rfc3339(), until.to_rfc3339(), probe,],
                 |row| {
                     Ok(JobRunOutcomeFact {
-                        job_id: row.get(0)?,
-                        state: row.get(1)?,
-                        created_at: crate::parse_timestamp(&row.get::<_, String>(2)?)?,
+                        run_id: row.get(0)?,
+                        job_id: row.get(1)?,
+                        state: row.get(2)?,
+                        created_at: crate::parse_timestamp(&row.get::<_, String>(3)?)?,
                     })
                 },
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let mut facts = rows
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let truncated = facts.len() > max_rows;
         facts.truncate(max_rows);
         Ok(BoundedFacts { facts, truncated })
@@ -116,7 +118,7 @@ impl Store {
                 ORDER BY invocation_count DESC, i.activity_id ASC
                 "#,
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let rows = stmt
             .query_map(
@@ -129,10 +131,10 @@ impl Store {
                     })
                 },
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     /// Counts distinct job runs with any invocation in `[since, until)`, and
@@ -190,6 +192,6 @@ impl Store {
                 matching_job_runs: row.get::<_, i64>(1)?.max(0) as u64,
             })
         })
-        .map_err(|e| OrbitError::Store(e.to_string()))
+        .map_err(sqlite_store_error)
     }
 }

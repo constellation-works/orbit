@@ -124,12 +124,20 @@ orbit doctor
 Before pulling, check:
 
 - The owner is registered on the follower and reachable over SSH.
-- Both machines run the same Orbit version and distributed-drain protocol.
-- Both declare the same `workflow.required_validation_commands`, and the
-  follower can run those commands and access the repository's forge.
+- Both machines run the same Orbit version, distributed-drain protocol and
+  fingerprint. Restart long-lived Orbit processes after upgrading.
+- The follower can run the owner's captured `workflow.required_validation_commands`
+  and access the repository's forge. Differing local declarations warn when
+  the drain starts; they do not replace the owner's checks.
 - The follower has an enabled crew, its provider CLI installed and signed
   in, and the tools the task needs. If the owner enables before-PR review,
-  the follower can also run the owner's `operation.review_crew`.
+  the follower can also run the owner's pre-landing reviewer:
+  `workflow.purpose_crews.pre_landing_review`, or `workflow.purpose_crews.review`
+  while that is unset. The same reviewer requirement applies to
+  `review.timing = "before_landing"` and to machines selected by the owner's
+  `review.before_landing_hosts`.
+- A task tagged `ui` needs a verified browser kit on the follower. Check with
+  `orbit browser-kit status` before pulling UI work.
 
 Start a bounded window on the replica checkout:
 
@@ -140,7 +148,10 @@ orbit run auto --pull project --host owner --for 8h --concurrency 3
 `project` is the owner's workspace name or `ws_*` ID. Without `--host`,
 `--pull` requires the full host-qualified selector from discovery. It must
 name this replica's own owner and workspace. The owner admits only tasks
-whose crew and OS the follower can run. Each leaf implements, validates,
+whose crew and OS the follower can run, including the crew executor's OS
+restriction. Its live executor census gives scarce work precedence, controlled
+by `workflow.admission_affinity`; see [admission order](../distributed-drain/#how-it-fits-together).
+Each leaf implements, validates,
 and opens a pull request, then hands the candidate back to the owner.
 
 For the admission probe, before-PR review setup, and stop and recovery

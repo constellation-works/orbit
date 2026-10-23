@@ -190,8 +190,54 @@ export function setWorkspace(id) {
   for (const listener of workspaceListeners) listener();
 }
 
-// ORB-10872: workspace + time window are one dashboard scope. Scoreboard,
-// Audit, Reliability, and Managed Execution either honor this window or show
+// The names `/api/workspaces` gives each workspace id. Labels show the name the
+// header picker shows; an id the list does not name yet is shown as given, and
+// listeners re-render labels when the list arrives.
+let workspaceNames = new Map();
+const workspaceNameListeners = new Set();
+
+export function setWorkspaceNames(workspaces) {
+  workspaceNames = new Map((Array.isArray(workspaces) ? workspaces : [])
+    .filter((workspace) => workspace && workspace.id && workspace.name)
+    .map((workspace) => [workspace.id, workspace.name]));
+  for (const listener of workspaceNameListeners) listener();
+}
+
+export function onWorkspaceNamesChange(listener) {
+  workspaceNameListeners.add(listener);
+  return () => workspaceNameListeners.delete(listener);
+}
+
+/// The name a workspace id is shown by, or the id itself when no name is known.
+export function workspaceDisplayName(id) {
+  return workspaceNames.get(id) || id;
+}
+
+// Workspace ids belong to a host. Keep each host's choice separately so a
+// remembered local workspace cannot become a remote host's default.
+function rememberedWorkspaceKey() {
+  const host = findRegisteredHost(currentHost) || servingHost;
+  return `orbit.dashboard.workspace.${host?.machine_id || currentHost || "local"}`;
+}
+
+export function getRememberedWorkspace() {
+  try {
+    return window.localStorage.getItem(rememberedWorkspaceKey());
+  } catch (_) {
+    return null;
+  }
+}
+
+export function rememberWorkspace() {
+  try {
+    window.localStorage.setItem(rememberedWorkspaceKey(), currentWorkspace || ALL_WORKSPACES_TOKEN);
+  } catch (_) {
+    // Storage refusal only disables remembering the choice.
+  }
+}
+
+// ORB-10872: workspace + time window are one dashboard scope. Events,
+// Metrics, Reliability, and Cost either honor this window or show
 // an equally prominent independent-scope label. Seeded from `?window=` or the
 // hash query so reload and shared links restore the same cutoff.
 export const DASHBOARD_WINDOWS = ["1h", "24h", "7d", "30d", "all"];
@@ -304,6 +350,7 @@ export function syncWindowSelectors() {
   for (const [id, target] of [
     ["scoreboard-window-selector", selected],
     ["metrics-window-selector", selected],
+    ["agents-window-selector", selected],
     ["reliability-window-selector", rel.window],
   ]) {
     const selector = document.getElementById(id);
@@ -359,13 +406,22 @@ export function wireWindowSelector(selectorId, opts = {}) {
 // renders a placeholder instead. This lives in the shared leaf module so all
 // three modules query the same live predicate without a circular import.
 let multiWorkspace = false;
+let workspaceListHostRevision = null;
 
+// Publish cardinality only after loading the current host's workspace list.
 export function setMultiWorkspace(value) {
   multiWorkspace = !!value;
+  workspaceListHostRevision = hostRevision;
 }
 
 export function isMultiWorkspace() {
   return multiWorkspace;
+}
+
+// A host switch invalidates cardinality before workspace listeners run,
+// including while the destination's connection check is still pending.
+export function isWorkspaceListReady() {
+  return workspaceListHostRevision === hostRevision;
 }
 
 export function isAggregateView() {
@@ -528,7 +584,7 @@ export function runHref(runId, { host = selectedRunHost(), workspace = currentWo
   return scopedHref(`#runs?run_id=${encodeURIComponent(runId)}`, { host, workspace });
 }
 
-/// The dashboard address that opens task `taskId` expanded on the Tasks tab,
+/// The dashboard address that selects task `taskId` on the Tasks tab,
 /// scoped like `runHref`. The hash carries only `open`, so following it leaves
 /// the operator's status and search filter as it was. Every task link is built
 /// here.
@@ -561,10 +617,10 @@ export function restoreScopeFromUrl() {
   requestHostSwitch(query.get("host") || null, { fromHistory: true });
   const linked = query.get("workspace");
   if (linked === ALL_WORKSPACES_TOKEN) {
-    if (multiWorkspace) {
-      aggregateLinked = true;
-      setWorkspace(null);
-    }
+    // The workspace count still belongs to the host being left. Keep the
+    // address's intent until discovery decides whether this host can aggregate.
+    aggregateLinked = true;
+    setWorkspace(null);
   } else if (linked) {
     setWorkspace(linked);
   }
@@ -635,6 +691,20 @@ export function el(tag, opts = {}, children = []) {
     if (child != null) node.append(child);
   }
   return node;
+}
+
+// A focusable "i" that shows an explanation on hover or keyboard focus, so a
+// fact reads as a short value and its caveat is one gesture away. The text
+// stays in the DOM (visually hidden until shown), so a screen reader reads it
+// in place. The bubble spans the value column of the nearest positioned row;
+// a row sets `--hint-left` to its label width. `id` names the text, so a
+// control can point aria-describedby at it.
+export function infoHint(text, { id = null } = {}) {
+  const note = el("span", { class: "info-hint-text", text });
+  if (id) note.id = id;
+  const hint = el("span", { class: "info-hint" }, [note]);
+  hint.tabIndex = 0;
+  return hint;
 }
 
 // ORB-11658: expanding a row is the dashboard's primary interaction, so it has
@@ -722,7 +792,10 @@ function syncRovingRows(container) {
   }
 }
 
-export function enableRovingRows(container) {
+//
+// `letterKeys` adds j/k as Down/Up; `onMove(button)` runs after a key moved
+// focus to another row's button. Options apply from the first registration.
+export function enableRovingRows(container, { letterKeys = false, onMove = null } = {}) {
   if (!container || rovingLists.has(container)) return;
   rovingLists.set(container, { key: null });
   container.addEventListener("focusin", (event) => {
@@ -741,14 +814,17 @@ export function enableRovingRows(container) {
     const buttons = Array.from(container.querySelectorAll("[data-row-focus]"))
       .filter((button) => button.getClientRects().length > 0);
     const at = buttons.indexOf(from);
+    const key = letterKeys && event.key === "j" ? "ArrowDown" : letterKeys && event.key === "k" ? "ArrowUp" : event.key;
     let next;
-    if (event.key === "ArrowDown") next = buttons[at + 1];
-    else if (event.key === "ArrowUp") next = buttons[at - 1];
-    else if (event.key === "Home") next = buttons[0];
-    else if (event.key === "End") next = buttons[buttons.length - 1];
+    if (key === "ArrowDown") next = buttons[at + 1];
+    else if (key === "ArrowUp") next = buttons[at - 1];
+    else if (key === "Home") next = buttons[0];
+    else if (key === "End") next = buttons[buttons.length - 1];
     else return;
     event.preventDefault();
-    if (next) next.focus();
+    if (!next) return;
+    next.focus();
+    if (onMove) onMove(next);
   });
 }
 
@@ -975,6 +1051,27 @@ export function postJson(path, body) {
   return requestJson(path, "POST", body);
 }
 
+// A run's captured review layer before landing and what decided it: `run-option`
+// is the run's own `--review`, `claim` a claimed leaf's owner, and any other
+// source names the policy layer that applied (`workspace policy`, `global policy`).
+export function reviewLayerText(layer) {
+  if (!layer?.timing) return "";
+  const source = layer.source || "unknown";
+  const origin = source === "run-option" ? "run option --review"
+    : source === "claim" ? "the owner's claim"
+    : `${source} policy`;
+  return `${layer.timing} (${origin})`;
+}
+
+// A drain or ship receipt's notices, one line each, as `orbit run auto` and
+// `orbit run ship` print them: `warning` (host throttle, validation
+// environment, backlog for another OS, unset execution.env.pass variables)
+// and `note` (no required validation) carry one notice per line.
+export function submissionNoticeLines(result) {
+  const lines = (value, label) => String(value || "").split("\n").filter(Boolean).map((line) => `${label}: ${line}`);
+  return [...lines(result?.warning, "Warning"), ...lines(result?.note, "Note")];
+}
+
 export function patchJson(path, body) {
   return requestJson(path, "PATCH", body);
 }
@@ -1077,7 +1174,7 @@ export function syncNodes(container, newNodesArr) {
     if (key && oldMap.has(key)) {
       const oldNode = oldMap.get(key);
       if (oldNode.dataset.hash === newNode.dataset.hash) {
-        nodeToPlace = oldNode;
+        if (readsOnThisClock(oldNode, newNode)) nodeToPlace = oldNode;
       } else {
         nodeToPlace.classList.add("data-changed");
       }
@@ -1088,6 +1185,7 @@ export function syncNodes(container, newNodesArr) {
     if (newNode !== nodeToPlace) {
       teardownOnce(newNode);
     }
+    if (key) nodeToPlace.dataset.clockZone = clockZone;
 
     if (container.children[i] !== nodeToPlace) {
       if (container.children[i]) {
@@ -1114,6 +1212,22 @@ export function syncNodes(container, newNodesArr) {
   if (state) panelMessage(container.id, state);
   syncRovingRows(container);
   restoreFocus();
+}
+
+// A row hash covers the data, not the clock it is read on, so a UTC/Local
+// switch leaves it alone. A node placed before the switch is kept only while
+// it reads the same as its rebuild: one showing a time gives way, one without
+// keeps its input and state.
+function readsOnThisClock(oldNode, newNode) {
+  const placed = oldNode.dataset.clockZone;
+  if (!placed || placed === clockZone || oldNode === newNode) return true;
+  return clockReading(oldNode) === clockReading(newNode);
+}
+
+function clockReading(node) {
+  if (typeof node.querySelectorAll !== "function") return null;
+  const titles = Array.from(node.querySelectorAll("[title]"), (titled) => titled.getAttribute("title"));
+  return JSON.stringify([node.textContent, node.getAttribute("title"), titles]);
 }
 
 // One entry per admission a follower's settle-only pass carried (`orbit run
@@ -1196,10 +1310,13 @@ export function elapsedDurationInfo(record, durationMs = record?.duration_ms, no
   return { durationMs, isLive: false };
 }
 
-// Timestamps. The dashboard reads one clock: an absolute instant renders as
-// 24-hour local time with the zone abbreviation, a relative age carries that
-// absolute instant in its title, and UTC appears only for values defined in
-// UTC (cron schedules, the UTC-aligned Reliability window), always labelled.
+// Timestamps. The dashboard reads one clock, UTC unless this browser has
+// chosen Local. An absolute instant renders as 24-hour time with its zone
+// abbreviation, a relative age carries that absolute instant in its title,
+// and values defined in UTC (cron schedules, the Reliability window) stay
+// on formatUtcDateTime / formatUtcRange, always labelled UTC. Choosing the
+// other zone repaints what `clockStamp` marked in place and rebuilds any
+// keyed node whose reading changed (`syncNodes`).
 
 function toDate(value) {
   if (value == null || value === "") return null;
@@ -1232,28 +1349,107 @@ export function zoneName(value = new Date()) {
     .find((part) => part.type === "timeZoneName")?.value || "UTC";
 }
 
-/// "2026-10-06 23:31 PDT". Unparseable input is returned as given, empty as "-".
+// Per browser, so a dashboard time can be lined up with a CLI timestamp
+// without converting by hand. Unset storage and a storage refusal both
+// stay on UTC.
+const CLOCK_ZONE_KEY = "orbit.dashboard.clock";
+const clockZoneListeners = new Set();
+
+function storedClockZone() {
+  try {
+    const stored = window.localStorage.getItem(CLOCK_ZONE_KEY);
+    if (stored === "utc" || stored === "local") return stored;
+  } catch (_) {
+    // Private mode and the vm fixtures have no storage; the default stands.
+  }
+  return "utc";
+}
+
+let clockZone = storedClockZone();
+
+export function getClockZone() {
+  return clockZone;
+}
+
+/// Selects `utc` or `local`. Returns true when the choice changed.
+/// An unknown value is ignored.
+export function setClockZone(zone) {
+  if (zone !== "utc" && zone !== "local") return false;
+  if (zone === clockZone) return false;
+  clockZone = zone;
+  try {
+    window.localStorage.setItem(CLOCK_ZONE_KEY, zone);
+  } catch (_) {
+    // The choice still applies to this page when storage is refused.
+  }
+  repaintClockStamps();
+  for (const listener of clockZoneListeners) {
+    try {
+      listener(zone);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+  return true;
+}
+
+export function onClockZoneChange(listener) {
+  clockZoneListeners.add(listener);
+  return () => clockZoneListeners.delete(listener);
+}
+
+/// Marks `node` as showing `value` through `formatDateTime`, in its text or
+/// with `title: true` its title, so a UTC/Local switch repaints it in place.
+/// A view that keeps a node across renders (an unchanged task detail, one
+/// holding a draft) then reads the new zone without a rebuild that would drop
+/// its drafts, focus and disclosures. Returns `node`.
+export function clockStamp(node, value, { title = false } = {}) {
+  if (!node || !toDate(value)) return node;
+  node.dataset.clockAt = String(value);
+  if (title) node.dataset.clockIn = "title";
+  return node;
+}
+
+function repaintClockStamps() {
+  if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") return;
+  for (const node of document.querySelectorAll("[data-clock-at]")) {
+    const text = formatDateTime(node.dataset.clockAt);
+    if (node.dataset.clockIn === "title") node.title = text;
+    else node.textContent = text;
+  }
+}
+
+function clockIsUtc() {
+  return clockZone === "utc";
+}
+
+function activeZoneName(date) {
+  return clockIsUtc() ? "UTC" : zoneName(date);
+}
+
+/// "2026-10-07 06:31 UTC", or the browser's zone when Local is selected.
+/// Unparseable input is returned as given, empty as "-".
 export function formatDateTime(value, { seconds = false } = {}) {
   const date = toDate(value);
   if (!date) return value == null || value === "" ? "-" : String(value);
-  return `${dateTimeText(dateParts(date, false), seconds)} ${zoneName(date)}`;
+  return `${dateTimeText(dateParts(date, clockIsUtc()), seconds)} ${activeZoneName(date)}`;
 }
 
-/// "2026-10-06", using the browser's local calendar date.
+/// "2026-10-07" on the dashboard clock's calendar.
 export function formatDate(value) {
   const date = toDate(value);
   if (!date) return value == null || value === "" ? "-" : String(value);
-  const parts = dateParts(date, false);
+  const parts = dateParts(date, clockIsUtc());
   return `${parts.y}-${pad2(parts.mo)}-${pad2(parts.d)}`;
 }
 
-/// A local wall-clock time, "23:32:57 PDT"; `zone: false` drops the zone for
-/// dense columns whose title or header carries it.
+/// A wall-clock time on the dashboard clock, "06:32:57 UTC"; `zone: false`
+/// drops the zone for dense columns whose title or header carries it.
 export function formatClock(value, { seconds = true, zone = true } = {}) {
   const date = toDate(value);
   if (!date) return value == null || value === "" ? "" : String(value);
-  const text = clockText(dateParts(date, false), seconds);
-  return zone ? `${text} ${zoneName(date)}` : text;
+  const text = clockText(dateParts(date, clockIsUtc()), seconds);
+  return zone ? `${text} ${activeZoneName(date)}` : text;
 }
 
 /// "2026-10-07 06:33 UTC", for values whose meaning is defined in UTC.

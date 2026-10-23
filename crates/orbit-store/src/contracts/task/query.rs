@@ -2,7 +2,7 @@
 
 use orbit_types::task::{
     ArtifactManifestFileV2, ExternalRef, Task, TaskComment, TaskEnvelopeV2, TaskHistoryEntry,
-    TaskPriority, TaskRelationType, TaskStatus, TaskType, normalize_task_tags,
+    TaskOrigin, TaskPriority, TaskRelationType, TaskStatus, TaskType, normalize_task_tags,
 };
 
 use super::TaskIndexFilter;
@@ -17,6 +17,8 @@ pub struct TaskListFilter {
     pub statuses: Option<Vec<TaskStatus>>,
     pub priority: Option<TaskPriority>,
     pub task_type: Option<TaskType>,
+    /// Keep only tasks recorded with this origin; tasks without one never match.
+    pub origin: Option<TaskOrigin>,
     pub parent_id: Option<String>,
     pub job_run_id: Option<String>,
     pub tags: Vec<String>,
@@ -54,6 +56,7 @@ impl TaskListFilter {
                 .is_none_or(|values| values.contains(&task.status))
             && self.priority.is_none_or(|value| task.priority == value)
             && self.task_type.is_none_or(|value| task.task_type == value)
+            && self.origin.is_none_or(|value| task.origin == Some(value))
             && self.parent_id.as_ref().is_none_or(|value| {
                 task.relations.iter().any(|relation| {
                     relation.relation_type == TaskRelationType::ChildOf && relation.target == *value
@@ -88,6 +91,7 @@ impl TaskListFilter {
             priority: self.priority,
             job_run_id: self.job_run_id.clone(),
             tags: self.tags.clone(),
+            parent_id: self.parent_id.clone(),
             scan_before: self.scan_before.clone(),
             excluded_ids,
         }
@@ -96,9 +100,13 @@ impl TaskListFilter {
     /// Whether [`index_filter`](Self::index_filter) covers every predicate, so
     /// the index can also bound the selection with `LIMIT` and count the total.
     /// An explicit empty status set matches nothing and is left to `matches`.
+    /// The index narrows a `parent_id` selection to the tasks its relation
+    /// rows name after the freshness scan verifies every `child_of` target.
+    /// Parent selections still confirm each envelope before counting/limiting.
     pub(crate) fn is_fully_indexed(&self) -> bool {
         self.search.is_none()
             && self.task_type.is_none()
+            && self.origin.is_none()
             && self.parent_id.is_none()
             && self.external_ref.is_none()
             && self.has_external_ref_system.is_none()

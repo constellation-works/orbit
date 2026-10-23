@@ -42,6 +42,7 @@ function payloadFor(url) {
     case '/api/crews': return { default_crew: null, crews: [] };
     case '/api/workflows/auto/readiness': return { capacity: {}, tasks: [] };
     case '/api/diagnostics/implement_one': return {
+      outcome: url.searchParams.get("outcome") || "succeeded",
       window: trendWindow(url), truncated: false,
       buckets: [0, 1, 2].map(i => ({ start: ago((3 - i) * 3600000), all: stats, low: stats, medium: null, hard: null, other_runs: 0 })),
       current: { all: stats, low: stats, medium: null, hard: null, xhard: null, unset: null },
@@ -52,6 +53,10 @@ function payloadFor(url) {
       window: trendWindow(url), buckets: [0, 1, 2].map(i => ({ start: ago((3 - i) * 3600000), ...counts })), current: counts, previous: counts,
     };
     case '/api/tasks/completion-by-complexity': return { by_complexity: [] };
+    case '/api/diagnostics/defects': {
+      const empty = { total: 0, lineage: { fix_for_fix: 0, regression: 0, unattributed: 0 }, origin: { other: 0 } };
+      return { window: trendWindow(url), lineages: [], origins: ['other'], buckets: [0, 1, 2].map(i => ({ start: ago((3 - i) * 3600000), ...empty })), current: empty, previous: empty };
+    }
     case '/api/job-runs': return list([runningRun]);
     case '/api/runs/jrun-duration-fixture': return { run: runningRun, steps };
     case '/api/runs/jrun-duration-fixture/events':
@@ -86,7 +91,7 @@ try {
   page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
-  await page.goto(`${origin}#diagnostics/metrics`);
+  await page.goto(`${origin}#analytics/metrics`);
   await page.locator('#metrics-body .mx-actors tbody tr').first().waitFor();
   await page.getByRole('button', { name: 'Show all 55 actors' }).click();
   await page.waitForFunction(() => document.querySelectorAll('#metrics-body .mx-actors tbody tr').length === 55);

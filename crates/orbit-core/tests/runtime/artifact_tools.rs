@@ -1,8 +1,8 @@
 //! Artifact diagnostics and the reviewer's list-before-read procedure, through
 //! the public tool boundary. Mutable fixtures run in isolated child processes.
 
-use orbit_core::application::task::TaskUpdateParams;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::{NotFoundKind, OrbitError, OrbitRuntime, TaskStatus};
 use orbit_engine::{ReviewLandingRequest, RuntimeHost};
 use orbit_types::task::{ArtifactWriter, MAX_TASK_ARTIFACT_CONTENT_BYTES, TaskArtifact};
 use orbit_types::telemetry::AuditEventStatus;
@@ -15,13 +15,113 @@ use serde_json::{Value, json};
 
 use super::review_gate_audit::Fixture;
 
-#[test]
-fn local_artifact_writers_cannot_forge_or_pin_review_certificates() {
-    if !super::dispatch_admission::isolated(
-        "artifact_tools::local_artifact_writers_cannot_forge_or_pin_review_certificates",
-    ) {
-        return;
+fn task_starts_admit_artifacts_before_any_persistence() {
+    let fixture = Fixture::new();
+    for status in [TaskStatus::Proposed, TaskStatus::Backlog] {
+        let task = fixture
+            .runtime
+            .add_task(TaskAddParams {
+                title: "Start artifact admission".into(),
+                description: "Reject forged review records before starting.".into(),
+                acceptance_criteria: vec!["Only admitted artifacts persist.".into()],
+                plan: "Check artifact admission.".into(),
+                status: Some(status),
+                ..Default::default()
+            })
+            .unwrap();
+        let comments = fixture.runtime.get_task_comments(&task.id).unwrap();
+        let history = fixture.runtime.get_task_history(&task.id).unwrap();
+        let start = |path: &str, content: &str| {
+            // The tool schema currently rejects artifact fields. Exercise the
+            // shared runtime writer its start handler calls, so admission here
+            // cannot be satisfied by that transport-only rejection.
+            fixture.runtime.start_task_with_identity_and_crew(
+                &task.id,
+                None,
+                Some("Admitted artifacts".into()),
+                None,
+                Some("codex".into()),
+                None,
+                None,
+                TaskUpdateParams {
+                    description: Some("Admitted start".into()),
+                    upsert_artifacts: vec![
+                        TaskArtifact::from_text("ordinary.txt", "ordinary evidence"),
+                        TaskArtifact::from_text(path, content),
+                    ],
+                    ..Default::default()
+                },
+                None,
+            )
+        };
+        for reserved in [
+            REVIEW_GATE_ARTIFACT,
+            REVIEW_EVIDENCE_HOLD_ARTIFACT,
+            REVIEW_MANIFEST_ARTIFACT,
+            REVIEW_BASELINE_ARTIFACT,
+            REVIEW_REPORT_HISTORY_ARTIFACT,
+            "review-future.json",
+        ] {
+            for path in [
+                reserved.to_string(),
+                format!(" ./ ./{reserved}\t"),
+                reserved.to_ascii_uppercase(),
+            ] {
+                let result = start(&path, "{}");
+                assert!(
+                    matches!(result, Err(OrbitError::InvalidInput(_))),
+                    "a start must not grant review certificate authority: {path}: {result:?}"
+                );
+            }
+        }
+        for report in [
+            json!({}),
+            json!({"schema_version": 99, "attempt_id": "attempt", "verdict": "accept"}),
+            json!({"schema_version": 1, "attempt_id": " ", "verdict": "accept"}),
+        ] {
+            let result = start(" ./ review-report.json\t", &report.to_string());
+            assert!(matches!(result, Err(OrbitError::InvalidInput(_))));
+        }
+        assert_eq!(fixture.runtime.get_task(&task.id).unwrap(), task);
+        assert_eq!(
+            fixture.runtime.get_task_comments(&task.id).unwrap(),
+            comments
+        );
+        assert_eq!(fixture.runtime.get_task_history(&task.id).unwrap(), history);
+        assert!(
+            fixture
+                .runtime
+                .get_task_artifact_manifest(&task.id)
+                .unwrap()
+                .is_empty(),
+            "a rejected start must persist neither the forged record nor ordinary batch members"
+        );
+
+        let report = json!({"schema_version": 1, "attempt_id": "attempt", "verdict": "incomplete"});
+        start(" ./ review-report.json\t", &report.to_string())
+            .expect("ordinary evidence and schema-valid reviewer reports remain accepted on start");
+        assert_eq!(
+            fixture.runtime.get_task(&task.id).unwrap().status,
+            TaskStatus::InProgress
+        );
+        for (path, content) in [
+            ("ordinary.txt", "ordinary evidence".to_string()),
+            (REVIEW_REPORT_ARTIFACT, report.to_string()),
+        ] {
+            assert_eq!(
+                fixture
+                    .runtime
+                    .get_task_artifact(&task.id, path)
+                    .unwrap()
+                    .unwrap()
+                    .content,
+                content.as_bytes()
+            );
+        }
     }
+}
+
+fn local_artifact_writers_cannot_forge_or_pin_review_certificates() {
     let mut fixture = Fixture::new();
     let source = fixture.repo.join(".orbit/tmp/forged.json");
     std::fs::create_dir_all(source.parent().unwrap()).unwrap();
@@ -174,13 +274,7 @@ fn local_artifact_writers_cannot_forge_or_pin_review_certificates() {
     assert!(landings[0].covered, "{landings:?}");
 }
 
-#[test]
 fn full_review_inventory_is_accepted_through_the_agent_artifact_tool() {
-    if !super::dispatch_admission::isolated(
-        "artifact_tools::full_review_inventory_is_accepted_through_the_agent_artifact_tool",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     let source = fixture.repo.join(".orbit/tmp/full-review-areas.json");
     std::fs::create_dir_all(source.parent().unwrap()).unwrap();
@@ -208,13 +302,7 @@ fn full_review_inventory_is_accepted_through_the_agent_artifact_tool() {
     assert_eq!(stored.content, content);
 }
 
-#[test]
 fn normalized_reviewer_reports_are_validated_on_put_and_update() {
-    if !super::dispatch_admission::isolated(
-        "artifact_tools::normalized_reviewer_reports_are_validated_on_put_and_update",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     fixture.admit();
     let source = fixture.repo.join(".orbit/tmp/report.json");
@@ -279,13 +367,7 @@ fn normalized_reviewer_reports_are_validated_on_put_and_update() {
     );
 }
 
-#[test]
 fn artifact_errors_explain_the_source_file_listing_and_size_remedies() {
-    if !super::dispatch_admission::isolated(
-        "artifact_tools::artifact_errors_explain_the_source_file_listing_and_size_remedies",
-    ) {
-        return;
-    }
     let fixture = Fixture::new();
     let scratch = fixture.repo.join(".orbit/tmp");
     std::fs::create_dir_all(&scratch).unwrap();
@@ -419,13 +501,7 @@ fn successful_reads(runtime: &OrbitRuntime) -> usize {
         .count()
 }
 
-#[test]
 fn review_preflight_fetches_only_existing_optional_artifacts() {
-    if !super::dispatch_admission::isolated(
-        "artifact_tools::review_preflight_fetches_only_existing_optional_artifacts",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new();
     fixture.admit();
     let paths = read_review_evidence(&fixture);
@@ -464,3 +540,126 @@ fn review_preflight_fetches_only_existing_optional_artifacts() {
         .unwrap();
     assert_eq!(listings.len(), 2, "list exactly once per review preflight");
 }
+
+fn doc_duties_discovery_fetches_only_listed_ledgers() {
+    let fixture = Fixture::new();
+    let runtime = &fixture.runtime;
+    let make_task = |title: &str, ledger: Option<String>| {
+        let task = runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: "Doc-duties discovery candidate.".into(),
+                acceptance_criteria: vec!["Discovery is metadata-first.".into()],
+                ..Default::default()
+            })
+            .unwrap();
+        if let Some(ledger) = ledger {
+            runtime
+                .update_task_with_identity(
+                    &task.id,
+                    TaskUpdateParams {
+                        upsert_artifacts: vec![TaskArtifact::from_text(
+                            "doc-duties-ledger.json",
+                            ledger,
+                        )],
+                        ..Default::default()
+                    },
+                    None,
+                    Some("codex".into()),
+                )
+                .unwrap();
+        }
+        task.id.to_string()
+    };
+    let v1 = json!({"schema_version": 1, "documents": [{"path": "docs/a.md", "attempted_on": "2026-01-01", "outcome": "clean"}]}).to_string();
+    let v2 = json!({"schema_version": 2, "state": {"docs/a.md": [{"attempted_on": "2026-02-01", "outcome": "clean"}]}, "documents": []}).to_string();
+    let oldest = make_task("oldest ledger", Some(v1));
+    let middle = make_task("no ledger", None);
+    let newest = make_task("newest ledger", Some(v2.clone()));
+
+    // The doc-duties step-2 procedure: newest first, discover via the
+    // metadata-only artifacts projection, fetch only listed ledgers, and
+    // stop at the first cumulative (schema_version 2) ledger.
+    let call = |tool: &str, input: Value| {
+        runtime
+            .execute_tool_command(tool, input, None, Some("codex".into()))
+            .unwrap()
+    };
+    let mut fetched: Vec<(String, Value)> = Vec::new();
+    for id in [&newest, &middle, &oldest] {
+        let listing = call("orbit.task.show", json!({"id": id, "field": "artifacts"}));
+        let available = listing.as_array().expect("artifact metadata list");
+        assert!(
+            available
+                .iter()
+                .all(|artifact| artifact.get("content").is_none()),
+            "the artifacts projection is metadata-only: {listing}"
+        );
+        if available
+            .iter()
+            .any(|artifact| artifact["path"] == "doc-duties-ledger.json")
+        {
+            let read = call(
+                "orbit.task.artifact.get",
+                json!({"id": id, "path": "doc-duties-ledger.json"}),
+            );
+            let is_cumulative =
+                serde_json::from_str::<Value>(read["content"].as_str().expect("ledger text"))
+                    .unwrap()["schema_version"]
+                    == 2;
+            fetched.push((id.clone(), read));
+            if is_cumulative {
+                break;
+            }
+        }
+    }
+    assert_eq!(fetched.len(), 1, "only the newest listed ledger is fetched");
+    assert_eq!(fetched[0].0, newest);
+    assert_eq!(fetched[0].1["content"], v2);
+    assert_eq!(
+        successful_reads(runtime),
+        1,
+        "skipping the unlisted middle task generated no failed artifact GET"
+    );
+
+    // A direct GET for a well-formed absent artifact stays typed not-found
+    // and now explains metadata-only discovery; valid retrieval is unchanged.
+    let error = runtime
+        .run_tool(
+            "orbit.task.artifact.get",
+            json!({"id": middle, "path": "doc-duties-ledger.json"}),
+        )
+        .expect_err("an absent ledger must stay refused, not fabricated");
+    assert!(
+        matches!(
+            error,
+            OrbitError::NotFound {
+                kind: NotFoundKind::Artifact,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    for hint in ["orbit.task.show", "field: \"artifacts\""] {
+        assert!(error.to_string().contains(hint), "{error}");
+    }
+    let read = runtime
+        .run_tool(
+            "orbit.task.artifact.get",
+            json!({"id": newest, "path": "doc-duties-ledger.json"}),
+        )
+        .unwrap();
+    assert_eq!(read["content"], v2);
+}
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    task_starts_admit_artifacts_before_any_persistence_scenarios,
+    task_starts_admit_artifacts_before_any_persistence,
+    local_artifact_writers_cannot_forge_or_pin_review_certificates,
+    full_review_inventory_is_accepted_through_the_agent_artifact_tool,
+    normalized_reviewer_reports_are_validated_on_put_and_update,
+    artifact_errors_explain_the_source_file_listing_and_size_remedies,
+    review_preflight_fetches_only_existing_optional_artifacts,
+    doc_duties_discovery_fetches_only_listed_ledgers
+);

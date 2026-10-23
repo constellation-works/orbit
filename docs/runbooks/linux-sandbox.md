@@ -6,12 +6,12 @@ paths:
   - "install.sh"
   - "crates/orbit-cli/src/command/init/**"
   - "crates/orbit-exec/src/**"
-  - "crates/orbit-core/src/adapter/engine_host/v2_host/tests/**"
+  - "crates/orbit-core/src/adapter/engine_host/actions/tests/**"
   - "crates/orbit-cmd/src/update/bundled_bwrap.rs"
   - "scripts/build-bundled-bwrap.sh"
 related_features: [policy-sandbox, executors]
 related_artifacts: []
-last_validated: 2026-10-10
+last_validated: 2026-10-19
 ---
 
 # Linux sandbox onboarding and diagnostics
@@ -180,7 +180,22 @@ look ready.
 The Linux boundary enforces writes from the resolved policy. It leaves host filesystem
 reads and host network access available, so it does not provide worktree-only reads or
 policy-gated network egress. Well-known credential locations are masked inside the
-sandbox. See [policy-sandbox](../design/policy-sandbox/) for the design.
+sandbox, including the default Linux browser profile roots `~/.config/google-chrome`,
+`~/.config/chromium`, `~/.config/BraveSoftware/Brave-Browser` and
+`~/.mozilla/firefox`. A browser root that does not exist at launch is skipped.
+`XDG_CONFIG_HOME` overrides (any config home other than `~/.config`), Firefox
+profiles outside `~/.mozilla/firefox` (snap and flatpak included), snap copies
+of Chrome or Chromium, channel directories, other browsers, and an explicit
+user-data directory are not masked. `~/.local/chromium-deps` stays readable.
+See [SECURITY.md](../../SECURITY.md) for the full bound. Existing per-user
+runtime directories (`/run/user/<uid>` and absolute
+`XDG_RUNTIME_DIR`) are also hidden, so session D-Bus, systemd user-manager,
+SSH-agent and GPG-agent sockets there cannot be reached by the worker or its
+children. Policy grants inside those directories refuse the launch. Providers
+cannot use the raw session bus for authentication. Abstract Unix sockets,
+network services and pathname sockets elsewhere remain accessible; see
+[SECURITY.md](../../SECURITY.md) for the IPC limits and
+[policy-sandbox](../design/policy-sandbox/) for the design.
 
 ## Verify the Bubblewrap boundary natively
 
@@ -189,14 +204,19 @@ Bubblewrap suite from the candidate checkout on the owning Linux host:
 
 ```sh
 cargo test -p orbit-exec --test sandbox linux_sandbox:: -- --include-ignored --nocapture
+cargo test -p orbit-exec --test sandbox linux_runtime_ipc:: -- --nocapture
 ```
 
 On Linux, the `linux_sandbox::` module in the `sandbox` integration-test target
 includes live children through `spawn_under_linux_bwrap` and checks
 credential masking, worktree writes, protected `.env` paths, Orbit store
 exceptions and Git metadata integrity. Tests that cannot create the namespace
-print `skipping real Bubblewrap test` and return early; the ignored ones fail
-instead. Confirm nonempty selection without spawning children first:
+print `DEFERRED: bubblewrap unavailable:` and return early; the ignored ones fail
+instead. The `linux_runtime_ipc::` fixture creates host Unix sockets and checks
+that the runtime mask hides them while a control socket remains reachable. It
+also checks inherited children, explicit bus-address queries and refusal of
+grants or caller-mask aliases that would reopen the runtime. Confirm nonempty
+selection without spawning children first:
 
 ```sh
 cargo test -p orbit-exec --test sandbox linux_sandbox:: -- --list
@@ -219,9 +239,11 @@ namespace-and-mount probe as the unprivileged runner user. Only the Ubuntu
 profile, or an existing `/etc/apparmor.d/bwrap-userns-restrict` fails the step
 with diagnostics. The apt and AppArmor preparation now precedes guardrails, so
 its failure preempts their output. The explicit Linux sandbox/policy enforcement
-gate still runs afterwards and selects the ignored Linux sandbox tests; its
-nextest filters fail if either selection is empty. The workflow never changes
-the global user-namespace controls.
+gate still runs afterwards. It asserts with `cargo nextest list` that its
+portable package selection matches at least one test, because the guardrails
+pass already ran those tests, and its ignored Linux sandbox run fails when that
+selection is empty. The workflow never changes the global user-namespace
+controls.
 
 Step-failure recovery dispatch through Bubblewrap with a provider process has
 no automated native check. Its persistent Git configuration guard runs in the

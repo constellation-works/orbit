@@ -4,7 +4,8 @@ use orbit_core::application::distributed::{DrainEntryPoint, RESOURCE_THROTTLED};
 use orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA;
 use orbit_types::task::HostOs;
 use orbit_types::workflow::{
-    BASELINE_RED_HOLD_EVENT, BaselineRedHold, CONTRACT_REFUSAL_MARKER, PullBreaker,
+    BASELINE_RED_HOLD_EVENT, BaselineRedHold, CONTRACT_REFUSAL_MARKER, DrainPassCounters,
+    DrainPassOutcome, PullBreaker,
 };
 
 use super::*;
@@ -12,14 +13,7 @@ use super::*;
 /// A configured follower name survives the refill request, owner admission,
 /// claimed leaf insertion, task binding and pulled-by history. Legacy callers
 /// without a name keep their machine id and unknown display name.
-#[test]
 fn pull_admission_preserves_execution_machine_name() {
-    if !isolated(
-        module_path!(),
-        "pull_admission_preserves_execution_machine_name",
-    ) {
-        return;
-    }
     for name in [Some("Daniels-Mac-mini.local"), None] {
         let mut pair = Pair::new(1);
         let location = orbit_types::task::ExecutionLocation {
@@ -51,14 +45,7 @@ fn pull_admission_preserves_execution_machine_name() {
 
 /// Exercise the owner's actual tool/redaction boundary with the incident's
 /// inherited session metadata, then the follower's real refill action.
-#[test]
 fn session_metadata_does_not_corrupt_owner_probe_or_pull_pass() {
-    if !isolated(
-        module_path!(),
-        "session_metadata_does_not_corrupt_owner_probe_or_pull_pass",
-    ) {
-        return;
-    }
     let pair = Pair::new(0);
     let drain = pair.run_drain();
     let _env = orbit_common::test_env::scoped([
@@ -94,14 +81,7 @@ fn session_metadata_does_not_corrupt_owner_probe_or_pull_pass() {
 
 /// Both a current owner's typed redaction refusal and an older owner's
 /// corrupted fingerprint must leave the window alive for the next pass.
-#[test]
 fn redacted_owner_identity_retries_without_protocol_skew() {
-    if !isolated(
-        module_path!(),
-        "redacted_owner_identity_retries_without_protocol_skew",
-    ) {
-        return;
-    }
     let pair = Pair::new(0);
     let fingerprint = orbit_store::contracts::distributed_drain_protocol_fingerprint();
     let drain = pair.run_drain();
@@ -149,14 +129,7 @@ fn redacted_owner_identity_retries_without_protocol_skew() {
 
 /// A scrubbed mutation reply must not imply that admission failed: replaying
 /// its durable request returns the receipt the owner already stored.
-#[test]
 fn redacted_pull_receipt_reports_unknown_outcome_and_replays_same_request() {
-    if !isolated(
-        module_path!(),
-        "redacted_pull_receipt_reports_unknown_outcome_and_replays_same_request",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let probe = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
     let fingerprint = orbit_store::contracts::distributed_drain_protocol_fingerprint();
@@ -196,14 +169,7 @@ fn redacted_pull_receipt_reports_unknown_outcome_and_replays_same_request() {
 
 /// An unanswered request from before both hosts upgraded must not fail the
 /// current drain after its probe matches; receipt lookup releases the old slot.
-#[test]
 fn obsolete_persisted_request_skew_does_not_fail_a_matching_drain() {
-    if !isolated(
-        module_path!(),
-        "obsolete_persisted_request_skew_does_not_fail_a_matching_drain",
-    ) {
-        return;
-    }
     let current = orbit_store::contracts::distributed_drain_protocol_fingerprint();
     for (old_fingerprint, schema) in [
         (
@@ -289,14 +255,7 @@ fn obsolete_persisted_request_skew_does_not_fail_a_matching_drain() {
 /// Owner admission hands selector-free implementation work to a follower on
 /// its first pass with an empty lock footprint; tagged no-diff work is
 /// claimable by the follower too [ORB-14474].
-#[test]
 fn owner_pull_admits_empty_context_without_locks_and_claims_no_diff_work() {
-    if !isolated(
-        module_path!(),
-        "owner_pull_admits_empty_context_without_locks_and_claims_no_diff_work",
-    ) {
-        return;
-    }
     let pair = Pair::new(2);
     for (index, id) in pair.tasks.iter().enumerate() {
         pair.wire
@@ -344,14 +303,7 @@ fn owner_pull_admits_empty_context_without_locks_and_claims_no_diff_work() {
 /// owner's own delivery, so submission notes it rather than refusing. This
 /// fixture deploys no job asset, so a submission past every preflight — the
 /// owner probe included — reaches the job catalog and stops there.
-#[test]
 fn a_follower_without_required_validation_commands_starts_a_pull_drain() {
-    if !isolated(
-        module_path!(),
-        "a_follower_without_required_validation_commands_starts_a_pull_drain",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let follower = OrbitRuntime::in_memory()
         .expect("replica runtime")
@@ -366,39 +318,60 @@ fn a_follower_without_required_validation_commands_starts_a_pull_drain() {
         .logical_workspace_id
         .clone();
 
-    let submitted = follower
-        .submit_workspace_pull_run(
-            orbit_core::WorkspacePullRequest {
-                selector: &format!("{OWNER}/{logical}"),
-                for_seconds: Some(60),
-                max_active_leaf_runs: Some(1),
-                allowed_crews: &[],
-                actor: None,
-            },
-            orbit_types::workflow::JobRunTrigger::cli(),
-        )
-        .expect_err("a fixture without job assets never submits a run");
+    let probes_before = pair.wire.calls("orbit.drain.probe").len();
+    for seconds in [86_401, 172_800, u64::MAX] {
+        let before = follower.list_job_runs(Default::default()).unwrap();
+        let error = follower
+            .submit_workspace_pull_run(
+                orbit_core::WorkspacePullRequest {
+                    selector: &format!("{OWNER}/{logical}"),
+                    for_seconds: Some(seconds),
+                    ..Default::default()
+                },
+                orbit_types::workflow::JobRunTrigger::cli(),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error, OrbitError::InvalidInput(ref message)
+            if message == "for_seconds must be a whole number from 1 to 86400 (24 hours)"),
+            "{error}"
+        );
+        assert_eq!(follower.list_job_runs(Default::default()).unwrap(), before);
+        assert_eq!(
+            pair.wire.calls("orbit.drain.probe").len(),
+            probes_before,
+            "invalid input never probes the owner"
+        );
+    }
 
-    assert!(
-        matches!(
-            submitted,
-            OrbitError::NotFound { ref id, .. } if id == "workspace_pull_pipeline"
-        ),
-        "an empty requirement list must not refuse a pull drain: {submitted}"
-    );
-    assert_eq!(pair.wire.calls("orbit.drain.probe").len(), 2);
+    for for_seconds in [Some(60), None, Some(0), Some(86_400)] {
+        let submitted = follower
+            .submit_workspace_pull_run(
+                orbit_core::WorkspacePullRequest {
+                    selector: &format!("{OWNER}/{logical}"),
+                    for_seconds,
+                    max_active_leaf_runs: Some(1),
+                    allowed_crews: &[],
+                    actor: None,
+                },
+                orbit_types::workflow::JobRunTrigger::cli(),
+            )
+            .expect_err("a fixture without job assets never submits a run");
+
+        assert!(
+            matches!(
+                submitted,
+                OrbitError::NotFound { ref id, .. } if id == "workspace_pull_pipeline"
+            ),
+            "an empty requirement list must not refuse a pull drain: {submitted}"
+        );
+    }
+    assert_eq!(pair.wire.calls("orbit.drain.probe").len(), 8);
 }
 
 /// An unreadable persisted cancel request fails the whole pass visibly; it
 /// cannot probe, request or launch work without readable control state.
-#[test]
 fn unreadable_cancel_state_fails_visibly_without_admission() {
-    if !isolated(
-        module_path!(),
-        "unreadable_cancel_state_fails_visibly_without_admission",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain = pair.run_drain();
     pair.follower
@@ -455,14 +428,7 @@ fn unreadable_cancel_state_fails_visibly_without_admission() {
 
 /// Older owners reject additive fields (`crews`, `os`) despite equal binary
 /// versions. Negotiation must stop the newer follower before it sends them.
-#[test]
 fn an_older_owner_is_refused_before_a_newer_request_is_sent() {
-    if !isolated(
-        module_path!(),
-        "an_older_owner_is_refused_before_a_newer_request_is_sent",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     *pair.wire.protocol.lock().unwrap() = Some(1);
     let drain = pair.start_drain();
@@ -511,14 +477,7 @@ fn an_older_owner_is_refused_before_a_newer_request_is_sent() {
 /// A pre-fingerprint follower pulls with an older `caller_schema` and no
 /// fingerprint. Its build closes a request only on `invalid_input`, so the
 /// owner must keep that code for it; a fingerprinted older build is skew.
-#[test]
 fn fingerprintless_older_revision_pull_keeps_the_invalid_input_refusal() {
-    if !isolated(
-        module_path!(),
-        "fingerprintless_older_revision_pull_keeps_the_invalid_input_refusal",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let probe = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
     let pull = |request_id: &str, caller_fingerprint: Option<&str>| {
@@ -556,14 +515,7 @@ fn fingerprintless_older_revision_pull_keeps_the_invalid_input_refusal() {
 /// The incident's same-version builds must differ as soon as an admission
 /// field changes, including a nested field. This checks the live probe against
 /// the generated request shape instead of pinning a manually bumped hash.
-#[test]
 fn probe_fingerprint_tracks_request_types_and_refuses_changed_shapes() {
-    if !isolated(
-        module_path!(),
-        "probe_fingerprint_tracks_request_types_and_refuses_changed_shapes",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let probe = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
     let schema = orbit_store::contracts::admission_request_schema();
@@ -605,14 +557,7 @@ fn probe_fingerprint_tracks_request_types_and_refuses_changed_shapes() {
 
 /// The owner can upgrade after preflight: skew is checked before unknown
 /// request fields or malformed nested values can hide it as invalid input.
-#[test]
 fn owner_checks_fingerprint_before_deserializing_an_incompatible_pull() {
-    if !isolated(
-        module_path!(),
-        "owner_checks_fingerprint_before_deserializing_an_incompatible_pull",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let error = pair
         .wire
@@ -646,14 +591,7 @@ fn owner_checks_fingerprint_before_deserializing_an_incompatible_pull() {
 
 /// The real pull job ends failed on same-release wire skew, even with an open
 /// window; neither stop nor cancellation can turn the failed pass into success.
-#[test]
 fn same_version_skew_ends_the_pull_job_failed_before_any_pull() {
-    if !isolated(
-        module_path!(),
-        "same_version_skew_ends_the_pull_job_failed_before_any_pull",
-    ) {
-        return;
-    }
     let mut pair = Pair::new(1);
     orbit_core::bootstrap::init::init_workspace_at_root(
         &pair.follower.global_root(),
@@ -711,6 +649,7 @@ fn same_version_skew_ends_the_pull_job_failed_before_any_pull() {
             .read_run_state(&run.run_id)
             .unwrap()
             .unwrap()
+            .pull_drain
             .drain_last_pass
             .unwrap();
         assert!(pass.degraded);
@@ -725,14 +664,7 @@ fn same_version_skew_ends_the_pull_job_failed_before_any_pull() {
 
 /// Transport errors persist, a successful pass resets a transient streak,
 /// and three failures latch a warning instead of idling invisibly forever.
-#[test]
 fn repeated_pass_failures_degrade_the_drain_and_a_new_drain_resets_it() {
-    if !isolated(
-        module_path!(),
-        "repeated_pass_failures_degrade_the_drain_and_a_new_drain_resets_it",
-    ) {
-        return;
-    }
     let pair = Pair::new(0);
     let drain = pair.start_drain();
     *pair.wire.unreachable.lock().unwrap() = true;
@@ -747,7 +679,7 @@ fn repeated_pass_failures_degrade_the_drain_and_a_new_drain_resets_it() {
         assert_eq!(pass["consecutive_pass_failures"], count);
         assert_eq!(pass["degraded"], count == 3);
         let state = pair.follower.read_run_state(&drain).unwrap().unwrap();
-        let health = state.drain_last_pass.unwrap();
+        let health = state.pull_drain.drain_last_pass.unwrap();
         assert_eq!(health.consecutive_pass_failures, count);
         assert!(
             health
@@ -775,14 +707,7 @@ fn repeated_pass_failures_degrade_the_drain_and_a_new_drain_resets_it() {
 
 /// A graceful cancel persisted while orphan reconciliation runs is observed
 /// before this pass probes, requests, or launches anything.
-#[test]
 fn cancel_recorded_during_orphan_reconciliation_admits_nothing() {
-    if !isolated(
-        module_path!(),
-        "cancel_recorded_during_orphan_reconciliation_admits_nothing",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain = pair.run_drain();
     assert!(
@@ -820,14 +745,7 @@ fn cancel_recorded_during_orphan_reconciliation_admits_nothing() {
 }
 
 /// A readable run state with no cancellation still probes and admits work.
-#[test]
 fn readable_state_without_cancel_permits_refill() {
-    if !isolated(
-        module_path!(),
-        "readable_state_without_cancel_permits_refill",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain = pair.start_drain();
     assert!(
@@ -854,14 +772,7 @@ fn readable_state_without_cancel_permits_refill() {
 /// Three claims in a row that this drain settled as failures open its
 /// breaker: the next pass requests nothing and reports why. A new drain
 /// starts with a closed breaker and pulls again.
-#[test]
 fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
-    if !isolated(
-        module_path!(),
-        "three_failed_claims_open_the_breaker_and_a_new_drain_resets_it",
-    ) {
-        return;
-    }
     let pair = Pair::new(4);
     let drain = pair.start_drain();
 
@@ -888,6 +799,7 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("the pass is recorded");
     assert!(
@@ -898,6 +810,28 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
         "{recorded:?}"
     );
     assert_eq!(recorded.resource_throttle, None, "{recorded:?}");
+    // Every pass counts once: each pass that queued a leaf lost its bind
+    // reply and failed; of the passes that sent no request, the first two
+    // found no slot under their zero ceiling, and the breaker held the next
+    // two, the first of them because the failure it settled opened it.
+    let counters = pass_counters(&pair, &drain);
+    assert_eq!(counters.passes, 7, "{counters:?}");
+    assert_eq!(
+        counters.outcome(DrainPassOutcome::Failed),
+        3,
+        "{counters:?}"
+    );
+    assert_eq!(
+        counters.outcome(DrainPassOutcome::CeilingFull),
+        2,
+        "{counters:?}"
+    );
+    assert_eq!(counters.outcome(DrainPassOutcome::Held), 2, "{counters:?}");
+    assert_eq!(
+        counters.held_by_reason,
+        BTreeMap::from([("circuit_open".to_string(), 2)]),
+        "{counters:?}"
+    );
     pair.follower_jobs
         .mark_job_run_running(&drain, Utc::now(), std::process::id())
         .expect("running drain");
@@ -933,12 +867,24 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
         .read_run_state(&restarted)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("the pass is recorded");
     assert_eq!(cleared.admission_refusal, None, "{cleared:?}");
     assert_eq!(pair.wire.calls("orbit.task.pull").len(), 4);
     assert_eq!(backlog(&pair), 1);
     assert_eq!(pair.owner_claims().len(), 4);
+}
+
+/// The drain's admission pass counters.
+fn pass_counters(pair: &Pair, drain: &str) -> DrainPassCounters {
+    pair.follower
+        .read_run_state(drain)
+        .unwrap()
+        .unwrap()
+        .pull_drain
+        .drain_pass_counters
+        .expect("the drain counts its passes")
 }
 
 /// The drain's recorded failure breaker, which a pass leaves open or
@@ -948,6 +894,7 @@ fn breaker(pair: &Pair, drain: &str) -> PullBreaker {
         .read_run_state(drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .pull_breaker
         .expect("the breaker is recorded")
 }
@@ -955,7 +902,11 @@ fn breaker(pair: &Pair, drain: &str) -> PullBreaker {
 /// Let the breaker's cooldown pass, as the clock would.
 fn cooldown_passes(pair: &Pair, drain: &str) {
     let mut state = pair.follower.read_run_state(drain).unwrap().unwrap();
-    let breaker = state.pull_breaker.as_mut().expect("an open breaker");
+    let breaker = state
+        .pull_drain
+        .pull_breaker
+        .as_mut()
+        .expect("an open breaker");
     breaker.half_open_at = Utc::now() - chrono::Duration::seconds(1);
     pair.follower.write_run_state(drain, &state).unwrap();
 }
@@ -965,14 +916,7 @@ fn cooldown_passes(pair: &Pair, drain: &str) {
 /// other while that probe runs, however many slots are free. A probe that
 /// fails opens it again with twice the wait; one that hands off closes it,
 /// and the drain admits again.
-#[test]
 fn an_open_breaker_half_opens_for_one_probe_and_reopens_or_closes_on_its_outcome() {
-    if !isolated(
-        module_path!(),
-        "an_open_breaker_half_opens_for_one_probe_and_reopens_or_closes_on_its_outcome",
-    ) {
-        return;
-    }
     let pair = Pair::new(6);
     let drain = pair.start_drain();
     let pulls = |pair: &Pair| pair.wire.calls("orbit.task.pull").len();
@@ -1036,7 +980,7 @@ fn an_open_breaker_half_opens_for_one_probe_and_reopens_or_closes_on_its_outcome
     assert_eq!(closed["consecutive_failures"], 0, "{closed}");
     assert!(closed["refusal"].is_null(), "{closed}");
     let state = pair.follower.read_run_state(&drain).unwrap().unwrap();
-    assert_eq!(state.pull_breaker, None);
+    assert_eq!(state.pull_drain.pull_breaker, None);
     pair.running_leaf(&drain, 4);
     assert_eq!(pulls(&pair), 6, "a closed breaker admits again");
 }
@@ -1046,14 +990,7 @@ fn an_open_breaker_half_opens_for_one_probe_and_reopens_or_closes_on_its_outcome
 /// an operator to requeue, but says nothing about the host: it neither
 /// extends nor resets the breaker's streak. Three genuine failures in a row
 /// still open it.
-#[test]
 fn contract_refusals_do_not_trip_the_breaker_but_genuine_failures_still_do() {
-    if !isolated(
-        module_path!(),
-        "contract_refusals_do_not_trip_the_breaker_but_genuine_failures_still_do",
-    ) {
-        return;
-    }
     let pair = Pair::new(6);
     let drain = pair.start_drain();
     let refusal = format!(
@@ -1097,19 +1034,189 @@ fn excluded(pass: &Value, crew: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
+/// Read-only audit requirements are admitted through the closed owner bridge.
+fn claimed_workspace_reads_are_satisfiable_before_a_leaf_is_created() {
+    for tool in ["orbit.search", "orbit.task.list"] {
+        let mut pair = Pair::new(0);
+        let task = backlog_task_with_input(
+            &pair.wire.owner,
+            &pair.owner_repo,
+            "src/audit.rs",
+            None,
+            json!({"required_tools": [tool]}),
+        );
+        pair.tasks.push(task.clone());
+        let drain = pair.start_drain();
+        let _leaf = pair.queued_leaf(&drain, 1);
+        assert_eq!(pair.owner_claims().len(), 1, "{tool} must be claimable");
+        assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], task);
+    }
+}
+
+/// Required tools must be satisfiable before a follower creates any claim or
+/// leaf (F2026-10-352/353/354). Provenance never changes that authority.
+fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
+    let pair = Pair::new(0);
+    let owner = &pair.wire.owner;
+    let mut held = Vec::new();
+    for tool in ["orbit.task.update", "orbit.task.requeue"] {
+        for automated in [false, true] {
+            let file = format!("src/requirement{}.rs", held.len());
+            let task = if automated {
+                std::fs::write(pair.owner_repo.join(&file), "fn work() {}\n").unwrap();
+                let definition = owner
+                    .auto_task_add(orbit_core::AutoTaskAddParams {
+                        name: format!("tool-routing-{}", held.len()),
+                        description: "Preclaim requirement regression".into(),
+                        schedule: orbit_core::AutoTaskSchedule::Interval { every_minutes: 60 },
+                        template: serde_json::from_value(json!({
+                            "title": "Automated tool requirement",
+                            "description": "Same requirements as hand-authored work.",
+                            "acceptance_criteria": ["Requirements remain satisfiable."],
+                            "required_tools": [tool],
+                            "context_files": [format!("file:{file}")],
+                            "complexity": "low", "status": "backlog",
+                        }))
+                        .unwrap(),
+                        dedupe: orbit_core::DedupePolicy::SkipIfOpen,
+                    })
+                    .unwrap();
+                let task = owner.auto_task_mint(&definition.name).unwrap();
+                owner.run_tool("orbit.task.update", json!({
+                    "id": task.id, "plan": "1. Implement the requirement.", "model": "codex",
+                })).unwrap();
+                task.id
+            } else {
+                backlog_task_with_input(
+                    owner,
+                    &pair.owner_repo,
+                    &file,
+                    None,
+                    json!({"required_tools": [tool]}),
+                )
+            };
+            held.push((task, tool));
+        }
+    }
+    let local = owner
+        .run_deterministic(
+            "list_backlog_tasks",
+            &json!({}),
+            &json!({}),
+            ToolContext::default(),
+        )
+        .unwrap();
+    for (task, _) in &held {
+        assert!(
+            local["task_ids"].as_array().unwrap().contains(&json!(task)),
+            "owner-local dispatch remains eligible: {local}"
+        );
+    }
+    let drain = pair.start_drain();
+    let idle = pair.pass(&drain);
+    assert!(error_of(&idle).is_empty(), "{idle}");
+    assert_eq!(idle["admitted"], 0, "{idle}");
+    assert!(
+        pair.owner_claims().is_empty(),
+        "no claim for unsatisfiable tools"
+    );
+    assert!(
+        pair.leaf_runs().is_empty(),
+        "no worktree setup or failed leaf"
+    );
+    let request = pair.wire.calls("orbit.task.pull").pop().unwrap();
+    let receipt = pair
+        .wire
+        .call("", "orbit.task.pull", request.clone())
+        .unwrap();
+    assert!(receipt["receipt"]["claim"].is_null(), "{receipt}");
+    assert_eq!(
+        pair.wire
+            .call("", "orbit.task.pull", request.clone())
+            .unwrap(),
+        receipt,
+        "idle replay preserves the original exclusions"
+    );
+    let exclusions = receipt["receipt"]["deferred_conflicts"].as_array().unwrap();
+    assert_eq!(exclusions.len(), held.len(), "{receipt}");
+    for (task, tool) in &held {
+        let reason = exclusions
+            .iter()
+            .find(|entry| entry["task_id"] == *task)
+            .unwrap()["reason"]
+            .as_str()
+            .unwrap();
+        assert!(reason.contains(tool), "{reason}");
+        assert!(
+            reason.contains(if *tool == "orbit.task.update" {
+                "denied in claimed mode"
+            } else {
+                "outside the closed claimed-owner bridge"
+            }),
+            "{reason}"
+        );
+        assert_eq!(pair.owner_status(task), "backlog");
+        assert_eq!(pair.owner_task(task)["required_tools"], json!([tool]));
+        let mutation = owner.run_tool(
+            "orbit.task.update",
+            json!({
+                "id": task, "required_tools": [], "model": "codex",
+            }),
+        );
+        assert!(mutation.is_err(), "requirements remain immutable");
+        // The owner-local implementer keeps its existing activity admission.
+        let grant = owner
+            .resolve_activity_tool_denials(std::slice::from_ref(task), "agent_implement", &[])
+            .unwrap();
+        assert_eq!(grant.requested_tools, vec![tool.to_string()]);
+        assert!(grant.effective_tools.iter().any(|name| name == tool));
+    }
+    for peers in held.as_chunks::<2>().0 {
+        let reason = |task: &str| {
+            exclusions
+                .iter()
+                .find(|entry| entry["task_id"] == task)
+                .unwrap()["reason"]
+                .clone()
+        };
+        assert_eq!(
+            reason(&peers[0].0),
+            reason(&peers[1].0),
+            "hand-authored and auto-task records obey the same policy"
+        );
+    }
+
+    let supported = backlog_task_with_input(
+        owner,
+        &pair.owner_repo,
+        "src/supported.rs",
+        None,
+        json!({"required_tools": [
+            "orbit.task.show", "orbit.task.add", "orbit.friction.add",
+            "orbit.task.artifact.get", "orbit.task.artifact.put", "proc.spawn",
+        ]}),
+    );
+    assert_eq!(
+        pair.wire.call("", "orbit.task.pull", request).unwrap(),
+        receipt,
+        "adding eligible work does not alter a stored idle receipt"
+    );
+    let leaf = pair.queued_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), supported);
+    assert_eq!(pair.owner_claims().len(), 1);
+    assert_eq!(pair.leaf_runs(), vec![leaf]);
+    for (task, tool) in &held {
+        assert!(!pair.owner_has_claim_for_task(task));
+        assert_eq!(pair.owner_task(task)["required_tools"], json!([tool]));
+    }
+}
+
 /// A follower whose window preflight cannot find crew `antigravity`'s CLI is
 /// never handed an `antigravity` task [ORB-13941]. The owner admits the next
 /// task it can run instead and, once only the unrunnable one is left, answers
 /// idle and names it, so the task stays in the backlog for the owner or
 /// another follower rather than being claimed and failed here.
-#[test]
 fn a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run() {
-    if !isolated(
-        module_path!(),
-        "a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run",
-    ) {
-        return;
-    }
     let pair = Pair::with_crews(&[Some("antigravity"), Some("sol")]);
     pair.follower_cli("antigravity", "orbit-test-no-such-provider-cli");
     let (unrunnable, runnable) = (&pair.tasks[0], &pair.tasks[1]);
@@ -1178,14 +1285,7 @@ fn a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run() {
 /// and an untagged one, never the `os:macos` task, which the idle receipt
 /// names and which stays in the owner's backlog until a macOS follower pulls
 /// it.
-#[test]
 fn a_follower_is_handed_only_tasks_its_os_satisfies() {
-    if !isolated(
-        module_path!(),
-        "a_follower_is_handed_only_tasks_its_os_satisfies",
-    ) {
-        return;
-    }
     let mut pair = Pair::new(3);
     let (mac, either, anywhere) = (
         pair.tasks[0].clone(),
@@ -1259,14 +1359,7 @@ fn a_follower_is_handed_only_tasks_its_os_satisfies() {
 /// `blocked`, the failure breaker does not count it, and the drain offers
 /// that crew no more for the rest of its window, so the same task is not
 /// pulled straight back to fail the same way.
-#[test]
 fn a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_window() {
-    if !isolated(
-        module_path!(),
-        "a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_window",
-    ) {
-        return;
-    }
     a_provider_failure_releases_the_claim(
         "[provider_unavailable] claude provider authentication failure (HTTP 401): \
          Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
@@ -1277,14 +1370,7 @@ fn a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_wind
 /// [ORB-14149] Likewise a claimed leaf whose provider said its selected model
 /// was at capacity: recovery could not change that and an immediate rerun
 /// would use the same model, so the claim goes back to the owner's backlog.
-#[test]
 fn a_provider_capacity_failure_releases_the_claim_and_excludes_the_crew_for_the_window() {
-    if !isolated(
-        module_path!(),
-        "a_provider_capacity_failure_releases_the_claim_and_excludes_the_crew_for_the_window",
-    ) {
-        return;
-    }
     a_provider_failure_releases_the_claim(
         "[provider_capacity] cli subprocess exited with code 1: codex provider reported the \
          selected model at capacity: Selected model is at capacity. Please try a different model.",
@@ -1362,14 +1448,7 @@ fn a_provider_failure_releases_the_claim(diagnostic: &str, reason: &str) {
 /// resolves to it. `sonnet` is configured as the `anthropic` alias of
 /// `claude`, so a 401 on `opus` must keep `sonnet` out of the window while
 /// `sol`, on codex, is still admitted.
-#[test]
 fn a_provider_auth_failure_excludes_every_crew_of_that_provider() {
-    if !isolated(
-        module_path!(),
-        "a_provider_auth_failure_excludes_every_crew_of_that_provider",
-    ) {
-        return;
-    }
     let config = "\
 [workflow]
 default_crew = \"sol\"
@@ -1486,14 +1565,7 @@ model = \"gpt-sol\"
 /// points at the red commit and after it moves to another failing tip, then
 /// offers it once the owner's clock tick records that the required command
 /// passes on the new base. Pull admission never re-checks it [ORB-14739].
-#[test]
 fn a_red_base_failure_releases_the_claim_until_the_command_passes() {
-    if !isolated(
-        module_path!(),
-        "a_red_base_failure_releases_the_claim_until_the_command_passes",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let repo = &pair.owner_repo;
     git(repo, &["init", "-q", "-b", "main"]);
@@ -1612,14 +1684,7 @@ fn a_red_base_failure_releases_the_claim_until_the_command_passes() {
 /// [ORB-13901] While sustained host pressure throttles the follower, its
 /// drain requests no claim but still delivers a settlement it owes; once
 /// memory is back below its resume mark the next pass pulls again.
-#[test]
 fn a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume() {
-    if !isolated(
-        module_path!(),
-        "a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume",
-    ) {
-        return;
-    }
     let mut pair = Pair::new(2);
     let probe = crate::dispatch_admission::PressureProbe::calm();
     pair.follower = pair
@@ -1664,10 +1729,22 @@ fn a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .and_then(|pass| pass.resource_throttle)
         .expect("the pull pass records the throttle");
     assert_eq!(recorded.resources[0].percent, 96.0);
+    let counters = pass_counters(&pair, &drain);
+    assert_eq!(
+        counters.outcome(DrainPassOutcome::Throttle),
+        1,
+        "{counters:?}"
+    );
+    assert_eq!(
+        counters.throttle_by_resource,
+        BTreeMap::from([("memory".to_string(), 1)]),
+        "{counters:?}"
+    );
 
     probe.memory(70.0, Utc::now());
     let resumed = pair.pass(&drain);
@@ -1681,14 +1758,7 @@ fn a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume() {
 /// unattended discovery stands down, yet a calm follower still claims. With
 /// the follower held on CPU and the owner calm, the follower requests nothing
 /// and reports its own throttle, not an admission refusal.
-#[test]
 fn a_pull_claim_is_gated_by_the_follower_host_never_the_owner() {
-    if !isolated(
-        module_path!(),
-        "a_pull_claim_is_gated_by_the_follower_host_never_the_owner",
-    ) {
-        return;
-    }
     let owner_probe = crate::dispatch_admission::PressureProbe::calm();
     let mut pair = Pair::with_owner(2, |owner| {
         owner.with_host_resource_probe(owner_probe.clone())
@@ -1757,6 +1827,7 @@ fn a_pull_claim_is_gated_by_the_follower_host_never_the_owner() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("the pass is recorded");
     assert_eq!(
@@ -1791,14 +1862,7 @@ pub(super) fn local_drain_admission(owner: &OrbitRuntime, task: &str) -> Vec<Str
 /// [ORB-13918] A task the owner's local drain admitted is not pulled while
 /// that admission is live, even though its gate has not yet moved it out of
 /// `backlog` or reserved its footprint; once the local runs end, it is.
-#[test]
 fn a_task_a_local_drain_admitted_is_not_pulled_until_that_admission_ends() {
-    if !isolated(
-        module_path!(),
-        "a_task_a_local_drain_admitted_is_not_pulled_until_that_admission_ends",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let local = local_drain_admission(&pair.wire.owner, &task);
@@ -1839,14 +1903,7 @@ fn a_task_a_local_drain_admitted_is_not_pulled_until_that_admission_ends() {
 /// drain neither selects it nor lets a gate that queued it before the claim
 /// landed dispatch it: the gate's pre-dispatch admission stops as a no-op and
 /// no delivery run starts.
-#[test]
 fn a_task_under_a_live_claim_is_never_admitted_by_the_local_drain() {
-    if !isolated(
-        module_path!(),
-        "a_task_under_a_live_claim_is_never_admitted_by_the_local_drain",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let drain = pair.start_drain();
@@ -1929,14 +1986,7 @@ fn a_task_under_a_live_claim_is_never_admitted_by_the_local_drain() {
 /// section, so a follower pulling after the wave, but before the wave's gate
 /// has reserved anything, is handed neither the admitted task nor a task
 /// overlapping its footprint.
-#[test]
 fn a_pull_after_an_owner_wave_cannot_take_the_footprint_it_admitted() {
-    if !isolated(
-        module_path!(),
-        "a_pull_after_an_owner_wave_cannot_take_the_footprint_it_admitted",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let owner = &pair.wire.owner;
     let admitted = pair.tasks[0].clone();
@@ -1966,14 +2016,7 @@ fn a_pull_after_an_owner_wave_cannot_take_the_footprint_it_admitted() {
 /// owner waits on it: the drain's recorded hold reason, readiness, and a gate
 /// whose wait budget runs out, which defers its task to the backlog and ends
 /// its run successfully instead of failing it.
-#[test]
 fn a_wait_on_a_claimed_footprint_names_the_claim_and_a_starved_gate_defers() {
-    if !isolated(
-        module_path!(),
-        "a_wait_on_a_claimed_footprint_names_the_claim_and_a_starved_gate_defers",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let claimed = pair.tasks[0].clone();
     let drain = pair.start_drain();
@@ -2018,6 +2061,7 @@ fn a_wait_on_a_claimed_footprint_names_the_claim_and_a_starved_gate_defers() {
         .read_run_state(&local_drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("last pass");
     let held = pass
@@ -2067,46 +2111,125 @@ fn a_wait_on_a_claimed_footprint_names_the_claim_and_a_starved_gate_defers() {
             .with_automation_machine_identity(Some(OWNER.into())),
     );
     let gate_job = owner.show_job_catalog_entry("task_gate_pipeline").unwrap();
-    let gate = owner
-        .run_job_v2_from_yaml(
-            &gate_job.path,
-            json!({
-                "task_ids": [waiting],
-                "mode": "local",
-                "max_wait_seconds": 0,
-                "poll_interval_seconds": 0,
-            }),
+    let dependent = backlog_task(&owner, &pair.owner_repo, "src/dependent.rs", None);
+    owner
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": dependent, "dependencies": [claimed], "model": "codex"}),
         )
-        .expect("gate run");
+        .unwrap();
+    // Fake only the loop's monotonic clock and sleeper. Real shipped actions,
+    // reservation conflicts, deferral audit and child admission still execute.
+    for (budget, interval, iterations, sleeps) in [
+        (0, 30, 0, vec![]),
+        (1, 30, 1, vec![1]),
+        (3, 1, 3, vec![1, 1, 1]),
+        (3, 2, 2, vec![2, 1]),
+    ] {
+        for target in [&waiting, &dependent] {
+            let elapsed = std::rc::Rc::new(std::cell::Cell::new(Duration::ZERO));
+            let observed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let clock_elapsed = elapsed.clone();
+            let sleep_elapsed = elapsed.clone();
+            let sleep_observed = observed.clone();
+            let epoch = std::time::Instant::now();
+            let gate = orbit_engine::test_support::with_loop_clock(
+                move || epoch + clock_elapsed.get(),
+                move |delay| {
+                    sleep_observed.borrow_mut().push(delay);
+                    sleep_elapsed.set(sleep_elapsed.get() + delay);
+                },
+                || {
+                    owner
+                        .run_job_v2_from_yaml(
+                            &gate_job.path,
+                            json!({
+                                "task_ids": [target],
+                                "mode": "local",
+                                "max_wait_seconds": budget,
+                                "poll_interval_seconds": interval,
+                            }),
+                        )
+                        .expect("gate run")
+                },
+            );
+            assert_eq!(elapsed.get(), Duration::from_secs(budget));
+            assert_eq!(
+                *observed.borrow(),
+                sleeps
+                    .iter()
+                    .copied()
+                    .map(Duration::from_secs)
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(gate.pipeline["wait_for_window"]["iterations"], iterations);
+            assert_eq!(gate.pipeline["wait_for_window"]["timed_out"], true);
+            if budget == 0 {
+                assert!(
+                    gate.pipeline.get("reserve").is_none(),
+                    "zero budget must never reserve"
+                );
+            }
+
+            assert!(
+                gate.success,
+                "a starved gate defers, never fails: {gate:#?}"
+            );
+            let deferral = &gate.pipeline["starvation_check"];
+            assert_eq!(deferral["deferred"], true, "{deferral}");
+            assert_eq!(deferral["max_wait_seconds"], budget as f64);
+            assert_eq!(
+                deferral["blocking_task_ids"],
+                json!([claimed]),
+                "{deferral}"
+            );
+            assert_eq!(
+                deferral["blocking_claims"][0]["claim_id"],
+                claim_id.as_str(),
+                "{deferral}"
+            );
+            let dispatch = &gate.pipeline["dispatch_child"];
+            assert_eq!(dispatch["skipped"], true, "{dispatch}");
+            assert_eq!(dispatch["status"], "success", "{dispatch}");
+            assert_eq!(dispatch["deferral"], *deferral, "{dispatch}");
+            assert!(
+                owner_jobs
+                    .list_job_runs("task_local_pipeline")
+                    .unwrap()
+                    .is_empty(),
+                "a deferred gate dispatches no delivery run"
+            );
+            assert_eq!(pair.owner_status(target), "backlog");
+            if target == &dependent {
+                assert_eq!(deferral["waiting_on_deps"], json!([claimed]));
+            }
+            assert_eq!(pair.only_owner_claim()["claim"]["phase"], "claimed");
+        }
+    }
+    // Exercise late-grant cleanup through the real public action boundary.
+    let free = backlog_task(&owner, &pair.owner_repo, "src/late.rs", None);
+    let reservation = owner
+        .run_deterministic(
+            "reserve_locks",
+            &json!({}),
+            &json!({"task_ids": [free], "ttl_seconds": 60}),
+            ToolContext::default(),
+        )
+        .unwrap();
+    assert_eq!(reservation["reserved"], true);
+    let deferred = owner.run_deterministic("gate_starvation_defer", &json!({}), &json!({"task_ids": [free], "max_wait_seconds": 1, "expired": true, "reservation": reservation}), ToolContext::default()).unwrap();
+    assert_eq!(deferred["deferred"], true);
+    assert_eq!(deferred["reservation"]["reserved"], false);
+    let locks = owner.run_tool("orbit.task.locks", json!({})).unwrap();
     assert!(
-        gate.success,
-        "a starved gate defers, never fails: {gate:#?}"
-    );
-    let deferral = &gate.pipeline["starvation_check"];
-    assert_eq!(deferral["deferred"], true, "{deferral}");
-    assert_eq!(
-        deferral["blocking_task_ids"],
-        json!([claimed]),
-        "{deferral}"
-    );
-    assert_eq!(
-        deferral["blocking_claims"][0]["claim_id"],
-        claim_id.as_str(),
-        "{deferral}"
-    );
-    let dispatch = &gate.pipeline["dispatch_child"];
-    assert_eq!(dispatch["skipped"], true, "{dispatch}");
-    assert_eq!(dispatch["status"], "success", "{dispatch}");
-    assert_eq!(dispatch["deferral"], *deferral, "{dispatch}");
-    assert!(
-        owner_jobs
-            .list_job_runs("task_local_pipeline")
+        locks["by_reservation"]
+            .as_array()
             .unwrap()
-            .is_empty(),
-        "a deferred gate dispatches no delivery run"
+            .iter()
+            .all(|held| held["reservation_id"] != reservation["reservation_id"]),
+        "a late grant must be released: {locks}"
     );
-    assert_eq!(pair.owner_status(&waiting), "backlog");
-    assert_eq!(pair.only_owner_claim()["claim"]["phase"], "claimed");
+    assert_eq!(pair.owner_status(&free), "backlog");
 }
 
 /// A task that keeps an admissible status but is refused at dispatch (a pilot
@@ -2114,14 +2237,7 @@ fn a_wait_on_a_claimed_footprint_names_the_claim_and_a_starved_gate_defers() {
 /// child whose reason and audit record carry the admission error, never a
 /// claim that its status changed. A status that really left the admissible set
 /// still reports a withdrawal.
-#[test]
 fn a_held_backlog_task_reports_the_hold_at_dispatch_not_a_status_change() {
-    if !isolated(
-        module_path!(),
-        "a_held_backlog_task_reports_the_hold_at_dispatch_not_a_status_change",
-    ) {
-        return;
-    }
     let pair = Pair::new(3);
     let owner = &pair.wire.owner;
     let gate = |task: &str| {
@@ -2273,15 +2389,8 @@ fn owner_with(root: &Path, config: &str, after_landing: bool) -> OrbitRuntime {
 /// auto-task, or the deprecated policy value that stands in for it — runs on
 /// the owner after landing; the owner's `review.before_pr` is captured on the
 /// claim for the leaf's gate; and the executor's own switch decides nothing.
-#[test]
 fn review_settings_never_refuse_a_pull_and_the_owner_captures_before_pr() {
-    if !isolated(
-        module_path!(),
-        "review_settings_never_refuse_a_pull_and_the_owner_captures_before_pr",
-    ) {
-        return;
-    }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
 
     let after_landing = owner_with(&root.path().join("auto-task"), "", true);
     let probe = probe_owner(&after_landing, false);
@@ -2350,6 +2459,7 @@ fn a_pull_drain_on_a_host_that_fails_the_git_scan_claims_nothing() {
             env: Default::default(),
             sandbox: Some(sandbox),
             allow_fallback: false,
+            host_os: None,
             created_at: None,
             updated_at: None,
         })
@@ -2387,3 +2497,123 @@ fn a_pull_drain_on_a_host_that_fails_the_git_scan_claims_nothing() {
     let after: Vec<String> = pair.tasks.iter().map(|id| pair.owner_status(id)).collect();
     assert_eq!(before, after, "no task changed status");
 }
+
+/// A reboot inside the hold horizon requests nothing and records why. One
+/// strictly later requests a claim. Equality with the horizon holds, so the
+/// near side is scheduled exactly `hold_minutes` out and the far side one
+/// minute past that, measured at the pass.
+fn a_shutdown_inside_the_hold_horizon_refuses_pull_claims_and_one_beyond_it_requests_one() {
+    let mut pair = Pair::new(1);
+    let drain = pair.start_drain();
+    let schedule = |minutes: i64| orbit_core::runtime::host_signal::ScheduledShutdown {
+        mode: "reboot".into(),
+        scheduled_at: Utc::now() + chrono::Duration::minutes(minutes),
+        source: "fixture".into(),
+    };
+    let install = |pair: &mut Pair, minutes: i64| {
+        pair.follower = pair
+            .follower
+            .clone()
+            .with_host_shutdown_hold_minutes(30)
+            .with_host_signal_probe(Arc::new(
+                orbit_core::runtime::host_signal::FixedHostSignals::scheduled(schedule(minutes)),
+            ));
+    };
+
+    install(&mut pair, 30);
+    let held = pair.pass(&drain);
+    assert_eq!(held["admitting"], false, "{held}");
+    assert_eq!(held["admitted"], 0, "{held}");
+    assert!(
+        held["refusal"]
+            .as_str()
+            .is_some_and(|refusal| refusal.starts_with("host_shutdown_scheduled")),
+        "{held}"
+    );
+    assert!(
+        held["host_shutdown"]
+            .as_str()
+            .is_some_and(|text| text.contains("reboot")),
+        "{held}"
+    );
+    assert!(
+        pair.wire.calls("orbit.task.pull").is_empty(),
+        "a hold must not request a claim: {held}"
+    );
+    let recorded = pair
+        .follower
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .pull_drain
+        .drain_last_pass
+        .expect("the pass is recorded");
+    assert!(
+        recorded
+            .admission_refusal
+            .as_deref()
+            .is_some_and(|refusal| refusal.starts_with("host_shutdown_scheduled")),
+        "{recorded:?}"
+    );
+
+    install(&mut pair, 31);
+    let _leaf = pair.queued_leaf(&drain, 1);
+    assert_eq!(
+        pair.wire.calls("orbit.task.pull").len(),
+        1,
+        "a schedule past the horizon is admitted"
+    );
+}
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    pull_admission_preserves_execution_machine_name_scenarios,
+    pull_admission_preserves_execution_machine_name,
+    session_metadata_does_not_corrupt_owner_probe_or_pull_pass,
+    redacted_owner_identity_retries_without_protocol_skew,
+    redacted_pull_receipt_reports_unknown_outcome_and_replays_same_request,
+    obsolete_persisted_request_skew_does_not_fail_a_matching_drain,
+    owner_pull_admits_empty_context_without_locks_and_claims_no_diff_work,
+    a_follower_without_required_validation_commands_starts_a_pull_drain,
+    unreadable_cancel_state_fails_visibly_without_admission,
+    an_older_owner_is_refused_before_a_newer_request_is_sent,
+    fingerprintless_older_revision_pull_keeps_the_invalid_input_refusal,
+    probe_fingerprint_tracks_request_types_and_refuses_changed_shapes,
+    owner_checks_fingerprint_before_deserializing_an_incompatible_pull
+);
+
+crate::scenario_table!(
+    same_version_skew_ends_the_pull_job_failed_before_any_pull_scenarios,
+    same_version_skew_ends_the_pull_job_failed_before_any_pull,
+    repeated_pass_failures_degrade_the_drain_and_a_new_drain_resets_it,
+    cancel_recorded_during_orphan_reconciliation_admits_nothing,
+    readable_state_without_cancel_permits_refill,
+    three_failed_claims_open_the_breaker_and_a_new_drain_resets_it,
+    an_open_breaker_half_opens_for_one_probe_and_reopens_or_closes_on_its_outcome,
+    contract_refusals_do_not_trip_the_breaker_but_genuine_failures_still_do,
+    a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run,
+    unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf,
+    claimed_workspace_reads_are_satisfiable_before_a_leaf_is_created,
+    a_follower_is_handed_only_tasks_its_os_satisfies,
+    a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_window
+);
+
+crate::scenario_table!(
+    a_provider_capacity_failure_releases_the_claim_and_excludes_the_crew_for_the_window_scenarios,
+    a_provider_capacity_failure_releases_the_claim_and_excludes_the_crew_for_the_window,
+    a_provider_auth_failure_excludes_every_crew_of_that_provider,
+    a_red_base_failure_releases_the_claim_until_the_command_passes,
+    a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume,
+    a_pull_claim_is_gated_by_the_follower_host_never_the_owner,
+    a_task_a_local_drain_admitted_is_not_pulled_until_that_admission_ends,
+    a_task_under_a_live_claim_is_never_admitted_by_the_local_drain,
+    a_pull_after_an_owner_wave_cannot_take_the_footprint_it_admitted,
+    a_wait_on_a_claimed_footprint_names_the_claim_and_a_starved_gate_defers,
+    a_held_backlog_task_reports_the_hold_at_dispatch_not_a_status_change
+);
+
+crate::scenario_table!(
+    review_settings_never_refuse_a_pull_and_the_owner_captures_before_pr_scenarios,
+    review_settings_never_refuse_a_pull_and_the_owner_captures_before_pr,
+    a_shutdown_inside_the_hold_horizon_refuses_pull_claims_and_one_beyond_it_requests_one
+);

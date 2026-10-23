@@ -24,14 +24,21 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 mod admission;
+mod artifact_attachment;
 mod blockers;
 mod ci_sweep_races;
 mod creation;
 mod crew_selection;
+mod freshness;
 mod inspection;
 mod malformed_input;
+// The provider fixture is an executable script.
+#[cfg(unix)]
+mod mixed_crews;
 mod native_os;
 mod pilot_output;
+mod post_deploy;
+mod provider_hold;
 mod races;
 mod review_evidence;
 mod settlement;
@@ -46,16 +53,19 @@ struct Workspace {
 
 impl Workspace {
     fn new() -> Self {
-        let root = TempDir::new().unwrap();
+        Self::with_config(
+            "[crews.fixture]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"fixture\"\n",
+        )
+    }
+
+    /// `new`, with `config` as the workspace crew registry.
+    fn with_config(config: &str) -> Self {
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("home/.orbit");
         let repo = root.path().join("repo");
         std::fs::create_dir_all(&global).unwrap();
         std::fs::create_dir_all(repo.join(".orbit")).unwrap();
-        std::fs::write(
-            repo.join(".orbit/config.toml"),
-            "[crews.fixture]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"fixture\"\n",
-        )
-        .unwrap();
+        std::fs::write(repo.join(".orbit/config.toml"), config).unwrap();
         let git = |args: &[&str]| {
             git_in(&repo, args, None);
         };
@@ -382,13 +392,7 @@ impl Workspace {
     }
 }
 
-#[test]
 fn all_held_pilot_run_succeeds_and_retains_every_holder_skip() {
-    if !super::dispatch_admission::isolated(
-        "task_pilot::all_held_pilot_run_succeeds_and_retains_every_holder_skip",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     // Explicit requests must not lose skips to automatic discovery's sample cap.
     let tasks = (0..21)
@@ -432,13 +436,7 @@ fn all_held_pilot_run_succeeds_and_retains_every_holder_skip() {
     }
 }
 
-#[test]
 fn mixed_pilot_selection_applies_free_tasks_and_skips_held_tasks() {
-    if !super::dispatch_admission::isolated(
-        "task_pilot::mixed_pilot_selection_applies_free_tasks_and_skips_held_tasks",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let held = workspace.task("held");
     let free = workspace.task("free");
@@ -507,10 +505,7 @@ fn namespace(pin: &str) -> &str {
 
 fn git_in(repo: &Path, args: &[&str], input: Option<&str>) -> String {
     use std::io::Write;
-    let mut command = std::process::Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let mut child = command
         .args(args)
         .current_dir(repo)
@@ -578,13 +573,7 @@ fn pending_fingerprint(
         .clone()
 }
 
-#[test]
 fn preparation_routine_withholds_active_pilot_tasks_until_the_hold_ends() {
-    if !super::dispatch_admission::isolated(
-        "task_pilot::preparation_routine_withholds_active_pilot_tasks_until_the_hold_ends",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = workspace.task("routine candidate");
     let routine = pilot_routine();
@@ -657,13 +646,7 @@ fn preparation_routine_withholds_active_pilot_tasks_until_the_hold_ends() {
 
 /// A retained pending member can be off the next page when a targeted pilot
 /// acquires its hold. Admission must suppress it even without re-observation.
-#[test]
 fn preparation_routine_admission_withholds_a_held_member_off_the_scan_page() {
-    if !super::dispatch_admission::isolated(
-        "task_pilot::preparation_routine_admission_withholds_a_held_member_off_the_scan_page",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     for index in 0..50 {
         workspace
@@ -710,13 +693,7 @@ fn preparation_routine_admission_withholds_a_held_member_off_the_scan_page() {
 
 /// An attempt's source pin outlives neither its settlement nor its terminal
 /// failure; before either it stays, so the run can still reach the source.
-#[test]
 fn routine_attempt_pins_are_released_once_the_attempt_settles_or_fails() {
-    if !super::dispatch_admission::isolated(
-        "task_pilot::routine_attempt_pins_are_released_once_the_attempt_settles_or_fails",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let settles = workspace.task("settles");
@@ -819,13 +796,7 @@ fn applied_legacy(workspace: &Workspace, task: &Task, attempt: &MemberAttempt) -
 /// A pre-upgrade accepted assessment still needs its pinned source to be
 /// compared under material_v1; current material_v2 assessments release at
 /// settlement as covered above.
-#[test]
 fn routine_attempt_pin_stays_for_a_legacy_assessment() {
-    if !super::dispatch_admission::isolated(
-        "task_pilot::routine_attempt_pin_stays_for_a_legacy_assessment",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let task = workspace.task("legacy assessment");
@@ -873,13 +844,7 @@ fn routine_attempt_pin_stays_for_a_legacy_assessment() {
 /// An attempt an earlier client admitted pinned only the legacy shared ref.
 /// The current client still reads it by its exact name to carry the
 /// assessment forward, and never deletes it: no owner is recorded for it.
-#[test]
 fn legacy_shared_pins_are_read_as_a_fallback_and_never_released() {
-    if !super::dispatch_admission::isolated(
-        "task_pilot::legacy_shared_pins_are_read_as_a_fallback_and_never_released",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let task = workspace.task("pinned by an earlier client");
@@ -940,13 +905,7 @@ fn legacy_shared_pins_are_read_as_a_fallback_and_never_released() {
 /// Tracked root and nested `AGENTS.md` and `CLAUDE.md` bytes are part of the
 /// preparation fingerprint when `instructions` is material. A near-name, an
 /// ordinary file, and an untracked instruction file are not.
-#[test]
 fn instruction_edits_change_the_preparation_fingerprint() {
-    if !super::dispatch_admission::isolated(
-        "task_pilot::instruction_edits_change_the_preparation_fingerprint",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = workspace.task("instruction material");
     let routine = instructions_routine();
@@ -1038,13 +997,7 @@ fn instruction_edits_change_the_preparation_fingerprint() {
 /// A tree whose full path listing is larger than the 1 MiB cap on one
 /// command's output still yields its instruction files: the listing is
 /// filtered as it is read, not buffered as evidence.
-#[test]
 fn instruction_snapshot_survives_a_tree_listing_over_the_source_output_cap() {
-    if !super::dispatch_admission::isolated(
-        "task_pilot::instruction_snapshot_survives_a_tree_listing_over_the_source_output_cap",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = workspace.task("large tree instruction material");
     let routine = instructions_routine();
@@ -1089,13 +1042,7 @@ fn instruction_snapshot_survives_a_tree_listing_over_the_source_output_cap() {
 /// A `material_v1` assessment stored against an empty instruction snapshot
 /// does not carry forward once the pinned revision's tracked instruction
 /// files are part of that hash. The member is piloted again once.
-#[test]
 fn legacy_assessment_repilots_when_pinned_instructions_were_omitted() {
-    if !super::dispatch_admission::isolated(
-        "task_pilot::legacy_assessment_repilots_when_pinned_instructions_were_omitted",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     workspace.commit_file("AGENTS.md", "root rules\n", "root instructions");
@@ -1147,13 +1094,7 @@ fn legacy_assessment_repilots_when_pinned_instructions_were_omitted() {
 /// size one namespace listing could read, and keeps every pin a consumer or
 /// live run names, every legacy and delivery batch pin, and every ref it
 /// cannot prove is an attempt pin. It refuses while a sweep holds the lock.
-#[test]
 fn fix_automation_pins_releases_only_owned_attempt_pins_nothing_names() {
-    if !super::dispatch_admission::isolated(
-        "task_pilot::fix_automation_pins_releases_only_owned_attempt_pins_nothing_names",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let assessed = workspace.task("assessed");
@@ -1267,13 +1208,7 @@ fn fix_automation_pins_releases_only_owned_attempt_pins_nothing_names() {
 /// namespaces. Each releases and reclaims only its own; a canonical alias of
 /// a root is that root, and a second root (as a copy or move would be) never
 /// adopts the first one's pins.
-#[test]
 fn owned_pins_are_disjoint_across_roots_and_workspaces_sharing_git() {
-    if !super::dispatch_admission::isolated(
-        "task_pilot::owned_pins_are_disjoint_across_roots_and_workspaces_sharing_git",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let task = workspace.task("shared");
@@ -1335,13 +1270,7 @@ fn owned_pins_are_disjoint_across_roots_and_workspaces_sharing_git() {
 /// provably this owner's: admission refuses to pin into it, and neither
 /// settlement nor the repair deletes anything in it. A pin that names a
 /// different commit is never rebound or released by its attempt.
-#[test]
 fn unproven_ownership_and_moved_pins_retain_every_pin() {
-    if !super::dispatch_admission::isolated(
-        "task_pilot::unproven_ownership_and_moved_pins_retain_every_pin",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let task = workspace.task("conflicting owner");
@@ -1419,3 +1348,29 @@ fn unproven_ownership_and_moved_pins_retain_every_pin() {
     assert_eq!(workspace.pins(), expected);
     assert_eq!(workspace.object(&moved_pin), elsewhere);
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    all_held_pilot_run_succeeds_and_retains_every_holder_skip_scenarios,
+    all_held_pilot_run_succeeds_and_retains_every_holder_skip,
+    mixed_pilot_selection_applies_free_tasks_and_skips_held_tasks,
+    preparation_routine_withholds_active_pilot_tasks_until_the_hold_ends,
+    preparation_routine_admission_withholds_a_held_member_off_the_scan_page,
+    routine_attempt_pins_are_released_once_the_attempt_settles_or_fails,
+    routine_attempt_pin_stays_for_a_legacy_assessment,
+    legacy_shared_pins_are_read_as_a_fallback_and_never_released,
+    instruction_edits_change_the_preparation_fingerprint
+);
+
+crate::scenario_table!(
+    instruction_snapshot_survives_a_tree_listing_over_the_source_output_cap_scenarios,
+    instruction_snapshot_survives_a_tree_listing_over_the_source_output_cap,
+    legacy_assessment_repilots_when_pinned_instructions_were_omitted,
+    fix_automation_pins_releases_only_owned_attempt_pins_nothing_names
+);
+
+crate::scenario_table!(
+    owned_pins_are_disjoint_across_roots_and_workspaces_sharing_git_scenarios,
+    owned_pins_are_disjoint_across_roots_and_workspaces_sharing_git,
+    unproven_ownership_and_moved_pins_retain_every_pin
+);

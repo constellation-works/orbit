@@ -216,14 +216,15 @@ pub(super) fn contract(
         );
     }
     let crew = &runtime.operation_policy().review_crew;
-    let pool = configured_pool_members(runtime, &crew.value).map_err(|error| error.to_string())?;
+    let pool = configured_pool_members(runtime, &crew.value, orbit_config::REVIEW_CREW_KEY)
+        .map_err(|error| error.to_string())?;
     let (review_crew, review_crew_source) = match pool.as_slice() {
         [] => {
-            return Err(
-                "no independent review crew is configured; set `[operation] review_crew` in the \
-                 owner's configuration and retry"
-                    .into(),
-            );
+            return Err(format!(
+                "no independent review crew is configured; set `{}` in the owner's \
+                 configuration and retry",
+                orbit_config::REVIEW_CREW_KEY
+            ));
         }
         [only] => {
             let review_crew = only.name.clone();
@@ -232,8 +233,9 @@ pub(super) fn contract(
                 .map_err(|error| {
                     format!(
                         "the configured review crew '{review_crew}' cannot be resolved on this \
-                         host ({error}); define it or set another `[operation] review_crew` and \
-                         retry"
+                         host ({error}); define it or set another `{}` and \
+                         retry",
+                        orbit_config::REVIEW_CREW_KEY
                     )
                 })?;
             (review_crew, crew.source.label().to_string())
@@ -250,8 +252,9 @@ pub(super) fn contract(
             let unavailable = |error: OrbitError| {
                 format!(
                     "no crew of the configured review pool [{names}] can be resolved on this \
-                     host ({error}); define one or set another `[operation] review_crew` and \
-                     retry"
+                     host ({error}); define one or set another `{}` and \
+                     retry",
+                    orbit_config::REVIEW_CREW_KEY
                 )
             };
             let candidates = runtime

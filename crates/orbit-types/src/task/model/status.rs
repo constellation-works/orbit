@@ -20,6 +20,13 @@ pub const CANDIDATE_DISCARDED_EVENT: &str = "candidate_discarded";
 /// [ORB-14338].
 pub const CANDIDATE_RESUME_EVENT: &str = "candidate_resume";
 
+/// Task history event the owner records when a claim's failure or release
+/// keeps the leaf's committed candidate: its commit, the ref and pull request
+/// it is on, and the run and machine that made it. The claim settlement's own
+/// record stays the one admission and `orbit task requeue` read; this entry
+/// shows on the task what the next run continues.
+pub const CLAIM_CANDIDATE_KEPT_EVENT: &str = "claim_candidate_kept";
+
 /// Task history event recorded when Orbit, not the executing agent, wrote the
 /// task's execution summary. It is audit history and stays after the agent
 /// replaces the summary; [`DERIVED_EXECUTION_SUMMARY_PREFIX`] tells whether the
@@ -170,6 +177,19 @@ impl FromStr for TaskStatus {
 }
 
 impl TaskStatus {
+    /// Every status, in declaration order.
+    pub const ALL: [TaskStatus; 9] = [
+        TaskStatus::Proposed,
+        TaskStatus::Backlog,
+        TaskStatus::InProgress,
+        TaskStatus::Review,
+        TaskStatus::Done,
+        TaskStatus::Blocked,
+        TaskStatus::Archived,
+        TaskStatus::Rejected,
+        TaskStatus::Someday,
+    ];
+
     pub fn cli_name(self) -> &'static str {
         match self {
             TaskStatus::Proposed => "proposed",
@@ -288,8 +308,8 @@ pub enum TaskComplexity {
     Medium,
     Hard,
     /// Reserved top tier for the most capable (and most expensive) crews.
-    /// Spelled `xhard` everywhere, so neither serde's snake_case rename nor
-    /// clap's kebab-case value naming may split it into `x_hard`/`x-hard`.
+    // Keep this spelling aligned across serde and clap; their default naming
+    // conventions would otherwise split it into `x_hard` and `x-hard`.
     #[serde(rename = "xhard")]
     #[cfg_attr(feature = "clap", value(name = "xhard"))]
     XHard,
@@ -392,5 +412,91 @@ impl FromStr for TaskType {
 impl TaskType {
     pub fn valid_names() -> &'static [&'static str] {
         &["feature", "bug", "refactor", "chore"]
+    }
+}
+
+/// Why a task was filed: a human operator asked for it, an orchestrator
+/// decided on its own, or automation minted it.
+///
+/// Persisted `Task.origin` stays `Option`: a task filed before origins were
+/// recorded, or by an interactive caller that did not say, has none, and
+/// that absence is never read as any of these values.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+#[serde(rename_all = "snake_case")]
+pub enum TaskOrigin {
+    /// A human operator asked for the work.
+    #[cfg_attr(feature = "clap", value(name = "operator_request"))]
+    OperatorRequest,
+    /// An orchestrator judged the work necessary on its own initiative.
+    #[cfg_attr(feature = "clap", value(name = "orchestrator_initiative"))]
+    OrchestratorInitiative,
+    /// A system filer minted it: an auto-task definition, routine, sweep or
+    /// other automated creation path.
+    Automation,
+}
+
+impl TaskOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TaskOrigin::OperatorRequest => "operator_request",
+            TaskOrigin::OrchestratorInitiative => "orchestrator_initiative",
+            TaskOrigin::Automation => "automation",
+        }
+    }
+
+    pub fn valid_names() -> &'static [&'static str] {
+        &["operator_request", "orchestrator_initiative", "automation"]
+    }
+}
+
+impl Display for TaskOrigin {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl FromStr for TaskOrigin {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "operator_request" => Ok(TaskOrigin::OperatorRequest),
+            "orchestrator_initiative" => Ok(TaskOrigin::OrchestratorInitiative),
+            "automation" => Ok(TaskOrigin::Automation),
+            other => Err(format!(
+                "unknown task origin: {other} (valid origins: {})",
+                TaskOrigin::valid_names().join(", ")
+            )),
+        }
+    }
+}
+
+/// Which rule supplied a task's `orchestrator_model` when it was created.
+///
+/// Persisted `Task.orchestrator_model_source` stays `Option`: a task without
+/// an orchestrator model, including every task filed before the field
+/// existed, has none.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OrchestratorModelSource {
+    /// The creating call named the model explicitly.
+    Explicit,
+    /// Snapshotted from the orchestrator crew's configured model.
+    CrewConfig,
+}
+
+impl OrchestratorModelSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OrchestratorModelSource::Explicit => "explicit",
+            OrchestratorModelSource::CrewConfig => "crew_config",
+        }
+    }
+}
+
+impl Display for OrchestratorModelSource {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }

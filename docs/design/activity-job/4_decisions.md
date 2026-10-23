@@ -4,7 +4,7 @@ type: design
 title: "Activity / Job — Decisions"
 owner: codex
 last_updated: 2026-10-11
-last_validated: 2026-10-10
+last_validated: 2026-10-14
 status: Draft
 feature: activity-job
 doc_role: decisions
@@ -1259,7 +1259,7 @@ Rejected alternative: enforce uniqueness at the store layer as a constraint on n
 ## Dispatch admission separates unmet dependencies from unsatisfiable ones
 
 **Recorded:** 2026-08-02 22:25:12.480309Z · [ORB-10593]
-**Paths:** `crates/orbit-types/src/task/model/task.rs`, `crates/orbit-core/src/adapter/engine_host/v2_host/dispatch.rs`
+**Paths:** `crates/orbit-types/src/task/model/task.rs`, `crates/orbit-core/src/adapter/engine_host/actions/dispatch.rs`
 
 ### Context
 
@@ -1325,7 +1325,7 @@ Rejected alternatives: probing the base branch's own PR through GitHub (couples 
 ## Typed deterministic action declaration spans core and engine
 
 **Recorded:** 2026-08-09 06:46:48.177638Z · [ORB-10630]
-**Paths:** `crates/orbit-types/src/workflow/activity_job/mod.rs`, `crates/orbit-core/src/adapter/engine_host/v2_host/dispatch.rs`, `crates/orbit-engine/src/executor/automation/mod.rs`
+**Paths:** `crates/orbit-types/src/workflow/activity_job/mod.rs`, `crates/orbit-core/src/adapter/engine_host/actions/dispatch.rs`, `crates/orbit-engine/src/executor/automation/mod.rs`
 
 ### Context
 Deterministic action names had independent core advertisement, core forwarding, engine constants, and engine dispatch lists. The resulting skew shipped asset actions that were not invocable.
@@ -1576,7 +1576,7 @@ Step recovery runs once per exhausted step and is limited to small repairs. It m
    - completes `complete_no_diff` (to `review` or `done`, as the caller's authority allows) only when the commit resolves and `git merge-base --is-ancestor` places it on the base branch; otherwise it escalates;
    - requeues to `backlog` with a `final_recovery_requeued` history event, at most 2 per rolling 24 h (counted from that history, so no new storage), and escalates past the bound;
    - maps `reject`, `archive` and `escalate` to `rejected`, `archived` and `blocked`.
-   Every decision, refusal included, is recorded as one system comment headed `final_recovery run_id=<run> decision=<kind> outcome=<outcome>`.
+   Every decision, refusal included, is recorded as a typed `final_recovery_decided` history decision (run, decision kind and outcome), which a replay reads back, with one system comment headed `final_recovery run_id=<run> decision=<kind> outcome=<outcome>` for people. A run with only such a comment, written before the typed decision existed, still reads its outcome from that comment.
 4. The crew comes from `workflow.final_recovery_crews`, a weighted pool in the existing `name[:weight]` grammar (default `["sol:100", "opus:20"]`, filtered to the crews the registry defines; `[]` disables final recovery). The activity names the pool with `crew_config_key`; the host draws once per run, honours the run's `allowed_crews`, and freezes the draw in `PipelineState.activity_crew_draws`. Resume clones run state, so a resumed run reuses the same crew.
 5. `step_failure_recovery` keeps resume withheld. Its instructions now say to repair the worktree so a resume from the failed step succeeds, and to report that step; the `resumed_pipeline` delivery mode is gone. Resuming is an operator or final-recovery action.
 
@@ -1595,7 +1595,7 @@ Step recovery runs once per exhausted step and is limited to small repairs. It m
 ## A backstop recovers tasks blocked outside pipelines
 
 **Recorded:** 2026-10-04 · [ORB-13898] · amended [ORB-14685]
-**Paths:** `crates/orbit-core/assets/activities/final_recovery.yaml`, `crates/orbit-core/src/application/task/blocked_recovery.rs`, `crates/orbit-core/src/application/task/retained_candidate.rs`, `crates/orbit-core/src/adapter/engine_host/v2_host/blocked_recovery.rs`, `crates/orbit-core/assets/jobs/blocked_task_recovery_pipeline.yaml`, `crates/orbit-core/assets/activities/prepare_blocked_task_recovery.yaml`, `crates/orbit-core/assets/activities/apply_blocked_task_recovery.yaml`, `crates/orbit-core/src/application/routines/sweep.rs`
+**Paths:** `crates/orbit-core/assets/activities/final_recovery.yaml`, `crates/orbit-core/src/application/task/blocked_recovery.rs`, `crates/orbit-core/src/application/task/retained_candidate.rs`, `crates/orbit-core/src/application/task/blocked_recovery_steps.rs`, `crates/orbit-core/assets/jobs/blocked_task_recovery_pipeline.yaml`, `crates/orbit-core/assets/activities/prepare_blocked_task_recovery.yaml`, `crates/orbit-core/assets/activities/apply_blocked_task_recovery.yaml`, `crates/orbit-core/src/application/routines/sweep.rs`
 
 ### Context
 
@@ -1617,7 +1617,7 @@ Tasks still reach `blocked` on paths no pipeline hook sees: run finalization of 
    - The agent's contract says so. The shared `final_recovery` activity takes optional `decisions` and `lane_contract` inputs; the backstop sends `decisions` without `resume` and a `lane_contract` stating that its checkout is discarded, so implementing or validating the task there delivers nothing. It sends no `step_ids`. The in-pipeline lane sends neither field, so its agent may still repair its worktree and `resume`.
    - The *retained candidate* is the failed run's own worktree, where unfinished work stays after the run ends [F2026-10-159]. Preparation locates it with the rule its setup used and lists up to 20 changed paths through `git status` with optional locks off. It never writes, copies or runs Git writes there. The agent input carries the path and paths, or `absent` with a reason: no failed run, a run executed on another machine, or a worktree already removed. Every escalation's `human_action` names it, including one converted from `resume` and one for a missing or malformed decision.
 5. A recovery run that ends without applying a decision — agent failure, timeout, a dead worker — is settled on a later tick as an `escalate` carrying that run's id. Every dispatched episode therefore ends with exactly one recorded decision.
-6. `orbit task show` prints the last final-recovery decision (JSON `final_recovery`). `orbit doctor` reports the `blocked-task-recovery` row: tasks still blocked after a decision, counts of pending, human-held and expired episodes, and the tasks held for an unattributed edit.
+6. Every task show carries the last final-recovery decision: local and routed `orbit task show` print `Final Recovery:`, and `orbit.task.show`, `orbit task show --json` and `GET /api/tasks/:id` include `final_recovery` (`run_id`, `decision`, `outcome`, `at`). A list does not. `orbit doctor` reports the `blocked-task-recovery` row: tasks still blocked after a decision, counts of pending, human-held and expired episodes, and the tasks held for an unattributed edit.
 
 ### Rejected alternatives
 
@@ -1692,7 +1692,7 @@ A QA auto-task tagged `no-diff-expected` finished its sweep, returned a full acc
 
 **Recorded:** 2026-10-11 · [ORB-15643]
 **Amends:** the `timeout` contract of `invoke_and_wait` in [2_design.md](./2_design.md) §4, for callers that pass `on_timeout: cancel_child`
-**Paths:** `crates/orbit-core/src/adapter/engine_host/v2_host/pipeline_actions/invoke.rs`, `crates/orbit-core/src/application/job/run/child_timeout.rs`, `crates/orbit-engine/src/executor/automation/vcs/failure/preserve.rs`, `crates/orbit-core/assets/jobs/task_gate_pipeline.yaml`, `crates/orbit-core/assets/jobs/task_auto_pipeline.yaml`
+**Paths:** `crates/orbit-core/src/adapter/engine_host/actions/pipeline_actions/invoke.rs`, `crates/orbit-core/src/application/job/run/child_timeout.rs`, `crates/orbit-engine/src/executor/automation/vcs/failure/preserve.rs`, `crates/orbit-core/assets/jobs/task_gate_pipeline.yaml`, `crates/orbit-core/assets/jobs/task_auto_pipeline.yaml`
 
 ### Context
 

@@ -1,5 +1,6 @@
 //! The one transaction that decides a task commit.
 
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
@@ -37,7 +38,7 @@ impl Store {
                     |row| row.get(0),
                 )
                 .optional()
-                .map_err(|error| OrbitError::Store(error.to_string()))?
+                .map_err(sqlite_store_error)?
                 .ok_or_else(|| {
                     OrbitError::Store(format!(
                         "task commit journal '{journal_id}' is not prepared; refusing to commit"
@@ -89,7 +90,7 @@ impl Store {
                             now
                         ],
                     )
-                    .map_err(|error| OrbitError::Store(error.to_string()))?;
+                    .map_err(sqlite_store_error)?;
             }
 
             for (old, new) in &effects.replacements {
@@ -99,7 +100,7 @@ impl Store {
                 let count = tx.tx.execute(
                     "UPDATE task_coordination_rows SET payload_json=?5, journal_id=?6 WHERE workspace_id=?1 AND kind=?2 AND row_id=?3 AND payload_json=?4",
                     params![workspace_id, old.kind, old.row_id, old.payload_json, new.payload_json, journal_id],
-                ).map_err(|e| OrbitError::Store(e.to_string()))?;
+                ).map_err(sqlite_store_error)?;
                 if count != 1 {
                     return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
                 }
@@ -108,7 +109,7 @@ impl Store {
                 tx.tx.execute(
                     "UPDATE task_reservations SET released_at=?3, release_reason='explicit' WHERE reservation_id=?1 AND workspace_id=?2 AND released_at IS NULL",
                     params![reservation_id, workspace_id, now],
-                ).map_err(|e| OrbitError::Store(e.to_string()))?;
+                ).map_err(sqlite_store_error)?;
             }
 
             if let Some((friction, receipt_id)) = &effects.friction {
@@ -120,7 +121,11 @@ impl Store {
                 tx.tx.execute(
                     "INSERT INTO task_coordination_rows(workspace_id, kind, row_id, payload_json, journal_id, created_at) VALUES (?1, 'distributed-claim-friction-v1', ?2, ?3, ?4, ?5)",
                     params![workspace_id, receipt_id, payload, journal_id, now],
-                ).map_err(|error| OrbitError::Store(error.to_string()))?;
+                ).map_err(sqlite_store_error)?;
+            }
+
+            if let Some(entry) = &effects.census {
+                super::upsert_executor_census_in(tx.connection(), &workspace_id, entry)?;
             }
 
             let reservation_id = reserved
@@ -134,7 +139,7 @@ impl Store {
                      WHERE journal_id = ?1 AND state = 'prepared'",
                     params![journal_id, now, reservation_id],
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             if affected != 1 {
                 return Err(OrbitError::Store(format!(
                     "task commit journal '{journal_id}' changed state during its own commit"
@@ -161,7 +166,7 @@ fn first_existing_coordination_row(
                 |found| found.get(0),
             )
             .optional()
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         if existing.is_some() {
             return Ok(Some((row.kind.clone(), row.row_id.clone())));
         }

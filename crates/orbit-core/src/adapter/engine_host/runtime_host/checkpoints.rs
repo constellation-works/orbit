@@ -81,8 +81,8 @@ pub(super) fn checkpoint_failure_activity(
         })
 }
 
-/// Reserve the host-assigned attempt one admitted conflict recovery will
-/// certify. The reservation lives in the host-only authority, so neither the
+/// Reserve the host-assigned attempt one preparation or conflict recovery
+/// will certify. The reservation lives in the host-only authority, so neither the
 /// provider nor the shared run store can name or advance it.
 pub(super) fn begin_rebase_recovery_attempt(
     runtime: &OrbitRuntime,
@@ -168,4 +168,45 @@ pub(super) fn rebase_recovery_attempts(
     step_id: &str,
 ) -> Result<Vec<RebaseRecoveryAttemptScope>, OrbitError> {
     RecoveryAuthority::open(&runtime.global_root())?.attempts(run_id, step_id)
+}
+
+pub(super) fn checkpoint_step_diagnostic(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    step_id: &str,
+    output: &Value,
+) -> Result<(), DispatchError> {
+    runtime
+        .stores()
+        .jobs()
+        .update_run_state(run_id, &mut |_, state| {
+            state.record_pipeline_output(step_id, output.clone());
+            Ok(())
+        })
+        .map(|_| ())
+        .map_err(|error| {
+            DispatchError::JobExecution(format!(
+                "persist step diagnostics (run {run_id}, step `{step_id}`): {error}"
+            ))
+        })
+}
+
+pub(super) fn completion_deadline(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    pull_request: &str,
+    proposed: u64,
+) -> Result<u64, OrbitError> {
+    let mut deadline = proposed;
+    runtime
+        .stores()
+        .jobs()
+        .update_run_state(run_id, &mut |_, state| {
+            deadline = *state
+                .completion_deadlines
+                .entry(pull_request.into())
+                .or_insert(proposed);
+            Ok(())
+        })?;
+    Ok(deadline)
 }

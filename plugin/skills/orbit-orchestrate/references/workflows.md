@@ -78,20 +78,35 @@ not a rewrite of failed history.
 | `task_local_pipeline` | Implement in a worktree and merge to the configured local base without a PR; optional push. |
 | `task_auto_pipeline` | Discover ready backlog tasks and ship them. |
 | `task_gate_pipeline` | Gated shipment with windowing. A wait that outlasts its budget defers: the run succeeds without dispatching, the task stays in backlog, and the `gate.starvation` audit names the blocking tasks and any execution claim holding them. Dispatches `task_<mode>_pipeline`, or the plugin delivery job a task selects with a `delivery:<job>` tag (the job must declare `spec.task_delivery.modes`); a selection whose plugin is disabled or uninstalled is refused, never defaulted. |
-| `task_pilot_pipeline` | Read-only agent preflight plus deterministic task-isolated apply. Apply uses the host-prepared context list as the authoritative before snapshot; agents propose only the after list, and legacy before echoes are ignored. Apply normalizes only unambiguous bare file/directory targets from the pinned source, records the normalization, and commits valid siblings. Durable task edits, ownership changes, and source or governing repository-instruction changes settle as typed `superseded` skips in `partition_decisions` and `task_outcomes`; applied and superseded partitions succeed together. The state consumer releases superseded members for fresh observation and preparation without a failure record or retry against the stale snapshot. Invalid assessments and unresolved write failures still fail the run. Replays use durable per-task operation receipts with the prepared before list. Only a selector an operator declared with `allow_missing_context` may be missing at the pinned source; apply keeps any such target the assessment omits (`context_creation_retained`), refuses every undeclared missing anchor, names a dropped undeclared one under `context_reauthorization_required`, and treats a declaration that changed after preparation as stale. A task a review filed (tagged `code-review`, `delivery-code-review`, `qa-full-sweep`, `qa-sweep` or `security-review`) keeps every evidence selector the assessment omits that still resolves at the pinned source, in the filed order (`context_evidence_retained`), so re-assessment cannot narrow it; only an operator narrows that scope. The task's `task_pilot_applied` history entry carries a short summary and operation receipt; the full structured assessment is in a `task-pilot` comment with the same receipt. It defaults to no lifecycle promotion. An omitted optional `base_branch` binds as empty at the prepare activity boundary, then preparation resolves the registered workspace base branch, falling back to `[workflow] base_branch`; pass a non-empty run input to inspect another branch. |
+| `task_pilot_pipeline` | Read-only agent preflight plus deterministic task-isolated apply. Apply uses the host-prepared context list as the authoritative before snapshot; agents propose only the after list, and legacy before echoes are ignored. Apply normalizes only unambiguous bare file/directory targets from the pinned source, records the normalization, and commits valid siblings. Durable task edits, ownership changes, and source or governing repository-instruction changes settle as typed `superseded` skips in `partition_decisions` and `task_outcomes`; applied and superseded partitions succeed together. The state consumer releases superseded members for fresh observation and preparation without a failure record or retry against the stale snapshot. Invalid assessments and unresolved write failures still fail the run. Replays use durable per-task operation receipts with the prepared before list. Only a selector an operator declared with `allow_missing_context` may be missing at the pinned source; apply keeps any such target the assessment omits (`context_creation_retained`), refuses every undeclared missing anchor, names a dropped undeclared one under `context_reauthorization_required`, and treats a declaration that changed after preparation as stale. The footprint contains only likely substantive creation, modification or deletion targets; read-only evidence and incidental shared-doc updates (such as `docs/CONFIG.md`) stay out of locks, while affected docs still change in the same PR. A task a review filed (tagged `code-review`, `delivery-code-review`, `qa-full-sweep`, `qa-sweep` or `security-review`) keeps omitted, resolving selectors in filed order (`context_evidence_retained`) unless the pilot verifies they require no substantive change and supplies exact selector/reason records in `context_evidence_dropped`. Apply validates and audits those records; they cannot override proposed change targets or creation grants. The pilot keeps targets the finding names for change; read-only evidence references belong in the description. The task's `task_pilot_applied` history entry carries a short summary and operation receipt; the full structured assessment is in a `task-pilot` comment with the same receipt. It defaults to no lifecycle promotion. An omitted optional `base_branch` binds as empty at the prepare activity boundary, then preparation resolves the registered workspace base branch, falling back to `[workflow] base_branch`; pass a non-empty run input to inspect another branch. |
 | `finding_verification_pipeline` | Verify review-filed bug findings (type `bug` tagged `code-review`, `delivery-code-review`, `security-review` or `qa-sweep`) at one pinned revision. Each verifier crew is drawn from the task's complexity-tier pool, passing over the filer's crew. A REJECTED verdict from the low tier, or any low-confidence verdict, is judged again once by the next tier. CONFIRMED is recorded on the task; REJECTED moves it to `rejected` with its `path:line` evidence. When the workspace sets `review.verify_findings = true` (default off), approval, promotion and drain admission refuse the finding until it is CONFIRMED for its current material (`unverified_review_finding`). Claim or evidence-selector edits require verification again; comment-only edits retain confirmation. Legacy verdicts without a finding fingerprint remain held. Run `orbit run job finding_verification_pipeline --input 'task_ids=["<id>"]'`, or enable the seeded `finding_verification.yaml` state routine. |
 | `workspace_ship_pipeline` / `workspace_auto_pipeline` | Workspace-scoped wrappers that resolve mode and base branch, then invoke the pipelines above. |
+| `workspace_pull_pipeline` | Follower pull drain. The owner admits each claim through `orbit.task.pull`; the leaf is `task_claimed_pr_pipeline` and ends at a handoff. The follower does not merge. See [distributed-drain.md](../../orbit/references/setup/distributed-drain.md). |
 | `ci_failure_sweep_pipeline` | File GitHub Actions findings as proposed, pilot them, and admit only current warning-free repairs to backlog; never implements them. |
 | `dependabot_alert_sweep_pipeline` | Collect Dependabot/code/secret-scanning evidence and file remediation tasks. |
 | `worktree_gc_pipeline` | Reclaim settled worktrees. |
+| `store_gc_pipeline` | Prune audit rows, unreferenced audit blobs, and terminal-run pipeline state. The seeded `store-gc` routine runs it. See [automation.md](../../orbit-setup/references/automation.md). |
 | `blocked_task_recovery_pipeline` | Final recovery for one task blocked outside a delivery pipeline (a failed, interrupted or gate run, or a failed claim settlement). The owner's clock sweep dispatches it once per block episode, at most two at a time. It runs `final_recovery` in a detached checkout of the base that is never delivered, offering only `complete_no_diff`, `reject`, `archive`, `requeue` and `escalate`, and applies the decision through the same applier as the delivery pipelines. It never resumes: `resume` escalates, and `requeue` shares the requeue bound. The agent input and every escalation name the failed run's retained candidate: its worktree path and changed paths, or why there is none. Resume or salvage that worktree by hand; the backstop only reads it. Not for direct invocation. |
 | `review_evidence_fulfilment_pipeline` | On a Linux owner, runs the named `scripts/codeql-rust-local.sh` command for a review held only for `codeql` evidence. It runs at the held commit, attaches the result and log, and receipt queues a fresh review. A failed or incomplete run attaches only the log, with a typed reason. The owner's clock sweep dispatches it, one at a time. Not for direct invocation. |
 | `baseline_hold_refresh_pipeline` | Re-checks backlog tasks held for a red base whose base ref moved to a tip with no recorded result: runs the held required command there and records the verdict, which lifts the hold only when it passes. The owner's clock sweep dispatches it, one run per workspace at a time, so the sweep itself never runs the command. Not for direct invocation. |
 | `agent_invoke_pipeline` | One operator-admitted agent invocation for exploration or debugging, run on the host outside the executor sandbox. Submit it with `orbit run agent` / `orbit_agent_invoke`, never `orbit run job`: it needs a per-invocation operator admission — the same test locally and over SSH — changes no task, and is not resumable. See [tool-surface.md](../../orbit/references/tool-surface.md). |
+| `agent_explore_pipeline` | One read-only explorer a managed implement or review-repair agent delegated through `orbit.agent.invoke` when `workflow.explore.enabled` is on. Sandboxed with no writes, starts in the caller's own worktree, carries `parent_run_id`, and changes no task. Never submit it directly. |
 | `task_claimed_pr_pipeline` | Claimed leaf for PR ship mode. Ends at an owner handoff; the follower never merges. See [distributed-drain.md](../../orbit/references/setup/distributed-drain.md). |
 | `task_claimed_local_pipeline` | Claimed leaf for local ship mode, and only when the execution machine is the owner. A remote follower is refused. Ends at a handoff and does not merge or complete. |
 | `task_landing_pipeline` | Lands one authorized handoff on the owner. The handoff outbox submits it; a drain or schedule does not. |
 | `task_review_reconciliation_pipeline` | Validates and reviews one already-merged foreign delivery head. Admitted by `orbit task reconcile-review submit`; the job refuses a run that lacks that admission. |
+
+Claimed workers reach the owner's `orbit.task.show`, `orbit.search`,
+`orbit.task.list`, `orbit.task.add`, `orbit.friction.add`, and
+`orbit.task.artifact.get` / `orbit.task.artifact.put` through their run's
+coordinator. Search and task listing read only the claimed workspace's owner
+records; federated search scope (`workspaces`, `all_workspaces` and aliases)
+is refused. Task show and artifacts retain their claimed-task scope, and
+finding creation retains its `spawned_from` requirement. Use search/list for
+owner-side deduplication and return dedupe evidence in the output or the new
+finding. `orbit.task.update` stays denied: a task requiring it remains an
+`owner_hold` naming that tool and needs owner execution. Other mutating tools
+remain outside the closed bridge.
 
 Inspect any of them with `orbit job show <id>` before invoking — the step list is
 the contract.
@@ -108,10 +123,9 @@ candidate onto the new base as uncommitted changes, then:
 
 | Outcome | When | Implementation step |
 |---|---|---|
-| `resumed_validated` | The failed step is `commit` or later, the candidate applies cleanly, and `workflow.required_validation_commands` pass on it. | Skipped. The candidate goes straight to commit, validation, review and delivery. |
+| `resumed_carried` | A completed owner-local candidate failed at `commit` or later and applies cleanly. No required validation runs at resume time. | Skipped. The candidate goes straight to commit, base synchronization where applicable, final validation, review and delivery. |
 | `resumed_held` | The last run was held on named external evidence, that evidence arrived (`review_evidence_received` is the task's latest decision), and the held commit applies cleanly. This includes a claimed leaf's hold that the owner's own run resumes from the published held candidate. | Skipped, and validation does not run at resume time. The candidate goes to commit, validation and the fresh review that finds the evidence. When the hold named only evidence a host-evidence rule owed, the held review settles without a reviewer. |
-| `resumed_repaired` | The failed step is the implementation or any step before `commit`, or the candidate conflicts with the new base, a required command fails, or the before-PR review refused it. | Starts from the applied candidate. An unfinished implementation carries trigger `implementation` and the failed step; otherwise the conflict paths, the failing command and output, or the review findings. |
-| `resumed_unjudged` | The failed step is `commit` or later, and a required command's tool is missing, so validation could not judge the candidate. | Skipped. The pipeline's own `validate` step reports the environment failure. |
+| `resumed_repaired` | The failed step is the implementation or any step before `commit`, or the candidate conflicts with the new base, or the before-PR review refused it. | Starts from the applied candidate. An unfinished implementation carries trigger `implementation` and the failed step; otherwise the conflict paths or the review findings. |
 | `fresh` | No candidate was preserved, an operator discarded it, the task's description or acceptance criteria changed since that run, the run is a bundle, or the commit is unreachable. | Implements from scratch. The reason and its `reason_code` are recorded. |
 
 Context selectors are preparation hints, not what the task means: a task
@@ -120,9 +134,11 @@ reads the current selectors.
 
 A candidate held for a red base resumes like any candidate from `commit` or
 later. That includes one the before-PR review held because its only failed
-check also fails on the pinned base. It is `resumed_validated` once the base
-passes, and a fresh review judges it. The implementer runs only if a required
-command now fails. A claimed leaf's resume always runs the implementer.
+check also fails on the pinned base. It is `resumed_carried` once the hold
+lifts. The final validation gate judges the committed, synchronized candidate
+and invokes existing recovery for a candidate failure; infrastructure refusals
+and baseline-red holds keep their distinct handling. A fresh review follows.
+A claimed leaf's resume always runs the implementer.
 
 A resumed held candidate on the hold's own base has the held tree, so the
 evidence matches it directly. On a moved base the review gate counts the
@@ -136,11 +152,10 @@ reviewed head for re-review.
 
 Whenever a candidate was found, the outcome, the source run, branch and SHA
 are written to the task's history as a `candidate_resume` event and returned
-in the step's output. Required validation runs twice on a candidate resumed as
-`resumed_validated`: once to decide the outcome, and again in the pipeline's
-`validate` step on the committed, synchronized head that is delivered. It does
-not run at resume time for an unfinished implementation; that candidate goes
-to the implementer first.
+in the step's output. Resume runs no required validation commands. The
+pipeline's `validate` step runs them on the committed, synchronized head that
+is delivered, including a `resumed_carried` candidate. No old candidate evidence
+waives this gate. An unfinished implementation goes to the implementer first.
 
 To throw a candidate away, run
 `orbit task update <task-id> --discard-candidate --status backlog`. This
@@ -191,9 +206,15 @@ creates `proposed` tasks. The CI job invokes `task_pilot_pipeline` for each new
 task and retries matching tasks that a prior pilot left proposed, carrying
 explicit promotion authority into its deterministic apply boundary. Invalid or
 empty selectors, pilot failure, duplicates, already-landed
-work, conflicts, warnings and a `no-auto-approve` tag leave that task proposed
-without blocking other pilot children. An `orbit run auto --approve-proposed`
-drain hands the same apply boundary a drain-scoped authority instead, verified
+work, conflicts, holding warnings and a `no-auto-approve` tag leave that task
+proposed without blocking other pilot children. `blocked_by`, `adr_conflicts`
+and deterministic `validation_tool_warnings` entries always hold. Surface and
+utility findings use `{text, holds_promotion}`: true holds for wrong behavior,
+contract conflicts or an unreachable validation requirement; false preserves an
+advisory observation without holding promotion or showing it as held. Legacy
+plain-string surface and utility warnings still hold. Advisory findings remain
+in the assessment comment shown by `orbit task show` and the worker's brief. An
+`orbit run auto --approve-proposed` drain hands the same apply boundary a drain-scoped authority instead, verified
 against the drain that dispatched the pilot. A standalone task-pilot run has no
 promotion authority. The
 source run/job/SHA/step remains in the task description, while parent and child
@@ -201,6 +222,16 @@ run state retain the pilot run ID, result, and admission decision. Filing
 clusters failures by a normalized error signature that prefers a concrete test
 or panic identity over ANSI styling, generic runner/cargo/nextest trailers, and
 assertion payload help text; the raw excerpt stays in the description.
+Runner `Run` groups retain printed-command provenance through their closing
+`##[endgroup]`: command headers and bodies are reproduction context, never
+emitted failure anchors. An unclosed group or a prefix ending in an orphan
+closing delimiter cannot establish a source cause. Genuine emitted annotations,
+compiler diagnostics and test/panic identities keep their precedence after the
+command display closes. Repair excerpts stay bounded around that same emitted
+diagnostic, including when later cleanup would fill a tail-only excerpt.
+Landing refuses attribution from incomplete sources or truncated displays
+without a complete failing command; this does not grant any new repair or
+merge authority.
 
 The sweep routes each repair to a host that can reproduce it. Collection reads
 each failed job's runner labels from the GitHub jobs API; when a snapshot has
@@ -222,7 +253,7 @@ its nonzero process completion, up to 256 KiB (`kind: runner_command`,
 supply `kind: runner_failure_regions`, `complete: false`, with
 `command_complete: true` and `selection_complete: true`: the command boundaries
 and every recognized failure anchor were scanned, but the command was not fully
-retained. Regions keep the command header, every recognized failure anchor, summaries
+retained. Regions keep the command header and command-display closing delimiter, every recognized emitted failure anchor, summaries
 and the process exit. A failing test keeps its captured output from the anchor
 through the stdout/stderr block until the next test status line, the
 captured-output section end, or the summary. Compiler diagnostics and other
@@ -393,6 +424,21 @@ succeeded, and in PR mode only after the PR is verified merged. A run submitted
 without the flag carries no `completion` key at all, so its persisted input is
 identical to a pre-`--complete` submission. See
 [orchestration.md](orchestration.md) for the authorization semantics.
+
+### The `auto_fix` input
+
+`orbit run auto --auto-fix` sets `auto_fix: true` on the drain, which forwards it
+to every leaf the same way it forwards `completion`; without the flag the key is
+absent. In `task_pr_pipeline` it runs `pr_complete` even under
+`completion: review`, as a watcher that never merges and never completes the
+task: it returns once the PR is mergeable or merged elsewhere. A failed required
+check fails the step with a marked hand-off that the executor routes to the
+job's `step_failure_recovery`. A conflict goes to the step's existing
+`pr_conflict_recovery`. Both draw their crew from `workflow.purpose_crews.auto_fix`,
+else `workflow.low_complexity_crews`.
+The retried `pr_complete` validates and publishes the repair and then watches the
+new head. A reviewed head is sent through the `re_review_*` round instead. See
+[orchestration.md](orchestration.md#auto-fix-authorization).
 
 ## Cancelling
 

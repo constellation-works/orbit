@@ -109,6 +109,7 @@ pub(crate) fn diagnostic_step(
             .max(0) as u64,
     );
     let params = JobRunStepParams {
+        lock_wait_ms: None,
         step_index,
         target_type: JobTargetType::Job,
         target_id: run.job_id.clone(),

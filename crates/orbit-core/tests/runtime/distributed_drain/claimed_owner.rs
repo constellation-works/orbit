@@ -13,14 +13,74 @@ use super::*;
 
 use super::claimed_review::{ReviewedLeaf, revision};
 
-#[test]
-fn a_claimed_worker_files_follow_up_work_only_from_its_active_claim() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_worker_files_follow_up_work_only_from_its_active_claim",
-    ) {
-        return;
+/// A pulled leaf deduplicates against owner records through the public tool API.
+fn a_claimed_worker_searches_and_lists_only_its_owners_workspace() {
+    let leaf = ReviewedLeaf::admit();
+    let owner = &leaf.pair.wire.owner;
+    let found = owner
+        .run_tool(
+            "orbit.task.add",
+            json!({
+                "title": "Distinctive audit duplicate", "description": "Owner-only dedupe record.",
+                "complexity": "low", "model": "codex", "workspace": leaf.pair.owner_repo,
+            }),
+        )
+        .unwrap();
+    let duplicate = found["id"].as_str().unwrap();
+    let listed = leaf
+        .bound
+        .run_tool("orbit.task.list", json!({"fields": ["id", "title"]}))
+        .unwrap();
+    assert!(
+        listed["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|task| task["id"] == duplicate),
+        "{listed}"
+    );
+    let query = json!({"query": "Distinctive audit duplicate", "kind": "task"});
+    let searched = leaf.bound.run_tool("orbit.search", query.clone()).unwrap();
+    assert_eq!(searched["results"][0]["id"], duplicate, "{searched}");
+    for scope in [
+        json!({"workspaces": ["ws_other"]}),
+        json!({"workspace_scope": ["ws_other"]}),
+        json!({"all_workspaces": true}),
+        json!({"allWorkspaces": "true"}),
+    ] {
+        let mut input = query.clone();
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(scope.as_object().unwrap().clone());
+        assert!(leaf.bound.run_tool("orbit.search", input.clone()).is_err());
+        // The owner also refuses scope widening if a worker bypasses the broker.
+        let binding = leaf.bound.worker_invocation().unwrap().clone();
+        input["workspace"] = json!(binding.owner_workspace_id);
+        assert!(
+            owner
+                .execute_owner_coordination(
+                    "orbit.search",
+                    input,
+                    ToolSessionContext {
+                        worker_invocation: Some(binding),
+                        effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+                        ..Default::default()
+                    }
+                )
+                .is_err()
+        );
     }
+    for tool in ["orbit.search", "orbit.task.list"] {
+        assert!(
+            leaf.bound
+                .run_tool(tool, json!({"query": "duplicate", "workspace": "ws_other"}))
+                .is_err()
+        );
+    }
+}
+
+fn a_claimed_worker_files_follow_up_work_only_from_its_active_claim() {
     let leaf = ReviewedLeaf::admit();
     let add = |relations: Value| {
         leaf.bound
@@ -93,14 +153,7 @@ fn a_claimed_worker_files_follow_up_work_only_from_its_active_claim() {
     assert!(stale.contains("stale_claim"), "{stale}");
 }
 
-#[test]
 fn agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist() {
-    if !isolated(
-        module_path!(),
-        "agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist",
-    ) {
-        return;
-    }
     // The isolated launcher clears all activity grants and deny policies.
     assert!(std::env::var_os("ORBIT_ACTIVITY_TOOLS_DENY").is_none());
     assert!(std::env::var_os("ORBIT_MANAGED_RUN_CONTEXT").is_none());
@@ -132,9 +185,20 @@ fn agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist() {
         },
         ..Default::default()
     });
+    // A forged delivery would mark operator steering consumed and clear the
+    // promotion gate without any prompt carrying it.
+    let forged_delivery = json!(orbit_store::contracts::ClaimSteeringRecord::Delivery {
+        step_id: "implement_one".into(),
+        through: None,
+        delivered: Vec::new(),
+        truncated: Vec::new(),
+        built_at: Utc::now(),
+    });
     let mut attacks = vec![
         json!({"_worker_update": host_update}),
         json!({"_worker_read": "tasks"}),
+        json!({"_worker_steering": forged_delivery}),
+        json!({"_worker_read": "steering"}),
         json!({"_worker_update": null}),
         json!({"_worker_read": null}),
         json!({"_worker_update": host_update, "_meta": {"orbit": {"worker_host_call": true}}}),
@@ -164,7 +228,10 @@ fn agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist() {
         let local_error = local
             .execute_tool_command("orbit.task.update", input.clone(), None, None)
             .unwrap_err();
-        if input.get("_worker_update").is_some() || input.get("_worker_read").is_some() {
+        if ["_worker_update", "_worker_read", "_worker_steering"]
+            .iter()
+            .any(|key| input.get(*key).is_some())
+        {
             assert!(
                 matches!(local_error, OrbitError::PolicyDenied(_)),
                 "reserved input must be refused before any claim mutation: {local_error}"
@@ -248,14 +315,7 @@ fn agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist() {
     assert_eq!(task.execution_summary, "activity host summary");
 }
 
-#[test]
 fn a_worker_update_persists_redacted_text_and_a_task_scoped_audit() {
-    if !isolated(
-        module_path!(),
-        "a_worker_update_persists_redacted_text_and_a_task_scoped_audit",
-    ) {
-        return;
-    }
     let leaf = ReviewedLeaf::admit();
     let secret = "ghp_123456789012345678901234567890123456";
     let result = leaf.bound.run_tool("orbit.task.update", json!({
@@ -296,14 +356,7 @@ fn a_worker_update_persists_redacted_text_and_a_task_scoped_audit() {
 /// gate's own records cross on the host channel, so the manifest and the
 /// certificate land and the owner pins the certificate, which the agent then
 /// cannot overwrite either.
-#[test]
 fn a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes",
-    ) {
-        return;
-    }
     use orbit_types::workflow::handoff::HandoffReviewEvidence;
     use orbit_types::workflow::{REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT, ReviewVerdict};
 
@@ -355,6 +408,32 @@ fn a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes() {
             owner.get_task_history(&task).unwrap(),
         )
     };
+
+    // Native operator propagation must not promote a claimed worker, even
+    // with an omitted model and a human-looking runtime actor (ORB-16220).
+    bound
+        .clone()
+        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .run_tool(
+            "orbit.task.artifact.put",
+            json!({
+                "id": task, "path": "evidence/worker.json", "source_path": source,
+            }),
+        )
+        .unwrap();
+    owner_put("evidence/owner-worker.json", &forged).unwrap();
+    let manifest = owner.get_task_artifact_manifest(&task).unwrap();
+    for path in ["evidence/worker.json", "evidence/owner-worker.json"] {
+        assert_eq!(
+            manifest
+                .iter()
+                .find(|file| file.path == path)
+                .unwrap()
+                .writer,
+            None,
+            "a claimed worker's artifact cannot acquire operator provenance"
+        );
+    }
 
     let before = task_view();
     for path in [
@@ -423,3 +502,13 @@ fn a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes() {
         "the pinned certificate is unchanged"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_claimed_worker_files_follow_up_work_only_from_its_active_claim_scenarios,
+    a_claimed_worker_files_follow_up_work_only_from_its_active_claim,
+    a_claimed_worker_searches_and_lists_only_its_owners_workspace,
+    agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist,
+    a_worker_update_persists_redacted_text_and_a_task_scoped_audit,
+    a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes
+);

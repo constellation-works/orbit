@@ -1,5 +1,8 @@
 //! Interrupted rebase recovery and certified rewrite classification.
-use super::super::super::input::input_string_field;
+use super::super::super::input::{input_string_field, required_input_string};
+use super::super::absorbed::{
+    ABSORBING_STEP, AbsorbedReason, AbsorbedRefusal, covering_commit, task_scope_digest,
+};
 use super::super::git::{
     git_command_success, git_output, git_output_raw, git_success, git_timeout_error,
     timeout_recovery_error,
@@ -7,10 +10,95 @@ use super::super::git::{
 use super::super::handoff::{HandoffContext, rebase_in_progress};
 use super::checkpoint::{RecoveryCheckpointLookup, recovery_checkpoint_lookup, recovery_run_id};
 use super::divergence::original_base_sha;
-use crate::context::RuntimeHost;
+use crate::context::{RebaseRecoveryAttemptScope, RuntimeHost};
 use orbit_common::{OrbitError, RecoverableVcsConflict};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
+
+/// Certify a deterministic `sync_base` rebase that dropped every pick, using
+/// the same content evidence and host authority as conflict recovery. Other
+/// steps and candidates without a covering commit retain the empty-branch
+/// refusal. Consumers re-observe this certificate before settlement.
+pub(super) fn certify_empty_rebase<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    context: &HandoffContext,
+    base_sha: &str,
+) -> Result<Value, OrbitError> {
+    let refused =
+        |reason, detail| OrbitError::Execution(AbsorbedRefusal::new(reason, detail).to_string());
+    if input.get("step_id").and_then(Value::as_str) != Some(ABSORBING_STEP)
+        || context.tasks.len() != 1
+    {
+        return Err(refused(
+            AbsorbedReason::StaleCheckpoint,
+            "only a single-task sync_base may settle an empty rebase",
+        ));
+    }
+    let workspace = context.workspace_path.as_path();
+    if !git_output_raw(
+        workspace,
+        &["status", "--porcelain", "--untracked-files=all"],
+    )?
+    .is_empty()
+    {
+        return Err(refused(
+            AbsorbedReason::DirtyWorktree,
+            "the rebased checkout has uncommitted or untracked changes",
+        ));
+    }
+    let head_sha_before = required_input_string(input, "head_sha")?;
+    let original_base = original_base_sha(workspace, head_sha_before, base_sha)?;
+    let (covering, candidate_paths) =
+        covering_commit(workspace, &original_base, head_sha_before, base_sha)?.ok_or_else(
+            || {
+                refused(
+                    AbsorbedReason::NoCoveringCommit,
+                    "the synced base does not hold the candidate's exact content",
+                )
+            },
+        )?;
+    let run_id = recovery_run_id(input, context);
+    let workspace_path = workspace.to_string_lossy().into_owned();
+    let dispatch =
+        |error: crate::activity_job::DispatchError| OrbitError::Execution(error.to_string());
+    let attempt = host
+        .begin_rebase_recovery_attempt(
+            run_id,
+            ABSORBING_STEP,
+            &RebaseRecoveryAttemptScope {
+                workspace_path: workspace_path.clone(),
+                head_sha_before: head_sha_before.to_string(),
+                target_base_sha: base_sha.to_string(),
+            },
+        )
+        .map_err(dispatch)?;
+    let checkpoint = json!({
+        "run_id": run_id,
+        "step_id": ABSORBING_STEP,
+        "task_ids": [context.tasks[0].id],
+        "workspace_path": workspace_path,
+        "head": input["head"],
+        "head_sha_before": head_sha_before,
+        "original_base_sha": original_base,
+        "base_ref": input["base_ref"],
+        "target_base_sha": base_sha,
+        "base_sha": base_sha,
+        "remote_sha_before": input.get("remote_sha").cloned().unwrap_or(Value::Null),
+        "head_sha": base_sha,
+        "companion_paths": [],
+        "rewritten": true,
+        "recovery_attempt": attempt,
+        "absorbed": {
+            "covering_commit": covering,
+            "candidate_paths": candidate_paths,
+            "task_scope_digest": task_scope_digest(&context.tasks[0]),
+        },
+    });
+    host.checkpoint_rebase_recovery(run_id, ABSORBING_STEP, &checkpoint)
+        .map_err(dispatch)?;
+    Ok(checkpoint)
+}
 
 pub(in crate::executor::automation::vcs) fn ensure_clean_for_rewrite(
     workspace_path: &Path,
@@ -227,7 +315,7 @@ fn read_rebase_state(workspace_path: &Path, name: &str) -> Result<Option<String>
 /// - `Overtaken`: a certified checkpoint matches this attempt in everything
 ///   but its base, and the prepared base strictly descends from the base the
 ///   checkpoint landed on: the base advanced after recovery certified it. The
-///   caller chases the advance ([`super::super::base_chase::chase_advanced_base`]) rather than reusing
+///   caller chases the advance ([`super::super::base::chase::chase_advanced_base`]) rather than reusing
 ///   or refusing it [ORB-14393].
 /// - `Err`: a certified checkpoint was found whose recorded provenance does
 ///   not match this attempt. A hard refusal with no redo.
@@ -330,9 +418,8 @@ pub(in crate::executor::automation::vcs) fn unmerged_paths(
     repo_root: &Path,
 ) -> Result<Vec<String>, OrbitError> {
     Ok(
-        git_output(repo_root, &["diff", "--name-only", "--diff-filter=U"])?
-            .lines()
-            .map(str::trim)
+        git_output_raw(repo_root, &["diff", "--name-only", "--diff-filter=U", "-z"])?
+            .split('\0')
             .filter(|path| !path.is_empty())
             .map(ToOwned::to_owned)
             .collect(),
@@ -351,8 +438,58 @@ pub(super) fn rebase_conflict_error(
             operation: "git_rebase".to_string(),
             original_base_sha: original_base_sha(repo_root, head_sha_before, target_base_sha)?,
             target_base_sha: target_base_sha.to_string(),
+            conflicting_files: conflicted_files(repo_root, &conflicting_paths)?,
             conflicting_paths,
             diagnostic: diagnostic.to_string(),
         },
     )))
+}
+
+/// Only trivial per-path three-way resolutions are proved here. Distinct edits,
+/// renames, missing sides, and malformed index evidence remain for recovery to
+/// judge. An absent base can only prove identical add/add sides.
+fn conflicted_files(
+    repo_root: &Path,
+    paths: &[String],
+) -> Result<Vec<orbit_common::ConflictedFile>, OrbitError> {
+    // One index read for the whole stop, rather than one Git process per file.
+    let raw = git_output_raw(repo_root, &["ls-files", "--unmerged", "-z"])?;
+    let mut entries = std::collections::BTreeMap::new();
+    let mut valid = true;
+    for record in raw.split('\0').filter(|record| !record.is_empty()) {
+        let Some((entry, path)) = record.split_once('\t') else {
+            valid = false;
+            continue;
+        };
+        let fields = entry.split_whitespace().collect::<Vec<_>>();
+        let stage = fields.get(2).and_then(|stage| stage.parse::<usize>().ok());
+        if fields.len() != 3 || !matches!(stage, Some(1..=3)) {
+            valid = false;
+            continue;
+        }
+        let stages = entries.entry(path).or_insert([None, None, None]);
+        if let Some(stage) = stage
+            && stages[stage - 1].replace((fields[0], fields[1])).is_some()
+        {
+            valid = false;
+        }
+    }
+    Ok(paths
+        .iter()
+        .map(|path| {
+            let [base, ours, theirs] = entries.get(path.as_str()).copied().unwrap_or_default();
+            // A missing side may be a rename/delete conflict, even when the
+            // remaining side matches the base. Both sides must exist before
+            // per-path equality can prove a trivial resolution.
+            let identical = |left: Option<(&str, &str)>, right| left.is_some() && left == right;
+            let deterministic = valid
+                && ours.is_some()
+                && theirs.is_some()
+                && (identical(ours, theirs) || identical(base, ours) || identical(base, theirs));
+            orbit_common::ConflictedFile {
+                path: path.clone(),
+                deterministically_resolvable: deterministic,
+            }
+        })
+        .collect())
 }

@@ -9,9 +9,9 @@ use orbit_core::application::distributed::PullCrewWindow;
 use orbit_store::contracts::ClaimSettlementKind;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
-    BaselineRedHold, ClaimFailureClass, CrewExclusion, CrewExclusionSource,
-    FORGE_UNAVAILABLE_ERROR_CODE, ForgeUnavailableHold, PROVIDER_FAILURE_HOLD_EVENT,
-    ProviderFailureClass, ProviderFailureHold,
+    BASELINE_RED_HOLD_EVENT, BaselineRedHold, ClaimFailureClass, CrewExclusion,
+    CrewExclusionSource, FORGE_UNAVAILABLE_ERROR_CODE, ForgeUnavailableHold,
+    PROVIDER_FAILURE_HOLD_EVENT, ProviderFailureClass, ProviderFailureHold,
 };
 
 use super::*;
@@ -76,14 +76,7 @@ fn settle_only(pair: &Pair, drain: &str) -> Value {
 /// ORB-14717: settle the actual handoff fetch error as the last failed
 /// step of a claimed leaf. A timeout releases finished work; an unknown
 /// remote ref retains the existing candidate failure and blocks the task.
-#[test]
 fn handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks() {
-    if !isolated(
-        module_path!(),
-        "handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks",
-    ) {
-        return;
-    }
     for timeout in [true, false] {
         let leaf = super::claimed_review::ReviewedLeaf::admit();
         let pair = &leaf.pair;
@@ -170,6 +163,7 @@ fn handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks() {
             .complete_job_run_step(
                 &leaf.leaf,
                 &JobRunStepParams {
+                    lock_wait_ms: None,
                     step_index,
                     target_type: JobTargetType::Activity,
                     target_id: "claim_handoff".into(),
@@ -305,14 +299,7 @@ fn sol_exclusion(pair: &Pair, drain: &str) -> Option<CrewExclusion> {
 /// excludes that crew for the drain's window, so the same task is not pulled
 /// straight back to fail the same way. A transient failure after the leaf
 /// pushed keeps the published candidate and its pull request.
-#[test]
 fn crew_failures_release_the_claim_and_exclude_the_crew_for_the_window() {
-    if !isolated(
-        module_path!(),
-        "crew_failures_release_the_claim_and_exclude_the_crew_for_the_window",
-    ) {
-        return;
-    }
     for (error, class) in [
         (
             "[transient_failure] action pin check could not connect (status 000)",
@@ -386,14 +373,7 @@ fn crew_failures_release_the_claim_and_exclude_the_crew_for_the_window() {
 /// interrupted at a step boundary by the same upgrade does: the task returns
 /// to the backlog rather than blocked, the pushed candidate rides on the
 /// release, and the task's next claim resumes it.
-#[test]
 fn an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it() {
-    if !isolated(
-        module_path!(),
-        "an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it",
-    ) {
-        return;
-    }
     for kind in [
         "upgrade_admission_refused",
         "orbit_upgrade_admission_refused",
@@ -449,14 +429,7 @@ fn an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it() {
 /// [ORB-14439] The owner's run history never holds a follower's leaf, so the
 /// owner keeps what the leaf's settlement said: a failure scan on the owner
 /// reads a follower's provider outage, typed, from the owner's own store.
-#[test]
 fn the_owner_lists_a_follower_leaf_release_with_its_evidence_class() {
-    if !isolated(
-        module_path!(),
-        "the_owner_lists_a_follower_leaf_release_with_its_evidence_class",
-    ) {
-        return;
-    }
     let (pair, _, _) = a_released_failure(
         "[provider_unavailable] claude provider authentication failure (HTTP 401)",
         "provider",
@@ -496,14 +469,7 @@ fn the_owner_lists_a_follower_leaf_release_with_its_evidence_class() {
 /// window, whatever crew a task names: the drain asks the owner for nothing
 /// more, and the owner holds every task from that drain even when its
 /// request was built before the release reached it.
-#[test]
 fn host_failures_release_the_claim_and_suppress_the_host_for_the_window() {
-    if !isolated(
-        module_path!(),
-        "host_failures_release_the_claim_and_suppress_the_host_for_the_window",
-    ) {
-        return;
-    }
     for (error, class) in [
         (
             "[validation_environment] required validation 'make ci-fast' could not run: \
@@ -583,14 +549,7 @@ fn host_failures_release_the_claim_and_suppress_the_host_for_the_window() {
 /// A red base is not the host's crew either: the claim is released and the
 /// crew keeps running. (`admission` covers the owner holding the task until
 /// the base turns green.)
-#[test]
 fn a_baseline_red_failure_releases_the_claim_without_excluding_the_crew() {
-    if !isolated(
-        module_path!(),
-        "a_baseline_red_failure_releases_the_claim_without_excluding_the_crew",
-    ) {
-        return;
-    }
     let hold = BaselineRedHold {
         base_ref: "main".into(),
         base_sha: "b0".into(),
@@ -607,6 +566,83 @@ fn a_baseline_red_failure_releases_the_claim_without_excluding_the_crew() {
     assert_eq!(window(&pair, &drain).host_suppressed, None);
 }
 
+/// [ORB-15956] A leaf whose base was red when its gate ran, but whose base
+/// has since passed the same command, releases without a baseline hold and
+/// keeps its candidate: the task's next claim resumes it on the green base
+/// instead of waiting on a hold that no longer applies.
+#[test]
+fn a_leaf_whose_red_base_turned_green_keeps_its_candidate_without_a_hold() {
+    if !isolated(
+        module_path!(),
+        "a_leaf_whose_red_base_turned_green_keeps_its_candidate_without_a_hold",
+    ) {
+        return;
+    }
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let repo = &pair.follower_repo;
+    git(repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join(".gitignore"), "/.orbit/\n").unwrap();
+    std::fs::write(repo.join("Makefile"), "ci-lint:\n\t@exit 2\n").unwrap();
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "red base"]);
+    let red = git(repo, &["rev-parse", "HEAD"]).trim().to_string();
+    std::fs::write(repo.join("Makefile"), "ci-lint:\n\t@echo lint-ok\n").unwrap();
+    git(repo, &["commit", "-q", "-am", "fix lint"]);
+    let hold = BaselineRedHold {
+        base_ref: "main".into(),
+        base_sha: red.clone(),
+        command: "make ci-lint".into(),
+        run_id: String::new(),
+        selection: None,
+        failures: Default::default(),
+    };
+    // The host has already checked the moved base, as its hold refresh does;
+    // settlement only reads that recorded result.
+    assert!(matches!(
+        orbit_engine::baseline_hold_status(&pair.follower, repo, &hold),
+        orbit_engine::BaselineHoldStatus::Lifted(_)
+    ));
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    leaf_completed(&pair, &leaf, prepared());
+    pair.leaf_fails_with(
+        &leaf,
+        &hold.text(&format!(
+            "required validation 'make ci-lint' fails on base {red} exactly as on the candidate"
+        )),
+    );
+
+    let pass = settle_only(&pair, &drain);
+    assert_eq!(pair.owner_status(&task), "backlog", "{pass}");
+    let release = &settlement_of(&pair, &leaf)["Release"];
+    assert!(
+        release["baseline_red"].is_null(),
+        "a green base holds nothing: {release}"
+    );
+    let candidate = &release["failure"]["candidate"];
+    assert_eq!(candidate["head_sha"], HEAD, "{release}");
+    let owner_task = pair.owner_task(&task);
+    assert!(
+        !owner_task["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["event"] == BASELINE_RED_HOLD_EVENT),
+        "{owner_task:#}"
+    );
+
+    let next = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&next), task, "the task is pulled again");
+    let resumed = pair
+        .admission(&next)
+        .receipt
+        .and_then(|receipt| receipt.task)
+        .and_then(|task| task.resume_candidate)
+        .expect("the claim carries the kept candidate");
+    assert_eq!(resumed.head_sha, HEAD);
+}
+
 /// [ORB-14617] A claimed leaf whose delivery push the forge kept refusing
 /// ends held, not failed. [ORB-14634] It held its claim while its push
 /// retried inside the push's window, so once that window closes the
@@ -614,14 +650,7 @@ fn a_baseline_red_failure_releases_the_claim_without_excluding_the_crew() {
 /// kept and why. The forge refused it, not this host or the crew: the drain
 /// keeps offering the crew, and the owner hands the task straight back to it
 /// with the kept candidate, which only this host has.
-#[test]
 fn a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew() {
-    if !isolated(
-        module_path!(),
-        "a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew",
-    ) {
-        return;
-    }
     let pair = Pair::with_crews(&[Some("sol")]);
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
@@ -647,6 +676,7 @@ fn a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew() {
         .complete_job_run_step(
             &leaf,
             &JobRunStepParams {
+                lock_wait_ms: None,
                 step_index: 0,
                 target_type: JobTargetType::Activity,
                 target_id: "diagnostic".into(),
@@ -709,11 +739,7 @@ fn a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew() {
 
 /// The candidate's own failure, and a task its final recovery judged, still
 /// block the task — typed, so `orbit run show` says which.
-#[test]
 fn a_candidate_failure_still_blocks_the_task() {
-    if !isolated(module_path!(), "a_candidate_failure_still_blocks_the_task") {
-        return;
-    }
     let pair = Pair::with_crews(&[Some("sol")]);
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
@@ -746,21 +772,131 @@ fn a_candidate_failure_still_blocks_the_task() {
     );
 }
 
+/// [ORB-16793] The owner's task history says why a follower's leaf blocked
+/// the task: its `claim_failed` entry names the leaf run, the host, the
+/// settlement's evidence and failure classes and the step that failed, with
+/// the reason redacted, so neither an operator nor the codebase analytics
+/// need the claim settlement to read it.
+fn a_failed_leaf_names_its_cause_in_owner_history() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let mut synchronized = prepared();
+    synchronized["sync_base"] =
+        json!({"head": BRANCH, "head_sha": HEAD, "base": "main", "base_sha": "b0"});
+    leaf_completed(&pair, &leaf, synchronized);
+    pair.leaf_fails_with(
+        &leaf,
+        "cargo test: 3 tests failed; request sent Bearer fixture-secret-token",
+    );
+
+    let pass = settle_only(&pair, &drain);
+    assert_eq!(pair.owner_status(&task), "blocked", "{pass}");
+    let failure = &settlement_of(&pair, &leaf)["Fail"]["failure"];
+    assert_eq!(failure["class"], "candidate", "{failure}");
+    let failed_step = failure["candidate"]["failed_step_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the kept candidate names its failed step: {failure}"));
+    let executed_on = &pair.owner_claim_for_leaf(&leaf)["claim"]["executed_on"];
+    let host = executed_on["machine_name"]
+        .as_str()
+        .or(executed_on["machine_id"].as_str())
+        .expect("the claim names its host");
+    let owner = pair.owner_task(&task);
+    let entry = owner["history"]
+        .as_array()
+        .and_then(|history| {
+            history
+                .iter()
+                .rev()
+                .find(|entry| entry["event"] == "claim_failed")
+        })
+        .unwrap_or_else(|| panic!("an owner claim_failed entry: {owner:#}"));
+    assert_eq!(entry["to_status"], "blocked", "{entry}");
+    assert_eq!(
+        entry["note"].as_str(),
+        Some(
+            format!(
+                "claimed leaf failed: host={host}, run_id={leaf}, evidence=failure, \
+                 failure_class=candidate, failed_step={failed_step}, error=cargo test: 3 tests \
+                 failed; request sent Bearer [REDACTED_AUTH]"
+            )
+            .as_str()
+        ),
+        "the note carries the settlement's cause, redacted: {entry}"
+    );
+
+    // The Blocked ranking reads the cause off the note, and off the claim's
+    // settlement for an entry written before the note existed.
+    let run_failures = || {
+        let view = pair
+            .wire
+            .owner
+            .run_tool(
+                "orbit.codebase.analytics",
+                json!({"window": "all", "min_support": 1}),
+            )
+            .expect("codebase analytics");
+        view["blocked"]["causes"]
+            .as_array()
+            .and_then(|causes| causes.iter().find(|cause| cause["cause"] == "run_failure"))
+            .map(|cause| (cause["tasks"].clone(), view["blocked"]["causes"].clone()))
+            .expect("a run failure bucket")
+    };
+    let (tasks, causes) = run_failures();
+    assert_eq!(tasks, 1, "a candidate failure is the work's: {causes}");
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(
+            &pair.wire.owner.global_root(),
+        ),
+    )
+    .unwrap();
+    let events = registry
+        .find_task_binding(&task)
+        .unwrap()
+        .expect("owner task binding")
+        .canonical_path
+        .join(orbit_types::task::TASK_EVENTS_FILE_NAME);
+    let rows = std::fs::read_to_string(&events)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            let mut row: Value = serde_json::from_str(line).unwrap();
+            if row["type"] == "claim_failed" {
+                row.as_object_mut().unwrap().remove("note");
+            }
+            format!("{row}\n")
+        })
+        .collect::<String>();
+    std::fs::write(&events, rows).unwrap();
+    assert!(
+        pair.owner_task(&task)["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["event"] == "claim_failed" && entry["note"].is_null())
+    );
+    let (tasks, causes) = run_failures();
+    assert_eq!(
+        tasks, 1,
+        "the settlement explains a note-less entry: {causes}"
+    );
+}
+
 /// Cancelling one launched claimed leaf, as `orbit run cancel <leaf>` and the
 /// dashboard's cancel do, gives its claim back with the operator's reason
-/// rather than failing the task, and excludes its crew for the drain window.
-#[test]
+/// and candidate. Only that task is suppressed for the drain window; the
+/// crew stays usable for unrelated work and mandatory before-landing review.
 fn cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reason() {
-    if !isolated(
-        module_path!(),
-        "cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reason",
-    ) {
-        return;
-    }
-    let pair = Pair::with_crews(&[Some("sol")]);
+    let pair = Pair::with_owner_config(
+        "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = \"sol\"\n",
+        &[Some("sol"), Some("sol")],
+    );
     let drain = pair.run_drain();
     let (leaf, worker) = pair.running_leaf_with_worker(&drain, 1);
     let task = pair.claimed_task(&leaf);
+    leaf_completed(&pair, &leaf, prepared());
 
     let cancel = pair
         .follower
@@ -785,28 +921,55 @@ fn cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reaso
     );
     let release = &settlement_of(&pair, &leaf)["Release"];
     assert_eq!(release["failure"]["class"], "operator_cancel", "{release}");
+    assert_eq!(release["failure"]["candidate"]["branch"], BRANCH);
+    assert_eq!(release["failure"]["candidate"]["head_sha"], HEAD);
     assert_eq!(
         pair.owner_claim_for_leaf(&leaf)["claim"]["phase"],
         "revoked"
     );
-    let exclusion = sol_exclusion(&pair, &drain).expect("a cancel excludes its crew");
-    assert_eq!(exclusion.source, CrewExclusionSource::LeafReleased);
+    assert_eq!(sol_exclusion(&pair, &drain), None);
+    assert_eq!(window(&pair, &drain).host_suppressed, None);
+
+    let next = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&next), pair.tasks[1]);
+    let ship = pair.admission(&next).request.ship;
+    assert!(ship.before_landing, "the owner's mandatory review survives");
+    assert_eq!(ship.review.unwrap().crew.as_deref(), Some("sol"));
+
+    // Replay a request built before the cancel, bypassing the follower's
+    // window projection: the owner itself must suppress the original task.
+    let mut request = pair.wire.calls("orbit.task.pull")[0].clone();
+    request["request_id"] = json!("built-before-the-operator-cancel");
+    let same = pair
+        .wire
+        .call("", "orbit.task.pull", request.clone())
+        .unwrap();
+    assert!(same["receipt"]["claim"].is_null(), "{same:#}");
     assert!(
-        exclusion.reason.contains("operator_cancel"),
-        "{exclusion:?}"
+        same["receipt"]["crew_unavailable"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|held| held["task_id"] == task.as_str()
+                && held["reason"].as_str().unwrap().contains("operator_cancel")),
+        "the original task stays withheld from this window: {same:#}"
     );
+    assert_eq!(pair.owner_claims().len(), 2, "no immediate repull");
+
+    // A later window can resume the candidate, with the release still in
+    // owner history; the budget scenario below verifies the cancel counts.
+    request["request_id"] = json!("after-the-operator-cancel-window");
+    request["run_context"]["run_id"] = json!("jrun-after-the-operator-cancel");
+    let later = pair.wire.call("", "orbit.task.pull", request).unwrap();
+    assert_eq!(later["receipt"]["claim"]["task_id"], task.as_str());
+    let resumed = &later["receipt"]["task"]["resume_candidate"];
+    assert_eq!(resumed["branch"], BRANCH, "{later:#}");
+    assert_eq!(resumed["head_sha"], HEAD, "{later:#}");
 }
 
 /// An operator who cancels a launched claimed leaf with `--block` asks for the
 /// task to stay blocked: the cancel is still typed, but it fails the claim.
-#[test]
 fn cancelling_a_launched_claimed_leaf_with_block_blocks_its_task() {
-    if !isolated(
-        module_path!(),
-        "cancelling_a_launched_claimed_leaf_with_block_blocks_its_task",
-    ) {
-        return;
-    }
     let pair = Pair::with_crews(&[Some("sol")]);
     let drain = pair.run_drain();
     let (leaf, worker) = pair.running_leaf_with_worker(&drain, 1);
@@ -842,14 +1005,7 @@ fn cancelling_a_launched_claimed_leaf_with_block_blocks_its_task() {
 /// moving base, which excludes nothing, so the same drain pulls it again —
 /// is blocked by the third, with one comment listing every reason,
 /// including an operator's cancel.
-#[test]
 fn a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason() {
-    if !isolated(
-        module_path!(),
-        "a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let drain = pair.run_drain();
@@ -874,7 +1030,7 @@ fn a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason() {
     assert_eq!(pair.owner_status(&task), "backlog");
 
     for (n, reason) in reasons.iter().enumerate() {
-        // A cancel excludes its crew only for the drain that admitted it;
+        // A cancel suppresses its task only for the drain that admitted it;
         // later drains can retry the task while the task-wide budget persists.
         let drain = pair.run_drain();
         let leaf = pair.running_leaf(&drain, 1);
@@ -934,14 +1090,7 @@ fn a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason() {
 /// drain for the rest of its window, even when the drain's next request was
 /// built before the release reached it and so excludes no crew. Another
 /// drain may still take it.
-#[test]
 fn the_owner_does_not_hand_a_host_released_task_back_to_the_same_drain() {
-    if !isolated(
-        module_path!(),
-        "the_owner_does_not_hand_a_host_released_task_back_to_the_same_drain",
-    ) {
-        return;
-    }
     let (pair, _, _) = a_released_failure(
         "[validation_environment] required validation could not run: python3 lacks tomllib",
         "environment",
@@ -984,14 +1133,7 @@ fn the_owner_does_not_hand_a_host_released_task_back_to_the_same_drain() {
 /// blocking the task. The task's next claim carries that candidate into its
 /// leaf, whose `resume_candidate` step continues it; a spec change retires
 /// it, and the claim after implements fresh.
-#[test]
 fn a_base_conflict_keeps_the_candidate_and_the_next_claim_resumes_it() {
-    if !isolated(
-        module_path!(),
-        "a_base_conflict_keeps_the_candidate_and_the_next_claim_resumes_it",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let drain = pair.run_drain();
@@ -1073,11 +1215,7 @@ fn a_base_conflict_keeps_the_candidate_and_the_next_claim_resumes_it() {
 
 /// An operator's `orbit task update --discard-candidate` retires a kept
 /// candidate: the task's next claim implements fresh.
-#[test]
 fn a_discarded_candidate_is_not_resumed() {
-    if !isolated(module_path!(), "a_discarded_candidate_is_not_resumed") {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let drain = pair.run_drain();
@@ -1114,14 +1252,7 @@ fn a_discarded_candidate_is_not_resumed() {
 /// [ORB-14257] A worker step whose call to the owner never reached it fails
 /// typed as an owner-route failure, and the leaf it ends releases its claim
 /// as `owner_route` — not as a failure of its candidate.
-#[test]
 fn a_lost_owner_route_fails_the_step_as_owner_route() {
-    if !isolated(
-        module_path!(),
-        "a_lost_owner_route_fails_the_step_as_owner_route",
-    ) {
-        return;
-    }
     struct Unreachable;
     impl orbit_tools::OwnerCoordinator for Unreachable {
         fn call(
@@ -1250,9 +1381,11 @@ fn an_owner_lock_timeout_is_retried_and_never_settles_as_a_base_conflict() {
         .unwrap();
 
     // Two busy answers are retried through: the envelope's task load succeeds.
-    let task = bound
-        .get_task(&claim.task_id)
-        .expect("retried past the busy owner");
+    let task = orbit_core::test_support::with_owner_read_retry_wait(
+        |_| std::thread::sleep(Duration::from_millis(1)),
+        || bound.get_task(&claim.task_id),
+    )
+    .expect("retried past the busy owner");
     assert_eq!(task.id, claim.task_id);
     assert_eq!(
         owner.calls.load(Ordering::SeqCst),
@@ -1263,9 +1396,11 @@ fn an_owner_lock_timeout_is_retried_and_never_settles_as_a_base_conflict() {
     // A lock that stays held exhausts the bounded retries.
     owner.calls.store(0, Ordering::SeqCst);
     owner.busy.store(usize::MAX, Ordering::SeqCst);
-    let error = bound
-        .get_task(&claim.task_id)
-        .expect_err("the owner stays busy");
+    let error = orbit_core::test_support::with_owner_read_retry_wait(
+        |_| std::thread::sleep(Duration::from_millis(1)),
+        || bound.get_task(&claim.task_id),
+    )
+    .expect_err("the owner stays busy");
     assert_eq!(
         owner.calls.load(Ordering::SeqCst),
         3,
@@ -1295,14 +1430,7 @@ fn an_owner_lock_timeout_is_retried_and_never_settles_as_a_base_conflict() {
 /// third release of any other kind blocks it. [ORB-14697] The release itself
 /// excludes no crew: the follower's provider-limit store holds the reading
 /// that does, and only until it lapses (`provider_limit/gate.rs`).
-#[test]
 fn a_provider_limit_releases_the_claim_outside_the_release_budget() {
-    if !isolated(
-        module_path!(),
-        "a_provider_limit_releases_the_claim_outside_the_release_budget",
-    ) {
-        return;
-    }
     let config = "\
 [workflow]
 default_crew = \"sol\"
@@ -1484,3 +1612,29 @@ model = \"gpt-luna\"
         }
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks_scenarios,
+    handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks,
+    crew_failures_release_the_claim_and_exclude_the_crew_for_the_window,
+    an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it,
+    the_owner_lists_a_follower_leaf_release_with_its_evidence_class,
+    host_failures_release_the_claim_and_suppress_the_host_for_the_window,
+    a_baseline_red_failure_releases_the_claim_without_excluding_the_crew
+);
+
+crate::scenario_table!(
+    a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew_scenarios,
+    a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew,
+    a_candidate_failure_still_blocks_the_task,
+    a_failed_leaf_names_its_cause_in_owner_history,
+    cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reason,
+    cancelling_a_launched_claimed_leaf_with_block_blocks_its_task,
+    a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason,
+    the_owner_does_not_hand_a_host_released_task_back_to_the_same_drain,
+    a_base_conflict_keeps_the_candidate_and_the_next_claim_resumes_it,
+    a_discarded_candidate_is_not_resumed,
+    a_lost_owner_route_fails_the_step_as_owner_route,
+    a_provider_limit_releases_the_claim_outside_the_release_budget
+);

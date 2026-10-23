@@ -1,9 +1,5 @@
-use orbit_core::application::job::{
-    ActivityInvocationEvidence, job_run_to_json_with_activity_provenance,
-};
-use orbit_core::{
-    InvocationQuery, JobRun, OrbitError, OrbitRuntime, PipelineInvokeResult, PipelineWaitEntry,
-};
+use orbit_core::application::job::job_run_to_json_with_activity_provenance;
+use orbit_core::{JobRun, OrbitError, OrbitRuntime, PipelineInvokeResult, PipelineWaitEntry};
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 
@@ -14,7 +10,7 @@ use crate::command::{CommandOut, CommandOutput, Execute, Payload};
 
 #[derive(Args)]
 #[command(
-    after_help = "Examples:\n  orbit run job task_auto_pipeline\n  orbit run job task_auto_pipeline --input mode=local\n  orbit run job crates/orbit-core/assets/jobs/task_pipeline.yaml --input task_id=T123\n  orbit run job task_pilot_pipeline --wait\n  orbit run job task_pilot_pipeline --input crew=luna --json\n\nThere is no `--crew` flag: crew selection is a run input, `--input crew=<name>`.\nThat picks this run's resolved crew; an activity with an explicit `crew` or\n`crew_config_key` pool still routes there instead. Check `activity_provenance` in\n`orbit run show <RUN_ID> --json` for what actually dispatched.\n\nThe run is submitted to a detached worker and the command returns as soon as it is durable.\nInspect it with `orbit run history -j <JOB_ID>` and `orbit run show <RUN_ID>`."
+    after_help = "Examples:\n  orbit run job task_auto_pipeline\n  orbit run job task_auto_pipeline --input mode=local\n  orbit run job crates/orbit-core/assets/jobs/task_auto_pipeline.yaml --input mode=local\n  orbit run job task_pilot_pipeline --wait\n  orbit run job task_pilot_pipeline --input crew=luna --json\n\nThere is no `--crew` flag: crew selection is a run input, `--input crew=<name>`.\nThat picks this run's resolved crew; an activity with an explicit `crew` or\n`crew_config_key` pool still routes there instead. Check `activity_provenance` in\n`orbit run show <RUN_ID> --json` for what actually dispatched.\n\nThe run is submitted to a detached worker and the command returns as soon as it is durable.\nInspect it with `orbit run history -j <JOB_ID>` and `orbit run show <RUN_ID>`."
 )]
 pub struct JobRunArgs {
     /// Job ID from the catalog, or a direct path to a schemaVersion 2 job YAML.
@@ -211,10 +207,11 @@ impl Execute for JobResumeArgs {
     }
 }
 
-/// CLI adapter for the shared run projection.
+/// CLI adapter for the shared run projection used by run history.
 ///
-/// The CLI has historically exposed the claimed worker PID; the web API does
-/// not. Keep that contract difference at this presentation boundary.
+/// History keeps the historical contract of exposing only the claimed worker
+/// PID. `orbit run show` adds the submitted input and start-time token beside
+/// it; list projections stay on this narrower shape.
 pub(crate) fn cli_job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     let evidence = Vec::new();
     let mut value = job_run_to_json_with_activity_provenance(run, state, &evidence);
@@ -232,21 +229,14 @@ pub(crate) fn cli_job_run_to_json_with_activity_provenance(
     state: Option<&PipelineState>,
 ) -> Value {
     let evidence = runtime
-        .invocation_records(InvocationQuery {
-            job_run_id: Some(run.run_id.clone()),
-            limit: 1_000,
-            ..InvocationQuery::default()
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(|record| ActivityInvocationEvidence {
-            activity_id: record.activity_id,
-            provider: record.agent,
-            model: record.model,
-        })
-        .collect::<Vec<_>>();
+        .activity_invocation_evidence(&run.run_id)
+        .unwrap_or_default();
     let mut value = job_run_to_json_with_activity_provenance(run, state, &evidence);
+    // Same worker identity and submitted input the HTTP run detail and MCP
+    // run show already carry. History uses [`cli_job_run_to_json`] and does not.
+    value["input"] = json!(run.input);
     value["pid"] = json!(run.pid);
+    value["pid_start_time"] = json!(run.pid_start_time);
     value
 }
 

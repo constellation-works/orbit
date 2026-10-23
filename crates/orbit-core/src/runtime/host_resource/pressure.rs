@@ -11,6 +11,9 @@ use super::{
     ResourceReading, ResourceSeverity,
 };
 
+/// The held-pressure name of the Linux disk I/O stall share.
+const IO_PRESSURE: &str = "io full";
+
 #[derive(Default, Serialize, Deserialize)]
 struct PressureState {
     last_sample: Option<DateTime<Utc>>,
@@ -39,21 +42,42 @@ impl ResourcePressureEvaluator {
         let mut pressures = Vec::new();
         let mut seen = Vec::new();
         let mut reading = |key: String, value: Option<f64>, high: u8, resume: u8, cpu: bool| {
-            seen.push(key.clone());
+            // Share history only between workspaces using the same resource thresholds.
+            // Schema-1 readers accept these string keys, but their unqualified resource
+            // lookups start empty rather than mistaking this history for their own.
+            // Put thresholds first so no new key can collide with a legacy disk path.
+            let utilization = cpu && settings.cpu_source == "utilization";
+            let state_key = if utilization {
+                format!("{high}/{resume}@cpu:utilization")
+            } else {
+                format!("{high}/{resume}@{key}")
+            };
+            seen.push(state_key.clone());
             let unknown_reason = if stale {
                 Some("stale")
             } else {
                 match value {
                     None => Some("unavailable"),
-                    Some(v) if !v.is_finite() || v < 0.0 || (!cpu && v > 100.0) => Some("invalid"),
+                    Some(v)
+                        if !v.is_finite() || v < 0.0 || ((!cpu || utilization) && v > 100.0) =>
+                    {
+                        Some("invalid")
+                    }
                     _ => None,
                 }
             };
-            let state = self.states.entry(key.clone()).or_default();
-            // History from another workspace is evidence only for the same thresholds.
-            if state.high_percent != high || state.resume_percent != resume {
-                *state = PressureState::default();
+            // Carry matching legacy history forward once, preserving a sustain window
+            // or hold across an upgrade on hosts with a single threshold set.
+            if !utilization
+                && !self.states.contains_key(&state_key)
+                && self.states.get(&key).is_some_and(|state| {
+                    state.high_percent == high && state.resume_percent == resume
+                })
+                && let Some(state) = self.states.remove(&key)
+            {
+                self.states.insert(state_key.clone(), state);
             }
+            let state = self.states.entry(state_key).or_default();
             if unknown_reason.is_some() {
                 *state = PressureState::default();
                 return ResourceReading {
@@ -117,7 +141,11 @@ impl ResourcePressureEvaluator {
         };
         let cpu = reading(
             "cpu".into(),
-            sample.cpu_percent,
+            if settings.cpu_source == "utilization" {
+                sample.cpu_utilization_percent
+            } else {
+                sample.cpu_percent
+            },
             settings.cpu_high_percent,
             settings.cpu_resume_percent,
             true,
@@ -129,6 +157,17 @@ impl ResourcePressureEvaluator {
             settings.memory_resume_percent,
             false,
         );
+        // A host without pressure stall information has no `io` reading at all:
+        // it is neither gated nor an unknown telemetry entry.
+        let io = sample.io_full_percent.map(|percent| {
+            reading(
+                IO_PRESSURE.into(),
+                Some(percent),
+                settings.io_full_high_percent,
+                settings.io_full_resume_percent,
+                false,
+            )
+        });
         let disks: Vec<_> = sample
             .disks
             .into_iter()
@@ -163,7 +202,7 @@ impl ResourcePressureEvaluator {
             .cloned();
         pressures.retain(|pressure| !pressure.resource.starts_with("disk "));
         pressures.extend(worst_disk);
-        // Keep recent disk history for other workspaces sharing the host root.
+        // Keep recent resource/threshold history for other workspaces sharing the host root.
         // It is never included in this verdict unless this probe observes it.
         self.states.retain(|key, state| {
             seen.contains(key)
@@ -175,6 +214,7 @@ impl ResourcePressureEvaluator {
         });
         let severities: Vec<_> = [cpu.severity, memory.severity]
             .into_iter()
+            .chain(io.as_ref().map(|io| io.severity))
             .chain(disks.iter().map(|disk| disk.reading.severity))
             .collect();
         let severity = if severities.contains(&ResourceSeverity::Critical) {
@@ -216,6 +256,7 @@ impl ResourcePressureEvaluator {
             stale,
             cpu,
             memory,
+            io,
             disk,
             disks,
             severity,
@@ -249,6 +290,9 @@ impl ResourceAdmission {
         };
         note("cpu".into(), &status.cpu);
         note("memory".into(), &status.memory);
+        if let Some(io) = &status.io {
+            note("io".into(), io);
+        }
         for disk in &status.disks {
             note(format!("disk {}", disk.path.display()), &disk.reading);
         }

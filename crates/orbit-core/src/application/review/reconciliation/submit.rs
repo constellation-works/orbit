@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::required_string;
 use orbit_common::security::redaction::redact_all_and_home_error;
 use orbit_common::security::release::sha256_hex;
-use orbit_engine::review_gate::{self, RequiredValidationRun};
+use orbit_engine::review_gate::{self, RequiredValidationRun, ScratchHostTarget};
 use orbit_types::task::TaskArtifact;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ToolSessionContext;
@@ -634,7 +634,11 @@ fn run_remediation_command(
         std::process::id()
     );
     let checkout = runtime.create_recovery_checkout(&checkout_id, remediation_commit)?;
-    let run = review_gate::run_required_validation(runtime, &checkout, command);
+    // Leased like every recovery checkout's host validation target.
+    let run = (!runtime.validation_env_policy().build_output_env.is_empty())
+        .then(|| review_gate::lease_scratch_host_target(&checkout, ScratchHostTarget::Recovery))
+        .transpose()
+        .and_then(|_lease| review_gate::run_required_validation(runtime, &checkout, command));
     let cleanup = runtime.remove_recovery_checkout(&checkout_id);
     let run: RequiredValidationRun = run?;
     cleanup?;

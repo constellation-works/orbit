@@ -1,4 +1,4 @@
-//! implement_one durations for Health › Metrics: the windowed trend by
+//! implement_one durations for Analytics › Metrics: the windowed trend by
 //! complexity and actor, and the 30-day actor table per complexity.
 
 use std::collections::{BTreeMap, HashMap};
@@ -30,12 +30,22 @@ pub(in crate::api) async fn diagnostics_implement_one(
     Ws(runtime): Ws,
     Query(q): Query<DiagnosticsQuery>,
 ) -> Response {
+    let outcome = q.outcome.as_deref().unwrap_or("succeeded");
+    let succeeded_only = match outcome {
+        "succeeded" => true,
+        "all" => false,
+        _ => {
+            return map_runtime_error(orbit_core::OrbitError::InvalidInput(
+                "outcome must be succeeded or all".to_string(),
+            ));
+        }
+    };
     let range = match trend_range(&q) {
         Ok(range) => range,
         Err(error) => return map_runtime_error(error),
     };
     match super::super::blocking("implement_one aggregation", move || {
-        implement_one_trend(&runtime, &range)
+        implement_one_trend(&runtime, &range, succeeded_only)
     })
     .await
     {
@@ -55,9 +65,11 @@ struct Run {
 fn implement_one_trend(
     runtime: &OrbitRuntime,
     range: &DiagnosticsRange,
+    succeeded_only: bool,
 ) -> Result<Value, orbit_core::OrbitError> {
     let complexity_since = Utc::now() - Duration::days(COMPLEXITY_ACTORS_DAYS);
     let records = runtime.workspace_invocation_records(InvocationQuery {
+        succeeded_candidate_only: succeeded_only,
         since: TrendWindow::read_since(range).map(|since| since.min(complexity_since)),
         activity_id: Some(ACTIVITY.to_string()),
         limit: RECORD_LIMIT,
@@ -185,6 +197,7 @@ fn implement_one_trend(
         .collect();
 
     Ok(json!({
+        "outcome": if succeeded_only { "succeeded" } else { "all" },
         "window": window.to_json(),
         "truncated": truncated,
         "buckets": buckets,

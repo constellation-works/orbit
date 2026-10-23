@@ -5,14 +5,7 @@ use orbit_core::application::job::JobRunCancelOutcome;
 
 /// The session machine fences bind/settle even when the caller knows the
 /// claim and bound run. A refused attempt must leave the owner unchanged.
-#[test]
 fn another_session_machine_cannot_bind_or_settle_a_followers_claim() {
-    if !isolated(
-        module_path!(),
-        "another_session_machine_cannot_bind_or_settle_a_followers_claim",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
@@ -38,7 +31,13 @@ fn another_session_machine_cannot_bind_or_settle_a_followers_claim() {
         let error = pair
             .wire
             .owner
-            .serve_claim_settle(&wrong_session, &claim.claim_id, Some(&leaf), mutation)
+            .serve_claim_settle(
+                &wrong_session,
+                &claim.claim_id,
+                Some(&leaf),
+                mutation,
+                orbit_store::contracts::ClaimAttribution::default(),
+            )
             .expect_err("another session machine must not settle this claim");
         assert_eq!(
             error.claim_refusal(),
@@ -75,6 +74,7 @@ fn another_session_machine_cannot_bind_or_settle_a_followers_claim() {
             &claim.claim_id,
             Some(&leaf),
             ClaimMutation::Release(evidence),
+            orbit_store::contracts::ClaimAttribution::default(),
         )
         .expect("the owning session machine can still settle its attempt");
     assert_eq!(
@@ -86,14 +86,7 @@ fn another_session_machine_cannot_bind_or_settle_a_followers_claim() {
 
 /// A host that cannot spawn a claimed leaf returns its task and stops pulling
 /// immediately, rather than blocking several tasks to trip the breaker.
-#[test]
 fn a_launch_failure_cancels_the_leaf_releases_the_task_and_suppresses_the_host() {
-    if !isolated(
-        module_path!(),
-        "a_launch_failure_cancels_the_leaf_releases_the_task_and_suppresses_the_host",
-    ) {
-        return;
-    }
     let pair = Pair::new(3);
     let drain = pair.start_drain();
     let failed = pair.pass(&drain);
@@ -140,14 +133,7 @@ fn a_launch_failure_cancels_the_leaf_releases_the_task_and_suppresses_the_host()
 
 /// An operator cancellation of a launched claimed leaf reaches its owner as a
 /// release, so the task keeps its candidate in backlog with the cancel reason.
-#[test]
 fn operator_cancelled_claimed_leaf_returns_to_backlog_with_reason() {
-    if !isolated(
-        module_path!(),
-        "operator_cancelled_claimed_leaf_returns_to_backlog_with_reason",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
@@ -204,14 +190,7 @@ fn operator_cancelled_claimed_leaf_returns_to_backlog_with_reason() {
 /// identity the owner already committed: one request, one claim, one leaf,
 /// bound and launched once. A drain that gave up on the unanswered request
 /// would pull the owner's second task as well.
-#[test]
 fn lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once() {
-    if !isolated(
-        module_path!(),
-        "lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once",
-    ) {
-        return;
-    }
     let pair = Pair::new(2);
     let drain = pair.start_drain();
 
@@ -265,14 +244,7 @@ fn lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once() {
 /// A settlement whose reply is lost stays recorded and is delivered again;
 /// the owner replays the outcome it already applied rather than applying it
 /// twice or refusing it, and a further replay changes nothing.
-#[test]
 fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
-    if !isolated(
-        module_path!(),
-        "a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain = pair.start_drain();
     let task = pair.tasks[0].clone();
@@ -359,14 +331,7 @@ impl Pair {
 /// backs off — doubling to a 15 minute cap — instead of asking on every pass.
 /// Once the owner accepts, the same recorded handoff settles and requests
 /// resume.
-#[test]
 fn a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_accepts() {
-    if !isolated(
-        module_path!(),
-        "a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_accepts",
-    ) {
-        return;
-    }
     let pair = Pair::new(2);
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
@@ -457,14 +422,7 @@ fn a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_acc
 
 /// [ORB-13979] An operator who fixed the owner need not wait out the
 /// backoff: `orbit run auto --stop` delivers a refused settlement at once.
-#[test]
 fn an_operator_stop_delivers_a_refused_settlement_without_waiting_for_its_backoff() {
-    if !isolated(
-        module_path!(),
-        "an_operator_stop_delivers_a_refused_settlement_without_waiting_for_its_backoff",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
@@ -506,14 +464,7 @@ fn an_operator_stop_delivers_a_refused_settlement_without_waiting_for_its_backof
 /// pending, and the cancelling drain waits for it rather than ending; once
 /// the owner answers again, the drain's next pass delivers it and the drain
 /// ends. No new drain is needed.
-#[test]
 fn a_pending_settlement_is_retried_after_an_owner_outage_before_the_drain_ends() {
-    if !isolated(
-        module_path!(),
-        "a_pending_settlement_is_retried_after_an_owner_outage_before_the_drain_ends",
-    ) {
-        return;
-    }
     let pair = Pair::new(2);
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
@@ -584,14 +535,7 @@ impl RoutineWorkspaceProvider for ReplicaOnly {
 /// [ORB-13892] A forced release the owner was down for is retried by the
 /// clock sweep once the leaf's worker and the drain are both gone: no new
 /// drain, and the task returns to the owner's backlog.
-#[test]
 fn a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep() {
-    if !isolated(
-        module_path!(),
-        "a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain_worker = Worker::spawn();
     let drain = pair.run_drain_with_worker(drain_worker.pid);
@@ -649,3 +593,17 @@ fn a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep() {
         "no new drain"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    another_session_machine_cannot_bind_or_settle_a_followers_claim_scenarios,
+    another_session_machine_cannot_bind_or_settle_a_followers_claim,
+    a_launch_failure_cancels_the_leaf_releases_the_task_and_suppresses_the_host,
+    operator_cancelled_claimed_leaf_returns_to_backlog_with_reason,
+    lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once,
+    a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once,
+    a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_accepts,
+    an_operator_stop_delivers_a_refused_settlement_without_waiting_for_its_backoff,
+    a_pending_settlement_is_retried_after_an_owner_outage_before_the_drain_ends,
+    a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep
+);

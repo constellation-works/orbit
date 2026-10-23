@@ -52,7 +52,15 @@ const CLAUDE_REVOKED_TOKEN: &str = r#"{"is_error":true,"api_error_status":401,"r
 #[cfg(unix)]
 mod build_budget;
 #[cfg(unix)]
+mod explore;
+#[cfg(unix)]
 mod no_diff;
+#[cfg(unix)]
+mod regression_risk;
+#[cfg(unix)]
+mod stderr_failure;
+#[cfg(unix)]
+mod tag_instructions;
 
 /// Provider failures are control-plane evidence; transcripts and Orbit work
 /// failures must never exclude a crew. Recorded Claude payload: ORB-13965.
@@ -66,6 +74,18 @@ fn provider_authentication_results_are_typed_without_reading_transcripts() {
             "claude",
             r#"{"is_error":true,"api_error_status":403,"result":"Access denied"}"#,
             true,
+        ),
+        (
+            Provider::Claude,
+            "claude",
+            r#"{"type":"result","is_error":true,"api_error_status":400,"result":"API Error: 400 This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header with the ID of the workspace to use. Add the header, or use an API key that is scoped to a workspace."}"#,
+            true,
+        ),
+        (
+            Provider::Claude,
+            "claude",
+            r#"{"type":"result","is_error":true,"api_error_status":400,"result":"API Error: 400 tools.0.custom.input_schema: schema rejected"}"#,
+            false,
         ),
         (
             Provider::Claude,
@@ -162,8 +182,14 @@ fn provider_authentication_results_are_typed_without_reading_transcripts() {
         // Test both CLI conventions: nonzero failure and an exit-0 wrapper.
         for exit_code in [0, 1] {
             let run = format!("auth-{index}-{exit_code}");
-            let audit = tempfile::tempdir().unwrap();
-            let (writer, _) = build_writer(audit.path(), &run).unwrap();
+            // This matrix observes typed provider results, not audit storage.
+            // Durable blobs and envelope readback stay covered by the adjacent
+            // revoked-token and no-diff dispatch fixtures.
+            let writer = Arc::new(V2AuditWriter::new(
+                &run,
+                "smoke",
+                Arc::new(orbit_agent::loop_engine::audit::NullSink),
+            ));
             let fake = fake_cli(binary, &format!("#!/bin/sh\ncat > /dev/null\ncat <<'PAYLOAD'\n{payload}\nPAYLOAD\nexit {exit_code}\n")).unwrap();
             let mut spec = cli_agent_loop_spec(Some(provider));
             spec.model = None;
@@ -184,6 +210,24 @@ fn provider_authentication_results_are_typed_without_reading_transcripts() {
                 unavailable,
                 "{binary} exit {exit_code}: {payload}: {outcome:?}"
             );
+            if payload.contains("not scoped to a workspace") {
+                assert!(
+                    outcome.message.as_deref().is_some_and(|message| {
+                        message.contains("API key is not scoped to a workspace")
+                    }),
+                    "provider-unavailable diagnostics must name the workspace-scoped credential rejection: {outcome:?}"
+                );
+            }
+            if payload.contains("input_schema") && exit_code != 0 {
+                assert!(
+                    outcome.message.as_deref().is_some_and(|message| {
+                        message.contains(
+                            "the provider rejected Orbit's response-envelope schema passed via",
+                        )
+                    }),
+                    "an unrelated input_schema rejection must retain its schema diagnostic: {outcome:?}"
+                );
+            }
             if unavailable {
                 assert!(
                     !outcome.success,
@@ -332,8 +376,6 @@ fn cli_agent_dispatch_regressions() -> Result<(), Box<dyn std::error::Error>> {
     scenario_c_wall_clock_timeout()?;
     scenario_e_loader_rejection_retired_session()?;
     scenario_f_loader_rejection_retired_backend_value()?;
-    scenario_h_cli_reference_asset_round_trip()?;
-    scenario_i_existing_agent_loop_assets_still_deserialize()?;
     scenario_j_cli_executor_static_args_are_audited()?;
 
     Ok(())
@@ -383,49 +425,86 @@ fn scenario_a_cli_dispatch_emits_envelope_events() -> Result<(), Box<dyn std::er
     Ok(())
 }
 
-/// The provider's environment carries its own wall-clock deadline, so a
-/// nested `proc.spawn` can run as long as the invocation has left rather than
-/// the 60 s unscoped ceiling.
+/// A worker's environment carries the browser kit's locators exactly when the
+/// kit under its HOME passed `verify` at the installed version, and never the
+/// kit's libraries on `LD_LIBRARY_PATH`.
 #[cfg(unix)]
 #[test]
-fn cli_dispatch_stamps_the_provider_deadline() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp_audit = tempfile::tempdir()?;
-    let (writer, _store) = build_writer(tmp_audit.path(), "smoke-cli-deadline")?;
-    let observed = tempfile::tempdir()?;
-    let observed_path = observed.path().join("deadline");
-    let fake = fake_cli(
-        "claude",
-        &format!(
-            "#!/bin/sh\ncat > /dev/null\nprintf '%s' \"$ORBIT_ACTIVITY_DEADLINE_UNIX_MS\" > '{}'\necho '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
-            observed_path.display()
+fn cli_dispatch_hands_workers_only_a_verified_browser_kit() -> Result<(), Box<dyn std::error::Error>>
+{
+    use orbit_exec::browser_kit::{KitLayout, PLAYWRIGHT_VERSION};
+
+    let observe = |home: &Path, run_id: &str| -> Result<String, Box<dyn std::error::Error>> {
+        let tmp_audit = tempfile::tempdir()?;
+        let (writer, _store) = build_writer(tmp_audit.path(), run_id)?;
+        let observed = home.join("observed-env");
+        let fake = fake_cli(
+            "claude",
+            &format!(
+                "#!/bin/sh\ncat > /dev/null\nprintf 'PLAYWRIGHT_BROWSERS_PATH=%s\\nPLAYWRIGHT_MODULE=%s\\nORBIT_BROWSER_KIT_ENV=%s\\nLD_LIBRARY_PATH=%s\\n' \"$PLAYWRIGHT_BROWSERS_PATH\" \"$PLAYWRIGHT_MODULE\" \"$ORBIT_BROWSER_KIT_ENV\" \"$LD_LIBRARY_PATH\" > '{}'\necho '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+                observed.display()
+            ),
+        )?;
+        let mut host = ScriptHost::new(fake.cli_path());
+        host.admitted_env = vec![("HOME".to_string(), home.display().to_string())];
+        let outcome = dispatch_v2_activity(V2DispatchInput {
+            activity_name: "cli_browser_kit",
+            spec: &ActivityV2Spec::AgentLoop(cli_agent_loop_spec(None)),
+            fs_profile: None,
+            input: serde_json::json!({ "prompt": "hello" }),
+            audit: writer,
+            run_id,
+            host: Some(&host),
+        })?;
+        assert!(outcome.success, "fake claude should exit 0");
+        Ok(fs::read_to_string(&observed)?)
+    };
+
+    let home = tempfile::tempdir()?;
+    let layout = KitLayout::for_home(home.path());
+    let root = layout.root();
+    let package = root.join("kit/node_modules/playwright");
+    fs::create_dir_all(&package)?;
+    fs::write(
+        package.join("package.json"),
+        format!("{{\"version\":\"{PLAYWRIGHT_VERSION}\"}}"),
+    )?;
+    fs::write(package.join("index.mjs"), "")?;
+    let core = root.join("kit/node_modules/playwright-core");
+    fs::create_dir_all(&core)?;
+    fs::write(
+        core.join("browsers.json"),
+        r#"{"browsers":[{"name":"chromium-headless-shell","revision":"1248"}]}"#,
+    )?;
+    let shell = root.join("browsers/chromium_headless_shell-1248");
+    fs::create_dir_all(&shell)?;
+    fs::write(shell.join("INSTALLATION_COMPLETE"), "")?;
+    fs::create_dir_all(root.join("root/usr/lib/x86_64-linux-gnu"))?;
+    fs::write(root.join("env.sh"), "export LD_LIBRARY_PATH=/kit/libs\n")?;
+
+    let unverified = observe(home.path(), "browser-kit-unverified")?;
+    assert_eq!(
+        unverified,
+        "PLAYWRIGHT_BROWSERS_PATH=\nPLAYWRIGHT_MODULE=\nORBIT_BROWSER_KIT_ENV=\nLD_LIBRARY_PATH=\n",
+        "a kit that never passed verify reaches no worker"
+    );
+
+    fs::write(
+        root.join("orbit-kit.json"),
+        format!(
+            "{{\"schema_version\":1,\"playwright_version\":\"{PLAYWRIGHT_VERSION}\",\"chromium_revision\":\"1248\",\"browser_version\":\"156.0.8078.4\",\"verified_at\":\"2026-10-18T00:00:00Z\"}}"
         ),
     )?;
-
-    let mut spec = cli_agent_loop_spec(None);
-    spec.wall_clock_timeout_seconds = 600;
-    let host = ScriptHost::new(fake.cli_path());
-    let epoch_ms = || {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|since| since.as_millis())
-    };
-    let before = epoch_ms()?;
-    let outcome = dispatch_v2_activity(V2DispatchInput {
-        activity_name: "cli_smoke_deadline",
-        spec: &ActivityV2Spec::AgentLoop(spec),
-        fs_profile: None,
-        input: serde_json::json!({ "prompt": "hello" }),
-        audit: writer,
-        run_id: "smoke-cli-deadline",
-        host: Some(&host),
-    })?;
-    let after = epoch_ms()?;
-    assert!(outcome.success, "fake claude should exit 0");
-
-    let deadline: u128 = fs::read_to_string(&observed_path)?.trim().parse()?;
-    assert!(
-        (before + 600_000..=after + 600_000).contains(&deadline),
-        "deadline {deadline} is not dispatch time plus the 600 s wall clock ({before}..={after})"
+    let verified = observe(home.path(), "browser-kit-verified")?;
+    assert_eq!(
+        verified,
+        format!(
+            "PLAYWRIGHT_BROWSERS_PATH={}\nPLAYWRIGHT_MODULE={}\nORBIT_BROWSER_KIT_ENV={}\nLD_LIBRARY_PATH=\n",
+            layout.browsers().display(),
+            layout.module().display(),
+            layout.env_script().display()
+        ),
+        "a verified kit reaches workers through its locators alone"
     );
     Ok(())
 }
@@ -565,74 +644,6 @@ fn scenario_f_loader_rejection_retired_backend_value() -> Result<(), Box<dyn std
     // `cli` named the surviving path, so it stays accepted and inert.
     let yaml = "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: retained\nspec:\n  type: agent_loop\n  description: retained\n  instruction: hi\n  backend: cli\n";
     load_activity_asset(yaml).expect("`backend: cli` must keep loading");
-    Ok(())
-}
-
-/// H: load `agent_loop_cli_reference.yaml` from disk and execute it
-/// end-to-end through the CLI runner using a substitutable `claude` script.
-/// Proves the YAML parses with the new `backend:` / `provider:` /
-/// `wall_clock_timeout_seconds:` fields and routes correctly to the CLI
-/// runner.
-#[cfg(unix)]
-fn scenario_h_cli_reference_asset_round_trip() -> Result<(), Box<dyn std::error::Error>> {
-    println!("  H) agent_loop_cli_reference.yaml round-trips + dispatches");
-    let repo_root = repo_root();
-    let path = repo_root
-        .join("crates/orbit-core/assets/activities/examples/agent_loop_cli_reference.yaml");
-    let yaml = fs::read_to_string(&path)?;
-    let asset = load_activity_asset(&yaml)?;
-    match &asset.spec.spec {
-        ActivityV2Spec::AgentLoop(spec) => {
-            assert_eq!(spec.provider, Provider::Claude);
-            assert_eq!(spec.wall_clock_timeout_seconds, 30);
-        }
-        other => panic!("expected agent_loop spec, got {other:?}"),
-    }
-
-    let tmp_audit = tempfile::tempdir()?;
-    let (writer, store) = build_writer(tmp_audit.path(), "smoke-cli-h")?;
-    // [ORB-10449] A round-tripped asset gets the default completion contract,
-    // so the fake must terminate with a real envelope like a live provider.
-    let fake = fake_cli(
-        "claude",
-        "#!/bin/sh\ncat > /dev/null\necho '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{},\"error\":null}'\n",
-    )?;
-    let host = ScriptHost::new(fake.cli_path());
-    let outcome = dispatch_v2_activity(V2DispatchInput {
-        activity_name: &asset.name,
-        spec: &asset.spec.spec,
-        fs_profile: asset.spec.fs_profile.as_deref(),
-        input: serde_json::json!({ "prompt": "hello from the yaml round-trip" }),
-        audit: writer.clone(),
-        run_id: "smoke-cli-h",
-        host: Some(&host),
-    })?;
-    assert!(outcome.success);
-    println!(
-        "    asset dispatched, events={}",
-        events_snapshot(&store, "smoke-cli-h")?.len()
-    );
-    Ok(())
-}
-
-/// I: existing Phase 3 v2 `agent_loop` YAML assets still deserialize with the
-/// new `AgentLoopSpec` fields (serde defaults). Covers the default CLI
-/// + the loop/denial samples under `jobs/v2_samples/`.
-fn scenario_i_existing_agent_loop_assets_still_deserialize()
--> Result<(), Box<dyn std::error::Error>> {
-    println!("  I) existing v2 agent_loop assets deserialize unchanged");
-    let repo_root = repo_root();
-    let asset_path =
-        repo_root.join("crates/orbit-core/assets/activities/examples/agent_loop_reference.yaml");
-    let yaml = fs::read_to_string(&asset_path)?;
-    let asset = load_activity_asset(&yaml)?;
-    if let ActivityV2Spec::AgentLoop(spec) = &asset.spec.spec {
-        assert_eq!(spec.provider, Provider::Claude);
-        assert!(spec.wall_clock_timeout_seconds > 0);
-    } else {
-        panic!("expected agent_loop");
-    }
-    println!("    {}: provider=claude (default)", asset.name);
     Ok(())
 }
 
@@ -890,15 +901,6 @@ fn policy_refusal(error: &AssetLoadError) -> (&str, &'static str) {
     }
 }
 
-fn repo_root() -> PathBuf {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("workspace root")
-        .to_path_buf()
-}
-
 /// The real CLI supervisor must keep high-volume stdout/stderr out of the
 /// operational feed. A child owns the global subscriber and disposable state.
 #[cfg(unix)]
@@ -980,6 +982,9 @@ pub(super) fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
     AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "cli smoke".to_string(),
+        steering_instruction: None,
+        regression_risk_instruction: None,
+        explore_instruction: None,
         tools: vec!["orbit.task.show".to_string(), "proc.spawn".to_string()],
         on_denial: OnDenial::Terminate,
         model: Some(orbit_common::model_defaults::CLAUDE_DEFAULT_STRONG.to_string()),
@@ -993,6 +998,8 @@ pub(super) fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
         proc_allowed_programs: None,
         proc_disallowed_programs: None,
         trusted_host_execution: false,
+        crew_env: Vec::new(),
+        crew_account: None,
     }
 }
 
@@ -1083,6 +1090,9 @@ fn synthetic_loop_session_job() -> JobV2 {
             spec: ActivityV2Spec::AgentLoop(AgentLoopSpec {
                 tool_disallow_list: None,
                 instruction: String::new(),
+                steering_instruction: None,
+                regression_risk_instruction: None,
+                explore_instruction: None,
                 tools: vec![],
                 on_denial: OnDenial::Terminate,
                 model: None,
@@ -1096,6 +1106,8 @@ fn synthetic_loop_session_job() -> JobV2 {
                 proc_allowed_programs: None,
                 proc_disallowed_programs: None,
                 trusted_host_execution: false,
+                crew_env: Vec::new(),
+                crew_account: None,
             }),
             activity_name: None,
             input_schema_json: None,
@@ -1113,6 +1125,8 @@ fn synthetic_loop_session_job() -> JobV2 {
         resolved_recovery_activity: None,
         body: JobV2StepBody::Loop {
             loop_: LoopBlock {
+                timeout_seconds: None,
+                interval_seconds: None,
                 items: None,
                 max_iterations: 3,
                 break_when: None,
@@ -1131,6 +1145,7 @@ fn synthetic_loop_session_job() -> JobV2 {
         resolved_failure_activity: None,
         final_recovery_activity: None,
         resolved_final_recovery_activity: None,
+        steering_gate: None,
         max_active_runs: 1,
         kind: JobKind::Workflow,
         steps: vec![loop_step],
@@ -1170,7 +1185,7 @@ impl ScriptHost {
         self
     }
 }
-impl RuntimeHost for ScriptHost {
+impl orbit_engine::test_support::NullRuntimeHost for ScriptHost {
     fn requires_claude_worker_credential(&self) -> bool {
         self.requires_claude_credential
     }

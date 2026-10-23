@@ -54,6 +54,7 @@ pub(crate) fn classify_failure(
     status: AuditEventStatus,
     error_message: Option<&str>,
 ) -> FailureClass {
+    let error_message = error_message.map(orbit_types::workflow::failure_classification_text);
     if is_deferral(surface, error_message) {
         return FailureClass::Deferred;
     }
@@ -99,12 +100,6 @@ fn is_deferral(surface: &str, error_message: Option<&str>) -> bool {
 pub fn is_failure_only_diagnostic_surface(name: &str) -> bool {
     let name = name.trim();
     FAILURE_ONLY_DIAGNOSTIC_SURFACES.contains(&name)
-}
-
-/// True when an audit row is a lifecycle diagnostic rather than a call whose
-/// success and failure populations can be compared.
-pub fn is_lifecycle_diagnostic(event: &AuditEvent) -> bool {
-    is_failure_only_diagnostic_surface(&surface_of(event))
 }
 
 /// True when the row names a real tool. Direct CLI and legacy job-run

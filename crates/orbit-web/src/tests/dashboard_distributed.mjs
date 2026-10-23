@@ -120,6 +120,7 @@ const console_ = (claims, capabilities) => ({
   claims,
   capabilities: capabilities || {
     handoff_approve: { authorized: true, reason: null },
+    handoff_retry: { authorized: true, reason: null },
     handoff_revoke: { authorized: true, reason: null },
     claim_recover: { authorized: true, reason: null },
   },
@@ -187,8 +188,10 @@ globalThis.fetch = async (path, options = {}) => {
 
 const distributed = await import("./js/distributed.js");
 const {
-  buildDistributedBlock,
+  buildAttentionCallout,
+  buildDeliveryPanel,
   buildExecutionProvenance,
+  claimAttention,
   invalidateDistributedConsole,
   formatExecutionLocation,
   CONSOLE_TTL_MS,
@@ -209,7 +212,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   invalidateDistributedConsole();
   confirms.length = 0;
   confirmAnswer = true;
-  const block = buildDistributedBlock(taskId, options);
+  const block = buildDeliveryPanel(taskId, options);
   place(block);
   await settle();
   return block;
@@ -304,7 +307,6 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   const text = block.textContent;
 
   assert.equal(block.style.display, "", "a task with a claim shows the block");
-  assert.equal(block.querySelector("h4").getAttribute("aria-expanded"), "true");
   assert.ok(text.includes("on runner-2"), "execution names the machine");
 
   // The bound run lives in the follower's job store: name the machine to inspect
@@ -313,7 +315,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.ok(text.includes("inspect this run on machine hm_follower"), text);
 
   // An elapsed reservation is a diagnostic. Nothing here may read as revoked.
-  assert.ok(text.includes("expired 2026-09-18 17:00 PDT"), text);
+  assert.ok(text.includes("expired 2026-09-19 00:00 UTC"), text);
   assert.ok(text.includes("expiry is not revocation"), text);
   assert.ok(!/revoked/i.test(text), `an expired reservation must not read as revoked: ${text}`);
 
@@ -349,7 +351,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   // Several claims for one task (a retry after recovery) are told apart by id
   // and creation time.
   assert.ok(text.includes("claim claim-1"), text);
-  assert.ok(text.includes("created 2026-09-17 17:00 PDT"), text);
+  assert.ok(text.includes("created 2026-09-18 00:00 UTC"), text);
 }
 
 {
@@ -386,7 +388,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   sent.length = 0;
 
   setWorkspace("workspace-a");
-  const oldWorkspaceBlock = buildDistributedBlock("ORB-2");
+  const oldWorkspaceBlock = buildDeliveryPanel("ORB-2");
   await settle();
   assert.equal(oldWorkspaceBlock.style.display, "none", "workspace A has no claim for the task");
   assert.equal(
@@ -398,7 +400,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   // This is the dashboard selector path: tasks.js observes the workspace
   // change and must drop the distributed.js memo before the next detail mount.
   setWorkspace("workspace-b");
-  const newWorkspaceBlock = buildDistributedBlock("ORB-2");
+  const newWorkspaceBlock = buildDeliveryPanel("ORB-2");
   await settle();
   assert.equal(newWorkspaceBlock.style.display, "", "workspace B's live claim renders its panel");
   assert.equal(
@@ -440,7 +442,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   holdConsoleReads = true;
 
   setWorkspace("workspace-a");
-  buildDistributedBlock("ORB-2");
+  buildDeliveryPanel("ORB-2");
   assert.equal(heldConsoleReads.length, 1, "workspace A console read is in flight");
   assert.equal(heldConsoleReads[0].workspace, "workspace-a");
 
@@ -450,7 +452,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   await settle();
   holdConsoleReads = false;
 
-  const newWorkspaceBlock = buildDistributedBlock("ORB-2");
+  const newWorkspaceBlock = buildDeliveryPanel("ORB-2");
   await settle();
   assert.equal(newWorkspaceBlock.style.display, "", "workspace B's live claim renders its panel");
   assert.ok(
@@ -536,7 +538,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
 
   const input = reasonInput(block);
   assert.ok(input, "revocation asks for a reason");
-  assert.equal(input.getAttribute("aria-label"), "Revoke authority reason");
+  assert.equal(input.getAttribute("aria-label"), "Recovery reason");
   input.value = "candidate superseded";
 
   const revoked = claim();
@@ -780,8 +782,9 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.equal(confirms.length, 1, "revoking asks first");
   assert.ok(confirms[0].includes("ORB-2"), `the confirmation names the task: ${confirms[0]}`);
   assert.ok(/withdraws? (completion )?authority/i.test(confirms[0]), `the confirmation names the effect: ${confirms[0]}`);
-  // Recovery has its own reason field (the second one in the row).
-  block.querySelectorAll("input.claim-reason")[1].value = "host was rebuilt";
+  // Recovery shares the card's one reason field.
+  assert.equal(block.querySelectorAll("input.claim-reason").length, 1, "one reason field serves every reason-gated action");
+  reasonInput(block).value = "host was rebuilt";
   press(recoveryButton(block, "backlog"));
   await settle();
   assert.equal(confirms.length, 2, "recovering asks first");
@@ -884,7 +887,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
 
     // Inside the window, rows share one read.
     clock += 1000;
-    const shared = buildDistributedBlock("ORB-2");
+    const shared = buildDeliveryPanel("ORB-2");
     await settle();
     assert.equal(consoleReads.length, reads, "a detail opened inside the window reuses the read");
     assert.ok(button(shared, "Approve handoff"));
@@ -895,7 +898,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
     approved.handoff.authority = { state: "authorized", summary: "completion authority recorded elsewhere", authorization_id: "auth-9", recorded_at: null };
     consoleBody = console_([approved]);
     clock += CONSOLE_TTL_MS + 1;
-    const later = buildDistributedBlock("ORB-2");
+    const later = buildDeliveryPanel("ORB-2");
     await settle();
     assert.equal(consoleReads.length, reads + 1, "a detail opened after the window re-reads");
     assert.ok(!button(later, "Approve handoff"), "the stale approve button is gone");
@@ -918,7 +921,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
     onTaskChanged: () => {
       readsAtChange.push(consoleReads.length);
       setTimeout(() => {
-        rebuilt = buildDistributedBlock("ORB-2");
+        rebuilt = buildDeliveryPanel("ORB-2");
         place(rebuilt);
       }, 0);
     },
@@ -950,7 +953,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   sent.length = 0;
   consoleBody = console_([claim()]);
   let rebuilt = null;
-  const block = await mount("ORB-2", { onTaskChanged: () => { rebuilt = buildDistributedBlock("ORB-2"); } });
+  const block = await mount("ORB-2", { onTaskChanged: () => { rebuilt = buildDeliveryPanel("ORB-2"); } });
   nextAction = { status: 400, body: { error: "candidate not found", code: "no_candidate", remedy: "push the candidate branch and try again" } };
   press(button(block, "Approve handoff"));
   await settle();
@@ -992,7 +995,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   consoleBody = console_([claim()]);
   invalidateDistributedConsole();
   failConsoleReads = 1;
-  const block = buildDistributedBlock("ORB-2");
+  const block = buildDeliveryPanel("ORB-2");
   await settle();
   assert.equal(block.style.display, "", "a failed read is shown");
   const alert = block.querySelector(".claim-feedback.error");
@@ -1001,6 +1004,75 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   press(block.querySelector("button.claim-retry"));
   await settle();
   assert.ok(button(block, "Approve handoff"), "retry recovers the panel");
+}
+
+// The stopped same-handoff retry carries exact expectations and keeps its key
+// across a lost reply and a rebuilt panel. Live work has no retry control.
+{
+  sent.length = 0;
+  const stopped = claim();
+  stopped.handoff.authority.state = "authorized";
+  stopped.handoff.landing = { state: "stopped", attempt: 3, evidence: "required review" };
+  consoleBody = console_([stopped]);
+  let block = await mount();
+  press(button(block, "Retry landing")); await settle();
+  assert.equal(sent.length, 0, "retry requires an operator reason");
+  block.querySelector('[data-reason-for~="retry-handoff"]').value = "provider now permits this candidate";
+  nextAction = { status: 503, body: { error: "reply lost" } };
+  press(button(block, "Retry landing")); await settle();
+  assert.equal(sent.length, 1);
+  const first = sent[0];
+  assert.ok(first.path.endsWith("/retry"));
+  assert.equal(first.body.expected_candidate_commit, CANDIDATE);
+  assert.equal(first.body.expected_base_commit, BASE);
+  assert.equal(first.body.expected_latest_attempt, 3);
+  assert.equal(first.body.expected_latest_state, "stopped");
+  assert.ok(first.body.request_key);
+  block = await mount();
+  block.querySelector('[data-reason-for~="retry-handoff"]').value = "provider now permits this candidate";
+  press(button(block, "Retry landing")); await settle();
+  assert.equal(sent[1].body.request_key, first.body.request_key, "a rebuilt panel reuses durable replay identity");
+  stopped.handoff.landing.state = "dispatched";
+  consoleBody = console_([stopped]);
+  block = await mount();
+  assert.ok(!button(block, "Retry landing"), "ordinary live work cannot be retried");
+}
+
+// A stopped landing raises the detail's attention callout, read from the same
+// claim read the panel paints; live or landed work raises none.
+{
+  const calloutFor = async (claims) => {
+    consoleBody = console_(claims);
+    let callout = "unread";
+    await mount("ORB-2", {
+      onClaims: (read) => { callout = buildAttentionCallout(claimAttention(read), { onRetry: () => {} }); },
+    });
+    return callout;
+  };
+  const stopped = claim();
+  stopped.handoff.authority.state = "authorized";
+  stopped.handoff.landing = {
+    state: "stopped", attempt: 2, summary: "stopped with durable evidence",
+    evidence: JSON.stringify({
+      schema_version: 1, kind: "owner_landing_refusal",
+      reason: { value: "pull request #7 cannot be merged (status check 'Test shard 1/3' failed); classified `candidate`: 'Test shard 1/3' (candidate) failed with signature `audit_gc_keeps_denials`; log excerpt:\npanicked" },
+    }),
+  };
+  const raised = await calloutFor([stopped]);
+  assert.ok(raised && raised.dataset.attention === "landing-stopped", "a stopped landing raises the callout");
+  const named = Array.from(raised.querySelectorAll(".mono")).map((node) => node.textContent);
+  assert.ok(named.includes("Test shard 1/3") && named.includes("audit_gc_keeps_denials"), `the callout names the failed check and test: ${named}`);
+  assert.ok(Array.from(raised.querySelectorAll("button")).some((node) => node.textContent.includes("Retry landing")), "an authorized stop offers the retry");
+  const plain = claim();
+  plain.handoff.authority.state = "authorized";
+  plain.handoff.landing = { state: "stopped", attempt: 1, evidence: "required review" };
+  const unparsed = await calloutFor([plain]);
+  assert.ok(unparsed && /required review/i.test(unparsed.textContent), `plain-text evidence still explains the stop: ${unparsed && unparsed.textContent}`);
+  const live = claim();
+  live.handoff.authority.state = "authorized";
+  live.handoff.landing = { state: "dispatched", attempt: 3, summary: "an owner landing job is carrying this handoff" };
+  assert.equal(await calloutFor([live]), null, "a landing in progress raises no callout");
+  assert.equal(await calloutFor([claim()]), null, "a handoff awaiting approval raises no callout");
 }
 
 // --- a settled claim is history, not a warning ---------------------------------
@@ -1065,8 +1137,9 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.equal(sent.length, 0, "a blank reason sends nothing");
   assert.equal(confirms.length, 0, "a blank reason does not ask for confirmation");
   assert.equal(input.getAttribute("aria-invalid"), "true", "the empty field is marked invalid");
-  const problem = block.querySelector(".claim-feedback.error");
+  const problem = block.querySelector(".claim-reason-problem");
   assert.ok(problem && problem.getAttribute("role") === "alert" && problem.textContent.includes("needs a reason"), `the missing reason is announced: ${block.textContent}`);
+  assert.equal(input.getAttribute("aria-describedby"), problem.id, "the announcement is tied to the field it is about");
   assert.ok(document.activeElement === input, "focus returns to the field that needs input");
 
   // Whitespace is still blank.
@@ -1080,6 +1153,32 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   await settle();
   assert.equal(sent.length, 1, "with a reason the decision goes through");
   assert.equal(sent[0].body.reason, "host was rebuilt");
+}
+
+// --- a reviewed handoff names its verdict, never an object -----------------------
+
+{
+  // A before-landing review carries its evidence as the disposition's one
+  // variant; the line reads the verdict and the reviewer, not "[object Object]".
+  const reviewed = claim();
+  reviewed.handoff.review = {
+    policy: "before_landing",
+    disposition: {
+      before_landing: {
+        attempt_id: "rv-1", verdict: "accept_with_fixes", reviewed_head_sha: CANDIDATE, reviewed_base_sha: BASE,
+        reviewer_crew: "codex-high", reviewer_run_id: "jrun-review-1",
+        certificate: { path: "review/certificate.json", sha256: "f".repeat(64) },
+      },
+    },
+    is_code_review: true,
+    summary: "before-landing review accept_with_fixes by crew `codex-high` (attempt rv-1)",
+  };
+  consoleBody = console_([reviewed]);
+  const block = await mount();
+  const review = block.querySelector(".claim-line.review-disposition");
+  assert.ok(review, "the handoff has a review line");
+  assert.ok(!review.textContent.includes("[object Object]"), `the review line never prints an object: ${review.textContent}`);
+  assert.ok(/accepted with fixes · before landing · codex-high/.test(review.textContent), `the review line names the verdict, timing and reviewer: ${review.textContent}`);
 }
 
 // --- a candidate with missing fields does not print placeholders ---------------------

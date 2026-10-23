@@ -32,6 +32,10 @@
 //! # Dependency direction
 //! `orbit-common` / `orbit-types` ← `orbit-store` ← consumers such as orbit-core and orbit-engine
 
+#[cfg(test)]
+#[path = "../tests/store/support/git.rs"]
+mod git_test_support;
+
 pub mod compose;
 pub mod contracts;
 mod driver;
@@ -66,25 +70,6 @@ pub mod friction_store {
     pub use crate::repository::friction::{FrictionAddParams, FrictionListFilter, FrictionStore};
 }
 
-pub mod pr_scoreboard {
-    pub use crate::driver::file::scoreboard::pr_scoreboard::{
-        record_pr_count_with_revision, record_pr_count_without_revision,
-    };
-}
-
-pub mod scoreboard_summary {
-    pub use crate::driver::file::scoreboard::scoreboard_summary::{
-        NormalizedTokenSummary, ORCHESTRATION_SCHEMA_VERSION, OrchestrationBucketKind,
-        OrchestrationBucketSummary, OrchestrationModelSummary, OrchestrationSummary,
-        ScoreboardInputs, ScoreboardSummary, ScoreboardWindow, fill_notable_summary_excerpts,
-        generate_summary_with_inputs, write_summary,
-    };
-}
-
-pub mod token_scoreboard {
-    pub use crate::repository::token_scoreboard::write_token_scoreboard;
-}
-
 use chrono::{DateTime, Utc};
 
 pub use contracts::incident::{
@@ -95,7 +80,6 @@ pub use contracts::incident::{
 };
 pub(crate) use contracts::{
     ActiveTaskReservation, AuditActorAggregate, AuditAttributionAggregate, AuditRoleAggregate,
-    AuditToolCallCountsByRole, AuditToolCallCountsBySurfaceAndRole, AuditTopToolCall,
     ExpiredTaskReservation, ReleasedTaskReservation, TaskReservationCheckParams,
     TaskReservationCheckResult, TaskReservationListResult, TaskReservationOwnedConflictsParams,
     TaskReservationOwnedConflictsResult, TaskReservationRecord,
@@ -111,7 +95,7 @@ pub use contracts::{
     InvocationRunCoverage, JobRunOutcomeFact, JobRunStepParams, RegisteredTaskResolution,
     RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, SessionLogAppendParams,
     SessionLogEntry, SessionLogKind, TaskArtifactUpdateParams, TaskCompletionByComplexity,
-    TaskCreateParams, TaskInvocationMetrics, TaskLockConflict, TaskLockHolder,
+    TaskCreateParams, TaskDefectFiling, TaskInvocationMetrics, TaskLockConflict, TaskLockHolder,
     TaskReservationReleaseReason, TaskReservationReserveParams, TaskStoreBackend,
     TaskTerminalTransition, ToolInvocationMetrics, V2AuditEventFilter, V2AuditEventInsertParams,
     V2AuditEventRow,
@@ -124,6 +108,14 @@ pub(crate) use driver::sqlite::connection::StoreTx;
 pub use driver::sqlite::routine_store::try_acquire_routine_sweep_lock;
 pub use fs::lock::read_lock_holder;
 pub use repository::task::{TaskCommitBoundary, admission_refusal};
+
+/// Hooks for tests in crates that depend on `orbit-store`, behind the
+/// `test-support` feature. Enable it only from `[dev-dependencies]`.
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    pub use crate::repository::task::coordination::fallback_hook::with_repair_owner_fallback_elapsed;
+    pub use crate::repository::task::coordination::lock_timeout_hook::with_task_commit_lock_timeout;
+}
 
 pub(crate) fn parse_timestamp(raw: &str) -> rusqlite::Result<DateTime<Utc>> {
     let parsed = DateTime::parse_from_rfc3339(raw)

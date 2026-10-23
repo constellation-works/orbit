@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Filesystem Profile Resolution"
 tags: ["policy-sandbox"]
-last_validated: 2026-10-11
+last_validated: 2026-10-19
 ---
 
 # Spec: Filesystem Profile Resolution
@@ -33,7 +33,7 @@ The resolution algorithm has multiple layered transformations (lookup, normaliza
 - **Path normalization.** Caller-supplied paths are normalized via `normalize_glob_path`: trim, slash-flip, strip leading `./`, and canonicalize redundant separators and `.` components. Absolute paths, `~`-anchored paths, and parent-directory components are rejected after backslash normalization.
 - **Empty rule list.** If the operation's rule list is empty after deny injection, the decision is `allowed = false` with `matched_rule = "[]"`.
 - **Rule walk.** The evaluator walks the rule list in order and tracks the most recent match. The decision uses the *last* match's negation flag: positive match → allow, negated match → deny.
-- **Empty positive set.** If the rule list contains no positive rules (only negated rules), the decision is `allowed = false` with `matched_rule = "[]"`.
+- **Empty positive set.** If the rule list contains no positive rules (only negated rules) and no rule matches the path, the decision is `allowed = false` with `matched_rule = "[]"`. A path that matches one of those negated rules reports that rule's pattern, as in Matched-rule reporting.
 - **No matching rule.** If positive rules exist but none match, the decision is `allowed = false` with `matched_rule = "<no matching rule>"`.
 - **Matched-rule reporting.** A positive or negated match reports the normalized pattern in `matched_rule` (slash separators, with leading `./` removed); negation is not included in the reported pattern. A negated match surfaces as `allowed = false`. There is no separately persisted negation flag on `FsCheckResult`, `FsPolicyEvaluation`, or `FsCallEvent` — the only structural signal that a match was a deny is the `allowed = false` value. Audit consumers that need to distinguish "denied by an explicit deny rule" from "denied because no rule matched" must inspect `matched_rule` against the policy's deny lists themselves.
 

@@ -1,8 +1,8 @@
 //! Formatting slips in a pilot's output that the host can settle itself: the
 //! host owns each partition's index, and a missing or scalar `evidence_gaps`
 //! is coerced to an array with a note, so neither sends a run down the repair
-//! path. Fixtures drive the real prepare and apply actions in isolated
-//! children.
+//! path. A `user_facing_ui` finding adds the `ui` tag and never removes one.
+//! Fixtures drive the real prepare and apply actions in isolated children.
 
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{Task, TaskStatus};
@@ -65,13 +65,7 @@ fn result(task_id: &str, partition_index: Option<u64>) -> Value {
     result
 }
 
-#[test]
 fn host_index_applies_to_a_missing_or_wrong_partition_index() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::pilot_output::host_index_applies_to_a_missing_or_wrong_partition_index",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
 
     // A single-partition run settles with the host's index whether the pilot
@@ -146,13 +140,7 @@ fn host_index_applies_to_a_missing_or_wrong_partition_index() {
     assert_eq!(swapped["repair_count"], 2, "{swapped}");
 }
 
-#[test]
 fn missing_or_scalar_evidence_gaps_are_normalised_to_an_array() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::pilot_output::missing_or_scalar_evidence_gaps_are_normalised_to_an_array",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let cases = [
         ("missing", None, json!([])),
@@ -217,3 +205,78 @@ fn missing_or_scalar_evidence_gaps_are_normalised_to_an_array() {
     let refused = workspace.apply_results(&prepared, json!([pilot]));
     assert_eq!(refused["repair_count"], 1, "{refused}");
 }
+
+fn a_ui_finding_adds_the_ui_tag_and_never_removes_one() {
+    let workspace = Workspace::new();
+    // (label, tags the task starts with, the finding, tags after apply)
+    let cases = [
+        ("untagged ui", vec![], Some(json!(true)), vec!["ui"]),
+        (
+            "dashboard ui",
+            vec!["dashboard"],
+            Some(json!(true)),
+            vec!["dashboard", "ui"],
+        ),
+        ("already ui", vec!["ui"], Some(json!(true)), vec!["ui"]),
+        (
+            "operator ui, not found",
+            vec!["ui"],
+            Some(json!(false)),
+            vec!["ui"],
+        ),
+        ("operator ui, older pilot", vec!["ui"], None, vec!["ui"]),
+        ("not ui", vec![], Some(json!(false)), vec![]),
+        ("older pilot", vec![], None, vec![]),
+        ("null", vec![], Some(Value::Null), vec![]),
+    ];
+    for (label, tags, finding, expected) in cases {
+        let task = workspace
+            .runtime
+            .add_task(TaskAddParams {
+                title: label.into(),
+                description: format!("Prepare {label}."),
+                acceptance_criteria: vec!["Selectors identify the implementation scope.".into()],
+                plan: "Inspect README.md.".into(),
+                tags: tags.iter().map(ToString::to_string).collect(),
+                status: Some(TaskStatus::Proposed),
+                ..Default::default()
+            })
+            .unwrap();
+        let prepared = workspace.prepare_partitioned(&[&task.id], 1);
+        let mut pilot = result(&task.id, Some(0));
+        if let Some(finding) = finding {
+            pilot["tasks"][0]["user_facing_ui"] = finding;
+        }
+        let applied = workspace.apply_results(&prepared, json!([pilot]));
+        assert_eq!(applied["applied_count"], 1, "{label}: {applied}");
+        assert_eq!(
+            workspace.runtime.get_task(&task.id).unwrap().tags,
+            expected,
+            "{label}"
+        );
+    }
+
+    // A finding that is not a boolean is refused for repair, not guessed at.
+    let task = workspace.pilot_task("string finding");
+    let prepared = workspace.prepare_partitioned(&[&task.id], 1);
+    let mut pilot = result(&task.id, Some(0));
+    pilot["tasks"][0]["user_facing_ui"] = json!("yes");
+    let refused = workspace.apply_results(&prepared, json!([pilot]));
+    assert_eq!(refused["repair_count"], 1, "{refused}");
+    assert!(
+        workspace
+            .runtime
+            .get_task(&task.id)
+            .unwrap()
+            .tags
+            .is_empty()
+    );
+}
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    host_index_applies_to_a_missing_or_wrong_partition_index_scenarios,
+    host_index_applies_to_a_missing_or_wrong_partition_index,
+    missing_or_scalar_evidence_gaps_are_normalised_to_an_array,
+    a_ui_finding_adds_the_ui_tag_and_never_removes_one
+);

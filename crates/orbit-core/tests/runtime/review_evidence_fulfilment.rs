@@ -106,10 +106,7 @@ echo "codeql-rust-local: run directory: $run_dir" >&2
 }
 
 fn git(fixture: &Fixture, args: &[&str]) -> String {
-    let mut command = std::process::Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command
         .args(args)
         .current_dir(&fixture.repo)
@@ -301,13 +298,7 @@ fn assert_held_without(fixture: &Fixture, evidence: &str, why: &str) {
     );
 }
 
-#[test]
 fn a_held_codeql_check_runs_at_the_held_commit_and_its_result_requeues_review() {
-    if !super::dispatch_admission::isolated(
-        "review_evidence_fulfilment::a_held_codeql_check_runs_at_the_held_commit_and_its_result_requeues_review",
-    ) {
-        return;
-    }
     let (fixture, mut hold) = held(Stub::Clean, CODEQL);
     configure_job(&fixture, 1, None);
     // A benign legacy spelling must write the same canonical evidence/log
@@ -418,13 +409,7 @@ fn a_held_codeql_check_runs_at_the_held_commit_and_its_result_requeues_review() 
     assert!(after.dispatched.is_empty(), "{after:?}");
 }
 
-#[test]
 fn an_incomplete_failed_or_unadmitted_run_leaves_the_hold_with_a_typed_reason() {
-    if !super::dispatch_admission::isolated(
-        "review_evidence_fulfilment::an_incomplete_failed_or_unadmitted_run_leaves_the_hold_with_a_typed_reason",
-    ) {
-        return;
-    }
     let probe = orbit_exec::probe_bwrap();
     if !probe.available {
         orbit_exec::report_bwrap_deferral(
@@ -466,20 +451,13 @@ fn an_incomplete_failed_or_unadmitted_run_leaves_the_hold_with_a_typed_reason() 
     }
 }
 
-#[test]
 fn owner_fulfilment_refuses_reserved_aliases_in_a_persisted_hold_without_overwriting_review() {
-    if !super::dispatch_admission::isolated(
-        "review_evidence_fulfilment::owner_fulfilment_refuses_reserved_aliases_in_a_persisted_hold_without_overwriting_review",
-    ) {
-        return;
-    }
+    // The owner and report admission use the same evidence_artifact_path
+    // guard. The report test covers individual normalization forms; this
+    // boundary keeps both protected persisted records and combined spelling.
     for reserved in [REVIEW_GATE_ARTIFACT, REVIEW_EVIDENCE_HOLD_ARTIFACT] {
-        for alias in [
-            format!(" {reserved}"),
-            format!("{reserved} "),
-            format!("{reserved}/"),
-            format!("./{reserved}"),
-        ] {
+        let alias = format!(" {reserved}/ ");
+        {
             let (fixture, mut hold) = held(Stub::Clean, CODEQL);
             configure_job(&fixture, 1, None);
             // Seed a hostile persisted hold after normal admission. This
@@ -557,13 +535,7 @@ fn owner_fulfilment_refuses_reserved_aliases_in_a_persisted_hold_without_overwri
     }
 }
 
-#[test]
 fn fulfilment_waits_for_disk_and_retries_a_disk_refusal_a_bounded_number_of_times() {
-    if !super::dispatch_admission::isolated(
-        "review_evidence_fulfilment::fulfilment_waits_for_disk_and_retries_a_disk_refusal_a_bounded_number_of_times",
-    ) {
-        return;
-    }
     let probe = orbit_exec::probe_bwrap();
     if !probe.available {
         orbit_exec::report_bwrap_deferral(
@@ -631,7 +603,7 @@ const PASSING_PROBE: &str = "set -e\n\
 /// stand-in `cargo`'s target script; the returned directory holds that
 /// stand-in. The workspace branch then moves past the held commit.
 fn held_host(probe: &str, command: &str) -> (Fixture, ReviewEvidenceHold, tempfile::TempDir) {
-    let bin = tempfile::TempDir::new().unwrap();
+    let bin = tempfile::TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let cargo = bin.path().join("cargo");
     // `cargo test -p <package> --test <target> [filter] -- --nocapture`
     std::fs::write(&cargo, "#!/bin/sh\nexec sh \"tests/host/$5.sh\"\n").unwrap();
@@ -687,13 +659,7 @@ fn held_host(probe: &str, command: &str) -> (Fixture, ReviewEvidenceHold, tempfi
 /// the held commit without an operator, attaches its result and log, and
 /// requeues review. Where namespaces are unavailable the tick stands down
 /// and the hold stays for an owner that can run it.
-#[test]
 fn a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_review() {
-    if !super::dispatch_admission::isolated(
-        "review_evidence_fulfilment::a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_review",
-    ) {
-        return;
-    }
     let (fixture, hold, _bin) = held_host(PASSING_PROBE, HOST_TEST);
     configure_job(&fixture, 1, None);
     let probe = orbit_exec::probe_bwrap();
@@ -759,13 +725,7 @@ fn a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_revi
 
 /// A host run that executed nothing confined, or failed, is no evidence: its
 /// log is attached and the hold stays with a typed reason.
-#[test]
 fn a_host_sandbox_test_that_skips_or_fails_leaves_the_hold_with_a_typed_reason() {
-    if !super::dispatch_admission::isolated(
-        "review_evidence_fulfilment::a_host_sandbox_test_that_skips_or_fails_leaves_the_hold_with_a_typed_reason",
-    ) {
-        return;
-    }
     let probe = orbit_exec::probe_bwrap();
     if !probe.available {
         orbit_exec::report_bwrap_deferral(
@@ -854,3 +814,14 @@ fn a_held_host_sandbox_test_outside_its_allowlist_is_refused_without_running() {
         assert_eq!(rows[0].1["reason"], reason);
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_held_codeql_check_runs_at_the_held_commit_and_its_result_requeues_review_scenarios,
+    a_held_codeql_check_runs_at_the_held_commit_and_its_result_requeues_review,
+    an_incomplete_failed_or_unadmitted_run_leaves_the_hold_with_a_typed_reason,
+    owner_fulfilment_refuses_reserved_aliases_in_a_persisted_hold_without_overwriting_review,
+    fulfilment_waits_for_disk_and_retries_a_disk_refusal_a_bounded_number_of_times,
+    a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_review,
+    a_host_sandbox_test_that_skips_or_fails_leaves_the_hold_with_a_typed_reason
+);

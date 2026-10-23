@@ -1,4 +1,5 @@
 //! Public GitHub CLI parsing and recovery contracts over sanitized fixtures.
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use orbit_tools::github_cli as gh;
@@ -31,6 +32,10 @@ fn source(parts: &Value) -> String {
         })
         .collect()
 }
+fn progress(message: std::fmt::Arguments<'_>) {
+    writeln!(std::io::stderr().lock(), "{message}").unwrap();
+}
+
 fn golden(name: &str, cases: &Value, mut render: impl FnMut(&Value) -> Value) {
     let update = std::env::var_os("ORBIT_UPDATE_LOG_GOLDENS").is_some();
     let expected = if update {
@@ -49,6 +54,8 @@ fn golden(name: &str, cases: &Value, mut render: impl FnMut(&Value) -> Value) {
         if filter.as_ref().is_some_and(|filter| key != filter) {
             continue;
         }
+        progress(format_args!("golden row start: {name}/{key}"));
+        let started = std::time::Instant::now();
         let actual = render(case);
         if !update {
             assert_eq!(
@@ -60,6 +67,10 @@ fn golden(name: &str, cases: &Value, mut render: impl FnMut(&Value) -> Value) {
             outputs.insert(key.to_string(), actual).is_none(),
             "duplicate fixture {key}"
         );
+        progress(format_args!(
+            "golden row complete: {name}/{key} elapsed_seconds={:.6}",
+            started.elapsed().as_secs_f64()
+        ));
     }
     if update {
         std::fs::write(
@@ -95,6 +106,7 @@ fn streamed(log: gh::StreamedLog) -> Value {
 #[test]
 fn streamed_log_fixture_goldens() {
     golden("streamed", &read("streamed.json"), |case| {
+        let preparation = std::time::Instant::now();
         let mut raw = source(&case["parts"]);
         if case["conflicting_column"] == true {
             raw = raw
@@ -120,7 +132,18 @@ fn streamed_log_fixture_goldens() {
             })
             .unwrap_or(vec![1, 7, 4096]);
         let mut output = None;
+        progress(format_args!(
+            "streamed source: {} bytes={} preparation_seconds={:.6}",
+            case["name"].as_str().unwrap(),
+            raw.len(),
+            preparation.elapsed().as_secs_f64()
+        ));
         for chunk in chunks {
+            progress(format_args!(
+                "streamed collector start: {} chunk={chunk}",
+                case["name"].as_str().unwrap()
+            ));
+            let pushing = std::time::Instant::now();
             let mut collector = if case["tail_weighted"] == true {
                 gh::StreamedLogCollector::tail_weighted(cap, evidence)
             } else {
@@ -129,7 +152,15 @@ fn streamed_log_fixture_goldens() {
             for bytes in raw.as_bytes().chunks(chunk) {
                 collector.push(bytes);
             }
+            let push_seconds = pushing.elapsed().as_secs_f64();
+            let finishing = std::time::Instant::now();
             let actual = streamed(collector.finish());
+            progress(format_args!(
+                "streamed collector complete: {} chunk={chunk} pushes={} push_seconds={push_seconds:.6} finish_seconds={:.6}",
+                case["name"].as_str().unwrap(),
+                raw.len().div_ceil(chunk),
+                finishing.elapsed().as_secs_f64()
+            ));
             if let Some(previous) = &output {
                 assert_eq!(
                     &actual, previous,
@@ -150,10 +181,10 @@ fn mid_log_nextest_blocks_survive_independent_command_and_display_limits() {
     let block = "FAIL [ 0.123s] (2021/2810) suite failing_test\n──────── STDOUT ────────\noutput from the failing test\n──────── STDERR ────────\nthread 'failing_test' panicked at tests/sample.rs:12:3:\nexpected a completed operation\n";
     let padding = "PASS [ 0.001s] suite passing_test\n".repeat(32_768);
     for (prefix, suffix) in [
-        ("##[group]Run cargo nextest run\n".to_string(), "##[error]Process completed with exit code 100.\n"),
+        ("##[group]Run cargo nextest run\n##[endgroup]\n".to_string(), "##[error]Process completed with exit code 100.\n"),
         (String::new(), ""),
-        (format!("{}\n##[group]Run cargo nextest run\n", "unrelated".repeat(4096)), "##[error]Process completed with exit code 100.\n"),
-        ("##[group]Run earlier\n##[error]Process completed with exit code 1.\n##[group]Run cargo nextest run\n".to_string(), "##[error]Process completed with exit code 100.\n"),
+        (format!("{}\n##[group]Run cargo nextest run\n##[endgroup]\n", "unrelated".repeat(4096)), "##[error]Process completed with exit code 100.\n"),
+        ("##[group]Run earlier\n##[endgroup]\n##[error]Process completed with exit code 1.\n##[group]Run cargo nextest run\n##[endgroup]\n".to_string(), "##[error]Process completed with exit code 100.\n"),
     ] {
         let raw = format!("{prefix}{padding}{block}{padding}Summary [ 1.0s] 2810 tests run: 1 failed\n{suffix}");
         assert!(raw.len() > 2_000_000);

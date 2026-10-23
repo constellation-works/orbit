@@ -2,7 +2,7 @@
 type: design
 summary: "Delivery automation operations [ORB-11330]"
 tags: [automation-triggers]
-last_validated: 2026-10-12
+last_validated: 2026-10-19
 ---
 
 # Delivery automation operations [ORB-11330]
@@ -100,7 +100,7 @@ debt and preview the new baseline first.
 
 A delivery review definition mints its tasks with the crew named in its own
 template, exactly like any other auto-task, with one exception: while
-`operation.review_crew` is set, `delivery-code-review` mints with that crew
+`workflow.purpose_crews.review` is set, `delivery-code-review` mints with that crew
 instead [ORB-13896]. The crew is applied at mint time and is not part of the
 consumer's epoch. While this consumer is enabled, `orbit doctor` also fails its
 `review` row when the consumer is missing, unowned, wedged, stalled, held for
@@ -206,7 +206,7 @@ range, including unattributed neighbors. Fill in the actual checks and findings,
 replace the action ID placeholder with the current task ID, and attach:
 
 ```sh
-orbit tool run orbit.task.artifact.put --input '{"id":"<assigned task>","source_path":"./automation-coverage.json","path":"automation-coverage.json","model":"codex"}'
+orbit tool run orbit.task.artifact.put --input '{"id":"<assigned task>","source_path":".orbit/tmp/automation-coverage.json","path":"automation-coverage.json","model":"codex"}'
 ```
 
 The version-2 schema has these required fields:
@@ -216,11 +216,11 @@ The version-2 schema has these required fields:
 | `schema_version`, `batch_id`, `consumer`, `epoch`, `input_digest` | Exact frozen identity; version is 2. |
 | `action_id`, `attempt`, `coverage` | This admitted action and examination class. |
 | `from_exclusive`, `through_inclusive` | Exact objects, each with `commit` and `tree`. |
-| `examined_commits`, `examined_deliveries` | Complete ordered lists from the input. |
+| `examined_commits`, `examined_deliveries` | Complete ordered arrays of commit-SHA and delivery-key strings from the input, not frozen objects. |
 | `examination_complete` | True only when all obligations were examined. |
 | `delivery_examinations` | One entry per frozen delivery, described below. |
-| `checks` | Nonempty array of nonempty `subject`, `method`, `observation` objects. |
-| `findings` | Array of finding references/descriptions; it may be empty. |
+| `checks` | Nonempty array of objects with nonempty string `subject`, `method` and `observation` fields. |
+| `findings` | Array of finding reference/description strings; it may be empty. |
 
 Each `delivery_examinations` entry names its `delivery` key and records what
 the reviewer read:
@@ -252,10 +252,30 @@ active attempt.
 
 `orbit.task.artifact.put` — and any task update attaching
 `automation-coverage.json` — refuses a file that does not parse as this schema
-and stores nothing, returning the exact parse error (for example `invalid type:
-map, expected a string at line 137 column 4`) so the executor can fix and re-put
-it inside its run. Parsing is the only check at put time; identity, membership,
-completeness and authority are validated when the action settles.
+and stores nothing, returning the field/index and parse error (for example
+`checks[0].observation: invalid type: map, expected a string at line 137 column 4`).
+Correct that field using the assigned task's evidence template, preserve its
+version and frozen identity, then re-put the corrected file inside its run.
+Parsing is the only check at put time; identity, membership, completeness and
+authority are validated when the action settles.
+
+For example, the following checks/findings fragment has the correct element
+shapes. Replace the examples with actual observations and finding references;
+use `"findings": []` when there are no findings. Batch/action IDs, `consumer`,
+`epoch`, `input_digest` and each `commit`, `tree`, delivery key, path and finding
+reference are strings, not copies of frozen objects. Verdict findings also contain task-ID strings:
+`{"findings":["<finding task ID>"]}`.
+
+```json
+{
+  "checks": [{
+    "subject": "src/lib.rs",
+    "method": "git diff <before> <after> -- src/lib.rs",
+    "observation": "The error branch drops the caller's retry token."
+  }],
+  "findings": ["<finding task ID>: retry token lost; introduced by <culprit task ID> at <commit SHA>"]
+}
+```
 
 Unknown fields, changed identities, partial membership, empty checks, unavailable
 source objects or false completion cannot advance coverage. Findings may remain
@@ -272,9 +292,30 @@ works through the checkoutless hub: the hub retains origin, while the batch owne
 verifies its source and run assignment during evaluation. An upload without valid
 executor context can be stored, but cannot certify coverage.
 
+A review task a follower claimed runs on a host whose run records the owner
+never holds. Its put reaches the owner as a claim mutation, and the owner writes
+the witness in the same commit as the bytes, also naming the claim it
+authenticated and the follower machine. Settlement verifies that witness
+against the owner's claim journal: the claim was admitted for this task to that
+machine and bound to exactly that run, and the task still links that run and
+machine. It does not need a live claim, so coverage stays verifiable after the
+claim lands, and it reads no mutation receipts, which are pruned a week after
+settlement. A witness without a claim never certifies a follower's run.
+Coverage a follower submitted before owners stamped claimed puts has no witness
+and stays `unauthorized_submitter`; the only supported recovery is an audited
+`orbit auto-task recover <name> --reissue-action --reason <why>` over the same
+frozen obligations. No witness is added to, and no artifact rewritten on, the
+earlier task.
+
 For a job-only routine, the assigned job returns a `coverage_evidence` object in
 an existing persisted step result. It must match the immutable `input.automation`
-batch and the admitted run ID. No additional tool is needed.
+batch and the admitted run ID. No additional tool is needed. Once a terminal
+job's owner is confirmed stopped, missing coverage evidence settles the attempt
+as failed and leaves coverage owed. Only an ordinary `Failed` run can use the
+frozen automatic retry budget. `Held` and `Timeout`, like cancellation and
+interruption, require explicit operator recovery; they report `needs_attention`
+instead of remaining `batch_pending`. A terminal record whose owner is still
+alive or cannot be proved stopped continues waiting.
 
 ## Inspection and recovery
 
@@ -428,8 +469,9 @@ failure settles the batch again until another explicit reissue.
 
 Any refusal aborts the whole request before the write, naming every reason that
 applied: `unknown_consumer`, `member_consumer`, `owned_elsewhere`,
-`branch_changed`, `repository_changed`, `owner_changed`, `coverage_changed`,
+`ownership_unresolved`, `branch_changed`, `repository_changed`, `owner_changed`, `coverage_changed`,
 `coverage_unverifiable`, `active_execution`, `settings_unchanged`,
+`recovery_mode_conflict` (replay combined with adopt or reissue),
 `no_settled_action`, `action_evidenced`, `definition_changed` (a reissue that
 does not also adopt the identity it would run under) or `missing_authorization`
 (no reason or actor). A change of workspace, owner machine, repository, branch
@@ -485,10 +527,15 @@ orbit auto-task recover delivery-code-review --replay-history \
 ```
 
 Replay never rewrites Git. It preserves the baseline, covered cursor, accepted
-receipts, waivers, exclusions, and the complete active batch/action/input digest.
+receipts, waiver records, and the complete active batch/action/input digest.
 Pending deliveries, unresolved commits, and provider associations are replaced
 only through stable delivery keys and exact commit mapping; inserted commits use
-the normal provider association path. A mapped unresolved-only orphan keeps its
+the normal provider association path. A retained waived or excluded landing
+stays waived or excluded, keeping its certificate and decision time, and moves
+onto exactly the mapped images of its commits. That lets an excluded prefix
+retire, and lets an accepted batch clear waivers and exclusions, against
+canonical commits. A replay that cannot restate such a landing over that exact
+mapping is refused. A mapped unresolved-only orphan keeps its
 exact reason on the canonical commit without acquiring a fabricated provider
 association. Retained provider associations keep their PR identity and map
 their shared delivery anchor through the complete proven commit mapping;
@@ -541,9 +588,21 @@ contact the network to rediscover it.
 
 A recorded stall that outlives `automation.stall_window_minutes` (default 60) is
 logged once at `warn` and filed once as friction; before that window it is
-recorded but quiet. A stall clears itself only when the orphaned revision is
+recorded but quiet. A `history_diverged` stall clears itself only when the orphaned revision is
 provably reachable from the branch head again, which moves no debt and needs no
 audit.
+
+`crew_os_ineligible` is a held admission rather than a deferred reason. Before
+it mints a claimed batch's review task, the evaluator asks Core whether any
+`workflow.purpose_crews.review` member's executor can run under the
+definition's `os:` tags. When none can, the claim stays as it is and the
+consumer records a stall whose `crew_hold` names the definition, the pool key,
+each excluded crew with its executor and `host_os`, and the tags; the tick
+reports `stalled: crew_os_ineligible` instead of an error. Every later tick
+asks again and refreshes the names, and the first one whose configuration
+admits a crew clears the stall and mints the held batch in the same pass. No
+recovery or reset is needed, and its friction (after the window) names the
+configuration change that clears it instead of those commands.
 
 ### Resetting a consumer whose debt cannot be reconciled [ORB-12346]
 
@@ -585,6 +644,13 @@ evidence is not executing and needs no `--force` — `member_consumer`, `unknown
 `owned_elsewhere` and `missing_authorization`. Forgotten debt is not coverage:
 the discarded landings never appear in a receipt, and the record is the only
 trace they existed.
+
+Both preview and apply bind action liveness to the exact inspected consumer
+snapshot, including its generation and action identity. If an evaluation settles
+that action or admits a retry before reset loads the checkpoint, reset returns
+`concurrent_evaluation` before deleting state, writing an audit record or releasing
+pins. Inspect and retry against the current consumer. `--force` permits abandoning
+a live action in that inspected snapshot; it does not bypass concurrent movement.
 
 ## Rollback and limits
 
@@ -799,15 +865,21 @@ most 50 task envelopes and retains a continuation.
 Due members are admitted in batches [ORB-12746]. One pass claims up to
 `batch_size` due members (default 5; an explicit value must lie in
 `1..=min(50, max_items)`; the default is capped by `max_items`) that Core admits
-and that share one pinned source and one stored `task.crew` identity, oldest first,
-into a single attempt, and
-dispatches one `task_pilot_pipeline` run carrying every member's task id as an
-explicit `task_ids` entry. A mixed-crew eligible set therefore yields one
-run per crew rather than a single rejected bundle [ORB-12761]. Prepare partitions those ids into groups of at most
-five, so a burst of *N* same-crew eligible tasks yields one run with ⌈N/5⌉ pilot
+and that share one pinned source, oldest first, into a single attempt, and
+dispatches one pipeline run carrying every member's task id as an explicit
+`task_ids` entry. Finding verification also requires one stored `task.crew`
+[ORB-12761], so a member whose crew disagrees stays pending for the next
+admission. Task-pilot preparation admits every due crew in that batch
+[ORB-16839]: prepare partitions the run by each task's stored crew and then
+into groups of at most five, so two crews are assessed in that one run as
+separate partitions instead of one rejected bundle. Run start admits the mix
+only for the run the live attempt admitted, checked against that attempt and
+its action key [ORB-16860]. A hand-assembled `orbit run task-pilot` list that
+mixes crews, or any other job whose input merely carries a claim, is still
+refused at run start.
+A burst of *N* same-crew eligible tasks still yields one run with ⌈N/5⌉ pilot
 partitions and up to five concurrent workers instead of *N* serial runs;
-members beyond the batch, or whose crew disagrees with the claimed attempt,
-stay pending for the next admission. The attempt's
+members beyond the batch stay pending for the next admission. The attempt's
 retry budget, backoff and absolute deadline are per attempt: a run that stops
 before any apply output retries the whole batch, while a member whose input
 goes stale before acknowledgement leaves the batch without failing its

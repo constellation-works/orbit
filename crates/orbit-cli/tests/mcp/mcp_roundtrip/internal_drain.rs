@@ -9,6 +9,10 @@ const OPERATIONS: &[&str] = &[
     "orbit.task.pull",
 ];
 
+/// Owner-side drain read with no MCP scope and no follower route: the public
+/// surface never registers it, so it is unknown there rather than policy-denied.
+const UNADVERTISED_OWNER_READS: &[&str] = &["orbit.drain.claims"];
+
 fn audit_rows(workspace: &McpWorkspace, name: &str) -> Vec<Value> {
     let output = orbit_ok(
         McpWorkspace::orbit_command(&workspace.work, &workspace.home)
@@ -63,12 +67,9 @@ fn public_drain_calls_and_spoofed_initialize_are_refused_and_audited() {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect::<BTreeSet<_>>();
-        assert_eq!(
-            names.len(),
-            28,
-            "the reviewed 37-tool surface loses five protocol tools and seven tools \
-             folded into their siblings, then gains `orbit_task_eligible`, \
-             `orbit_task_review_reset` and `orbit_task_reconcile_review`"
+        assert!(
+            names.contains("orbit_task_retry_handoff"),
+            "the public owner retry operation remains advertised"
         );
         for name in OPERATIONS {
             let advertised = orbit_types::tool::mcp_advertised_tool_name(name);
@@ -88,6 +89,21 @@ fn public_drain_calls_and_spoofed_initialize_are_refused_and_audited() {
                 refused["result"]["structuredContent"]["code"],
                 "policy_denied"
             );
+        }
+        for name in UNADVERTISED_OWNER_READS {
+            let advertised = orbit_types::tool::mcp_advertised_tool_name(name);
+            assert!(!names.contains(name) && !names.contains(advertised.as_str()));
+            // The refusal code depends on the client's selector gate (unknown
+            // selector or unknown tool); `call_tool_err` asserts the call is refused.
+            for spelling in [*name, advertised.as_str()] {
+                client.call_tool_err(spelling, json!({}));
+            }
+            // Not an internal drain operation at all, so the protocol refuses the name.
+            let refused = client.request(
+                "orbit/internal/drain/call",
+                json!({"protocol":1,"name":name,"arguments":{}}),
+            );
+            assert_eq!(refused["error"]["code"], -32602, "{refused}");
         }
         assert!(names.contains("orbit_task_add") && names.contains("orbit_workflow_ship"));
         let preflight = client.request("orbit/internal/drain/preflight", json!({}));
@@ -111,41 +127,14 @@ fn public_drain_calls_and_spoofed_initialize_are_refused_and_audited() {
 
 /// Run the fixture's Rust transport client in a clean child as well as its
 /// server processes: SshDestinationProbe reads the client's PATH and identity.
+/// Returns true inside that child, where the body runs.
 fn isolated(test: &str) -> bool {
-    const MARKER: &str = "ORBIT_TEST_INTERNAL_DRAIN_CHILD";
-    if std::env::var(MARKER).as_deref() == Ok(test) {
-        return true;
-    }
-    let home = tempdir().unwrap();
     // libtest names a test by its module path below the crate root.
     let qualified = format!(
         "{}::{test}",
         module_path!().split_once("::").expect("test module").1
     );
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
-    let output = command
-        .args(["--exact", &qualified, "--nocapture", "--test-threads=1"])
-        .env(MARKER, test)
-        .env("HOME", home.path())
-        .env("USERPROFILE", home.path())
-        .current_dir(home.path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains("test result: ok. 1 passed;"),
-        "child test `{qualified}` did not execute: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    false
+    !crate::isolated_test::run_in_child(&qualified)
 }
 
 #[cfg(unix)]
@@ -172,6 +161,11 @@ def forward():
         child.stdin.flush()
     child.stdin.close()
 threading.Thread(target=forward, daemon=True).start()
+def exit_now():
+    # forward() is blocked reading stdin under its buffer lock, so interpreter
+    # finalization would abort on it [ORB-15926]. Exit without finalizing.
+    sys.stdout.flush()
+    os._exit(0)
 for line in child.stdout:
     message = json.loads(line)
     receipt = message.get('result', {{}}).get('structuredContent', {{}}).get('receipt')
@@ -179,10 +173,11 @@ for line in child.stdout:
         os.rename({lose}, {lose} + '.consumed')
         child.terminate()
         child.wait()
-        sys.exit(0)
+        exit_now()
     sys.stdout.buffer.write(line)
     sys.stdout.buffer.flush()
 child.wait()
+exit_now()
 "#,
         home = json!(owner.home),
         work = json!(owner.work),

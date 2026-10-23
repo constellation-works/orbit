@@ -11,6 +11,11 @@ stability = "stable"
 [lints]
 workspace = true
 
+[features]
+# A scoped task-commit lock deadline for downstream tests only. Enable it only
+# from `[dev-dependencies]`, never in a shipped build.
+test-support = []
+
 [dependencies]
 blake3.workspace = true
 chrono.workspace = true
@@ -21,6 +26,7 @@ orbit-types = { path = "../orbit-types" }
 rusqlite = { workspace = true, features = ["functions"] }
 serde.workspace = true
 serde_json.workspace = true
+serde_path_to_error.workspace = true
 schemars.workspace = true
 serde_yaml.workspace = true
 tar.workspace = true

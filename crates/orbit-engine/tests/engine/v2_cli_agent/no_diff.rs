@@ -14,9 +14,9 @@ struct NoDiffHost {
     committed: AtomicBool,
 }
 
-impl RuntimeHost for NoDiffHost {
+impl orbit_engine::test_support::NullRuntimeHost for NoDiffHost {
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        self.cli.resolve_cli_executor(provider)
+        RuntimeHost::resolve_cli_executor(&self.cli, provider)
     }
 
     fn get_task(&self, _: &str) -> Result<Task, OrbitError> {
@@ -210,7 +210,7 @@ fn missing_no_diff_fields_fail_at_implementation_and_preserve_raw_response() {
                             .contains("no_diff_artifacts")
                     );
                     assert!(writer.events_snapshot().unwrap().iter().any(|event| matches!(
-                    &event.kind, V2AuditEventKind::StepFinished {step_id, outcome, error_message}
+                    &event.kind, V2AuditEventKind::StepFinished {step_id, outcome, error_message, ..}
                     if step_id == "implement_one" && outcome == "failed"
                         && error_message.as_deref().is_some_and(|message| message.contains("response_envelope_error"))
                 )), "{label}: attribute the failure to implement_one");
@@ -232,7 +232,7 @@ struct SummaryDeliveryHost {
     state: std::sync::Mutex<orbit_types::workflow::PipelineState>,
 }
 
-impl RuntimeHost for SummaryDeliveryHost {
+impl orbit_engine::test_support::NullRuntimeHost for SummaryDeliveryHost {
     fn read_run_state(
         &self,
         _: &str,
@@ -257,7 +257,7 @@ impl RuntimeHost for SummaryDeliveryHost {
     }
 
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        self.cli.resolve_cli_executor(provider)
+        RuntimeHost::resolve_cli_executor(&self.cli, provider)
     }
 
     fn get_task(&self, _: &str) -> Result<Task, OrbitError> {
@@ -311,6 +311,8 @@ impl RuntimeHost for SummaryDeliveryHost {
                     note: update.status_note,
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
+                    decision: None,
                 });
         }
         Ok(())

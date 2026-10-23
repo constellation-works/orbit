@@ -248,7 +248,7 @@ async function assertTaskLinksOpenUnderFilter(page, { ids, show, selector }) {
     for (const id of ids) {
       await show();
       await page.locator(selector).filter({ hasText: new RegExp(`^${id}$`) }).click();
-      const pinned = page.locator('#tasks-body .row.pinned-external');
+      const pinned = page.locator('#task-detail-body:has(.pinned-external)');
       await pinned.filter({ hasText: id }).waitFor({ state: 'visible' });
       const scope = new URL(page.url());
       if (scope.searchParams.get('workspace') !== FIXTURE_WORKSPACE || !scope.hash.includes(`open=${id}`)) {
@@ -268,6 +268,7 @@ async function assertTaskLinksOpenUnderFilter(page, { ids, show, selector }) {
 }
 
 export async function assertRunDetailPresentation(page, evidence) {
+  await assertRequestsHeld(page, evidence);
   await page.setViewportSize({ width: 1440, height: 1100 });
   const render = async (run, steps, logs = []) => page.evaluate(async ({ run, steps, logs }) => {
     const detail = await import('/js/run-detail.js');
@@ -350,6 +351,83 @@ export async function assertRunDetailPresentation(page, evidence) {
   if (!localWaitingText.includes('3 backlog tasks have recorded wait reasons (3 deferred, 0 excluded)')
     || localWaitingText.includes('6 additional admissible tasks')) {
     throw new Error(`Local deferred tasks must be counted once in the run-detail banner: ${localWaitingText}`);
+  }
+  // A running local drain whose last pass was deferred on a busy lock says
+  // so, and dates the lists it kept from its last completed pass.
+  const deferredPass = {
+    queued: 3, deferred: localDeferred, deferred_total: 3,
+    recorded_at: '2026-10-17T05:01:00Z', waiting_recorded_at: '2026-10-17T05:00:00Z',
+    last_pass_error_code: 'lock_busy', consecutive_pass_failures: 2,
+    last_pass_error: 'record pilot operator handoffs: timed out after 30000ms acquiring task commit boundary (held by pid 4242)',
+  };
+  await render({ state: 'running', job_id: 'workspace_auto_pipeline', drain_last_pass: deferredPass }, []);
+  const passWarning = await page.locator('#run-detail-meta .pass-warning').textContent();
+  if (!passWarning.includes('Admission pass deferred') || !passWarning.includes('2 consecutive deferred passes')
+    || !passWarning.includes('held by pid 4242')) {
+    throw new Error(`A running drain must show its deferred admission pass: ${passWarning}`);
+  }
+  const keptWaiting = await page.locator('#run-detail-meta .still-waiting .child-dispatch-notice').textContent();
+  if (keptWaiting.includes('the owner answered') || !keptWaiting.includes('as of the last completed pass at')) {
+    throw new Error(`A local drain's kept lists must be dated from its last completed pass: ${keptWaiting}`);
+  }
+  await render({ state: 'failed', job_id: 'workspace_auto_pipeline', drain_last_pass: deferredPass }, []);
+  if (await page.locator('#run-detail-meta .pass-warning').count()
+    || !(await page.locator('.run-failure-message').textContent()).includes('held by pid 4242')) {
+    throw new Error('A failed drain reports its last pass error in the failure box only');
+  }
+  await render({ state: 'cancelled', job_id: 'workspace_auto_pipeline', drain_last_pass: deferredPass }, []);
+  if (await page.locator('#run-detail-meta .pass-warning').count()) {
+    throw new Error('A cancelled drain has no next pass to retry');
+  }
+
+  // ORB-17188: the facts grid names the execution host once, and each cell reads
+  // without a repeated word. The execution cell is always the grid's last cell
+  // and the review cell is the one labelled `review`. Screenshots come before the
+  // checks so a failed check still leaves its evidence.
+  const facts = () => page.evaluate(() => {
+    const cells = [...document.querySelectorAll('#run-detail-meta .run-meta-grid > div')];
+    const parts = (cell, selector) => [...cell.querySelectorAll(selector)].map(part => part.textContent.trim()).join(' ');
+    const review = cells.find(cell => cell.querySelector(':scope > .label')?.textContent === 'review');
+    return {
+      executed: parts(cells.at(-1), '.label, .value'),
+      review: review ? parts(review, '.value') : null,
+    };
+  });
+  const repeatedWord = text => {
+    const seen = new Set();
+    for (const word of text.toLowerCase().match(/[a-z0-9][a-z0-9_-]*/g) ?? []) {
+      if (seen.has(word)) return word;
+      seen.add(word);
+    }
+    return null;
+  };
+  const ranOnHost = { state: 'success', workspace_id: FIXTURE_WORKSPACE, executed_on: { machine_id: 'hm_dk2', machine_name: 'dk-server-2' } };
+  const policyRun = { ...ranOnHost, review_layer: { timing: 'none', source: 'workspace' } };
+  const runOptionRun = { ...ranOnHost, review_layer: { timing: 'before_landing', source: 'run-option' } };
+  const unrecordedRun = { state: 'success', workspace_id: FIXTURE_WORKSPACE, review_layer: { timing: 'none', source: 'workspace' } };
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 1100 });
+    await render(policyRun, []);
+    await page.locator('#run-detail-meta').screenshot({ path: path.join(evidence, `run-facts-dark-${width}.jpg`), type: 'jpeg', quality: 85 });
+  }
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await render(policyRun, []);
+  const policy = await facts();
+  if (policy.executed.split('dk-server-2').length !== 2 || repeatedWord(policy.executed)) {
+    throw new Error(`Execution host must read once with no repeated word: ${policy.executed}`);
+  }
+  if (!policy.review.includes('workspace policy') || repeatedWord(policy.review)) {
+    throw new Error(`Review must name its layer and source without a repeated word: ${policy.review}`);
+  }
+  await render(runOptionRun, []);
+  const runOption = await facts();
+  if (!runOption.review.includes('run option --review') || repeatedWord(runOption.review)) {
+    throw new Error(`A run-option review must name its source without a repeated word: ${runOption.review}`);
+  }
+  await render(unrecordedRun, []);
+  const unrecorded = await facts();
+  if (!unrecorded.executed.includes('unknown') || repeatedWord(unrecorded.executed)) {
+    throw new Error(`An unrecorded execution location must still read naturally: ${unrecorded.executed}`);
   }
 
   const childDispatches = ['success', 'cancelled', 'failed', null, 'running', 'success'].map((state, index) => ({
@@ -634,4 +712,81 @@ export async function assertRunDetailPresentation(page, evidence) {
   if (await page.locator('.step-log-block.stderr .log-wrap-toggle').getAttribute('aria-pressed') !== 'true') throw new Error('Wrap toggles must act only on their own stream');
   if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth || window.logHtmlExecuted)) throw new Error('Log display must neither widen the page nor execute HTML');
   fs.writeFileSync(path.join(evidence, 'run-detail-result.json'), JSON.stringify({ passed: true, viewport: 1440, heldColor, stdoutLayout: layout, scenarios: ['held reason and color', 'one-based single step', 'empty logs', 'missing and zero knowledge metrics', 'active and terminal replay', 'timeline legend', 'mixed JSON and malformed stdout', 'independent wrap toggles', 'safe text rendering'] }, null, 2));
+}
+
+// The shipped page must explain a drain that requests no claims, including
+// owner refusals, without turning healthy drains into warnings.
+export async function assertRequestsHeld(page, evidence) {
+  const now = Date.now();
+  const stamp = offset => new Date(now + offset).toISOString();
+  const breaker = {
+    failures: 3, failure_classes: ['candidate', 'candidate', 'task_input'],
+    opened_at: stamp(-60000), half_open_at: stamp(900000),
+  };
+  const remedy = "the owner refuses this recorded outcome while it holds the claim; fix the condition its reason names on the owner. Automatic passes retry with backoff, at most every 15 minutes, and settle it once the owner accepts; `orbit run auto --stop` retries it at once. Recovering the claim on the owner's dashboard closes it instead";
+  const settlement = {
+    leaf_run_id: 'jrun-refused-leaf', owner: 'owner/workspace', refusals: 2,
+    first_refused_at: stamp(-120000), retry_after: stamp(60000),
+    reason: '<img src=x onerror="window.refusalHtmlExecuted=true"> required validation commands missing', remedy,
+  };
+  const scenarios = [
+    { code: 'circuit_open', text: 'the failure breaker is open; inspect the failed claims and fix the cause meanwhile, or start a new drain to reset it', breaker },
+    { code: 'circuit_half_open', text: '1 claim(s) this drain carries have not settled yet', breaker: { ...breaker, half_open_at: stamp(-1000) } },
+    { code: 'settlement_refused', text: 'the owner refused 2 recorded settlement(s) while holding their claims, so no new claim is requested', settlements: [settlement, { ...settlement, leaf_run_id: 'jrun-second-leaf', reason: 'owner policy changed' }] },
+    { code: 'owner_busy_backoff', text: `a claimed leaf was released because the owner's store stayed locked (database is locked); this drain requests no claim until ${stamp(60000)}, when requests resume by themselves` },
+  ];
+  const render = async ({ code, text, breaker = null, settlements = [] } = {}) => page.evaluate(async data => {
+    const detail = await import('/js/run-detail.js');
+    for (const pane of document.querySelectorAll('.tab-pane')) pane.classList.toggle('active', pane.dataset.tab === 'run-detail');
+    detail.setActiveRunDetail({
+      run: { run_id: 'jrun-requests-held', job_id: 'workspace_pull_pipeline', state: 'running',
+        drain_last_pass: { recorded_at: data.recordedAt, ...(data.code ? { admission_refusal: `${data.code}: ${data.text}` } : {}) } },
+      pull_breaker: data.breaker, refused_settlements: data.settlements, steps: [],
+    });
+    detail.renderRunDetailMeta();
+  }, { code, text, breaker, settlements, recordedAt: stamp(0) });
+  const results = [];
+  for (const colorScheme of ['dark', 'light']) {
+    await page.emulateMedia({ colorScheme });
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 1100 });
+      for (const scenario of scenarios) {
+        await render(scenario);
+        const panel = page.locator('#run-detail-meta .requests-held');
+        await panel.waitFor({ state: 'visible', timeout: 5000 });
+        const text = await panel.textContent();
+        if (!text.includes(`Requests held: ${scenario.code}: ${scenario.text}`) || !text.includes('last pass')) {
+          throw new Error(`Requests held must name the refusal and its pass: ${text}`);
+        }
+        if (scenario.breaker && (!text.includes('3 consecutive failed claims (candidate, candidate, task_input)')
+          || !text.includes(scenario.code === 'circuit_open' ? 'to admit one probe claim' : 'half-open since')
+          || (scenario.code === 'circuit_open' && !/\(in \d+m \d+s\)/.test(text)))) {
+          throw new Error(`Breaker must explain failures and its next probe: ${text}`);
+        }
+        if (scenario.settlements && (await panel.locator('.refused-settlement').count() !== 2
+          || !text.includes(settlement.reason) || !text.includes(remedy) || !text.includes('jrun-second-leaf')
+          || !text.includes('next attempt after'))) throw new Error('Each refused settlement must name its reason, next retry and remedy');
+        const layout = await panel.evaluate(node => {
+          const bounds = node.getBoundingClientRect();
+          return { left: bounds.left, right: bounds.right, width: innerWidth,
+            overflow: node.scrollWidth > node.clientWidth, htmlExecuted: !!window.refusalHtmlExecuted,
+            injectedElements: node.querySelectorAll('img').length };
+        });
+        if (layout.left < 0 || layout.right > width + 1 || layout.overflow || layout.htmlExecuted || layout.injectedElements) {
+          throw new Error(`Requests held must wrap safely inside the viewport: ${JSON.stringify(layout)}`);
+        }
+        await panel.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: path.join(evidence, `requests-held-${scenario.code}-${colorScheme}-${width}.png`), fullPage: true });
+        results.push({ code: scenario.code, colorScheme, width, layout });
+      }
+      // Supplementary records still explain a hold without a pass refusal.
+      await render({ breaker, settlements: [settlement] });
+      if (await page.locator('.requests-held .pull-breaker').count() !== 1
+        || await page.locator('.requests-held .refused-settlement').count() !== 1) throw new Error('Hold records must remain visible without a pass refusal');
+      await render();
+      if (await page.locator('.requests-held').count()) throw new Error('A healthy drain must have no Requests held panel');
+    }
+  }
+  fs.writeFileSync(path.join(evidence, 'requests-held-result.json'), JSON.stringify({ passed: true, scenarios: results,
+    healthy: 'no panel', theme: 'The dashboard supports a dark palette; both browser color preferences preserve it.' }, null, 2));
 }

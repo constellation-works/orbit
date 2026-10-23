@@ -85,23 +85,11 @@ pub(crate) fn ambiguous_workspace_selector(selector: &str) -> OrbitError {
     ))
 }
 
-/// Finds the local checkout for a workspace ID or name.
-pub fn find_checkout<'a>(
-    registry: &'a WorkspaceRegistry,
-    id_or_name: &str,
-) -> Result<Option<&'a WorkspaceCheckout>, OrbitError> {
-    let Some(workspace) = find_workspace(registry, id_or_name)? else {
-        return Ok(None);
-    };
-    Ok(find_checkout_by_id(registry, &workspace.id))
-}
-
 /// Finds the local checkout for an exact workspace ID.
 ///
 /// Persisted relations and resolved bindings already store `workspace_id`.
-/// Those lookups must not reuse [`find_checkout`], which treats the argument
-/// as an id-or-name selector and fails closed when one workspace's ID equals
-/// another's name.
+/// Those lookups must not treat that stored id as an id-or-name selector:
+/// doing so fails closed when one workspace's ID equals another's name.
 pub fn find_checkout_by_id<'a>(
     registry: &'a WorkspaceRegistry,
     workspace_id: &str,

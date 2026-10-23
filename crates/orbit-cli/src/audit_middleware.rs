@@ -8,7 +8,8 @@ use orbit_core::{
 
 pub use crate::command::operation::CommandMeta;
 
-/// Feeds the **persistent** SQLite audit event store on every CLI invocation.
+/// Feeds the **persistent** SQLite audit event store after runtime bootstrap.
+/// Bootstrap and preflight refusals do not instantiate this guard.
 ///
 /// This is a separate mechanism from the in-process `EventLog` (`OrbitRuntime.event_log`), which
 /// is session-scoped and not persisted. The two channels serve different purposes:
@@ -93,9 +94,9 @@ impl Drop for AuditGuard<'_> {
         // audit row for this thread (the runtime now owns tool-invocation audit
         // for both CLI and MCP entry points), suppress the guard's own emission
         // so we never double-audit a single `orbit tool run` invocation. Paths
-        // that bail before the runtime is reached — invalid JSON, missing
-        // input, `--dry-run` — leave the flag clear and still get a guard-side
-        // row.
+        // that dispatch without executing a runtime tool call, such as
+        // `--dry-run`, leave the flag clear and still get a guard-side row.
+        // Invalid JSON is refused before bootstrap, before a guard exists.
         if take_tool_audit_recorded() {
             return;
         }

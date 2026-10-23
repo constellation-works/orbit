@@ -1,6 +1,7 @@
 use orbit_agent::{AgentResponseStatus, ParsedStdout};
+use orbit_common::governance::authorization::governed_tool;
 use orbit_types::telemetry::InvocationTrace;
-use orbit_types::tool::ExecutionResult;
+use orbit_types::tool::{ExecutionResult, McpCapability};
 use orbit_types::workflow::activity_job::AgentLoopSpec;
 use serde_json::Value;
 
@@ -28,7 +29,7 @@ pub(super) fn cli_agent_envelope_json(
     envelope.insert("run_id".to_string(), Value::String(run_id.to_string()));
     envelope.insert(
         "tools".to_string(),
-        serde_json::to_value(effective_tools)
+        serde_json::to_value(agent_visible_tools(effective_tools))
             .map_err(|err| DispatchError::CliInvocationFailed(format!("serialize tools: {err}")))?,
     );
     envelope.insert(
@@ -49,6 +50,20 @@ pub(super) fn cli_agent_envelope_json(
 
     serde_json::to_vec(&Value::Object(envelope))
         .map_err(|err| DispatchError::CliInvocationFailed(format!("serialize envelope: {err}")))
+}
+
+/// Keep the advertised tool list aligned with the capability held by the
+/// managed agent. The activity allowlist is still enforced separately, and
+/// ungoverned tools remain visible as before.
+fn agent_visible_tools(effective_tools: &[String]) -> Vec<&str> {
+    effective_tools
+        .iter()
+        .filter(|tool| {
+            governed_tool(tool)
+                .is_none_or(|operation| operation.allowed.contains(&McpCapability::Agent))
+        })
+        .map(String::as_str)
+        .collect()
 }
 
 pub(super) fn parse_cli_invocation_trace_from(

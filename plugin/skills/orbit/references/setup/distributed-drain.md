@@ -25,11 +25,12 @@ routing is in [tool-surface.md](../tool-surface.md).
 ## What v1 does not do
 
 - No heartbeat, automatic reclamation, fleet registry, or follower merge.
-- No review on the follower's own terms. With the owner's `review.before_pr`
-  on, every claimed PR leaf runs the before-PR reviewer the claim captured
-  (the owner's `operation.review_crew`, which each follower must be able to
-  run); the follower's own `review.before_pr` is ignored. With the owner's
-  `review.before_landing` on instead, the leaf opens its PR first and that
+- No review on the follower's own terms. With the owner's `review.timing` at
+  `before_pr`, every claimed PR leaf runs the before-PR reviewer the claim
+  captured from the owner's effective pool: `workflow.purpose_crews.pre_landing_review`
+  when non-empty, otherwise `workflow.purpose_crews.review`. Each follower must be
+  able to run the captured crew; the follower's own `review.timing` is ignored. With the
+  owner's `review.timing` at `before_landing` instead, the leaf opens its PR first and that
   reviewer reviews the open PR before the leaf hands off; the owner accepts
   only the head the review settled. After-landing review
   (the owner's `delivery-code-review` auto-task) never affects admission.
@@ -60,21 +61,22 @@ orbit --version
 orbit config get machine.id
 orbit workspace show
 orbit doctor
-orbit config get review.before_pr        # decisive on the owner only
-orbit config get review.before_landing   # decisive on the owner only
-orbit config get operation.review_crew   # the owner's reviewer crew
+orbit config get review.timing                  # decisive on the owner only
+orbit config get workflow.purpose_crews.pre_landing_review # owner's dedicated before-PR/before-landing pool
+orbit config get workflow.purpose_crews.review  # fallback and after-landing reviewer pool
 ```
 
 Require one owner per repository, matching binaries, matching distributed-drain
 protocol schema `10`, and equivalent crew and toolchain resolution. Review policy
-is the owner's: admission captures the owner's `review.before_pr` and
-`review.before_landing` and, when either is on, its `operation.review_crew`, review budget, and
+is the owner's: admission captures the owner's `review.timing` and, when it is
+not `off`, its effective reviewer pool (`workflow.purpose_crews.pre_landing_review`
+when non-empty, otherwise `workflow.purpose_crews.review`), review budget, and
 `workflow.required_validation_commands` into the claim. With either
-on, the owner must ship through PRs (review runs only on that route;
-admission refuses otherwise) and set `operation.review_crew`, and every
-follower must resolve that crew; `orbit run auto --pull` refuses before
-claiming with `before_pr_reviewer_unavailable` otherwise. The follower's own
-`review.before_pr` is reported to the owner but never gates admission or the
+timing, the owner must ship through PRs (review runs only on that route;
+admission refuses otherwise) and resolve an effective reviewer pool, and every
+follower must resolve and be able to run the captured crew; `orbit run auto --pull`
+refuses before claiming with `before_pr_reviewer_unavailable` otherwise. The follower's own
+`review.timing` is reported to the owner but never gates admission or the
 leaf, so a follower need not change it. Hosts may run different operating systems:
 each follower declares its OS, and a task tagged `os:linux`, `os:macos` or
 `os:windows` is claimed only by a host of a named OS; it waits in the backlog,
@@ -152,13 +154,32 @@ exact paths. Protected metadata names and environment patterns (including `.envr
 ignore ASCII case on every host: `.Orbit/`, `.GIT/`, `.ENV` and `.Env.local`
 are refused even on Linux. Both peers require the same protocol revision (currently 10).
 Tagged `no-diff-expected` tasks are claimable and hand off `NoDiff` with no
-PR; a review needs no report, and a tagged claim that changes code is refused
-as `no_diff_expected_changed`. An ordinary claim that proves its
+PR; a review needs no report and runs no required validation or replay, which
+the owner accepts while its copy of the task keeps the tag, and a tagged claim
+that changes code is refused as `no_diff_expected_changed`. An ordinary claim that proves its
 implementation changes nothing may also hand off `NoDiff`. In claimed mode the implementer writes the verifier report
 and its logs beneath `.orbit/tmp/` and returns `no_diff_artifacts` scratch
-references; commit imports and verifies them through the claim. The owner
-rechecks the report against its live base before authorized completion without
-a PR. A changed base or evidence requires fresh validation.
+references; commit imports and verifies them through the claim. Required
+ledgers, screenshots and other task artifacts use a separate
+`task_artifacts: [{path, source_path}]` output for diff and no-diff candidates,
+including `no-diff-expected` tasks. Keep sources beneath the leaf's `.orbit/tmp/`
+and each file at most 1 MiB. Commit validates all files before attachment and
+refuses missing or oversized files, scratch escapes and invalid or duplicate
+artifact paths, naming the path. Task artifacts cannot use either clean-tree
+report name or a report's declared log names, and cannot use the reserved
+`review-` namespace (any ASCII case), which only the review gate writes;
+`no_diff_artifacts` remains limited to the report and its logs. Owner mode
+uses `orbit.task.artifact.put`.
+The owner rechecks the report against its live base before authorized completion
+without a PR. A changed base or evidence requires fresh validation. When the tests that
+show the base resolves the task run only outside the agent sandbox, the
+implementer also names them as `already_resolved` `cargo test` selectors, and
+`claim_validate` replays each on the base on the claim host; a failing or empty
+replay never completes the task. A handoff may also carry `owed_criteria`:
+criteria the owner's pilot typed `post_deploy`, which only the deployed build
+can evidence. The owner refuses the settlement when its own pilot finding does
+not type each one, and otherwise lands the handoff with the task left in
+`review` until an operator records them (see the task-execution reference).
 
 
 A claimed PR leaf that fails before its normal commit preserves unfinished
@@ -222,10 +243,17 @@ returns.
   backlog. A leaf it cannot confirm stopped keeps its claim, is listed under
   `unstopped_leaves`, and fails the command. The MCP stop
   (`orbit.workflow.auto`, `action: "stop"`) takes the same `force`.
+  `run auto --stop --json`, the MCP stop and the dashboard's stop return one
+  result: `outcome`, `pull_settlements`, and per coordinator its `run_id`,
+  `job_id`, `outcome`, `remaining_children` (`run_id`, `job_name`, `phase`,
+  `child_status`) and `forced_runs`.
   Prefer `--stop`, which ends nothing. The OS clock sweep retries any
   settlement still recorded on the follower (for example after the owner was
   unreachable) once no drain or leaf worker is left to; `orbit run auto --stop`
-  flushes it by hand, with or without an active drain.
+  flushes it by hand, with or without an active drain. If the drain and its
+  leaves died together (a host OOM took the user manager and the clock), the
+  follower's `orbit run history` or `orbit run show` interrupts the dead runs
+  and settles their claims with the owner; no cancel is needed.
 - An unreachable or refusing owner is reported in each iteration's output.
   Protocol skew ends the drain failed immediately with `protocol_skew`; its
   durable settlements remain available to leaf workers and the settle-only
@@ -252,10 +280,18 @@ returns.
   stale `Outcome: failed` needs no hand-clearing before re-dispatch.
 - `orbit run concurrency <run-id> --set N` retunes the slot ceiling live. It is
   the only ceiling: the claimed leaf jobs declare no active-run limit of their
-  own, so size it to what the follower can carry. A leaf in its before-landing
-  review admits a replacement beside it, up to N such leaves, so a drain may
-  carry N implementing plus N reviewing leaves; `orbit run show <run-id>`
-  splits its `Claimed leaves:` by stage.
+  own. Before each claim, the pull allocator counts `occupied - min(reviewing,
+  N)` against N. A leaf counts as reviewing after the owner's persisted
+  before-landing admission has `applies=true`; validation and publishing before
+  that boundary count as implementing, while later review revalidation and
+  handoff remain reviewing. Review credit is capped at N, but reviewing leaves
+  can exceed N as replacements reach review. With an unchanged N and no
+  pre-existing excess, total occupied leaves stay at most 2N and implementing
+  leaves at most N. Lowering N preserves running leaves, so existing excess can
+  remain temporarily. Owner/local drains continue counting every in-flight
+  child against their ceiling. `orbit run show <run-id>` splits `Claimed
+  leaves:` by stage; review rebuilds still compete for repository build-budget
+  slots.
 - `orbit run extend <run-id> --for <d> [--concurrency N]` lengthens a live
   pull drain's window on the same run, even in its settling tail after the
   window closed; a second `orbit run auto --pull` would only queue behind it.
@@ -416,8 +452,10 @@ re-backlog. See [automation.md](../../../orbit-setup/references/automation.md#bu
 ## Verify
 
 A probe with `admits: true`, matching versions and protocol, a replica role
-and, when the owner's `review.before_pr` is on, a follower that resolves the
-owner's `operation.review_crew` mean the hosts are **installed**. Start a drain
+and, when the owner's `review.timing` is `before_pr` or `before_landing`, a
+follower that can run the captured reviewer from its effective pool
+(`workflow.purpose_crews.pre_landing_review` when non-empty, otherwise
+`workflow.purpose_crews.review`) means the hosts are **installed**. Start a drain
 only when the user asked for one, and leave schedules untouched. After the
 first claim, confirm on the owner that `orbit.drain.claims` shows it on the
 follower's machine, and that after handoff the task is in `review` with its PR

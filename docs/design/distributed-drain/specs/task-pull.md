@@ -1,14 +1,14 @@
 ---
 type: design
 summary: Spec for idempotent owner-side task admission, request receipts, execution claims, and lifecycle invariants.
-last_validated: 2026-10-10
+last_validated: 2026-10-19
 title: Spec — orbit.task.pull
 owner: claude
 status: Draft
 feature: distributed-drain
 tags: [distributed-drain, pull, queue, spec]
 related_features: [distributed-drain, federated-mcp, host-registry]
-related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-13992, ORB-13908, ORB-14149, ORB-14192]
+related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-13992, ORB-13908, ORB-14149, ORB-14192, ORB-14938, ORB-17304]
 ---
 
 # Spec: `orbit.task.pull`
@@ -16,8 +16,8 @@ related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-1
 `orbit.task.pull` creates at most one claim for an intended admission. The owner selects the first
 ready, valid, conflict-free task in its canonical order and atomically records the reservation,
 attempt identity, `in-progress` transition, history, and request receipt. Retries replay the same
-receipt. The internal store foundation now implements admission receipts, claims, replay,
-and compaction, and [ORB-12495] exposed the owner's read-only half — the
+receipt. The internal store foundation now implements admission receipts, claims and replay,
+though tombstone compaction is not yet written, and [ORB-12495] exposed the owner's read-only half — the
 [preflight probe](../2_design.md#41-read-only-admission-probe) and the
 [receipt lookup](#read-only-receipt-reconciliation) below — on the managed MCP and registered CLI
 surfaces. [ORB-13625] registered the executor's mutating half — `orbit.task.pull`,
@@ -42,9 +42,10 @@ The queue is a logical owner-side query, not a required maintained table:
   admission path. Sequencing uses dependencies.
 - **Order:** the canonical automatic-dispatch comparator: critical, corrective and ordinary
   bands, then priority, frozen-batch expiry, age and task ID. Pull admission uses the owner's
-  same expiring frozen-batch set as local dispatch. Before age, it prefers work whose OS
-  requirement the executor satisfies but the owner does not. This affinity never crosses a
-  band, priority or expiry boost; owner-local admission retains local dispatch order.
+  same expiring frozen-batch set as local dispatch. Within a band, both pull and owner-local
+  admission order the requester's candidates against the live
+  [executor census](#executor-census-and-affinity) [ORB-17304], which replaced the
+  owner-relative OS affinity of [ORB-14938].
 - **Validation:** selection, dependency checks, current status, canonicalized own `context_files`,
   and conflicts are checked within the admission transaction. Cached projections cannot authorize
   admission. Ordinary task and reservation mutations must participate in the same serialization.
@@ -59,15 +60,69 @@ The queue is a logical owner-side query, not a required maintained table:
 
 Each participant must meet all workspace execution requirements. The owner checks a task's
 `os:` tags against the executor's declared OS; mismatches stay in the backlog with an
-`os_unavailable` diagnostic. A request also declares the crews its
+`os_unavailable` diagnostic. It admits a task tagged `ui` only to an executor that declares a
+verified browser kit (`browser_kit`); others stay with a `browser_kit_unavailable` diagnostic. A request also declares the crews its
 executor can run (`crews`, below) [ORB-13941], and the owner skips a ready candidate whose crew the executor
 cannot run — its own `task.crew`, or the executor's `default_crew` for a task naming none. The
 skipped task keeps its place in the owner's order for the owner or another follower. The owner
 still orders every admission; the declaration only narrows what this executor is offered.
 
+### Executor census and affinity
+
+The reasoning is
+[Admission prefers work only the requesting executor can run](../4_decisions.md#admission-prefers-work-only-the-requesting-executor-can-run).
+Admission is first-fit over its order, and executor capability alone is only a pass/fail
+filter. Without the census a scarce executor took fungible work while work only it could run
+waited. Observed 2026-10-20: the Mac was the only host running the `opus` crew, and it still took
+the first fungible task while opus-assigned and `os:macos` tasks queued.
+
+- **Census row.** The owner's store keeps one `executor_census` row per workspace and executor
+  machine: its declared capability (`os`, `crews`, `browser_kit`), the drain run that declared
+  it, and when (`seen_at`). It leaves out `admissible`, the per-pass load-forecast fit.
+  - A follower's row is upserted in the same commit as each admission receipt, admitted or idle,
+    from the capability its request already declares.
+  - The owner writes its own row when its local drain window opens and on each pass. Its crews
+    come from that drain's crew preflight window, less provider-limit exclusions.
+  - The census adds no wire field and changes neither the request fingerprint nor the protocol
+    schema. An older binary keeps writing the migrated store, and the table forces no
+    generation switch.
+- **Liveness.** A row is live when its `seen_at` falls within ten minutes
+  (`EXECUTOR_CENSUS_LIVENESS_SECONDS`), or while its machine holds a `claimed` or `running` claim,
+  so an executor whose slots are full and that stops pulling still counts. The owner's own row
+  counts only while the local drain that declared it is running, so an owner with no live local
+  drain is not in the census. Receipts are never scanned. A store without the table, or a row this binary cannot decode, reads as an empty
+  census.
+- **Eligible set.** For a candidate, the eligible set is the live executors that pass the same
+  capability predicates the screen applies: the effective OS requirement (`os:` tags intersected
+  with the crew executor's `host_os`), the browser kit, and crew runnability. One shared
+  predicate serves both eligibility and affinity, so they cannot disagree.
+- **Order.** `band → exclusive to the requester → priority → expiry → fewer eligible executors
+  → age → task ID`.
+  - A task is *exclusive* when the requester is its only eligible live executor. Exclusivity
+    crosses priority but never band: critical and corrective work still leads.
+  - The eligible-executor count is a within-priority tiebreak. A task the requester cannot run
+    sorts last; the screen still decides whether it is offered.
+- **Degenerate cases.** If the census holds only the requester, every candidate ties on both
+  keys, and the order is the canonical one. If the census cannot be read, admission keeps the
+  canonical order with a warning; that is not an error.
+- **Owner-local admission** sorts with the same comparator, the owner as the requester and its
+  own live row as its capability. Without that row the order is canonical. Owner-local crew
+  eligibility is unchanged.
+- **Policy.** `workflow.admission_affinity` chooses how far exclusivity reaches:
+  - `band` (default): the order above;
+  - `priority`: exclusivity counts only within the same priority;
+  - `off`: no affinity at all, the canonical order alone.
+- **Explainability.** An admitted receipt records `affinity`: the task's class (`exclusive`,
+  `shared` or `fungible`, every live executor eligible), its eligible-executor count, the reach
+  in force and the census machine ids it was ordered against. A same-request replay returns the
+  stored receipt, whatever the census has become.
+- **Limitation.** The census tracks liveness, not free capacity. A fungible high-priority task
+  can wait while the only other executor that could run it is saturated. `priority` mode is the
+  escape hatch: it bounds that wait to one priority.
+
 ## Class and routing
 
-Only the owner serves this `control_plane` tool. A caller must have the workspace's `agent`
+Only the owner serves this `control_plane` tool. A caller must hold the workspace's `agent` or `operator`
 capability. `agent_invoke` is not needed because execution starts locally. Workspace selection uses
 the host-qualified selector. SSH login establishes owner access; session agent/operator capability
 and caller-side managed-run restrictions remain. There is no destination callers file, key-bound
@@ -79,11 +134,11 @@ capability and authenticates no machine. Local account access and SSH login are 
 this single-user model: the fence prevents mixed attempts among cooperating executors, not
 impersonation by a caller able to start the server with another label, including locally from a
 managed agent context. Owner-local drains use trusted local
-runtime identity and the same logical admission contract. With the owner's `review.before_pr` on,
-admission refuses, before creating a claim, an executor that does not declare `review_gate` and a
-local ship mode, where no gate runs; the executor's own `caller_before_pr` never refuses
-[ORB-13908]. The owner resolves its ship contract per executor: with `review.before_landing` off
-and `review.before_pr` off, an executor whose trusted session machine id is listed in the owner's
+runtime identity and the same logical admission contract. With the owner's `review.timing` at
+`before_pr`, admission refuses, before creating a claim, an executor that does not declare
+`review_gate` and a local ship mode, where no gate runs; the executor's own `caller_before_pr`
+never refuses [ORB-13908]. The owner resolves its ship contract per executor: with the owner's
+`review.timing` `off`, an executor whose trusted session machine id is listed in the owner's
 `review.before_landing_hosts` gets `before_landing` on and the owner's `review` contract, every
 other executor and the owner's own deliveries get neither [ORB-15192]. The probe resolves it for
 the probing session's machine and pull admission for the pulling session's machine, so a
@@ -101,11 +156,13 @@ defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 | `caller_version` | string | Caller binary version |
 | `caller_schema` | integer | Caller distributed-drain wire-protocol schema version |
 | `caller_fingerprint` | string, optional for historical requests | Type-derived request fingerprint, checked before request deserialization |
-| `caller_before_pr` | bool | The `review.before_pr` the calling drain captured at submission; diagnostic only, since a claimed leaf runs the review the `ship` contract captures [ORB-13908] |
-| `review_gate` | bool, optional | Whether the executor's claimed PR leaf runs the before-PR gate; an owner with `review.before_pr` on admits only an executor that declares it. Absent: `false` |
-| `run_context` | object | Calling drain's `run_id`, `job_name`, and diagnostic `host_id` |
+| `caller_before_pr` | bool | Whether the calling drain captured before-PR review (`review.timing = "before_pr"`) at submission; diagnostic only, since a claimed leaf runs the review the `ship` contract captures [ORB-13908] |
+| `review_gate` | bool, optional | Whether the executor's claimed PR leaf runs the before-PR gate; an owner with `review.timing` at `before_pr` admits only an executor that declares it. Absent: `false` |
+| `run_context` | object | Calling drain's `run_id`, `job_name`, and diagnostic `machine_name` |
 | `crews` | object, optional | Executor crew capability: `runnable` (crew names its window preflight found runnable; absent means unrestricted), `default_crew` (what a task naming no crew runs as there; absent admits no crew-less task) and `excluded` (`{crew, source, reason}` crews it will not run for the rest of its window). Absent: every crew is admissible |
 | `os` | enum, optional | Executor host OS: `linux`, `macos` or `windows`. A task carrying `os:` tags is admitted only to an executor whose OS one of them names. Absent (an OS outside that set): only tasks without an `os:` tag are admissible |
+| `browser_kit` | bool, optional | Whether the executor's host has a verified headless browser kit (`orbit browser-kit verify` passed against the installed version). A task tagged `ui` is admitted only to an executor that declares one. Absent: `false`, so a request without the field is offered no `ui` task |
+| `admissible` | object, optional | The work the executor's host load forecast has room for, sent under `machine.auto_concurrency` `enforce` ([auto-concurrency §6](../../auto-concurrency/2_design.md#6-pull-drains)): `keys` (`{work_class, complexity}` pairs, `work_class` `change` or `no-diff`, `complexity` absent for unset) and `templates` (`auto-task:` template names). A template task is admissible when its template is listed, any other task when its work class and complexity are. Absent: every task is admissible |
 
 The caller persists the request before sending it. One drain run uses many request IDs. There is
 no count, slot declaration, or caller scan bound. The crew capability is part of the immutable
@@ -113,7 +170,8 @@ request, so a replay is judged by the capability it was first sent with, and so 
 declared OS. Protocol revision 2 adds `crews`, revision 4 adds `os`, and revision 5 replaces
 `caller_review_policy` with `caller_before_pr` and the ship contract's `review_policy` with
 `before_pr`: an older owner rejects the new field even though it is optional, and a revision-4
-caller still sending `caller_review_policy` is answered `protocol_mismatch`. Revision 6 adds the
+caller still sending `caller_review_policy` is refused as `invalid_input` whose message begins
+`protocol_mismatch:`. Revision 6 adds the
 ship contract's `review` (below) and the typed handoff's before-PR evidence [ORB-13895]; revision 7
 sends `review_gate`, which a revision-6 owner rejects as an unknown field [ORB-13908]. Revision 8
 captures the owner's `required_validation_commands` in the before-PR `review` contract [ORB-14192].
@@ -170,8 +228,8 @@ A pull drain also records what its owner kept off this host. When a request is a
 the receipt's diagnostics fill `drain_last_pass` as a local drain's classifier does: `queued` is
 the receipt's `queue_depth`; `deferred` lists footprint holds (`context_lock_conflict`, the holder
 in `blocked_by`) and other owner holds (`owner_hold`); `excluded` lists unmet dependencies
-(`dependency_not_done`, the unfinished tasks in `blocked_by`), `os:` waits (`host_os_mismatch`) and
-unrunnable crews (`crew_unavailable`), both lists bounded to 20 with `deferred_total` and `excluded_total` the full counts; and
+(`dependency_not_done`, the unfinished tasks in `blocked_by`), `os:` waits (`host_os_mismatch`),
+browser-kit waits for `ui` tasks (`browser_kit_missing`), unrunnable crews (`crew_unavailable`) and work the host has no room for (`capacity_unavailable`), both lists bounded to 20 with `deferred_total` and `excluded_total` the full counts; and
 `waiting_by_reason` counts every kept-off task by code. `waiting_recorded_at` dates the owner's
 answer. A pass that sends no request (throttled, settlement held, breaker open, window closed,
 owner unreachable), or whose requests all claim, keeps the previous diagnostics and their date
@@ -183,9 +241,10 @@ for a pull drain as for a local one.
 ## Idempotency and admission
 
 1. Apply pre-admission refusals in the table order below: selector, current authorization,
-   trusted invocation context, input shape, version/schema, ship mode, then before-PR review: an
-   owner with `review.before_pr` on admits only a PR-mode request whose executor declares
-   `review_gate`. The executor's `caller_before_pr` is not checked.
+   trusted invocation context, fingerprint, input shape, version/schema, ship mode, then before-PR
+   review: an owner whose ship contract captures `before_pr` or `before_landing` admits only a
+   PR-mode request whose executor declares `review_gate`. The executor's `caller_before_pr` is not
+   checked.
    These checks also apply to pull receipt replay; the separate read-only receipt lookup below
    is for reconciliation across configuration/upgrades.
 2. Begin the owner store transaction. Its substrate is the task/reservation commit boundary
@@ -220,17 +279,26 @@ for a pull drain as for a local one.
    wave and its gate's first reservation. Skip a candidate
    whose crew the request's `crews` says the executor cannot run and record it in
    `crew_unavailable` [ORB-13941]. A malformed capability (a blank crew name) is `invalid_input`.
+   After the crew check, skip a candidate outside the request's `admissible`, when it carries
+   one, and record it in `capacity_unavailable` [ORB-15774]; a repair claim is filtered the same
+   way.
    Also skip, into `crew_unavailable`, a task the requesting machine's same drain run
-   (`run_context.run_id`) released for an `environment`, `transient`, `owner_route` or `provider`
-   failure, and every task when that run released one for an `environment` or `owner_route`
-   failure — the host itself is suppressed for the window; another drain may take them
-   [ORB-14257]. A `provider` release for a content refusal excludes no crew; instead the owner
+   (`run_context.run_id`) released for an `environment`, `transient` (unless it carries a forge hold), `owner_route` or `provider`
+   failure, or by an operator cancel, and every task when that run released one for an
+   `environment` or `owner_route` failure — the host itself is suppressed for the window; another
+   drain may take them [ORB-14257]. A `transient` release marked `owner_busy` (the leaf's owner call lost to the
+   owner's own lock-wait deadline) holds neither the task nor the host, and does not count
+   against the task's release budget, for the task's first three such releases within the
+   budget window; the owner ignores the mark on any other class and records every later busy
+   release as an ordinary `transient` one. A `provider` release for a content refusal excludes no crew; instead the owner
    records a provider failure hold on the task, and admission defers, into `deferred_conflicts`,
    a held task whose crew (or, for a task naming none, the request's `default_crew`) the hold
    excludes [ORB-15573]. An admitted task carries `resume_candidate`, the candidate the owner kept from
    the task's last claim, unless its spec changed or an operator discarded it since. Before the crew check, skip a candidate whose `os:` tags name no OS the request's `os`
    declares, and record it in `os_unavailable` with the wait (`waits for a macos host
-   (os:macos); the executor runs linux`). An `os:*` tag outside the reserved namespace, which
+   (os:macos); the executor runs linux`). Then skip a candidate tagged `ui` (exactly, ignoring
+   case) when the request does not declare `browser_kit`, and record it in
+   `browser_kit_unavailable` with the wait, which names `orbit browser-kit install`. An `os:*` tag outside the reserved namespace, which
    task writes reject but an older stored task may carry, is satisfied by no executor.
    `no-diff-expected` tasks are claimable by a remote executor: its claimed leaf hands off
    `NoDiff`, files findings on the owner through the claimed-owner broker and opens no PR
@@ -255,7 +323,8 @@ for a pull drain as for a local one.
    No local leaf run, branch, or worktree is created by this transaction.
 5. If none is eligible, persist an `idle` receipt with diagnostics. This changes receipt state but
    creates no task transition, claim, or reservation. End this refill pass on the first idle
-   response, sleep for the configured poll interval, and use a new request ID for the next poll.
+   response, sleep for the configured idle interval (`idle_sleep_seconds`, 60 seconds by default),
+   and use a new request ID for the next poll.
 
 The receipt stores owner-resolved ship configuration as of admission. Replays do not silently change
 the execution contract. Exact request retries may return the same task repeatedly; only one
@@ -268,6 +337,101 @@ retired request namespaces without retaining every individual ID.
 A receipt is historical evidence, not current execution authority. Replay includes current claim
 phase separately. A revoked or settled claim is never reactivated; local launch requires an
 idempotent owner-side binding check and execution mutations require the current claim.
+
+## Owner retry of an authorized handoff
+
+A stopped owner landing does not invalidate a healthy native leaf binding. A trusted
+operator can retry that exact accepted handoff with `orbit.task.retry_handoff`,
+`orbit task retry-handoff`, or the dashboard's **Retry landing** action. The operation
+requires an explicit owner workspace (logical ID or absolute checkout path), handoff
+identity, expected accepted candidate/base commits, expected latest attempt number and
+state, a reason, and a durable `request_key`. It accepts no saved job inputs, repair
+switches, replacement head, or authority. Managed agents and replica checkouts refuse it.
+
+The CLI's `--owner-workspace` also accepts a registered workspace name. It resolves
+that selector from any working directory and requires it to match `--workspace`
+when both are supplied. An internal task-partition ID is accepted when it names
+the selected runtime; an unknown or conflicting owner selector refuses before
+handoff lookup.
+
+The shared text sanitizer applies to the reason before persistence. A sanitized
+reason retains the successful dispatch response and records a redaction audit event
+attributed to the affected task; replaying the original input resolves the same receipt.
+
+The runtime reads the recorded prior owner job without inferring stoppage from age or
+process liveness, and rechecks the current handed-off claim, accepted candidate, native
+validation/review evidence and unrevoked completion authorization. A stopped attempt is
+eligible. For a latest `dispatched` attempt with an attached job, the atomic store reservation
+requires durable terminal evidence from this owner's workspace: its handoff/attempt action key,
+attached run, landing job and task/handoff input must match exactly. It archives that attempt
+as stopped with terminal-run evidence and retains the original terminal run unchanged before
+reserving its successor. An unresolved merge intent stays unresolved for the normal consumer;
+a reserved attempt without an attached job can still recover submission under its existing key.
+A stale expectation refuses without reserving another attempt. The foreign leaf binding,
+claim, immutable handoff, native certificate and original completion authorization remain unchanged.
+
+Pending, running and retrying jobs cannot be displaced. Reservation expiry, missing or foreign
+run evidence, worker messages and payload-supplied state never prove stoppage. Revoked,
+invalidated or landed claims cannot reserve new work. Replaying an already submitted receipt
+is an advisory read of its original run, even after settlement; it grants no new launch authority.
+
+For an already accepted handoff, retry and landing share the provider
+base-update proof: exact repository/PR/branches, fresh successful base fetch,
+base ancestry, two exact parents and the computed clean merge tree. The owner
+observes the stored acceptance and its original evidence; it never substitutes
+a certificate for the provider head. Initial settlement still requires the
+exact submitted head. Unknown or edited source, a foreign or rewound base,
+unreadable native evidence and unsupported proof refuse before dispatch.
+A provider-reported existing merge must also be contained in the fetched
+landing branch and have the exact delivery tree. This permits normal settlement
+of a clean already-merged provider update without sending another merge.
+
+The existing claim journal atomically records the operator request receipt and reserves
+its attempt before pipeline submission. The job uses the normal handoff/attempt action
+key. Concurrent independent requests cannot reserve a second attempt from the same
+observed state; identical replays and a lost reply resolve the same receipt and run,
+including after that run settles. A crash before submission leaves the pending landing
+outbox to recover; a crash after submission resolves its recorded action key before
+attachment. Previous attempts and their stopped evidence remain inspectable through
+`landing_attempt_record` and task history.
+
+The normal owner landing job first reconciles any unresolved external merge intent.
+An already-merged exact head completes from provider readback without sending another
+merge. Otherwise all repository, remote head/base, review, required-check, native
+certificate, lease and merge-certainty checks still apply. After adopting a verified
+provider base merge, a fully readable policy with no required contexts is valid.
+An app-unbound context can be satisfied by an authentic successful legacy commit
+status bound to the exact repository and new head; it cannot satisfy an
+app-bound workflow gate. Pending, failed, foreign or unreadable evidence refuses
+completion, and owner-owed checks still require explicit success. UNKNOWN/PENDING uses the
+existing bounded wait; administrative or review refusal is not widened into a wait.
+A candidate that needs repair must produce a fresh validated handoff instead.
+
+Under existing completion/auto-fix authority, an otherwise successful old head
+with absent required contexts has one bounded base-refresh path. Adapter-owned
+PR-event/integration evidence and complete old/base workflow blobs must prove
+non-emission and exact supported emission on the fresh descendant base.
+Supported emission is an unconditional job, a job behind the adapter's live-PR
+state read, or one also narrowed by the exact `Change scope` job of `ci.yml`
+(`scripts/ci-change-scope.sh`, `continue-on-error`): every mode it can output
+either runs such a job or reports it skipped under its name. A skipped check
+run on the old head that no policy requires does not stop the path. The
+workflow scan authenticates path-filtered (`paths` or `paths-ignore`) PR
+workflows but derives no guaranteed contexts from them; they cannot justify
+a base update or prevent a sibling workflow from proving its own emission. The
+inherited-failure and absent-context paths share one durable owner-task
+reservation and absolute deadline across attempts and runs. Reservation
+precedes the expected-head provider update; an unknown outcome is observed,
+never repeated. Current effective policy and every exact new-head required and
+owner-owed success gate the ordinary merge. Other conditional/dynamic or incomplete
+emission evidence refuses; it grants no source-repair or policy-bypass authority.
+A legacy status cannot stand in for the positive workflow CheckRun proof in
+absent-context refresh or prerequisite-rerun recovery.
+
+Save the request key and reuse the exact input after an uncertain reply. The dashboard
+retains its key in browser storage before sending; if storage is unavailable it refuses
+and points to the owner CLI. This operation does not resume the foreign workflow,
+rebind or release its claim, force a merge, or change branch protection.
 
 ## Read-only receipt reconciliation
 
@@ -299,9 +463,11 @@ with the current executor; preserve it for explicit recovery rather than rewriti
 | `claim` | `claim_id`, `reservation_id`, `reservation_expires_at`, runtime execution machine; absent for idle |
 | `claim_state` | Current phase at response time, separate from the stored admission receipt |
 | `ship` | Owner-resolved mode, base/landing branches, `before_pr`, `before_landing` (for this executor), completion policy, optional durable authorization reference and, only when `before_pr` or `before_landing` is on, the captured `review` contract (`contract_version`, `crew`, `budget`, `required_validation_commands`, and `baseline_commands` when the owner lists any) |
-| `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations and selectors; `blocked_by` names the holder when known |
+| `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations; `blocked_by` names the holder when known |
 | `crew_unavailable[]` | Ready candidates skipped because the executor cannot run their crew, with the reason; omitted when empty |
 | `os_unavailable[]` | Ready candidates skipped because their `os:` tags name no OS the executor runs, with the wait; omitted when empty |
+| `browser_kit_unavailable[]` | Ready candidates tagged `ui` skipped because the request declares no verified browser kit, with the wait; omitted when empty |
+| `capacity_unavailable[]` | Ready candidates skipped because the request's `admissible` leaves them out, with the work the forecast had no room for; omitted when empty |
 | `invalid_candidates[]` | Invalid dependency or lock-surface exclusions with reasons; `blocked_by` names the unfinished dependencies |
 | `idle` | No claim created by this request |
 | `queue_depth` | Remaining ready entries at original admission, diagnostic only |
@@ -324,12 +490,12 @@ read, so a preflight cannot report a verdict admission would not reach.
 |---|---|
 | `unknown_selector` | Selector cannot resolve to the named owner workspace |
 | `capability_refused` | Destination is a replica or caller lacks required authority |
-| `invalid_input` | Required request, version/policy declaration, or drain context is missing or malformed |
-| `version_mismatch` | Caller binary version differs from owner |
 | `protocol_skew` | Caller and owner request fingerprints differ (or the owner predates fingerprints); refused before pull, with both fingerprints in the diagnosis |
+| `invalid_input` | Required request, version/policy declaration, or drain context is missing or malformed |
 | `protocol_mismatch` | Legacy probe report for differing integer revisions; current followers surface typed `protocol_skew` |
+| `version_mismatch` | Caller binary version differs from owner |
 | `ship_mode_unsupported` | A remote caller targets a local-only ship workspace |
-| `before_pr_unsupported` | The ship contract captures `before_pr` or `before_landing` (owner's `review.before_pr`, `review.before_landing`, or a `review.before_landing_hosts` match for this executor) and the executor does not declare `review_gate`, or the ship mode is local (stored receipts may spell it `review_policy_unsupported`) |
+| `before_pr_unsupported` | The ship contract captures `before_pr` or `before_landing` (owner's `review.timing`, or a `review.before_landing_hosts` match for this executor) and the executor does not declare `review_gate`, or the ship mode is local (stored receipts may spell it `review_policy_unsupported`) |
 | `request_mismatch` | Existing request ID is reused with different input |
 | `request_expired` | An old request is represented only by a non-reusable tombstone |
 | `ship_contract_mismatch` | A *new* request carries a ship contract other than the one the owner resolves now for the calling machine; replays keep their stored contract |
@@ -381,14 +547,17 @@ inspection/recovery is required when no worker settles the claim. See [2_design.
 - Transactional admission never admits an unsatisfied dependency or overlapping protected footprint.
 - The owner alone orders work; invalid, conflicting, in-flight, OS-incompatible, crew-incompatible,
   and owner-held candidates are deferred or excluded with diagnostics. Follower capability
-  declarations may narrow eligibility but never reorder the owner's work.
+  declarations narrow eligibility, and the owner derives affinity from the live executors'
+  declarations in its own [census](#executor-census-and-affinity). A follower cannot ask for an
+  order.
 - A refusal creates no claim. Idle persists only its receipt and diagnostics.
 - Trusted invocation context fences execution machine and bound run; host labels confer no rights.
 - Reassignment invalidates former attempt writes and landing authority before a new admission.
 - Reservation cleanup can affect only the reservation associated with the settling claim.
 - Owner and follower drains use the same admission boundary; legacy local admission cannot bypass it.
 - Pull and task promotion do not grant merge authority; explicit handoff approval does.
-- `none` is the only review policy in v1; review status does not imply an automated review.
+- The handoff's captured `review` contract sets any required before-PR or before-landing
+  evidence; task status `review` alone is not review evidence.
 - Existing ship-sweep routines, wrapper, CLI, and owner-local drains cannot bypass this admission
   contract; queued/bound leaf runs and unrepresented admissions consume capacity exactly once.
 
@@ -398,6 +567,20 @@ Implement the [validation matrix](../2_design.md#8-required-validation-scenarios
 pull responses, concurrent mutations, duplicate local dispatch, reassignment with a returning
 worker, settlement during partitions, and merge-intent reconciliation. Contract review is not a
 substitute for these tests.
+
+The public owner-retry fixture retains the actual substitute worker until its run has an
+owner and cancellation or exit is requested. Cancelled evidence comes from public cancellation;
+failed evidence comes from the startup observer after a running worker exits. The fixture waits
+for the supervisor to reap each launched child before removing its root. Concurrent same-key
+requests, response replay, exact terminal-state assertions and refusal cases remain real calls;
+an already-exited substitute cannot race a manual replacement of its terminal outcome.
+The concurrent retry regression rendezvouses after reservation and immediately before log
+creation, so both callers reach the same successor without relying on scheduler timing.
+Every delivered substitute, including duplicate delivery of that pending run, stays owned
+until its supervisor reaps it. Worker logs use exclusive creation under the pinned directory
+and a no-follow existing-file open only on `EEXIST`; other failures propagate with the raw
+errno and held/named directory device, inode and link counts. Concurrent creation never
+requires weakening confinement, file modes or the no-follow policy.
 
 ## Agent Signature
 
@@ -412,9 +595,9 @@ executor crew capability and provider-unavailable release under [ORB-13941], 202
 
 `TaskCommitBoundary::admission_storage_usage` reports full-receipt and permanent-tombstone
 counts and logical UTF-8 payload bytes. SQLite page and index overhead is additional. An
-idle receipt can compact immediately; a claim in claimed, running, or handed-off phase
-retains its full receipt. At a 30-second poll, one idle drain leaves 2,880 request identities
-per day even after compaction. No age-based tombstone deletion is supported.
+idle receipt is eligible to compact immediately; a claim in claimed, running, or handed-off phase
+retains its full receipt. At the default 60-second idle sleep, one idle drain leaves 1,440 request
+identities per day even after compaction. No age-based tombstone deletion is supported.
 
 Execution provenance is optional on persisted records for backward reading. Run origin is
 captured from the trusted runtime backend at insertion and is not updated by run upserts.
@@ -469,6 +652,15 @@ evidence. A non-passing verdict fails the leaf before push, and the failure sett
 task. A follower that cannot run the captured reviewer crew requests no claim
 (`before_pr_reviewer_unavailable`).
 
+Failure and release settlements may carry the follower's review ledgers. The owner
+rejects the entire carry if its executor differs from the admitted machine or any
+ledger belongs to another task or claim. It imports ledgers only after the claim
+journal accepts the settlement's machine, bound run and current authority, or
+recognizes its exact recorded replay. Refused settlements cannot create ledgers or
+replace reset history. Import failures are logged without undoing the settlement;
+an exact retry can complete the import, preserving an operator reset already held
+by the owner.
+
 When the captured contract is before-landing instead [ORB-14849], the PR leaf publishes first,
 then runs `landing_review_gate_admit` → `landing_review` → `landing_review_gate_settle` before
 pinning validation. A reviewer fix is validated on its new head and pushed under a lease on the
@@ -495,8 +687,8 @@ older executors refuse schema 2 rather than silently applying a transition witho
 Recording completion authority dispatches the owner-local `task_landing_pipeline` from the outbox in
 the same call, so authorized work lands with no drain, ship sweep, routine or schedule running.
 Handoff identity keys one durable landing attempt and the dispatch key: a merged handoff refuses
-re-dispatch, a live owner job is not dispatched twice, and a pending request whose job never started
-or whose job is terminal is recovered as the next attempt by an explicit dispatch pass.
+re-dispatch, a live owner job is not dispatched twice, and a pending request whose job was never submitted
+or whose exact owner job is durably terminal is recovered as the next attempt by an explicit dispatch pass.
 `OrbitRuntime::dispatch_landing_requests`, `land_handoff` and `landing_attempts` are internal
 owner-domain seams alongside the handoff ones; landing a named handoff is how a stopped attempt is
 retried and an uncertain one reconciled.
@@ -605,11 +797,22 @@ required validation. The sandboxed implementer writes the report and every decla
 and returns `no_diff_artifacts` entries with artifact `path` and scratch `source_path`.
 Commit confines and bounds those reads, imports only the report and its declared logs
 through the claim, and reuses the existing no-diff/already-landed verifier; a skip flag
-alone refuses this route. A `no-diff-expected` task whose implementer returns no report
+alone refuses this route. An `already_resolved` outcome names `cargo test` selectors that
+`claim_validate` replays on the base outside the agent sandbox, each required to pass at
+least one test; their logs join the handoff's validation [ORB-15747]. A `no-diff-expected` task whose implementer returns no report
 (a review that files findings) instead commits to a `skipped_no_diff_expected` checkpoint
 naming its task, run and pinned base [ORB-14791]. The owner's own pipeline skips the same
 clean commit on the tag alone; the claimed checkpoint lets the owner recheck that its copy
-of the task still carries the tag. A claimed tagged leaf whose worktree changed or whose HEAD
+of the task still carries the tag. As the owner's pipeline also skips `validate` for the tag,
+`claim_validate` runs no required command, deferral replay or already-resolved replay for this
+checkpoint and records `skipped_no_diff_expected` with no validation references. The owner
+exempts exactly this checkpoint, on a task its copy still tags, from `required validation
+missing` at acceptance, approval and landing; any log the handoff does carry is still checked
+for the exact claim, run and candidate [ORB-15764]. A claim admitted before an owner upgrade and
+settled after it was run by the older leaf, which still pins the required logs for this skip,
+and the upgraded owner accepts them. A newer leaf's empty skip reaching an owner that has not
+upgraded is refused as `required validation missing`; the settlement stays pending on the
+follower, is redelivered with backoff, and is accepted once the owner runs the newer build. A claimed tagged leaf whose worktree changed or whose HEAD
 moved is refused at commit as `no_diff_expected_changed`, before the index is touched: it has
 no pull-request route for code, while the owner's own pipeline still commits such a change
 [ORB-14247]. Both claimed leaves support it, and the PR leaf skips branch
@@ -625,7 +828,7 @@ reads persisted handoffs; claimed leaves use `NoDiff` for this case.
 
 [ORB-13625] delivered the follower half. The owner's `orbit.task.pull` input is
 the caller's durable `AdmissionRequest` (request ID, caller version and schema,
-review policy, run context, and the ship contract its probe reported); it
+`caller_before_pr` and `review_gate`, run context, and the ship contract its probe reported); it
 answers `{receipt, claim_state}`. A follower drain also sends its window's crew capability as `crews` [ORB-13941].
 `orbit.drain.claim.bind` takes `claim_id`,
 `run_id` and the receipt's `ship`; `orbit.drain.claim.settle` takes `claim_id`,

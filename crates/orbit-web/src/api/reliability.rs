@@ -20,10 +20,10 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::Utc;
+use orbit_core::metrics::cost::MetricsWindow;
 use orbit_core::metrics::reliability::{
     BucketOutcomeRow, JobOutcomeRow, OutcomeCounts, Rate, ReliabilityWindow, RuntimeReliability,
 };
-use orbit_core::scoreboard_summary::ScoreboardWindow;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -33,7 +33,7 @@ use crate::state::DashboardState;
 /// Window used when `?window=` is omitted. Long enough that the rates carry a
 /// usable `n` on a typical workspace, short enough to still be a current
 /// reading rather than a lifetime average.
-const DEFAULT_RELIABILITY_WINDOW: ScoreboardWindow = ScoreboardWindow::Week;
+const DEFAULT_RELIABILITY_WINDOW: MetricsWindow = MetricsWindow::Week;
 
 /// `?window=<1h|24h|7d|30d>`.
 #[derive(Debug, Default, Deserialize)]
@@ -146,7 +146,7 @@ fn resolve_window(raw: Option<&str>) -> Result<ReliabilityWindow, String> {
     let selected = match raw {
         None => DEFAULT_RELIABILITY_WINDOW,
         Some(value) => value
-            .parse::<ScoreboardWindow>()
+            .parse::<MetricsWindow>()
             .map_err(|error| error.to_string())?,
     };
     let Some(duration) = selected.duration() else {
@@ -163,6 +163,7 @@ fn accumulate(totals: &mut OutcomeCounts, counts: &OutcomeCounts) {
     totals.total += counts.total;
     totals.succeeded += counts.succeeded;
     totals.failed += counts.failed;
+    totals.cascaded += counts.cascaded;
     totals.cancelled += counts.cancelled;
     totals.skipped += counts.skipped;
     totals.held += counts.held;

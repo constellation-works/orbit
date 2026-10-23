@@ -35,6 +35,19 @@ impl TaskV2Store {
             },
         )
     }
+    pub(crate) fn lookup_committed_creation_id(
+        &self,
+        key: &str,
+        digest: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        self.in_boundary(
+            || match self.registry.task_action(&self.workspace_id, key, digest)? {
+                Some(id) => self.bundle_store.committed_creation_id(&id),
+                None => Ok(None),
+            },
+        )
+    }
+
     pub(crate) fn create_desktop_task(
         &self,
         params: TaskCreateParams,
@@ -42,7 +55,12 @@ impl TaskV2Store {
         digest: &str,
     ) -> Result<(Task, bool), OrbitError> {
         self.in_boundary(|| {
-            if let Some(task) = self.lookup_desktop_creation(key, digest)? {
+            // Only a registered publication can take the replay shortcut.
+            // A complete bundle left before registration must go through
+            // create_or_recover_action_bundle to commit that registration.
+            if self.lookup_committed_creation_id(key, digest)?.is_some()
+                && let Some(task) = self.lookup_desktop_creation(key, digest)?
+            {
                 return Ok((task, true));
             }
             self.create_task_locked(params, Some(key), Some(digest))
@@ -107,6 +125,7 @@ impl TaskV2Store {
                 at: comment.at,
                 by: comment.by.clone(),
                 body: comment.message.clone(),
+                operation_id: None,
             })
             .collect();
         let mut events = vec![orbit_types::task::TaskEventRowV2 {
@@ -118,6 +137,8 @@ impl TaskV2Store {
             note: None,
             from_status: None,
             to_status: Some(params.status),
+            operation_id: None,
+            decision: None,
         }];
         // The initial grant is part of the bundle the create publishes, so a
         // task never exists without the creation intent its writer declared.
@@ -140,6 +161,8 @@ impl TaskV2Store {
                 note: Some(grant.to_note()),
                 from_status: None,
                 to_status: None,
+                operation_id: None,
+                decision: None,
             });
         }
         let bundle = TaskBundleV2 {
@@ -157,6 +180,9 @@ impl TaskV2Store {
                 crew: params.crew,
                 crew_source: params.crew_source,
                 orchestrator: params.orchestrator,
+                orchestrator_model: params.orchestrator_model,
+                orchestrator_model_source: params.orchestrator_model_source,
+                origin: params.origin,
                 relations,
                 tags: normalize_task_tags(params.tags),
                 required_tools: orbit_types::task::normalize_required_tools(params.required_tools),
@@ -392,7 +418,7 @@ impl TaskV2Store {
         tags: &[String],
     ) -> Result<Vec<Task>, OrbitError> {
         let mut matches = Vec::new();
-        self.search_tasks_visit(query, tags, &|_| true, &mut |task| {
+        self.search_tasks_visit(query, tags, None, &|_| true, &mut |task| {
             matches.push(task);
             true
         })?;
@@ -402,10 +428,12 @@ impl TaskV2Store {
     /// Stream the tasks matching `query` in listing order (newest first) to
     /// `visit` until it returns `false`.
     ///
-    /// `admit` sees each candidate's envelope-only task before anything of it
-    /// is read, so tasks the caller would discard anyway (a status, tag or path
-    /// filter) cost no read, and stopping early costs none for the tasks that
-    /// were never reached. An admitted task is first pruned from its envelope
+    /// `statuses` and `tags` select candidates through the generated index,
+    /// so a task in another status costs no envelope read at all. `admit`
+    /// sees each candidate's envelope-only task before anything more of it is
+    /// read, so tasks the caller would discard anyway (a path filter) cost no
+    /// bundle read, and stopping early costs none for the tasks that were
+    /// never reached. An admitted task is first pruned from its envelope
     /// and search documents (no event log, no consistency checks); only a task
     /// that can match is read whole on the lightweight listing path, which
     /// decides the match. Artifact payloads stay unopened and only the manifest
@@ -421,6 +449,7 @@ impl TaskV2Store {
         &self,
         query: &str,
         tags: &[String],
+        statuses: Option<&[TaskStatus]>,
         admit: &dyn Fn(&Task) -> bool,
         visit: &mut dyn FnMut(Task) -> bool,
     ) -> Result<(), OrbitError> {
@@ -431,6 +460,7 @@ impl TaskV2Store {
         let candidates = self.task_candidates(
             &TaskListFilter {
                 tags: tags.to_vec(),
+                statuses: statuses.map(<[TaskStatus]>::to_vec),
                 ..Default::default()
             },
             usize::MAX,

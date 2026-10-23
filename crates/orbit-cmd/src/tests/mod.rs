@@ -2,9 +2,7 @@
 //! `docs/design-patterns/test_layout.md`); moved with their modules from
 //! orbit-core in [ORB-10016].
 
-mod agent_rules;
 mod diagnostics;
-mod migrate;
 
 /// Run mutable Orbit fixtures with disposable user state and no inherited
 /// routing authority, preserving the requested test's behavioral assertions.

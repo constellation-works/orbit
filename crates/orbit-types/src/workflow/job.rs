@@ -547,6 +547,10 @@ impl JobRunTrigger {
 /// Per-step execution record stored in a step file inside the run bundle directory.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JobRunStep {
+    /// Lock acquisition wait in the step; unknown for historical records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock_wait_ms: Option<u64>,
+
     pub step_index: u32,
     pub target_type: JobTargetType,
     pub target_id: OrbitId,

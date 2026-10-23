@@ -17,9 +17,9 @@ use chrono::Utc;
 use orbit_common::process::ancestry::process_start_key;
 use orbit_engine::{PluginBrokerHandle, PluginBrokerRun};
 use orbit_store::contracts::{
-    AdmissionReceipt, AdmissionRequest, AdmissionRunContext, AdmissionShipContract,
-    AdmissionTaskSummary, ClaimEvidence, ClaimMutation, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-    ExecutionClaim, ExecutionClaimPhase, ExecutionLocation, LocalPullMutation, PullDestination,
+    AdmissionRequest, AdmissionRunContext, AdmissionShipContract, AdmissionTaskSummary,
+    ClaimEvidence, ClaimMutation, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
+    LocalPullMutation, PullDestination,
 };
 use orbit_tools::plugin::BrokeredCaller;
 use orbit_types::policy::ResolvedFsProfile;
@@ -38,6 +38,7 @@ use super::super::claimed_owner::{ClaimedOwnerRoute, bridge_through};
 use super::super::execute::ToolEntryPoint;
 use super::claimed_review::{FOLLOWER, GET, OWNER, Owner, PUT, TASK};
 use crate::OrbitRuntime;
+use crate::application::test_support::{admission_receipt, admission_request};
 use crate::runtime::plugin::broker::{
     BrokerDispatch, BrokerRequest, EntryPoint, PeerAnchor, PluginBroker,
 };
@@ -125,29 +126,26 @@ impl Leaf {
             execution_machine_id: FOLLOWER.into(),
         };
         let request = AdmissionRequest {
-            request_id: "request-1".into(),
-            caller_version: "fixture".into(),
-            caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-            caller_fingerprint: None,
             caller_before_pr: true,
             review_gate: true,
-            run_context: AdmissionRunContext {
-                run_id: drain.run_id.clone(),
-                job_name: drain.job_id.clone(),
-                machine_name: None,
-            },
-            ship: AdmissionShipContract {
-                mode: "pr".into(),
-                base_branch: "main".into(),
-                landing_branch: "main".into(),
-                before_pr: false,
-                before_landing: false,
-                completion: "review".into(),
-                authorization_reference: None,
-                review: None,
-            },
-            crews: None,
-            os: None,
+            ..admission_request(
+                "request-1".into(),
+                AdmissionRunContext {
+                    run_id: drain.run_id.clone(),
+                    job_name: drain.job_id.clone(),
+                    machine_name: None,
+                },
+                AdmissionShipContract {
+                    mode: "pr".into(),
+                    base_branch: "main".into(),
+                    landing_branch: "main".into(),
+                    before_pr: false,
+                    before_landing: false,
+                    completion: "review".into(),
+                    authorization_reference: None,
+                    review: None,
+                },
+            )
         };
         let record = jobs
             .allocate_pull_request(&destination, &request, 10)
@@ -158,12 +156,10 @@ impl Leaf {
             machine_id: FOLLOWER.into(),
             machine_name: None,
         };
-        let receipt = AdmissionReceipt {
-            schema_version: 1,
-            gates: None,
-            request: record.request.clone(),
-            machine_id: FOLLOWER.into(),
-            claim: Some(ExecutionClaim {
+        let receipt = admission_receipt(
+            record.request.clone(),
+            FOLLOWER.into(),
+            ExecutionClaim {
                 claim_id: "claim-1".into(),
                 task_id: TASK.into(),
                 request_id: request_id.clone(),
@@ -174,21 +170,16 @@ impl Leaf {
                 reservation_expires_at: (Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
                 repair: None,
                 phase: ExecutionClaimPhase::Claimed,
-            }),
-            task: Some(AdmissionTaskSummary {
+            },
+            AdmissionTaskSummary {
                 id: TASK.into(),
                 title: "Claimed work".into(),
                 complexity: None,
                 crew: None,
                 context_files: vec![],
                 resume_candidate: None,
-            }),
-            invalid_candidates: vec![],
-            deferred_conflicts: vec![],
-            crew_unavailable: vec![],
-            os_unavailable: vec![],
-            queue_depth: 0,
-        };
+            },
+        );
         let mut record = jobs
             .mutate_local_pull(
                 &destination,

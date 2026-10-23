@@ -29,6 +29,7 @@ model = \"claude-opus\"
 fn codex_reading(used_percent: f64, resets_at: chrono::DateTime<Utc>) -> ProviderLimitObservation {
     ProviderLimitObservation {
         provider: "codex".into(),
+        account: None,
         model: None,
         window: Some("primary".into()),
         exhausted: false,
@@ -55,18 +56,38 @@ fn exclusions<'a>(pass: &'a Value, crew: &str) -> Vec<&'a Value> {
         .collect()
 }
 
-#[test]
-fn a_limited_provider_sits_out_the_window_only_until_its_reading_lapses() {
-    if !isolated(
-        module_path!(),
-        "a_limited_provider_sits_out_the_window_only_until_its_reading_lapses",
-    ) {
-        return;
+/// The executor's login decides its window even when the owner is exhausted.
+fn an_owners_limit_does_not_hold_an_unlimited_executor() {
+    let pair = Pair::with_configs(CREWS, CREWS, &[Some("sol")]);
+    let resets_at = (Utc::now() + Duration::hours(2)).trunc_subsecs(6);
+    pair.wire
+        .owner
+        .record_provider_limit(&codex_reading(100.0, resets_at))
+        .unwrap();
+    pair.follower
+        .record_provider_limit(&codex_reading(31.0, resets_at))
+        .unwrap();
+    let drain = pair.run_drain();
+    let pass = pair.pass(&drain);
+    for crew in ["sol", "luna"] {
+        assert!(exclusions(&pass, crew).is_empty(), "{pass:#}");
     }
+    assert_eq!(
+        pair.owner_claims().len(),
+        1,
+        "the owner admits the executor: {pass:#}"
+    );
+}
+
+fn a_limited_provider_sits_out_the_window_only_until_its_reading_lapses() {
     let pair = Pair::with_configs(CREWS, CREWS, &[Some("sol")]);
     let drain = pair.run_drain();
     // The store keeps microseconds, so the expected reset must too.
     let resets_at = (Utc::now() + Duration::hours(2)).trunc_subsecs(6);
+    pair.wire
+        .owner
+        .record_provider_limit(&codex_reading(31.0, resets_at))
+        .expect("the owner's login still has capacity");
     pair.follower
         .record_provider_limit(&codex_reading(95.0, resets_at))
         .expect("seed the follower's reading");
@@ -85,6 +106,10 @@ fn a_limited_provider_sits_out_the_window_only_until_its_reading_lapses() {
             "{exclusion}"
         );
         let reason = exclusion["reason"].as_str().unwrap_or_default();
+        assert!(
+            reason.contains(FOLLOWER),
+            "the exclusion names the reading host: {reason}"
+        );
         assert!(
             reason.contains("codex primary at 95% (limit 90%)"),
             "{reason}"
@@ -127,14 +152,7 @@ fn a_limited_provider_sits_out_the_window_only_until_its_reading_lapses() {
 /// for a permanent reason (preflight failure) refuses with the allowlist
 /// message even when an unrelated crew is excluded by a provider usage limit,
 /// rather than advising the operator that this drain will admit again.
-#[test]
 fn an_allowlist_restriction_with_an_unrelated_limited_crew_refuses_the_allowlist() {
-    if !isolated(
-        module_path!(),
-        "an_allowlist_restriction_with_an_unrelated_limited_crew_refuses_the_allowlist",
-    ) {
-        return;
-    }
     let pair = Pair::with_configs(CREWS, CREWS, &[Some("sol")]);
     pair.follower_cli("claude", "orbit-test-no-such-provider-cli");
     let resets_at = Utc::now() + Duration::hours(2);
@@ -163,14 +181,7 @@ fn an_allowlist_restriction_with_an_unrelated_limited_crew_refuses_the_allowlist
 /// [ORB-14902] An allowlist-restricted drain whose permitted crew is held by a
 /// provider usage limit reports the provider limit refusal without literal
 /// whitespace padding.
-#[test]
 fn an_allowlist_restriction_on_a_limited_crew_reports_provider_limit_refusal() {
-    if !isolated(
-        module_path!(),
-        "an_allowlist_restriction_on_a_limited_crew_reports_provider_limit_refusal",
-    ) {
-        return;
-    }
     let pair = Pair::with_configs(CREWS, CREWS, &[Some("sol")]);
     pair.follower_cli("claude", "orbit-test-no-such-provider-cli");
     let resets_at = Utc::now() + Duration::hours(2);
@@ -195,3 +206,12 @@ fn an_allowlist_restriction_on_a_limited_crew_reports_provider_limit_refusal() {
     assert!(pair.wire.calls("orbit.task.pull").is_empty(), "{pass}");
     assert!(pair.owner_claims().is_empty());
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_limited_provider_sits_out_the_window_only_until_its_reading_lapses_scenarios,
+    an_owners_limit_does_not_hold_an_unlimited_executor,
+    a_limited_provider_sits_out_the_window_only_until_its_reading_lapses,
+    an_allowlist_restriction_with_an_unrelated_limited_crew_refuses_the_allowlist,
+    an_allowlist_restriction_on_a_limited_crew_reports_provider_limit_refusal
+);

@@ -24,11 +24,6 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
-#[cfg(test)]
-thread_local! {
-    static TEST_ACTIVITY_TOOLS: RefCell<Option<ActivityToolPolicyEnv>> = const { RefCell::new(None) };
-}
-
 /// A managed agent's activity tool policy, as its inherited envelope states it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ActivityToolPolicyEnv {
@@ -36,44 +31,6 @@ pub(crate) struct ActivityToolPolicyEnv {
     pub(crate) allowed_tools: Vec<String>,
     /// Deny-mode disallow list; `None` in allowlist mode.
     pub(crate) deny_policy: Option<ActivityToolDenyPolicy>,
-}
-
-/// Restores a test-local activity-tool override when dropped.
-///
-/// The override is thread-local so tests never need to change process-global
-/// environment variables merely to isolate their temporary runtime from a
-/// managed executor's inherited activity allowlist.
-#[cfg(test)]
-pub(crate) struct TestActivityToolsGuard {
-    previous: Option<ActivityToolPolicyEnv>,
-}
-
-#[cfg(test)]
-impl Drop for TestActivityToolsGuard {
-    fn drop(&mut self) {
-        TEST_ACTIVITY_TOOLS.with(|tools| {
-            tools.replace(self.previous.take());
-        });
-    }
-}
-
-/// Override the effective managed-agent activity allowlist for this test
-/// thread. Production dispatch always reads the inherited activity envelope.
-#[cfg(test)]
-pub(crate) fn override_activity_tools_for_test(
-    allowed_tools: impl IntoIterator<Item = impl Into<String>>,
-) -> TestActivityToolsGuard {
-    override_activity_tool_policy_for_test(ActivityToolPolicyEnv {
-        allowed_tools: allowed_tools.into_iter().map(Into::into).collect(),
-        deny_policy: None,
-    })
-}
-
-/// Override the managed-agent activity tool policy for this test thread.
-#[cfg(test)]
-fn override_activity_tool_policy_for_test(policy: ActivityToolPolicyEnv) -> TestActivityToolsGuard {
-    let previous = TEST_ACTIVITY_TOOLS.with(|tools| tools.replace(Some(policy)));
-    TestActivityToolsGuard { previous }
 }
 
 /// A process launched as a plugin backend reaches Orbit only through
@@ -91,9 +48,7 @@ pub(super) fn enforce_plugin_callback_allowlist(
     name: &str,
 ) -> Result<(), OrbitError> {
     apply_callback_resolution(
-        resolve_plugin_callback_session(global_root, || {
-            legacy_callback_identity_enabled(global_root)
-        })?,
+        resolve_plugin_callback_session(global_root)?,
         global_root,
         |plugin| plugins.get_plugin(plugin),
         name,
@@ -104,9 +59,7 @@ pub(super) fn enforce_plugin_callback_allowlist_from_root(
     global_root: &Path,
     name: &str,
 ) -> Result<(), OrbitError> {
-    let resolution = resolve_plugin_callback_session(global_root, || {
-        legacy_callback_identity_enabled(global_root)
-    })?;
+    let resolution = resolve_plugin_callback_session(global_root)?;
     if matches!(resolution, CallbackResolution::None) {
         return Ok(());
     }
@@ -148,9 +101,7 @@ pub fn refuse_plugin_child_cli_command(
     global_root: &Path,
     invocation: Option<&str>,
 ) -> Result<(), OrbitError> {
-    match resolve_plugin_callback_session(global_root, || {
-        legacy_callback_identity_enabled(global_root)
-    })? {
+    match resolve_plugin_callback_session(global_root)? {
         CallbackResolution::None => Ok(()),
         CallbackResolution::Identified(identity) => Err(plugin_cli_surface_refused(
             Some(&identity.provenance.name),
@@ -159,14 +110,6 @@ pub fn refuse_plugin_child_cli_command(
         // A credential fault is refused on its own terms here, exactly as
         // both tool entry points refuse it, so a broken or borrowed session
         // never reads as an ordinary caller on this surface either.
-        CallbackResolution::InvalidCredential(identity) => {
-            Err(orbit_tools::plugin::invalid_callback_credential(
-                identity.as_ref().map(|id| id.provenance.name.as_str()),
-            ))
-        }
-        CallbackResolution::Mismatched { token, ancestry } => Err(
-            orbit_tools::plugin::mismatched_callback_credential(&token, ancestry.as_deref()),
-        ),
         CallbackResolution::RetiredCredential(identity) => {
             Err(orbit_tools::plugin::retired_callback_credential(
                 identity.as_ref().map(|id| id.provenance.name.as_str()),
@@ -176,22 +119,6 @@ pub fn refuse_plugin_child_cli_command(
             Err(orbit_tools::plugin::unidentified_plugin_child())
         }
     }
-}
-
-/// Whether this host still honours the retired plugin callback credential —
-/// the environment token plus process ancestry — as well as the descriptor a
-/// backend inherits [ORB-12841].
-///
-/// Read from the *global* `config.toml` only: a plugin backend runs under one
-/// host, and a per-workspace answer would mean the same backend were
-/// identified differently depending on which workspace its caller stood in.
-/// Loaded on demand rather than per call, because the question only arises for
-/// a caller that presented legacy evidence.
-pub(crate) fn legacy_callback_identity_enabled(global_root: &Path) -> Result<bool, OrbitError> {
-    let roots = orbit_config::ConfigRoots::global_only(global_root);
-    Ok(orbit_config::ResolvedConfig::load(&roots)?
-        .snapshot
-        .plugin_legacy_callback_identity)
 }
 
 fn plugin_cli_surface_refused(plugin: Option<&str>, invocation: Option<&str>) -> OrbitError {
@@ -223,21 +150,6 @@ fn apply_callback_resolution(
             stamp_callback_plugin_provenance(&identity, installed.as_ref());
             refuse_unless_recorded(global_root, installed.as_ref(), &identity, name)
         }
-        CallbackResolution::InvalidCredential(identity) => {
-            if let Some(identity) = identity.as_ref() {
-                let installed = get_plugin(&identity.provenance.name).ok().flatten();
-                stamp_callback_plugin_provenance(identity, installed.as_ref());
-            }
-            Err(orbit_tools::plugin::invalid_callback_credential(
-                identity.as_ref().map(|id| id.provenance.name.as_str()),
-            ))
-        }
-        CallbackResolution::Mismatched { token, ancestry } => Err(
-            orbit_tools::plugin::mismatched_callback_credential(&token, ancestry.as_deref()),
-        ),
-        // A backend that held only the retired credential while this host has
-        // stopped honouring it. Stamped like an invalid one so the refusal
-        // lands on the plugin's own audit row.
         CallbackResolution::RetiredCredential(identity) => {
             if let Some(identity) = identity.as_ref() {
                 let installed = get_plugin(&identity.provenance.name).ok().flatten();
@@ -401,11 +313,6 @@ pub(super) fn read_proc_spawn_budget_from_env(max_timeout_ms: u64) -> Option<Pro
 }
 
 pub(super) fn read_activity_tool_policy_from_env() -> ActivityToolPolicyEnv {
-    #[cfg(test)]
-    if let Some(policy) = TEST_ACTIVITY_TOOLS.with(|tools| tools.borrow().clone()) {
-        return policy;
-    }
-
     if std::env::var("ORBIT_TASK_ACTOR_KIND").ok().as_deref() != Some("agent") {
         return ActivityToolPolicyEnv::default();
     }

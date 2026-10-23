@@ -25,22 +25,11 @@ pub(super) fn load_registry_for_selector_resolution(
     registry_path: &Path,
     identity: &MachineIdentityState,
 ) -> Result<WorkspaceRegistry, OrbitError> {
-    let loaded =
-        workspace_registry::load_registry_from_read_only_with_machine(registry_path, identity)?;
-    let mut registry = loaded.registry;
-    let validation_required = workspace_registry::validate_workspaces(&mut registry);
-    if !loaded.migration_required && !validation_required {
-        return Ok(registry);
-    }
-
-    workspace_registry::with_registry_lock(registry_path, || {
-        let mut registry =
-            workspace_registry::load_registry_from_with_machine(registry_path, identity)?;
-        if workspace_registry::validate_workspaces(&mut registry) {
-            let _ = workspace_registry::save_registry_to(&registry, registry_path);
-        }
-        Ok(registry)
-    })
+    workspace_registry::load_validated_registry_from_with_machine(
+        registry_path,
+        workspace_registry::WorkspaceValidationMode::BestEffort,
+        identity,
+    )
 }
 
 /// The host data directory a registry lookup reads: the `--root` override when
@@ -608,5 +597,25 @@ pub(super) fn attach_registry_context(
         runtime.with_automation_execution_location(location),
         global_root,
     );
+    // Creation-time crew draws on an owner may count a crew as runnable
+    // when a host serving this workspace can run it, so declare the
+    // registered hosts with their recorded operating systems, by machine
+    // id. The runtime counts a registered host as serving only when this
+    // workspace's own claim records show it pulled here recently;
+    // registration alone never counts. Best-effort: an unreadable host
+    // file leaves the list empty, which is exactly the single-host draw
+    // behaviour, and never fails the open. Entries registered before
+    // discovery reported an OS contribute nothing until re-added.
+    let registered = orbit_registry::hosts::load_host_registry(global_root)
+        .map(|registry| {
+            registry
+                .hosts()
+                .entries()
+                .iter()
+                .filter_map(|entry| entry.host_os.map(|os| (entry.machine_id.clone(), os)))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let runtime = runtime.with_registered_host_oses(registered);
     crate::worker_coordination::attach(runtime)
 }

@@ -31,11 +31,8 @@ spec:
   steps:
     - id: invoke
       target: activity:agent_invoke
-      default_input:
-        prompt: "{{ input.prompt }}"
-        workspace_path: "{{ input.cwd }}"
-        cwd: "{{ input.cwd }}"
-        crew: "{{ input.crew }}"
-        timeout_seconds: "{{ input.timeout_seconds }}"
-        provider_sandbox: "{{ input.provider_sandbox }}"
-        trusted_host_admission: "{{ input.trusted_host_admission }}"
+      # Forward the admission's binding as one object. repo_root is present
+      # only for a linked checkout; rendering an absent optional string as an
+      # empty value would declare an invalid pair for primary invocations.
+      # This also keeps prompt text from being recursively templated.
+      default_input: "{{ input }}"

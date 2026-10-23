@@ -30,7 +30,7 @@ pub enum FormatArg {
     Auto,
     /// Aligned columns with a header.
     Table,
-    /// Untruncated text with tab-separated fields and no header.
+    /// Untruncated text with tab-separated fields; a header row only with --header.
     Plain,
     /// A single JSON document.
     Json,
@@ -43,8 +43,9 @@ pub enum FormatArg {
 pub enum OutputMode {
     /// Aligned columns with a header, truncated to the sink's width.
     Table,
-    /// `table` with the header suppressed, borders and ANSI absent, truncation
-    /// disabled, and single-tab field separators — the form `cut -f` expects.
+    /// `table` with the header suppressed (unless `--header` asked for it),
+    /// borders and ANSI absent, truncation disabled, and single-tab field
+    /// separators — the form `cut -f` expects.
     Plain,
     /// A single JSON document.
     Json,
@@ -96,6 +97,7 @@ pub struct OutputSink {
     mode: OutputMode,
     explicit_table: bool,
     legacy_json: bool,
+    plain_header: bool,
 }
 
 impl OutputSink {
@@ -144,7 +146,22 @@ impl OutputSink {
             mode,
             explicit_table: requested == Some(FormatArg::Table),
             legacy_json,
+            plain_header: false,
         }
+    }
+
+    /// Prepend each table's header row to its plain form, as the global
+    /// `--header` asks (`specs/output-modes.md` §1). Off by default, so the
+    /// plain form a script already parses keeps its bytes.
+    #[must_use]
+    pub fn with_plain_header(mut self, plain_header: bool) -> Self {
+        self.plain_header = plain_header;
+        self
+    }
+
+    /// Whether a table's plain form starts with its header row.
+    pub fn plain_header(&self) -> bool {
+        self.plain_header
     }
 
     /// Whether stdout is a terminal.
@@ -240,10 +257,10 @@ pub fn stdin_is_terminal() -> bool {
     std::io::stdin().is_terminal()
 }
 
-/// Whether stderr has a terminal for an explicit administrator authentication
-/// prompt. A shell installer may arrive via a stdin pipe while stderr still
-/// points at the user's terminal.
-#[cfg(target_os = "linux")]
+/// Whether stderr has a terminal for an explicit prompt, such as an
+/// administrator authentication prompt or the browser-kit offer. A shell
+/// installer may arrive via a stdin pipe while stderr still points at the
+/// user's terminal.
 pub fn stderr_is_terminal() -> bool {
     std::io::stderr().is_terminal()
 }

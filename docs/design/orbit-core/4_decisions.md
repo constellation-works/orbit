@@ -11,7 +11,7 @@ tags: [orbit-core, orbit-cmd, architecture, north-star]
 paths: ["crates/orbit-core/**", "crates/orbit-cmd/**"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10026, ORB-10545, ORB-12772]
-last_validated: 2026-10-10
+last_validated: 2026-10-17
 ---
 
 # Orbit Core — Decisions
@@ -43,6 +43,8 @@ Record five bearings as orbit's north star. This is an **incremental bearing, no
 5. **Crates follow build boundaries, not taxonomy.** Crate splits are justified by compile-graph and dependency-direction needs, not by conceptual category. Explicitly kept as-is under this bearing: the YAML+SQLite layered store in orbit-store, and the stability-tier markers (ARCHITECTURE.md §Stability tiers).
 
 **Adoption model.** Incremental and opportunistic: when a new surface is added or an existing command group is touched for other reasons, move that slice to request/response + registry then. Future decisions should cite this bearing when steering by it, or supersede it if the bearing itself changes.
+
+**Amended for bearing 1:** [Migrate the remaining nouns on a plan, not on contact](../operations-as-data/4_decisions.md#migrate-the-remaining-nouns-on-a-plan-not-on-contact) replaces the opportunistic adoption model with a planned noun-by-noun migration for operations as data only. Bearings 2–5 are unaffected.
 
 **Alternatives rejected.** (a) *Status quo as the implicit bearing*: keeps charging up to 4× adapter wiring per operation and guarantees the next boundary refactor hits the same inherent-impl/orphan-rule wall with no recorded direction — the cost that motivated this ADR. (b) *Big-bang registry rewrite*: months of churn across every surface with no incremental payoff and high regression risk in a codebase that ships continuously; rejected in favor of the touch-it-move-it model.
 

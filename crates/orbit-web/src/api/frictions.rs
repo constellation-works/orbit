@@ -14,6 +14,7 @@ use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::friction::{FRICTION_LIST_RESPONSE_MODE_WITH_NOTES, FrictionVerb};
+use orbit_common::governance::operation::OperationVerb;
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -47,8 +48,7 @@ impl FrictionCall {
         if !self
             .verb
             .spec()
-            .params
-            .iter()
+            .params()
             .any(|declared| declared.name == param)
         {
             return Err(OrbitError::Execution(format!(
@@ -58,6 +58,18 @@ impl FrictionCall {
         }
         self.input.insert(param.to_string(), value);
         Ok(())
+    }
+
+    /// Pass on the request-body fields the verb's spec does not declare, so
+    /// the tool entry reports them as it does for every other surface.
+    /// Declared fields the route does not model stay out of the call.
+    fn forward_undeclared(&mut self, extra: Map<String, Value>) {
+        let spec = self.verb.spec();
+        self.input.extend(
+            extra
+                .into_iter()
+                .filter(|(field, _)| spec.is_undeclared_field(field)),
+        );
     }
 
     /// Set a parameter only when the caller supplied a non-blank value.
@@ -119,7 +131,8 @@ pub(super) struct FrictionsQuery {
 /// `model` falls back to the human actor label via [`run_friction_tool`] when
 /// the caller omits it. `orbit.friction.add` rejects
 /// a separate `agent` field (attribution was consolidated to `model`-only),
-/// so this body does not accept one.
+/// so this body does not accept one. Fields the tool does not declare are
+/// forwarded for the tool entry to report.
 #[derive(Deserialize, Default)]
 pub(super) struct CreateFrictionBody {
     #[serde(default)]
@@ -132,6 +145,8 @@ pub(super) struct CreateFrictionBody {
     tags: Option<Vec<String>>,
     #[serde(default)]
     during_task: Option<String>,
+    #[serde(flatten)]
+    extra: Map<String, Value>,
 }
 
 #[derive(Deserialize, Default)]
@@ -144,6 +159,10 @@ pub(super) struct FrictionPatchBody {
     /// legacy record a usable handle without touching its append-only report.
     #[serde(default)]
     title: Option<String>,
+    /// Fields the tool does not declare, forwarded for the tool entry to
+    /// report.
+    #[serde(flatten)]
+    extra: Map<String, Value>,
 }
 
 pub(super) async fn list_frictions(
@@ -249,7 +268,9 @@ pub(super) async fn create_friction_action(
         if let Some(tags) = body.tags {
             call.set("tags", json!(tags))?;
         }
-        call.set_optional("during_task", body.during_task.as_deref())
+        call.set_optional("during_task", body.during_task.as_deref())?;
+        call.forward_undeclared(body.extra);
+        Ok(())
     })();
     if let Err(e) = built {
         return map_runtime_error(e);
@@ -308,6 +329,7 @@ pub(super) async fn update_friction_action(
         if let Some(title) = title {
             call.set("title", Value::String(title))?;
         }
+        call.forward_undeclared(body.extra);
         Ok(call)
     });
     let call = match built {

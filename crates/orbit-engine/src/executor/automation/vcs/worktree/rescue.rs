@@ -7,7 +7,13 @@
 //! removes such a worktree once the candidate is recoverable elsewhere, in
 //! this order: a durable carry ref or the run's published branch on `origin`
 //! whose tree is exactly the worktree's candidate, or a patch GC writes to a
-//! bounded rescue store and verifies before removal. Anything GC cannot
+//! bounded rescue store and verifies before removal. The patch applies to
+//! the worktree's `HEAD`. GC pins that commit on
+//! `refs/orbit/rescue/worktree-gc/<run>-<tree>` in the owning repository
+//! before it deletes the run branch, so an unpublished `HEAD` stays
+//! reachable after Git drops the branch and expires reflogs, including
+//! files that commit introduced and the diff does not repeat. A deleting
+//! sweep removes the pin once the patch file is gone. Anything GC cannot
 //! capture exactly keeps the worktree.
 //!
 //! The candidate is what the carry stages: every tracked change and every
@@ -21,11 +27,16 @@ use std::path::{Component, Path, PathBuf};
 use orbit_common::OrbitError;
 use serde::Serialize;
 
-use super::super::git::{git_output, git_output_with_env, git_run_bytes};
+use super::super::git::{
+    git_command_success, git_output, git_output_with_env, git_run_bytes, git_success,
+};
 use super::super::operations::CANDIDATE_REF_PREFIX;
 
 /// The store's directory under the owning checkout.
 const RESCUE_STORE: &str = ".orbit/state/rescue/worktree-gc";
+/// Local ref that keeps a rescue patch's base commit reachable after GC
+/// deletes the run branch. One ref per patch file, same leaf name.
+const RESCUE_BASE_REF_PREFIX: &str = "refs/orbit/rescue/worktree-gc/";
 /// Largest patch GC writes; a bigger candidate keeps its worktree.
 const MAX_RESCUE_PATCH_BYTES: u64 = 16 * 1024 * 1024;
 /// Total the store may hold; when full, GC keeps worktrees instead.
@@ -144,6 +155,89 @@ pub(super) fn published_recovery(
     run_id: &str,
     snapshot: &CandidateSnapshot,
 ) -> Option<WorktreeGcRecovery> {
+    origin_run_refs(worktree, branch, task_ids, run_id)?
+        .into_iter()
+        .find(|recovery| {
+            git_output(
+                worktree,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("{}^{{tree}}", recovery.commit),
+                ],
+            )
+            .is_ok_and(|tree| tree == snapshot.tree)
+        })
+}
+
+/// A clean worktree's `HEAD` and where its commits survive once GC deletes
+/// its run branch [ORB-16385]. No recovery: every commit on `HEAD` is
+/// reachable from a ref that is not a run branch: the base or another local
+/// branch, a remote-tracking branch, a tag, a carry ref or a rescue base ref.
+/// A recovery: the run's carry ref or branch on `origin` contains `HEAD`. The
+/// error says how many commits only the run branch holds, and keeps the
+/// worktree.
+pub(super) fn committed_recovery(
+    worktree: &Path,
+    branch: &str,
+    task_ids: &[String],
+    run_id: &str,
+) -> Result<(String, Option<WorktreeGcRecovery>), String> {
+    let head = git_output(worktree, &["rev-parse", "--verify", "HEAD^{commit}"])
+        .map_err(|error| format!("cannot read the worktree's HEAD: {error}"))?;
+    // Other run branches are excluded: each is collected by the same rule,
+    // so one never vouches for another.
+    let exclude_branch = format!("--exclude={branch}");
+    let unique = git_output(
+        worktree,
+        &[
+            "rev-list",
+            "--count",
+            &head,
+            "--not",
+            "--exclude=orbit/*",
+            &exclude_branch,
+            "--branches",
+            "--remotes",
+            "--tags",
+            &format!("--glob={}", CANDIDATE_REF_PREFIX.trim_end_matches('/')),
+            &format!("--glob={}", RESCUE_BASE_REF_PREFIX.trim_end_matches('/')),
+        ],
+    )
+    .map_err(|error| format!("cannot tell which commits only the run branch holds: {error}"))?;
+    if unique == "0" {
+        return Ok((head, None));
+    }
+    let contains_head = |recovery: &WorktreeGcRecovery| {
+        recovery.commit == head
+            || git_command_success(
+                worktree,
+                &["merge-base", "--is-ancestor", &head, &recovery.commit],
+            )
+            .unwrap_or(false)
+    };
+    if let Some(recovery) = origin_run_refs(worktree, branch, task_ids, run_id)
+        .unwrap_or_default()
+        .into_iter()
+        .find(contains_head)
+    {
+        return Ok((head, Some(recovery)));
+    }
+    Err(format!(
+        "{unique} commit(s) on '{branch}' exist on no published ref and in no rescue \
+         patch; push the branch or keep its commits elsewhere, then rerun GC"
+    ))
+}
+
+/// The run's carry refs, then its branch, as `origin` lists them. `None`
+/// when `origin` cannot be listed.
+fn origin_run_refs(
+    worktree: &Path,
+    branch: &str,
+    task_ids: &[String],
+    run_id: &str,
+) -> Option<Vec<WorktreeGcRecovery>> {
     let carry_refs = task_ids
         .iter()
         .map(|task_id| format!("{CANDIDATE_REF_PREFIX}{task_id}/{run_id}"))
@@ -156,7 +250,7 @@ pub(super) fn published_recovery(
         Ok(listed) => listed,
         Err(error) => {
             tracing::info!(path = %worktree.display(), %error,
-                "worktree GC could not list origin's candidate refs; falling back to a rescue patch");
+                "worktree GC could not list origin's run refs");
             return None;
         }
     };
@@ -165,28 +259,21 @@ pub(super) fn published_recovery(
         .filter_map(|line| line.split_once('\t'))
         .map(|(sha, name)| (name.trim().to_string(), sha.trim().to_string()))
         .collect::<Vec<_>>();
-    carry_refs
-        .iter()
-        .map(|name| (name, "carry_ref"))
-        .chain(std::iter::once((&branch_ref, "published_branch")))
-        .find_map(|(name, source)| {
-            let (_, sha) = remote.iter().find(|(listed, _)| listed == name)?;
-            let tree = git_output(
-                worktree,
-                &[
-                    "rev-parse",
-                    "--verify",
-                    "--quiet",
-                    &format!("{sha}^{{tree}}"),
-                ],
-            )
-            .ok()?;
-            (tree == snapshot.tree).then(|| WorktreeGcRecovery {
-                source: source.to_string(),
-                location: name.clone(),
-                commit: sha.clone(),
+    Some(
+        carry_refs
+            .iter()
+            .map(|name| (name, "carry_ref"))
+            .chain(std::iter::once((&branch_ref, "published_branch")))
+            .filter_map(|(name, source)| {
+                let (_, sha) = remote.iter().find(|(listed, _)| listed == name)?;
+                Some(WorktreeGcRecovery {
+                    source: source.to_string(),
+                    location: name.clone(),
+                    commit: sha.clone(),
+                })
             })
-        })
+            .collect(),
+    )
 }
 
 /// Write the candidate as a patch against `snapshot.head` to the bounded
@@ -209,9 +296,12 @@ pub(super) fn write_rescue_patch(
     })?;
     ensure_real_store_directories(&store)?;
     // Named by the candidate's tree too, so a later sweep of the same run
-    // never overwrites a verified patch with a different tree's.
-    let short_tree = snapshot.tree.get(..12).unwrap_or(&snapshot.tree);
-    let file = store.join(format!("{}-{short_tree}.patch", file_stem(run_id)));
+    // never overwrites a verified patch with a different tree's. The same
+    // leaf names the base ref, so the patch and the commit it applies to
+    // stay paired.
+    let leaf = rescue_patch_leaf(run_id, &snapshot.tree)?;
+    let base_ref = format!("{RESCUE_BASE_REF_PREFIX}{leaf}");
+    let file = store.join(format!("{leaf}.patch"));
     let diff = git_run_bytes(
         worktree,
         &[
@@ -239,7 +329,9 @@ pub(super) fn write_rescue_patch(
     }
     let mut patch = format!(
         "Orbit worktree GC rescue patch\n\nRun: {run_id}\nBranch: {branch}\nBase: {}\n\
-         Tree: {}\n\nApply with `git apply` on a checkout of the base commit.\n\n",
+         Base-Ref: {base_ref}\nTree: {}\n\nApply with `git apply` on a checkout of \
+         the base commit. Base-Ref keeps that commit reachable after the run branch \
+         is deleted.\n\n",
         snapshot.head, snapshot.tree
     )
     .into_bytes();
@@ -278,6 +370,15 @@ pub(super) fn write_rescue_patch(
             tracing::warn!(path = %file.display(), %remove, "unverified rescue patch left behind");
         }
         return Err(format!("rescue patch did not verify: {error}"));
+    }
+    // The caller deletes the run branch next. When that branch is the only
+    // root for an unpublished HEAD, the SHA in the patch text does not keep
+    // the commit — or files it introduced that this diff does not repeat.
+    if let Err(error) = retain_patch_base(repo_root, &base_ref, &snapshot.head) {
+        if let Err(remove) = fs::remove_file(&file) {
+            tracing::warn!(path = %file.display(), %remove, "unpinned rescue patch left behind");
+        }
+        return Err(format!("rescue patch base was not retained: {error}"));
     }
     Ok(recovery)
 }
@@ -367,6 +468,141 @@ fn file_stem(run_id: &str) -> String {
             }
         })
         .collect()
+}
+
+/// The patch file's leaf and the last component of its base ref.
+fn rescue_patch_leaf(run_id: &str, tree: &str) -> Result<String, String> {
+    let short_tree = tree.get(..12).unwrap_or(tree);
+    let leaf = format!("{}-{short_tree}", file_stem(run_id));
+    let name = format!("{RESCUE_BASE_REF_PREFIX}{leaf}");
+    if valid_rescue_base_ref(&name) {
+        Ok(leaf)
+    } else {
+        Err(format!("rescue base ref '{name}' is not a plain ref"))
+    }
+}
+
+/// One plain path segment under the rescue base prefix, so the name can be
+/// neither an option nor a path that escapes the rescue namespace.
+fn valid_rescue_base_ref(value: &str) -> bool {
+    value
+        .strip_prefix(RESCUE_BASE_REF_PREFIX)
+        .is_some_and(|rest| {
+            !rest.is_empty()
+                && !rest.contains('/')
+                && !rest.starts_with('.')
+                && !rest.ends_with(".lock")
+                && !rest.contains("..")
+                && rest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        })
+}
+
+/// Point `base_ref` at `commit` in the owning repository. The worktree and
+/// the run branch are about to disappear; a commit that exists only in the
+/// worktree's private objects cannot be kept by a ref here.
+fn retain_patch_base(repo_root: &Path, base_ref: &str, commit: &str) -> Result<(), String> {
+    let found = git_output(
+        repo_root,
+        &["rev-parse", "--verify", &format!("{commit}^{{commit}}")],
+    )
+    .map_err(|error| {
+        format!("the owning repository does not contain the patch base {commit}: {error}")
+    })?;
+    if found != commit {
+        return Err(format!(
+            "the owning repository resolved the patch base to {found}, not {commit}"
+        ));
+    }
+    git_success(repo_root, &["update-ref", "--no-deref", base_ref, commit])
+        .map_err(|error| format!("could not point {base_ref} at {commit}: {error}"))?;
+    match git_output(
+        repo_root,
+        &["rev-parse", "--verify", &format!("{base_ref}^{{commit}}")],
+    ) {
+        Ok(pinned) if pinned == commit => Ok(()),
+        Ok(pinned) => {
+            if let Err(error) = git_success(repo_root, &["update-ref", "-d", base_ref]) {
+                tracing::warn!(%base_ref, %error, "rescue base ref left pointing at the wrong commit");
+            }
+            Err(format!(
+                "{base_ref} points at {pinned}, not the patch base {commit}"
+            ))
+        }
+        Err(error) => Err(format!(
+            "could not read {base_ref} after pinning it: {error}"
+        )),
+    }
+}
+
+/// Drop base refs whose patch file is gone. A symlinked store is not
+/// evidence the patches were removed, so those refs stay. An unreadable or
+/// unexpected file at the patch path also keeps its ref.
+pub(super) fn release_orphan_rescue_bases(repo_root: &Path) -> Result<(), OrbitError> {
+    let Some(store) = validated_rescue_store(repo_root) else {
+        return Ok(());
+    };
+    if !rescue_store_allows_release(&store) {
+        tracing::warn!(
+            store = %store.display(),
+            "rescue base refs kept; the rescue store is not a real directory"
+        );
+        return Ok(());
+    }
+    let listed = git_output(
+        repo_root,
+        &[
+            "for-each-ref",
+            "--format=%(refname)",
+            RESCUE_BASE_REF_PREFIX,
+        ],
+    )?;
+    for name in listed
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        if !valid_rescue_base_ref(name) {
+            continue;
+        }
+        let Some(leaf) = name.strip_prefix(RESCUE_BASE_REF_PREFIX) else {
+            continue;
+        };
+        if !rescue_patch_is_gone(&store.join(format!("{leaf}.patch"))) {
+            continue;
+        }
+        if let Err(error) = git_success(repo_root, &["update-ref", "-d", name]) {
+            tracing::warn!(%name, %error, "rescue base ref could not be released");
+        }
+    }
+    Ok(())
+}
+
+/// Whether the store's own components are real directories or simply absent.
+/// A symlink or other non-directory stops the walk: release must not decide
+/// from a redirected path.
+fn rescue_store_allows_release(store: &Path) -> bool {
+    let depth = Path::new(RESCUE_STORE).components().count();
+    let mut directories = store.ancestors().take(depth).collect::<Vec<_>>();
+    directories.reverse();
+    for directory in directories {
+        match fs::symlink_metadata(directory) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return true,
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// `true` only when the patch file is absent. Anything else — a real file, a
+/// symlink, a directory, or an unreadable path — keeps the base ref.
+fn rescue_patch_is_gone(patch: &Path) -> bool {
+    matches!(
+        fs::symlink_metadata(patch),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
 }
 
 /// Run `body` against a fresh scratch index, removing it afterwards.

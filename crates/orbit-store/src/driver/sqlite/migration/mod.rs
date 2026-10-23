@@ -1,14 +1,19 @@
 use std::path::Path;
 
-use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_error;
+use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::Connection;
 
 use crate::contracts::{ForwardCompatibleOpen, StateComponent, evaluate_newer_state};
 
+mod admission_reservations;
 mod audit_events;
 mod baseline;
+mod executor_census;
 mod feature;
+mod feature_ledgers;
 mod friction;
+mod handoff_settlement;
 mod host_registry;
 mod introspect;
 mod invocation;
@@ -17,12 +22,14 @@ mod learning;
 mod ledger;
 mod operation_mode;
 mod plugins;
+mod resource_minutes;
+mod retention_analytics;
 mod routine;
 mod task_commit_journal;
 mod task_reservations;
-mod tools;
 
 // Schema steps, referenced by the ordered `ledger::MIGRATIONS` registry.
+use admission_reservations::apply_admission_reservations;
 use audit_events::{
     apply_audit_actor_alias_v2, apply_audit_actor_identity, apply_audit_machine_name_columns,
     apply_audit_plugin_grants, apply_audit_self_reported_actor, apply_audit_tool_call_index,
@@ -30,21 +37,25 @@ use audit_events::{
     apply_v2_audit_event_type_ts_index,
 };
 use baseline::apply_baseline_schema;
+use executor_census::apply_executor_census;
 use feature::apply_feature_schema_ledger;
+use feature_ledgers::apply_absorb_feature_ledgers;
 use friction::{apply_friction_records_schema, apply_friction_rehome_target};
+use handoff_settlement::apply_handoff_settlement_sidecars;
 use host_registry::{
     apply_host_registry_core, apply_hub_registry_metadata, apply_workspace_coordination_projections,
 };
 use introspect::table_exists;
 use invocation::{
     apply_invocation_provider, apply_invocation_telemetry_columns,
-    apply_invocation_workspace_scope, apply_invocations_ts_index,
-    apply_provider_limit_observations, apply_provider_limit_readings,
+    apply_invocation_workspace_scope, apply_invocations_ts_index, apply_provider_crew_accounts,
+    apply_provider_crew_outages, apply_provider_limit_observations, apply_provider_limit_readings,
 };
 use job_runs::{
     apply_execution_provenance, apply_flat_crew_model, apply_job_run_archive_stage,
-    apply_job_run_id_allocations, apply_job_run_states, apply_job_runs_created_index,
-    apply_job_runs_job_created_and_retry_indexes, apply_job_runs_recency_index,
+    apply_job_run_id_allocations, apply_job_run_states, apply_job_run_step_lock_wait,
+    apply_job_runs_created_index, apply_job_runs_job_created_and_retry_indexes,
+    apply_job_runs_recency_index,
 };
 use learning::{apply_learning_index_workspace_scope, apply_remove_native_learning_subsystem};
 use operation_mode::apply_remove_operation_mode;
@@ -53,6 +64,11 @@ use plugins::{
     apply_plugin_archive_digest, apply_plugin_build_record, apply_plugin_certified_orbit_version,
     apply_plugins_and_audit_plugin_provenance,
 };
+use resource_minutes::{
+    apply_admission_forecasts, apply_forecast_attribution, apply_host_resource_minutes,
+    apply_pull_forecast_decisions, apply_run_resource_minutes, apply_worker_cpu_accounting,
+};
+use retention_analytics::apply_retention_analytics;
 use routine::apply_routine_scheduler_schema;
 use task_commit_journal::apply_task_commit_journal;
 use task_reservations::apply_workspace_claim_scope;
@@ -61,11 +77,11 @@ use task_reservations::apply_workspace_claim_scope;
 #[cfg(test)]
 use introspect::table_has_column;
 
-pub use feature::{
-    AppliedFeatureMigration, FeatureMigration, FeatureSchemaStatus, PendingFeatureMigration,
+pub(crate) use ledger::applied_migrations;
+pub use ledger::{
+    AppliedMigration, LedgerStamp, LedgeredDatabase, Migration, SUPPORTED_SCHEMA_VERSION,
+    current_schema_version, evaluate_newer_database, run_database_migrations,
 };
-pub use ledger::{AppliedMigration, SUPPORTED_SCHEMA_VERSION};
-pub(crate) use ledger::{applied_migrations, current_schema_version};
 
 /// Bring the store database up to the newest supported schema version,
 /// applying any pending versioned migrations (each transactional and
@@ -125,10 +141,14 @@ pub fn read_schema_ledger_status(db_path: &Path) -> Result<SchemaLedgerStatus, O
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .map_err(|e| {
-            OrbitError::Store(format!(
-                "cannot open store database '{}' read-only: {e}",
-                db_path.display()
-            ))
+            sqlite_error(
+                StorageLayer::Store,
+                &e,
+                format!(
+                    "cannot open store database '{}' read-only: {e}",
+                    db_path.display()
+                ),
+            )
         })?;
         let current_version = current_schema_version(&conn)?;
         let forward_compatible = if current_version > SUPPORTED_SCHEMA_VERSION {
@@ -165,6 +185,16 @@ pub(crate) fn schema_compatibility() -> orbit_common::fs::generation::LedgerComp
             .iter()
             .map(|m| (m.version, m.compat.is_write_safe(), !m.compat.is_breaking())),
     )
+}
+
+/// The frozen feature schemas as upgrade admission compares them: each
+/// feature's newest version and its newest breaking migration.
+pub(crate) fn feature_compatibility() -> Vec<(
+    &'static str,
+    u32,
+    orbit_common::fs::generation::FeatureFloor,
+)> {
+    feature::feature_compatibility(feature_ledgers::FEATURE_REGISTRIES)
 }
 
 /// Registry migrations newer than `current_version`, in apply order. Lets

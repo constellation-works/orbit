@@ -14,11 +14,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 
 use orbit_agent::{Agent, AgentConfig, AgentRequest};
-use orbit_common::security::child_env::allowlisted_child_env;
+use orbit_common::security::child_env::{allowlisted_child_env, allowlisted_child_env_from};
 use orbit_types::identity::ReasoningEffort;
 use orbit_types::workflow::Provider;
 use serde_json::{Value, json};
-use support::{ChildGuard, HOSTILE_ENV, WAIT, isolated, scratch};
+use support::{ChildGuard, HOSTILE_ENV, STATE_ROOT_OVERRIDES, WAIT, isolated, scratch};
 
 struct CliCase {
     provider: &'static str,
@@ -111,6 +111,14 @@ const CLI_CASES: &[CliCase] = &[
         effort_flag: Some("--variant"),
     },
     CliCase {
+        provider: "muse",
+        binary: "muse",
+        model: "fixture-model",
+        emitted_model: "fixture-model",
+        model_flag: "--model",
+        effort_flag: Some("--reasoning-effort"),
+    },
+    CliCase {
         provider: "mock",
         binary: "mock-agent",
         model: "",
@@ -119,6 +127,28 @@ const CLI_CASES: &[CliCase] = &[
         effort_flag: None,
     },
 ];
+
+/// State/cache root overrides each provider owns. Shared XDG names belong
+/// only to providers whose sandbox roots resolve through them; every other
+/// provider must receive none of these names.
+fn expected_state_overrides(provider: &str) -> &'static [&'static str] {
+    match provider {
+        "codex" => &["CODEX_HOME"],
+        "claude" => &["CLAUDE_CONFIG_DIR"],
+        "grok" => &["GROK_HOME"],
+        "copilot" => &["COPILOT_HOME", "XDG_CACHE_HOME"],
+        "pi" => &["PI_CODING_AGENT_DIR"],
+        "opencode" => &[
+            "XDG_DATA_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "OPENCODE_CONFIG_DIR",
+        ],
+        "muse" => &["XDG_CONFIG_HOME", "XDG_DATA_HOME"],
+        _ => &[],
+    }
+}
 
 fn has_pair(args: &[String], flag: &str, value: &str) -> bool {
     args.windows(2)
@@ -196,9 +226,22 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                     let mut extras = spec.required_env_vars.to_vec();
                     extras.push("ORBIT_WORKSPACE_CLAIM_TOKEN");
                     let env = allowlisted_child_env(&pass, &extras);
+                    // A provider that cannot read stdin names a prompt-file
+                    // flag; deliver the prompt the way the runner does.
+                    let mut args = spec.args.clone();
+                    let piped: &[u8] = match spec.prompt_file_flag {
+                        Some(flag) => {
+                            let prompt_file = dir.join("prompt-file");
+                            fs::write(&prompt_file, &spec.stdin).expect("prompt file");
+                            args.push(flag.to_string());
+                            args.push(prompt_file.display().to_string());
+                            &[]
+                        }
+                        None => &spec.stdin,
+                    };
                     let mut child = ChildGuard(
                         Command::new(&spec.program)
-                            .args(&spec.args)
+                            .args(&args)
                             .current_dir(&dir)
                             .env_clear()
                             .envs(env)
@@ -214,7 +257,7 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                         .stdin
                         .take()
                         .expect("provider stdin")
-                        .write_all(&spec.stdin)
+                        .write_all(piped)
                         .expect("send prompt then close pipe");
                     assert!(
                         child.wait(WAIT).success(),
@@ -235,7 +278,15 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                         case.provider
                     );
                     let stdin = fs::read_to_string(dir.join("stdin")).unwrap();
-                    let prompt = if case.provider == "antigravity" {
+                    let prompt = if let Some(flag) = spec.prompt_file_flag {
+                        assert!(stdin.is_empty(), "{} also piped its prompt", case.provider);
+                        let path = args
+                            .windows(2)
+                            .find(|pair| pair[0] == flag)
+                            .map(|pair| pair[1].clone())
+                            .expect("prompt file argument");
+                        fs::read_to_string(path).expect("prompt file bytes")
+                    } else if case.provider == "antigravity" {
                         let event: Value =
                             serde_json::from_str(&stdin).expect("Antigravity user event");
                         assert_eq!(event["event"], "user");
@@ -282,6 +333,49 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                             case.provider
                         );
                     }
+                    // Each synthetic state/cache override reaches only its
+                    // owning adapter; unrelated providers receive none, so
+                    // the child resolves the same root the sandbox grants.
+                    let expected = expected_state_overrides(case.provider);
+                    for (name, value) in STATE_ROOT_OVERRIDES {
+                        if expected.contains(name) {
+                            assert!(
+                                vars.contains(&(*name, *value)),
+                                "{} dropped its state-root override {name}",
+                                case.provider
+                            );
+                        } else {
+                            assert!(
+                                !vars.iter().any(|(key, _)| key == name),
+                                "{} leaked unrelated state-root override {name}",
+                                case.provider
+                            );
+                        }
+                    }
+                    // Absent overrides are not invented: with no override in
+                    // the parent, the composed env carries none and the CLI
+                    // retains its HOME default (matching the sandbox).
+                    let absent_parent: Vec<(String, String)> = vec![
+                        ("HOME".to_string(), "/synthetic-home".to_string()),
+                        ("PATH".to_string(), "/usr/bin".to_string()),
+                    ];
+                    let absent_env =
+                        allowlisted_child_env_from(&absent_parent, &[], spec.required_env_vars);
+                    for (name, _) in STATE_ROOT_OVERRIDES {
+                        assert!(
+                            !absent_env.iter().any(|(key, _)| key == name),
+                            "{} invented absent state-root override {name}",
+                            case.provider
+                        );
+                    }
+                    if case.provider == "muse" {
+                        for pinned in [("MUSE_NO_AUTO_UPDATE", "1"), ("MUSE_LOGIN", "0")] {
+                            assert!(
+                                vars.contains(&pinned),
+                                "Muse launcher must never self-update or start a login: {pinned:?}"
+                            );
+                        }
+                    }
                     if case.provider == "claude" {
                         assert!(
                             vars.contains(&("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1")),
@@ -323,10 +417,18 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                                 "{} effort mapped incorrectly: {args:?}",
                                 case.provider
                             );
-                        } else {
+                        } else if case.provider == "codex" {
+                            // `--config` also carries non-effort settings, so the
+                            // unset-effort guarantee is the effort value, not the flag.
                             assert!(
                                 !args.iter().any(|arg| arg == value),
                                 "{} emitted unconfigured effort",
+                                case.provider
+                            );
+                        } else {
+                            assert!(
+                                !args.iter().any(|arg| arg == flag),
+                                "{} emitted an effort flag when effort was unset",
                                 case.provider
                             );
                         }

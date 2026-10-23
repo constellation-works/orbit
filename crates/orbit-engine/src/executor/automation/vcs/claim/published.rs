@@ -2,13 +2,14 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::SourceRevision;
-use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery};
-use serde_json::{Value, json};
+use orbit_types::workflow::handoff::{AcceptedHandoff, HandoffCandidate, HandoffDelivery};
 
 use crate::context::RuntimeHost;
 
 use super::super::git::{git_command_success, git_output, git_success};
-use super::super::pr::{DeliveryPin, PrMergeState, classify_pr_state};
+use super::super::pr::{
+    DeliveryPin, PrMergeState, PullRequestStatus, classify_pr_state, read_pr_status,
+};
 use super::super::review_gate::revision;
 use super::input::refused;
 use super::slug;
@@ -81,20 +82,34 @@ pub fn observe_published_candidate<H: RuntimeHost + ?Sized>(
     workspace_path: &Path,
     submitted: &HandoffCandidate,
 ) -> Result<HandoffCandidate, OrbitError> {
+    observe_published(host, workspace_path, submitted, false)
+}
+
+/// Re-observe an already accepted handoff for an authorized owner retry.
+/// The runtime supplies its immutable stored acceptance, never tool input.
+/// A different head requires the same fresh clean-base proof landing uses;
+/// the returned observation and every certificate remain on the accepted SHA.
+pub fn observe_accepted_published_handoff<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    accepted: &AcceptedHandoff,
+) -> Result<HandoffCandidate, OrbitError> {
+    observe_published(host, workspace_path, &accepted.handoff.candidate, true)
+}
+
+fn observe_published<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    submitted: &HandoffCandidate,
+    accepted: bool,
+) -> Result<HandoffCandidate, OrbitError> {
     let HandoffDelivery::PullRequest { number } = submitted.delivery else {
         return Err(refused(
             "owner observation of a published candidate requires a pull-request delivery",
         ));
     };
     let pr_number = number.to_string();
-    let response = host.run_private_vcs_operation(
-        super::super::operations::PR_STATUS,
-        json!({
-            "pr": pr_number,
-            "workspace_path": workspace_path.to_string_lossy(),
-        }),
-    )?;
-    let status = response.get("pull_request").cloned().unwrap_or(Value::Null);
+    let status = read_pr_status(host, workspace_path, &pr_number)?;
 
     match classify_pr_state(&status) {
         PrMergeState::Closed => {
@@ -120,12 +135,20 @@ pub fn observe_published_candidate<H: RuntimeHost + ?Sized>(
         | PrMergeState::Pending => {}
     }
 
-    DeliveryPin::pinned(
+    let mut pin = DeliveryPin::pinned(
         &submitted.source_branch,
         &submitted.base_branch,
         &submitted.candidate.commit,
-    )
-    .ensure_pinned_candidate(&status, &pr_number)?;
+    );
+    if accepted && status.head_sha.as_deref() != Some(&submitted.candidate.commit) {
+        super::super::landing::checks::verify_published_base_update(
+            workspace_path,
+            submitted,
+            &status,
+        )?;
+        pin.adopt_refreshed_candidate(status.head_sha.as_deref());
+    }
+    pin.ensure_pinned_candidate(&status, &pr_number)?;
 
     // `gh` resolves a bare PR number against the *checkout's* own remote, so
     // the delivery is already scoped to this repository. Comparing the URL it
@@ -172,12 +195,12 @@ pub fn observe_published_candidate<H: RuntimeHost + ?Sized>(
 
     Ok(HandoffCandidate {
         repository,
-        source_branch: reported(&status, "headRefName").ok_or_else(|| {
+        source_branch: status.head_branch.clone().ok_or_else(|| {
             refused(format!(
                 "pull request #{pr_number} did not report its head branch"
             ))
         })?,
-        base_branch: reported(&status, "baseRefName").ok_or_else(|| {
+        base_branch: status.base_branch.clone().ok_or_else(|| {
             refused(format!(
                 "pull request #{pr_number} did not report its base branch"
             ))
@@ -189,18 +212,9 @@ pub fn observe_published_candidate<H: RuntimeHost + ?Sized>(
     })
 }
 
-fn reported(status: &Value, field: &str) -> Option<String> {
-    status
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 /// The repository a pull request URL names, when the provider reported one.
-fn published_repository(status: &Value) -> Option<String> {
-    let url = reported(status, "url")?;
+fn published_repository(status: &PullRequestStatus) -> Option<String> {
+    let url = status.url.as_deref()?;
     let trimmed = url.trim_end_matches('/');
     let (repository, _) = trimmed.rsplit_once("/pull/")?;
     slug(repository)

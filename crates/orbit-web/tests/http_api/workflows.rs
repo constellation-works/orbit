@@ -111,6 +111,17 @@ fn auto_stop_is_idempotent_and_preserves_in_flight_children() {
                 .write_run_state(&coordinator.run_id, &state)
                 .unwrap();
             let server = fixture.server(true);
+            let refused = server.send(
+                "POST",
+                "/api/workflows/auto/stop?workspace=ws_http_fixture",
+                json!({"auto_concurrency":"enforce"}),
+            );
+            assert_eq!(refused.status().as_u16(), 400);
+            assert_eq!(
+                fixture.runtime.read_run_state(&coordinator.run_id).unwrap(),
+                Some(state.clone()),
+                "an incompatible mode on stop must be refused before changing admissions"
+            );
             let first = json_ok(server.send(
                 "POST",
                 "/api/workflows/auto/stop?workspace=ws_http_fixture",
@@ -119,8 +130,20 @@ fn auto_stop_is_idempotent_and_preserves_in_flight_children() {
             assert_eq!(first["outcome"], "stopped");
             assert_eq!(first["coordinators"][0]["run_id"], coordinator.run_id);
             assert_eq!(
-                first["coordinators"][0]["remaining_children"][0]["run_id"],
-                child.run_id
+                first["coordinators"][0],
+                json!({
+                    "run_id": coordinator.run_id,
+                    "job_id": "workspace_auto_pipeline",
+                    "outcome": "stopped",
+                    "remaining_children": [{
+                        "run_id": child.run_id,
+                        "job_name": "task_auto_pipeline",
+                        "phase": first["coordinators"][0]["remaining_children"][0]["phase"],
+                        "child_status": first["coordinators"][0]["remaining_children"][0]["child_status"],
+                    }],
+                    "forced_runs": [],
+                }),
+                "the dashboard returns the stop projection CLI and MCP return: {first}"
             );
             let stopped = fixture
                 .runtime
@@ -165,6 +188,46 @@ fn auto_stop_is_idempotent_and_preserves_in_flight_children() {
 const WS: &str = "ws_http_fixture";
 
 #[test]
+fn auto_windows_refuse_oversized_input_without_creating_a_run() {
+    isolated(
+        "workflows::auto_windows_refuse_oversized_input_without_creating_a_run",
+        || {
+            let fixture = Fixture::new();
+            fixture.job("workspace_auto_pipeline");
+            let server = fixture.server(true);
+            let uri = format!("/api/workflows/auto?workspace={WS}");
+            let before = run_ids(&fixture);
+            for duration in ["2d", "86401s"] {
+                let response = server.send("POST", &uri, json!({"for_duration":duration}));
+                let status = response.status().as_u16();
+                let error: Value = response.json().unwrap();
+                assert_eq!(status, 400, "{error}");
+                assert_eq!(
+                    error["error"],
+                    "for_seconds must be a whole number from 1 to 86400 (24 hours)"
+                );
+                assert_eq!(run_ids(&fixture), before, "refused input creates no run");
+            }
+            for body in [json!({}), json!({"for_duration":"0s"})] {
+                assert_eq!(server.send("POST", &uri, body).status().as_u16(), 400);
+                assert_eq!(run_ids(&fixture), before, "minimum-window rules remain");
+            }
+            for duration in ["1s", "24h"] {
+                let receipt = json_ok(server.send("POST", &uri, json!({"for_duration":duration})));
+                assert_eq!(receipt["job_id"], "workspace_auto_pipeline");
+                assert!(receipt["submitted_at"].is_string(), "{receipt}");
+                assert!(receipt.get("review").is_some());
+                assert_eq!(receipt["auto_fix"], false);
+                assert_eq!(
+                    run_input(&fixture, &receipt)["for_seconds"],
+                    if duration == "1s" { 1 } else { 86_400 }
+                );
+            }
+        },
+    );
+}
+
+#[test]
 fn resume_requires_current_completion_authority_and_preserves_review_only_admission() {
     isolated(
         "workflows::resume_requires_current_completion_authority_and_preserves_review_only_admission",
@@ -173,7 +236,9 @@ fn resume_requires_current_completion_authority_and_preserves_review_only_admiss
             fixture.job("resume_fixture");
             let mut source =
                 fixture.seed_run("jrun-resume-done", "resume_fixture", JobRunState::Failed);
-            source.input = Some(json!({"completion":"done","marker":"preserved"}));
+            source.input = Some(
+                json!({"completion":"done","marker":"preserved","auto_concurrency":"enforce","auto_concurrency_source":"explicit"}),
+            );
             fixture.save_run(&source);
             let uri = format!("/api/job-runs/{}/resume?workspace={WS}", source.run_id);
             let agent = fixture.server(false);
@@ -233,6 +298,25 @@ fn resume_requires_current_completion_authority_and_preserves_review_only_admiss
                 assert!(expected.insert(resumed.run_id));
                 assert_eq!(run_ids(&fixture), expected);
             }
+            // An inherited snapshot is retained even when the current host
+            // default differs, through the same public resume endpoint.
+            fixture.job("workspace_auto_pipeline");
+            let mut local = fixture.seed_run(
+                "jrun-resume-captured-mode",
+                "workspace_auto_pipeline",
+                JobRunState::Failed,
+            );
+            local.input =
+                Some(json!({"auto_concurrency":"shadow","auto_concurrency_source":"configured"}));
+            fixture.save_run(&local);
+            let receipt = json_ok(operator.send(
+                "POST",
+                &format!("/api/job-runs/{}/resume?workspace={WS}", local.run_id),
+                json!({}),
+            ));
+            let input = run_input(&fixture, &receipt);
+            assert_eq!(input["auto_concurrency"], "shadow");
+            assert_eq!(input["auto_concurrency_source"], "configured");
         },
     );
 }
@@ -753,6 +837,7 @@ fn failed_pull_protocol_is_visible_after_terminalization() {
                 fixture.seed_run("jrun-skew", "workspace_pull_pipeline", JobRunState::Failed);
             let now = Utc::now();
             run.steps.push(orbit_types::workflow::JobRunStep {
+                lock_wait_ms: None,
                 step_index: 0,
                 target_type: orbit_types::workflow::JobTargetType::Job,
                 target_id: run.job_id.clone(),
@@ -777,7 +862,8 @@ fn failed_pull_protocol_is_visible_after_terminalization() {
                 )
                 .unwrap();
             let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
-            state.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
+            state.pull_drain.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
+                task_pilot_warning: None,
                 capacity: None,
                 recorded_at: now,
                 queued: 0,
@@ -794,6 +880,7 @@ fn failed_pull_protocol_is_visible_after_terminalization() {
                 consecutive_pass_failures: 1,
                 admission_refusal: None,
                 degraded: true,
+                admission_forecast: None,
             });
             fixture
                 .runtime
@@ -819,49 +906,132 @@ fn auto_start_approve_proposed_is_opt_in_boolean_and_operator_gated() {
         || {
             let fixture = Fixture::new();
             fixture.job("workspace_auto_pipeline");
+            std::fs::write(
+                fixture.global.join("config.toml"),
+                "[machine.auto_concurrency]\nmode = \"shadow\"\n",
+            )
+            .unwrap();
             let uri = format!("/api/workflows/auto?workspace={WS}");
             let agent = fixture.server(false);
             let operator = fixture.server(true);
             let before = run_ids(&fixture);
 
-            // A session without the operator capability cannot turn it on, and
-            // is told which governed operation refused it.
+            // Each authority is independently guarded before durable effects.
+            for (field, operation) in [
+                ("approve_proposed", "auto_drain.approve_proposed"),
+                ("auto_fix", "auto_drain.auto_fix"),
+            ] {
+                let denied = error_code(
+                    agent.send("POST", &uri, json!({"for_duration":"1m",field:true})),
+                    403,
+                    "authorization_denied",
+                );
+                assert_eq!(denied["operation"], operation);
+                assert_eq!(run_ids(&fixture), before, "a denied start persists no run");
+                for wrong in [json!("true"), json!(1), json!(null)] {
+                    assert_parse_error(
+                        operator.send("POST", &uri, json!({"for_duration":"1m",field:wrong})),
+                        "invalid type",
+                    );
+                }
+                assert_eq!(run_ids(&fixture), before, "a rejected body persists no run");
+            }
+
+            for wrong in [
+                json!(false),
+                json!(true),
+                json!(1),
+                json!(null),
+                json!("bogus"),
+            ] {
+                let response = operator.send(
+                    "POST",
+                    &uri,
+                    json!({"for_duration":"1m","auto_concurrency":wrong}),
+                );
+                assert!(
+                    !response.status().is_success(),
+                    "malformed mode must be refused"
+                );
+            }
+            assert!(
+                !operator
+                    .send(
+                        "POST",
+                        &format!("/api/workflows/auto/stop?workspace={WS}"),
+                        json!({"auto_concurrency":"off"})
+                    )
+                    .status()
+                    .is_success()
+            );
+            assert!(
+                !operator
+                    .send(
+                        "POST",
+                        &uri,
+                        json!({"for_duration":"1m","autoConcurrency":"enforce"})
+                    )
+                    .status()
+                    .is_success()
+            );
             let denied = error_code(
                 agent.send(
                     "POST",
                     &uri,
-                    json!({"for_duration":"1m","approve_proposed":true}),
+                    json!({"for_duration":"1m","auto_concurrency":"off"}),
                 ),
                 403,
                 "authorization_denied",
             );
-            assert_eq!(denied["operation"], "auto_drain.approve_proposed");
-            assert_eq!(run_ids(&fixture), before, "a denied start persists no run");
-
-            // Anything but a JSON boolean is refused before a run exists.
-            for wrong in [json!("true"), json!(1), json!(null)] {
-                assert_parse_error(
-                    operator.send(
-                        "POST",
-                        &uri,
-                        json!({"for_duration":"1m","approve_proposed":wrong}),
+            assert_eq!(denied["operation"], "auto_drain.auto_concurrency");
+            assert_eq!(
+                run_ids(&fixture),
+                before,
+                "refused modes leave no durable effects"
+            );
+            let config = std::fs::read(fixture.global.join("config.toml")).ok();
+            for mode in ["off", "shadow", "enforce"] {
+                let started = json_ok(operator.send(
+                    "POST",
+                    &uri,
+                    json!({"for_duration":"1m","auto_concurrency":mode}),
+                ));
+                assert_eq!(started["auto_concurrency"]["mode"], mode);
+                assert_eq!(started["auto_concurrency"]["source"], "explicit");
+                let shown = json_ok(operator.send(
+                    "GET",
+                    &format!(
+                        "/api/runs/{}?workspace={WS}",
+                        started["run_id"].as_str().unwrap()
                     ),
-                    "invalid type",
-                );
+                    json!({}),
+                ));
+                assert_eq!(shown["run"]["auto_concurrency"]["mode"], mode);
+
+                let input = run_input(&fixture, &started);
+                assert_eq!(input["auto_concurrency"], mode);
+                assert_eq!(input["auto_concurrency_source"], "explicit");
             }
-            assert_eq!(run_ids(&fixture), before, "a rejected body persists no run");
+            assert_eq!(
+                std::fs::read(fixture.global.join("config.toml")).ok(),
+                config
+            );
 
             // Omitted and explicit false start the same window as before, from
             // an unauthorized session too.
             for body in [
                 json!({"for_duration":"1m"}),
-                json!({"for_duration":"1m","approve_proposed":false}),
+                json!({"for_duration":"1m","approve_proposed":false,"auto_fix":false}),
             ] {
                 let started = json_ok(agent.send("POST", &uri, body));
                 assert_eq!(started["approve_proposed"], false, "{started}");
+                assert_eq!(started["auto_fix"], false, "{started}");
+                assert_eq!(started["auto_concurrency"]["mode"], "shadow");
+                assert_eq!(started["auto_concurrency"]["source"], "configured");
                 assert_eq!(started["completion"], "review", "{started}");
                 let run = run_input(&fixture, &started);
                 assert_ne!(run["approve_proposed"], true, "{run}");
+                assert_ne!(run["auto_fix"], true, "{run}");
             }
 
             let started = json_ok(operator.send(
@@ -876,6 +1046,62 @@ fn auto_start_approve_proposed_is_opt_in_boolean_and_operator_gated() {
             );
             let run = run_input(&fixture, &started);
             assert_eq!(run["approve_proposed"], true, "{run}");
+
+            for (complete, approve) in [(false, false), (true, true)] {
+                let before = run_ids(&fixture);
+                let receipt = json_ok(operator.send(
+                    "POST", &uri,
+                    json!({"for_duration":"1m","auto_fix":true,"complete":complete,"approve_proposed":approve}),
+                ));
+                assert_eq!(receipt["auto_fix"], true);
+                assert_eq!(receipt["approve_proposed"], approve);
+                assert_eq!(
+                    receipt["completion"],
+                    if complete { "done" } else { "review" }
+                );
+                let input = run_input(&fixture, &receipt);
+                assert_eq!(
+                    input["auto_fix"], true,
+                    "the existing coordinator must inherit repair authority"
+                );
+                assert_eq!(
+                    input["completion"].as_str().unwrap_or("review"),
+                    receipt["completion"].as_str().unwrap()
+                );
+                assert_eq!(
+                    input["approve_proposed"].as_bool().unwrap_or(false),
+                    approve
+                );
+                assert_eq!(run_ids(&fixture).len(), before.len() + 1);
+            }
+
+            // A long-lived dashboard must capture the host default at submission,
+            // rather than keep inheriting the runtime's startup snapshot.
+            let changed = json_ok(operator.send(
+                "PUT",
+                &format!("/api/config/keys/machine.auto_concurrency.mode?workspace={WS}"),
+                json!({"scope":"global","value":"enforce"}),
+            ));
+            assert_eq!(changed["new_value"], "enforce");
+            let readiness =
+                json_ok(operator.get(&format!("/api/workflows/auto/readiness?workspace={WS}")));
+            assert_eq!(
+                readiness["auto_concurrency"]["configured_mode"], "enforce",
+                "the inherited choice must show the current admitted host setting"
+            );
+            let inherited = json_ok(operator.send("POST", &uri, json!({"for_duration":"1m"})));
+            assert_eq!(inherited["auto_concurrency"]["mode"], "enforce");
+            assert_eq!(inherited["auto_concurrency"]["source"], "configured");
+            assert_eq!(
+                run_input(&fixture, &inherited)["auto_concurrency"],
+                "enforce"
+            );
+            let earlier = json_ok(operator.get(&format!(
+                "/api/runs/{}?workspace={WS}",
+                started["run_id"].as_str().unwrap()
+            )));
+            assert_eq!(earlier["run"]["auto_concurrency"]["mode"], "shadow");
+            assert_eq!(earlier["run"]["auto_concurrency"]["source"], "configured");
         },
     );
 }
@@ -890,10 +1116,98 @@ fn auto_readiness_reports_authorization_and_replica_for_the_start_form() {
             let agent = json_ok(fixture.server(false).get(&uri));
             assert_eq!(agent["controls_authorized"], false, "{agent}");
             assert_eq!(agent["replica"], false, "{agent}");
+            assert!(
+                agent
+                    .get("validation_env_warning")
+                    .is_some_and(Value::is_null),
+                "{agent}"
+            );
             let operator = json_ok(fixture.server(true).get(&uri));
             assert_eq!(operator["controls_authorized"], true, "{operator}");
             assert_eq!(operator["replica"], false, "{operator}");
             assert_eq!(operator["approvals"]["enabled"], false, "{operator}");
+            let replica = Fixture::replica_of("hm_fixture_remote");
+            let server = replica.server(true);
+            let readiness = json_ok(server.get(&uri));
+            assert_eq!(readiness["replica"], true);
+            let before = listed_runs(&replica);
+            let response = server.send(
+                "POST",
+                &format!("/api/workflows/auto?workspace={WS}"),
+                json!({"for_duration":"1m","auto_fix":true}),
+            );
+            assert!(!response.status().is_success());
+            let refused: Value = response.json().unwrap();
+            assert!(
+                refused["error"]
+                    .as_str()
+                    .is_some_and(|message| !message.is_empty()),
+                "owner admission must explain its refusal: {refused}"
+            );
+            assert_eq!(
+                listed_runs(&replica),
+                before,
+                "replica refusal must precede run creation"
+            );
+        },
+    );
+}
+
+/// Readiness keeps the shell PATH warning across warm reads and server restarts.
+#[test]
+#[cfg(unix)]
+fn auto_readiness_reuses_the_validation_warning_without_profiles() {
+    isolated(
+        "workflows::auto_readiness_reuses_the_validation_warning_without_profiles",
+        || {
+            let fixture = Fixture::new();
+            let home = fixture.global.parent().unwrap();
+            let marker = home.join("login-probes");
+            for name in [".bash_profile", ".profile", ".zprofile"] {
+                std::fs::write(home.join(name),
+                    "printf 'probe\\n' >> \"$HOME/login-probes\"\nexport PATH=\"$HOME/login-tools:/usr/bin:/bin\"\n"
+                ).unwrap();
+            }
+            std::fs::create_dir_all(home.join(".config/fish")).unwrap();
+            std::fs::write(home.join(".config/fish/config.fish"),
+                "printf 'probe\\n' >> \"$HOME/login-probes\"\nset -gx PATH \"$HOME/login-tools\" /usr/bin /bin\n"
+            ).unwrap();
+            let configure = |mode: &str| {
+                std::fs::write(fixture.work.join("config.toml"), format!(
+                    "[workflow]\nrequired_validation_commands = [\"make check\"]\n[workflow.validation_env]\npath = [\"/usr/bin\", \"/bin\"]\npath_mode = \"{mode}\"\n"
+                )).unwrap();
+            };
+            configure("replace");
+            let uri = format!("/api/workflows/auto/readiness?workspace={WS}");
+            let first = {
+                let server = fixture.server(false);
+                let first = json_ok(server.get(&uri));
+                assert!(
+                    first["validation_env_warning"]
+                        .as_str()
+                        .unwrap()
+                        .contains(home.join("login-tools").to_str().unwrap()),
+                    "{first}"
+                );
+                let warm = json_ok(server.get(&uri));
+                assert_eq!(
+                    warm["validation_env_warning"],
+                    first["validation_env_warning"]
+                );
+                assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 1);
+                first
+            };
+            // Cross-process reuse also prevents a cold probe after a web restart.
+            let restarted = json_ok(fixture.server(false).get(&uri));
+            assert_eq!(
+                restarted["validation_env_warning"],
+                first["validation_env_warning"]
+            );
+            assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 1);
+            configure("prepend");
+            let kept = json_ok(fixture.server(false).get(&uri));
+            assert!(kept["validation_env_warning"].is_null(), "{kept}");
+            assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 2);
         },
     );
 }
@@ -1080,6 +1394,347 @@ fn auto_readiness_explains_the_tasks_it_names() {
     );
 }
 
+/// Readiness applies the live drain's own `--allow-crew` set: a task it
+/// excludes reads `crew_not_allowed` with its crew and the permitted set, and
+/// the tasks the drain would admit stay eligible.
+#[test]
+fn auto_readiness_applies_the_live_drains_crew_restriction() {
+    isolated(
+        "workflows::auto_readiness_applies_the_live_drains_crew_restriction",
+        || {
+            let fixture = Fixture::new();
+            std::fs::write(
+                fixture.global.join("config.toml"),
+                "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"sol-model\"\n\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus-model\"\n",
+            )
+            .unwrap();
+            let crewed = |title: &str, file: &str, crew: Option<&str>| {
+                std::fs::write(fixture.runtime.paths().repo_root.join(file), "fixture\n").unwrap();
+                fixture
+                    .runtime
+                    .add_task(TaskAddParams {
+                        title: title.into(),
+                        description: format!("Readiness fixture: {title}"),
+                        acceptance_criteria: vec!["The fixture is observable.".into()],
+                        plan: "Fixture plan.".into(),
+                        context_files: vec![format!("file:{file}")],
+                        complexity: TaskComplexity::Medium,
+                        status: Some(TaskStatus::Backlog),
+                        crew: crew.map(str::to_string),
+                        ..Default::default()
+                    })
+                    .unwrap()
+            };
+            let excluded = crewed("runs as opus", "opus.rs", Some("opus"));
+            let permitted = crewed("runs as sol", "sol.rs", Some("sol"));
+            let defaulted = crewed("runs as the default crew", "default.rs", None);
+            let server = fixture.server(false);
+            let uri = format!("/api/workflows/auto/readiness?workspace={WS}");
+            let entry = |payload: &Value, task: &Task| {
+                payload["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|entry| entry["task_id"] == task.id.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| panic!("{} missing: {payload:#}", task.id))
+            };
+
+            let selected_uri = format!(
+                "{uri}&task={},{}&concurrency=7&limit=500&allow_crew=sol",
+                excluded.id, permitted.id
+            );
+            let selected = json_ok(server.get(&selected_uri));
+            assert_eq!(selected["tasks"].as_array().unwrap().len(), 2, "{selected}");
+            assert_eq!(selected["capacity"]["max_active_leaf_runs"], 7);
+            assert_eq!(selected["capacity"]["allowed_crews"], json!(["sol"]));
+            assert_eq!(entry(&selected, &excluded)["reason"], "crew_not_allowed");
+            assert_eq!(entry(&selected, &permitted)["eligible"], true);
+            let both_crews =
+                json_ok(server.get(&selected_uri.replace("allow_crew=sol", "allow_crew=sol,opus")));
+            assert_eq!(entry(&both_crews, &excluded)["eligible"], true);
+            assert_eq!(
+                both_crews["capacity"]["allowed_crews"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2
+            );
+
+            assert_eq!(
+                server
+                    .get(&selected_uri.replace("limit=500", "limit=1"))
+                    .status(),
+                400,
+                "explicit selections larger than the limit are refused"
+            );
+            for limit in [0, 501] {
+                assert_eq!(server.get(&format!("{uri}&limit={limit}")).status(), 400);
+            }
+            let idle = json_ok(server.get(&uri));
+            assert_eq!(idle["capacity"]["allowed_crews"], Value::Null, "{idle:#}");
+            for task in [&excluded, &permitted, &defaulted] {
+                assert_eq!(
+                    entry(&idle, task)["eligible"],
+                    true,
+                    "no drain restricts crews: {idle:#}"
+                );
+            }
+
+            let mut drain =
+                fixture.seed_run("jrun-auto", "workspace_auto_pipeline", JobRunState::Running);
+            drain.input = Some(json!({"max_active_leaf_runs": 4, "allowed_crews": ["sol"]}));
+            fixture.save_run(&drain);
+            let live = json_ok(server.get(&uri));
+            assert_eq!(live["capacity"]["drain_run_id"], "jrun-auto", "{live:#}");
+            let refused = entry(&live, &excluded);
+            assert_eq!(refused["eligible"], false, "{refused}");
+            assert_eq!(refused["reason"], "crew_not_allowed", "{refused}");
+            assert_eq!(refused["crew"], "opus", "{refused}");
+            assert_eq!(refused["allowed_crews"], json!(["sol"]), "{refused}");
+            assert_eq!(
+                live["capacity"]["allowed_crews"],
+                json!(["sol"]),
+                "{live:#}"
+            );
+            for task in [&permitted, &defaulted] {
+                let admitted = entry(&live, task);
+                assert_eq!(
+                    admitted["eligible"], true,
+                    "the drain admits it: {admitted}"
+                );
+            }
+
+            // [ORB-16439] The only live drain is a restricted pull drain on a
+            // replica: readiness shows its allowed crews and excludes tasks that
+            // require other crews.
+            drain.state = JobRunState::Success;
+            drain.finished_at = Some(Utc::now());
+            fixture.save_run(&drain);
+
+            let mut pull_drain =
+                fixture.seed_run("jrun-pull", "workspace_pull_pipeline", JobRunState::Running);
+            pull_drain.input = Some(json!({"max_active_leaf_runs": 4, "allowed_crews": ["sol"]}));
+            fixture.save_run(&pull_drain);
+            let pull_live = json_ok(server.get(&uri));
+            assert_eq!(
+                pull_live["capacity"]["drain_run_id"],
+                Value::Null,
+                "{pull_live:#}"
+            );
+            assert_eq!(
+                pull_live["capacity"]["pull_drain_run_id"], "jrun-pull",
+                "{pull_live:#}"
+            );
+            assert_eq!(
+                pull_live["capacity"]["allowed_crews"],
+                json!(["sol"]),
+                "{pull_live:#}"
+            );
+            let pull_refused = entry(&pull_live, &excluded);
+            assert_eq!(pull_refused["eligible"], false, "{pull_refused}");
+            assert_eq!(pull_refused["reason"], "crew_not_allowed", "{pull_refused}");
+            assert_eq!(pull_refused["crew"], "opus", "{pull_refused}");
+            assert_eq!(
+                pull_refused["allowed_crews"],
+                json!(["sol"]),
+                "{pull_refused}"
+            );
+            for task in [&permitted, &defaulted] {
+                let admitted = entry(&pull_live, task);
+                assert_eq!(
+                    admitted["eligible"], true,
+                    "the pull drain admits it: {admitted}"
+                );
+            }
+        },
+    );
+}
+
+// Not `ORBIT_`-prefixed: those names are never reported unset.
+const UNSET_PASS: &str = "FIXTURE_HTTP_NOTICE_TOKEN";
+
+/// A fixture whose operator passes a variable the server does not hold,
+/// configured by `extra`, with both delivery workflows deployed.
+fn notice_fixture(extra: &str) -> Fixture {
+    let fixture = Fixture::new();
+    fixture.job("workspace_auto_pipeline");
+    fixture.job("task_auto_pipeline");
+    std::fs::write(
+        fixture.global.join("config.toml"),
+        format!(
+            "[execution.env]\npass = [\"HOME\", \"PATH\", \"CLAUDE_CODE_OAUTH_TOKEN\", \"{UNSET_PASS}\"]\n\n{extra}"
+        ),
+    )
+    .unwrap();
+    fixture
+}
+
+/// The notice fixtures pass `CLAUDE_CODE_OAUTH_TOKEN` and hold it, so the
+/// Claude credential warning a macOS host without one gets [ORB-16663] stays
+/// out of their receipts.
+fn held_worker_credential() -> orbit_common::test_env::ScopedEnv {
+    orbit_common::test_env::scoped([("CLAUDE_CODE_OAUTH_TOKEN", Some("fixture-worker-token"))])
+}
+
+fn backlog_task(fixture: &Fixture, title: &str, tags: &[&str]) -> Task {
+    fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: title.into(),
+            description: "submission notice fixture".into(),
+            status: Some(TaskStatus::Backlog),
+            tags: tags.iter().map(ToString::to_string).collect(),
+            ..Default::default()
+        })
+        .unwrap()
+}
+
+fn warning_lines(receipt: &Value) -> Vec<String> {
+    receipt["warning"]
+        .as_str()
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// A drain started from the dashboard reports what `orbit run auto` and
+/// `orbit.workflow.auto` report: the host throttle, backlog for another OS,
+/// unset `execution.env.pass` names and the required-validation note. An
+/// explicit ship reports the throttle and the unset names.
+#[test]
+fn auto_start_and_ship_report_the_submission_notices() {
+    isolated(
+        "workflows::auto_start_and_ship_report_the_submission_notices",
+        || {
+            let _credential = held_worker_credential();
+            let fixture = notice_fixture("");
+            // A live pull drain recorded a throttle on its latest pass; every
+            // admission in this workspace reports it.
+            let pull = fixture.seed_run(
+                "jrun-pull-throttled",
+                "workspace_pull_pipeline",
+                JobRunState::Running,
+            );
+            let mut state = PipelineState::new(pull.run_id.clone(), pull.job_id.clone(), json!({}));
+            state.pull_drain.drain_last_pass = Some(
+                serde_json::from_value(json!({
+                    "recorded_at": Utc::now(),
+                    "queued": 0,
+                    "resource_throttle": {"resources": [{
+                        "resource": "memory", "percent": 95.0, "high_percent": 90,
+                        "resume_percent": 85, "since": Utc::now(),
+                    }]},
+                }))
+                .unwrap(),
+            );
+            fixture
+                .runtime
+                .write_run_state(&pull.run_id, &state)
+                .unwrap();
+            let other_os = if cfg!(target_os = "macos") {
+                "os:linux"
+            } else {
+                "os:macos"
+            };
+            let elsewhere = backlog_task(&fixture, "another OS", &[other_os]);
+            let explicit = backlog_task(&fixture, "explicit", &[]);
+            let server = fixture.server(false);
+
+            let started = json_ok(server.send(
+                "POST",
+                &format!("/api/workflows/auto?workspace={WS}"),
+                json!({"for_duration":"1m"}),
+            ));
+            let warnings = warning_lines(&started);
+            assert_eq!(warnings.len(), 3, "{started}");
+            assert!(
+                warnings[0].starts_with("Admissions throttled: "),
+                "{started}"
+            );
+            assert!(
+                warnings[1].contains(&elsewhere.id) && warnings[1].contains("another OS"),
+                "{started}"
+            );
+            assert!(warnings[2].contains(UNSET_PASS), "{started}");
+            assert!(
+                started["resource_throttle"]["resources"]
+                    .as_array()
+                    .is_some_and(|resources| !resources.is_empty()),
+                "{started}"
+            );
+            assert!(
+                started["note"]
+                    .as_str()
+                    .is_some_and(|note| note.contains("workflow.required_validation_commands")),
+                "{started}"
+            );
+            assert!(started.get("validation_env_warning").is_none(), "{started}");
+
+            let shipped = json_ok(server.send(
+                "POST",
+                &format!("/api/workflows/ship?workspace={WS}"),
+                json!({"task_ids":[explicit.id],"mode":"local"}),
+            ));
+            let warnings = warning_lines(&shipped);
+            assert_eq!(warnings.len(), 2, "{shipped}");
+            assert!(
+                warnings[0].starts_with("Admissions throttled: "),
+                "an explicit ship proceeds under the throttle and says so: {shipped}"
+            );
+            assert!(warnings[1].contains(UNSET_PASS), "{shipped}");
+            assert!(
+                shipped.get("resource_throttle").is_none() && shipped.get("note").is_none(),
+                "{shipped}"
+            );
+        },
+    );
+}
+
+/// Required validation that cannot use the login shell is reported by a
+/// dashboard drain start and ship, as by the CLI and MCP.
+#[test]
+fn auto_start_and_ship_report_the_validation_environment() {
+    isolated(
+        "workflows::auto_start_and_ship_report_the_validation_environment",
+        || {
+            let _credential = held_worker_credential();
+            let fixture = notice_fixture(
+                "[workflow]\nrequired_validation_commands = [\"make ci-fast\"]\n\n\
+                 [workflow.validation_env]\nshell_probe = \"off\"\n",
+            );
+            let explicit = backlog_task(&fixture, "explicit", &[]);
+            let server = fixture.server(false);
+            for (path, body) in [
+                ("auto", json!({"for_duration":"1m"})),
+                ("ship", json!({"task_ids":[explicit.id],"mode":"local"})),
+            ] {
+                let receipt = json_ok(server.send(
+                    "POST",
+                    &format!("/api/workflows/{path}?workspace={WS}"),
+                    body,
+                ));
+                let warning = receipt["validation_env_warning"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{path}: {receipt}"));
+                assert!(
+                    warning.contains("`workflow.validation_env.shell_probe = off`"),
+                    "{path}: {receipt}"
+                );
+                assert!(
+                    warning_lines(&receipt).iter().any(|line| line == warning),
+                    "{path}: {receipt}"
+                );
+                assert!(
+                    receipt.get("note").is_none(),
+                    "{path}: configured required validation needs no note: {receipt}"
+                );
+            }
+        },
+    );
+}
+
 fn run_input(fixture: &Fixture, started: &Value) -> Value {
     let run_id = started["run_id"].as_str().expect("run id");
     listed_runs(fixture)
@@ -1087,4 +1742,234 @@ fn run_input(fixture: &Fixture, started: &Value) -> Value {
         .find(|run| run.run_id == run_id)
         .and_then(|run| run.input)
         .expect("persisted run input")
+}
+
+const REVIEW_CREW: &str = "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n\n\
+     [workflow]\ndefault_crew = \"reviewers\"\n\n[operation]\nreview_crew = \"reviewers\"\n";
+
+/// A dashboard drain start can add a review layer for that run, and its
+/// receipt names the captured layer; ship refuses a layer local-only delivery
+/// cannot run, and a value outside the two layers is a parse error.
+#[test]
+fn auto_start_and_ship_accept_a_strengthen_only_review_option() {
+    isolated(
+        "workflows::auto_start_and_ship_accept_a_strengthen_only_review_option",
+        || {
+            let _credential = held_worker_credential();
+            let fixture = notice_fixture(REVIEW_CREW);
+            let explicit = backlog_task(&fixture, "explicit", &[]);
+            let server = fixture.server(false);
+
+            let started = json_ok(server.send(
+                "POST",
+                &format!("/api/workflows/auto?workspace={WS}"),
+                json!({"for_duration":"1m","review":"before-landing"}),
+            ));
+            assert_eq!(
+                started["review"],
+                json!({"timing":"before-landing","source":"run-option"}),
+                "{started}"
+            );
+            assert_eq!(
+                run_input(&fixture, &started)["review_request"],
+                "before-landing",
+                "a resume or replay re-resolves from the persisted request: {started}"
+            );
+
+            let before = run_ids(&fixture);
+            let refused = server.send(
+                "POST",
+                &format!("/api/workflows/ship?workspace={WS}"),
+                json!({"task_ids":[explicit.id],"mode":"local","review":"before-pr"}),
+            );
+            let status = refused.status().as_u16();
+            let value: Value = refused.json().expect("JSON error body");
+            assert!((400..500).contains(&status), "{status} {value}");
+            assert!(
+                value["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("--review before-pr")),
+                "{value}"
+            );
+            assert_eq!(run_ids(&fixture), before, "a refused ship persists no run");
+
+            assert_parse_error(
+                server.send(
+                    "POST",
+                    &format!("/api/workflows/auto?workspace={WS}"),
+                    json!({"for_duration":"1m","review":"after-landing"}),
+                ),
+                "unknown variant",
+            );
+        },
+    );
+}
+
+const TWO_CREWS: &str = "[crews.alpha]\nmodel = \"alpha-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n\n\
+     [crews.beta]\nmodel = \"beta-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n\n\
+     [workflow]\ndefault_crew = \"alpha\"\n";
+
+/// The 4xx error text a refused start answers with.
+fn refusal(response: reqwest::blocking::Response) -> (u16, String) {
+    let status = response.status().as_u16();
+    let value: Value = response.json().expect("JSON error body");
+    assert!((400..500).contains(&status), "{status} {value}");
+    (
+        status,
+        value["error"].as_str().unwrap_or_default().to_string(),
+    )
+}
+
+/// A dashboard window restricted to one crew with a tier's pool replaced
+/// records the same run input `orbit run auto --allow-crew alpha
+/// --low-complexity-crews alpha:2 beta:1 --hard-complexity-crews` does, and a
+/// blank or unconfigured crew is refused in the runtime's words before any
+/// run exists.
+#[test]
+fn auto_start_records_the_crew_restriction_and_pool_overrides() {
+    isolated(
+        "workflows::auto_start_records_the_crew_restriction_and_pool_overrides",
+        || {
+            let _credential = held_worker_credential();
+            let fixture = notice_fixture(TWO_CREWS);
+            let server = fixture.server(false);
+            let uri = format!("/api/workflows/auto?workspace={WS}");
+
+            let before = run_ids(&fixture);
+            let (_, blank) = refusal(server.send(
+                "POST",
+                &uri,
+                json!({"for_duration":"1m","allow_crew":[" "]}),
+            ));
+            assert_eq!(blank, "crew name in the allowlist must not be empty");
+            let (_, unknown) = refusal(server.send(
+                "POST",
+                &uri,
+                json!({"for_duration":"1m","allow_crew":["gamma"]}),
+            ));
+            assert!(unknown.contains("gamma"), "{unknown}");
+            assert_eq!(run_ids(&fixture), before, "a refused start persists no run");
+
+            let started = json_ok(server.send(
+                "POST",
+                &uri,
+                json!({
+                    "for_duration": "1m",
+                    "concurrency": 2,
+                    "allow_crew": ["alpha"],
+                    "low_complexity_crews": ["alpha:2", "beta:1"],
+                    "hard_complexity_crews": [],
+                }),
+            ));
+            assert_eq!(started["source"], "local", "{started}");
+            assert_eq!(started["allowed_crews"], json!(["alpha"]), "{started}");
+            let input = run_input(&fixture, &started);
+            assert_eq!(input["for_seconds"], 60, "{input}");
+            assert_eq!(input["max_active_leaf_runs"], 2, "{input}");
+            assert_eq!(input["allowed_crews"], json!(["alpha"]), "{input}");
+            assert_eq!(
+                input["low_complexity_crews"],
+                json!(["alpha:2", "beta:1"]),
+                "{input}"
+            );
+            assert_eq!(input["hard_complexity_crews"], json!([]), "{input}");
+            assert!(
+                input.get("medium_complexity_crews").is_none(),
+                "an omitted tier keeps the workspace pool: {input}"
+            );
+        },
+    );
+}
+
+/// `--pull` refuses on the dashboard what it refuses on the command line, in
+/// the same words and before any owner is contacted: the flags clap rejects
+/// beside it, `--review`, `--host` without it, a blank crew, a pull from the
+/// owner checkout and a local window on a replica. Readiness names the same
+/// checkout refusals the Start form shows before submission.
+#[test]
+fn pull_starts_refuse_what_the_cli_refuses() {
+    isolated("workflows::pull_starts_refuse_what_the_cli_refuses", || {
+        let uri = format!("/api/workflows/auto?workspace={WS}");
+        let readiness_uri = format!("/api/workflows/auto/readiness?workspace={WS}");
+
+        let replica = Fixture::replica_of("hm_fixture_remote");
+        let server = replica.server(true);
+        let before = run_ids(&replica);
+        let selector = format!("hm_fixture_remote/{WS}");
+        for (extra, flag) in [
+            (json!({"approve_proposed": true}), "--approve-proposed"),
+            (
+                json!({"auto_concurrency": "shadow"}),
+                "--auto-concurrency <MODE>",
+            ),
+            (json!({"auto_fix": true}), "--auto-fix"),
+            (
+                json!({"low_complexity_crews": []}),
+                "--low-complexity-crews [<CREW>...]",
+            ),
+        ] {
+            let mut body = json!({"for_duration": "1m", "pull": selector});
+            body.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let (status, error) = refusal(server.send("POST", &uri, body));
+            assert_eq!(status, 400);
+            assert_eq!(
+                error,
+                format!("the argument '--pull <SELECTOR>' cannot be used with '{flag}'")
+            );
+        }
+        let (_, review) = refusal(server.send(
+            "POST",
+            &uri,
+            json!({"for_duration":"1m","pull":selector,"review":"before-pr"}),
+        ));
+        assert_eq!(
+            review,
+            orbit_core::application::review::pull_review_request_refusal()
+        );
+        let (_, host) = refusal(server.send(
+            "POST",
+            &uri,
+            json!({"for_duration":"1m","host":"dk-server-2"}),
+        ));
+        assert_eq!(
+            host,
+            "the following required arguments were not provided: --pull <SELECTOR>"
+        );
+        let (_, blank) = refusal(server.send(
+            "POST",
+            &uri,
+            json!({"for_duration":"1m","pull":selector,"allow_crew":[""]}),
+        ));
+        assert_eq!(blank, "crew name in the allowlist must not be empty");
+
+        let options = json_ok(server.get(&readiness_uri))["start_options"].clone();
+        assert_eq!(options["checkout"], "replica", "{options}");
+        assert_eq!(
+            options["owner_machine_id"], "hm_fixture_remote",
+            "{options}"
+        );
+        let (status, local) = refusal(server.send("POST", &uri, json!({"for_duration":"1m"})));
+        assert_eq!(status, 409);
+        assert_eq!(options["local_refusal"], local, "{options}");
+        assert_eq!(run_ids(&replica), before, "refusals persist no run");
+
+        let owner = Fixture::new();
+        let server = owner.server(true);
+        let options = json_ok(server.get(&readiness_uri))["start_options"].clone();
+        assert_eq!(options["checkout"], "owner", "{options}");
+        assert!(options["local_refusal"].is_null(), "{options}");
+        let (status, pull) = refusal(server.send(
+            "POST",
+            &uri,
+            json!({"for_duration":"1m","pull":format!("{}/{WS}", owner.machine_id())}),
+        ));
+        assert_eq!(status, 409);
+        assert_eq!(options["pull_refusal"], pull, "{options}");
+        assert!(
+            run_ids(&owner).is_empty(),
+            "the owner's refused pull persists no run"
+        );
+    });
 }

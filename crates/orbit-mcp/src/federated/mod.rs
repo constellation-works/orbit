@@ -22,9 +22,6 @@ mod host;
 mod probe;
 mod task_route;
 
-#[cfg(test)]
-mod tests;
-
 pub use self::capability::{
     CapabilityClasses, McpToolClass, ensure_tool_class_held, mcp_tool_class,
 };

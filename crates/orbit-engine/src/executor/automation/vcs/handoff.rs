@@ -277,6 +277,7 @@ pub(super) fn record_failed_handoff<H: RuntimeHost + ?Sized>(
                     at: Utc::now(),
                     by: FAILED_HANDOFF_ACTOR.to_string(),
                     message: message.clone(),
+                    operation_id: None,
                 }],
                 ..TaskAutomationUpdate::default()
             },

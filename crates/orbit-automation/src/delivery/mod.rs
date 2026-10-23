@@ -13,8 +13,6 @@ mod reconcile;
 pub mod recovery;
 pub mod reset;
 pub mod stall;
-#[cfg(test)]
-mod tests;
 mod waiver;
 
 pub(crate) use digest::json_definition_epoch;
@@ -26,6 +24,19 @@ pub use waiver::waive;
 /// Authority/source owner, implemented by Core. It never decides coverage rules.
 pub trait DeliveryHost {
     fn admission_deferral(&self) -> Result<Option<String>, AutomationError> {
+        Ok(None)
+    }
+
+    /// Why the claimed `attempt` cannot be admitted under the current
+    /// configuration, or `None` when it can. A hold stalls the consumer as
+    /// [`stall::CREW_OS_INELIGIBLE`] instead of failing admission on every
+    /// tick, and the first evaluation that finds it gone resumes admission
+    /// without an operator.
+    fn admission_hold(
+        &self,
+        _attempt: &BatchAttempt,
+    ) -> Result<Option<orbit_types::workflow::automation::recovery::CrewOsHold>, AutomationError>
+    {
         Ok(None)
     }
 

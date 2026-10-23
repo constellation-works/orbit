@@ -62,14 +62,7 @@ fn reviewer_edits(repo: &Path) {
 /// attempt's findings with the released candidate; the task's next claim,
 /// on a host with its own object store, applies that repair onto its base
 /// and hands the implementer the open findings.
-#[test]
 fn a_cancelled_review_keeps_its_repair_and_findings_for_the_next_claim() {
-    if !isolated(
-        module_path!(),
-        "a_cancelled_review_keeps_its_repair_and_findings_for_the_next_claim",
-    ) {
-        return;
-    }
     let (mut reviewed, worker) = ReviewedLeaf::admit_with_worker();
     let pair = &reviewed.pair;
     let (leaf, task) = (reviewed.leaf.clone(), reviewed.task.clone());
@@ -127,10 +120,18 @@ fn a_cancelled_review_keeps_its_repair_and_findings_for_the_next_claim() {
         head,
         "the repair sits on the reviewed candidate"
     );
-    let identity = git(&origin, &["log", "-1", "--format=%an|%cn", &repair]);
+    let identity = git(
+        &origin,
+        &["log", "-1", "--format=%an <%ae>|%cn <%ce>", &repair],
+    );
     let (author, committer) = identity.trim().split_once('|').unwrap();
-    assert!(author.ends_with("-reviewer"), "{identity}");
-    assert_eq!(committer, "orbit", "{identity}");
+    // [ORB-16768] The detached repair names the reviewer's resolved model
+    // under the reviewer role address; the committer stays Orbit.
+    assert_eq!(
+        author, "orbit[gpt-6.1-sol] <codex-reviewer@orbit.local>",
+        "{identity}"
+    );
+    assert_eq!(committer, "orbit <orbit@orbit.local>", "{identity}");
     assert_eq!(
         git(&origin, &["show", &format!("{repair}:src/f0.rs")]),
         REPAIRED
@@ -247,14 +248,7 @@ fn a_cancelled_review_keeps_its_repair_and_findings_for_the_next_claim() {
 /// repair under. The task's next claim continues the published branch and
 /// its pull request, with that repair applied: no second pull request and
 /// no re-implementation from the base.
-#[test]
 fn a_forced_drain_cancel_keeps_a_landing_reviewers_repair_on_the_published_candidate() {
-    if !isolated(
-        module_path!(),
-        "a_forced_drain_cancel_keeps_a_landing_reviewers_repair_on_the_published_candidate",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -277,15 +271,18 @@ fn a_forced_drain_cancel_keeps_a_landing_reviewers_repair_on_the_published_candi
         ("validate", json!({"decision": "passed"})),
         ("push", json!({"branch": branch, "local_sha": head})),
         ("pr_open", json!({"pr_number": "41"})),
-        (
-            "landing_review_gate_admit",
-            json!({
-                "applies": true,
-                "attempt_id": "landing-attempt-1",
-                "head_sha": head,
-                "reviewer": {"crew": "sol", "provider": "claude", "model": "claude-opus-4"},
-            }),
-        ),
+        ("landing_review_gate_admit", {
+            let mut admitted = crate::review_admission_shape::admitted_review(
+                "landing-attempt-1",
+                "lineage",
+                &head,
+            );
+            admitted["reviewer"] = json!({
+                "crew": "sol", "crew_source": "workspace", "provider": "claude",
+                "model": "claude-opus-4", "reasoning_effort": null,
+            });
+            admitted
+        }),
     ] {
         record_step(&pair, &leaf, step, &output);
     }
@@ -390,3 +387,10 @@ fn a_forced_drain_cancel_keeps_a_landing_reviewers_repair_on_the_published_candi
     assert!(checkout.join(ADDED).is_file());
     assert_eq!(git(&checkout, &["rev-parse", "HEAD"]).trim(), base);
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_cancelled_review_keeps_its_repair_and_findings_for_the_next_claim_scenarios,
+    a_cancelled_review_keeps_its_repair_and_findings_for_the_next_claim,
+    a_forced_drain_cancel_keeps_a_landing_reviewers_repair_on_the_published_candidate
+);

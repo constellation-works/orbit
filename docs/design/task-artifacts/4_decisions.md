@@ -326,7 +326,7 @@ slicing of arbitrary subprocess bytes.
 - The real ORB-10332 note goes from 81,031 B to 1,221 B (98.5%); its `events.jsonl`
   row from 85,020 B to 1,466 B. Applied to the nine measured entries, ~16% of all
   task history bytes in the workspace stop being written.
-- Agent task context shrinks with it: `v2_host/task_context.rs` injects the most
+- Agent task context shrinks with it: `engine_host/actions/task_context.rs` injects the most
   recent `workflow_run_failed` note into the implementer's context verbatim, so
   the 81 KB blob was being paid for again on every dispatch against a
   previously-failed task.

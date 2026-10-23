@@ -1,7 +1,10 @@
 use orbit_core::application::job::JobRunListParams;
+pub(crate) use orbit_core::application::job::{
+    RunDisplayStep as RunStepRecord, RunDisplaySteps, RunStepSource as StepSource,
+};
 use orbit_core::runtime::audit::run::RunAuditStep;
-use orbit_core::{JobRun, JobRunStep, JobTargetType, NotFoundKind, OrbitError, OrbitRuntime};
-use orbit_types::workflow::PipelineState;
+use orbit_core::{JobRun, JobRunStep, NotFoundKind, OrbitError, OrbitRuntime};
+use orbit_types::workflow::{JobTargetType, PipelineState};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Payload};
@@ -18,7 +21,9 @@ use super::format::{
 ///
 /// `Reconcile` is the operator default: an orphaned `pending`/`running` run
 /// is finalized as `interrupted`, releasing its task reservations, so the
-/// view shows what actually happened. `Observe` reports stored records
+/// view shows what actually happened. It then settles with their owner the
+/// pull claims an ended drain or leaf left that nothing else will carry
+/// [ORB-15783]. `Observe` reports stored records
 /// untouched, for readers that promise not to mutate run state [ORB-12941].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RunRead {
@@ -37,7 +42,11 @@ impl RunRead {
 
     pub(crate) fn show(self, runtime: &OrbitRuntime, run_id: &str) -> Result<JobRun, OrbitError> {
         match self {
-            Self::Reconcile => runtime.show_job_run(run_id),
+            Self::Reconcile => {
+                let run = runtime.show_job_run(run_id)?;
+                runtime.settle_orphaned_pulls();
+                Ok(run)
+            }
             Self::Observe => runtime.show_job_run_observed(run_id),
         }
     }
@@ -48,7 +57,11 @@ impl RunRead {
         params: JobRunListParams,
     ) -> Result<Vec<JobRun>, OrbitError> {
         match self {
-            Self::Reconcile => runtime.list_job_runs(params),
+            Self::Reconcile => {
+                let runs = runtime.list_job_runs(params)?;
+                runtime.settle_orphaned_pulls();
+                Ok(runs)
+            }
             Self::Observe => runtime.list_job_runs_observed(params),
         }
     }
@@ -80,17 +93,32 @@ pub(crate) fn resolve_run_step(
     run: &JobRun,
     step_id: &str,
 ) -> Result<RunStepRecord, OrbitError> {
-    if let Some(audit_step) = runtime
-        .collect_run_audit_steps(&run.run_id)?
-        .into_iter()
-        .find(|step| step.step_id == step_id)
-    {
-        return Ok(RunStepRecord::from_audit_step(audit_step));
+    let audit_steps = runtime.collect_run_audit_steps(&run.run_id)?;
+    if let Some(audit_step) = audit_steps.iter().find(|step| step.step_id == step_id) {
+        return Ok(RunStepRecord::from_audit(audit_step.clone(), run.state));
     }
 
-    find_stored_run_step(run, step_id)
-        .map(RunStepRecord::from_job_step)
-        .ok_or_else(|| step_not_found(&run.run_id, step_id))
+    let audit_index = step_id
+        .parse::<u32>()
+        .ok()
+        .and_then(|index| audit_steps.iter().find(|step| step.step_index == index));
+    let audit_is_displayed = !audit_steps.is_empty()
+        && run
+            .steps
+            .iter()
+            .all(|step| step.target_type == JobTargetType::Job);
+    if audit_is_displayed && let Some(audit_step) = audit_index {
+        return Ok(RunStepRecord::from_audit(audit_step.clone(), run.state));
+    }
+
+    if let Some(stored_step) = find_stored_run_step(run, step_id) {
+        return Ok(RunStepRecord::from_job_step(stored_step));
+    }
+    if let Some(audit_step) = audit_index {
+        return Ok(RunStepRecord::from_audit(audit_step.clone(), run.state));
+    }
+
+    Err(step_not_found(&run.run_id, step_id))
 }
 
 fn find_stored_run_step<'a>(run: &'a JobRun, step_id: &str) -> Option<&'a JobRunStep> {
@@ -103,19 +131,6 @@ fn step_not_found(run_id: &str, step_id: &str) -> OrbitError {
     OrbitError::InvalidInput(format!(
         "step '{step_id}' does not match any step in run '{run_id}'"
     ))
-}
-
-pub(crate) fn filtered_steps<'a>(
-    run: &'a JobRun,
-    step_id: Option<&str>,
-) -> Result<Vec<&'a JobRunStep>, OrbitError> {
-    match step_id {
-        Some(step_id) => Ok(vec![
-            find_stored_run_step(run, step_id)
-                .ok_or_else(|| step_not_found(&run.run_id, step_id))?,
-        ]),
-        None => Ok(run.steps.iter().collect()),
-    }
 }
 
 pub(crate) fn resolve_step_filter(
@@ -140,88 +155,6 @@ pub(crate) fn resolve_step_filter(
     }
 
     Err(step_not_found(&run.run_id, step_id))
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct RunStepRecord {
-    pub(crate) step_index: u32,
-    pub(crate) target_type: String,
-    pub(crate) target_id: String,
-    started_at: Option<chrono::DateTime<chrono::Utc>>,
-    finished_at: Option<chrono::DateTime<chrono::Utc>>,
-    duration_ms: Option<u64>,
-    exit_code: Option<i32>,
-    agent_response_json: Option<Value>,
-    state: String,
-    error_code: Option<String>,
-    error_message: Option<String>,
-}
-
-impl RunStepRecord {
-    pub(crate) fn from_job_step(step: &JobRunStep) -> Self {
-        Self {
-            step_index: step.step_index,
-            target_type: step.target_type.to_string(),
-            target_id: step.target_id.clone(),
-            started_at: step.started_at,
-            finished_at: step.finished_at,
-            duration_ms: step.duration_ms,
-            exit_code: step.exit_code,
-            agent_response_json: step.agent_response_json.clone(),
-            state: step.state.to_string(),
-            error_code: step.error_code.clone(),
-            error_message: step.error_message.clone(),
-        }
-    }
-
-    /// The output this step recorded in the run's checkpoint state.
-    ///
-    /// Read by step id. The audit-derived `step_index` counts steps in
-    /// first-started order, while checkpoints are keyed by YAML position, and
-    /// a `when:`-skipped or resume-skipped step (which never starts) shifts
-    /// the two apart; indexing `step_outputs` with it returns another step's
-    /// output. Only the job-level summary step of a run that wrote no
-    /// per-step checkpoint is read by index: it is recorded at step 0.
-    pub(crate) fn output<'a>(&self, state: &'a PipelineState) -> Option<&'a Value> {
-        state.pipeline_step_output(&self.target_id).or_else(|| {
-            (self.target_type == JobTargetType::Job.to_string())
-                .then(|| state.step_output(self.step_index))
-                .flatten()
-        })
-    }
-
-    fn from_audit_step(step: RunAuditStep) -> Self {
-        let duration_ms = match (step.started_at, step.finished_at) {
-            (Some(started), Some(finished)) => Some(
-                finished
-                    .signed_duration_since(started)
-                    .num_milliseconds()
-                    .max(0) as u64,
-            ),
-            _ => None,
-        };
-        Self {
-            step_index: step.step_index,
-            target_type: JobTargetType::Activity.to_string(),
-            target_id: step.step_id,
-            started_at: step.started_at,
-            finished_at: step.finished_at,
-            duration_ms,
-            exit_code: None,
-            agent_response_json: None,
-            state: step.state.unwrap_or_else(|| "running".to_string()),
-            error_code: None,
-            error_message: step.error_message,
-        }
-    }
-}
-
-pub(crate) fn run_header_text(run: &JobRun) -> String {
-    run_header_text_with_state(run, None)
-}
-
-pub(crate) fn run_header_text_with_state(run: &JobRun, state: Option<&PipelineState>) -> String {
-    run_header_text_with_lock_holders(run, state, &LockHolders::new())
 }
 
 pub(crate) fn run_header_text_with_lock_holders(
@@ -274,6 +207,18 @@ pub(crate) fn run_header_text_with_lock_holders(
             run.crew_model.as_deref().unwrap_or("model unavailable"),
         ));
     }
+    // The pool each activity drew its crew from, and the rule that chose it.
+    for (key, draw) in state
+        .into_iter()
+        .flat_map(|state| &state.activity_crew_draws)
+    {
+        lines.push(format!(
+            "{} {} for {key} via {}",
+            bold("Activity Crew:"),
+            draw.crew,
+            draw.source
+        ));
+    }
     if let Some(line) = format_waiting_line_with_holders(run.state, state, holders) {
         lines.push(line);
     }
@@ -293,6 +238,22 @@ pub(crate) fn run_header_text_with_lock_holders(
         .filter(|names| !names.is_empty())
     {
         lines.push(format!("{} {}", bold("Unset env:"), unset.join(", ")));
+    }
+    // Crews whose `env` sources the submitting process did not hold: drains
+    // excluded them and their activities were refused.
+    if let Some(unset) = state
+        .map(|state| &state.crew_env_unset)
+        .filter(|crews| !crews.is_empty())
+    {
+        lines.push(format!(
+            "{} {}",
+            bold("Unset crew env:"),
+            unset
+                .iter()
+                .map(orbit_types::workflow::CrewEnvUnset::describe)
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
     }
     lines.extend(format_child_dispatch_lines(state));
     lines.join("\n")
@@ -347,83 +308,36 @@ pub(crate) fn activity_provenance_lines(value: &Value) -> Vec<String> {
         .collect()
 }
 
-/// Where the steps a run view renders came from.
-///
-/// A v2 pipeline run keeps its step history in the audit trail rather than in
-/// the job-run record, so `JobRun::steps` is empty for exactly the runs whose
-/// header reports `step_outputs=N` and whose `orbit run events` lists every
-/// step. `orbit run show` used to answer "no steps recorded" for those; it now
-/// reconstructs them from the same trail and names the source [ORB-12113].
-/// The same holds for a run whose record carries only a run-level step.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StepSource {
-    /// The job-run record carried its own steps.
-    Record,
-    /// Reconstructed from the run's v2 audit trail.
-    Audit,
-}
-
-impl StepSource {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Record => "record",
-            Self::Audit => "audit",
-        }
-    }
-}
-
-/// The steps a run view should render, and where they came from.
-pub(crate) struct RunDisplaySteps {
-    pub(crate) records: Vec<RunStepRecord>,
-    pub(crate) source: StepSource,
-}
-
-/// Choose the steps a run view renders: the record's own when it has them,
-/// and the ones reconstructed from its audit trail otherwise.
-///
-/// A record holding only run-level steps (target type `job`, as the
-/// interruption reconciler writes) says how the run ended, not what it did, so
-/// the audit trail answers there too. The run-level step's error stays in the
-/// record's own `run.steps` and in the root-cause line.
+/// The steps a run view renders, chosen by the rule every run surface shares.
 ///
 /// `audit_steps` come from the caller's existing audit scan, so recovering
 /// them costs no extra read.
 pub(crate) fn run_display_steps(run: &JobRun, audit_steps: Vec<RunAuditStep>) -> RunDisplaySteps {
-    let run_level_only = run
-        .steps
-        .iter()
-        .all(|step| step.target_type == JobTargetType::Job);
-    if !run.steps.is_empty() && (!run_level_only || audit_steps.is_empty()) {
-        return RunDisplaySteps {
-            records: run.steps.iter().map(RunStepRecord::from_job_step).collect(),
-            source: StepSource::Record,
-        };
-    }
-
-    RunDisplaySteps {
-        records: audit_steps
-            .into_iter()
-            .map(RunStepRecord::from_audit_step)
-            .collect(),
-        source: StepSource::Audit,
-    }
+    orbit_core::application::job::run_display_steps(run, || audit_steps)
 }
 
 pub(crate) fn step_summary_table(steps: &[RunStepRecord]) -> crate::output::table::Table {
     use crate::output::table::{Column, Table};
     // `orbit run show <run_id> -s <step>` prints one step's untruncated record.
-    let mut table = Table::new(vec![
+    let mut columns = vec![
         Column::new("#").number(),
         Column::new("TARGET"),
         Column::new("STATE").fixed(),
         Column::new("DURATION").number(),
         Column::new("ERROR CODE").fixed(),
         Column::new("ERROR MESSAGE"),
-    ])
-    .empty_message("no steps recorded in the run record or its audit trail");
+    ];
+    let show_lock_wait = steps
+        .iter()
+        .any(|step| step.lock_wait_ms.unwrap_or_default() > 0);
+    if show_lock_wait {
+        columns.insert(4, Column::new("LOCK WAIT (ms)").number());
+    }
+    let mut table =
+        Table::new(columns).empty_message("no steps recorded in the run record or its audit trail");
     for step in steps {
         use comfy_table::Cell;
-        table.add_row(vec![
+        let mut cells = vec![
             // One-based, as the dashboard numbers them; `step_index` stays
             // zero-based in `--json`.
             Cell::new(step.step_index + 1),
@@ -432,7 +346,19 @@ pub(crate) fn step_summary_table(steps: &[RunStepRecord]) -> crate::output::tabl
             Cell::new(format_duration(step.duration_ms)),
             Cell::new(step.error_code.as_deref().unwrap_or("-")),
             Cell::new(summarize_error_message(step.error_message.as_deref())),
-        ]);
+        ];
+        if show_lock_wait {
+            cells.insert(
+                4,
+                Cell::new(
+                    step.lock_wait_ms
+                        .filter(|ms| *ms > 0)
+                        .map(|ms| ms.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+            );
+        }
+        table.add_row(cells);
     }
     table
 }
@@ -494,6 +420,9 @@ pub(crate) fn step_record_payload(
             step.error_message.as_deref().unwrap_or("-")
         ),
     ];
+    if let Some(wait) = step.lock_wait_ms.filter(|ms| *ms > 0) {
+        lines.push(format!("{} {wait}ms", bold("Lock wait:")));
+    }
     if let Some(output) = doc.get("step_output").filter(|value| !value.is_null()) {
         lines.push(bold("Step Output:").to_string());
         lines.push(
@@ -505,32 +434,5 @@ pub(crate) fn step_record_payload(
 }
 
 pub(crate) fn run_step_record_to_json(step: &RunStepRecord) -> Value {
-    json!({
-        "step_index": step.step_index,
-        "target_id": step.target_id,
-        "target_type": step.target_type,
-        "state": step.state,
-        "started_at": step.started_at.map(|t| t.to_rfc3339()),
-        "finished_at": step.finished_at.map(|t| t.to_rfc3339()),
-        "duration_ms": step.duration_ms,
-        "exit_code": step.exit_code,
-        "agent_response_json": step.agent_response_json,
-        "error_code": step.error_code,
-        "error_message": step.error_message,
-    })
-}
-
-pub(crate) fn legacy_step_to_json(step: &JobRunStep) -> Value {
-    json!({
-        "step_index": step.step_index,
-        "target_id": step.target_id,
-        "target_type": step.target_type.to_string(),
-        "state": step.state.to_string(),
-        "started_at": step.started_at.map(|t| t.to_rfc3339()),
-        "finished_at": step.finished_at.map(|t| t.to_rfc3339()),
-        "duration_ms": step.duration_ms,
-        "exit_code": step.exit_code,
-        "error_code": step.error_code,
-        "error_message": step.error_message,
-    })
+    step.to_json()
 }

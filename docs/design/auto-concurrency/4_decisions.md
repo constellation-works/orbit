@@ -1,26 +1,32 @@
 ---
 title: Auto-concurrency — Decisions
 owner: claude
-last_updated: 2026-10-11
-last_validated: 2026-10-11
+last_updated: 2026-10-13
+last_validated: 2026-10-13
 status: Draft
 feature: auto-concurrency
 doc_role: decisions
 type: design
-summary: Proposed standing rules for predictive admission — measure what each task uses, forecast host-wide, keep the throttle as the backstop, assume unknown work is expensive, never exceed the operator's ceiling or cancel work.
+summary: Design decisions for predictive admission — measure each task, forecast host-wide, keep the throttle as the backstop, assume unknown work is expensive, and never exceed the operator's ceiling or cancel work; superseded consequences are marked.
 tags: [auto-concurrency, drain, capacity, decisions]
-paths: ["crates/orbit-core/src/adapter/engine_host/v2_host/admission/auto_admission.rs", "crates/orbit-core/src/runtime/host_resource/**"]
+paths: ["crates/orbit-core/src/application/admission/auto_admission.rs", "crates/orbit-core/src/runtime/host_resource/**"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757]
 ---
 
 # Auto-concurrency — Decisions
 
-Record non-obvious decisions here by title. Task references carry provenance; superseded decisions remain in place so their original reasoning stays legible. See [CONVENTIONS.md §4](../CONVENTIONS.md#4-decisions) for the admission rule and required `Cost:` line.
+Record non-obvious decisions here by title. Task references preserve provenance, including when later implementation supersedes a consequence. See [CONVENTIONS.md §4](../CONVENTIONS.md#4-decisions) for the admission rule and required `Cost:` line.
 
-Nothing here is implemented yet. Every entry is a proposed Door 2 rule: it
-governs choices the implementation tasks have not made yet. Each is open to
-the operator's revision while the folder is `Draft`.
+These entries preserve the reasoning recorded during design; current
+implementation details are in [2_design.md](./2_design.md) and the linked
+source. Where a consequence below is superseded, it is labeled so the
+original decision remains legible without describing current behavior
+incorrectly. The folder remains `Draft`: rollout is in shadow and current
+forecast-accuracy evidence is too sparse to establish enforcement readiness.
+Per-task measurement, the host-wide forecast with serialized reservations,
+local gap-fit admission under `shadow` and `enforce`, pull-drain admission,
+and the starvation signal are implemented.
 
 ## Admit on forecast resource use, not on a throughput model
 
@@ -63,16 +69,19 @@ and with load that isn't from tasks.
 ### Decision
 
 Resource profiles are built only from per-task measurements: the worker's
-own Linux scope, or its process tree where no scope exists. Host totals are
-used only for the baseline and to check the forecast.
+own Linux scope or, on macOS, its process tree. Host totals are used for the
+baseline and to check the forecast.
 
 ### Consequences
 
 - Attribution is exact on Linux, and the baseline separates out load that
   isn't from tasks.
-- Cost: a host without per-task measurement has no profiles. That covers
-  macOS until its process-tree sampler exists, and Linux with containment
-  off. Such a host admits as today.
+- **Superseded consequence:** the original record said macOS had no
+  process-tree sampler. That sampler and native host measurement are now
+  implemented ([ORB-15776], [ORB-15980]); the worker CPU-unit repair is
+  recorded in [ORB-15994]. Linux with worker containment off, or a host
+  without enough usable deliveries, can still lack profiles and admit as
+  today.
 
 ## Forecast and admit host-wide, one decision at a time
 
@@ -110,16 +119,24 @@ their load comes later. Forecasts are wrong some of the time.
 
 Forecast admission only ever removes candidates. It never overrides the
 resource throttle, whose hold stops all admission when real pressure
-arrives. Admit thresholds stay below the throttle's marks. No later
-admission mechanism replaces the throttle; it can only be tightened.
+arrives. The configured memory admit threshold stays below the global
+throttle's memory high mark. No later admission mechanism replaces the
+throttle; it can only be tightened.
 
 ### Consequences
 
 - A bad forecast costs at most the tasks admitted before real pressure
   appears.
-- Cost: two sets of thresholds to configure. The throttle can block an
-  admission the forecast approved. Overload from a bad forecast lasts until
-  enough tasks finish, because nothing is cancelled.
+- **Superseded consequence:** the original record said all admit thresholds
+  stay below their throttle marks. Current configuration enforces only the
+  memory ordering. Forecast CPU is utilization as a share of host cores;
+  Linux throttle CPU is normalized load average, which counts the run queue
+  and can exceed 100%. Those are different signals, so their configured
+  percentages are not compared. The throttle can still block an admission
+  the forecast approved. Overload from a bad forecast lasts until enough
+  tasks finish, because nothing is cancelled.
+- Cost: there are separate forecast and throttle thresholds. The memory
+  ordering is validated; CPU threshold ordering is not meaningful on Linux.
 
 ## Unknown work is assumed expensive
 

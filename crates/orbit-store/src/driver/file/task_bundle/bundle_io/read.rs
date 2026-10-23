@@ -13,7 +13,7 @@ use orbit_common::{NotFoundKind, OrbitError, StorageLayer};
 use orbit_types::task::{
     TASK_ACCEPTANCE_FILE_NAME, TASK_COMMENTS_FILE_NAME, TASK_DESCRIPTION_FILE_NAME,
     TASK_ENVELOPE_FILE_NAME, TASK_EVENTS_FILE_NAME, TASK_EXECUTION_SUMMARY_FILE_NAME,
-    TASK_PLAN_FILE_NAME, TaskEnvelopeV2,
+    TASK_PLAN_FILE_NAME, TaskCommentRowV2, TaskEnvelopeV2, TaskEventRowV2,
 };
 use serde::de::DeserializeOwned;
 use std::fs::{self};
@@ -67,7 +67,58 @@ fn read_bundle_at_with(
     payloads: ArtifactPayloadCheck,
 ) -> Result<TaskBundleV2, OrbitError> {
     let expected_task_id = task_id_from_bundle_dir(bundle_dir)?;
-    read_bundle_for_id(bundle_dir, &expected_task_id, payloads).map_err(|error| match error {
+    read_bundle_for_id(bundle_dir, &expected_task_id, payloads)
+        .map_err(|error| corrupt_unless_missing_or_io(bundle_dir, expected_task_id, error))
+}
+
+/// Read only a bundle's event log, for a history read.
+///
+/// One file instead of the bundle's nine and no artifact payloads: the
+/// envelope is checked for presence, not parsed, so the event-log/envelope
+/// status check the full read makes is left to it. `None` when an incomplete
+/// write is recorded for the bundle, whose visible rows only the full read
+/// reconstructs. Callers hold the bundle's shared lock, as for any read a
+/// writer could interleave with.
+pub(crate) fn read_events_at(bundle_dir: &Path) -> Result<Option<Vec<TaskEventRowV2>>, OrbitError> {
+    read_sidecar_at(bundle_dir, TASK_EVENTS_FILE_NAME, read_task_events)
+}
+
+/// [`read_events_at`] for the comment log.
+pub(crate) fn read_comments_at(
+    bundle_dir: &Path,
+) -> Result<Option<Vec<TaskCommentRowV2>>, OrbitError> {
+    read_sidecar_at(bundle_dir, TASK_COMMENTS_FILE_NAME, read_task_comments)
+}
+
+fn read_sidecar_at<T>(
+    bundle_dir: &Path,
+    file_name: &str,
+    read: fn(&Path) -> Result<Vec<T>, OrbitError>,
+) -> Result<Option<Vec<T>>, OrbitError> {
+    let expected_task_id = task_id_from_bundle_dir(bundle_dir)?;
+    let rows = || {
+        if !bundle_dir.join(TASK_ENVELOPE_FILE_NAME).is_file() {
+            return Err(OrbitError::not_found(
+                NotFoundKind::Task,
+                expected_task_id.clone(),
+            ));
+        }
+        if commit::has_pending_write(bundle_dir) {
+            return Ok(None);
+        }
+        read(&bundle_dir.join(file_name)).map(Some)
+    };
+    rows().map_err(|error| corrupt_unless_missing_or_io(bundle_dir, expected_task_id, error))
+}
+
+/// A read failure as the bundle's damage, unless it says the task is missing
+/// or the filesystem failed.
+fn corrupt_unless_missing_or_io(
+    bundle_dir: &Path,
+    task_id: String,
+    error: OrbitError,
+) -> OrbitError {
+    match error {
         OrbitError::NotFound {
             kind: NotFoundKind::Task,
             ..
@@ -75,11 +126,11 @@ fn read_bundle_at_with(
         | OrbitError::TaskBundleCorrupt { .. } => error,
         error if error.storage_layer() == Some(StorageLayer::Io) => error,
         other => OrbitError::TaskBundleCorrupt {
-            task_id: expected_task_id,
+            task_id,
             path: bundle_dir.to_string_lossy().into_owned(),
             reason: other.to_string(),
         },
-    })
+    }
 }
 
 /// Read only a bundle's envelope.
@@ -89,25 +140,22 @@ fn read_bundle_at_with(
 /// small YAML file per task rather than the bundle's seven.
 pub(crate) fn read_envelope_at(bundle_dir: &Path) -> Result<TaskEnvelopeV2, OrbitError> {
     let expected_task_id = task_id_from_bundle_dir(bundle_dir)?;
-    read_envelope_for_id(bundle_dir, &expected_task_id).map_err(|error| match error {
-        OrbitError::NotFound {
-            kind: NotFoundKind::Task,
-            ..
-        }
-        | OrbitError::TaskBundleCorrupt { .. } => error,
-        error if error.storage_layer() == Some(StorageLayer::Io) => error,
-        other => OrbitError::TaskBundleCorrupt {
-            task_id: expected_task_id,
-            path: bundle_dir.to_string_lossy().into_owned(),
-            reason: other.to_string(),
-        },
-    })
+    read_envelope_for_id(bundle_dir, &expected_task_id)
+        .map_err(|error| corrupt_unless_missing_or_io(bundle_dir, expected_task_id, error))
 }
 
 fn read_envelope_for_id(
     bundle_dir: &Path,
     expected_task_id: &str,
 ) -> Result<TaskEnvelopeV2, OrbitError> {
+    // One span per `task.yaml` parse, whichever read asked for it: what a
+    // selection's cost is counted in.
+    let _span = orbit_common::tracing::trace_span!(
+        target: "orbit.store.task_bundle",
+        "task_envelope_read",
+        task_id = expected_task_id,
+    )
+    .entered();
     let envelope_path = bundle_dir.join(TASK_ENVELOPE_FILE_NAME);
     if !envelope_path.is_file() {
         return Err(OrbitError::not_found(

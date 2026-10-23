@@ -23,13 +23,14 @@ fn configure_crews(fixture: &Fixture) {
         config["crews"][name]["model"] = value(model);
         config["crews"][name]["backend"] = value("cli");
     }
-    config["operation"]["review_crew"] = value("opus");
+    config["workflow"]["purpose_crews"]["review"] = value("opus");
     fs::write(&path, config.to_string()).unwrap();
 }
 
 fn reading(provider: &str, used_percent: f64, resets_in: Duration) -> ProviderLimitObservation {
     ProviderLimitObservation {
         provider: provider.into(),
+        account: None,
         model: None,
         window: Some("five_hour".into()),
         exhausted: false,
@@ -63,9 +64,22 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
     }
     let fixture = Fixture::init();
     configure_crews(&fixture);
-    let runtime =
-        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
-            .unwrap();
+    orbit_registry::ensure_machine_identity(&fixture.home.join(".orbit"), || {
+        Ok(orbit_registry::NewMachineIdentity {
+            name: "provider-limits-host".into(),
+            task_prefix: "PL".into(),
+        })
+    })
+    .unwrap();
+    let runtime = orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
+        orbit_core::runtime::OrbitRuntimeRoots {
+            global_root: fixture.home.join(".orbit"),
+            shared_root: fixture.work.join(".orbit"),
+            local_root: fixture.work.join(".orbit"),
+        },
+    )
+    .unwrap();
+    let reading_host = runtime.automation_machine_identity().unwrap();
     // Claude past the default 90% threshold, Codex well below it; Gemini
     // reports no usage at all.
     runtime
@@ -164,13 +178,12 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
         params![drain, fixture.workspace_id(), at.to_rfc3339(), std::process::id()],
     )
     .unwrap();
-    db.execute_batch("CREATE TABLE IF NOT EXISTS local_pull_admissions (workspace_id TEXT NOT NULL, owner_machine TEXT NOT NULL, owner_workspace TEXT NOT NULL, execution_machine TEXT NOT NULL, request_id TEXT NOT NULL, claim_id TEXT, leaf_run_id TEXT, record_json TEXT NOT NULL, PRIMARY KEY(workspace_id,owner_machine,owner_workspace,execution_machine,request_id), UNIQUE(workspace_id,owner_machine,owner_workspace,claim_id), UNIQUE(workspace_id,leaf_run_id));").unwrap();
     let mut state = PipelineState::new(
         drain.into(),
         "workspace_pull_pipeline".into(),
         serde_json::json!({}),
     );
-    state.pull_crew_preflight = Some(PullCrewPreflight {
+    state.pull_drain.pull_crew_preflight = Some(PullCrewPreflight {
         checked_at: at,
         runnable: vec!["opus".into(), "sol".into()],
         default_crew: Some("sol".into()),
@@ -186,6 +199,10 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
         .find(|exclusion| exclusion["crew"] == "opus")
         .unwrap_or_else(|| panic!("opus not excluded: {window:#}"));
     assert_eq!(exclusion["source"], "provider_limit", "{exclusion}");
+    assert!(
+        exclusion["reason"].as_str().unwrap().contains(reading_host),
+        "the JSON exclusion identifies the local reading's host: {exclusion}"
+    );
     assert_eq!(exclusion["until"], claude["until"], "{exclusion}");
     assert_eq!(window["runnable"], serde_json::json!(["sol"]), "{window}");
     let text = fixture
@@ -198,7 +215,8 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
     assert!(
         text.lines().any(|line| line.contains("Crews:")
             && line.contains("excluded opus (provider_limit until ")
-            && line.contains("claude five_hour at 93%")),
+            && line.contains("claude five_hour at 93%")
+            && line.contains(reading_host)),
         "{text}"
     );
 
@@ -228,7 +246,7 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
         silent["message"],
         "gemini: no usage signal; Orbit learns limits from failures"
     );
-    let lane = "operation.review_crew";
+    let lane = "workflow.purpose_crews.review";
     let row = doctor_row(&rows, &format!("provider-limits:{lane}"));
     assert_eq!(row["status"], "warning", "{row}");
     let message = row["message"].as_str().unwrap();
@@ -262,7 +280,7 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
         .collect::<Vec<_>>();
     assert!(
         checks.contains(&("provider-limits:claude", "warning"))
-            && checks.contains(&("provider-limits:operation.review_crew", "warning")),
+            && checks.contains(&("provider-limits:workflow.purpose_crews.review", "warning")),
         "{claude}"
     );
     assert_eq!(

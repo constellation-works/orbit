@@ -138,14 +138,13 @@ pub(super) fn probe(fetch: bool) -> Result<super::BuildSandboxProbe, String> {
 const FETCH_UNSUPPORTED: &str = "macOS runs no network `fetch` phase for a plugin build, because a fetch descendant could \
      outlive the phase with its network";
 
-/// The `sandbox-exec` command for one offline phase, and the profile file it
-/// reads (kept alive until the phase ends).
+/// The `sandbox-exec` command for one offline phase. The profile is passed
+/// inline: a file in the shared temp root could be rewritten by another
+/// confined process before `sandbox-exec` reads it.
 #[cfg(target_os = "macos")]
 pub(super) fn command(
     request: &super::BuildPhaseRequest<'_>,
-) -> Result<(std::process::Command, tempfile::NamedTempFile), orbit_common::OrbitError> {
-    use std::io::Write;
-
+) -> Result<std::process::Command, orbit_common::OrbitError> {
     use orbit_common::OrbitError;
 
     if request.sandbox.network != super::BuildPhaseNetwork::None {
@@ -155,16 +154,11 @@ pub(super) fn command(
     }
     let sandbox_exec = crate::sandbox_exec_path()
         .ok_or_else(|| OrbitError::PolicyDenied(crate::sandbox_exec_unavailable_message()))?;
-    let mut profile_file = tempfile::NamedTempFile::new()
-        .map_err(|error| OrbitError::Io(format!("create build sandbox profile: {error}")))?;
-    profile_file
-        .write_all(compile_macos_build_profile(&request.sandbox).as_bytes())
-        .map_err(|error| OrbitError::Io(format!("write build sandbox profile: {error}")))?;
     let mut command = std::process::Command::new(sandbox_exec);
     command
-        .arg("-f")
-        .arg(profile_file.path())
+        .arg("-p")
+        .arg(compile_macos_build_profile(&request.sandbox))
         .args(request.argv)
         .current_dir(request.cwd);
-    Ok((command, profile_file))
+    Ok(command)
 }

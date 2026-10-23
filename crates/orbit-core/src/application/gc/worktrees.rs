@@ -1,12 +1,12 @@
 //! Worktree GC: which runs' worktrees are delivered, and the owner lookups it needs.
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use orbit_engine::{
     RuntimeHost, WorktreeGcOptions, WorktreeGcResult, WorktreeGcTaskLookup, collect_worktrees,
     run_worktree_has_reclaim_output,
 };
 use orbit_store::contracts::{ClaimMutation, JobRunQuery, LocalPullPhase};
-use orbit_types::task::{TaskStatus, task_id_prefix};
+use orbit_types::task::{TaskHistoryEntry, TaskStatus, task_id_prefix};
 use orbit_types::workflow::JobRun;
 use serde_json::{Value, json};
 
@@ -132,6 +132,7 @@ impl OrbitRuntime {
                 reclaim_patterns: Some(self.worktree_reclaim_patterns()),
                 reclaim_kept: false,
                 rescue_dirty: false,
+                parked_older_than: None,
             },
         )
         .map(Some)
@@ -184,7 +185,10 @@ impl OrbitRuntime {
                 return WorktreeGcTaskLookup::Unresolved;
             }
         };
-        let fields = json!({ "id": task_id, "fields": ["status", "pr_status"] });
+        let fields = json!({
+            "id": task_id,
+            "fields": ["status", "pr_status", "updated_at"],
+        });
         let (route, answer) = if holder == owner_machine {
             let Some(selector) = self.worktree_gc_owner_selector(owner_machine, run_id) else {
                 return WorktreeGcTaskLookup::NoOwnerRoute(
@@ -195,12 +199,57 @@ impl OrbitRuntime {
                 );
             };
             let answer = transport.show_task(&selector, fields);
-            (selector, answer)
+            (
+                selector.clone(),
+                answer.map(|answer| (answer, Some(selector))),
+            )
         } else {
-            (holder, transport.show_task_by_id(fields))
+            (
+                holder,
+                transport
+                    .show_task_by_id(fields)
+                    .map(|answer| (answer, None)),
+            )
+        };
+        // Only a parked task's age matters, so only it pays for its history.
+        let history = |selector: Option<&str>| {
+            let input = json!({ "id": task_id, "fields": ["history"] });
+            match selector {
+                Some(selector) => transport.show_task(selector, input),
+                None => transport.show_task_by_id(input),
+            }
         };
         match answer {
-            Ok(fields) => owner_task_fields(task_id, &fields),
+            Ok((fields, selector)) => {
+                let mut lookup = owner_task_fields(task_id, &fields);
+                if let WorktreeGcTaskLookup::Found {
+                    status: status @ TaskStatus::Someday,
+                    status_since,
+                    ..
+                } = &mut lookup
+                {
+                    let updated_at = fields
+                        .get("updated_at")
+                        .cloned()
+                        .and_then(|at| serde_json::from_value::<DateTime<Utc>>(at).ok());
+                    let entered = match history(selector.as_deref()) {
+                        Ok(answer) => answer
+                            .get("history")
+                            .cloned()
+                            .and_then(|history| {
+                                serde_json::from_value::<Vec<TaskHistoryEntry>>(history).ok()
+                            })
+                            .and_then(|history| status_entered_at(&history, *status)),
+                        Err(error) => {
+                            tracing::info!(%task_id, %error,
+                                "worktree GC could not read a parked task's history from its holder");
+                            None
+                        }
+                    };
+                    *status_since = entered.or(updated_at);
+                }
+                lookup
+            }
             Err(OrbitError::NotFound { .. }) => WorktreeGcTaskLookup::Unresolved,
             Err(OrbitError::RemoteTool { code, .. }) if code == "not_found" => {
                 WorktreeGcTaskLookup::Unresolved
@@ -219,10 +268,23 @@ impl OrbitRuntime {
         // Read the store directly: get_task can route through a managed
         // worker's coordinator, which is not the authority for local ids.
         match self.stores().tasks().get_task(task_id) {
-            Ok(Some(task)) => WorktreeGcTaskLookup::Found {
-                status: task.status,
-                pr_status: task.pr_status,
-            },
+            Ok(Some(task)) => {
+                // Only a parked task's age matters, so only it reads history.
+                let status_since = (task.status == TaskStatus::Someday).then(|| {
+                    self.stores()
+                        .task_history()
+                        .get_task_history(task_id)
+                        .ok()
+                        .flatten()
+                        .and_then(|history| status_entered_at(&history, task.status))
+                        .unwrap_or(task.updated_at)
+                });
+                WorktreeGcTaskLookup::Found {
+                    status: task.status,
+                    pr_status: task.pr_status,
+                    status_since,
+                }
+            }
             _ => WorktreeGcTaskLookup::Unresolved,
         }
     }
@@ -253,6 +315,28 @@ impl OrbitRuntime {
             self.workspace_runtime_binding()
                 .map(|binding| format!("{owner_machine}/{}", binding.logical_workspace_id))
         })
+    }
+
+    /// A claimed leaf's claim that is not settled with its owner yet
+    /// [ORB-16385]. The follower may still owe the owner the leaf's delivery,
+    /// so a parked task's age does not license removing its worktree. A
+    /// claim admission that cannot be read counts as live.
+    pub(crate) fn worktree_gc_live_claim(&self, run_id: &str) -> Option<String> {
+        match self.stores().jobs().local_pull_for_run(run_id) {
+            Ok(Some(record))
+                if !matches!(
+                    record.phase,
+                    LocalPullPhase::Settled | LocalPullPhase::Idle | LocalPullPhase::Refused
+                ) =>
+            {
+                Some(format!(
+                    "claim from {} is {:?}, not settled",
+                    record.destination.selector, record.phase
+                ))
+            }
+            Ok(_) => None,
+            Err(error) => Some(format!("cannot read the run's claim admission: {error}")),
+        }
     }
 
     /// The settled claim behind a claimed leaf's worktree, if it has one
@@ -301,6 +385,7 @@ impl OrbitRuntime {
                 reclaim_patterns: Some(self.worktree_reclaim_patterns()),
                 reclaim_kept: false,
                 rescue_dirty: false,
+                parked_older_than: None,
             },
         )
     }
@@ -326,6 +411,11 @@ impl OrbitRuntime {
                 })
             })
             .transpose()?;
+        let parked_older_than = worktree_parked_cutoff(
+            self.context
+                .settings()
+                .worktree_parked_reclaim_after_hours(),
+        );
         let runs = self.list_job_runs_for_worktree_gc()?;
         collect_worktrees(
             &self.paths().repo_root,
@@ -340,6 +430,7 @@ impl OrbitRuntime {
                 reclaim_patterns: Some(self.worktree_reclaim_patterns()),
                 reclaim_kept: false,
                 rescue_dirty: false,
+                parked_older_than,
             },
         )
     }
@@ -356,6 +447,24 @@ fn is_worktree_gc_transport_failure(error: &OrbitError) -> bool {
             | OrbitError::OutcomeUnknown { .. }
             | OrbitError::OwnerUnavailable(_)
     ) || error.host_registry_code() == Some(orbit_common::HostRegistryCode::OwnerUnreachable)
+}
+
+/// Now less the parked-reclaim window; `None` when it cannot be represented,
+/// which keeps every parked worktree.
+fn worktree_parked_cutoff(hours: u64) -> Option<DateTime<Utc>> {
+    i64::try_from(hours)
+        .ok()
+        .and_then(Duration::try_hours)
+        .and_then(|age| Utc::now().checked_sub_signed(age))
+}
+
+/// When the task last moved into `status`, from its history.
+fn status_entered_at(history: &[TaskHistoryEntry], status: TaskStatus) -> Option<DateTime<Utc>> {
+    history
+        .iter()
+        .filter(|entry| entry.to_status == Some(status) && entry.from_status != Some(status))
+        .map(|entry| entry.at)
+        .max()
 }
 
 /// The owner's `status`/`pr_status` projection. An answer GC cannot read is
@@ -379,5 +488,6 @@ fn owner_task_fields(task_id: &str, fields: &Value) -> WorktreeGcTaskLookup {
             .get("pr_status")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
+        status_since: None,
     }
 }

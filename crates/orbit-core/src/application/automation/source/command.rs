@@ -3,10 +3,13 @@
 use super::super::source_cache::SourceCache;
 use chrono::{DateTime, Utc};
 use orbit_automation::AutomationError;
+use orbit_common::process::supervisor::{
+    Outcome, Periodic, ProcessStopCause, Stdin, Stream, SupervisedChild, Supervision, Termination,
+};
 use std::{
     io::{BufRead, Read, Seek, SeekFrom, Write},
     path::Path,
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     time::Duration,
 };
 
@@ -20,32 +23,12 @@ const COMMAND_BUDGET: Duration = Duration::from_secs(2);
 
 /// Largest stdout one command's evidence may carry.
 pub(in crate::application::automation) const OUTPUT_LIMIT: u64 = 1_048_576;
+/// How often supervision checks that stdout file. The previous poll slept this
+/// long between size and deadline checks.
+const OUTPUT_LIMIT_POLL: Duration = Duration::from_millis(10);
 /// Largest listing [`Source::git_matching_paths`] streams through a filter.
 /// Only the kept paths are held in memory, so this bounds disk, not evidence.
 pub(in crate::application::automation) const LISTING_LIMIT: u64 = 256 * 1_048_576;
-
-/// A source command owns its descendants as well as its direct child. Drop
-/// cleans up on timeout, I/O failure and a leader exiting before its helpers.
-struct SourceChild(Child);
-
-impl Drop for SourceChild {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        if let Ok(group) = i32::try_from(self.0.id()) {
-            // SAFETY: this child was made a group leader with process_group(0).
-            // No caller memory is accessed; never signal our own group or a
-            // reused PID that now belongs to a different process group.
-            unsafe {
-                let current = libc::getpgid(group);
-                if group > 1 && group != libc::getpgrp() && (current < 0 || current == group) {
-                    libc::killpg(group, libc::SIGKILL);
-                }
-            }
-        }
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
 
 impl<'a> Source<'a> {
     pub(crate) fn new(root: &'a Path) -> Self {
@@ -143,8 +126,9 @@ impl<'a> Source<'a> {
     }
 
     /// Run one child process to completion with stdout in an unlinked temp
-    /// file, killing it once the file passes `limit` bytes or `budget` /
-    /// [`SOURCE_DEADLINE`] elapses.
+    /// file. The supervisor waits, applies `budget` and the time left on
+    /// [`SOURCE_DEADLINE`], and kills the child at once. Crossing `limit`
+    /// bytes is a periodic check. The caller still checks the file after exit.
     fn capture(
         &self,
         program: &str,
@@ -209,54 +193,64 @@ impl<'a> Source<'a> {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
-        let mut child = SourceChild(
-            command
-                .current_dir(self.root)
-                .stdin(stdin)
-                .stdout(output)
-                .stderr(errors)
-                .spawn()
-                .map_err(|e| {
-                    AutomationError::Deferred(format!(
-                        "source_spawn_failed: {}: {e}",
-                        command_line(program, args)
-                    ))
-                })?,
-        );
+        let child = command
+            .current_dir(self.root)
+            .stdin(stdin)
+            .stdout(output)
+            .stderr(errors)
+            .spawn()
+            .map_err(|e| {
+                AutomationError::Deferred(format!(
+                    "source_spawn_failed: {}: {e}",
+                    command_line(program, args)
+                ))
+            })?;
 
-        let start = self.started.restart();
+        let mut over_limit = || {
+            let over = file
+                .metadata()
+                .map(|meta| meta.len() > limit)
+                .unwrap_or(true);
+            over.then_some(ProcessStopCause::Periodic)
+        };
+        let outcome = SupervisedChild::adopt(child)
+            .supervise(Supervision {
+                stdin: Stdin::Null,
+                stdout: Stream::Redirected,
+                stderr: Stream::Redirected,
+                timeout: self.supervision_timeout(budget),
+                // The source clock, so a frozen or injected test clock does
+                // not start spending the wall-clock budget.
+                clock: Some(&super::budget_now),
+                every: Some(Periodic {
+                    interval: OUTPUT_LIMIT_POLL,
+                    run: &mut over_limit,
+                }),
+                termination: Termination::KillNow,
+                cancelled: None,
+                intercept_signals: false,
+                drain_budget: Duration::ZERO,
+                cap_drain_at_deadline: false,
+                require_eof: false,
+                stopped_descendants: None,
+                on_spawn: None,
+                on_stopped_descendant: None,
+                extendable_deadline: None,
+            })
+            .map_err(|error| AutomationError::Deferred(error.to_string()))?;
 
-        loop {
-            if let Some(status) = child
-                .0
-                .try_wait()
-                .map_err(|e| AutomationError::Deferred(e.to_string()))?
-            {
-                if !status.success() {
-                    return Err(AutomationError::Deferred(format!(
-                        "evidence_unavailable: {}: {}",
-                        command_line(program, args),
-                        failure_text(&mut diagnostics, status)
-                    )));
-                }
-                break;
-            }
-
-            let over_budget = start.elapsed() > budget
-                || self.elapsed() > SOURCE_DEADLINE
-                || file
-                    .metadata()
-                    .map(|meta| meta.len() > limit)
-                    .unwrap_or(true);
-
-            if over_budget {
-                return Err(AutomationError::Deferred("source_budget".into()));
-            }
-
-            std::thread::sleep(Duration::from_millis(10));
+        if outcome.timed_out || stopped_periodically(&outcome) {
+            return Err(AutomationError::Deferred("source_budget".into()));
+        }
+        if !outcome.success {
+            return Err(AutomationError::Deferred(format!(
+                "evidence_unavailable: {}: {}",
+                command_line(program, args),
+                failure_text(&mut diagnostics, &failure_fallback(&outcome))
+            )));
         }
 
-        // A child that exits between the last poll and here may have written
+        // A child that exits between the last check and here may have written
         // past the limit.
         if file
             .metadata()
@@ -267,6 +261,24 @@ impl<'a> Source<'a> {
         }
 
         Ok(file)
+    }
+
+    /// Deadline passed to the supervisor for one command.
+    ///
+    /// A frozen test clock does not advance, so the wall clock must not spend
+    /// the budget: the timeout is already exhausted, or there is none. A live
+    /// clock gets the shorter of the command budget and the time left on
+    /// [`SOURCE_DEADLINE`], measured from the start of supervision.
+    fn supervision_timeout(&self, budget: Duration) -> Option<Duration> {
+        #[cfg(feature = "test-support")]
+        if self.started.is_frozen() {
+            let frozen = self.started.restart().elapsed();
+            if frozen > budget || self.elapsed() > SOURCE_DEADLINE {
+                return Some(Duration::ZERO);
+            }
+            return None;
+        }
+        Some(budget.min(SOURCE_DEADLINE.saturating_sub(self.elapsed())))
     }
 
     /// The NUL-delimited paths of a git listing for which `keep` is true, in
@@ -368,9 +380,33 @@ fn command_line(program: &str, args: &[&str]) -> String {
         .join(" ")
 }
 
+fn stopped_periodically(outcome: &Outcome) -> bool {
+    outcome
+        .stop_causes
+        .iter()
+        .any(|cause| matches!(cause, ProcessStopCause::Periodic))
+}
+
+/// Exit status text for a child that wrote no stderr. Matches `ExitStatus`'s
+/// display for a normal code, and keeps the signal status the supervisor
+/// recorded when there is no code.
+fn failure_fallback(outcome: &Outcome) -> String {
+    outcome
+        .stop_causes
+        .iter()
+        .find_map(|cause| match cause {
+            ProcessStopCause::TerminationStatus { status } => Some(status.to_string()),
+            _ => None,
+        })
+        .unwrap_or_else(|| match outcome.exit_code {
+            Some(code) => format!("exit status: {code}"),
+            None => "exit status: unknown".to_string(),
+        })
+}
+
 /// The first stderr line of a failed child, or its exit status when it said
 /// nothing. Bounded so a chatty tool cannot turn a reason into a log.
-fn failure_text(diagnostics: &mut std::fs::File, status: std::process::ExitStatus) -> String {
+fn failure_text(diagnostics: &mut std::fs::File, fallback: &str) -> String {
     let mut text = String::new();
     if diagnostics.seek(SeekFrom::Start(0)).is_ok() {
         let _ = diagnostics
@@ -380,7 +416,7 @@ fn failure_text(diagnostics: &mut std::fs::File, status: std::process::ExitStatu
 
     match text.lines().map(str::trim).find(|line| !line.is_empty()) {
         Some(line) => line.to_string(),
-        None => status.to_string(),
+        None => fallback.to_string(),
     }
 }
 

@@ -22,6 +22,7 @@ fn identity() -> CompatibilityIdentity {
     };
     CompatibilityIdentity {
         store_schema: ledger,
+        task_registry: ledger,
         workspace_layout: ledger,
         features: BTreeMap::new(),
         feature_floors: BTreeMap::new(),

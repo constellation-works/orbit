@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::ReviewLedger;
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -26,7 +27,7 @@ pub(super) fn read_ledger(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     raw.as_deref().map(decode).transpose()
 }
 
@@ -40,15 +41,46 @@ pub(super) fn ledgers_held_by(
         .prepare(
             "SELECT ledger_json FROM review_lineages WHERE workspace_id=?1 AND holder_run_id=?2",
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let rows = statement
         .query_map(params![workspace_id, run_id], |row| row.get::<_, String>(0))
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
-    rows.map(|raw| {
-        raw.map_err(|error| OrbitError::Store(error.to_string()))
-            .and_then(|raw| decode(&raw))
-    })
-    .collect()
+        .map_err(sqlite_store_error)?;
+    rows.map(|raw| raw.map_err(sqlite_store_error).and_then(|raw| decode(&raw)))
+        .collect()
+}
+
+/// Ledgers whose lineage key ends with `/{claim_id}`. The caller still checks
+/// that the ledger's task set contains the claim's task.
+pub(super) fn ledgers_for_claim(
+    conn: &Connection,
+    workspace_id: &str,
+    claim_id: &str,
+) -> Result<Vec<ReviewLedger>, OrbitError> {
+    if claim_id.is_empty() {
+        return Ok(Vec::new());
+    }
+    let pattern = format!("%/{}", like_literal(claim_id));
+    let mut statement = conn
+        .prepare(
+            "SELECT ledger_json FROM review_lineages \
+             WHERE workspace_id=?1 AND lineage_key LIKE ?2 ESCAPE '\\'",
+        )
+        .map_err(sqlite_store_error)?;
+    let rows = statement
+        .query_map(params![workspace_id, pattern], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(sqlite_store_error)?;
+    rows.map(|raw| raw.map_err(sqlite_store_error).and_then(|raw| decode(&raw)))
+        .collect()
+}
+
+/// Escape `\`, `%` and `_` so a claim id is a literal LIKE suffix.
+fn like_literal(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 /// Write the ledger, fencing on the revision the caller read. The holder
@@ -75,7 +107,7 @@ pub(super) fn write_ledger(
                     ledger.holder_run_id(),
                 ],
             )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         }
         Some(previous) => {
             ledger.revision = previous.saturating_add(1);
@@ -91,7 +123,7 @@ pub(super) fn write_ledger(
                         previous
                     ],
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             if changed == 0 {
                 return Err(OrbitError::Store(
                     "review ledger changed concurrently; reread and retry".into(),

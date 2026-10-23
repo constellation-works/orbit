@@ -112,8 +112,9 @@ impl OrbitRuntime {
         let request_id = audit_execution_id("workers");
         let outcome = self.apply_drain_worker_limit(request, &request_id);
         match &outcome {
-            Ok(change) => self.record_worker_limit_completion(
-                request.run_id,
+            Ok(change) => self.record_drain_control_completion(
+                WORKER_LIMIT_COMPLETION_AUDIT,
+                Some(request.run_id),
                 &request_id,
                 change.outcome.as_str(),
                 json!({
@@ -123,8 +124,9 @@ impl OrbitRuntime {
                 }),
                 None,
             )?,
-            Err(error) => self.record_worker_limit_completion(
-                request.run_id,
+            Err(error) => self.record_drain_control_completion(
+                WORKER_LIMIT_COMPLETION_AUDIT,
+                Some(request.run_id),
                 &request_id,
                 "rejected",
                 json!({ "requested_max_active_leaf_runs": request.max_active_leaf_runs }),
@@ -188,7 +190,7 @@ impl OrbitRuntime {
                     // invalidate the compare-and-set handle every other
                     // operator is holding.
                     unchanged = true;
-                    applied = state.drain_worker_limit.clone();
+                    applied = state.pull_drain.drain_worker_limit.clone();
                     return Ok(());
                 }
                 state.set_drain_worker_limit(
@@ -198,7 +200,7 @@ impl OrbitRuntime {
                     request.reason.map(str::to_string),
                     request.expected_revision,
                 );
-                applied = state.drain_worker_limit.clone();
+                applied = state.pull_drain.drain_worker_limit.clone();
                 Ok(())
             },
         )?;
@@ -302,39 +304,6 @@ impl OrbitRuntime {
                 "requested_at": chrono::Utc::now().to_rfc3339(),
             }),
             None,
-        )
-    }
-
-    fn record_worker_limit_completion(
-        &self,
-        run_id: &str,
-        request_id: &str,
-        outcome: &str,
-        detail: Value,
-        error: Option<String>,
-    ) -> Result<(), OrbitError> {
-        let mut arguments = json!({
-            "request_id": request_id,
-            "run_id": run_id,
-            "outcome": outcome,
-            "completed_at": chrono::Utc::now().to_rfc3339(),
-        });
-        if let (Some(target), Some(detail)) = (arguments.as_object_mut(), detail.as_object()) {
-            for (key, value) in detail {
-                target.insert(key.clone(), value.clone());
-            }
-        }
-        self.record_pipeline_audit(
-            WORKER_LIMIT_COMPLETION_AUDIT,
-            Some(run_id),
-            None,
-            if outcome == "rejected" {
-                AuditEventStatus::Failure
-            } else {
-                AuditEventStatus::Success
-            },
-            arguments,
-            error,
         )
     }
 }

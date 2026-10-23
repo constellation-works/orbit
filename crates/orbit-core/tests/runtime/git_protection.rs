@@ -34,7 +34,8 @@ fn git_protection_tolerates_object_store_leftovers_and_refuses_outside_aliases()
         ("temp-aliased-outside", true, true),
         ("temp-aliased-beside-metadata", true, true),
     ] {
-        let root = tempfile::tempdir().expect("fixture roots");
+        let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+            .expect("fixture roots");
         let repo_root = root
             .path()
             .canonicalize()
@@ -103,6 +104,7 @@ fn git_protection_tolerates_object_store_leftovers_and_refuses_outside_aliases()
                 env: Default::default(),
                 sandbox: Some(sandbox),
                 allow_fallback: false,
+                host_os: None,
                 created_at: None,
                 updated_at: None,
             })

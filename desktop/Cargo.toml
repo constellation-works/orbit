@@ -1,0 +1,71 @@
+# The desktop shell is its own Cargo workspace (excluded from the root one) so
+# Tauri and the platform webview stacks stay out of the main CI build.
+[workspace]
+
+[package]
+name = "orbit-desktop"
+version = "0.31.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT"
+description = "Desktop window for the Orbit dashboard"
+publish = false
+
+# The library (dashboard polling and the server supervisor) builds without the
+# native webview stack; only the window binary needs `native`.
+[features]
+default = ["native"]
+native = [
+    "dep:tauri-build", "dep:chrono", "dep:notify-rust", "dep:rsa", "dep:sha2", "dep:tauri",
+    "dep:tauri-plugin-autostart", "dep:tauri-plugin-dialog", "dep:tauri-plugin-opener",
+    "dep:tauri-plugin-window-state", "dep:ureq", "dep:signal-hook",
+]
+
+[[bin]]
+name = "orbit-desktop"
+path = "src/main.rs"
+required-features = ["native"]
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [], optional = true }
+
+[dependencies]
+# Update checks compare a key's not_after and revoked_at with today's date.
+chrono = { version = "0.4", default-features = false, features = ["clock"], optional = true }
+notify-rust = { version = "4", optional = true }
+# Release manifest verification, as in orbit-common::security::release.
+rsa = { version = "0.10.0-rc.18", features = ["sha2"], optional = true }
+serde_json = "1"
+sha2 = { version = "0.11", optional = true }
+tauri = { version = "2.12", features = ["tray-icon"], optional = true }
+tauri-plugin-autostart = { version = "2.5", optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
+tauri-plugin-opener = { version = "2.7", optional = true }
+tauri-plugin-window-state = { version = "2", optional = true }
+# Loopback HTTP to the app's own server, and HTTPS to GitHub for update checks.
+ureq = { version = "3.1", default-features = false, features = ["rustls"], optional = true }
+url = "2"
+
+[target.'cfg(unix)'.dependencies]
+# The library's server supervisor signals its child process with it.
+libc = "0.2"
+signal-hook = { version = "0.4", optional = true }
+
+# Its own fake `orbit`, so it takes the supervisor's `web serve` arguments
+# without libtest's argument parser.
+[[test]]
+name = "sidecar_lifecycle"
+harness = false
+
+[lints.clippy]
+await_holding_lock = "deny"
+dbg_macro = "deny"
+expect_used = "warn"
+print_stderr = "warn"
+print_stdout = "warn"
+unwrap_used = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

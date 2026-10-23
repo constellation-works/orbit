@@ -1,11 +1,12 @@
 //! `orbit run ship` CLI entrypoint.
 
 use clap::{Args, ValueEnum};
+use orbit_core::application::job::SubmissionKind;
 use orbit_core::{CompletionPolicy, OrbitError, OrbitRuntime, find_workflow};
 
 use crate::command::{CommandOut, Execute};
 
-use super::support::{WorkflowDispatchResult, workflow_dispatch_payload_with_warning};
+use super::support::{WorkflowDispatchResult, workflow_dispatch_payload_with_notices};
 
 const SHIP_WORKFLOW: &str = "ship";
 
@@ -28,12 +29,17 @@ impl ShipMode {
 #[command(
     about = "Ship backlog or explicitly selected tasks through the gated task pipeline",
     override_usage = "orbit run ship [<TASK_ID>...] [OPTIONS]",
-    after_help = "Examples:\n  orbit run ship\n  orbit run ship T123\n  orbit run ship T123 T456 --mode local\n  orbit run ship T123 --base main\n  orbit run ship T123 --allow-crew sol\n  orbit run ship T123 --complete\n\n\
+    after_help = "Examples:\n  orbit run ship\n  orbit run ship T123\n  orbit run ship T123 T456 --mode local\n  orbit run ship T123 --base main\n  orbit run ship T123 --allow-crew sol\n  orbit run ship T123 --complete\n  orbit run ship T123 --review before-landing\n\n\
                   Shipment is asynchronous: this prints the durable run ID and returns. The\n\
                   eventual outcome is not known when it does.\n\n\
                   `--allow-crew` restricts an explicit shipment to configured crews. It does\n\
                   not reassign tasks or select a fallback: an excluded current or later-resolved\n\
                   crew is refused before its provider starts.\n\n\
+                  `--review` adds a second-agent review before landing to this run only. It\n\
+                  can only add review: the layer workspace policy already applies is accepted\n\
+                  unchanged, and the other layer, a workspace that sets neither\n\
+                  `workflow.purpose_crews.pre_landing_review` nor `workflow.purpose_crews.review`\n\
+                  and local-only delivery are refused before the run starts.\n\n\
                   Inspect submitted runs with `orbit run history -j task_auto_pipeline` and\n\
                   `orbit run show <RUN_ID>`."
 )]
@@ -41,7 +47,8 @@ pub struct ShipCommand {
     /// Optional task IDs to seed explicit gated shipment. Omit for auto mode.
     #[arg(value_name = "TASK_ID", num_args = 0..)]
     pub task_ids: Vec<String>,
-    /// Pipeline mode for selected or auto-discovered task bundles. When omitted,
+    /// Pipeline mode. Each PR leaf accepts one task; explicit selections are
+    /// dispatched as singletons. When omitted,
     /// the mode is resolved from the current workspace's registry entry
     /// (explicit `ship_mode`, else defaults to `pr`).
     #[arg(short = 'm', long, value_enum)]
@@ -64,8 +71,18 @@ pub struct ShipCommand {
     /// fails before a run is created. Omitted, shipment remains unrestricted.
     #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
     pub allow_crew: Vec<String>,
+    /// Add this review layer before landing to this run when workspace
+    /// policy applies none: `before-pr` holds PR creation for a reviewer,
+    /// `before-landing` reviews the open PR before it lands. The layer
+    /// `review.timing` already applies is accepted unchanged; the other one
+    /// is refused, as are a workspace that sets neither
+    /// `workflow.purpose_crews.pre_landing_review` nor
+    /// `workflow.purpose_crews.review` and local-only delivery. Omitted,
+    /// workspace policy decides.
+    #[arg(long, value_enum, value_name = "LAYER")]
+    pub review: Option<orbit_types::workflow::ReviewLayer>,
     /// Require a systemd user scope for this run and every worker it starts.
-    /// Overrides machine.worker_containment_strict for this invocation.
+    /// Treats machine.worker_containment as strict for this invocation.
     #[arg(long)]
     pub strict_worker_containment: bool,
     /// Token for this workspace's exclusive claim, when another operator holds
@@ -87,7 +104,6 @@ impl ShipCommand {
 impl Execute for ShipCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let mode = resolve_ship_mode(&self, runtime)?;
-        validate_task_selection(&self.task_ids)?;
         ensure_workflow_exists(SHIP_WORKFLOW)?;
         // Ship is the one workflow whose submission carries task-level
         // admission checks, so it must not use the generic CLI dispatcher.
@@ -101,8 +117,8 @@ impl Execute for ShipCommand {
             self.claim_token.as_deref(),
             orbit_types::workflow::JobRunTrigger::cli(),
             self.strict_worker_containment,
+            self.review,
         )?;
-        super::support::warn_unset_env_pass(runtime);
         let run = WorkflowDispatchResult {
             workflow_alias: SHIP_WORKFLOW,
             job_id: invoke.job_name,
@@ -117,17 +133,15 @@ impl Execute for ShipCommand {
             error_code: None,
             error_message: None,
         };
-        // [ORB-13901] Discovery is refused while throttled; an explicit
-        // selection proceeds and is warned.
-        let mut warnings: Vec<String> = if self.task_ids.is_empty() {
-            Vec::new()
-        } else {
-            super::auto::resource_throttle_warning(runtime)
-                .into_iter()
-                .collect()
-        };
-        warnings.extend(runtime.validation_env_preflight_warning());
-        workflow_dispatch_payload_with_warning(SHIP_WORKFLOW, &[run], warnings)
+        let notices = runtime.submission_notices(SubmissionKind::Ship {
+            explicit: !self.task_ids.is_empty(),
+        });
+        workflow_dispatch_payload_with_notices(
+            SHIP_WORKFLOW,
+            &[run],
+            notices.warnings(),
+            notices.notes(),
+        )
     }
 }
 
@@ -174,53 +188,6 @@ fn resolve_ship_mode(
         return Ok(orbit_core::ShipMode::Pr);
     };
     Ok(mode)
-}
-
-#[derive(Args)]
-#[command(
-    about = "Deprecated alias for `orbit run ship --mode local`",
-    override_usage = "orbit run ship-local [<TASK_ID>...] [OPTIONS]",
-    after_help = "`orbit run ship-local` was replaced by `orbit run ship --mode local`."
-)]
-pub struct LegacyShipLocalCommand {
-    /// Deprecated. Pass task IDs to `orbit run ship --mode local`.
-    #[arg(value_name = "TASK_ID", num_args = 0..)]
-    pub task_ids: Vec<String>,
-    /// Deprecated. Use `orbit run ship --mode local --base <BRANCH>`.
-    #[arg(short = 'b', long)]
-    pub base: Option<String>,
-}
-
-impl Execute for LegacyShipLocalCommand {
-    fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {
-        let _ = self;
-        Err(OrbitError::InvalidInput(
-            "`orbit run ship-local` was replaced by `orbit run ship --mode local`".to_string(),
-        ))
-    }
-}
-
-fn validate_task_selection(task_ids: &[String]) -> Result<(), OrbitError> {
-    if let Some(legacy) = task_ids.first().and_then(|value| legacy_ship_form(value)) {
-        return Err(OrbitError::InvalidInput(legacy.to_string()));
-    }
-    Ok(())
-}
-
-fn legacy_ship_form(value: &str) -> Option<&'static str> {
-    match value {
-        "local" => {
-            Some("`orbit run ship local` was replaced by `orbit run ship --mode local <TASK_ID>`")
-        }
-        "pr" => Some("`orbit run ship pr` was replaced by `orbit run ship --mode pr <TASK_ID>`"),
-        "auto" | "ship-auto" => Some(
-            "`orbit run ship auto` was replaced by `orbit run auto`; `orbit run ship` remains leaf-only auto shipment when no task ids are supplied",
-        ),
-        "list" | "show" => Some(
-            "`orbit run ship list/show` was removed; use `orbit run history -j <JOB_ID>` and `orbit run show <RUN_ID>` for run inspection",
-        ),
-        _ => None,
-    }
 }
 
 fn ensure_workflow_exists(workflow_alias: &'static str) -> Result<(), OrbitError> {

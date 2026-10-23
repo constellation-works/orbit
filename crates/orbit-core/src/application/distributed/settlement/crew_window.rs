@@ -1,7 +1,7 @@
 //! The crews a pull drain's window can run [ORB-13941], and what a claimed
 //! leaf's settlement phase means for the operator.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use orbit_store::contracts::{AdmissionCrewCapability, LocalPullPhase};
 use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, PullAuthExclusion};
 use serde::Serialize;
@@ -12,15 +12,20 @@ use super::entries::RefusedPullSettlement;
 ///
 /// The window's provider preflight, taken once when it opened, minus every
 /// crew a claimed leaf of this drain found unusable since — an authentication
-/// failure excludes every configured crew of that provider, a capacity
-/// failure only the leaf's crew — and, when the drain was submitted with
-/// `--allow-crew`, outside that restriction [ORB-14174]. Derived from the
-/// drain's run input and its own admission records, so it survives a follower
-/// restart and a resume, and ends with the drain.
+/// failure excludes every configured crew of that provider account for the
+/// window (a crew that sets `env` is an account of its own [ORB-17288]), a
+/// capacity failure only the leaf's crew and only for a bounded backoff
+/// [ORB-15791] — and, when the drain was submitted with `--allow-crew`,
+/// outside that restriction [ORB-14174]. Derived from the drain's run input
+/// and its own admission records, so it survives a follower restart and a
+/// resume, and ends with the drain.
 ///
 /// [ORB-14697] Each pass also excludes the crews this host's provider-limit
-/// store finds at their usage limit, until the reading lapses, so they are
-/// runnable again within the same window.
+/// store finds at their usage limit, until the reading lapses. The reason
+/// names the host whose local store supplied the reading; an owner's reading
+/// does not gate a follower. A timed
+/// exclusion — a provider limit or a capacity backoff — carries its `until`,
+/// and the crew is runnable again within the same window once it passes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PullCrewWindow {
     /// When the preflight ran; `None` while the drain has not taken one.
@@ -43,9 +48,20 @@ pub struct PullCrewWindow {
     /// itself, whatever its crew [ORB-14257]. `None` while the host runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_suppressed: Option<String>,
-    /// Crews the window can run before `allowed` narrows them. The owner's
-    /// before-PR reviewer runs as one of these: the restriction selects the
-    /// implementation crews a claim may carry, not the review it owes.
+    /// Whether `host_suppressed` came from repeated busy-owner episodes
+    /// rather than a failure of this host: the remedy is on the owner.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub host_suppressed_by_busy_owner: bool,
+    /// While set, this drain requests no claim until `until`: a claimed leaf
+    /// was released because the owner's store stayed locked, which blames
+    /// neither this host nor its crew. It lifts by itself in the same window;
+    /// repeated episodes suppress the host instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_busy_backoff: Option<OwnerBusyBackoff>,
+    /// Crews the window can run once its timed exclusions lift, before
+    /// `allowed` narrows them. The owner's reviewer runs as one of these:
+    /// the restriction selects the implementation crews a claim may carry,
+    /// not the review it owes.
     #[serde(skip)]
     pub(super) reviewable: Option<Vec<String>>,
 }
@@ -61,37 +77,51 @@ impl PullCrewWindow {
         }
     }
 
-    /// Why the owner's before-PR reviewer crew cannot run in this window, or
-    /// `None` when it can. Judged without `allowed`: only exclusions and the
-    /// preflight count.
+    /// Why the owner's reviewer crew cannot run in this window, or `None`
+    /// when it can. Judged without `allowed`: only exclusions and the
+    /// preflight count, and a provider limit does not hold review. A
+    /// capacity backoff does, and the reason names when it lifts [ORB-15791].
     #[must_use]
     pub fn reviewer_unrunnable_reason(&self, crew: &str) -> Option<String> {
+        let excluded: Vec<CrewExclusion> = self
+            .excluded
+            .iter()
+            .filter(|exclusion| exclusion.source != CrewExclusionSource::ProviderLimit)
+            .cloned()
+            .collect();
+        if let Some(exclusion) = excluded.iter().find(|exclusion| exclusion.crew == crew)
+            && let Some(until) = exclusion.until
+        {
+            return Some(format!(
+                "crew `{crew}` is backed off on the executor until {}, when requests resume: {}",
+                until.to_rfc3339(),
+                exclusion.reason
+            ));
+        }
         AdmissionCrewCapability {
             runnable: self.reviewable.clone(),
             default_crew: None,
-            excluded: self
-                .excluded
-                .iter()
-                .filter(|exclusion| exclusion.source != CrewExclusionSource::ProviderLimit)
-                .cloned()
-                .collect(),
+            excluded,
         }
         .unrunnable_reason(Some(crew))
     }
 
     /// Whether the window can run nothing at all: the host is suppressed,
-    /// or every configured crew is excluded, so requesting work would only
-    /// collect idle receipts.
+    /// the drain is backing off a busy owner, or every configured crew is
+    /// excluded, so requesting work would only collect idle receipts.
     #[must_use]
     pub fn runs_nothing(&self) -> bool {
-        self.host_suppressed.is_some() || self.runnable.as_ref().is_some_and(Vec::is_empty)
+        self.host_suppressed.is_some()
+            || self.owner_busy_backoff.is_some()
+            || self.runnable.as_ref().is_some_and(Vec::is_empty)
     }
 
     /// Whether every crew this drain could otherwise run — the
-    /// allowlist-permitted preflight-runnable set — is excluded by a provider
-    /// usage limit, so this drain admits again once one lifts [ORB-14697, ORB-14902].
+    /// allowlist-permitted preflight-runnable set — is excluded until a set
+    /// time, by a provider usage limit or a capacity backoff, so this drain
+    /// admits again once one lifts [ORB-14697, ORB-14902, ORB-15791].
     #[must_use]
-    pub fn held_by_provider_limit(&self) -> bool {
+    pub fn held_until_lift(&self) -> bool {
         if self.host_suppressed.is_some() || self.runnable.as_ref().is_some_and(|r| !r.is_empty()) {
             return false;
         }
@@ -105,10 +135,10 @@ impl PullCrewWindow {
             (Some(allowed), None) => allowed
                 .iter()
                 .filter(|crew| {
-                    !self.excluded.iter().any(|exclusion| {
-                        &exclusion.crew == *crew
-                            && exclusion.source != CrewExclusionSource::ProviderLimit
-                    })
+                    !self
+                        .excluded
+                        .iter()
+                        .any(|exclusion| &exclusion.crew == *crew && exclusion.until.is_none())
                 })
                 .map(String::as_str)
                 .collect(),
@@ -116,10 +146,9 @@ impl PullCrewWindow {
         };
         !candidate_crews.is_empty()
             && candidate_crews.iter().all(|crew| {
-                self.excluded.iter().any(|exclusion| {
-                    exclusion.crew == *crew
-                        && exclusion.source == CrewExclusionSource::ProviderLimit
-                })
+                self.excluded
+                    .iter()
+                    .any(|exclusion| exclusion.crew == *crew && exclusion.until.is_some())
             })
     }
 
@@ -129,6 +158,14 @@ impl PullCrewWindow {
         let mut lines = Vec::with_capacity(self.excluded.len() + 3);
         if let Some(reason) = &self.host_suppressed {
             lines.push(format!("host suppressed: {reason}"));
+        }
+        if let Some(backoff) = &self.owner_busy_backoff {
+            lines.push(format!(
+                "owner busy: backed off until {} ({} of {OWNER_BUSY_EPISODE_LIMIT} episodes): {}",
+                backoff.until.to_rfc3339(),
+                backoff.episodes,
+                backoff.reason
+            ));
         }
         if let Some(allowed) = &self.allowed {
             lines.push(format!("allowed (--allow-crew): {}", allowed.join(", ")));
@@ -162,6 +199,114 @@ impl PullCrewWindow {
         }));
         lines.extend(self.auth_exclusions.iter().map(PullAuthExclusion::describe));
         lines
+    }
+}
+
+/// How long a drain requests no claim after a claimed leaf was released for
+/// the owner's busy store. Long enough for the owner's lock holder to finish,
+/// short against a drain's window.
+const OWNER_BUSY_BACKOFF_MINUTES: i64 = 5;
+
+/// How many separate busy-owner episodes in one window a drain backs off
+/// before it suppresses its host for the rest of the window. Releases that
+/// end within [`OWNER_BUSY_BACKOFF_MINUTES`] of the previous one belong to the
+/// same episode — leaves already running when the owner's store locked, which
+/// one backoff covers — so only an owner that stays busy across backoffs
+/// reaches the bound.
+pub(crate) const OWNER_BUSY_EPISODE_LIMIT: u32 = 3;
+
+/// A drain's bounded backoff from an owner whose store stayed locked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OwnerBusyBackoff {
+    /// When requests resume by themselves.
+    pub until: DateTime<Utc>,
+    /// Busy-owner episodes in this window so far, this one included.
+    pub episodes: u32,
+    /// Releases for the owner's busy store in this window so far.
+    pub releases: u32,
+    /// The latest such release.
+    pub reason: String,
+}
+
+/// Whether a drain's busy-owner releases hold it briefly or suppress its
+/// host for the rest of the window.
+pub(super) enum OwnerBusyVerdict {
+    Backoff(OwnerBusyBackoff),
+    Suppress(String),
+}
+
+/// The releases for the owner's busy store that one pull drain's claimed
+/// leaves met in its window.
+#[derive(Debug, Default)]
+pub(super) struct OwnerBusyReleases {
+    releases: Vec<(DateTime<Utc>, String)>,
+}
+
+impl OwnerBusyReleases {
+    pub(super) fn record(&mut self, at: DateTime<Utc>, reason: String) {
+        self.releases.push((at, reason));
+    }
+
+    /// The backoff from the latest release, or the host's suppression once
+    /// the releases span [`OWNER_BUSY_EPISODE_LIMIT`] episodes; `None`
+    /// without a release.
+    pub(super) fn verdict(mut self) -> Option<OwnerBusyVerdict> {
+        self.releases.sort_by_key(|(at, _)| *at);
+        let backoff = Duration::minutes(OWNER_BUSY_BACKOFF_MINUTES);
+        let mut episodes = 0_u32;
+        let mut previous: Option<DateTime<Utc>> = None;
+        for (at, _) in &self.releases {
+            if previous.is_none_or(|previous| *at >= previous + backoff) {
+                episodes += 1;
+            }
+            previous = Some(*at);
+        }
+        let releases = u32::try_from(self.releases.len()).unwrap_or(u32::MAX);
+        let (at, reason) = self.releases.pop()?;
+        if episodes >= OWNER_BUSY_EPISODE_LIMIT {
+            return Some(OwnerBusyVerdict::Suppress(format!(
+                "the owner's store stayed locked across {episodes} backoffs in this window \
+                 ({releases} releases; the bound is {OWNER_BUSY_EPISODE_LIMIT}); latest: {reason}"
+            )));
+        }
+        Some(OwnerBusyVerdict::Backoff(OwnerBusyBackoff {
+            until: at + backoff,
+            episodes,
+            releases,
+            reason,
+        }))
+    }
+}
+
+/// [ORB-15791] How long a crew's first capacity failure in a window backs it
+/// off; each further one in the same window doubles it, up to
+/// [`CAPACITY_BACKOFF_CAP_MINUTES`], well below a drain's window.
+const CAPACITY_BACKOFF_MINUTES: i64 = 10;
+const CAPACITY_BACKOFF_CAP_MINUTES: i64 = 60;
+
+/// The capacity failures one crew's claimed leaves met in a pull drain's
+/// window.
+#[derive(Debug, Default)]
+pub(super) struct CapacityFailures {
+    count: u32,
+    latest: Option<(DateTime<Utc>, String)>,
+}
+
+impl CapacityFailures {
+    pub(super) fn record(&mut self, at: DateTime<Utc>, reason: String) {
+        self.count += 1;
+        if self.latest.as_ref().is_none_or(|(latest, _)| at >= *latest) {
+            self.latest = Some((at, reason));
+        }
+    }
+
+    /// When the backoff from the latest failure lifts, and that failure's
+    /// reason.
+    pub(super) fn backoff(self) -> Option<(DateTime<Utc>, String)> {
+        let (at, reason) = self.latest?;
+        let doublings = self.count.saturating_sub(1).min(8);
+        let minutes = (CAPACITY_BACKOFF_MINUTES << doublings).min(CAPACITY_BACKOFF_CAP_MINUTES);
+        Some((at + Duration::minutes(minutes), reason))
     }
 }
 

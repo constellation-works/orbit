@@ -6,7 +6,7 @@
 //! The host returns the selected assignment and this module applies it over the
 //! inline activity baseline field by field.
 
-use orbit_types::identity::ReasoningEffort;
+use orbit_types::identity::{CrewEnvVar, ReasoningEffort};
 use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};
 use serde_json::Value;
 
@@ -20,6 +20,11 @@ pub struct ResolvedAgentSettings {
     pub provider: Provider,
     pub model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// The crew's `env` entries. A crew without any keeps the inline
+    /// activity's (always empty: assets cannot set them).
+    pub env: Vec<CrewEnvVar>,
+    /// The crew's own provider account, when it sets `env`.
+    pub account: Option<String>,
 }
 
 /// A run-scoped restriction on the crews this run may launch [ORB-11242]. The
@@ -27,12 +32,14 @@ pub struct ResolvedAgentSettings {
 /// selects the crew for a given activity.
 const ALLOWED_CREWS_KEY: &str = "allowed_crews";
 /// Activity input naming the configuration the host resolves the crew from
-/// (a `workflow.<tier>_complexity_crews` pool, `workflow.final_recovery_crews`).
+/// (a `workflow.purpose_crews.<purpose>` or `workflow.<tier>_complexity_crews`
+/// pool, or the final-recovery binding `workflow.final_recovery_crews`).
 const CREW_CONFIG_KEY: &str = "crew_config_key";
 
 /// Resolve one crew assignment for an activity. Explicit activity input wins —
-/// a named `crew` or a `crew_config_key` the host resolves from configuration;
-/// absent both, the run input preserves the run's resolved crew selection.
+/// a named `crew`, which the host uses as it is, else a `crew_config_key` the
+/// host resolves from configuration; absent both, the run input preserves the
+/// run's resolved crew selection.
 pub fn resolve_crew_settings(
     host: &dyn RuntimeHost,
     inline: &AgentLoopSpec,
@@ -87,6 +94,8 @@ fn resolve_from_config(config: &CrewConfig, inline: &AgentLoopSpec) -> ResolvedA
         provider: config.provider.unwrap_or(inline.provider),
         model: config.model.clone().or_else(|| inline.model.clone()),
         reasoning_effort: config.reasoning_effort.or(inline.reasoning_effort),
+        env: config.env.clone(),
+        account: config.account.clone(),
     }
 }
 
@@ -94,4 +103,6 @@ pub fn apply_resolved_settings(spec: &mut AgentLoopSpec, resolved: &ResolvedAgen
     spec.provider = resolved.provider;
     spec.model = resolved.model.clone();
     spec.reasoning_effort = resolved.reasoning_effort;
+    spec.crew_env.clone_from(&resolved.env);
+    spec.crew_account.clone_from(&resolved.account);
 }

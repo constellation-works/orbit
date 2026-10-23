@@ -21,14 +21,13 @@ use orbit_common::OrbitError;
 use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied, JobOutcome, RuntimeHost, V2AuditWriter, V2SqliteSink,
-    execute_job_with_resume, resolve_job_catalog_refs_for_execution,
+    FinalRecoveryApplied, JobOutcome, V2AuditWriter, V2SqliteSink, execute_job_with_resume,
+    resolve_job_catalog_refs_for_execution,
 };
-use orbit_types::workflow::FinalRecoveryDecision;
 use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, DeterministicSpec};
+use orbit_types::workflow::{FinalRecoveryDecision, ReviewGateRefusal};
 use serde_json::{Value, json};
 
-#[test]
 fn a_reviewer_timeout_retains_its_output_and_stops_before_retry_or_publication() {
     let host = ScriptedHost::new(Settlement::Timeout, Revalidation::Passes);
     let result = run_shipped_pipeline(&host);
@@ -41,11 +40,11 @@ fn a_reviewer_timeout_retains_its_output_and_stops_before_retry_or_publication()
     assert!(host.inputs("pr_open").is_empty());
     let handoff = host.inputs("pr_failure_handoff");
     assert_eq!(handoff.len(), 1);
-    assert!(
-        handoff[0]["error_message"]
-            .as_str()
-            .unwrap()
-            .contains("review_timeout_incomplete:")
+    assert_eq!(
+        handoff[0]["error_code"],
+        ReviewGateRefusal::TimeoutIncomplete.error_code(),
+        "the handoff decides on the executor's typed refusal: {}",
+        handoff[0]
     );
     assert_eq!(handoff[0]["pipeline"]["review"]["timed_out"], true);
     assert!(matches!(
@@ -59,7 +58,6 @@ fn a_reviewer_timeout_retains_its_output_and_stops_before_retry_or_publication()
 
 /// No findings: the reviewed head is the implementation head, nothing is
 /// revalidated, and the PR opens with no "Review fixes" section.
-#[test]
 fn accept_publishes_the_implementation_head_without_revalidation() {
     let host = ScriptedHost::new(Settlement::Accept, Revalidation::Passes);
     let result = run_shipped_pipeline(&host);
@@ -106,7 +104,6 @@ fn accept_publishes_the_implementation_head_without_revalidation() {
 /// to the reviewer once, with the typed defect, in the same attempt: the
 /// reviewer step dispatches a second time carrying `report_correction`, the
 /// engine never asks again, and one admission and one settlement follow.
-#[test]
 fn a_report_shape_defect_returns_to_the_reviewer_once_before_settlement() {
     const DEFECT: &str = "validation_contradicted: negative control `make test-guard` names \
                           `crates/orbit-cmd/src/update/converge.rs`, outside the candidate's scope";
@@ -166,7 +163,6 @@ fn a_report_shape_defect_returns_to_the_reviewer_once_before_settlement() {
 /// validation reruns on it with the implementation head as the ownership
 /// base, and only then is it pushed and opened with the "Review fixes"
 /// section the settlement produced.
-#[test]
 fn accept_with_fixes_revalidates_the_reviewer_commit_before_publishing_it() {
     let host = ScriptedHost::new(Settlement::AcceptWithFixes, Revalidation::Passes);
     let result = run_shipped_pipeline(&host);
@@ -213,7 +209,6 @@ fn accept_with_fixes_revalidates_the_reviewer_commit_before_publishing_it() {
 /// A reviewer commit that fails owner revalidation rejects the candidate:
 /// no step recovery, no second review, nothing pushed or opened, and the
 /// failure handoff blocks the task naming the revalidation step.
-#[test]
 fn a_failed_revalidation_rejects_without_a_second_review() {
     let host = ScriptedHost::new(Settlement::AcceptWithFixes, Revalidation::Fails);
     let result = run_shipped_pipeline(&host);
@@ -250,7 +245,6 @@ fn a_failed_revalidation_rejects_without_a_second_review() {
 /// An unfixable finding: settlement refuses, nothing is published, final
 /// recovery gets its one look, and the failure handoff blocks the task with
 /// the candidate preserved.
-#[test]
 fn reject_blocks_the_task_after_final_recovery() {
     let host = ScriptedHost::new(Settlement::Reject, Revalidation::Passes);
     let result = run_shipped_pipeline(&host);
@@ -303,14 +297,14 @@ fn reject_blocks_the_task_after_final_recovery() {
     let handoff = host.inputs("pr_failure_handoff");
     assert_eq!(handoff.len(), 1);
     assert_eq!(handoff[0]["failed_step_id"], "review_gate_settle");
-    let message = handoff[0]["error_message"].as_str().unwrap_or_default();
-    assert!(
-        message.contains("review_gate_blocked"),
-        "the handoff carries the gate's refusal: {message}"
+    assert_eq!(
+        handoff[0]["error_code"],
+        ReviewGateRefusal::Blocked.error_code(),
+        "the handoff carries the gate's typed refusal: {}",
+        handoff[0]
     );
 }
 
-#[test]
 fn reject_supplies_fixture_log_tail_to_final_recovery() {
     let host = ScriptedHost::new(Settlement::Reject, Revalidation::Passes)
         .with_log_tail("fixture-owned recovery evidence");
@@ -451,6 +445,10 @@ pub(super) enum Settlement {
 pub(super) enum Revalidation {
     Passes,
     Fails,
+    /// The first final gate fails, then existing step recovery repairs it.
+    CandidateFailsOnce,
+    CandidateEnvironment,
+    CandidateBaselineRed,
 }
 
 /// Plays the shipped pipeline's activities, keeping the candidate head a
@@ -581,17 +579,16 @@ impl ScriptedHost {
                     "handoff_evidence": null,
                 }))
             }
-            Settlement::Reject | Settlement::Timeout => {
-                Err(DispatchError::DeterministicActionRefused {
-                    action: "review_gate_settle".to_string(),
-                    message: format!("review_gate_blocked: attempt {attempt} settled reject"),
-                })
-            }
+            Settlement::Reject | Settlement::Timeout => Err(DispatchError::ReviewGateRefused {
+                action: "review_gate_settle".to_string(),
+                refusal: ReviewGateRefusal::Blocked,
+                message: format!("review_gate_blocked: attempt {attempt} settled reject"),
+            }),
         }
     }
 }
 
-impl RuntimeHost for ScriptedHost {
+impl orbit_engine::test_support::NullRuntimeHost for ScriptedHost {
     fn record_reviewer_invocation(
         &self,
         request: &orbit_engine::ReviewerInvocationRequest,
@@ -651,6 +648,40 @@ impl RuntimeHost for ScriptedHost {
                     && self.revalidation == Revalidation::Fails =>
             {
                 return Err(DeterministicFailure::validation(&head));
+            }
+            "candidate_validate"
+                if input.get("ownership_base_sha").is_none()
+                    && matches!(
+                        self.revalidation,
+                        Revalidation::CandidateFailsOnce
+                            | Revalidation::CandidateEnvironment
+                            | Revalidation::CandidateBaselineRed
+                    )
+                    && self.inputs("candidate_validate").len() == 1 =>
+            {
+                let message = match self.revalidation {
+                    Revalidation::CandidateEnvironment => {
+                        "[validation_environment] required tool unavailable".to_string()
+                    }
+                    Revalidation::CandidateBaselineRed => orbit_types::workflow::BaselineRedHold {
+                        base_ref: "origin/main".to_string(),
+                        base_sha: "base-sha".to_string(),
+                        command: "make test".to_string(),
+                        run_id: RUN_ID.to_string(),
+                        selection: None,
+                        failures: Default::default(),
+                    }
+                    .text("base shares failure"),
+                    _ => format!("required validation failed on candidate {head}"),
+                };
+                return Err(DispatchError::DeterministicActionFailed {
+                    action: "candidate_validate".into(),
+                    message,
+                });
+            }
+            "step_failure_recovery" => {
+                *self.head.lock().expect("candidate") = "candidate-repaired".to_string();
+                json!({"summary": "repaired candidate"})
             }
             "candidate_validate" => json!({ "decision": "passed", "tested_head": head }),
             "review_gate_admit" if input["preflight"] == true => {
@@ -757,4 +788,50 @@ impl DeterministicFailure {
             message: format!("required validation 'make test' did not pass on candidate {head}"),
         }
     }
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn review_settlement_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "review_settlement_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_reviewer_timeout_retains_its_output_and_stops_before_retry_or_publication",
+                a_reviewer_timeout_retains_its_output_and_stops_before_retry_or_publication,
+            ),
+            (
+                "accept_publishes_the_implementation_head_without_revalidation",
+                accept_publishes_the_implementation_head_without_revalidation,
+            ),
+            (
+                "a_report_shape_defect_returns_to_the_reviewer_once_before_settlement",
+                a_report_shape_defect_returns_to_the_reviewer_once_before_settlement,
+            ),
+            (
+                "accept_with_fixes_revalidates_the_reviewer_commit_before_publishing_it",
+                accept_with_fixes_revalidates_the_reviewer_commit_before_publishing_it,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn review_settlement_contracts_2() {
+    crate::git_fixture::isolated(module_path!(), "review_settlement_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_failed_revalidation_rejects_without_a_second_review",
+                a_failed_revalidation_rejects_without_a_second_review,
+            ),
+            (
+                "reject_blocks_the_task_after_final_recovery",
+                reject_blocks_the_task_after_final_recovery,
+            ),
+            (
+                "reject_supplies_fixture_log_tail_to_final_recovery",
+                reject_supplies_fixture_log_tail_to_final_recovery,
+            ),
+        ]);
+    });
 }

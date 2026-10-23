@@ -10,6 +10,85 @@ use super::git::{git_failure_error, git_run, timeout_recovery_error};
 const PROBE_ATTEMPTS: u32 = 3;
 const INITIAL_BACKOFF_MS: u64 = 250;
 
+#[cfg(feature = "test-support")]
+thread_local! {
+    static BACKOFF_MS: std::cell::Cell<u64> = const { std::cell::Cell::new(INITIAL_BACKOFF_MS) };
+}
+
+/// Scale retry waits in fixtures without changing attempt counts or production defaults.
+#[cfg(feature = "test-support")]
+pub fn with_remote_probe_backoff<T>(milliseconds: u64, operation: impl FnOnce() -> T) -> T {
+    struct Restore(u64);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            BACKOFF_MS.with(|slot| slot.set(self.0));
+        }
+    }
+    let _restore = Restore(BACKOFF_MS.with(|slot| slot.replace(milliseconds)));
+    operation()
+}
+
+fn initial_backoff_ms() -> u64 {
+    #[cfg(feature = "test-support")]
+    {
+        BACKOFF_MS.with(std::cell::Cell::get)
+    }
+    #[cfg(not(feature = "test-support"))]
+    {
+        INITIAL_BACKOFF_MS
+    }
+}
+
+// PR polling has a five-second production floor. These fixtures retain
+// requested delay accounting while exercising the next observation immediately;
+// ordinary builds and unscoped tests still perform the original real wait.
+#[cfg(feature = "test-support")]
+mod fixed_wait_fixture {
+    use std::{cell::RefCell, rc::Rc, time::Duration};
+
+    type Wait = Rc<dyn Fn(Duration)>;
+    thread_local! {
+        static WAIT: RefCell<Option<Wait>> = const { RefCell::new(None) };
+    }
+
+    /// Replace fixed VCS retry waits on this thread for one fixture operation.
+    /// Real subprocess deadlines and process cleanup retain their real clocks.
+    pub fn with_vcs_retry_wait<T>(
+        wait: impl Fn(Duration) + 'static,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        struct Restore(Option<Wait>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                WAIT.with(|slot| slot.replace(self.0.take()));
+            }
+        }
+        let _restore = Restore(WAIT.with(|slot| slot.replace(Some(Rc::new(wait)))));
+        operation()
+    }
+
+    pub(super) fn wait(duration: Duration) -> bool {
+        let wait = WAIT.with(|slot| slot.borrow().clone());
+        if let Some(wait) = wait {
+            wait(duration);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[cfg(feature = "test-support")]
+pub use fixed_wait_fixture::with_vcs_retry_wait;
+
+pub(crate) fn fixed_wait(duration: Duration) {
+    #[cfg(feature = "test-support")]
+    if fixed_wait_fixture::wait(duration) {
+        return;
+    }
+    std::thread::sleep(duration);
+}
+
 pub(super) struct RemoteBranchProbe {
     pub(super) sha: Option<String>,
     pub(super) attempts: u32,
@@ -96,7 +175,7 @@ pub(super) fn remote_ref_output(
                 ),
             ));
         }
-        let backoff_ms = INITIAL_BACKOFF_MS << (attempt - 1);
+        let backoff_ms = initial_backoff_ms() << (attempt - 1);
         tracing::warn!(
             stage,
             attempt,

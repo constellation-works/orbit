@@ -2,8 +2,8 @@ use std::str::FromStr;
 
 use orbit_common::OrbitError;
 use orbit_types::task::{
-    DEFAULT_TASK_LIST_LIMIT, TaskArtifact, TaskComplexity, TaskPriority, TaskRelation, TaskStatus,
-    TaskType, media_type_for_artifact_path,
+    DEFAULT_TASK_LIST_LIMIT, TaskArtifact, TaskComplexity, TaskOrigin, TaskPriority, TaskRelation,
+    TaskStatus, TaskType, media_type_for_artifact_path,
 };
 use serde_json::Value;
 
@@ -144,7 +144,7 @@ pub(super) fn parse_relations(input: &Value) -> Result<Option<Vec<TaskRelation>>
             .map(|relation| Some(vec![relation]))
             .map_err(|error| OrbitError::InvalidInput(format!("invalid `relations`: {error}"))),
         _ => Err(OrbitError::InvalidInput(
-            "`relations` must be an array of {type, target} objects".to_string(),
+            "`relations` must be an array of {type, target, regression?} objects".to_string(),
         )),
     }
 }
@@ -224,6 +224,30 @@ pub(super) fn parse_task_type(field: &str, raw: &str) -> Result<TaskType, OrbitE
             OrbitError::InvalidInput(format!("`{field}` {error}"))
         }
     })
+}
+
+/// An optional `origin` from the closed enum; an unknown value is refused
+/// with the allowed list.
+pub(super) fn parse_optional_task_origin(
+    input: &Value,
+    field: &str,
+) -> Result<Option<TaskOrigin>, OrbitError> {
+    orbit_common::protocol::tool_input::optional_string(input, field)?
+        .map(|raw| {
+            TaskOrigin::from_str(&raw).map_err(|_| {
+                OrbitError::invalid_input_with_suggestions(
+                    format!(
+                        "`{field}` must be one of: {}; got `{raw}`",
+                        TaskOrigin::valid_names().join(", ")
+                    ),
+                    TaskOrigin::valid_names()
+                        .iter()
+                        .map(|name| name.to_string())
+                        .collect(),
+                )
+            })
+        })
+        .transpose()
 }
 
 pub(super) fn require_object_field<'a>(

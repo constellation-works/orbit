@@ -64,7 +64,7 @@ pub struct CommitObservation {
     pub base_sha: Option<String>,
     /// Commit the host created. Present only for `committed`.
     pub head_sha: Option<String>,
-    /// When the step finished, from the run's own step record.
+    /// When the producing step finished, from its source run's step record.
     pub observed_at: Option<DateTime<Utc>>,
     pub provenance: Option<DeliveryEvidenceProvenance>,
     /// Why the status is `unavailable`.
@@ -138,6 +138,11 @@ pub enum LandingMethod {
 pub struct DeliveryEvidenceProvenance {
     /// Always [`RUN_DELIVERY_EVIDENCE_SOURCE`].
     pub source: String,
+    /// Run whose deterministic step produced this checkpoint. An inherited
+    /// commit names its authenticated ancestor, retaining the source timestamp.
+    /// Absent in older observations and for unavailable/unreached steps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_run_id: Option<String>,
     pub step_id: String,
     pub step_index: u32,
     pub activity: String,
@@ -158,6 +163,7 @@ pub enum DeliveryEvidenceGap {
     CheckpointInconsistent,
     /// The checkpoint is not a recognized host step output.
     OutputMalformed,
-    /// The checkpoint names a different task or run.
+    /// The checkpoint names a different task or run, or its bounded retry
+    /// ancestry cannot authenticate that ownership.
     OwnershipMismatch,
 }

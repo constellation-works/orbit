@@ -1,25 +1,52 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, teardownNode, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink } from './common.js';
+import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, infoHint, fetchJson, patchJson, postJson, syncNodes, teardownNode, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink, clockStamp, submissionNoticeLines, stateCell, fmtDuration, elapsedDurationInfo } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessEntry, drainReadinessFor, drainReadinessView, drainWaitSignature } from './drain-waits.js';
-import { elapsedLabel, runStartedAt, taskLockFiles } from './task-runtime.js';
-import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
+import { elapsedLabel, onTaskRuntimeChange, runStartedAt, taskContextContenders, taskLockFiles } from './task-runtime.js';
+import { buildAttentionCallout, buildDeliveryPanel, buildDeliveryProgress, buildExecutionProvenance, formatExecutionLocation, claimAttention, claimedReviewApproval, deliverySteps, handoffApprovalRequest, invalidateDistributedConsole, lastKnownClaims } from './distributed.js';
 
 const $ = (id) => document.getElementById(id);
 
 let lastCrewPayload = { default_crew: null, crews: [] };
-let expandedTaskIds = new Set();
+// The list row whose detail the side pane shows. One task at a time: the pane
+// beside the list replaces the inline accordion, so selecting another row
+// moves the pane to it and the list itself never reflows around a detail.
+let selectedTaskId = null;
 let taskActionNotice = null;
 let pinnedExternalTask = null;
-// The task the Tasks hash names with `open=`: the one opened last and still
-// open, so a copied URL reopens it. `pendingOpenTaskId` is a hash-named task
-// that has not been shown yet; the next render expands it from the list or
+// The task the Tasks hash names with `open=`: the one selected and still
+// shown, so a copied URL reopens it. `pendingOpenTaskId` is a hash-named task
+// that has not been shown yet; the next render selects it from the list or
 // pins it when the operator's filter hides it.
 let openTaskId = null;
 let pendingOpenTaskId = null;
+let openTaskGeneration = 0;
+// `#tasks/<id>` shows the pane across the content width. `taskPageReturn`
+// remembers the list scroll when the page was entered from the list, so Back
+// lands on the same selection at the same place; `listRestore` applies that
+// on the next render. `taskPageError` is a page whose task could not be read.
+let taskPageId = null;
+let taskPageReturn = null;
+let taskPageError = null;
+let listRestore = null;
+let returningFromPage = false;
+let focusPaneTitle = false;
+// A status change folded the pane: focus goes back to the row it came from.
+let rowFocusAfterRender = null;
+// The pane's tab is a page-wide choice: moving the selection keeps it.
+let activeDetailTab = "overview";
+// The Runs tab's read per task (`GET /api/job-runs?task_id=`), kept so a
+// rebuilt detail repaints the last answer while a fresh read is in flight.
+let taskRunLoads = new Map();
+const TASK_RUNS_LIMIT = 20;
+const TASK_RUNS_FRESH_MS = 15000;
+// The last context a render ran with, for the keyboard and pane handlers that
+// are wired once.
+let paneContext = null;
+let searchDebounce = null;
 // ORB-10874: per-task inline-edit feedback for the status/crew selects. Each
 // entry is `{ kind: 'pending'|'success'|'error', text, undo }`, where `undo`
 // (when present) is `{ previousValue, expiresAt }` — a bounded window in which
@@ -76,10 +103,15 @@ onWorkspaceChange(() => {
   pinnedExternalTask = null;
   taskActionNotice = null;
   quickActionState.clear();
-  expandedTaskIds.clear();
+  selectedTaskId = null;
+  taskRunLoads.clear();
   // The initial workspace selection also lands here; a task the URL named but
   // no render has shown yet must survive it.
-  if (!pendingOpenTaskId) setOpenTask(null);
+  if (!pendingOpenTaskId && openTaskId) {
+    taskPageId = null;
+    taskPageReturn = null;
+    setOpenTask(null);
+  }
   statusFeedback.clear();
   foldedStatusTasks.clear();
   crewFeedback.clear();
@@ -196,6 +228,12 @@ function fmtAbsTimeValue(context, value) {
   return context && typeof context.fmtAbsTime === "function"
     ? context.fmtAbsTime(value)
     : (value || "-");
+}
+
+// An absolute time in a task detail. The detail is kept while its task is
+// unchanged, so the time is stamped for a UTC/Local switch to repaint.
+function absTimeNode(context, value, attrs = {}) {
+  return clockStamp(el("span", { ...attrs, text: fmtAbsTimeValue(context, value) }), value);
 }
 
 function refreshTasks(context) {
@@ -327,12 +365,12 @@ function feedbackSignature(map, taskId) {
   return `${entry.kind}:${entry.text}:${entry.undo ? entry.undo.expiresAt : ""}`;
 }
 
-// The detail's own controls — the status and complexity selects and each field editor —
+// The detail's own controls — status, complexity, crew and each field editor —
 // keep their feedback outside the task object, so the detail's diff hash has to
 // see it the way the row's hash sees the status/crew entries. Without this a
 // saved or failed note would never paint.
 function detailFeedbackSignature(taskId) {
-  const parts = [feedbackSignature(statusFeedback, taskId), feedbackSignature(complexityFeedback, taskId)];
+  const parts = [feedbackSignature(statusFeedback, taskId), feedbackSignature(complexityFeedback, taskId), feedbackSignature(crewFeedback, taskId)];
   for (const field of Object.keys(TASK_FIELD_EDITORS)) {
     parts.push(feedbackSignature(fieldFeedback, fieldFeedbackKey(taskId, field)));
   }
@@ -400,6 +438,16 @@ function applyUpdatedTask(updatedTask, context) {
     pinnedExternalTask.task = merged;
   }
   return merged;
+}
+
+function currentCrewTask(task, context) {
+  if (!task || !task.id) return task;
+  return taskList(context).find((current) => current && current.id === task.id) ||
+    (pinnedExternalTask && pinnedExternalTask.task && pinnedExternalTask.task.id === task.id
+      ? pinnedExternalTask.task
+      : null) ||
+    taskDetails.get(task.id) ||
+    task;
 }
 
 // Read the full projection behind a summary row. One read per summary object:
@@ -526,6 +574,8 @@ function stopRowInteraction(node) {
 // with a blocking readiness gap. Readiness is derived per task rather than
 // stored, so it filters here instead of in the server's page query.
 let notReadyOnly = false;
+let pilotWarningsOnly = false;
+export function taskPilotWarningsFilter() { return pilotWarningsOnly; }
 
 function filterTasks(tasks, context) {
   const q = searchQueryValue(context);
@@ -533,6 +583,7 @@ function filterTasks(tasks, context) {
   return tasks.filter((t) => {
     if (!activeStatuses.has(t.status)) return false;
     if (notReadyOnly && !isNotReady(t)) return false;
+    if (pilotWarningsOnly && !pilotWarnings(t).length) return false;
     if (!q) return true;
     return (
       (t.id && t.id.toLowerCase().includes(q)) ||
@@ -541,16 +592,12 @@ function filterTasks(tasks, context) {
   });
 }
 
-const TASK_META_FIELDS = [
-  ["orchestrator", "orchestrator"],
-  ["implemented_by", "Implemented by"],
-  ["planned_by", "Planned by"],
+// Who made and carried the task, recorded by the pipeline and so read-only.
+const TASK_PEOPLE_FIELDS = [
   ["created_by", "Created by"],
-  ["pr_number", "PR"],
-  ["pr_status", "PR status"],
-  ["job_run_id", "Run"],
-  ["created_at", "Created"],
-  ["updated_at", "Updated"],
+  ["planned_by", "Planned by"],
+  ["implemented_by", "Implemented by"],
+  ["orchestrator", "Orchestrator"],
 ];
 
 const RELATION_GROUPS = [
@@ -588,20 +635,116 @@ export function openVisibleTask(taskId, context) {
     copyTaskIdWithNotice(taskId, context);
     return;
   }
-  expandedTaskIds.add(taskId);
-  setOpenTask(taskId);
-  renderTasks(taskList(context), context);
+  selectTask(taskId, context);
   revealTaskRow(taskId);
 }
 
-function revealTaskRow(taskId) {
+// Bring a row into view without moving a list that already shows it: a
+// deep link centres its row, a selection only scrolls as far as it must.
+function revealTaskRow(taskId, block = "nearest") {
   requestAnimationFrame(() => {
     const row = findTaskRow(taskId);
     if (!row) return;
-    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    row.scrollIntoView({ behavior: "smooth", block });
     row.classList.add("data-changed");
     setTimeout(() => row.classList.remove("data-changed"), 1200);
   });
+}
+
+// Select a list row: the pane moves to it. The clicked row stays where the
+// pointer left it, even when opening the pane narrows the list and its rows
+// rewrap, so selection never costs the operator their place.
+function selectTask(taskId, context, { anchor = null } = {}) {
+  const top = anchor && typeof anchor.getBoundingClientRect === "function" ? anchor.getBoundingClientRect().top : null;
+  if (pinnedExternalTask && pinnedExternalTask.id !== taskId) pinnedExternalTask = null;
+  selectedTaskId = taskId;
+  setOpenTask(taskId);
+  renderTasks(taskList(context), context);
+  keepRowInPlace(taskId, top);
+}
+
+function keepRowInPlace(taskId, top) {
+  const body = $("tasks-body");
+  const row = top == null ? null : findTaskRow(taskId);
+  if (!body || !row) return;
+  const delta = row.getBoundingClientRect().top - top;
+  if (Math.abs(delta) >= 1) body.scrollTop += delta;
+}
+
+// Close the pane. Focus returns to the row that opened it when it was in the
+// pane (or nowhere), so the keyboard resumes where the operator left the list.
+function closeTaskPane(context, { forget = false } = {}) {
+  if (taskPageId) {
+    leaveTaskPage(context);
+    return;
+  }
+  const taskId = shownTaskId();
+  if (!taskId) return;
+  const pane = $("task-detail-pane");
+  const active = document.activeElement;
+  const focusWasInPane = !active || active === document.body || Boolean(pane && pane.contains && pane.contains(active));
+  const row = findTaskRow(taskId);
+  const top = row && typeof row.getBoundingClientRect === "function" ? row.getBoundingClientRect().top : null;
+  if (pinnedExternalTask && pinnedExternalTask.id === taskId) pinnedExternalTask = null;
+  if (selectedTaskId === taskId) selectedTaskId = null;
+  if (openTaskId === taskId) setOpenTask(null);
+  // Reopening re-reads the detail, which is also the retry for a read that
+  // failed.
+  if (forget) forgetTaskDetailLoad(taskId);
+  renderTasks(taskList(context), context);
+  keepRowInPlace(taskId, top);
+  if (focusWasInPane) focusTaskRow(taskId);
+}
+
+function focusTaskRow(taskId) {
+  const button = findTaskRow(taskId)?.querySelector?.("[data-row-focus]");
+  if (button && typeof button.focus === "function") button.focus({ preventScroll: true });
+}
+
+// The task the pane holds right now: the pinned resolver result, else the
+// selected row.
+function shownTaskId() {
+  return (pinnedExternalTask && pinnedExternalTask.id) || selectedTaskId || null;
+}
+
+// Enter the full-page view of a task. The list behind it keeps its state; the
+// scroll is remembered because a hidden list loses it.
+function openTaskPage(taskId, context) {
+  const body = $("tasks-body");
+  taskPageReturn = { id: taskId, scrollTop: body ? body.scrollTop : 0 };
+  taskPageId = taskId;
+  taskPageError = null;
+  focusPaneTitle = true;
+  if (openTaskId !== taskId) setOpenTask(taskId);
+  renderTasks(taskList(context), context);
+  window.location.hash = `#tasks/${encodeURIComponent(taskId)}`;
+}
+
+// Leave the page state; the next render restores the list where it was.
+function exitTaskPageState() {
+  if (!taskPageId) return;
+  const back = taskPageReturn && taskPageReturn.id === taskPageId ? taskPageReturn : null;
+  listRestore = { id: taskPageId, scrollTop: back ? back.scrollTop : null };
+  taskPageId = null;
+  taskPageReturn = null;
+  taskPageError = null;
+}
+
+// Back to the list at the same selection. A page entered from the list goes
+// back through history, so the browser's own Back agrees with this control; a
+// page reached by a link has no list entry behind it and opens one.
+function leaveTaskPage(context) {
+  const taskId = taskPageId;
+  if (!taskId) return;
+  const fromList = Boolean(taskPageReturn && taskPageReturn.id === taskId);
+  exitTaskPageState();
+  if (!pinnedExternalTask && filterTasks(taskList(context), context).some((task) => task.id === taskId)) {
+    selectedTaskId = taskId;
+  }
+  returningFromPage = true;
+  renderTasks(taskList(context), context);
+  if (fromList && typeof window.history?.back === "function") window.history.back();
+  else window.location.hash = buildTasksHash(context);
 }
 
 // Task ids in a hash are untrusted input: keep only id-shaped values.
@@ -626,14 +769,17 @@ function writeOpenTaskToUrl(taskId) {
 }
 
 function setOpenTask(taskId) {
+  openTaskGeneration += 1;
   openTaskId = taskId;
   writeOpenTaskToUrl(taskId);
 }
 
 // Every path that closes a task detail goes through here so the URL stops
-// naming a task the page no longer shows.
+// naming a task the page no longer shows. A full-page task stays: the page is
+// that task, and its actions repaint it in place.
 function collapseTask(taskId) {
-  expandedTaskIds.delete(taskId);
+  if (taskPageId === taskId) return;
+  if (selectedTaskId === taskId) selectedTaskId = null;
   if (openTaskId === taskId) setOpenTask(null);
 }
 
@@ -645,8 +791,12 @@ function resolvePendingOpenTask(tasks, context) {
   if (!taskId) return;
   pendingOpenTaskId = null;
   if (filterTasks(tasks, context).some((task) => task.id === taskId)) {
-    expandedTaskIds.add(taskId);
-    revealTaskRow(taskId);
+    // A route replay for the row already selected leaves the list where it
+    // is, and coming back from the full page restores the list's own scroll.
+    const settled = selectedTaskId === taskId || (listRestore && listRestore.id === taskId);
+    selectedTaskId = taskId;
+    pinnedExternalTask = null;
+    if (!settled) revealTaskRow(taskId, "center");
   } else if (!(pinnedExternalTask && pinnedExternalTask.id === taskId)) {
     pinOpenTask(taskId, context);
   }
@@ -654,7 +804,8 @@ function resolvePendingOpenTask(tasks, context) {
 
 async function pinOpenTask(taskId, context) {
   const visit = captureWorkspaceVisit();
-  const superseded = () => !visit.isCurrent() || openTaskId !== taskId;
+  const generation = openTaskGeneration;
+  const superseded = () => !visit.isCurrent() || openTaskId !== taskId || generation !== openTaskGeneration;
   try {
     const task = await fetchJson(`/api/tasks/${encodeURIComponent(taskId)}`);
     if (superseded()) return;
@@ -665,25 +816,58 @@ async function pinOpenTask(taskId, context) {
     taskActionNotice = error && error.status === 404
       ? `${taskId} not found`
       : `Could not open ${taskId}: ${(error && error.message) || error}`;
+    // A full page has no list on screen to carry the notice.
+    if (taskPageId === taskId) taskPageError = taskActionNotice;
   }
   renderTasks(taskList(context), context);
 }
 
 /* Global ID resolver support (ORB-00211): allow rendering detail for a task that
    is outside the filtered list (hidden status, search, or truncated fetch)
-   without mutating DASHBOARD_TASK_STATUSES. The pinned detail appears in a
-   highlighted block at top of #tasks-body; auto-clears once the filtered list
+   without mutating DASHBOARD_TASK_STATUSES. The pinned detail shows in the
+   side pane, marked as outside the list; auto-clears once the filtered list
    actually contains the task. */
 export function setPinnedExternalTask(task, context) {
   if (!task || !task.id) return;
+  cancelTaskSearchDebounce();
+  if (selectedTaskId && selectedTaskId !== task.id) selectedTaskId = null;
   pinnedExternalTask = { task, id: task.id };
+  pendingOpenTaskId = null;
   setOpenTask(task.id);
+  // The resolver has cleared the text query; retire its URL and page too.
+  window.history?.replaceState?.(null, "", buildTasksHash(context));
+  if (context?.resetTaskPagination) context.resetTaskPagination();
 }
 
 export function clearPinnedExternalTask(context) {
   if (pinnedExternalTask && openTaskId === pinnedExternalTask.id) setOpenTask(null);
   pinnedExternalTask = null;
   if (context) renderTasks(taskList(context), context);
+}
+
+// Clearing also retires hash-driven reads, so a delayed response cannot restore
+// a dismissed result, even after another lookup for the same task.
+export function cancelTaskSearchDebounce() {
+  if (searchDebounce) clearTimeout(searchDebounce);
+  searchDebounce = null;
+}
+
+export function clearTaskSearch(context) {
+  cancelTaskSearchDebounce();
+  if (context?.cancelTaskLookup) context.cancelTaskLookup();
+  selectedTaskId = null;
+  taskPageId = null;
+  taskPageReturn = null;
+  pendingOpenTaskId = null;
+  pinnedExternalTask = null;
+  taskActionNotice = null;
+  setSearchQuery(context, "");
+  setOpenTask(null);
+  window.history?.replaceState?.(null, "", buildTasksHash(context));
+  if (context?.resetTaskPagination) context.resetTaskPagination();
+  syncTaskControls(context);
+  renderTasks(taskList(context), context);
+  refreshTasks(context).catch((error) => console.error("Failed to clear task search", error));
 }
 
 // Per-status counts for the chips, from the rows this page holds. They are
@@ -709,6 +893,7 @@ function refreshChips(context) {
     const isAll = chip.dataset.role === "all";
     const on = chip.dataset.role === "not-ready"
       ? notReadyOnly
+      : chip.dataset.role === "pilot-warnings" ? pilotWarningsOnly
       : isAll ? allOn : activeStatuses.has(status);
     chip.classList.toggle("active", on);
     // ORB-10874: chip state must not rely on the active/inactive color
@@ -724,6 +909,12 @@ function refreshChips(context) {
 // applyAuditHashQuery pair, so a reload or the browser's back/forward button
 // restores the same filtered view instead of resetting to the default.
 export function buildTasksHash(context) {
+  // The full-page view is its own route; the list filter waits behind it.
+  if (taskPageId) return `#tasks/${encodeURIComponent(taskPageId)}`;
+  return buildTasksListHash(context);
+}
+
+function buildTasksListHash(context) {
   const sp = new URLSearchParams();
   const order = statusOrder(context);
   const activeStatuses = activeStatusSet(context);
@@ -736,6 +927,7 @@ export function buildTasksHash(context) {
     sp.set("status", selected.length > 0 ? selected.join(",") : "none");
   }
   if (notReadyOnly) sp.set("ready", "not");
+  if (pilotWarningsOnly) sp.set("pilot", "warnings");
   const q = searchQueryValue(context);
   if (q) sp.set("q", q);
   if (openTaskId) sp.set("open", openTaskId);
@@ -743,15 +935,46 @@ export function buildTasksHash(context) {
   return qs ? `#tasks?${qs}` : "#tasks";
 }
 
-export function applyTasksHashQuery(query, context) {
-  const open = parseOpenTaskId(query.get("open"));
+// `page` is the `#tasks/<id>` route segment: that task's full-page view. It
+// names only the task, so the list filter behind it is left as it was.
+export function applyTasksHashQuery(query, context, page = null) {
+  cancelTaskSearchDebounce();
+  const pageId = parseOpenTaskId(page);
+  // A router replay of the route we just wrote is still the same lookup.
+  // Retire it only when navigation actually changes the represented state.
+  const current = buildTasksHash(context);
+  const replay = pageId
+    ? current === `#tasks/${encodeURIComponent(pageId)}`
+    : query.toString() === (current.split("?")[1] || "");
+  if (!replay && context?.cancelTaskLookup) context.cancelTaskLookup();
+  const open = pageId || parseOpenTaskId(query.get("open"));
+  if (openTaskId !== open) {
+    if (selectedTaskId && selectedTaskId !== open) selectedTaskId = null;
+    pinnedExternalTask = null;
+    taskActionNotice = null;
+  }
+  openTaskGeneration += 1;
   openTaskId = open;
   pendingOpenTaskId = open;
+  if (pageId) {
+    if (taskPageId !== pageId) taskPageError = null;
+    taskPageId = pageId;
+    return;
+  }
+  // Back from the full page (this pane's control or the browser's) returns to
+  // the list as it was: the same filter, page and scroll.
+  const fromPage = Boolean(taskPageId) || returningFromPage;
+  returningFromPage = false;
+  exitTaskPageState();
+  if (fromPage && query.toString() === (buildTasksListHash(context).split("?")[1] || "")) return;
   // A link that only names a task (`#tasks?open=ID`) opens it under whatever
   // filter the operator already has; reading it as "no filter" would reset
   // the chips and search to their defaults.
-  if (open && !["status", "q", "ready"].some((key) => query.has(key))) return;
-  if (context && typeof context.resetTaskPagination === "function") {
+  if (open && !["status", "q", "ready", "pilot"].some((key) => query.has(key))) return;
+  // A replay names the list already shown. Back fires popstate and then
+  // hashchange for the address the router just normalized; the second must
+  // not send the list to its first page and top.
+  if (!replay && context && typeof context.resetTaskPagination === "function") {
     context.resetTaskPagination();
   }
   const order = statusOrder(context);
@@ -767,6 +990,7 @@ export function applyTasksHashQuery(query, context) {
     setActiveStatuses(context, new Set(order.filter((s) => wanted.has(s))));
   }
   notReadyOnly = query.get("ready") === "not";
+  pilotWarningsOnly = query.get("pilot") === "warnings";
   setSearchQuery(context, (query.get("q") || "").trim().toLowerCase());
 }
 
@@ -832,10 +1056,12 @@ export function buildChips(context) {
     return node;
   };
   // The open statuses lead as chips with a dot and a count; the closed ones,
-  // all and not ready follow a divider as quieter toggles of the same kind.
+  // All and Not ready wait behind More, a disclosure. A quiet chip that is on
+  // stays in view while More is closed, so the filter the list obeys is
+  // always on screen.
   const defaults = new Set(defaultActiveStatuses(context));
   const primary = el("div", { class: "chip-group" });
-  const secondary = el("div", { class: "chip-group chip-group-quiet" });
+  const secondary = el("div", { class: "chip-group chip-group-quiet", id: "task-filter-more" });
   for (const status of statusOrder(context)) {
     const node = chip(STATUS_LABELS[status] || status, { status }, !defaults.has(status));
     node.addEventListener("click", () => {
@@ -860,18 +1086,37 @@ export function buildChips(context) {
     notReadyOnly = !notReadyOnly;
     navigateTasksHash(context);
   });
-  secondary.append(allChip, notReady);
-  container.append(primary, el("span", { class: "chip-divider", "aria-hidden": "true" }), secondary);
+  const pilotFilter = chip("Pilot warnings", { role: "pilot-warnings" }, true, "Proposed tasks held by their latest pilot findings");
+  pilotFilter.addEventListener("click", () => {
+    pilotWarningsOnly = !pilotWarningsOnly;
+    navigateTasksHash(context);
+  });
+  secondary.append(allChip, notReady, pilotFilter);
+  const more = el("button", {
+    class: "chip-more",
+    type: "button",
+    "aria-controls": "task-filter-more",
+    "aria-expanded": "false",
+    title: "Closed statuses, All, Not ready and Pilot warnings",
+  }, [el("span", { text: "More" })]);
+  more.addEventListener("click", () => {
+    const open = more.getAttribute("aria-expanded") !== "true";
+    more.setAttribute("aria-expanded", String(open));
+    secondary.classList.toggle("open", open);
+  });
+  container.append(primary, more, secondary);
   refreshChips(context);
 }
 
 export function wireSearch(context) {
   const input = $("task-search");
-  let debounce = null;
   input.addEventListener("input", (e) => {
     setSearchQuery(context, e.target.value.trim().toLowerCase());
-    if (debounce) clearTimeout(debounce);
-    debounce = setTimeout(() => navigateTasksHash(context), 250);
+    cancelTaskSearchDebounce();
+    searchDebounce = setTimeout(() => {
+      searchDebounce = null;
+      navigateTasksHash(context);
+    }, 250);
   });
   // ORB-14495: `/` jumps to the task search while the Tasks view shows it. A
   // field that takes typing keeps the key as a character.
@@ -903,6 +1148,7 @@ function renderFilterSummary(context) {
     parts.push(`status: ${order.filter((s) => activeStatuses.has(s)).join(", ")}`);
   }
   if (notReadyOnly) parts.push("not ready");
+  if (pilotWarningsOnly) parts.push("pilot warnings");
   const q = searchQueryValue(context);
   if (q) parts.push(`search: "${q}"`);
   node.textContent = parts.length > 0 ? `Filtering by ${parts.join(" · ")}` : "Showing all statuses";
@@ -931,8 +1177,11 @@ function buildOsBadges(task) {
   if (!requirement || typeof requirement !== "object") return [];
   const invalid = Array.isArray(requirement.invalid) ? requirement.invalid : [];
   const anyOf = Array.isArray(requirement.any_of) ? requirement.any_of : [];
+  if (["unresolved", "conflict"].includes(requirement.state)) {
+    return [el("span", { class: "os-badge os-badge-invalid", text: requirement.state, title: requirement.describe })];
+  }
   return [
-    ...anyOf.map((os) => el("span", { class: "os-badge mono", text: `os:${os}`, title: `Runs on ${requirement.describe || os}` })),
+    ...anyOf.map((os) => el("span", { class: "os-badge mono", text: os === "macos" ? "macOS" : os, title: `Runs on ${requirement.describe || os}` })),
     ...invalid.map((tag) => el("span", { class: "os-badge os-badge-invalid mono", text: tag, title: "Unsupported OS tag: no host runs this task until it is retagged" })),
   ];
 }
@@ -986,9 +1235,45 @@ function buildReadinessBadge(task) {
   })];
 }
 
+// Core supplies only the findings that hold promotion; clients do not
+// reinterpret pilot assessments or read the drain's latest-pass snapshot.
+function pilotWarnings(task) {
+  return Array.isArray(task.pilot_warnings) ? task.pilot_warnings : [];
+}
+
+function buildPilotWarningBadge(task) {
+  const count = pilotWarnings(task).length;
+  return count ? [el("span", {
+    class: "chip pilot-warning-chip",
+    role: "img",
+    "aria-label": `Pilot warnings: ${count} holding findings`,
+  }, [el("span", { text: "⚠", "aria-hidden": "true" }), ` pilot warnings · ${count}`])] : [];
+}
+
+function buildPilotWarnings(task) {
+  const findings = pilotWarnings(task);
+  if (!findings.length) return null;
+  const labels = {
+    utility_warnings: "Utility", surface_warnings: "Surface",
+    validation_tool_warnings: "Validation tool", blocked_by: "Prerequisite",
+    adr_conflicts: "Conflict",
+  };
+  return el("section", { class: "task-attention warning pilot-warnings", "aria-label": "Pilot warnings" }, [
+    el("span", { class: "task-attention-icon", "aria-hidden": "true" }),
+    el("div", { class: "task-attention-content" }, [
+      el("h3", { class: "task-attention-title", text: "Pilot warnings" }),
+      el("p", { class: "task-attention-body", text: "The drain holds this task until an operator approves it or edits it so the next pilot pass is clean." }),
+      el("ul", { class: "pilot-warning-findings" }, findings.map(finding => el("li", {}, [
+        el("strong", { text: `${labels[finding.kind] || String(finding.kind).replaceAll("_", " ")}: ` }),
+        el("span", { text: finding.text }),
+      ]))),
+    ]),
+  ]);
+}
+
 // The readiness dot beside a backlog task's ID: the pool colour, its words as
 // the dot's label and the full wait in the tooltip. A row the snapshot does
-// not mention keeps an empty slot so the IDs stay aligned.
+// not mention keeps a hidden dot and says nothing.
 function buildReadinessDot(task) {
   const readiness = drainReadinessFor(task.id);
   if (!readiness) return el("span", { class: "ready-dot none", "aria-hidden": "true" });
@@ -997,11 +1282,30 @@ function buildReadinessDot(task) {
   return dot;
 }
 
-// `[source] Rest of the title`: the bracketed source prefix reads quieter than
-// the problem it introduces. Both stay one line of the same title text.
+// A backlog row's second line after its ID: the readiness dot and why the
+// task is or is not starting, in the drain snapshot's own words. The dot's
+// label already says it to assistive technology, so the visible words are
+// hidden from it rather than read twice.
+function buildRowReason(task) {
+  const dot = buildReadinessDot(task);
+  const readiness = drainReadinessFor(task.id);
+  if (!readiness) return el("span", { class: "row-reason none" }, [dot]);
+  const words = readiness.badge ? readiness.badge.text : readiness.label;
+  const text = `${words.charAt(0).toUpperCase()}${words.slice(1)}`.replace(/\bmacos\b/g, "macOS");
+  return el("span", { class: "row-reason" }, [
+    dot,
+    el("span", { class: "row-reason-text", text, title: readiness.title, "aria-hidden": "true" }),
+  ]);
+}
+
+// `[source] Rest of the title`: the bracketed source prefixes become tag chips
+// beside the title (`[auto-task]` reads as an "auto-task" chip), so the title
+// starts with the problem it names.
 function splitTitlePrefix(title) {
   const match = /^((?:\[[^\]]+\]\s*)+)(.*)$/.exec(String(title || ""));
-  return match && match[2] ? [match[1], match[2]] : ["", String(title || "")];
+  if (!match || !match[2]) return [[], String(title || "")];
+  const labels = [...match[1].matchAll(/\[([^\]]+)\]/g)].map((part) => part[1].trim()).filter(Boolean);
+  return [labels, match[2]];
 }
 
 // Where a running or blocked task's run is and what it holds: the host, the
@@ -1030,7 +1334,7 @@ function buildRunCell(task) {
   ].filter(Boolean).join("\n");
   return el("span", { class: "run-cell", title }, [
     el("span", { class: `run-host${host ? "" : " none"}`, text: host || "no run" }),
-    sub.length ? el("span", { class: "run-sub", text: sub.join(" · ") }) : null,
+    ...sub.map((text) => el("span", { class: "run-sub", text })),
   ]);
 }
 
@@ -1046,10 +1350,9 @@ function readinessTaskLink(taskId, workspace) {
   return bindTaskLink(link, taskId, workspace ? { workspace } : {});
 }
 
-// The Readiness card's drain part: the pool and the row dot's badge text as
-// the headline, then what holds the task, each holder or dependency linked,
-// the server's detail and the raw reason. Without an entry it says whether a
-// read is pending, failed or found nothing, and never claims a pool.
+// The Readiness card leads with the pool, then links every reported blocker.
+// Without an entry it says whether a read is pending, failed or found nothing,
+// and never claims a pool.
 function buildDrainReadiness(drain, workspace) {
   const entry = drain && drain.entry;
   if (!entry) {
@@ -1065,7 +1368,7 @@ function buildDrainReadiness(drain, workspace) {
   const head = el("div", { class: "readiness-drain-head" }, [
     dot,
     el("strong", { text: view.poolLabel }),
-    el("span", { text: badge ? badge.text : "nothing holds it" }),
+    ...(badge && view.pool !== "locks" ? [el("span", { class: "readiness-drain-reason", text: `· ${badge.text}` })] : []),
   ]);
   const wrap = el("div", { class: "readiness-drain" }, [head]);
   wrap.dataset.pool = view.pool;
@@ -1077,14 +1380,17 @@ function buildDrainReadiness(drain, workspace) {
     wrap.appendChild(el("div", { class: "readiness-fix", text: view.title }));
     return wrap;
   }
-  if (badge.holder) wrap.appendChild(line("Waits on", [readinessTaskLink(badge.holder, workspace)]));
-  else if (badge.runId) {
-    const run = el("a", { class: "mono", text: badge.runId });
-    run.href = runHref(badge.runId, workspace ? { workspace } : {});
-    wrap.appendChild(line("Waits on", [run]));
+  if (badge.holders.length) {
+    wrap.appendChild(line("Held by", badge.holders.map(id => readinessTaskLink(id, workspace))));
+  } else if (view.pool === "locks" && !badge.runIds.length) {
+    wrap.appendChild(line("Held by", [el("span", { text: "Lock holder unavailable" })]));
   }
-  if (badge.selectors.length > 0) {
-    wrap.appendChild(line("Lock", badge.selectors.map((selector) => el("span", { class: "mono", text: selector }))));
+  if (badge.runIds.length) {
+    wrap.appendChild(line("Live run", badge.runIds.map(runId => {
+      const run = el("a", { class: "mono", text: runId });
+      run.href = runHref(runId, workspace ? { workspace } : {});
+      return run;
+    })));
   }
   if (badge.dependencies.length > 0) {
     wrap.appendChild(line("Depends on", badge.dependencies.map(({ taskId, status }) =>
@@ -1094,7 +1400,6 @@ function buildDrainReadiness(drain, workspace) {
       ]))));
   }
   if (badge.detail) wrap.appendChild(el("div", { class: "readiness-message", text: badge.detail }));
-  wrap.appendChild(el("div", { class: "readiness-fix mono", text: `Reason: ${badge.reason}` }));
   return wrap;
 }
 
@@ -1102,7 +1407,7 @@ function buildDrainReadiness(drain, workspace) {
 // then each preparation gap with its severity and its fix. "Ready" is claimed
 // only for a task the drain reports eligible with nothing missing.
 function buildReadinessBlock(readiness, drain, workspace) {
-  const wrap = el("div", { class: "readiness-list" });
+  const wrap = el("div", { class: "value readiness-list" });
   if (drain) wrap.appendChild(buildDrainReadiness(drain, workspace));
   if (!readiness) return wrap;
   if (readiness.preparing) {
@@ -1117,6 +1422,7 @@ function buildReadinessBlock(readiness, drain, workspace) {
     wrap.appendChild(el("div", { class: "readiness-note", text: eligible ? "Ready: nothing is missing." : "No preparation gaps." }));
     return wrap;
   }
+  wrap.appendChild(el("span", { class: "readiness-gap-count", text: `${gaps.length} ${gaps.length === 1 ? "gap" : "gaps"}` }));
   for (const gap of gaps) {
     const severity = gap.severity === "blocking" ? "blocking" : "advisory";
     wrap.appendChild(el("div", { class: "readiness-gap" }, [
@@ -1163,7 +1469,9 @@ function buildExternalRefs(refs) {
   return wrap;
 }
 
-function buildRelations(relations, context) {
+// The typed relations in RELATION_GROUPS order, one entry per related task,
+// each carrying the label that says how it relates.
+function relationTargets(relations) {
   const byType = new Map(RELATION_GROUPS.map(([key]) => [key, []]));
   for (const relation of relations) {
     const key = relationTypeKey(relation.relation_type || relation.type);
@@ -1171,25 +1479,8 @@ function buildRelations(relations, context) {
     if (!RELATION_GROUP_LABELS.has(key) || !target) continue;
     byType.get(key).push(target);
   }
-
-  const wrap = el("div");
-  for (const [key, label] of RELATION_GROUPS) {
-    const targets = byType.get(key);
-    if (!targets || targets.length === 0) continue;
-    const group = el("div", { class: "relation-group" }, [
-      el("span", { class: "label", text: label }),
-    ]);
-    for (const target of targets) {
-      const btn = el("button", { class: "relation-target mono", text: target });
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        openVisibleTask(target, context);
-      });
-      group.appendChild(btn);
-    }
-    wrap.appendChild(group);
-  }
-  return wrap;
+  return RELATION_GROUPS.flatMap(([key, label]) =>
+    byType.get(key).map((target) => ({ key, label, target })));
 }
 
 // ORB-11333: the settled before-PR review gate. Every value comes from the
@@ -1227,6 +1518,19 @@ function buildReviewGate(review) {
     lines.push(`stale gate reasons: ${review.stale_reasons.join(", ")}`);
   }
   for (const line of lines) wrap.appendChild(el("div", { text: line }));
+  return wrap;
+}
+
+function buildOwedCriteria(owed) {
+  const wrap = el("div", { class: "owed-criteria" });
+  for (const entry of owed) {
+    const parts = [
+      `${entry.criterion}. [${entry.state}] on ${entry.host}: ${entry.command} (target ${entry.target})`,
+    ];
+    if (entry.candidate_evidence) parts.push(`candidate: ${entry.candidate_evidence}`);
+    if (entry.evidence) parts.push(`recorded by ${entry.recorded_by ?? "—"}: ${entry.evidence}`);
+    wrap.appendChild(el("div", { text: parts.join(" · ") }));
+  }
   return wrap;
 }
 
@@ -1459,10 +1763,10 @@ const TASK_FIELD_EDITORS = {
   context_files: {
     label: "context files",
     toText: (task) => linesToText(task.context_files),
-    renderView: (task) =>
-      Array.isArray(task.context_files) && task.context_files.length > 0
-        ? buildFileList(task.context_files)
-        : emptyFieldView("no context files"),
+    // Keep the empty state in the same refreshable list as populated
+    // selectors, so a background refresh can replace it without rebuilding an
+    // open detail that contains another field's draft.
+    renderView: (task) => buildFileList(task),
     // The server refuses a selector that names nothing unless the caller says
     // the task is about to create it, so that escape is the editor's own
     // checkbox rather than a second, silently different code path.
@@ -1495,8 +1799,13 @@ function emptyFieldView(text) {
   return el("div", { class: "field-empty", text });
 }
 
+function taskMarkdownPanel(content) {
+  return el("div", { class: "task-markdown-panel" }, [content]);
+}
+
+// Numbered, because criteria are cited by number ("criterion 3 is met").
 function buildCriteriaList(criteria) {
-  const ul = el("ul", { class: "ac-list" });
+  const ul = el("ol", { class: "ac-list" });
   for (const ac of criteria) {
     const rendered = renderMarkdownInline(ac);
     if (rendered !== null) {
@@ -1510,23 +1819,141 @@ function buildCriteriaList(criteria) {
   return ul;
 }
 
-function buildFileList(paths) {
+function buildFileList(task) {
   const ul = el("ul", { class: "file-list mono" });
-  for (const path of paths) {
-    ul.appendChild(el("li", {}, selectorParts(path)));
-  }
+  ul.contentionTask = task;
+  refreshFileList(ul);
   return ul;
 }
 
-// A context selector is `kind:target`. The kind and, for path selectors, the
-// directory are dimmed so the basename — what an operator scans for — reads
-// first; the text content is still the whole selector.
-function selectorParts(selector) {
+function parseContextSelector(selector) {
   const match = /^([a-z]+):(.*)$/.exec(selector);
-  if (!match) return [selector];
+  if (!match) return { kind: "file", target: selector, cut: 0, base: selector, dir: "" };
   const [, kind, target] = match;
-  const cut = kind === "file" || kind === "dir" ? target.lastIndexOf("/") + 1 : 0;
-  return [el("span", { class: "selector-dim", text: `${kind}:${target.slice(0, cut)}` }), target.slice(cut)];
+  let cut = 0;
+  if (kind === "file") {
+    cut = target.lastIndexOf("/") + 1;
+  } else if (kind === "dir") {
+    const trimmed = target.endsWith("/") ? target.slice(0, -1) : target;
+    cut = trimmed.lastIndexOf("/") + 1;
+  }
+  return {
+    kind,
+    target,
+    cut,
+    base: target.slice(cut),
+    dir: target.slice(0, cut),
+  };
+}
+
+function disambiguateSelector(target, allTargets) {
+  if (allTargets.length <= 1) return "";
+  const segs = target.split("/");
+  segs.pop();
+  if (segs.length === 0) return "root";
+  const root = segs[0];
+  const rootCount = allTargets.filter((t) => t.split("/")[0] === root).length;
+  if (rootCount === 1) return root;
+  for (let i = 0; i < segs.length; i++) {
+    const prefix = segs.slice(0, i + 1).join("/") + "/";
+    if (allTargets.filter((t) => t.startsWith(prefix)).length === 1) {
+      return segs[i];
+    }
+  }
+  return segs[segs.length - 1];
+}
+
+function formatDirectory(dirPath) {
+  const span = el("span", { class: "selector-dim" });
+  if (!dirPath) return span;
+  const parts = dirPath.split("/");
+  for (let i = 0; i < parts.length; i++) {
+    if (i < parts.length - 1) {
+      const seg = `${parts[i]}/`;
+      if (i === 0) {
+        span.appendChild(el("span", { class: "selector-root", text: seg }));
+      } else {
+        span.appendChild(document.createTextNode(seg));
+      }
+      span.appendChild(el("wbr"));
+    } else if (parts[i]) {
+      span.appendChild(document.createTextNode(parts[i]));
+    }
+  }
+  return span;
+}
+
+function refreshFileList(ul) {
+  const task = ul.contentionTask;
+  const applicable = task.status === "backlog" || task.status === "in-progress";
+  const nodes = [];
+  const rawPaths = Array.isArray(task.context_files) ? task.context_files : [];
+  const parsed = rawPaths.map(parseContextSelector);
+  const baseMap = new Map();
+  for (const p of parsed) {
+    if (!p.base) continue;
+    if (!baseMap.has(p.base)) baseMap.set(p.base, []);
+    baseMap.get(p.base).push(p.target);
+  }
+
+  for (let i = 0; i < rawPaths.length; i++) {
+    const path = rawPaths[i];
+    const p = parsed[i];
+    const dups = p.base ? baseMap.get(p.base) || [] : [];
+    const isDuplicate = dups.length > 1;
+    const disambig = isDuplicate ? disambiguateSelector(p.target, dups) : "";
+
+    const matches = applicable ? taskContextContenders(task, path) : [];
+    const state = matches === null ? "Contention unknown: current workspace data unavailable"
+      : matches.length ? task.status === "backlog" ? "Contended context" : "Active context contention" : "";
+    const link = el("a", { class: "context-selector", title: [path, state].filter(Boolean).join(" · ") }, selectorParts(path, { isDuplicate, disambig }));
+    bindTaskLink(link, task.id, task.workspace_id ? { workspace: task.workspace_id } : {});
+    if (state) link.setAttribute("aria-label", `${path}: ${state}`);
+    const li = el("li", {}, [link]);
+    if (isDuplicate) li.classList.add("context-duplicate-base");
+    if (matches === null) li.classList.add("context-contention-unknown");
+    if (matches?.length) li.classList.add(task.status === "backlog" ? "context-contended-backlog" : "context-contended-active");
+    nodes.push(li);
+  }
+  if (nodes.length === 0) nodes.push(el("li", { class: "field-empty", text: "no context files" }));
+  ul.replaceChildren(...nodes);
+}
+
+// Update only the displayed selectors, including details preserved for an
+// unsaved editor/comment. Never replace an editor or discard its draft.
+onTaskRuntimeChange(() => {
+  for (const ul of document.querySelectorAll(".file-list")) {
+    if (ul.contentionTask) refreshFileList(ul);
+  }
+});
+
+// A context selector is `kind:target`. The basename — what an operator scans
+// for — leads on its own line, with the kind and, for path selectors, the
+// directory dimmed under it; the text content is still the whole selector.
+function selectorParts(selector, { isDuplicate = false, disambig = "" } = {}) {
+  const match = /^([a-z]+):(.*)$/.exec(selector);
+  if (!match) return [el("span", { class: "selector-base", text: selector })];
+  const [, kind, target] = match;
+  let cut = 0;
+  if (kind === "file") {
+    cut = target.lastIndexOf("/") + 1;
+  } else if (kind === "dir") {
+    const trimmed = target.endsWith("/") ? target.slice(0, -1) : target;
+    cut = trimmed.lastIndexOf("/") + 1;
+  }
+  const kindNode = el("span", { class: "selector-kind", text: `${kind}:` });
+  kindNode.dataset.kind = kind;
+
+  const baseNode = el("span", { class: "selector-base", text: target.slice(cut) });
+  if (disambig) {
+    baseNode.dataset.disambig = disambig;
+  }
+
+  return [
+    kindNode,
+    formatDirectory(target.slice(0, cut)),
+    baseNode,
+  ];
 }
 
 function linesToText(values) {
@@ -1788,15 +2215,30 @@ function commentMessage(comment) {
   return comment && typeof comment.message === "string" ? comment.message : "";
 }
 
+// The audit body of a pilot receipt: the whole message when the comment
+// carries its typed operation id.
+function pilotReceiptBody(comment) {
+  const message = commentMessage(comment);
+  if (comment.operation_id == null) return legacyPilotReceiptBody(message);
+  return /^[a-fA-F0-9]{64}$/.test(comment.operation_id) ? message : null;
+}
+
+// Compatibility reader for receipts written before the typed operation id:
+// an `operation_id=<id>` first line ahead of the audit body.
+function legacyPilotReceiptBody(message) {
+  const newline = message.indexOf("\n");
+  if (newline < 0 || !/^operation_id=[a-fA-F0-9]{64}\r?$/.test(message.slice(0, newline))) return null;
+  return message.slice(newline + 1);
+}
+
 // A pilot receipt is persisted data: summarize only a recognized assessment,
 // and keep the original message for raw/copy and for unrecognized comments.
 function pilotAssessment(comment) {
   if (!comment || comment.by !== "task-pilot") return null;
-  const message = commentMessage(comment);
-  const newline = message.indexOf("\n");
-  if (newline < 0 || !/^operation_id=[a-fA-F0-9]{64}\r?$/.test(message.slice(0, newline))) return null;
+  const body = pilotReceiptBody(comment);
+  if (body == null) return null;
   try {
-    const receipt = JSON.parse(message.slice(newline + 1));
+    const receipt = JSON.parse(body);
     const assessment = receipt && receipt.assessment;
     const fields = ["disposition", "confidence", "recommended_crew", "recommended_complexity", "assessment_rationale"];
     if (!assessment || !fields.every(field => typeof assessment[field] === "string" && assessment[field].trim())) return null;
@@ -1984,8 +2426,12 @@ function buildCommentCard(task, comment, index, context) {
       text: writer,
     }),
     isAgentComment(writer, task) ? el("span", { class: "comment-agent-pill", text: "agent" }) : null,
-    el("span", { class: "comment-at", text: fmtAbsTimeValue(context, comment && comment.at) }),
-    el("span", { class: "comment-age", text: commentAge(comment && comment.at), title: fmtAbsTimeValue(context, comment && comment.at) }),
+    absTimeNode(context, comment && comment.at, { class: "comment-at" }),
+    clockStamp(
+      el("span", { class: "comment-age", text: commentAge(comment && comment.at), title: fmtAbsTimeValue(context, comment && comment.at) }),
+      comment && comment.at,
+      { title: true },
+    ),
     size,
     actions,
   ]);
@@ -2112,7 +2558,7 @@ function findCommentCard(id) {
     const node = document.getElementById(id);
     if (node && (node.id === id || String(node.className).includes("comment-card"))) return node;
   }
-  const root = (typeof document.getElementById === "function" ? document.getElementById("tasks-body") : null) || (typeof document !== "undefined" ? document.body : null);
+  const root = (typeof document.getElementById === "function" ? document.getElementById("task-detail-body") : null) || (typeof document !== "undefined" ? document.body : null);
   if (!root) return null;
   const queue = [root];
   while (queue.length > 0) {
@@ -2145,6 +2591,13 @@ export function scrollToComment(hash = getCommentHash()) {
   if (!rawId.startsWith("comment-")) return false;
   const target = findCommentCard(rawId);
   if (!target) return false;
+  // The thread lives on the detail's Comments tab.
+  for (let node = target.parentNode; node; node = node.parentNode) {
+    if (typeof node.activateTab === "function") {
+      node.activateTab("comments");
+      break;
+    }
+  }
   const panel = findCommentsPanel(target);
   if (panel) {
     const isCollapsed = panel.classList && typeof panel.classList.contains === "function"
@@ -2268,8 +2721,92 @@ function renderCommentsPanel(panel, task, context) {
   panel.replaceChildren(head, thread);
 }
 
+// Descriptions longer than this open clamped behind "Show full description".
+// Estimated from the source, like a long comment, because the detail is built
+// off-document and cannot be measured before it paints.
+const LONG_DESCRIPTION_CHARS = 700;
+const LONG_DESCRIPTION_LINES = 12;
+// Tasks whose description the operator expanded; a rebuild keeps it open.
+const expandedDescriptions = new Set();
+// Tasks whose acceptance criteria the operator expanded; a rebuild keeps them open.
+const expandedCriteria = new Set();
+
+function isLongDescription(text) {
+  const value = String(text || "");
+  return value.length > LONG_DESCRIPTION_CHARS || value.split("\n").length > LONG_DESCRIPTION_LINES;
+}
+
+function isLongCriteria(criteria) {
+  return isLongDescription(linesToText(criteria));
+}
+
+// The attention callout's Retry landing goes to the claim panel's own control,
+// which asks for the reason and sends the request; nothing is sent from here.
+function goToLandingRetry(detail, claim) {
+  if (typeof detail.activateTab === "function") detail.activateTab("delivery");
+  const panel = Array.from(detail.querySelectorAll(".claim-panel"))
+    .find((node) => node.getAttribute("data-claim-id") === String((claim && claim.claim_id) || ""));
+  const target = panel && (panel.querySelector('[data-reason-for~="retry-handoff"]') || panel.querySelector(".claim-actions"));
+  if (!target) return;
+  if (typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "center", behavior: "smooth" });
+  if (target.tagName === "INPUT") target.focus({ preventScroll: true });
+}
+
+// Core selects the latest block or escalation and supplies readable evidence.
+// Render it as text: diagnoses and operator actions are untrusted task content.
+function buildTaskBlockCallout(task, context, detail) {
+  if (task.status !== "blocked") return null;
+  const block = task.block || {};
+  const headingId = `block-heading-${task.id}`;
+  const content = el("div", { class: "task-attention-content" }, [
+    el("h3", { class: "task-attention-title", id: headingId, text: "Blocked · needs your attention" }),
+    el("p", {
+      class: "task-attention-body task-block-reason",
+      text: block.reason || "No block reason was recorded.",
+    }),
+  ]);
+  const time = el("p", { class: "task-block-time" });
+  if (block.at) {
+    time.append("Blocked at ", absTimeNode(context, block.at));
+  } else {
+    time.textContent = "Block time not recorded.";
+  }
+  content.appendChild(time);
+  const next = block.next_action || (task.next_step && task.next_step.resume_command
+    ? "Review the failed run, resolve the cause, then resume the run or move this task back to backlog."
+    : "Review the task and its evidence, resolve the cause, then move this task back to backlog when it is ready to retry.");
+  content.appendChild(el("p", { class: "task-attention-body task-block-next", text: `Next: ${next}` }));
+  const actions = el("div", { class: "task-attention-actions" });
+  if (Number.isInteger(block.comment_index) && Array.isArray(task.comments) && task.comments[block.comment_index]) {
+    const read = el("button", { class: "attention-action primary", type: "button", text: "Read escalation" });
+    read.addEventListener("click", () => {
+      detail.activateTab("comments");
+      const id = commentAnchorId(task.id, block.comment_index);
+      expandedComments.add(commentKey(task.id, block.comment_index));
+      const panel = detail.querySelector(".comments-panel");
+      if (panel) renderCommentsPanel(panel, task, context);
+      scrollToComment(`#${id}`);
+    });
+    actions.appendChild(read);
+  }
+  if (block.run_id) {
+    const run = el("a", { class: "attention-action", text: "View run" });
+    run.href = runHref(block.run_id, task.workspace_id ? { workspace: task.workspace_id } : {});
+    actions.appendChild(run);
+  }
+  if (!actions.children.length) {
+    const history = el("button", { class: "attention-action", type: "button", text: "View history" });
+    history.addEventListener("click", () => detail.activateTab("history"));
+    actions.appendChild(history);
+  }
+  content.appendChild(actions);
+  return el("section", { class: "task-attention warning task-block-callout", "aria-labelledby": headingId }, [
+    el("span", { class: "task-attention-icon", "aria-hidden": "true" }), content,
+  ]);
+}
+
 function buildTaskDetail(task, context, drain = null) {
-  const detail = el("div", { class: "row-detail split-layout" });
+  const detail = el("div", { class: "row-detail task-detail" });
   detail.addEventListener("click", (e) => e.stopPropagation());
   detail.teardown = () => disconnectCommentCards(detail);
 
@@ -2282,24 +2819,43 @@ function buildTaskDetail(task, context, drain = null) {
     let classes = "field-block";
     if (collapsible) classes += " collapsible";
     if (collapsed) classes += " collapsed";
+    if (header.class) classes += ` ${header.class}`;
     const block = el("div", { class: classes });
     const heading = [el("span", { class: "field-title", text: title })];
     if (header.count != null) heading.push(el("span", { class: "field-count", text: String(header.count) }));
-    if (header.actions) heading.push(header.actions);
-    const h4 = el("h4", { class: "section-title" }, heading);
+    // A collapsible header that also holds actions keeps its title and count
+    // in one disclosure button, as the comments thread does, so its actions
+    // stay controls of their own rather than parts of a toggle.
+    const toggle = collapsible && header.actions ? el("button", { class: "field-toggle" }, heading) : null;
+    const h4 = toggle
+      ? el("h4", { class: "section-title" }, [toggle, header.actions])
+      : el("h4", { class: "section-title" }, header.actions ? [...heading, header.actions] : heading);
     if (collapsible) {
-      makeToggleRow(h4, {
-        expanded: !collapsed,
-        onToggle: (e) => {
-          e.stopPropagation();
-          const nowCollapsed = block.classList.toggle("collapsed");
-          h4.setAttribute("aria-expanded", String(!nowCollapsed));
-        },
-      });
+      const setOpen = (open) => {
+        block.classList.toggle("collapsed", !open);
+        (toggle || h4).setAttribute("aria-expanded", String(open));
+        if (header.onToggle) header.onToggle(open);
+      };
+      const onToggle = (e) => {
+        e.stopPropagation();
+        if (toggle && header.actions.contains(e.target)) return;
+        setOpen(block.classList.contains("collapsed"));
+      };
+      if (toggle) {
+        makeDisclosure(h4, toggle, { expanded: !collapsed, onToggle });
+        // Acting on the section (its Edit) opens it, so the editor is never
+        // hidden behind a collapsed header.
+        header.actions.addEventListener("click", () => {
+          if (block.classList.contains("collapsed")) setOpen(true);
+        }, true);
+      } else {
+        makeToggleRow(h4, { expanded: !collapsed, onToggle });
+      }
     }
     block.appendChild(h4);
     block.appendChild(child);
-    parent.appendChild(block);
+    if (parent) parent.appendChild(block);
+    return block;
   };
   const actionSlot = () => el("span", { class: "field-actions" });
 
@@ -2311,170 +2867,597 @@ function buildTaskDetail(task, context, drain = null) {
   const showsEditor = (field) =>
     canMutateTask(task) || taskFieldHasValue(task, TASK_FIELD_EDITORS[field]);
 
-  if (showsEditor("description")) {
-    addField(leftCol, "Description", editor("description"));
-  }
+  // What needs the operator, and how far the delivery has come, sit above the
+  // tabs. Both come from the claim read the Delivery block makes, which lands
+  // after the detail is built; until then the last read for this task (if any)
+  // paints them, so a rebuilt detail neither flashes nor shifts. They repaint
+  // only when what they show changes.
+  const pullRequest = pullRequestLink(task);
+  const attentionSlot = el("div", { class: "task-attention-slot" });
+  const progressSlot = el("div", { class: "delivery-progress-slot" });
+  let deliverySignature = null;
+  const paintDelivery = (claims) => {
+    const attention = claimAttention(claims);
+    const steps = deliverySteps(claims);
+    const signature = JSON.stringify([
+      attention ? [attention.kind, attention.headline, attention.body, attention.retry, attention.claim.claim_id, attention.evidence && attention.evidence.raw] : null,
+      steps,
+    ]);
+    if (signature === deliverySignature) return;
+    deliverySignature = signature;
+    const callout = buildAttentionCallout(attention, { pullRequest, onRetry: (claim) => goToLandingRetry(detail, claim) });
+    attentionSlot.replaceChildren(...(callout ? [callout] : []));
+    const progress = buildDeliveryProgress(steps);
+    progressSlot.replaceChildren(...(progress ? [progress] : []));
+  };
+  const known = lastKnownClaims(task.id);
+  if (known) paintDelivery(known);
 
   if (showsEditor("acceptance_criteria")) {
-    addField(leftCol, "Acceptance criteria", editor("acceptance_criteria"), true, true);
+    const count = Array.isArray(task.acceptance_criteria) ? task.acceptance_criteria.length : 0;
+    const actions = actionSlot();
+    const block = addField(leftCol, "Acceptance criteria", editor("acceptance_criteria", actions), false, false, {
+      actions,
+      class: "criteria-block",
+      ...(count ? { count } : {}),
+    });
+    if (isLongCriteria(task.acceptance_criteria)) {
+      const open = expandedCriteria.has(task.id);
+      if (!open) block.classList.add("clamped");
+      const toggle = el("button", {
+        class: "ac-toggle",
+        type: "button",
+        text: open ? "Show less" : "Show full AC",
+        "aria-expanded": String(open),
+      });
+      toggle.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const nowOpen = block.classList.contains("clamped");
+        block.classList.toggle("clamped", !nowOpen);
+        if (nowOpen) expandedCriteria.add(task.id);
+        else expandedCriteria.delete(task.id);
+        toggle.setAttribute("aria-expanded", String(nowOpen));
+        toggle.textContent = nowOpen ? "Show less" : "Show full AC";
+      });
+      block.appendChild(toggle);
+    }
+  }
+
+  if (showsEditor("description")) {
+    const actions = actionSlot();
+    const block = addField(leftCol, "Description", taskMarkdownPanel(editor("description", actions)), false, false, { actions, class: "description-block" });
+    if (isLongDescription(task.description)) {
+      const open = expandedDescriptions.has(task.id);
+      if (!open) block.classList.add("clamped");
+      const toggle = el("button", {
+        class: "description-toggle",
+        type: "button",
+        text: open ? "Show less" : "Show full description",
+        "aria-expanded": String(open),
+      });
+      toggle.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const nowOpen = block.classList.contains("clamped");
+        block.classList.toggle("clamped", !nowOpen);
+        if (nowOpen) expandedDescriptions.add(task.id);
+        else expandedDescriptions.delete(task.id);
+        toggle.setAttribute("aria-expanded", String(nowOpen));
+        toggle.textContent = nowOpen ? "Show less" : "Show full description";
+      });
+      block.appendChild(toggle);
+    }
+  }
+
+  // Criteria the delivery owes until the deployed build is measured; an
+  // operator records each with a `post-deploy: met|failed <N>` comment.
+  // The folded sections read as one group of disclosure rows.
+  const disclosures = el("div", { class: "detail-disclosures" });
+  if (Array.isArray(task.owed_criteria) && task.owed_criteria.length) {
+    addField(disclosures, "Owed after deploy", buildOwedCriteria(task.owed_criteria), true, false, {
+      count: task.owed_criteria.length,
+    });
   }
 
   if (task.plan && task.plan.trim()) {
-    addField(leftCol, "Plan", markdownView(task.plan), true, true);
+    addField(disclosures, "Plan", taskMarkdownPanel(markdownView(task.plan)), true, true);
   }
 
   if (task.execution_summary && task.execution_summary.trim()) {
-    addField(leftCol, "Execution summary", markdownView(task.execution_summary), true, true);
-  }
-
-  if (Array.isArray(task.artifacts) && task.artifacts.length > 0) {
-    addField(leftCol, "Artifacts", buildArtifacts(task), true, true);
+    addField(disclosures, "Execution summary", taskMarkdownPanel(markdownView(task.execution_summary)), true, true);
   }
 
   if (task.review && typeof task.review === "object") {
-    addField(leftCol, "Review gate", buildReviewGate(task.review), true, true);
+    addField(disclosures, "Review gate", buildReviewGate(task.review), true, true);
+  }
+  if (disclosures.children.length) leftCol.appendChild(disclosures);
+
+  // The task's state, readiness, delivery and relations sit together above
+  // the tabs; the side column holds the graph around it.
+  const metaBlock = buildTaskMeta(task, context, { editor, showsEditor, drain });
+
+  // The delivery card already links the pull request; the rest stay here.
+  const otherRefs = (Array.isArray(task.external_refs) ? task.external_refs : []).filter((ref) =>
+    !(pullRequest && ref && ref.system === GITHUB_PR_REF_SYSTEM && ref.url === pullRequest.url));
+  if (otherRefs.length > 0) {
+    addField(rightCol, "External refs", buildExternalRefs(otherRefs));
   }
 
+  // The overview leads; context, history, runs, artifacts and the thread each
+  // have a tab of their own, so the pane shows one subject at a time.
+  const history = buildTaskHistory(task, context);
+  const artifacts = Array.isArray(task.artifacts) ? task.artifacts.length : 0;
+  const comments = Array.isArray(task.comments) ? task.comments.length : 0;
+  const runs = el("div", { class: "task-runs", id: `detail-${task.id}-runs` });
+  const lifecycleActions = buildActionsRow(task, detail, context, { includeComment: false });
+  const commentActions = buildActionsRow(task, detail, context, { includeLifecycle: false });
+  const overview = el("div", { class: "task-overview-content" }, [
+    el("div", { class: "split-layout detail-overview" }, [leftCol, rightCol.children.length ? rightCol : null]),
+  ]);
+  // Keep the wrapper when Reject replaces the action row with its form.
+  // It belongs to the detail scroll viewport, outside the tab panels.
+  const actionFooter = lifecycleActions
+    ? el("div", { class: "task-action-footer", role: "region", "aria-label": "Task actions" }, [lifecycleActions])
+    : null;
+  const commentsContent = el("div", { class: "comments-tab-content" }, [
+    comments > 0 ? buildCommentsPanel(task, context) : el("p", { class: "field-empty", text: "No comments yet." }),
+    commentActions,
+  ]);
   // ORB-12516: distributed claim provenance and the owner's handoff actions.
-  // The block hides itself when this workspace holds no claim for the task, so
-  // an ordinary single-host detail is unchanged; there is no distributed tab.
-  leftCol.appendChild(
-    buildDistributedBlock(task.id, {
-      onTaskChanged: () => refreshTasks(context),
-      formatTime: (value) => fmtAbsTimeValue(context, value),
-    }),
-  );
+  // The tab appears only once a read finds a claim this workspace holds for
+  // the task. The last read decides whether it shows before the panel's own read.
+  const delivery = el("div", { class: "delivery-tab" });
+  const sections = buildDetailTabs(task, detail, [
+    { name: "overview", label: "Overview", content: overview },
+    {
+      name: "context_files",
+      label: "Context files",
+      count: Array.isArray(task.context_files) ? task.context_files.length : 0,
+      showZeroCount: true,
+      available: showsEditor("context_files"),
+      content: showsEditor("context_files") ? el("div", { class: "field-block context-files-block" }, [editor("context_files")]) : null,
+    },
+    { name: "delivery", label: "Delivery", content: delivery, available: Boolean(known && known.length) },
+    { name: "history", label: "History", count: history.count, content: history.node },
+    { name: "runs", label: "Runs", count: taskRunCount(task), content: runs },
+    {
+      name: "artifacts",
+      label: "Artifacts",
+      count: artifacts,
+      content: artifacts > 0 ? buildArtifacts(task) : el("p", { class: "field-empty", text: "No artifacts attached." }),
+    },
+    {
+      name: "comments",
+      label: "Comments",
+      count: comments,
+      content: commentsContent,
+    },
+  ], context);
+  detail.appendChild(metaBlock);
+  const blockCallout = buildTaskBlockCallout(task, context, detail);
+  if (blockCallout) detail.appendChild(blockCallout);
+  const pilotCallout = buildPilotWarnings(task);
+  if (pilotCallout) detail.appendChild(pilotCallout);
+  detail.appendChild(attentionSlot);
+  detail.appendChild(progressSlot);
+  for (const section of sections) detail.appendChild(section);
+  if (actionFooter) detail.appendChild(actionFooter);
+  delivery.appendChild(buildDeliveryPanel(task.id, {
+    onTaskChanged: () => refreshTasks(context),
+    onClaims: paintDelivery,
+    onContent: (rendered) => detail.setTabAvailable("delivery", rendered),
+    formatTime: (value) => fmtAbsTimeValue(context, value),
+    pullRequest,
+  }));
+  renderTaskRuns(runs, task, context);
+  // Activated once the panels exist: the Runs tab reads its runs then.
+  detail.activateTab(activeDetailTab);
 
-  // ORB-12651: comments block appears in the left/main column after review gate
-  if (Array.isArray(task.comments) && task.comments.length > 0) {
-    leftCol.appendChild(buildCommentsPanel(task, context));
+  return detail;
+}
+
+// The detail's head, above the tabs: what the task is and where it stands.
+// The levers an operator sets (status, complexity, crew, host, tags) share
+// one row of chips; the lifecycle strip places the status on the way to done;
+// the delivery card gathers the pull request, the run, the hands that carried
+// the task and its relations to other tasks. The pane head carries only the
+// id and title, so nothing here is repeated there, and the timestamps close
+// the Overview.
+function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
+  const levers = el("div", { class: "task-levers" });
+  levers.appendChild(buildStatusUpdateControl(task, context));
+  levers.appendChild(buildComplexityUpdateControl(task, context));
+  if (canMutateTask(task) && !isAggregateView()) {
+    const control = buildCrewUpdateControl(task, context, { withChip: false });
+    control.classList.add("task-chip-crew");
+    const select = control.querySelector("select");
+    select.removeAttribute("aria-label");
+    select.id = `detail-${task.id}-crew`;
+    const label = el("label", { text: "Crew" });
+    label.htmlFor = select.id;
+    const chip = el("span", { class: "task-chip task-crew-control" }, [label, select]);
+    control.prepend(chip);
+    levers.appendChild(control);
+  } else {
+    const crew = explicitCrewValue(task);
+    levers.appendChild(el("span", { class: "task-chip task-chip-crew", title: "Crew" }, [
+      el("span", { text: "Crew: " }),
+      ...(crew ? [crew] : [resolvedCrewName(task), el("span", { class: "fact-note", text: " · default" })]),
+    ]));
   }
+  levers.appendChild(el("span", { class: "task-chip task-chip-host", title: "Runs on" }, [
+    el("span", { class: "visually-hidden", text: "Runs on: " }),
+    buildOsReadout(task),
+  ]));
+  if (showsEditor("tags")) levers.appendChild(el("div", { class: "task-levers-tags" }, [editor("tags")]));
 
-  // The side column leads with what identifies the task — who made it, which
-  // run, when — then the levers an operator sets, then the graph around it.
+  const head = el("div", { class: "task-meta-block" }, [levers]);
+  const lifecycle = buildLifecycleStrip(task.status);
+  if (lifecycle) head.appendChild(lifecycle);
+  const delivery = buildDeliveryCard(task, drain, context);
+  if (delivery) head.appendChild(delivery);
+  return head;
+}
 
-  // Provenance and timestamps: recorded by the pipeline, so read-only here even
-  // though the fields below are not.
-  const meta = el("div", { class: "meta-list" });
-  let metaCount = 0;
-  for (const [key, label] of TASK_META_FIELDS) {
-    const v = task[key];
-    if (v == null || v === "") continue;
-    const display = key.endsWith("_at") ? fmtAbsTimeValue(context, v) : String(v);
-    const value = el("span", { class: "value" });
-    if (key === "job_run_id") {
-      // ORB-12516: a pulled task's run lives in the executing machine's own job
-      // store, so the id alone is a dangling reference. When the recorded
-      // execution machine is this one the link still resolves; otherwise name
-      // the machine to inspect rather than linking somewhere it is not.
-      const machine = task.job_run_machine;
-      if (task.job_run_navigable !== false) {
-        const link = el("a", { text: display });
-        link.href = runHref(display);
-        value.appendChild(link);
-      } else {
-        value.appendChild(el("span", { text: display }));
-        value.appendChild(
-          el("span", {
-            class: "claim-note",
-            text: "no owner-local run for this id — inspect it on the execution machine below",
-          }),
-        );
-      }
-      // The execution note is a separate element; the space keeps its text
-      // from reading as part of the run id.
-      value.appendChild(document.createTextNode(" "));
-      value.appendChild(
-        buildExecutionProvenance(
-          machine && machine.machine_id
-            ? { known: true, machine_id: machine.machine_id, machine_name: machine.machine_name || null }
-            : { known: false },
-          { runId: display, workspace: task.workspace_id },
-        ),
-      );
-    } else {
-      value.textContent = display;
-    }
-    const span = el("div", { class: "meta-item" }, [
-      el("span", { class: "label", text: `${label}` }),
-      value,
+// The statuses a task passes through on its way to done. Any other status
+// (blocked, rejected, archived, someday) sits off this line and shows no strip.
+const TASK_LIFECYCLE = [
+  ["proposed", "Proposed"],
+  ["backlog", "Backlog"],
+  ["in-progress", "In progress"],
+  ["review", "Review"],
+  ["done", "Done"],
+];
+
+function buildLifecycleStrip(status) {
+  const at = TASK_LIFECYCLE.findIndex(([key]) => key === status);
+  if (at < 0) return null;
+  const list = el("ol", { class: "task-lifecycle", "aria-label": "Lifecycle" });
+  TASK_LIFECYCLE.forEach(([key, label], index) => {
+    const state = index < at ? "past" : index === at ? "current" : "future";
+    const step = el("li", { class: `task-lifecycle-step ${state}` }, [
+      el("span", { class: "task-lifecycle-bar" }),
+      el("span", { class: "task-lifecycle-label", text: label }),
     ]);
-    meta.appendChild(span);
-    metaCount++;
-  }
-  if (metaCount > 0) addField(rightCol, "Details", meta);
+    if (state === "current") {
+      step.dataset.status = key;
+      step.setAttribute("aria-current", "step");
+    }
+    list.appendChild(step);
+  });
+  return list;
+}
 
+// The verb each recorded hand did, in the order the task met them.
+const TASK_HAND_VERBS = {
+  created_by: "created",
+  planned_by: "planned",
+  implemented_by: "implemented",
+  orchestrator: "orchestrated",
+};
+const AGENT_FAMILIES = ["claude", "codex", "gemini", "grok"];
+
+function buildHandsChain(task) {
+  const hands = TASK_PEOPLE_FIELDS
+    .filter(([key]) => task[key] != null && task[key] !== "")
+    .map(([key, label]) => {
+      const name = String(task[key]);
+      const family = AGENT_FAMILIES.find((agent) => name.toLowerCase().includes(agent));
+      const hand = el("span", { class: "task-hand", title: `${label} ${name}` }, [
+        el("span", { class: "task-hand-name", text: name }),
+        el("span", { class: "task-hand-verb", text: ` ${TASK_HAND_VERBS[key]}` }),
+      ]);
+      if (family) hand.dataset.agent = family;
+      return hand;
+    });
+  if (!hands.length) return null;
+  const chain = hands.flatMap((hand, index) =>
+    index ? [el("span", { class: "task-hand-sep", "aria-hidden": "true" }), hand] : [hand]);
+  return el("span", { class: "value task-hands" }, chain);
+}
+
+function buildDeliveryCard(task, drain, context) {
+  const row = (kind, label, value) =>
+    el("div", { class: `property-row fact task-delivery-row ${kind}` }, [el("span", { class: "label", text: label }), value]);
+  const rows = [];
+  const pullRequest = pullRequestLink(task);
+  if (pullRequest || task.pr_number) {
+    const value = el("span", { class: "value" });
+    if (pullRequest) {
+      const link = el("a", { class: "mono task-delivery-pr", text: pullRequest.number ? `#${pullRequest.number}` : "Pull request" });
+      link.href = pullRequest.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      value.appendChild(link);
+    } else {
+      value.appendChild(el("span", { class: "mono", text: `#${task.pr_number}` }));
+    }
+    if (task.pr_status) value.appendChild(el("span", { class: "fact-note", text: ` · ${task.pr_status}` }));
+    rows.push(row("pr", "Pull request", value));
+  }
+  if (task.job_run_id != null && task.job_run_id !== "") rows.push(row("run", "Run", buildRunValue(task)));
+  const hands = buildHandsChain(task);
+  if (hands) rows.push(row("hands", "Handled by", hands));
+  // One row per typed relation; its id opens the related task on click.
+  const relations = relationTargets(Array.isArray(task.relations) ? task.relations : []);
+  for (const { key, label, target } of relations) {
+    const open = el("button", { class: "mono task-delivery-relation", type: "button", text: target, title: `Open ${target}` });
+    open.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openVisibleTask(target, context);
+    });
+    const relationRow = row("relation", label, el("span", { class: "value" }, [open]));
+    relationRow.dataset.relation = key;
+    rows.push(relationRow);
+  }
   const readiness = readinessOf(task);
-  if (readiness || drain) {
-    const count = readiness ? readinessGaps(readiness).length : 0;
-    addField(rightCol, "Readiness", buildReadinessBlock(readiness, drain, task.workspace_id), false, false, count > 0 ? { count } : {});
-  }
-
+  if (readiness || drain) rows.push(row("readiness", "Readiness", buildReadinessBlock(readiness, drain, task.workspace_id)));
   // ORB-00037: in the aggregate ("All workspaces") view each task carries its
   // owning workspace's filesystem location (home-abbreviated to ~ server-side);
   // show it in full here since the row only has room for the short name badge.
   if (task.workspace_root) {
-    const loc = el("span", { class: "ws-location mono", text: task.workspace_root, title: task.workspace_root });
-    addField(rightCol, "Location", loc);
+    rows.push(row("location", "Location", el("span", { class: "value ws-location mono", text: task.workspace_root, title: task.workspace_root })));
   }
+  return rows.length ? el("div", { class: "task-delivery-card" }, rows) : null;
+}
 
-  // Status, complexity and tags are one card of properties: each is a label
-  // beside its control, and the tags edit button sits in the card header. The
-  // list rows group by status, so the status editor lives here.
-  {
-    const properties = el("div", { class: "property-list" });
-    const property = (label, control) =>
-      el("div", { class: "property-row" }, [el("span", { class: "label", text: label }), control]);
-    properties.appendChild(property("status", buildStatusUpdateControl(task, context)));
-    properties.appendChild(property("complexity", buildComplexityUpdateControl(task, context)));
-    const actions = actionSlot();
-    if (showsEditor("tags")) {
-      properties.appendChild(property("tags", editor("tags", actions)));
+// Where the task may run, as a word or two: "any", or the operating systems
+// (macOS, Linux). The full sentence — which crew or tags decided it — is the
+// readout's hint.
+const OS_NAMES = { macos: "macOS", linux: "Linux", windows: "Windows" };
+
+function osReadoutText(task) {
+  const requirement = task.os_requirement;
+  if (!requirement) return "any";
+  if (["unresolved", "conflict"].includes(requirement.state)) return requirement.state;
+  const anyOf = Array.isArray(requirement.any_of) ? requirement.any_of : [];
+  return anyOf.length ? anyOf.map((os) => OS_NAMES[os] || os).join(" or ") : "any";
+}
+
+function osReadoutNote(task) {
+  return task.os_requirement?.describe || (task.crew ? "any host" : "any host from OS tags (crew unassigned)");
+}
+
+function buildOsReadout(task) {
+  const readout = el("span", { class: "value" }, [el("span", { class: "task-os-readout", text: osReadoutText(task) })]);
+  readout.appendChild(infoHint(osReadoutNote(task)));
+  return readout;
+}
+
+// ORB-12516: a pulled task's run lives in the executing machine's own job
+// store, so the id alone is a dangling reference. When the recorded execution
+// machine is this one the link still resolves; otherwise name the machine to
+// inspect rather than linking somewhere it is not.
+function buildRunValue(task) {
+  const runId = String(task.job_run_id);
+  const machine = task.job_run_machine;
+  const known = Boolean(machine && machine.machine_id);
+  const value = el("span", { class: "value run-value" });
+  if (task.job_run_navigable !== false) {
+    const link = el("a", { class: "mono", text: runId });
+    link.href = runHref(runId);
+    value.appendChild(link);
+  } else {
+    value.appendChild(el("span", { class: "mono", text: runId }));
+  }
+  // "on <machine>" follows the id on its line; what the id cannot do here (no
+  // owner-local run) and an unrecorded machine are the hint.
+  if (known) {
+    // The space keeps the machine from reading as part of the run id.
+    value.appendChild(document.createTextNode(" "));
+    value.appendChild(buildExecutionProvenance(
+      { known: true, machine_id: machine.machine_id, machine_name: machine.machine_name || null },
+      { runId, workspace: task.workspace_id },
+    ));
+  }
+  const notes = [];
+  if (task.job_run_navigable === false) notes.push("No owner-local run for this id — inspect it on its execution machine.");
+  if (!known) notes.push(`Execution machine ${formatExecutionLocation(null)}.`);
+  if (notes.length) value.appendChild(infoHint(notes.join("\n")));
+  return value;
+}
+
+// Every meaningful history entry, newest first.
+function buildTaskHistory(task, context) {
+  // ORB-10311: legacy bare `commented` stubs are comment noise; the thread has
+  // its own tab.
+  const meaningful = Array.isArray(task.history) ? task.history.filter((h) => h && h.event !== "commented") : [];
+  if (meaningful.length === 0) {
+    return { count: 0, node: el("p", { class: "field-empty", text: "No history recorded." }) };
+  }
+  const wrap = el("div", { class: "history-list" });
+  for (const h of meaningful.slice().reverse()) {
+    const note = h.note ? ` (${h.note})` : "";
+    wrap.appendChild(el("div", { class: "history-line" }, [
+      document.createTextNode("["),
+      absTimeNode(context, h.at),
+      document.createTextNode("] "),
+      el("span", { class: "actor", text: h.by || "?" }),
+      document.createTextNode(`: ${taskHistoryEventLabel(h)}${note}`),
+    ]));
+  }
+  return { count: meaningful.length, node: wrap };
+}
+
+const DETAIL_TAB_NAMES = ["overview", "context_files", "delivery", "history", "runs", "artifacts", "comments"];
+
+// The detail's tab strip and its panels. Every panel is built with the detail
+// and switching only toggles which one shows, so a draft in one tab survives
+// a visit to another. Arrow keys move between tabs (automatic activation).
+// A tab marked `available: false` (such as Delivery without a claim) is left out of
+// the strip until `detail.setTabAvailable` adds it.
+function buildDetailTabs(task, detail, tabs, context) {
+  const base = `detail-${task.id}`;
+  const list = el("div", { class: "detail-tabs", role: "tablist", "aria-label": "Task detail sections" });
+  const buttons = new Map();
+  const panels = new Map();
+  const available = new Set(tabs.filter((tab) => tab.available !== false).map((tab) => tab.name));
+  const runsNode = tabs.find((tab) => tab.name === "runs")?.content || null;
+  let current = null;
+  // A remembered tab that is not in the strip yet (Delivery before its read
+  // lands) shows Overview and opens once it appears, unless the operator
+  // picks a tab first.
+  let waiting = null;
+  const activate = (name, { focus = false } = {}) => {
+    const next = panels.has(name) && available.has(name) ? name : "overview";
+    waiting = next === name ? null : name;
+    current = next;
+    if (next === name) activeDetailTab = next;
+    for (const [key, button] of buttons) {
+      const on = key === next;
+      button.setAttribute("aria-selected", String(on));
+      button.tabIndex = on ? 0 : -1;
+      button.classList.toggle("active", on);
+      panels.get(key).hidden = !on;
     }
-    addField(rightCol, "Properties", properties, false, false, { actions });
+    const footer = detail.querySelector(".task-action-footer");
+    if (footer) footer.hidden = next !== "overview";
+    if (focus) buttons.get(next).focus();
+    if (next === "runs") loadTaskRuns(task, context, runsNode);
+  };
+  for (const tab of tabs) {
+    const button = el("button", {
+      class: "detail-tab",
+      type: "button",
+      role: "tab",
+      id: `${base}-tab-${tab.name}`,
+      "aria-controls": `${base}-panel-${tab.name}`,
+    }, [
+      el("span", { class: "detail-tab-label", text: tab.label }),
+      el("span", { class: "detail-tab-count", text: tab.count || tab.showZeroCount ? String(tab.count) : "" }),
+    ]);
+    button.dataset.tab = tab.name;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      activate(tab.name);
+    });
+    buttons.set(tab.name, button);
+    if (available.has(tab.name)) list.appendChild(button);
+    const panel = el("div", {
+      class: "detail-tabpanel",
+      role: "tabpanel",
+      id: `${base}-panel-${tab.name}`,
+      "aria-labelledby": button.id,
+    }, [tab.content]);
+    panel.dataset.tabPanel = tab.name;
+    panels.set(tab.name, panel);
   }
+  list.addEventListener("keydown", (event) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const names = tabs.map((tab) => tab.name).filter((name) => available.has(name));
+    const at = Math.max(0, names.indexOf(current));
+    let next = null;
+    if (event.key === "ArrowRight") next = names[(at + 1) % names.length];
+    else if (event.key === "ArrowLeft") next = names[(at - 1 + names.length) % names.length];
+    else if (event.key === "Home") next = names[0];
+    else if (event.key === "End") next = names[names.length - 1];
+    if (!next) return;
+    event.preventDefault();
+    activate(next, { focus: true });
+  });
+  detail.activateTab = (name, opts) => activate(DETAIL_TAB_NAMES.includes(name) ? name : "overview", opts);
+  detail.setTabAvailable = (name, on) => {
+    const button = buttons.get(name);
+    if (!button || available.has(name) === Boolean(on)) return;
+    if (on) {
+      available.add(name);
+      const after = tabs.slice(tabs.findIndex((tab) => tab.name === name) + 1).find((tab) => available.has(tab.name));
+      list.insertBefore(button, after ? buttons.get(after.name) : null);
+      if (waiting === name) activate(name);
+    } else {
+      available.delete(name);
+      if (button.parentNode) button.parentNode.removeChild(button);
+      if (current === name) activate(name);
+    }
+  };
+  return [list, ...panels.values()];
+}
 
-  if (Array.isArray(task.external_refs) && task.external_refs.length > 0) {
-    addField(rightCol, "External refs", buildExternalRefs(task.external_refs));
+// The Runs tab: the runs that carried this task, newest first, from the job
+// store's task filter. Read when the tab shows, at most once per freshness
+// window, and painted in place so a read never rebuilds the detail.
+function taskRunCount(task) {
+  const load = taskRunLoads.get(task.id);
+  return load && load.items ? load.total : null;
+}
+
+function loadTaskRuns(task, context, fallback = null) {
+  const previous = taskRunLoads.get(task.id);
+  const target = () => document.getElementById(`detail-${task.id}-runs`) || fallback;
+  if (previous && (previous.pending || Date.now() - previous.at < TASK_RUNS_FRESH_MS)) return;
+  if (isAggregateView() && !task.workspace_id) {
+    taskRunLoads.set(task.id, { pending: false, error: "Task workspace is unknown", items: null, total: null, at: Date.now() });
+    renderTaskRuns(target(), task, context);
+    return;
   }
+  const visit = captureWorkspaceVisit();
+  const load = { pending: true, error: null, items: previous ? previous.items : null, total: previous ? previous.total : null, at: Date.now() };
+  taskRunLoads.set(task.id, load);
+  renderTaskRuns(target(), task, context);
+  fetchJson(taskWorkspacePath(task, `/api/job-runs?task_id=${encodeURIComponent(task.id)}&limit=${TASK_RUNS_LIMIT}`)).then(
+    (payload) => {
+      load.items = Array.isArray(payload && payload.items) ? payload.items : [];
+      load.total = Number.isFinite(payload && payload.total) ? payload.total : load.items.length;
+      load.error = null;
+    },
+    (error) => {
+      load.error = (error && error.message) || String(error);
+    },
+  ).finally(() => {
+    load.pending = false;
+    load.at = Date.now();
+    if (!visit.isCurrent() || taskRunLoads.get(task.id) !== load) return;
+    renderTaskRuns(target(), task, context);
+  });
+}
 
-  if (Array.isArray(task.relations) && task.relations.length > 0) {
-    const relations = buildRelations(task.relations, context);
-    if (relations.children.length > 0) addField(rightCol, "Relations", relations);
-  }
-
-  if (showsEditor("context_files")) {
-    const actions = actionSlot();
-    const count = Array.isArray(task.context_files) ? task.context_files.length : 0;
-    addField(rightCol, "Context files", editor("context_files", actions), false, false, { actions, count });
-  }
-
-  if (Array.isArray(task.history) && task.history.length > 0) {
-    // ORB-10311: drop legacy bare `commented` stubs *before* the recent-history
-    // limit so meaningful status/workflow events are not displaced by comment
-    // noise (comments render in their own panel below).
-    const meaningful = task.history.filter((h) => h && h.event !== "commented");
-    if (meaningful.length > 0) {
-      const wrap = el("div");
-      const recent = meaningful.slice(-5).reverse();
-      for (const h of recent) {
-        const note = h.note ? ` (${h.note})` : "";
-        const line = el("div", { class: "history-line" }, [
-          document.createTextNode(`[${fmtAbsTimeValue(context, h.at)}] `),
-          el("span", { class: "actor", text: h.by || "?" }),
-          document.createTextNode(`: ${taskHistoryEventLabel(h)}${note}`),
-        ]);
-        wrap.appendChild(line);
+function renderTaskRuns(node, task, context) {
+  if (!node) return;
+  const load = taskRunLoads.get(task.id);
+  const children = [];
+  if (!load || (load.pending && !load.items && !load.error)) {
+    const note = el("p", { class: "panel-placeholder", text: "Loading runs…", role: "status", "aria-live": "polite" });
+    children.push(note);
+  } else {
+    if (load.error) {
+      const retry = el("button", { class: "action", type: "button", text: "Retry" });
+      retry.addEventListener("click", (event) => {
+        event.stopPropagation();
+        taskRunLoads.delete(task.id);
+        loadTaskRuns(task, context, node);
+      });
+      children.push(el("div", { class: "action-error", text: `Could not load runs: ${load.error}`, role: "alert" }), retry);
+    }
+    if (load.items && load.items.length === 0) {
+      children.push(el("p", { class: "field-empty", text: "No runs recorded for this task." }));
+    } else if (load.items) {
+      const list = el("ul", { class: "task-run-list" });
+      for (const run of load.items) list.appendChild(buildTaskRun(run, task, context));
+      children.push(list);
+      if (load.total > load.items.length) {
+        children.push(el("p", { class: "task-runs-more", text: `Latest ${load.items.length} of ${load.total} runs.` }));
       }
-      addField(rightCol, "Recent history", wrap);
     }
   }
+  node.replaceChildren(...children);
+  const count = document.getElementById(`detail-${task.id}-tab-runs`)?.querySelector?.(".detail-tab-count");
+  if (count) count.textContent = load && load.items ? String(load.total) : "";
+}
 
-  detail.appendChild(leftCol);
-  detail.appendChild(rightCol);
-  detail.appendChild(buildActionsRow(task, detail, context));
-
-  return detail;
+function buildTaskRun(run, task, context) {
+  const runId = String(run.run_id || "");
+  const link = el("a", { class: "mono task-run-id", text: runId });
+  link.href = runHref(runId, task.workspace_id ? { workspace: task.workspace_id } : {});
+  const when = run.started_at || run.scheduled_at || run.finished_at;
+  const { durationMs } = elapsedDurationInfo(run);
+  return el("li", { class: "task-run" }, [
+    el("div", { class: "task-run-head" }, [link, stateCell(run.state || "unknown")]),
+    el("div", { class: "task-run-meta" }, [
+      run.job_id ? el("span", { class: "task-run-job", text: run.job_id }) : null,
+      when ? absTimeNode(context, when) : null,
+      durationMs != null ? el("span", { text: fmtDuration(durationMs) }) : null,
+    ]),
+    run.error_message ? el("div", { class: "task-run-error", text: run.error_message }) : null,
+  ]);
 }
 
 // The expanded row while its first detail read is pending or has failed. A
@@ -2516,10 +3499,11 @@ const PULL_REQUEST_LINK_STATUSES = new Set(["review", "in-progress"]);
 // is the operator override recorded in task history as `forced`.
 const FORCED_STATUS_GROUP_LABEL = "force (off-table)";
 
-function buildActionsRow(task, detail, context) {
-  const actions = el("div", { class: "actions" });
+function buildActionsRow(task, detail, context, { includeLifecycle = true, includeComment = true } = {}) {
+  const kind = includeComment ? "comment-actions" : "lifecycle-actions";
+  const actions = el("div", { class: `actions task-action-row ${kind}` });
   const mutable = canMutateTask(task);
-  if (SHIP_STATUSES.has(task.status)) {
+  if (includeLifecycle && SHIP_STATUSES.has(task.status)) {
     const shipped = shipInFlightTaskIds.has(taskDispatchIdentity(task));
     const btn = el("button", {
       class: "action ship",
@@ -2535,7 +3519,7 @@ function buildActionsRow(task, detail, context) {
     });
     actions.appendChild(btn);
   }
-  {
+  if (includeComment) {
     const btn = el("button", { class: "action comment", text: "comment" });
     btn.disabled = !mutable;
     btn.addEventListener("click", (e) => {
@@ -2544,7 +3528,7 @@ function buildActionsRow(task, detail, context) {
     });
     actions.appendChild(btn);
   }
-  if (APPROVE_STATUSES.has(task.status)) {
+  if (includeLifecycle && APPROVE_STATUSES.has(task.status)) {
     const btn = el("button", { class: "action approve", text: "approve" });
     btn.disabled = !mutable;
     btn.addEventListener("click", (e) => {
@@ -2554,7 +3538,7 @@ function buildActionsRow(task, detail, context) {
     });
     actions.appendChild(btn);
   }
-  if (REJECT_STATUSES.has(task.status)) {
+  if (includeLifecycle && REJECT_STATUSES.has(task.status)) {
     const btn = el("button", { class: "action reject", text: "reject" });
     btn.disabled = !mutable;
     btn.addEventListener("click", (e) => {
@@ -2563,7 +3547,7 @@ function buildActionsRow(task, detail, context) {
     });
     actions.appendChild(btn);
   }
-  if (task.status !== "archived") {
+  if (includeLifecycle && task.status !== "archived") {
     const btn = el("button", { class: "action archive", text: "archive" });
     btn.disabled = !mutable;
     btn.addEventListener("click", (e) => {
@@ -2574,9 +3558,11 @@ function buildActionsRow(task, detail, context) {
     });
     actions.appendChild(btn);
   }
-  const refusal = hostWriteRefusal();
-  if (refusal) actions.appendChild(el("span", { class: "host-read-only-note", text: refusal }));
-  return actions;
+  if (includeLifecycle || includeComment) {
+    const refusal = hostWriteRefusal();
+    if (refusal) actions.appendChild(el("span", { class: "host-read-only-note", text: refusal }));
+  }
+  return actions.children.length ? actions : null;
 }
 
 function buildStatusUpdateControl(task, context) {
@@ -2652,7 +3638,9 @@ function buildStatusUpdateControl(task, context) {
   return cell;
 }
 
-function buildCrewUpdateControl(task, context) {
+// The list row overlays a chip on its select; the detail styles the select
+// itself inside a visible field label and needs no duplicate value.
+function buildCrewUpdateControl(task, context, { withChip = true } = {}) {
   const cell = el("span", { class: "crew-cell" });
   if (isAggregateView()) {
     // The aggregate task list has no single crew registry to validate against.
@@ -2720,14 +3708,16 @@ function buildCrewUpdateControl(task, context) {
   cell.appendChild(select);
   const crewLabel = staleCurrentValue ? `${currentValue} (missing)` : currentValue || defaultOption.textContent;
   select.title += `: ${crewLabel}`;
-  const chip = el("span", {
-    class: "task-select-chip",
-    text: crews.length === 0 ? "unavailable" : staleCurrentValue
-      ? `${currentValue} (missing)`
-      : currentValue || resolvedCrewName(task),
-  });
-  chip.setAttribute("aria-hidden", "true");
-  cell.appendChild(chip);
+  if (withChip) {
+    const chip = el("span", {
+      class: "task-select-chip",
+      text: crews.length === 0 ? "unavailable" : staleCurrentValue
+        ? `${currentValue} (missing)`
+        : currentValue || resolvedCrewName(task),
+    });
+    chip.setAttribute("aria-hidden", "true");
+    cell.appendChild(chip);
+  }
   const feedbackNode = buildMutationFeedback(feedback, () => {
     if (feedback && feedback.undo) applyTaskCrewChange(task, feedback.undo.previousValue, context);
   });
@@ -2754,7 +3744,7 @@ async function applyTaskStatusChange(task, nextStatus, context) {
   const refuse = (text) => {
     statusFeedback.set(task.id, { kind: "error", text });
     renderTasks(taskList(context), context);
-    if (foldedStatusTasks.has(task.id) && !expandedTaskIds.has(task.id)) {
+    if (foldedStatusTasks.has(task.id) && selectedTaskId !== task.id) {
       scheduleFeedbackExpiry(statusFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
     }
   };
@@ -2819,8 +3809,10 @@ async function applyTaskStatusChange(task, nextStatus, context) {
     statusFeedback.set(task.id, feedback);
     // Fold the open detail in; an undo from a folded row keeps it folded. A
     // pinned detail is the only view of a filtered-out task, so it stays open.
+    // A full page is that task's own view, so it stays too.
     const pinned = pinnedExternalTask && pinnedExternalTask.id === task.id;
-    if (!pinned && (expandedTaskIds.has(task.id) || foldedStatusTasks.has(task.id))) {
+    if (!pinned && taskPageId !== task.id && (selectedTaskId === task.id || foldedStatusTasks.has(task.id))) {
+      if (selectedTaskId === task.id) rowFocusAfterRender = task.id;
       collapseTask(task.id);
       foldedStatusTasks.set(task.id, merged);
     }
@@ -2864,31 +3856,32 @@ function statusTransitionEvidenceUnavailable(requiredField) {
 }
 
 async function applyTaskCrewChange(task, nextValue, context) {
+  const currentTask = currentCrewTask(task, context);
   const visit = captureWorkspaceVisit();
-  const mutationPath = visit.path(taskMutationPath(task));
-  const previousValue = explicitCrewValue(task);
-  if (nextValue === previousValue || !canMutateTask(task)) return;
-  crewFeedback.set(task.id, { kind: "pending", text: "saving…" });
+  const mutationPath = visit.path(taskMutationPath(currentTask));
+  const previousValue = explicitCrewValue(currentTask);
+  if (nextValue === previousValue || !canMutateTask(currentTask)) return;
+  crewFeedback.set(currentTask.id, { kind: "pending", text: "saving…" });
   renderTasks(taskList(context), context);
   try {
     const updatedTask = await patchJson(mutationPath, { crew: nextValue || null });
     if (!visit.isCurrent()) return;
     applyUpdatedTask(updatedTask, context);
-    crewFeedback.set(task.id, {
+    crewFeedback.set(currentTask.id, {
       kind: "success",
       text: "crew saved",
       undo: { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS },
     });
   } catch (error) {
     if (!visit.isCurrent()) return;
-    crewFeedback.set(task.id, {
+    crewFeedback.set(currentTask.id, {
       kind: "error",
       text: `crew update failed: ${error.message || String(error)}`,
     });
     console.error(error);
   }
   renderTasks(taskList(context), context);
-  scheduleFeedbackExpiry(crewFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+  scheduleFeedbackExpiry(crewFeedback, currentTask.id, context, MUTATION_UNDO_WINDOW_MS + 500);
 }
 
 // A failed action is announced when it appears: the row's own controls are the
@@ -2932,7 +3925,7 @@ async function shipTask(task, detail, btnNode, context) {
     if (!visit.isCurrent()) return;
     const runId = result && result.run_id ? result.run_id : "(no run id)";
     const state = result && result.state ? result.state : "submitted";
-    taskActionNotice = `${task.id}: ship run ${runId} ${state}`;
+    taskActionNotice = [`${task.id}: ship run ${runId} ${state}`, ...submissionNoticeLines(result)].join("\n");
     collapseTask(task.id);
     await refreshTasks(context);
   } catch (error) {
@@ -3168,7 +4161,7 @@ async function approveReviewTask(task, detail, btnNode, context) {
 // while the detail is open again (it shows the feedback itself) or once the
 // feedback has expired.
 function buildFoldedStatusFeedback(taskId, context) {
-  if (!foldedStatusTasks.has(taskId) || expandedTaskIds.has(taskId)) return null;
+  if (!foldedStatusTasks.has(taskId) || selectedTaskId === taskId) return null;
   const entry = statusFeedback.get(taskId);
   return buildMutationFeedback(entry, () => {
     if (!entry || !entry.undo) return;
@@ -3178,7 +4171,7 @@ function buildFoldedStatusFeedback(taskId, context) {
 }
 
 function foldedStatusSignature(taskId) {
-  return foldedStatusTasks.has(taskId) && !expandedTaskIds.has(taskId) ? feedbackSignature(statusFeedback, taskId) : "";
+  return foldedStatusTasks.has(taskId) && selectedTaskId !== taskId ? feedbackSignature(statusFeedback, taskId) : "";
 }
 
 // Folded status feedback for a task with no row on screen, usually because its
@@ -3212,9 +4205,24 @@ function takeTaskActionNotice() {
   return notice;
 }
 
-// A detail kept as an open draft is reused as-is, so only its readiness list
-// is replaced when the drain state behind it changes.
-function refreshDraftReadiness(wrap, task, context, readinessTask = task) {
+// A detail kept for an open draft can refresh its read-only readiness and
+// selector displays without touching the editor holding that draft.
+function refreshDraftDetails(wrap, task, context, readinessTask = task) {
+  for (const readout of wrap.querySelectorAll(".task-os-readout")) {
+    readout.textContent = osReadoutText(task);
+    const note = readout.parentNode && readout.parentNode.querySelector(".info-hint-text");
+    if (note) note.textContent = osReadoutNote(task);
+  }
+  refreshDraftCrewControl(wrap, task, context);
+  if (Array.isArray(readinessTask.context_files)) {
+    const count = wrap.querySelector(`#detail-${task.id}-tab-context_files .detail-tab-count`);
+    if (count) count.textContent = String(readinessTask.context_files.length);
+    for (const ul of wrap.querySelectorAll(".file-list")) {
+      if (!ul.contentionTask) continue;
+      ul.contentionTask = readinessTask;
+      refreshFileList(ul);
+    }
+  }
   const current = wrap.querySelector(".readiness-list");
   if (!current) return;
   const drain = taskDrainState(task, context);
@@ -3229,40 +4237,42 @@ function refreshDraftReadiness(wrap, task, context, readinessTask = task) {
   parent.removeChild(current);
 }
 
-// The pinned global-resolver result: a task outside the active filter, shown
-// above the list with its own dismiss control.
+function refreshDraftCrewControl(wrap, task, context) {
+  const control = wrap.querySelector(".task-meta-block .crew-cell.task-chip-crew");
+  const select = control && control.querySelector("select");
+  if (!select) return;
+
+  const refreshed = buildCrewUpdateControl(task, context, { withChip: false });
+  const refreshedSelect = refreshed.querySelector("select");
+  if (!refreshedSelect) return;
+
+  const value = refreshedSelect.value;
+  select.replaceChildren(...refreshedSelect.children);
+  select.value = value;
+  select.disabled = refreshedSelect.disabled;
+  select.title = refreshedSelect.title;
+  select.dataset.currentValue = refreshedSelect.dataset.currentValue;
+  select.dataset.staleCurrentValue = refreshedSelect.dataset.staleCurrentValue;
+
+  const oldFeedback = control.querySelector(":scope > .mutation-feedback");
+  if (oldFeedback) oldFeedback.remove();
+  const newFeedback = refreshed.querySelector(":scope > .mutation-feedback");
+  if (newFeedback) control.appendChild(newFeedback);
+}
+
+// The pinned resolver result shares the normal detail's crew control. Only
+// the dock needs the outside-the-list note; full-page CSS hides that box.
 function buildPinnedTask(ptask, context) {
-  // The pinned row's detail is always open, so the row discloses nothing: its
-  // ID is the same copy button every task row has, and the row holds no other
-  // action of its own.
-  const row = el("div", {
-    class: "row pinned-external",
-    title: `${ptask.title} (global resolver; status ${ptask.status})`
-  }, [
-    makeCopyButton(ptask.id, { class: "id mono", title: "Copy task ID" }),
-    el("span", { class: "title", text: ptask.title }),
-    buildCrewUpdateControl(ptask, context),
+  const row = el("div", { class: "pinned-external" }, [
+    el("span", { class: "pinned-note", text: `Not in the current list · ${ptask.status}` }),
   ]);
+  stopRowInteraction(row);
   row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, ptask.id)}`;
 
   const drain = taskDrainState(ptask, context);
   const detail = buildTaskDetail(ptask, context, drain);
   const readiness = detail.querySelector(".readiness-list");
   if (readiness) readiness.dataset.drainSignature = taskDrainSignature(drain);
-  const dismiss = el("button", { class: "action", text: "Close" });
-  dismiss.title = "Dismiss global task detail";
-  dismiss.addEventListener("click", (ev) => {
-    ev.stopPropagation();
-    pinnedExternalTask = null;
-    if (openTaskId === ptask.id) setOpenTask(null);
-    renderTasks(taskList(context), context);
-  });
-  let actions = detail.querySelector(".actions");
-  if (!actions) {
-    actions = el("div", { class: "actions" });
-    detail.appendChild(actions);
-  }
-  actions.appendChild(dismiss);
 
   const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
   wrap.teardown = () => disconnectCommentCards(wrap);
@@ -3360,7 +4370,7 @@ function buildQuickAction(task, context) {
     link.target = "_blank";
     link.addEventListener("click", (event) => event.stopPropagation());
     cell.appendChild(link);
-    if (task.status !== "review") return cell;
+    return cell;
   }
   let spec = null;
   if (task.status === "proposed") {
@@ -3438,7 +4448,7 @@ async function runQuickAction(task, kind, context) {
       if (!visit.isCurrent()) return;
       const runId = result && result.run_id ? result.run_id : "(no run id)";
       const state = result && result.state ? result.state : "submitted";
-      taskActionNotice = `${task.id}: ship run ${runId} ${state}`;
+      taskActionNotice = [`${task.id}: ship run ${runId} ${state}`, ...submissionNoticeLines(result)].join("\n");
     } else {
       let claimed = null;
       if (task.status === "review") {
@@ -3545,24 +4555,13 @@ function buildGroupHeader(status, group) {
   return header;
 }
 
-// The column labels under a card's head. Run groups add the host column.
-function buildGroupColumns(status) {
-  const run = RUN_GROUPS.has(status);
-  const head = el("div", { class: `row header col-head${run ? " run-layout" : ""}` }, [
-    el("span", { class: "id-cell", text: "ID" }),
-    el("span", { class: "title", text: "Task" }),
-    el("span", { class: "crew-cell", text: "Crew" }),
-    run ? el("span", { class: "run-cell", text: status === "blocked" ? "Host · locks" : "Host · running" }) : null,
-    el("span", { class: "task-quick-cell" }),
-  ]);
-  head.dataset.key = `columns-${status}`;
-  head.dataset.hash = `columns-${status}`;
-  return head;
-}
+// The legend's short word for each readiness pool; its title says it in full.
+const READY_POOL_WORDS = { eligible: "eligible", locks: "locks", capacity: "capacity", other: "other" };
 
-// The Backlog card's readiness strip: one bar split by pool, then a legend
-// whose entries filter the card to that pool. Absent until the drain snapshot
-// arrives, so the card never claims a readiness it does not know.
+// The Backlog card's readiness strip: one slim bar split by pool, a legend
+// whose entries filter the card to that pool, and a link to the Drain view that
+// explains each wait. Absent until the drain snapshot arrives, so the card
+// never claims a readiness it does not know.
 function buildBacklogReadiness(group, context) {
   const { known, counts } = backlogReadiness(group);
   if (!known) return null;
@@ -3588,8 +4587,8 @@ function buildBacklogReadiness(group, context) {
         title: on ? "Show every backlog task" : `Show only tasks ${label.toLowerCase()}`,
       }, [
         el("span", { class: "ready-filter-dot", "aria-hidden": "true" }),
-        el("span", { text: label }),
         el("strong", { class: "ready-filter-count", text: String(counts[key]) }),
+        el("span", { text: READY_POOL_WORDS[key] || label.toLowerCase() }),
       ]);
       button.dataset.pool = key;
       button.disabled = counts[key] === 0 && !on;
@@ -3601,7 +4600,9 @@ function buildBacklogReadiness(group, context) {
     }),
     counts.unknown > 0 ? el("span", { class: "ready-unknown", text: `${counts.unknown} not in the drain snapshot` }) : null,
   ]);
-  const strip = el("div", { class: "group-readiness" }, [bar, legend]);
+  const why = el("a", { class: "ready-why", text: "Why? See Drain", title: "Open the Drain view: what each backlog task waits on" });
+  why.href = "#drain";
+  const strip = el("div", { class: "group-readiness" }, [bar, legend, why]);
   strip.dataset.key = "readiness-backlog";
   strip.dataset.hash = `${DRAIN_POOLS.map(({ key }) => counts[key]).join(",")},${counts.unknown}-${readyPoolFilter || ""}`;
   return strip;
@@ -3635,7 +4636,10 @@ export function renderTasks(tasks, context) {
   if (!panelCanRender("tasks-body")) return;
   const body = $("tasks-body");
   if (!body) return;
-  enableRovingRows(body);
+  paneContext = context;
+  // j/k move like Down/Up, and while the pane is open it follows the row the
+  // keyboard lands on.
+  enableRovingRows(body, { letterKeys: true, onMove: followRovingSelection });
 
   // ORB-00030: in the aggregate ("All workspaces") view each task carries its
   // owning workspace; show it as a badge in the Title cell. Detected from the
@@ -3649,7 +4653,7 @@ export function renderTasks(tasks, context) {
     const p = pinnedExternalTask.task;
     if (filterTasks(tasks, context).some((task) => task.id === p.id)) {
       pinnedExternalTask = null;
-      if (openTaskId === p.id) expandedTaskIds.add(p.id);
+      if (openTaskId === p.id) selectedTaskId = p.id;
     }
   }
   resolvePendingOpenTask(tasks, context);
@@ -3658,11 +4662,10 @@ export function renderTasks(tasks, context) {
   }
 
   // Collected as a plain array rather than a document fragment: a fragment
-  // would detach every reused node from the panel, and moving a node is what
-  // costs an open draft its caret. syncNodes leaves a node it already holds in
-  // place.
+  // would detach every reused node from the panel. syncNodes leaves a node it
+  // already holds in place, which is also what keeps the list still: the
+  // detail lives in the pane, so a selection rebuilds nothing here.
   const nodes = [];
-  const drafts = openDraftNodes(body);
   // DANI-10396: the row hash is cheap to compute from task fields alone, so it
   // is checked against the previous render's node *before* building
   // buildStatusUpdateControl/buildCrewUpdateControl — syncNodes would discard
@@ -3673,23 +4676,10 @@ export function renderTasks(tasks, context) {
   }
   const notice = takeTaskActionNotice();
 
-  // Render pinned external task detail (for statuses outside active filter) at top.
-  if (pinnedExternalTask && pinnedExternalTask.task) {
-    const ptask = pinnedExternalTask.task;
-    const pinnedKey = `pinned-${ptask.id}`;
-    const draft = drafts.get(pinnedKey);
-    if (draft) {
-      refreshDraftReadiness(draft, ptask, context);
-      nodes.push(draft);
-    } else {
-      nodes.push(buildPinnedTask(ptask, context));
-    }
-  }
-
   const filtered = filterTasks(tasks, context);
-  // Rows keep a fixed-width action column so titles and selects line up between
-  // groups; when no visible row has an action (a Done-only view) the whole
-  // column is dead space, so the list gives it back as one.
+  // Rows keep a fixed-width action column so actions line up between groups;
+  // when no visible row has an action (a Done-only view) the whole column is
+  // dead space, so the list gives it back as one.
   body.dataset.quickActions = filtered.some(hasQuickAction) ? "some" : "none";
   $("tasks-count").textContent = formatTaskCount(filtered.length, tasks.length, tasksMeta(context));
   renderTaskPagination(context);
@@ -3705,7 +4695,7 @@ export function renderTasks(tasks, context) {
   }
   renderFilterSummary(context);
   refreshChips(context);
-  if (filtered.length === 0 && nodes.length === 0) {
+  if (filtered.length === 0) {
     const replica = tasks.length === 0 ? replicaOwner() : null;
     const defaultText = tasks.length === 0 ? "No tasks available." : "No tasks match filter.";
     const emptyState = el("div", { class: "empty-state" }, [
@@ -3714,6 +4704,8 @@ export function renderTasks(tasks, context) {
       replica?.switchable ? showOnOwnerButton(replica.name) : null,
     ]);
     syncNodes(body, [notice, ...buildFoldedStatusNotices(new Set(), context), emptyState].filter(Boolean));
+    renderTaskPane(filtered, context);
+    finishTaskRender(body);
     return;
   }
   const groups = new Map();
@@ -3733,10 +4725,10 @@ export function renderTasks(tasks, context) {
   if (emptyNote) nodes.push(emptyNote);
   for (const status of ordered) {
     const group = groups.get(status);
-    // Each status is one card: its head, the backlog's readiness strip, the
-    // column labels, then the rows. The nodes stay siblings in the list so
-    // drafts, row reuse and keyboard roving work across groups; CSS draws the
-    // card from the first node of each run to the one marked `group-end`.
+    // Each status is one card: its head, the backlog's readiness strip, then
+    // the rows. The nodes stay siblings in the list so row reuse and keyboard
+    // roving work across groups; CSS draws the card from the first node of
+    // each run to the one marked `group-end`.
     const groupNodes = [buildGroupHeader(status, group)];
     let rows = group;
     if (status === "backlog") {
@@ -3744,121 +4736,85 @@ export function renderTasks(tasks, context) {
       if (strip) groupNodes.push(strip);
       if (readyPoolFilter && strip) rows = group.filter((t) => drainReadinessFor(t.id)?.pool === readyPoolFilter);
     }
-    groupNodes.push(buildGroupColumns(status));
     for (const t of rows) {
       const rowKey = `task-${t.id}`;
       const run = RUN_GROUPS.has(t.status);
-      // Basic hash based on row presentation parameters + expanded state
-      const rowHash = `${t.id}-${t.title}-${t.status}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}-${foldedStatusSignature(t.id)}`;
+      // Basic hash based on row presentation parameters (selection is painted
+      // apart, by syncRowSelection)
+      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
-        const idCell = el("span", { class: "id-cell" }, [
-          t.status === "backlog" ? buildReadinessDot(t) : null,
+        // Two lines beside the crew and the action: the title with its tag
+        // chips, then the ID and what the task is waiting on or where its run
+        // is. The ID line comes first in the DOM so Tab goes title → crew →
+        // action; the grid draws it under the title.
+        const meta = el("span", { class: "row-meta" }, [
           makeCopyButton(t.id, { class: "id mono", title: "Copy task ID" }),
+          t.status === "backlog" ? buildRowReason(t) : null,
+          run ? buildRunCell(t) : null,
         ]);
-        const titleBadges = [...buildOsBadges(t), ...buildReadinessBadge(t)];
-        const [prefix, rest] = splitTitlePrefix(t.title);
-        // The title is the row's disclosure: the row holds the copy-id button,
-        // the crew select and the quick action, so it cannot be a button itself.
-        const titleCell = el("button", { class: "title" }, [
+        const [prefixes, rest] = splitTitlePrefix(t.title);
+        const tags = [
           aggregate && t.workspace_name
             ? el("span", { class: "ws-badge mono", text: t.workspace_name, title: `Workspace: ${t.workspace_name}` })
             : null,
-          ...titleBadges,
-          prefix ? el("span", { class: "title-prefix", text: prefix }) : null,
-          rest,
+          ...buildOsBadges(t),
+          ...buildReadinessBadge(t),
+          ...buildPilotWarningBadge(t),
+          ...prefixes.map((label) => el("span", { class: "title-tag", text: label, title: `[${label}]` })),
+        ].filter(Boolean);
+        // The title is the row's disclosure: the row holds the copy-id button,
+        // the crew select and the quick action, so it cannot be a button itself.
+        const titleCell = el("button", { class: "title" }, [rest]);
+        const titleLine = el("span", { class: "title-line" }, [
+          titleCell,
+          tags.length ? el("span", { class: "title-tags" }, tags) : null,
         ]);
         const quickError = buildQuickActionError(t);
         const statusFeedbackNode = buildFoldedStatusFeedback(t.id, context);
         const statusNote = statusFeedbackNode ? el("div", { class: "task-status-note" }, [statusFeedbackNode]) : null;
         if (statusNote) stopRowInteraction(statusNote);
-        row = el("div", { class: `row${run ? " run-layout" : ""}${quickError ? " has-quick-error" : ""}${statusNote ? " has-status-note" : ""}`, title: t.title }, [
-          idCell,
-          titleCell,
+        row = el("div", { class: `row${quickError ? " has-quick-error" : ""}${statusNote ? " has-status-note" : ""}`, title: t.title }, [
+          meta,
+          titleLine,
           buildCrewUpdateControl(t, context),
-          run ? buildRunCell(t) : null,
           buildQuickAction(t, context),
           ...(quickError ? [quickError] : []),
           statusNote,
         ]);
         row.dataset.key = rowKey;
         row.dataset.hash = rowHash;
+        // Selection is painted after the sync (syncRowSelection), so moving it
+        // rebuilds no row and the focused one keeps its node.
         makeRowDisclosure(row, titleCell, {
-          expanded: expandedTaskIds.has(t.id),
-          // The detail node only exists while the row is open, so the IDREF is
-          // only published while it actually resolves.
-          controls: expandedTaskIds.has(t.id) ? `detail-${t.id}` : null,
+          expanded: false,
+          controls: "task-detail-pane",
           onToggle: () => {
-            const toggle = () => {
-              if (expandedTaskIds.has(t.id)) {
-                collapseTask(t.id);
-                // Reopening re-reads the detail, which is also the retry for a
-                // read that failed.
-                forgetTaskDetailLoad(t.id);
-              } else {
-                expandedTaskIds.add(t.id);
-                setOpenTask(t.id);
-              }
-              renderTasks(taskList(context), context);
-            };
-            if (document.startViewTransition) {
-              row.style.viewTransitionName = `task-row-${t.id}`;
-              document.startViewTransition(toggle).finished.then(() => {
-                row.style.viewTransitionName = "";
-              });
-            } else {
-              toggle();
-            }
+            if (selectedTaskId === t.id && !pinnedExternalTask) closeTaskPane(context, { forget: true });
+            else selectTask(t.id, context, { anchor: row });
           },
         });
-        if (expandedTaskIds.has(t.id)) row.classList.add("expanded");
       }
       groupNodes.push(row);
       rowIds.add(t.id);
-      if (expandedTaskIds.has(t.id)) {
-        const key = `detail-${t.id}`;
-        const draft = drafts.get(key);
-        if (draft) {
-          const state = taskDetailState(t, context);
-          refreshDraftReadiness(draft, t, context, state.task || t);
-          groupNodes.push(draft);
-        } else {
-          const state = taskDetailState(t, context);
-          const drain = taskDrainState(t, context);
-          // Diff by full task object stringified, plus the feedback the detail's
-          // own controls render (the row hash only covers the crew). A
-          // placeholder diffs on its read state instead; a detail rendered from
-          // the cached projection must not be rebuilt just because a refresh
-          // has a read in flight.
-          const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-          const detailHash = `${JSON.stringify(state.task || t)}-${readState}-${taskDrainSignature(drain)}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}`;
-          const existingDetail = existingRowNodes.get(key);
-          let detail = existingDetail && existingDetail.dataset.hash === detailHash ? existingDetail : null;
-          if (!detail) {
-            detail = state.task
-              ? buildTaskDetail(state.task, context, drain)
-              : buildTaskDetailPlaceholder(t, state, context);
-            const readiness = detail.querySelector(".readiness-list");
-            if (readiness) readiness.dataset.drainSignature = taskDrainSignature(drain);
-            detail.dataset.key = key;
-            // The row's `aria-controls` points here, so the detail needs a real id.
-            detail.id = key;
-            detail.dataset.hash = detailHash;
-          }
-          groupNodes.push(detail);
-        }
-      }
     }
     if (rows.length === 0) groupNodes.push(buildFilteredEmpty(status));
+    // A card whose rows carry no action (Blocked) gives the action column
+    // back, so its crew sits at the card's right edge.
+    const noQuick = !group.some(hasQuickAction);
     groupNodes.forEach((node, index) => {
       node.dataset.group = status;
+      node.classList.toggle("no-quick", noQuick);
       node.classList.toggle("group-end", index === groupNodes.length - 1);
     });
     nodes.push(...groupNodes);
   }
   nodes.splice(noticeIndex, 0, ...buildFoldedStatusNotices(rowIds, context));
   syncNodes(body, nodes);
+  syncRowSelection(body);
+  renderTaskPane(filtered, context);
+  finishTaskRender(body);
   const commentHash = getCommentHash();
   if (commentHash.startsWith("#comment-")) {
     if (restoredCommentHash !== commentHash) {
@@ -3869,4 +4825,408 @@ export function renderTasks(tasks, context) {
   } else {
     restoredCommentHash = null;
   }
+}
+
+// The selected row reads as selected without being rebuilt: its class and
+// its disclosure state are set on the node the list already holds.
+function syncRowSelection(body) {
+  const selected = !pinnedExternalTask && selectedTaskId ? `task-${selectedTaskId}` : null;
+  for (const row of body.querySelectorAll(".row")) {
+    if (!row.dataset.key || !row.dataset.key.startsWith("task-")) continue;
+    const on = row.dataset.key === selected;
+    row.classList.toggle("expanded", on);
+    const button = row.querySelector("[data-row-focus]");
+    if (button) button.setAttribute("aria-expanded", String(on));
+  }
+}
+
+// Work a render leaves for after both the list and the pane are in place:
+// the list scroll a full page saved, and focus a closed pane hands back.
+function finishTaskRender(body) {
+  const active = document.activeElement;
+  const pane = $("task-detail-pane");
+  const focusLost = !active || active === document.body;
+  if (listRestore && !taskPageId) {
+    const restore = listRestore;
+    listRestore = null;
+    if (restore.scrollTop != null) body.scrollTop = restore.scrollTop;
+    else revealTaskRow(restore.id, "center");
+    if (focusLost || (pane && pane.contains && pane.contains(active))) focusTaskRow(restore.id);
+  }
+  if (rowFocusAfterRender) {
+    const taskId = rowFocusAfterRender;
+    rowFocusAfterRender = null;
+    if (focusLost) focusTaskRow(taskId);
+  }
+}
+
+// The pane beside the list: a head naming the task with its close, back and
+// full-page controls, then the task's detail. A pinned resolver result shows
+// here too, marked as outside the list.
+function renderTaskPane(filtered, context) {
+  const pane = $("task-detail-pane");
+  const paneBody = $("task-detail-body");
+  if (!pane || !paneBody) return;
+  const ptask = pinnedExternalTask && pinnedExternalTask.task ? pinnedExternalTask.task : null;
+  const listTask = !ptask && selectedTaskId ? filtered.find((task) => task.id === selectedTaskId) || null : null;
+  const shown = ptask || listTask;
+  const existing = new Map();
+  for (const node of paneBody.children) {
+    if (node.dataset.key) existing.set(node.dataset.key, node);
+  }
+  const drafts = openDraftNodes(paneBody);
+  const nodes = [];
+  if (shown) {
+    nodes.push(buildPaneHead(shown, Boolean(ptask), context));
+    if (ptask) {
+      const draft = drafts.get(`pinned-${ptask.id}`);
+      if (draft) refreshDraftDetails(draft, ptask, context);
+      nodes.push(draft || buildPinnedTask(ptask, context));
+    } else {
+      nodes.push(buildListTaskDetail(listTask, drafts, existing, context));
+    }
+  } else if (taskPageId) {
+    nodes.push(buildTaskPagePlaceholder(context));
+  }
+  syncNodes(paneBody, nodes);
+  const open = nodes.length > 0;
+  pane.hidden = !open;
+  const main = $("tasks-main");
+  if (main) {
+    main.classList.toggle("task-pane-open", open);
+    main.classList.toggle("task-page-mode", open && Boolean(taskPageId));
+  }
+  syncPaneChrome(open);
+  if (focusPaneTitle && open) {
+    focusPaneTitle = false;
+    focusPaneHeading();
+  }
+}
+
+function focusPaneHeading() {
+  const title = $("task-detail-body")?.querySelector?.(".task-pane-title");
+  if (title && typeof title.focus === "function") title.focus({ preventScroll: true });
+}
+
+// A list task's detail node, kept across renders while its payload and
+// feedback are unchanged and kept verbatim while it holds a draft.
+function buildListTaskDetail(t, drafts, existing, context) {
+  const key = `detail-${t.id}`;
+  const state = taskDetailState(t, context);
+  const draft = drafts.get(key);
+  if (draft) {
+    refreshDraftDetails(draft, t, context, state.task || t);
+    return draft;
+  }
+  const drain = taskDrainState(t, context);
+  // Diff by full task object stringified, plus the feedback the detail's own
+  // controls render (the row hash only covers the crew). A placeholder diffs on
+  // its read state instead; a detail rendered from the cached projection must
+  // not be rebuilt just because a refresh has a read in flight.
+  const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
+  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}`;
+  const detailHash = `${baseHash}-${taskDrainSignature(drain)}`;
+  const existingDetail = existing.get(key);
+  if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;
+  // Only the drain readiness changed (its read landed after the detail was
+  // shown): repaint that card in place, so the detail — and whatever control
+  // in it has focus — is not rebuilt under the operator.
+  if (state.task && existingDetail && existingDetail.dataset.baseHash === baseHash && existingDetail.querySelector(".readiness-list")) {
+    refreshDraftDetails(existingDetail, t, context, state.task);
+    existingDetail.dataset.hash = detailHash;
+    return existingDetail;
+  }
+  const detail = state.task
+    ? buildTaskDetail(state.task, context, drain)
+    : buildTaskDetailPlaceholder(t, state, context);
+  const readiness = detail.querySelector(".readiness-list");
+  if (readiness) readiness.dataset.drainSignature = taskDrainSignature(drain);
+  detail.dataset.key = key;
+  // The row's disclosure and the tabs point here, so the detail needs a real id.
+  detail.id = key;
+  detail.dataset.hash = detailHash;
+  detail.dataset.baseHash = baseHash;
+  return detail;
+}
+
+function buildPaneHead(task, pinned, context) {
+  const page = taskPageId === task.id;
+  const back = el("button", {
+    class: "action task-pane-back",
+    type: "button",
+    text: page ? "Back to list" : "Back",
+    title: page ? "Back to the task list at this task (Esc)" : "Back to the task list (Esc)",
+  });
+  back.addEventListener("click", () => closeTaskPane(context, { forget: true }));
+  // Icon buttons: the glyph is CSS, the accessible name is the label.
+  const full = page ? null : el("button", {
+    class: "task-pane-icon task-pane-full",
+    type: "button",
+    title: "Open full page (Enter on its row)",
+    "aria-label": "Open full page",
+  });
+  if (full) full.addEventListener("click", () => openTaskPage(task.id, context));
+  const close = page ? null : el("button", {
+    class: "task-pane-icon task-pane-close",
+    type: "button",
+    title: "Close (Esc)",
+    "aria-label": "Close task detail",
+  });
+  if (close) close.addEventListener("click", () => closeTaskPane(context, { forget: true }));
+  const key = `pane-head-${task.id}`;
+  // The head carries only the id and title; status, crew, run and dates live in
+  // the detail's Details section, which edits them.
+  const baseHash = `${task.id}-${task.title}-${pinned}-${page}`;
+  const title = el("h2", { class: "task-pane-title", id: "task-pane-title", text: task.title || task.id });
+  title.tabIndex = -1;
+  const id = makeCopyButton(task.id, { class: "id mono", title: "Copy task ID" });
+  const spacer = el("span", { class: "task-pane-spacer" });
+  const head = el("div", { class: "task-pane-head" }, [
+    el("div", { class: "task-pane-bar" }, page
+      ? [id, spacer, back]
+      : [back, id, spacer, full, close]),
+    title,
+  ]);
+  head.dataset.key = key;
+  head.dataset.hash = baseHash;
+  head.dataset.baseHash = baseHash;
+  return head;
+}
+
+// A full page whose task is still being read, or could not be.
+function buildTaskPagePlaceholder(context) {
+  const back = el("button", { class: "action task-pane-back", type: "button", text: "Back to list" });
+  back.addEventListener("click", () => closeTaskPane(context));
+  const id = makeCopyButton(taskPageId, { class: "id mono", title: "Copy task ID" });
+  const note = el("p", {
+    class: taskPageError ? "panel-placeholder action-error" : "panel-placeholder",
+    text: taskPageError || `Loading ${taskPageId}…`,
+    role: "status",
+    "aria-live": "polite",
+  });
+  const title = el("h2", { class: "task-pane-title", id: "task-pane-title", text: taskPageId });
+  title.tabIndex = -1;
+  const bar = el("div", { class: "task-pane-bar" }, [id, el("span", { class: "task-pane-spacer" }), back]);
+  const node = el("div", { class: "task-pane-head" }, [bar, title, note]);
+  node.dataset.key = `pane-page-${taskPageId}`;
+  node.dataset.hash = taskPageError || "loading";
+  return node;
+}
+
+// ---------------------------------------------------------------------------
+// The pane's chrome: keyboard, the phone sheet, and the resizable width.
+
+const PANE_WIDTH_KEY = "orbit.dashboard.taskPaneWidth";
+const PANE_WIDTH_DEFAULT = 42;
+const PANE_WIDTH_MIN = 25;
+const PANE_WIDTH_MAX = 70;
+const PHONE_SHEET_QUERY = "(max-width: 760px)";
+let paneWidth = PANE_WIDTH_DEFAULT;
+let sheetOpen = false;
+let sheetInert = [];
+
+function isEditableTarget(target) {
+  return Boolean(target && (target.isContentEditable || (target.closest && target.closest("input, textarea, select"))));
+}
+
+function taskIdOfRow(row) {
+  const key = row && row.dataset ? row.dataset.key || "" : "";
+  return key.startsWith("task-") ? key.slice(5) : null;
+}
+
+// Roving focus moved to another row: while the pane shows a list task, it
+// follows. A pinned result or a full page is not a list selection.
+function followRovingSelection(button) {
+  if (!selectedTaskId || pinnedExternalTask || taskPageId || !paneContext) return;
+  const taskId = taskIdOfRow(button.closest ? button.closest(".row") : null);
+  if (taskId && taskId !== selectedTaskId) selectTask(taskId, paneContext);
+}
+
+// j/k from inside the pane: select the next or previous row and keep the
+// keyboard in the pane, on the new task's heading.
+function moveTaskSelection(step) {
+  const body = $("tasks-body");
+  if (!body || !paneContext) return false;
+  const buttons = Array.from(body.querySelectorAll("[data-row-focus]"))
+    .filter((button) => typeof button.getClientRects !== "function" || button.getClientRects().length > 0);
+  const at = buttons.findIndex((button) => taskIdOfRow(button.closest(".row")) === selectedTaskId);
+  const next = at < 0 ? buttons[0] : buttons[at + step];
+  const taskId = next ? taskIdOfRow(next.closest(".row")) : null;
+  if (!taskId) return false;
+  selectTask(taskId, paneContext);
+  revealTaskRow(taskId);
+  focusPaneHeading();
+  return true;
+}
+
+function phoneSheet() {
+  try {
+    return typeof window.matchMedia === "function" && window.matchMedia(PHONE_SHEET_QUERY).matches;
+  } catch (_) {
+    return false;
+  }
+}
+
+// At phone width the open pane is a full-screen sheet: a modal dialog whose
+// background is inert until Back closes it.
+function syncPaneChrome(open) {
+  const pane = $("task-detail-pane");
+  if (!pane) return;
+  const sheet = open && phoneSheet() && !pane.closest?.(".tab-pane:not(.active)");
+  if (sheet === sheetOpen) return;
+  sheetOpen = sheet;
+  if (sheet) {
+    pane.setAttribute("role", "dialog");
+    pane.setAttribute("aria-modal", "true");
+    pane.setAttribute("aria-labelledby", "task-pane-title");
+  } else if (typeof pane.removeAttribute === "function") {
+    pane.removeAttribute("role");
+    pane.removeAttribute("aria-modal");
+    pane.removeAttribute("aria-labelledby");
+  }
+  setSheetInert(sheet ? pane : null);
+  if (sheet) focusPaneHeading();
+}
+
+function setSheetInert(pane) {
+  for (const node of sheetInert) node.inert = false;
+  sheetInert = [];
+  for (let node = pane; node && node.parentElement && node !== document.body; node = node.parentElement) {
+    for (const sibling of node.parentElement.children) {
+      if (sibling === node || sibling.inert || sibling.tagName === "SCRIPT") continue;
+      sibling.inert = true;
+      sheetInert.push(sibling);
+    }
+  }
+}
+
+function clampPaneWidth(value) {
+  return Math.min(PANE_WIDTH_MAX, Math.max(PANE_WIDTH_MIN, value));
+}
+
+// The width is a per-viewer presentation preference: storage that is missing
+// or refuses (private mode, quota) costs only the remembered width.
+function loadPaneWidth() {
+  try {
+    const raw = window.localStorage.getItem(PANE_WIDTH_KEY);
+    const value = raw == null ? NaN : Number(raw);
+    return Number.isFinite(value) ? clampPaneWidth(value) : PANE_WIDTH_DEFAULT;
+  } catch (_) {
+    return PANE_WIDTH_DEFAULT;
+  }
+}
+
+function savePaneWidth() {
+  try {
+    window.localStorage.setItem(PANE_WIDTH_KEY, String(paneWidth));
+  } catch (_) {
+    /* the width still applies for this page */
+  }
+}
+
+function applyPaneWidth(value) {
+  paneWidth = Math.round(clampPaneWidth(value) * 10) / 10;
+  const main = $("tasks-main");
+  if (main) main.style.setProperty("--task-pane-width", `${paneWidth}%`);
+  const resizer = $("task-pane-resizer");
+  if (resizer) {
+    resizer.setAttribute("aria-valuenow", String(Math.round(paneWidth)));
+    resizer.setAttribute("aria-valuetext", `Detail pane ${Math.round(paneWidth)}% of the width`);
+  }
+}
+
+// The separator between the list and the pane: drag it, or focus it and use
+// the arrow keys (Shift for larger steps), Home and End. A double click
+// restores the default width.
+function wirePaneResizer() {
+  const resizer = $("task-pane-resizer");
+  const main = $("tasks-main");
+  if (!resizer || !main || resizer.dataset.wired === "true") return;
+  resizer.dataset.wired = "true";
+  let dragging = null;
+  const widthAt = (clientX) => {
+    const rect = main.getBoundingClientRect();
+    const style = window.getComputedStyle(main);
+    const left = rect.left + (parseFloat(style.paddingLeft) || 0);
+    const right = rect.right - (parseFloat(style.paddingRight) || 0);
+    return right > left ? ((right - clientX) / (right - left)) * 100 : paneWidth;
+  };
+  resizer.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    dragging = event.pointerId;
+    if (typeof resizer.setPointerCapture === "function") resizer.setPointerCapture(event.pointerId);
+    main.classList.add("task-pane-resizing");
+  });
+  resizer.addEventListener("pointermove", (event) => {
+    if (dragging === event.pointerId) applyPaneWidth(widthAt(event.clientX));
+  });
+  const finish = (event) => {
+    if (dragging !== event.pointerId) return;
+    dragging = null;
+    main.classList.remove("task-pane-resizing");
+    savePaneWidth();
+  };
+  resizer.addEventListener("pointerup", finish);
+  resizer.addEventListener("pointercancel", finish);
+  resizer.addEventListener("dblclick", () => {
+    applyPaneWidth(PANE_WIDTH_DEFAULT);
+    savePaneWidth();
+  });
+  resizer.addEventListener("keydown", (event) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const step = event.shiftKey ? 10 : 2;
+    let next = null;
+    if (event.key === "ArrowLeft") next = paneWidth + step;
+    else if (event.key === "ArrowRight") next = paneWidth - step;
+    else if (event.key === "Home") next = PANE_WIDTH_MIN;
+    else if (event.key === "End") next = PANE_WIDTH_MAX;
+    if (next == null) return;
+    event.preventDefault();
+    applyPaneWidth(next);
+    savePaneWidth();
+  });
+}
+
+// Wired once at startup. Enter on the selected row opens its full page, Esc
+// closes the pane (or leaves the full page), and j/k inside the pane move the
+// selection. Keys typed into a field stay with the field.
+export function wireTaskPane(context) {
+  paneContext = paneContext || context;
+  applyPaneWidth(loadPaneWidth());
+  wirePaneResizer();
+  const body = $("tasks-body");
+  const pane = $("task-detail-pane");
+  if (!body || !pane) return;
+  body.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const target = event.target;
+    if (!target || !target.matches || !target.matches("[data-row-focus]")) return;
+    const taskId = taskIdOfRow(target.closest(".row"));
+    if (!taskId || taskId !== selectedTaskId || pinnedExternalTask) return;
+    event.preventDefault();
+    openTaskPage(taskId, paneContext || context);
+  });
+  pane.addEventListener("keydown", (event) => {
+    if ((event.key !== "j" && event.key !== "k") || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (taskPageId || pinnedExternalTask || isEditableTarget(event.target)) return;
+    if (moveTaskSelection(event.key === "j" ? 1 : -1)) event.preventDefault();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (pane.hidden || pane.getClientRects().length === 0 || isEditableTarget(event.target)) return;
+    // The composer and other dialogs of the page keep their own Esc.
+    if (event.target && event.target.closest && event.target.closest("[role=dialog]:not(#task-detail-pane), #task-create-panel")) return;
+    event.preventDefault();
+    closeTaskPane(paneContext || context, { forget: true });
+  });
+  // The sheet follows the viewport and is released whenever Tasks is not the
+  // destination on screen.
+  try {
+    window.matchMedia(PHONE_SHEET_QUERY).addEventListener("change", () => syncPaneChrome(!pane.hidden));
+  } catch (_) {
+    /* no media queries: the pane stays a side pane */
+  }
+  // After the router has switched destinations for the same hashchange.
+  window.addEventListener("hashchange", () => setTimeout(() => syncPaneChrome(!pane.hidden), 0));
 }

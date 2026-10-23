@@ -140,13 +140,15 @@ impl Workspace {
     /// it again: that duplicate never runs, so it holds the drain's only slot
     /// until its substitute worker gives up.
     fn settle_leaf(&self, leaf: &str, task: &Task) {
-        self.edit(
-            task,
-            TaskUpdateParams {
-                status: Some(TaskStatus::Archived),
-                ..Default::default()
-            },
-        );
+        self.runtime
+            .apply_task_automation_update(
+                &task.id,
+                orbit_engine::TaskAutomationUpdate {
+                    status: Some(TaskStatus::Archived),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         self.finish(leaf, JobRunState::Success);
     }
 }
@@ -166,7 +168,7 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
 
     let drain = workspace
         .runtime
-        .submit_workspace_auto_run_with_containment(
+        .submit_workspace_auto_run_with_mode(
             Some(3600),
             Some(1),
             CompletionPolicy::Review,
@@ -177,11 +179,15 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
             JobRunTrigger::cli(),
             false,
             true,
+            false,
+            Some(orbit_types::workflow::AutoConcurrencyMode::Enforce),
+            None,
         )
         .unwrap()
         .run_id;
-    // A one-second poll, and an idle sleep longer than this test may wait:
-    // a pass that slept it while a pilot ran would time the test out.
+    // This outcome fixture polls without waiting; the unchanged long idle
+    // trap still detects selecting idle sleep while a pilot is live. The
+    // final join retains its real 3600-second bound and native polling.
     let store = workspace.runtime.sqlite_store().unwrap();
     let workspace_id = workspace.runtime.workspace_id().unwrap();
     store
@@ -190,7 +196,7 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
                 .connection()
                 .execute(
                     "UPDATE job_runs SET input_json = json_set(input_json, \
-                     '$.poll_sleep_seconds', 1, '$.idle_sleep_seconds', 600) \
+                     '$.poll_sleep_seconds', 0, '$.idle_sleep_seconds', 600) \
                      WHERE workspace_id = ?1 AND run_id = ?2",
                     [workspace_id.as_str(), drain.as_str()],
                 )
@@ -281,13 +287,56 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
     executor.join().unwrap().unwrap();
     std::fs::write(&release, "").unwrap();
 
+    // Pin actual graph execution, including the short active-pilot branch
+    // and the final authority join; checking the job text would prove neither.
+    let audit = workspace.runtime.v2_audit_store().unwrap();
+    let filter = orbit_store::contracts::V2AuditEventFilter {
+        workspace_id: workspace.runtime.workspace_id().unwrap(),
+        run_id: Some(drain.clone()),
+        limit: Some(100_000),
+        oldest_first: true,
+        ..Default::default()
+    };
+    let rows = audit.list_v2_audit_events(&filter).unwrap();
+    let events: Vec<Value> = rows
+        .iter()
+        .map(|row| serde_json::from_str(&row.payload_json).unwrap())
+        .collect();
+    for step in ["pilot_wait", "approval_join"] {
+        assert!(
+            events
+                .iter()
+                .any(|event| event["body_kind"] == "step_started" && event["step_id"] == step),
+            "the real drain must execute {step}"
+        );
+    }
     assert_eq!(workspace.run(&drain).state, JobRunState::Success);
+    assert_eq!(
+        workspace.run(&drain).input.as_ref().unwrap()["auto_concurrency"],
+        "enforce"
+    );
+    let state = workspace.runtime.read_run_state(&drain).unwrap().unwrap();
+    assert_eq!(
+        state
+            .pull_drain
+            .drain_last_pass
+            .as_ref()
+            .unwrap()
+            .admission_forecast
+            .as_ref()
+            .unwrap()
+            .mode,
+        "enforce",
+        "the shipped graph must forward its captured mode into real admission"
+    );
+
     assert_eq!(workspace.status(&late), TaskStatus::Backlog);
     let report = workspace
         .runtime
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_approvals
         .unwrap();
     assert_eq!(report.approved_total, 2);

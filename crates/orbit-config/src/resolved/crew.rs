@@ -1,6 +1,6 @@
 //! Crew admission, optional-property diagnostics and the workflow default lane.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -8,10 +8,13 @@ use orbit_common::model_defaults::{
     ANTIGRAVITY_DEFAULT_MODEL, CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK, CLAUDE_FABLE_MODEL,
     CLAUDE_HAIKU_MODEL, CODEX_ASTRA_MODEL, CODEX_LUNA_MODEL, CODEX_SOL_MODEL,
     COPILOT_DEFAULT_MODEL, CURSOR_DEFAULT_MODEL, GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL,
-    OPENCODE_DEFAULT_MODEL, PI_DEFAULT_MODEL,
+    MUSE_DEFAULT_MODEL, OPENCODE_DEFAULT_MODEL, PI_DEFAULT_MODEL,
 };
 use orbit_common::security::redaction::redact_home_dir;
-use orbit_types::identity::{Crew, CrewAssignment, ReasoningEffort, validate_antigravity_model};
+use orbit_types::identity::{
+    Crew, CrewAssignment, CrewEnvVar, ReasoningEffort, validate_antigravity_model,
+};
+use orbit_types::task::HostOs;
 use orbit_types::workflow::activity_job::Provider;
 
 use super::compatibility::reject_retired_crew_backend;
@@ -166,6 +169,7 @@ pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
         ("cursor", CURSOR_DEFAULT_MODEL, "cursor"),
         ("pi", PI_DEFAULT_MODEL, "pi"),
         ("opencode", OPENCODE_DEFAULT_MODEL, "opencode"),
+        ("muse", MUSE_DEFAULT_MODEL, "muse"),
     ] {
         crews.insert(
             name.to_string(),
@@ -175,10 +179,33 @@ pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
                 description: None,
                 tags: Vec::new(),
                 enabled: true,
+                env: Vec::new(),
             },
         );
     }
     crews
+}
+
+/// Host operating systems `provider`'s executor declares, when it declares any.
+///
+/// `declared` holds only executors that set `host_os`. The provider is
+/// trimmed, matched exactly, then ASCII case-insensitively. An unknown
+/// provider or an omitted declaration is unrestricted (`None`).
+pub fn executor_host_os<'a>(
+    provider: &str,
+    declared: &'a BTreeMap<String, BTreeSet<HostOs>>,
+) -> Option<&'a BTreeSet<HostOs>> {
+    let provider = provider.trim();
+    if provider.is_empty() {
+        return None;
+    }
+    if let Some(hosts) = declared.get(provider) {
+        return Some(hosts);
+    }
+    declared
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(provider))
+        .map(|(_, hosts)| hosts)
 }
 
 fn crew_assignment(model: &str, provider: &str) -> CrewAssignment {
@@ -214,6 +241,7 @@ pub(crate) fn crews_from_raw(
             description: normalized_crew_description(entry.description.as_deref()),
             tags: normalized_crew_tags(&entry.tags),
             enabled: entry.enabled.unwrap_or(true),
+            env: crew_env_from_raw(trimmed, entry.env.as_deref())?,
         };
         if crews.insert(trimmed.to_string(), crew).is_some() {
             return Err(OrbitError::InvalidInput(format!(
@@ -222,6 +250,27 @@ pub(crate) fn crews_from_raw(
         }
     }
     Ok((crews, ignored))
+}
+
+/// `[crews.<name>] env`, parsed. An entry that is not `NAME` or
+/// `NAME=SOURCE` over valid, non-`ORBIT_*` variable names, or a second entry
+/// for the same agent variable, fails the load naming the crew and entry: a
+/// credential routing the operator wrote must never be dropped silently.
+fn crew_env_from_raw(crew: &str, raw: Option<&[String]>) -> Result<Vec<CrewEnvVar>, OrbitError> {
+    let mut env: Vec<CrewEnvVar> = Vec::new();
+    for entry in raw.unwrap_or_default() {
+        let parsed = CrewEnvVar::parse(entry.trim()).map_err(|error| {
+            OrbitError::InvalidInput(format!("[crews.{crew}].env entry {error}"))
+        })?;
+        if env.iter().any(|held| held.name == parsed.name) {
+            return Err(OrbitError::InvalidInput(format!(
+                "[crews.{crew}].env sets '{}' more than once",
+                parsed.name
+            )));
+        }
+        env.push(parsed);
+    }
+    Ok(env)
 }
 
 fn normalized_crew_description(raw: Option<&str>) -> Option<String> {
@@ -345,7 +394,7 @@ fn effort_accepted_values(provider: &str, model: Option<&str>) -> &'static str {
             Some("grok-4.5") => "low, medium, high",
             _ => "omit the key",
         },
-        "claude" | "codex" | "pi" => ReasoningEffort::VALUES,
+        "claude" | "codex" | "pi" | "muse" => ReasoningEffort::VALUES,
         _ => "omit the key",
     }
 }

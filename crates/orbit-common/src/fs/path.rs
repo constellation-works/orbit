@@ -37,6 +37,14 @@ pub fn global_orbit_dir() -> Result<PathBuf, OrbitError> {
     Ok(home_dir()?.join(".orbit"))
 }
 
+/// Directory holding authenticated SSH control sockets for remote sessions.
+///
+/// This follows the invoking user's home even when a runtime uses a relocated
+/// registry root. Sandboxed agents must hide this same directory.
+pub fn ssh_socket_dir() -> Result<PathBuf, OrbitError> {
+    Ok(global_orbit_dir()?.join("ssh"))
+}
+
 /// The invoking user's home directory.
 ///
 /// Machine-global Orbit state hangs off this, and so do the SSH files a

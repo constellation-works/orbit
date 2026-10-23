@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -115,6 +114,7 @@ fn pipeline_step_dispatches_its_catalog_activity_to_policy_and_broker() {
         broker_runs: Mutex::new(Vec::new()),
         denial_activities: Mutex::new(Vec::new()),
         refuse_registration_after: None,
+        panic_on_registration: false,
     };
     let audit = V2AuditWriter::with_disk_sinks(
         &root.join("audit"),
@@ -204,9 +204,10 @@ struct RecordingHost {
     /// Refuses worker registration once the provider has published its
     /// grandchild's pid to this file, so the refusal lands while it is alive.
     refuse_registration_after: Option<PathBuf>,
+    panic_on_registration: bool,
 }
 
-impl RuntimeHost for RecordingHost {
+impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
     fn run_deterministic(
         &self,
         _action: &str,
@@ -277,7 +278,8 @@ impl RuntimeHost for RecordingHost {
         let Some(pid_file) = &self.refuse_registration_after else {
             return Ok(());
         };
-        wait_until(Duration::from_secs(10), || pid_file.exists());
+        assert!(wait_until(Duration::from_secs(10), || pid_file.exists()));
+        assert!(!self.panic_on_registration, "worker registration panicked");
         Err(OrbitError::Execution("worker registration refused".into()))
     }
 }
@@ -403,7 +405,7 @@ struct MissingWrapperHost {
     broker_starts: AtomicUsize,
 }
 
-impl RuntimeHost for MissingWrapperHost {
+impl orbit_engine::test_support::NullRuntimeHost for MissingWrapperHost {
     fn run_deterministic(
         &self,
         _action: &str,
@@ -521,6 +523,7 @@ fn auth_probe_obeys_leaf_sandbox_and_requires_a_successful_model_response() {
         broker_runs: Mutex::new(vec![]),
         denial_activities: Mutex::new(vec![]),
         refuse_registration_after: None,
+        panic_on_registration: false,
     };
     let mut probe = AuthProbe {
         args: vec!["sandbox".into(), "ORBIT_AUTH_OK".into(), "0".into()],
@@ -533,7 +536,7 @@ fn auth_probe_obeys_leaf_sandbox_and_requires_a_successful_model_response() {
     };
     if kind.is_some() {
         assert!(
-            run_auth_probe(&host, "claude", &probe, "auth-fixture", &root)
+            run_auth_probe(&host, "claude", &[], &probe, "auth-fixture", &root)
                 .unwrap()
                 .passed,
             "sandbox must deny the protected write while allowing the minimal invocation"
@@ -551,7 +554,7 @@ fn auth_probe_obeys_leaf_sandbox_and_requires_a_successful_model_response() {
     ] {
         probe.args = vec!["plain".into(), response.into(), exit.into()];
         assert_eq!(
-            run_auth_probe(&host, "claude", &probe, "auth-fixture", &root)
+            run_auth_probe(&host, "claude", &[], &probe, "auth-fixture", &root)
                 .unwrap()
                 .passed,
             passed
@@ -571,6 +574,9 @@ fn auth_probe_refused_registration_ends_the_grandchild() {
     use orbit_engine::activity_job::cli_runner::run_auth_probe;
     use orbit_types::workflow::{AuthProbe, AuthProbeSuccess};
 
+    if !ps_available("v2_cli_sandbox::auth_probe_refused_registration_ends_the_grandchild") {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let grandchild = Grandchild(root.join("grandchild.pid"));
@@ -583,6 +589,7 @@ fn auth_probe_refused_registration_ends_the_grandchild() {
         broker_runs: Mutex::new(Vec::new()),
         denial_activities: Mutex::new(Vec::new()),
         refuse_registration_after: Some(grandchild.0.clone()),
+        panic_on_registration: false,
     };
     let probe = AuthProbe {
         args: vec!["grandchild".into()],
@@ -592,7 +599,7 @@ fn auth_probe_refused_registration_ends_the_grandchild() {
         relogin_hint: "Run `claude login`.".into(),
     };
 
-    let outcome = run_auth_probe(&host, "claude", &probe, "registration-refusal", &root);
+    let outcome = run_auth_probe(&host, "claude", &[], &probe, "registration-refusal", &root);
     assert!(
         outcome.is_err(),
         "a refused registration must fail the probe"
@@ -601,56 +608,71 @@ fn auth_probe_refused_registration_ends_the_grandchild() {
 }
 
 /// The dispatch path has the same refusal: a provider step whose registration
-/// is refused must end the grandchild its provider started.
+/// is refused or panics must end the entire group its provider started.
 #[test]
-fn dispatch_refused_registration_ends_the_grandchild() {
+fn dispatch_registration_failure_ends_the_provider_group() {
     use orbit_engine::activity_job::cli_runner::run_cli_backend;
 
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().canonicalize().unwrap();
-    let grandchild = Grandchild(root.join("grandchild.pid"));
-    let command = root.join("codex");
-    write_grandchild_provider(&command, &grandchild.0);
-    let host = RecordingHost {
-        command,
-        worktree: root.clone(),
-        sandbox: None,
-        broker_runs: Mutex::new(Vec::new()),
-        denial_activities: Mutex::new(Vec::new()),
-        refuse_registration_after: Some(grandchild.0.clone()),
-    };
-    let spec: AgentLoopSpec = serde_json::from_value(json!({
-        "instruction": "review fixture",
-        "provider": "codex",
-        "tool_disallow_list": ["proc.*"],
-        "wall_clock_timeout_seconds": 30
-    }))
-    .unwrap();
-    let audit = V2AuditWriter::with_disk_sinks(
-        &root.join("audit"),
-        Arc::new(Store::open_in_memory().unwrap()),
-        "ws-registration",
-        "registration-refusal",
-        "codex".to_string(),
-        None,
-    )
-    .unwrap();
+    if !ps_available("v2_cli_sandbox::dispatch_registration_failure_ends_the_provider_group") {
+        return;
+    }
+    for panic_on_registration in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let grandchild = Grandchild(root.join("grandchild.pid"));
+        let command = root.join("codex");
+        write_grandchild_provider(&command, &grandchild.0);
+        let host = RecordingHost {
+            command,
+            worktree: root.clone(),
+            sandbox: None,
+            broker_runs: Mutex::new(Vec::new()),
+            denial_activities: Mutex::new(Vec::new()),
+            refuse_registration_after: Some(grandchild.0.clone()),
+            panic_on_registration,
+        };
+        let spec: AgentLoopSpec = serde_json::from_value(json!({
+            "instruction": "review fixture",
+            "provider": "codex",
+            "tool_disallow_list": ["proc.*"],
+            "wall_clock_timeout_seconds": 30
+        }))
+        .unwrap();
+        let audit = V2AuditWriter::with_disk_sinks(
+            &root.join("audit"),
+            Arc::new(Store::open_in_memory().unwrap()),
+            "ws-registration",
+            "registration-refusal",
+            "codex".to_string(),
+            None,
+        )
+        .unwrap();
 
-    let outcome = run_cli_backend(
-        &host,
-        &spec,
-        "agent_review_repair",
-        "registration-refusal",
-        audit,
-        &json!({"prompt": "review"}),
-        None,
-    );
-    assert!(
-        matches!(&outcome, Err(DispatchError::CliInvocationPermanent(message))
-            if message.contains("worker registration refused")),
-        "a refused registration must fail the dispatch permanently"
-    );
-    grandchild.assert_ended();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_cli_backend(
+                &host,
+                &spec,
+                "agent_review_repair",
+                "registration-refusal",
+                audit,
+                &json!({"prompt": "review"}),
+                None,
+            )
+        }));
+        if panic_on_registration {
+            assert!(
+                outcome.is_err(),
+                "the registration panic must unwind dispatch"
+            );
+        } else {
+            assert!(
+                matches!(outcome.unwrap(), Err(DispatchError::CliInvocationPermanent(message))
+                    if message.contains("worker registration refused")),
+                "a refused registration must fail the dispatch permanently"
+            );
+        }
+        grandchild.assert_ended();
+    }
 }
 
 /// Writes a provider stand-in that starts a sleeping grandchild, publishes
@@ -660,7 +682,8 @@ fn write_grandchild_provider(command: &Path, pid_file: &Path) {
     fs::write(
         command,
         format!(
-            "#!/bin/sh\nsleep 300 &\nprintf '%s\\n' \"$!\" > '{staging}' && mv '{staging}' '{pid_file}'\nwait\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$$\" > '{leader_file}'\nsleep 300 &\nprintf '%s\\n' \"$!\" > '{staging}' && mv '{staging}' '{pid_file}'\nwait\n",
+            leader_file = pid_file.with_extension("leader").display(),
             staging = staging.display(),
             pid_file = pid_file.display(),
         ),
@@ -676,10 +699,25 @@ struct Grandchild(PathBuf);
 
 impl Grandchild {
     fn assert_ended(&self) {
+        let leader: u32 = fs::read_to_string(self.0.with_extension("leader"))
+            .expect("provider leader pid")
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(
+            !process_is_running(leader).expect("inspect provider leader after cleanup"),
+            "provider leader survived registration failure"
+        );
+        assert_eq!(
+            orbit_common::process::identity::probe_process_group_liveness(leader as i32),
+            orbit_common::process::identity::KernelLiveness::Exited,
+            "the provider group must have no live members after registration failure"
+        );
         let text = fs::read_to_string(&self.0).expect("the provider publishes its grandchild");
         let pid: u32 = text.trim().parse().expect("grandchild pid");
         assert!(
-            wait_until(Duration::from_secs(5), || !process_is_running(pid)),
+            wait_until(Duration::from_secs(5), || !process_is_running(pid)
+                .expect("inspect grandchild after cleanup")),
             "grandchild {pid} outlived the refused worker registration"
         );
     }
@@ -687,13 +725,23 @@ impl Grandchild {
 
 impl Drop for Grandchild {
     fn drop(&mut self) {
+        if let Some(leader) = fs::read_to_string(self.0.with_extension("leader"))
+            .ok()
+            .and_then(|text| text.trim().parse::<u32>().ok())
+        {
+            let _ = orbit_common::process::OwnedChild::signal_spawned_group(leader, libc::SIGKILL);
+            // SAFETY: only reap this fixture's own provider; it may already have been reaped.
+            unsafe { libc::waitpid(leader as libc::pid_t, std::ptr::null_mut(), 0) };
+        }
         let Some(pid) = fs::read_to_string(&self.0)
             .ok()
             .and_then(|text| text.trim().parse::<u32>().ok())
         else {
             return;
         };
-        if process_is_running(pid) {
+        // A denied inspection is not evidence of death. Keep cleanup armed
+        // if the sandbox starts denying ps after the pre-spawn probe.
+        if process_is_running(pid).unwrap_or(true) {
             // SAFETY: the pid was published by this test's own provider, and
             // signalling it only ends the sleep that provider started.
             unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
@@ -703,17 +751,36 @@ impl Drop for Grandchild {
 
 /// A zombie has ended but still answers `kill(pid, 0)` until its parent reaps
 /// it, so `ps` decides whether the process still runs.
-fn process_is_running(pid: u32) -> bool {
-    let Ok(output) = Command::new("ps")
-        .args(["-o", "stat=", "-p", &pid.to_string()])
-        .output()
-    else {
-        return true;
+fn process_is_running(pid: u32) -> Result<bool, String> {
+    let output = match orbit_common::test_env::ps_stat(pid) {
+        orbit_common::test_env::PsRun::Ran(output) => output,
+        orbit_common::test_env::PsRun::Denied(reason) => return Err(reason),
     };
-    output.status.success()
-        && !String::from_utf8_lossy(&output.stdout)
-            .trim_start()
-            .starts_with('Z')
+    assert!(
+        output.status.success()
+            || (output.status.code() == Some(1)
+                && output.stdout.is_empty()
+                && output.stderr.is_empty()),
+        "ps failed: {output:?}"
+    );
+    let state = String::from_utf8_lossy(&output.stdout);
+    let state = state.trim();
+    Ok(!state.is_empty() && !state.starts_with('Z'))
+}
+
+/// Probe before spawning fixtures: only an exec denial defers their native
+/// assertions, and the claim host must replay them with ps available.
+fn ps_available(test: &str) -> bool {
+    match process_is_running(std::process::id()) {
+        Ok(running) => {
+            assert!(running, "ps must see this live test process");
+            true
+        }
+        Err(reason) => {
+            orbit_common::test_env::report_ps_denied(test, &reason);
+            false
+        }
+    }
 }
 
 fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
@@ -733,7 +800,7 @@ struct ProbeHost {
     unresolvable: bool,
 }
 
-impl RuntimeHost for ProbeHost {
+impl orbit_engine::test_support::NullRuntimeHost for ProbeHost {
     fn run_deterministic(
         &self,
         _action: &str,
@@ -774,7 +841,7 @@ impl RuntimeHost for ProbeHost {
 /// A host that has not opted into executing deferral probes.
 struct UnsupportedProbeHost;
 
-impl RuntimeHost for UnsupportedProbeHost {
+impl orbit_engine::test_support::NullRuntimeHost for UnsupportedProbeHost {
     fn run_deterministic(
         &self,
         _action: &str,
@@ -867,6 +934,7 @@ fn the_deferral_probe_records_what_the_lane_answers() {
         orbit_types::workflow::HostValidationGates::local(orbit_types::workflow::ValidationGates {
             required_validation_commands: vec!["make ci-test-affected".to_string()],
             baseline_commands: Vec::new(),
+            light_delivery_paths: None,
         });
     let pending = handoff
         .derive(
@@ -879,8 +947,8 @@ fn the_deferral_probe_records_what_the_lane_answers() {
             },
         )
         .unwrap();
-    pending.clone().complete(refused).unwrap();
-    let refusal = pending.complete(unresolved).expect_err(
+    pending.clone().complete(vec![refused]).unwrap();
+    let refusal = pending.complete(vec![unresolved]).expect_err(
         "a lane-resolution error carrying the namespace-refusal text is not an executed probe",
     );
     assert!(refusal.contains("no failing namespace probe"), "{refusal}");

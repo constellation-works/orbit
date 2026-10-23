@@ -1,9 +1,10 @@
 use clap::Args;
 use orbit_core::OrbitRuntime;
+use orbit_core::application::job::job_catalog_to_json_with_last_run;
 
 use crate::command::{CommandOut, Execute, Payload};
 
-use super::support::{job_catalog_to_json_with_last_run, write_v2_step};
+use super::support::write_v2_step;
 
 #[derive(Args)]
 pub struct JobShowArgs {

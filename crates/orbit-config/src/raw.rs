@@ -12,7 +12,8 @@ use std::collections::BTreeMap;
 pub(crate) struct RawRuntimeConfig {
     // Deliberately no `deny_unknown_fields`: config.toml is also home to
     // forward-compatible extension tables. Runtime admission reads only its
-    // owned keys, while explicit migration guards below reject retired
+    // owned keys; crate::unknown diagnoses unrecognised paths without failing.
+    // Explicit migration guards below reject retired
     // runtime keys whose continued acceptance would be unsafe or misleading.
     pub(crate) task: Option<RawTaskSection>,
     pub(crate) knowledge: Option<RawKnowledgeConfig>,
@@ -64,6 +65,11 @@ pub(crate) struct RawCrewEntry {
     pub(crate) description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) tags: Vec<String>,
+    /// `NAME` / `NAME=SOURCE` entries this crew's agents receive on top of
+    /// `[execution.env] pass`. Global config only; parsed and validated when
+    /// the registry is resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) env: Option<Vec<String>>,
     /// Retired role tables are retained only to reject stale configuration
     /// with rewrite guidance at load time. They are not part of the crew
     /// schema and never participate in assignment resolution or serialization.

@@ -1,8 +1,8 @@
 ---
 title: State Compatibility — Design
 owner: claude
-last_updated: 2026-09-27
-last_validated: 2026-10-09
+last_updated: 2026-10-13
+last_validated: 2026-10-22
 status: Draft
 feature: state-compatibility
 doc_role: design
@@ -154,16 +154,185 @@ binary, and the apply path are otherwise unchanged.
   that carries it.
 - **The layout half is not write-gated.** See §4: an additive-newer layout
   permits ordinary operation, so the classification carries the whole weight.
-- **Audit appends require a writable, supported schema.** Tool dispatch from
-  a foreign-generation reader appends through a separate connection to the
-  existing database, without migration, when its schema exactly matches this
+- **Audit appends require a writable, supported schema.** Native CLI commands
+  and tool dispatch from a foreign-generation reader share an append path
+  through a separate connection to the existing database, without migration,
+  when its schema exactly matches this
   binary. The runtime's state handles remain read-only. A newer read-only store
   or unwritable database still refuses the audit write; the CLI warns without
-  failing a read-only tool result.
-- **Task-registry compatibility is separate.** The global task registry keeps
-  its own `PRAGMA user_version` reader floor (see
-  [upgrades runbook](../../runbooks/upgrades.md)); this contract does not
-  change it.
+  failing the read result. Native CLI audit records retain the command's success
+  or failure outcome; tool dispatch owns its audit row and suppresses the
+  command guard's duplicate emission.
+- **The task registry fences binaries from before its ledger.** The global
+  task registry runs this contract on its own ledger (§8). Binaries from
+  before that ledger read only its `PRAGMA user_version`, so they cannot be
+  held read-only: the first registry migration that is not `Additive` refuses
+  them outright, as the layout does. The recovery authority runs on a ledger
+  of this kind too, and the store ledger absorbed the feature ledgers (§9);
+  see
+  [One versioned ledger per SQLite database](./4_decisions.md#one-versioned-ledger-per-sqlite-database-with-frozen-migration-bodies).
+
+## 7 Frozen store migration bodies
+
+The store registry in `driver/sqlite/migration/ledger.rs` is append-only.
+Each shipped entry owns its body and private shape-defining helpers; only
+schema-neutral primitives in `migration/introspect.rs` are shared. Later
+schema changes append an entry rather than altering what an earlier version
+produces. The freeze-in-place copied the existing helper bodies without
+changing SQL or operation order. The baseline tools and learning helpers now
+live privately in v1. v13 and v15 still defensively re-create missing tables;
+removing those paths requires the separate release-window host scan described
+in [the ledger decision](./4_decisions.md#one-versioned-ledger-per-sqlite-database-with-frozen-migration-bodies).
+
+Data backfills may use current domain code when they stamp the derivation
+version, as v16/v18 do with `actor_alias_version`; each migration owns its
+backfill helper, while a later entry can re-derive rows with a newer map.
+
+The store schema golden applies entries 1..N to an empty database independently
+for every N. It captures the normalized `sqlite_schema` rows (including
+indexes and SQL, excluding physical root-page numbers), ordered deterministically.
+The checked-in `migration/tests/store_schema.golden` stores lossless row additions
+and removals between consecutive full dumps, so replaying the deltas reconstructs
+all prefixes, including entries that leave the schema unchanged. `make goldens`
+checks it; `make goldens UPDATE=1` regenerates it. A new entry adds a new prefix;
+a change to an existing prefix needs an explanation and must not silently
+re-bless a changed shipped shape. Legacy recreation and actor backfill fixtures
+also run through the public store-open boundary, because an empty schema dump
+cannot prove data compatibility.
+
+## 8 The task registry ledger
+
+`tasks/index.sqlite` is a separate SQLite file, so it has a registry of its own
+(`driver/sqlite/task_registry/ledger.rs`), run by the store's ledger engine.
+The engine takes a `LedgeredDatabase` naming the state component (`task
+registry`), and writes the same `schema_meta` ledger rows and
+`migration.compat` record into that file. Its entries follow the rules of §1
+and §7: append-only, frozen bodies, and a per-prefix schema golden
+(`task_registry/tests/registry_schema.golden`). Two engine options exist for
+this database:
+
+- Registry migrations run with foreign-key enforcement off. SQLite ignores
+  `PRAGMA foreign_keys` inside a transaction, and the baseline's pre-v4
+  rewrite rebuilds `workspace_bindings`, the parent of every other registry
+  table; with enforcement on, the drop would cascade into the children.
+- After each entry, in the same transaction, the engine writes the
+  `user_version` fence for binaries from before the ledger: 5 while every
+  applied entry is `Additive`, 7 from the first one that is not. Never 6,
+  which those binaries may recover.
+
+Registry v1, `registry_baseline`, is a frozen copy of the pre-ledger v5
+setup, the `task_action_keys` table and the `task_envelope_stamps` cache,
+which binaries before the ledger created on first record. A registry with no
+ledger adopts it on its first writable open by running v1, which is
+idempotent over every shipped shape: `user_version` up to 5, including the
+path-coupled bindings before v4 and the allocator before v5, and the
+recognized v6. The pre-v5 rewrites and the v6 recognition now live only in
+that body; the recognition ignores the ledger's own `schema_meta` table,
+which the engine creates in the same transaction, and still mirrors envelope
+stamps a marked v6 may or may not carry. An unrecognized shape refuses
+before anything is written. Seeding the allocator is data, not shape: every
+writable open that finds no `local` allocator row seeds it after the ledger
+has run.
+
+Registry v2, `index_task_type`, is `Additive`: it adds a nullable
+`task_bundle_index.task_type` column and an index on workspace, type and
+creation time, for the defect trend. A binary without the entry keeps writing
+the registry; its upserts preserve the column's previous value and its inserts
+leave it `NULL`. Before reading defects, the newer binary checks the generated
+index against canonical envelopes, including nullable `task_type` in both the
+comparison and persisted freshness fingerprints. A missing or stale type
+requests a best-effort workspace index rebuild from bundles. This covers both
+type-change directions and changes to named causes used for fix-for-fix
+classification, without an unrelated insert or manual reindex. Unchanged
+envelopes reuse freshness proofs; adding type to the fingerprint invalidates
+older proofs once.
+
+Repair retains the existing bounded best-effort policy: a read-only registry,
+unreadable bundle, or refused rebuild (for example, a dangling relation) can
+leave the defect projection stale. Fix unresolved edges or restore their
+targets; `orbit doctor` identifies them. An envelope or unresolved-target change
+re-admits a refused repair. The shipped entry remains additive; no schema or
+writer floor changes are required for this reader-side freshness check.
+
+A registry whose ledger is newer than the binary is decided from its record,
+as in §3: additive-newer stays writable; read-compatible-newer opens with
+`query_only` on the writer connection and no read pool, so the registry
+reports itself read-only and its callers skip writes; breaking-newer is
+refused. A registry opened for observation never adopts the ledger: without a
+ledger it is readable at `user_version` 5 with action keys, and envelope stamp
+reads then check that the table exists. Once adopted, readers rely on v1.
+
+Upgrade admission carries the registry ledger as `task_registry` in the
+compiled `CompatibilityIdentity`, compared like the store schema. An identity
+or envelope recorded by a binary from before this ledger lacks it; it reads
+as version 0 with no floors, a binary that knows no registry migration. That
+fails closed: any registry migration with a writer or reader floor refuses
+it, matching the `user_version` fence.
+
+## 9 The absorbed feature ledgers
+
+Automation (v1–v5), review (v1–v4) and local pull (v1) kept independent
+registries in `feature_schema_meta`, each with a `feature.compat.<feature>`
+record in `schema_meta`, applied the first time a feature store opened. Store
+entry v49, `absorb_feature_ledgers`, runs each registry to completion inside
+the store migration's transaction, through the same feature engine
+(`migration/feature.rs::apply_feature_registry`) on the migration's
+connection. The feature rows and records come out exactly as a feature open
+wrote them, and a feature an earlier open advanced resumes where it stopped.
+
+The registries now live, frozen, in `migration/feature_ledgers/`, with private
+copies of the automation v4 and v5 member repairs. Nothing appends to them, and
+`FeatureMigration` is private to the migration module. A later change to an
+automation, review or local-pull table is a store ledger entry. Feature stores
+no longer initialize anything when they open, and readers no longer check
+whether `local_pull_admissions` exists, because every store this binary opens
+writable is at v49 or newer.
+
+v49 is `Additive`. A binary from before it opens the store writable, and its
+own feature open finds each feature at the version it supports and applies
+nothing. A binary that lacks a feature migration still decides from that
+feature's record: data-only and additive migrations above it keep it running,
+and a breaking one refuses, naming it. Upgrade admission keeps reporting the
+frozen feature versions and breaking floors in `CompatibilityIdentity`,
+because those older binaries still compare them.
+
+## 10 Handoff settlement attribution and older lifecycle readers
+
+Store v57, `handoff_settlement_sidecars`, restores the closed `fail` / `release`
+settlement vocabulary in `distributed-claim-lifecycle-v1`. A typed handoff writes
+its complete settlement record as `distributed-handoff-settlement-v1`, keyed by
+the same workspace and claim, in the transaction that records handoff authority,
+the lifecycle transition and the mutation receipt. New inspection and targeted
+claim reads project that immutable row into `ClaimInspection.settlement`; failure
+and release storage and scorecard classification stay unchanged. Older lifecycle
+writers never touch this row, so their later revocation or landing writes cannot
+discard handoff attribution. No unknown enum value is accepted or reclassified.
+
+The migration moves already-written inline `handoff` settlements, preserving
+every field, including unknown extensions, and their journal identity and creation
+time. Both the move and the version/compatibility stamp commit atomically. A
+conflicting existing attribution row refuses the upgrade and rolls it back;
+matching duplicate evidence is retained. Retry resumes from the old version.
+Execution claims, accepted handoffs, authorizations, mutation/admission receipts,
+and their input identity remain byte-for-byte unchanged. Journal recovery intents
+contain bundle events/envelopes/evidence rather than claim lifecycle snapshots;
+they need no rewrite, and replay cannot restore the incompatible inline value.
+
+v57 is `ReadCompatible`. Two database triggers reject INSERT or UPDATE of an
+inline `handoff` settlement with an explicit restart diagnostic. They protect
+already-open intermediate development writers as well as new connections, before
+the deciding transaction can publish any authority or receipt change. The separate
+row family alone would not prevent such a writer from recreating incompatible
+state after the one-time repair. The triggers do not reinterpret or drop evidence.
+
+New opens by an older binary therefore follow the existing enforced read-only
+contract, including refusal of audit appends; upgrade/restart that client to resume
+writes. An already-open v0.30.0 process can continue safe audited operations across
+the migration and new handoffs: its handoffs legitimately omit attribution and
+never write the guarded value. An already-open intermediate inline-handoff writer
+receives the pre-mutation refusal and must restart on the repaired binary. Upgrade
+admission also sees the v57 writer floor and uses the existing generation handover.
+There is no new layout version, and no shipped migration is changed.
 
 ## Task References
 

@@ -6,6 +6,7 @@ Existing records and source fixtures are retained when a shallow checkout lacks
 their revisions; available revisions are recomputed to repair old fingerprints.
 """
 
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -87,7 +88,19 @@ def record(raw, revision):
     }
 
 
+def same_body(left, right):
+    return all(left[key] == right[key] for key in ("digest", "settings", "comments"))
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check", action="store_true",
+        help="verify superseded bodies and source fixtures without writing (requires full history)",
+    )
+    args = parser.parse_args()
+    if args.check and git("rev-parse", "--is-shallow-repository").strip() != "false":
+        parser.exit(1, "body history check requires full Git history; fetch with --unshallow\n")
     history = json.loads(OUTPUT.read_text()) if OUTPUT.exists() else {}
     sources = json.loads(SOURCES.read_text()) if SOURCES.exists() else {}
     snapshots = {}
@@ -97,6 +110,8 @@ def main():
         records = []
         originals = sources.get(name, {})
         snapshots[name] = {}
+        current_path = ROOT / path
+        current = record(current_path.read_text(), "") if current_path.exists() else None
         # Only integration commits are trusted; uncommitted edits never gain provenance.
         revisions = git("log", "--first-parent", "--format=%H", "HEAD", "--", path).splitlines()
         candidates = [old["revision"] for old in history.get(name, [])] + revisions
@@ -107,13 +122,28 @@ def main():
             if raw is None:
                 raise ValueError(f"missing source fixture for {name} at {revision}")
             candidate = record(raw, revision)
-            if not any(all(old[key] == candidate[key] for key in ("digest", "settings", "comments")) for old in records):
+            # A current body needs no entry until superseded. Compare with the
+            # candidate checkout, so an uncommitted successor still requires
+            # the last landed body. Retain any current entry already recorded.
+            if (args.check and current is not None and same_body(current, candidate)
+                    and not any(same_body(old, candidate) for old in history.get(name, []))):
+                continue
+            if not any(same_body(old, candidate) for old in records):
                 records.append(candidate)
                 snapshots[name][revision] = raw
         records.sort(key=lambda item: (item["digest"], item["revision"]))
         history[name] = records
-    OUTPUT.write_text(json.dumps(history, indent=2, ensure_ascii=False, sort_keys=True) + "\n")
-    SOURCES.write_text(json.dumps(snapshots, indent=2, ensure_ascii=False, sort_keys=True) + "\n")
+    stale = []
+    for path, value in ((OUTPUT, history), (SOURCES, snapshots)):
+        rendered = json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+        if args.check:
+            if not path.exists() or path.read_text() != rendered:
+                stale.append(str(path.relative_to(ROOT)))
+        else:
+            path.write_text(rendered)
+    if stale:
+        parser.exit(1, "auto-task body history is stale: " + ", ".join(stale)
+                    + "\nRun python3 scripts/update-auto-task-body-history.py and commit both outputs.\n")
 
 
 if __name__ == "__main__":

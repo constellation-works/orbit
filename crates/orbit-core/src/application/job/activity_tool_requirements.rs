@@ -11,6 +11,7 @@
 /// recovery or review activity here when it should start even though the
 /// task requires a tool it disallows.
 const NON_IMPLEMENTER_ACTIVITIES: &[&str] = &[
+    "agent_explore",
     "agent_invoke",
     "agent_review_repair",
     "final_recovery",
@@ -18,6 +19,7 @@ const NON_IMPLEMENTER_ACTIVITIES: &[&str] = &[
     "review_reconciliation_review",
     "step_failure_recovery",
     "task_pilot",
+    "verify_finding",
 ];
 
 /// Whether a deny-mode activity omits covered task requirements rather than

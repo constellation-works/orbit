@@ -29,27 +29,30 @@ function observeShip(on: On): () => OrbitShip | null {
 }
 
 /** Answers every process the mod runs as an owner checkout of workspace `demo` would. */
-function fakeOrbit(on: On, ran: Ran[], answer?: (args: string[]) => unknown): void {
-  on('process.run', (_$, e) => {
+function fakeOrbit(on: On, ran: Ran[], answer?: (args: string[]) => unknown | Promise<unknown>, toasts?: string[]): void {
+  on('process.run', async (_$, e) => {
     const isRemote = e.argv[0] === 'ssh'
     const args = isRemote ? (e.argv.at(-1) ?? '').split(' ').slice(2).map(arg => arg.replace(/^'|'$/g, '')) : e.argv.slice(4)
     ran.push({ args, isRemote })
     const reply = (stdout: unknown) => ({ value: { exitCode: 0, stdout: JSON.stringify(stdout), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
-    const answered = answer?.(args)
+    const answered = await answer?.(args)
     if (answered !== undefined) return reply(answered)
     if (args[0] === 'workspace') return reply({ registered: true, workspace: { name: 'demo' }, checkout: { role: 'owner' } })
     if (args[0] === 'task' && args[1] === 'list') return reply(args.includes('done') ? [] : TASKS)
     if (args[0] === 'run' && args[1] === 'readiness') return reply({ tasks: [{ task_id: args[2], eligible: true, conflicts: [] }] })
     return reply({})
   })
-  stubSession(on)
+  stubSession(on, toasts)
 }
 
 /** What the engine itself would answer beneath the mod in a session. */
-function stubSession(on: On): void {
+function stubSession(on: On, toasts?: string[]): void {
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('ui.status', () => ({ value: undefined }))
-  on('ui.toast', () => ({ value: undefined }))
+  on('ui.toast', (_$, e) => {
+    toasts?.push(JSON.stringify(e))
+    return { value: undefined }
+  })
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', () => ({ cwd: '/work/demo' }))
 }
@@ -260,6 +263,58 @@ test('Board tracking reads the leaf directly and marks its failed finished step'
   expect(stopped?.steps.slice(0, 3)).toEqual(['done', 'failed', 'pending'])
   expect(stopped === null ? null : shipPosition(stopped)).toEqual({ label: PIPELINE[1]?.label, done: 1 })
   expect(track(stopped?.steps.slice(0, 3) ?? [])).toBe('●━✗─○')
+  await ui.unmount()
+})
+
+test("a stale terminal poll leaves the newly tracked run's timer active", async ($, on) => {
+  const ship = observeShip(on)
+  const ran: Ran[] = []
+  const toasts: string[] = []
+  let releaseOld!: (answer: unknown) => void
+  const heldOld = new Promise<unknown>(resolve => { releaseOld = resolve })
+  let oldPollStarted!: () => void
+  const oldStarted = new Promise<void>(resolve => { oldPollStarted = resolve })
+  const tasks = TASKS.map(task => task.id === 'ORB-1'
+    ? { ...task, status: 'in-progress', job_run_id: 'jrun-old' }
+    : task.id === 'ORB-2'
+      ? { ...task, status: 'in-progress', job_run_id: 'jrun-new' }
+      : task)
+  let newPolls = 0
+  fakeOrbit(on, ran, args => {
+    if (args[0] === 'task' && args[1] === 'list') return args.includes('done') ? [] : tasks
+    if (args[0] !== 'run') return undefined
+    if (args[1] === 'show' && args[2] === 'jrun-old') {
+      oldPollStarted()
+      return heldOld
+    }
+    if (args[1] === 'show' && args[2] === 'jrun-new') {
+      newPolls += 1
+      return { run: { job_id: 'task_pr_pipeline', state: 'running', error_message: null } }
+    }
+    if (args[1] === 'events') return { events: [] }
+    return undefined
+  }, toasts)
+  const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:05:00Z') })
+  await $.session.start({ cwd: '/work/demo', source: 'startup' } as never)
+  await clock.advance(0)
+  const ui = await $.ui.mount({ plugin: 'orbit', surface: 'terminal', ...PANE })
+
+  await ui.press({ key: 'card:ORB-1' })
+  const oldTracking = ui.press({ key: 'track' })
+  await oldStarted
+  await ui.press({ key: 'tab:board' })
+  await ui.press({ key: 'card:ORB-2' })
+  await ui.press({ key: 'track' })
+  expect(ship()?.runId).toBe('jrun-new')
+
+  releaseOld({ run: { job_id: 'task_pr_pipeline', state: 'failed', error_message: 'old run failed' } })
+  await oldTracking
+  await clock.advance(SHIP_POLL_MS * 2)
+
+  expect(newPolls).toBeGreaterThan(0)
+  expect(ship()?.runId).toBe('jrun-new')
+  expect(ship()?.phase).toBe('flying')
+  expect(toasts.some(toast => toast.includes('jrun-old'))).toBe(false)
   await ui.unmount()
 })
 

@@ -1,5 +1,7 @@
 //! Admission authority, wire protocol, and receipt contracts.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::{ClaimCandidateRef, ExecutionClaim};
@@ -10,13 +12,29 @@ pub use orbit_types::task::ExecutionLocation;
 /// request: how it orders candidates, and what its receipt captures.
 #[derive(Debug, Default)]
 pub struct AdmissionOrdering {
-    /// The owner's OS. Outside the namespace, it runs only unrestricted tasks.
-    pub owner_os: Option<orbit_types::task::HostOs>,
+    /// How far work only the requester can run reaches in the order
+    /// (`workflow.admission_affinity`) [ORB-17304].
+    pub affinity: orbit_types::task::AdmissionAffinityReach,
+    /// The live executors the requester's candidates are ordered against,
+    /// the requester among them. `None`, when the census could not be read
+    /// or `affinity` is off, orders canonically.
+    pub census: Option<super::ExecutorCensus>,
     /// Tasks whose admitted frozen delivery batch nears its deadline.
     pub expiring_tasks: std::collections::BTreeSet<String>,
     /// The owner's validation gates, captured in the receipt
     /// ([`AdmissionReceipt::gates`]) [ORB-15622].
     pub gates: Option<orbit_types::workflow::ValidationGates>,
+    /// The owner's tag instructions, captured in the receipt
+    /// ([`AdmissionReceipt::tag_instructions`]).
+    pub tag_instructions: Option<orbit_types::workflow::CapturedTagInstructions>,
+    /// Crew name to the executor `host_os` that constrains tasks assigned to
+    /// it. Empty leaves admission on the task's `os:` tags alone. Not part of
+    /// the follower's request, so it does not change the request fingerprint.
+    pub executor_host_os: BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
+    /// Offer only a pending landing repair, never a backlog task: the
+    /// owner's own repair pull, which its `orbit run auto` drain starts once
+    /// a repair's fallback window has passed.
+    pub repairs_only: bool,
 }
 
 /// Authority supplied by the embedding runtime, never deserialized from tool input.
@@ -64,12 +82,12 @@ pub struct AdmissionShipContract {
     pub mode: String,
     pub base_branch: String,
     pub landing_branch: String,
-    /// The owner's `review.before_pr` when it resolved this contract
+    /// Whether the owner's `review.timing` was `before_pr` when it resolved this contract
     /// [ORB-13992]. Contracts recorded before revision 5 carried a
     /// `review_policy` admitted only as `none`, which reads as `false`.
     #[serde(default)]
     pub before_pr: bool,
-    /// The owner's `review.before_landing` when it resolved this contract
+    /// Whether the owner's `review.timing` was `before_landing` when it resolved this contract
     /// [ORB-14849]: the claimed leaf reviews its open pull request before
     /// handing it off. Never on together with `before_pr`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -94,7 +112,7 @@ pub struct AdmissionReviewContract {
     /// (`REVIEW_CONTRACT_VERSION`). A certificate under another version is
     /// refused rather than reinterpreted.
     pub contract_version: u32,
-    /// The owner's `operation.review_crew`, when one is set. A handoff's
+    /// The owner's `workflow.purpose_crews.review`, when one is set. A handoff's
     /// reviewer must be this crew.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
@@ -155,14 +173,14 @@ impl AdmissionShipContract {
 
 /// Wire-protocol version of pull, probe, and lifecycle request/response shapes.
 ///
-/// It versions the distributed-drain protocol alone, not the scoreboard's
+/// It versions the distributed-drain protocol alone, not the Cost page's
 /// `ORCHESTRATION_SCHEMA_VERSION` and not MCP's own initialize metadata.
 /// Retained for persisted requests and lifecycle semantics. Pull request field
 /// compatibility is now derived by [`distributed_drain_protocol_fingerprint`],
 /// so an additive field needs no manual bump to detect skew. Revision 2 adds executor crew capabilities;
 /// revision 3 adds handoff footprint widening; revision 4 adds the executor's
 /// host OS; revision 5 replaces both endpoints' review-policy labels with
-/// their captured `review.before_pr` switch [ORB-13992]; revision 6 adds the
+/// their captured before-PR review switch [ORB-13992]; revision 6 adds the
 /// ship contract's captured `review`, the executor's `review_gate` and the
 /// handoff's before-PR review evidence [ORB-13895]; revision 7 sends
 /// `review_gate` on `orbit.task.pull`, which revision 6 owners reject
@@ -231,7 +249,7 @@ pub enum AdmissionRefusal {
     ProtocolMismatch,
     VersionMismatch,
     ShipModeUnsupported,
-    /// The owner captured `review.before_pr` or `review.before_landing` on
+    /// The owner captured a `review.timing` of `before_pr` or `before_landing`
     /// and the executor's leaf does not declare that it runs the review
     /// gate, or the ship mode is not the PR route the gate runs on
     /// [ORB-13908] [ORB-14849]. The executor's own switch never refuses.
@@ -318,6 +336,105 @@ impl AdmissionCrewCapability {
     }
 }
 
+/// One kind of non-template work an executor's host has room for: a work
+/// class and the complexity its tasks carry.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
+pub struct AdmissionWorkKey {
+    /// `no-diff` or `change`.
+    pub work_class: String,
+    /// The task's complexity as its tasks spell it (`low`, `xhard`,
+    /// `unassessed`); absent for tasks with none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub complexity: Option<String>,
+}
+
+/// The work a pulling executor's host load forecast has room for, for the
+/// whole horizon of its resource profile. The owner admits only a task inside
+/// it: a recurring `auto-task:` task when its template is listed, or when the
+/// executor has no profile of its template and `unprofiled_template_classes`
+/// lists its base class; any other task when its work class and complexity
+/// are.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AdmissionWorkFit {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<AdmissionWorkKey>,
+    /// Templates the executor has a profile of that fit, without the
+    /// `auto-task:` prefix.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub templates: Vec<String>,
+    /// Templates the executor has a profile of that do not fit, without the
+    /// `auto-task:` prefix. Every template the executor has a profile of is
+    /// in `templates` or here, so the owner can tell a template it has never
+    /// run from one with no room.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unfit_templates: Vec<String>,
+    /// The base classes, `no-diff` or `change`, under which a template the
+    /// executor has no profile of fits, priced as the executor would reserve
+    /// it: by the fallback chain from that base class.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unprofiled_template_classes: Vec<String>,
+}
+
+impl AdmissionWorkFit {
+    /// Whether nothing fits, so a request carrying it could admit nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+            && self.templates.is_empty()
+            && self.unprofiled_template_classes.is_empty()
+    }
+
+    /// Why `task` falls outside this fit, or `None` when it is inside it.
+    #[must_use]
+    pub fn unfit_reason(&self, task: &orbit_types::task::Task) -> Option<String> {
+        if let Some(template) = orbit_types::task::auto_task_template(&task.tags) {
+            let listed = |names: &[String]| names.iter().any(|name| name == template);
+            if listed(&self.templates) {
+                return None;
+            }
+            if listed(&self.unfit_templates) {
+                return Some(format!(
+                    "the executor's host load forecast has no room for template `{template}`"
+                ));
+            }
+            let base = if task
+                .tags
+                .iter()
+                .any(|tag| tag == orbit_types::task::NO_DIFF_EXPECTED_TAG)
+            {
+                orbit_types::task::NO_DIFF_WORK_CLASS
+            } else {
+                orbit_types::task::CHANGE_WORK_CLASS
+            };
+            return (!self
+                .unprofiled_template_classes
+                .iter()
+                .any(|class| class == base))
+            .then(|| {
+                format!(
+                    "the executor's host load forecast has no room for template `{template}`, \
+                     which it has no profile of, as {base} work"
+                )
+            });
+        }
+        let key = AdmissionWorkKey {
+            work_class: orbit_types::task::work_class(&task.tags),
+            complexity: task
+                .complexity
+                .map(|complexity| complexity.as_str().to_string()),
+        };
+        (!self.keys.contains(&key)).then(|| {
+            format!(
+                "the executor's host load forecast has no room for {} work of complexity {}",
+                key.work_class,
+                key.complexity.as_deref().unwrap_or("unset")
+            )
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AdmissionRequest {
     pub request_id: String,
@@ -327,7 +444,7 @@ pub struct AdmissionRequest {
     /// requests from before fingerprint negotiation; new followers declare it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller_fingerprint: Option<String>,
-    /// The executor's captured `review.before_pr` [ORB-13992]. Diagnostic
+    /// Whether the executor's captured `review.timing` is `before_pr` [ORB-13992]. Diagnostic
     /// only: a claimed leaf runs the review the ship contract captured, never
     /// the executor's own [ORB-13908]. Requests recorded before revision 5
     /// carried a `caller_review_policy`, which reads as `false`.
@@ -335,7 +452,7 @@ pub struct AdmissionRequest {
     pub caller_before_pr: bool,
     /// Whether the executor's claimed leaf runs the before-PR gate the ship
     /// contract's `review` captures [ORB-13895]. An owner with
-    /// `review.before_pr` on admits only an executor that declares it.
+    /// `review.timing = before_pr` admits only an executor that declares it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub review_gate: bool,
     pub run_context: AdmissionRunContext,
@@ -350,6 +467,18 @@ pub struct AdmissionRequest {
     /// tasks without an `os:` tag are admitted to it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub os: Option<orbit_types::task::HostOs>,
+    /// Whether the executor's host has a verified headless browser kit, which
+    /// a candidate tagged `ui` needs. A request without the field (one
+    /// recorded before it existed, or from an executor with no kit) declares
+    /// none, so no `ui` task is admitted to it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub browser_kit: bool,
+    /// The work the executor's host load forecast has room for, under
+    /// `machine.auto_concurrency.mode = "enforce"`. Absent otherwise, and from
+    /// an executor with no resource profiles: then every work class and
+    /// complexity is admissible, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admissible: Option<AdmissionWorkFit>,
 }
 
 impl AdmissionRequest {
@@ -404,6 +533,16 @@ pub struct AdmissionReceipt {
     /// executor runs. They stay in the backlog for a host that does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub os_unavailable: Vec<AdmissionDiagnostic>,
+    /// Ready candidates tagged `ui` skipped because the executor declared no
+    /// verified browser kit ([`AdmissionRequest::browser_kit`]). They stay
+    /// in the backlog for a host that has one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub browser_kit_unavailable: Vec<AdmissionDiagnostic>,
+    /// Ready candidates skipped because their work is outside the request's
+    /// [`AdmissionRequest::admissible`] fit. They stay in the backlog until
+    /// the executor's host has room, or for another host.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capacity_unavailable: Vec<AdmissionDiagnostic>,
     pub queue_depth: usize,
     /// The owner's `workflow.required_validation_commands` and
     /// `review.baseline_commands` when it admitted this request
@@ -414,6 +553,21 @@ pub struct AdmissionReceipt {
     /// leaf falls back to the replica's configuration with a warning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gates: Option<orbit_types::workflow::ValidationGates>,
+    /// Every tag instruction the owner applies, resolved when it admitted
+    /// this request. The claimed leaf's activities receive these, never its
+    /// replica's configuration or files, so one task gets the same guidance
+    /// on every host. Like `gates`, a response field outside the request's
+    /// fingerprint: a receipt from an older owner carries none, and its leaf
+    /// falls back to resolving on the replica with a warning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag_instructions: Option<orbit_types::workflow::CapturedTagInstructions>,
+    /// [ORB-17304] How the executor census the owner ordered against classes
+    /// the admitted task, and the census's machine ids. Absent from an idle
+    /// or repair receipt, from an order taken without a census, and from a
+    /// receipt of an older owner. A response field outside the request's
+    /// fingerprint, like `gates`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub affinity: Option<super::AdmissionAffinity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -451,6 +605,19 @@ pub struct OwnerWaveAdmission {
     /// footprint, or `None` once the candidate is admitted and its footprint
     /// is visible to every later pull grant.
     pub blocked_by: Option<Box<ExecutionClaim>>,
+}
+
+/// A stopped landing's repair awaiting its one automatic repair leaf, as the
+/// owner's local drain sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRepair {
+    pub task_id: String,
+    pub claim_id: String,
+    /// The executor of the stopped delivery, which the repair waits for.
+    pub original_executor: ExecutionLocation,
+    /// Why the owner may not take the repair yet, naming that executor and
+    /// when the owner may, or `None` once the owner may take it.
+    pub wait: Option<String>,
 }
 
 impl OwnerWaveAdmission {

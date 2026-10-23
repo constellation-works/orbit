@@ -15,6 +15,95 @@ use crate::OrbitRuntime;
 const OWNER_READ_LOCK_BUSY_RETRY_DELAYS: [Duration; 2] =
     [Duration::from_secs(1), Duration::from_secs(3)];
 
+#[cfg(feature = "test-support")]
+#[derive(Clone, Copy)]
+enum TestWaitScope {
+    OwnerReadRetry,
+    PipelinePoll,
+    HostLoadSampling,
+}
+
+#[cfg(feature = "test-support")]
+type TestWait = fn(Duration);
+
+#[cfg(feature = "test-support")]
+thread_local! {
+    static TEST_WAITS: std::cell::Cell<[Option<TestWait>; 3]> = const {
+        std::cell::Cell::new([None; 3])
+    };
+}
+
+#[cfg(feature = "test-support")]
+fn test_wait(scope: TestWaitScope) -> Option<TestWait> {
+    TEST_WAITS.with(|slot| slot.get()[scope as usize])
+}
+
+#[cfg(feature = "test-support")]
+fn with_test_wait<T>(scope: TestWaitScope, wait: TestWait, operation: impl FnOnce() -> T) -> T {
+    struct Restore(TestWaitScope, Option<TestWait>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_WAITS.with(|slot| {
+                let mut waits = slot.get();
+                waits[self.0 as usize] = self.1;
+                slot.set(waits);
+            });
+        }
+    }
+    let previous = TEST_WAITS.with(|slot| {
+        let mut waits = slot.get();
+        let previous = waits[scope as usize];
+        waits[scope as usize] = Some(wait);
+        slot.set(waits);
+        previous
+    });
+    let _restore = Restore(scope, previous);
+    operation()
+}
+
+/// Substitute only the owner-read retry wait on this thread, restoring it on
+/// return or unwind. Retry count, error handling and production delays stay intact.
+#[cfg(feature = "test-support")]
+pub fn with_owner_read_retry_wait<T>(wait: TestWait, operation: impl FnOnce() -> T) -> T {
+    with_test_wait(TestWaitScope::OwnerReadRetry, wait, operation)
+}
+
+/// Substitute only a pipeline wait's polling sleep on this thread. Elapsed
+/// time, caller deadlines, snapshots and child/process operations remain real.
+/// Restore the previous callback on return or unwind; worker threads must opt in
+/// separately, and cadence/deadline conformance tests must use the system wait.
+#[cfg(feature = "test-support")]
+pub fn with_pipeline_poll_wait<T>(wait: TestWait, operation: impl FnOnce() -> T) -> T {
+    with_test_wait(TestWaitScope::PipelinePoll, wait, operation)
+}
+
+/// Substitute sampling waits for an explicitly supplied immutable proc fixture.
+/// Raw reads, real timestamps, CPU unknowns and admission/reservation logic stay
+/// intact. Native proc reads and unopted threads retain the production interval.
+#[cfg(feature = "test-support")]
+pub fn with_host_load_sampling_wait<T>(wait: TestWait, operation: impl FnOnce() -> T) -> T {
+    with_test_wait(TestWaitScope::HostLoadSampling, wait, operation)
+}
+
+#[cfg(feature = "test-support")]
+pub(crate) fn pipeline_poll_wait_override() -> Option<TestWait> {
+    test_wait(TestWaitScope::PipelinePoll)
+}
+
+#[cfg(feature = "test-support")]
+pub(crate) fn host_load_sampling_wait_override() -> Option<TestWait> {
+    test_wait(TestWaitScope::HostLoadSampling)
+}
+
+fn retry_wait(delay: Duration) {
+    #[cfg(feature = "test-support")]
+    if let Some(wait) = test_wait(TestWaitScope::OwnerReadRetry) {
+        wait(delay);
+        return;
+    }
+    std::thread::sleep(delay);
+}
+
 impl OrbitRuntime {
     pub fn current_worker_invocation(
         global_root: &std::path::Path,
@@ -99,9 +188,19 @@ impl OrbitRuntime {
         &self,
         request: Value,
     ) -> Result<T, OrbitError> {
+        self.read_owner_tool_request("orbit.task.show", request)
+    }
+
+    /// Named artifact reads share the existing lock-busy retry and response
+    /// decoding; unknown outcomes are propagated, never treated as absent evidence.
+    pub(crate) fn read_owner_tool_request<T: serde::de::DeserializeOwned>(
+        &self,
+        tool: &str,
+        request: Value,
+    ) -> Result<T, OrbitError> {
         let mut delays = OWNER_READ_LOCK_BUSY_RETRY_DELAYS.iter();
         let value = loop {
-            match self.route_worker_host_tool("orbit.task.show", request.clone()) {
+            match self.route_worker_host_tool(tool, request.clone()) {
                 Err(error) if error.is_lock_busy() => {
                     let Some(delay) = delays.next() else {
                         return Err(error);
@@ -112,7 +211,7 @@ impl OrbitRuntime {
                         error = %error,
                         "owner read lost to a lock-wait deadline; retrying",
                     );
-                    std::thread::sleep(*delay);
+                    retry_wait(*delay);
                 }
                 result => break result?,
             }
@@ -151,6 +250,9 @@ impl OrbitRuntime {
         mut session: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
         check_worker_host_input(&input, session.worker_host_call)?;
+        if name == "orbit.search" {
+            check_worker_search_scope(&input)?;
+        }
         let bound = self
             .worker_invocation()
             .ok_or_else(|| OrbitError::PolicyDenied("worker binding missing".into()))?;
@@ -201,7 +303,7 @@ impl OrbitRuntime {
 
 pub(crate) fn check_worker_host_input(input: &Value, host_call: bool) -> Result<(), OrbitError> {
     if !host_call
-        && ["_worker_read", "_worker_update"]
+        && ["_worker_read", "_worker_update", "_worker_steering"]
             .iter()
             .any(|key| input.get(key).is_some())
     {
@@ -218,8 +320,11 @@ pub(crate) fn check_worker_host_input(input: &Value, host_call: bool) -> Result<
 /// of its candidate. A call the owner could not serve only because a lock
 /// stayed held is typed transient the same way [ORB-15088], so a step it
 /// fails — a rebase onto a moved base included — never settles as the
-/// candidate's failure or as a base conflict. The variant is kept; a refusal,
-/// an ambiguous outcome and a local error are left as they are.
+/// candidate's failure or as a base conflict. It also carries the
+/// owner-busy marker, so the release a claimed leaf settles with blames
+/// neither its host nor its crew and the drain backs off instead. The variant
+/// is kept; a refusal, an ambiguous outcome and a local error are left as
+/// they are.
 fn owner_route_failure(error: OrbitError) -> OrbitError {
     let typed = |message: String| {
         format!(
@@ -241,8 +346,9 @@ fn owner_route_failure(error: OrbitError) -> OrbitError {
         } if code == LOCK_BUSY_ERROR_CODE => OrbitError::RemoteTool {
             code,
             message: format!(
-                "{} {message}",
-                orbit_types::workflow::TRANSIENT_FAILURE_MARKER
+                "{} {} {message}",
+                orbit_types::workflow::TRANSIENT_FAILURE_MARKER,
+                orbit_types::workflow::OWNER_BUSY_MARKER
             ),
             payload,
         },
@@ -273,10 +379,40 @@ fn decode_owner_read<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, 
     Err(OrbitError::Store(format!("owner read response: {direct}")))
 }
 
+/// Search from a claimed worker may read only its bound owner workspace.
+/// Check both canonical fields and aliases even if both are supplied: parser
+/// precedence must never turn a conflicting alias into a scope escape.
+pub(crate) fn check_worker_search_scope(input: &Value) -> Result<(), OrbitError> {
+    let wider = ["workspaces", "workspace_scope"].iter().any(|key| {
+        input.get(key).is_some_and(|value| {
+            !value.is_null()
+                && !value.as_array().is_some_and(Vec::is_empty)
+                && !value.as_str().is_some_and(|s| s.trim().is_empty())
+        })
+    }) || ["all_workspaces", "allWorkspaces"].iter().any(|key| {
+        input.get(key).is_some_and(|value| {
+            !value.is_null()
+                && value.as_bool() != Some(false)
+                && !value
+                    .as_str()
+                    .is_some_and(|s| s.trim().eq_ignore_ascii_case("false"))
+        })
+    });
+    if wider {
+        return Err(OrbitError::PolicyDenied(
+            "claimed_owner_bridge_refused: search is limited to the claimed workspace; federated scope is unavailable".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn is_coordination_tool(name: &str) -> bool {
     name.starts_with("orbit.task.")
         || name.starts_with("orbit.friction.")
-        || matches!(name, "orbit.auto_task.add" | "orbit.auto_task.update")
+        || matches!(
+            name,
+            "orbit.search" | "orbit.auto_task.add" | "orbit.auto_task.update"
+        )
 }
 
 /// A required child can start before the parent has recorded its PID. Wait

@@ -353,8 +353,8 @@ function listText(items) {
 
 // ---------------------------------------------------------- review strip
 
-// Before-PR review is `review.before_pr`, before-landing review is
-// `review.before_landing` (or the hosts `review.before_landing_hosts` lists),
+// Before-PR review is `review.timing = before_pr`, before-landing review is
+// `review.timing = before_landing` (or the hosts `review.before_landing_hosts` lists),
 // and after-landing review is the delivery-code-review auto-task's own flag.
 function reviewStrip(review) {
   if (!review) return null;
@@ -368,23 +368,31 @@ function reviewStrip(review) {
   const before = review.before_pr || {};
   const landing = review.before_landing || {};
   const after = review.after_landing || {};
-  const crews = Array.isArray(before.crews) && before.crews.length ? before.crews.join(" ") : null;
+  // Before-PR and before-landing review share one reviewer pool, which falls
+  // back to the after-landing pool while `pre_landing_review` is unset.
+  const poolText = (crews) => Array.isArray(crews) && crews.length ? crews.join(" ") : null;
+  const reviewerCrews = poolText(before.crews);
+  const reviewer = reviewerCrews
+    ? ` · reviewer ${reviewerCrews} (${before.crew_key || "workflow.purpose_crews.review"}${before.crew_source ? `, ${before.crew_source}` : ""})`
+    : "";
+  const afterCrews = poolText(after.crews);
   const hosts = Array.isArray(landing.hosts) ? landing.hosts : [];
+  const timing = before.enabled === true ? "before_pr" : landing.enabled === true ? "before_landing" : "off";
   const steps = [
     {
       id: "before-pr", label: "Before PR", on: before.enabled === true,
-      source: `review.before_pr = ${before.enabled === true}${before.source ? ` (${before.source})` : ""}`,
+      source: `review.timing = ${timing}${before.source ? ` (${before.source})` : ""}${reviewer}`,
       problems: before.problems, warnings: [],
     },
     {
       id: "before-landing", label: "Before landing", on: landing.enabled === true,
-      source: `review.before_landing = ${landing.enabled === true}${landing.source ? ` (${landing.source})` : ""}${
-        landing.enabled === true ? "" : hosts.length ? ` · on for claims from ${hosts.join(", ")}` : " · no hosts listed"}`,
+      source: `review.timing = ${timing}${landing.source ? ` (${landing.source})` : ""}${
+        landing.enabled === true ? "" : hosts.length ? ` · on for claims from ${hosts.join(", ")}` : " · no hosts listed"}${reviewer}`,
       problems: landing.problems, warnings: landing.warnings,
     },
     {
       id: "after-landing", label: "After landing", on: after.enabled === true,
-      source: `${after.source || "auto-task not reported"}${crews ? ` · review crew ${crews}` : ""}`,
+      source: `${after.source || "auto-task not reported"}${afterCrews ? ` · review crew ${afterCrews} (workflow.purpose_crews.review${after.crew_source ? `, ${after.crew_source}` : ""})` : ""}`,
       problems: after.health?.problems, warnings: [],
     },
   ];
@@ -633,11 +641,18 @@ function keyRow(info) {
   node.dataset.key = row.key;
   node.dataset.layer = info.layer;
   node.addEventListener("click", () => {
-    if (selectedKey === row.key) return;
-    selectedKey = row.key;
-    draft = null;
-    notice = null;
-    rerender();
+    if (selectedKey !== row.key) {
+      selectedKey = row.key;
+      draft = null;
+      notice = null;
+      rerender();
+    }
+    // Follow the CSS container breakpoint, including when the operator
+    // reselects a key whose inspector is already open below a long list.
+    const panel = lastRender?.body.querySelector(".cfx-inspector");
+    if (panel && getComputedStyle(panel).position === "static") {
+      panel.scrollIntoView({ block: "start" });
+    }
   });
   return node;
 }
@@ -1068,7 +1083,11 @@ function limitBar(limit) {
     meter,
     el("span", { class: "cfx-limit-reset" }, [
       resets ? `${limit.resets_at ? "Resets" : "Counts until"} ${formatDateTime(resets)}` : "Reset not reported",
-      limit.gated ? el("span", { class: "cfx-gated", text: "gated", title: `Admission skips these crews until ${formatDateTime(limit.until)} (limit ${limit.threshold}%)` }) : null,
+      limit.gated
+        ? el("span", { class: "cfx-gated", text: "gated", title: `Admission skips these crews until ${formatDateTime(limit.until)} (limit ${limit.threshold}%)` })
+        : limit.threshold === "off"
+          ? el("span", { class: "cfx-muted", text: "gating off", title: "This provider's usage gate is off. Readings stay visible. A usage-limit failure still holds the task." })
+          : null,
     ]),
   ]);
 }

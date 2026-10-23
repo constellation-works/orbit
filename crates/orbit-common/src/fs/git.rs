@@ -281,6 +281,7 @@ const ADMITTED_SUBCOMMANDS: &[&str] = &[
     "for-each-ref",
     "init",
     "ls-tree",
+    "ls-remote",
     "merge-base",
     "remote",
     "rev-parse",

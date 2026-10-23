@@ -130,6 +130,8 @@ spec:
     latest runs, current and investigated failures, created tasks, existing
     dedupe owners, and the findings deferred for incomplete evidence, so
     partial registration is legible to an operator rather than inferred. The
+    audit also retains collection's `skipped_runs`, including the identities
+    and reasons for excluded GitHub-managed dynamic Dependabot updates. The
     filing entries retain workflow, job, step, runner-tested commit, source run
     IDs/URLs, and ref kinds/branches for the later pilot/admission audit.
   input_schema_json:

@@ -1,8 +1,8 @@
 ---
 title: Orbit Core — Overview
 owner: codex
-last_updated: 2026-10-03
-last_validated: 2026-10-09
+last_updated: 2026-10-21
+last_validated: 2026-10-21
 status: Accepted
 feature: orbit-core
 doc_role: overview
@@ -64,7 +64,8 @@ owners without externalizing it as new crates.
   superproject. When Git is unavailable, linked-worktree discovery requires a
   `worktrees/<name>` gitdir whose `commondir` points to the enclosing `.git`.
 - **Registry-aware composition** — opening a selected registered checkout and
-  composing routine discovery from local `host.toml` plus `workspaces.json`
+  composing routine discovery from the global `config.toml` `[machine]` table
+  plus `workspaces.json`
   lives in `orbit-cmd::registry_runtime` and `orbit-cmd::registry_routines`,
   over persistence and validation owned by `orbit-registry`.
 - **Consumer-justified re-export** — a root `pub use` kept only because a

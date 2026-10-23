@@ -2,7 +2,7 @@
 title: Task Migration — Overview
 owner: claude
 last_updated: 2026-10-10
-last_validated: 2026-10-10
+last_validated: 2026-10-19
 status: Draft
 feature: task-migration
 doc_role: overview

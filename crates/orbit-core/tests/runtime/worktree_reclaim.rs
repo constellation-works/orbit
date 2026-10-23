@@ -10,7 +10,7 @@ use std::path::Path;
 use tempfile::TempDir;
 
 fn git(repo: &Path, args: &[&str]) {
-    let output = std::process::Command::new("git")
+    let output = crate::git_test_support::command()
         .current_dir(repo)
         .args(args)
         .output()
@@ -29,14 +29,14 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
     ) {
         return;
     }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let repo = root.path().join("repo");
     let global = root.path().join("global");
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();
     std::fs::create_dir_all(&global).unwrap();
     std::fs::write(
         repo.join(".orbit/config.toml"),
-        "[worktree]\nreclaim = ['cache']\nreclaim_below_free_mib = 1099511627776\n",
+        "[worktree]\nreclaim = ['cache']\nreclaim_below_free_mib = 1099511627776\n[workflow.validation_env]\nbuild_output_env = ['BUILD_OUTPUT_DIR']\n",
     )
     .unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
@@ -51,11 +51,16 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
         runtime.workspace_id().unwrap(),
     );
     let mut kept = Vec::new();
+    // Host validation output, keyed by the checkout outside it: the oldest
+    // run's checkout is gone, the active run's is not.
+    let mut host_targets = Vec::new();
+    let host_gc = cfg!(any(target_os = "linux", target_os = "macos"));
     // Insert in reverse age order, so insertion order cannot pass this test.
     for (age, state) in [
         (1, JobRunState::Failed),
         (2, JobRunState::Failed),
         (3, JobRunState::Running),
+        (4, JobRunState::Failed),
     ] {
         let at = Utc::now() - Duration::hours(age);
         let run = jobs
@@ -82,6 +87,26 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
         );
         std::fs::create_dir_all(worktree.join("cache")).unwrap();
         std::fs::write(worktree.join("cache/output"), vec![0; 37]).unwrap();
+        if host_gc && age >= 3 {
+            let built = orbit_engine::review_gate::run_required_validation(
+                &runtime,
+                &worktree,
+                "mkdir -p \"$BUILD_OUTPUT_DIR/debug\" && printf output > \"$BUILD_OUTPUT_DIR/debug/output\"",
+            )
+            .unwrap();
+            assert!(built.passed, "{}", built.output);
+            host_targets.push(std::path::PathBuf::from(
+                built.environment["build_output"]["directory"]
+                    .as_str()
+                    .unwrap(),
+            ));
+        }
+        if age == 4 {
+            git(
+                &repo,
+                &["worktree", "remove", "--force", worktree.to_str().unwrap()],
+            );
+        }
         if state.is_terminal() {
             let mut worker = std::process::Command::new("true").spawn().unwrap();
             let pid = worker.id();
@@ -95,11 +120,21 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
         kept.push((run.run_id, worktree));
     }
     // Inspection and readiness remain observational, even with the threshold on.
-    assert_eq!(runtime.reclaimable_worktrees().unwrap().bytes_reclaimed, 74);
+    let inspected = runtime.reclaimable_worktrees().unwrap();
+    let host_bytes = inspected
+        .reports
+        .iter()
+        .filter(|report| host_gc && report.path == host_targets[1])
+        .map(|report| report.bytes_reclaimed)
+        .sum::<u64>();
+    assert_eq!(inspected.bytes_reclaimed, 74 + host_bytes, "{inspected:#?}");
+    assert!(!host_gc || host_bytes > 0, "{inspected:#?}");
     assert!(
         kept.iter()
+            .take(3)
             .all(|(_, path)| path.join("cache/output").exists())
     );
+    assert!(host_targets.iter().all(|target| target.exists()));
     runtime
         .run_deterministic(
             "list_backlog_tasks",
@@ -111,7 +146,21 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
     assert!(!kept[0].1.join("cache").exists());
     assert!(!kept[1].1.join("cache").exists());
     assert!(kept[2].1.join("cache/output").exists());
-    assert!(kept.iter().all(|(_, path)| path.join(".git").exists()));
+    assert!(
+        kept.iter()
+            .take(3)
+            .all(|(_, path)| path.join(".git").exists())
+    );
+    if host_gc {
+        assert!(
+            host_targets[0].join("debug/output").is_file(),
+            "an active run's output stays"
+        );
+        assert!(
+            !host_targets[1].exists(),
+            "a removed checkout's output is reclaimed"
+        );
+    }
     let mut events = runtime
         .list_audit_events(None, Some("worktree.reclaim".into()), None, None, 100)
         .unwrap();
@@ -124,11 +173,11 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
             value["run_id"].as_str().unwrap().to_string()
         })
         .collect::<Vec<_>>();
-    assert_eq!(
-        order,
-        [kept[1].0.clone(), kept[0].0.clone()],
-        "oldest output must be reclaimed first"
-    );
+    let mut expected = vec![kept[1].0.clone(), kept[0].0.clone()];
+    if host_gc {
+        expected.insert(0, kept[3].0.clone());
+    }
+    assert_eq!(order, expected, "oldest output must be reclaimed first");
 }
 
 #[cfg(unix)]
@@ -141,7 +190,7 @@ fn admission_skips_empty_terminal_history_without_git_and_detects_new_output() {
     ) {
         return;
     }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let repo = root.path().join("repo");
     let global = root.path().join("global");
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();

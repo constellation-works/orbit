@@ -37,7 +37,7 @@ pub(crate) struct ClaimedLeaf {
 /// a durable admission is a mis-dispatch, not a workload: every step below
 /// `worktree` reads claim context that will never resolve.
 pub(crate) const CLAIMED_LEAF_JOBS: &[&str] =
-    &["task_claimed_local_pipeline", "task_claimed_pr_pipeline"];
+    crate::runtime::host_resource::delivery::CLAIMED_LEAF_JOBS;
 
 impl ClaimedLeaf {
     /// The owner's gates this claim was admitted under [ORB-15622]: the
@@ -56,17 +56,19 @@ impl ClaimedLeaf {
         Some(ValidationGates {
             required_validation_commands: review.required_validation_commands.clone()?,
             baseline_commands: review.baseline_commands.clone(),
+            light_delivery_paths: None,
         })
     }
 }
 
 impl OrbitRuntime {
-    /// This host's own `workflow.required_validation_commands` and
-    /// `review.baseline_commands`.
+    /// This host's own `workflow.required_validation_commands`,
+    /// `review.baseline_commands` and `workflow.light_delivery_paths`.
     pub(crate) fn local_validation_gates(&self) -> ValidationGates {
         ValidationGates {
             required_validation_commands: self.workflow_required_validation_commands().to_vec(),
             baseline_commands: self.review_baseline_commands().to_vec(),
+            light_delivery_paths: Some(self.workflow_light_delivery_paths().to_vec()),
         }
     }
 
@@ -81,6 +83,19 @@ impl OrbitRuntime {
         }
         let owner = self.current_claimed_leaf().map(|leaf| leaf.owner_gates());
         self.claim_validation_gates(owner)
+    }
+
+    /// The required commands this host's final validation holds a delivered
+    /// candidate to, when that list is one an implementer may leave to it:
+    /// this host's configuration for its own runs, the owner's captured gates
+    /// for a claimed leaf. A claim that captured none (an older owner)
+    /// validates against this replica's copy, which the owner may refuse at
+    /// acceptance, so it yields nothing and the implementer keeps every check.
+    pub(crate) fn captured_final_validation_commands(&self) -> Vec<String> {
+        self.host_validation_gates()
+            .captured_required_commands()
+            .unwrap_or_default()
+            .to_vec()
     }
 
     /// [`Self::host_validation_gates`] for a claimed leaf, given what its

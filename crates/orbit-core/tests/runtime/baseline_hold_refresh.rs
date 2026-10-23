@@ -22,7 +22,7 @@ case "$selection" in
             inconclusive) exit 127 ;;
             no-summary) echo 'test suite::broken ... FAILED'; exit 1 ;;
         esac
-        printf '{"schema_version":1,"selection":%s,"tests_run":%s}' "$selection" "$tests" > "$ORBIT_VALIDATION_SUMMARY"
+        printf '{"schema_version":1,"selection":%s,"tests_run":%s,"executed_tests":["suite::broken"]}' "$selection" "$tests" > "$ORBIT_VALIDATION_SUMMARY"
         case "$mode" in
             red|ignored|zero) echo 'test suite::broken ... FAILED'; exit 1 ;;
             *) exit 0 ;;
@@ -71,22 +71,19 @@ fn refresh(fixture: &Fixture, hold: &BaselineRedHold, lifted: bool) {
         "{status:?}"
     );
     assert_eq!(
-        recorded_baseline_hold_status(&fixture.repo, hold),
+        recorded_baseline_hold_status(&fixture.runtime, &fixture.repo, hold),
         Some(status)
     );
 }
 
-#[test]
 fn recorded_failures_keep_the_hold_without_a_full_run_and_reuse_the_cache() {
-    if !super::dispatch_admission::isolated(
-        "baseline_hold_refresh::recorded_failures_keep_the_hold_without_a_full_run_and_reuse_the_cache",
-    ) {
-        return;
-    }
     let fixture = fixture(GATE, "after\n");
     let hold = hold(&fixture);
     move_base(&fixture, "red");
-    assert_eq!(recorded_baseline_hold_status(&fixture.repo, &hold), None);
+    assert_eq!(
+        recorded_baseline_hold_status(&fixture.runtime, &fixture.repo, &hold),
+        None
+    );
     refresh(&fixture, &hold, false);
     refresh(&fixture, &hold, false);
     assert_eq!(
@@ -108,15 +105,40 @@ fn recorded_failures_keep_the_hold_without_a_full_run_and_reuse_the_cache() {
     assert_eq!(ran[1], ran[0]);
     assert_eq!(ran[2], hold.selection.clone().unwrap());
     assert_eq!(&ran[3..], &ran[1..3]);
+
+    // Changing workspace output bindings requires new evidence even on the
+    // same tip and selection; the old cache and scratch lineage stay intact.
+    let path = fixture.repo.join(".orbit/config.toml");
+    let mut config = std::fs::read_to_string(&path).unwrap();
+    config.push_str("\n[workflow.validation_env]\nbuild_output_env = ['DIST_DIR']\n");
+    std::fs::write(path, config).unwrap();
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &fixture._root.path().join("global"),
+        &fixture.repo.join(".orbit"),
+    )
+    .unwrap();
+    assert_eq!(
+        recorded_baseline_hold_status(&runtime, &fixture.repo, &hold),
+        None
+    );
+    assert!(matches!(
+        baseline_hold_status(&runtime, &fixture.repo, &hold),
+        BaselineHoldStatus::Lifted(_)
+    ));
+    assert_eq!(
+        runs(&fixture).len(),
+        ran.len() + 2,
+        "new bindings replay failing tests and the full selection"
+    );
+    assert!(recorded_baseline_hold_status(&runtime, &fixture.repo, &hold).is_some());
+    assert_eq!(
+        runs(&fixture).len(),
+        ran.len() + 2,
+        "recorded queries stay observational"
+    );
 }
 
-#[test]
 fn unusable_replays_fall_back_to_the_full_selection_before_lifting() {
-    if !super::dispatch_admission::isolated(
-        "baseline_hold_refresh::unusable_replays_fall_back_to_the_full_selection_before_lifting",
-    ) {
-        return;
-    }
     let fixture = fixture(GATE, "after\n");
     let hold = hold(&fixture);
     for mode in ["ignored", "zero", "inconclusive", "no-summary"] {
@@ -132,13 +154,7 @@ fn unusable_replays_fall_back_to_the_full_selection_before_lifting() {
     }
 }
 
-#[test]
 fn holds_without_runnable_recorded_tests_use_only_the_full_command() {
-    if !super::dispatch_admission::isolated(
-        "baseline_hold_refresh::holds_without_runnable_recorded_tests_use_only_the_full_command",
-    ) {
-        return;
-    }
     let fixture = fixture(GATE, "after\n");
     let mut hold = hold(&fixture);
     for (mode, identities) in [
@@ -160,3 +176,11 @@ fn holds_without_runnable_recorded_tests_use_only_the_full_command() {
     refresh(&fixture, &hold, true);
     assert_eq!(runs(&fixture), vec![json!({"packages": ["suite"]}); 4]);
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    recorded_failures_keep_the_hold_without_a_full_run_and_reuse_the_cache_scenarios,
+    recorded_failures_keep_the_hold_without_a_full_run_and_reuse_the_cache,
+    unusable_replays_fall_back_to_the_full_selection_before_lifting,
+    holds_without_runnable_recorded_tests_use_only_the_full_command
+);

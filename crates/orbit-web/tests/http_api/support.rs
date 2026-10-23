@@ -215,17 +215,30 @@ impl Fixture {
 
     /// A server whose `PATH` starts with `bin`, so its `ssh` is a stub there.
     pub(super) fn server_with_path(&self, operator: bool, bin: &Path) -> Server {
+        self.server_with_path_envs(operator, bin, &[])
+    }
+
+    /// [`Self::server_with_path`] plus environment the server child inherits.
+    pub(super) fn server_with_path_envs(
+        &self,
+        operator: bool,
+        bin: &Path,
+        extra: &[(&str, &std::ffi::OsStr)],
+    ) -> Server {
         let path = std::env::join_paths(std::iter::once(bin.to_path_buf()).chain(
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
         ))
         .unwrap();
+        let mut env = Vec::with_capacity(extra.len() + 1);
+        env.push(("PATH", path.as_os_str()));
+        env.extend_from_slice(extra);
         self.server_impl_with_env(
             operator,
             false,
             false,
             &self.path("process.log"),
             None,
-            &[("PATH", path.as_os_str())],
+            &env,
         )
     }
 
@@ -237,6 +250,28 @@ impl Fixture {
             &self.path("process.log"),
             Some(&self.path("task-query.jsonl")),
         )
+    }
+
+    pub(super) fn counted_job_run_server(&self) -> Server {
+        self.server_impl_with_env(
+            false,
+            false,
+            false,
+            &self.path("process.log"),
+            None,
+            &[(
+                "ORBIT_HTTP_RUN_QUERY_TRACE",
+                self.path("run-query.jsonl").as_os_str(),
+            )],
+        )
+    }
+
+    pub(super) fn job_run_query_trace(&self) -> Vec<Value> {
+        fs::read_to_string(self.path("run-query.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
     }
 
     pub(super) fn replay_server(&self) -> Server {
@@ -555,8 +590,15 @@ pub(super) fn walk_audit_pages(
 }
 
 pub(super) fn serve_fixture() {
-    if let Some(path) = std::env::var_os("ORBIT_HTTP_TASK_QUERY_TRACE") {
-        // Count real store operations across the server's blocking threads.
+    let trace = std::env::var_os("ORBIT_HTTP_TASK_QUERY_TRACE")
+        .map(|path| (path, &["orbit.store.task_query", "orbit.core.codebase"][..]))
+        .or_else(|| {
+            std::env::var_os("ORBIT_HTTP_RUN_QUERY_TRACE")
+                .map(|path| (path, &["orbit.core.job_run.reconcile"][..]))
+        });
+    if let Some((path, targets)) = trace {
+        // Count task-store operations (with the codebase scan's per-task
+        // computes and landed diffs) or stale-run scans across blocking threads.
         tracing_subscriber::registry()
             .with(
                 tracing_subscriber::fmt::layer()
@@ -564,8 +606,8 @@ pub(super) fn serve_fixture() {
                     .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NEW)
                     .with_span_list(false)
                     .with_writer(std::sync::Mutex::new(fs::File::create(path).unwrap()))
-                    .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
-                        metadata.is_span() && metadata.target() == "orbit.store.task_query"
+                    .with_filter(tracing_subscriber::filter::filter_fn(move |metadata| {
+                        metadata.is_span() && targets.contains(&metadata.target())
                     })),
             )
             .init();
@@ -614,7 +656,9 @@ pub(super) fn serve_fixture() {
                             _ => 0,
                         }),
                     cpu_percent: (phase != 3).then_some(95.0),
+                    cpu_utilization_percent: None,
                     memory_percent: Some(50.0),
+                    io_full_percent: None,
                     disks: paths
                         .iter()
                         .enumerate()
@@ -668,4 +712,44 @@ pub(super) fn error_code(response: Response, status: u16, code: &str) -> Value {
     assert_eq!(actual, status, "{value}");
     assert_eq!(value["code"], json!(code), "{value}");
     value
+}
+
+/// Restore the pre-retention-analytics store shape so the public open path
+/// must backfill existing rows, rewinding the later executor census, crew
+/// account readings and handoff write guards with it. The fixture records
+/// invocations with the current binary before the upgrade, so
+/// `invocations.account` stays.
+/// Fixture-only; every caller runs in a child.
+pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
+    fixture
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute_batch(
+                    "DROP TRIGGER handoff_settlement_insert_guard;
+             DROP TRIGGER handoff_settlement_update_guard;
+             DELETE FROM schema_meta WHERE key = 'migration.v0057';
+             DROP TABLE provider_account_limit_observations;
+             DELETE FROM schema_meta WHERE key = 'migration.v0056';
+             DROP TABLE executor_census;
+             DELETE FROM schema_meta WHERE key = 'migration.v0055';
+             DROP TRIGGER retain_task_lock_denial;
+             DROP TRIGGER retain_run_commit_insert;
+             DROP TRIGGER retain_run_commit_update;
+             DROP TABLE task_lock_denials;
+             ALTER TABLE job_runs DROP COLUMN commit_decision;
+             ALTER TABLE job_runs DROP COLUMN commit_committed;
+             DELETE FROM schema_meta WHERE key = 'migration.v0054';",
+                )
+                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// Run pending store migrations through the production open boundary.
+pub(super) fn upgrade_retention_analytics(fixture: &Fixture) {
+    orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
 }

@@ -17,20 +17,27 @@ template:
     1. List tracked Markdown files under `docs/` and tracked top-level
        `README*` or `CONTRIBUTING*` documents with `git ls-files`. Exclude vendored
        dependencies, generated trees and indexes, archives, and files the
-       repository identifies as generated or historical records. Use repository
+       repository identifies as generated or historical records, including paths
+       in the repository's link-check or doc-index exclusion list, when it has
+       one. Check each candidate against that list before selecting it. Use repository
        guidance for any additional documentation scope; do not edit unrelated
        files. Keep the paths relative to the repository root.
     2. Build the carried attempt state. List the newest completed instances with
-       `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["doc-duties"],"limit":60,"fields":["id"],"model":"<agent-family>"}'`
-       and read each one's ledger, newest first, with
-       `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"doc-duties-ledger.json","model":"<agent-family>"}'`.
-       Skip a task with no ledger (a run from before ledgers existed) and ignore
-       its prose summary; never order by execution-summary text. A
+       `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["doc-duties"],"limit":60,"fields":["id"],"model":"<agent-family>"}'`.
+       For each candidate, newest first, discover its artifacts before fetching
+       any ledger: list the metadata-only artifacts projection with
+       `orbit tool run orbit.task.show --input '{"id":"<id>","field":"artifacts","model":"<agent-family>"}'`
+       and fetch the ledger with
+       `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"doc-duties-ledger.json","model":"<agent-family>"}'`
+       only when that listing names `doc-duties-ledger.json`. Skip a task whose
+       listing has no ledger (a run from before ledgers existed) without calling
+       `orbit.task.artifact.get` for it, and ignore its prose summary; never
+       order by execution-summary text. A
        `schema_version` 2 ledger carries `state`, a cumulative map from each
        path to its two most recent attempt rows, newest first. It already
-       covers every older ledger, so stop at the first one you can read and
+       covers every older ledger, so stop at the first listed one you can read and
        start from its `state`. Layer the `documents` rows of each
-       `schema_version` 1 ledger read before it on top (all of them when no
+       `schema_version` 1 ledger fetched before it on top (all of them when no
        version 2 ledger exists). For each path keep only the two rows with the
        newest `attempted_on` (ties: the newer task). Drop paths that step 1 no
        longer lists. The history window is a read bound, not a retention rule:
@@ -116,6 +123,7 @@ template:
   - orbit.task.artifact.get
   - orbit.task.artifact.put
   - orbit.task.list
+  - orbit.task.show
   # A batch may edit docs/ and root or workspace-specific documentation.
   # Reserve the workspace until the batch's concrete paths are known.
   context_files:

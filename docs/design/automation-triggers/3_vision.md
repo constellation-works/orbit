@@ -1,8 +1,8 @@
 ---
 title: Automation Triggers — Vision
 owner: codex
-last_updated: 2026-10-09
-last_validated: 2026-10-09
+last_updated: 2026-10-13
+last_validated: 2026-10-20
 status: Draft
 feature: automation-triggers
 doc_role: vision
@@ -40,7 +40,7 @@ change the contract.
    to check against real delivery rates. A busy repository may need more capacity
    rather than larger invisible backlogs; these values are not permission to
    enable all automation.
-3. **Coverage acceptance.** V1 requires schema-v1 structured evidence bound to
+3. **Coverage acceptance.** V1 requires schema-v2 structured evidence bound to
    the frozen batch and assigned executor run; Core validates it and Store retains
    an immutable receipt. Process success and unstructured summary prose are
    insufficient. The evidence contract is in [Operations](./5_operations.md#evidence-submission);

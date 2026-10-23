@@ -1,6 +1,17 @@
 use std::time::Duration;
 
-use super::super::completion::print_budget_exhausted;
+use orbit_common::process::build_budget::BuildBudgetWaits;
+use orbit_common::security::redaction::PatternRedactor;
+use orbit_types::workflow::activity_job::AgentLoopSpec;
+use orbit_types::workflow::{
+    ClaimFailureClass, STALLED_ERROR_CODE, STALLED_MARKER, TRANSIENT_FAILURE_MARKER,
+};
+use serde_json::json;
+
+use super::super::super::supervisor::CapturedOutput;
+use super::super::completion::{ProviderExit, print_budget_exhausted, project_completion};
+use crate::DispatchError;
+use crate::context::NullRuntimeHost;
 
 // Combinatorial budget/exit/envelope logic: exact hour-long boundaries cannot
 // be exercised economically by a real provider process. [ORB-15206]
@@ -31,5 +42,73 @@ fn only_a_clean_exit_without_an_envelope_at_the_injected_budget_is_a_timeout() {
             expected,
             "ORB-15206: exit_success={exit_success}, missing={missing}, budget={budget:?}, elapsed={elapsed_ms}ms",
         );
+    }
+}
+
+struct IdleHost;
+
+impl NullRuntimeHost for IdleHost {}
+
+fn project(stalled: bool, timed_out: bool) -> crate::DispatchOutcome {
+    let spec: AgentLoopSpec = serde_json::from_value(json!({})).expect("empty agent spec");
+    let host = IdleHost;
+    let input = json!({});
+    let redaction = PatternRedactor::http_default();
+    project_completion(ProviderExit {
+        host: &host,
+        spec: &spec,
+        input: &input,
+        run_id: "run",
+        provider: "fixture".to_string(),
+        model: None,
+        task_ids: &[],
+        worktree_boundary: None,
+        sandbox: None,
+        subprocess_cwd: None,
+        redaction: &redaction,
+        timeout_seconds: 300,
+        argv_redacted: Vec::new(),
+        stdin_blob_ref: "stdin".to_string(),
+        stdout_blob_ref: "stdout".to_string(),
+        stderr_blob_ref: "stderr".to_string(),
+        stdout: CapturedOutput::empty(),
+        stderr: CapturedOutput::empty(),
+        exit_code: None,
+        duration: Duration::from_millis(700),
+        timed_out,
+        stalled,
+        stall_window: Duration::from_secs(30),
+        print_timeout: None,
+        codex_home: None,
+        build_budget_waits: BuildBudgetWaits::default(),
+    })
+    .expect("project a provider exit")
+}
+
+#[test]
+fn a_stalled_provider_fails_transient_without_a_wall_clock_timeout() {
+    for (stalled, timed_out, expected_marker, absent_marker) in [
+        (true, false, STALLED_MARKER, "wall-clock timeout"),
+        (false, true, "wall-clock timeout", STALLED_MARKER),
+    ] {
+        let outcome = project(stalled, timed_out);
+        assert!(!outcome.success);
+        assert_eq!(outcome.output["stalled"], json!(stalled));
+        assert_eq!(outcome.output["timed_out"], json!(timed_out));
+        let message = outcome.message.expect("provider failure message");
+        assert!(message.contains(expected_marker), "{message}");
+        assert!(!message.contains(absent_marker), "{message}");
+
+        if stalled {
+            assert!(message.contains(TRANSIENT_FAILURE_MARKER), "{message}");
+            assert!(message.contains("30s"), "{message}");
+            assert_eq!(
+                ClaimFailureClass::of_step_failure(Some(STALLED_ERROR_CODE), Some(&message)),
+                Some(ClaimFailureClass::Transient)
+            );
+            let error = DispatchError::JobExecution(message);
+            assert_eq!(error.failure_code(), STALLED_ERROR_CODE);
+            assert!(!error.is_non_retryable());
+        }
     }
 }

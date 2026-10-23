@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use orbit_common::OrbitError;
 use orbit_types::workflow::ShipMode;
 
-use super::{HostLifetime, OrbitRuntime};
+use super::{HostLifetime, OrbitRuntime, OrbitRuntimeRoots, RuntimeConfigLoader};
 use crate::runtime::host_resource::{HostResourceMonitor, default_host_resource_probe};
 use crate::runtime::host_signal::{FixedHostSignals, default_host_signal_probe};
 use crate::runtime::task_pr_forge::{NoTaskPrForge, default_task_pr_forge};
@@ -47,16 +47,14 @@ impl OrbitRuntime {
             })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn build_from_resolved_config(
-        global_root: &Path,
-        shared_root: &Path,
-        local_root: &Path,
+        roots: &OrbitRuntimeRoots,
         binding: Option<WorkspaceRuntimeBinding>,
         runtime_config: &orbit_config::ResolvedConfig,
         layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
         host_lifetime: HostLifetime,
         read_only: bool,
+        config_loader: RuntimeConfigLoader,
     ) -> Result<Self, OrbitError> {
         let access = if read_only {
             builder::StateAccess::ReadOnly
@@ -65,42 +63,43 @@ impl OrbitRuntime {
         };
         Self::finish_from_context(
             builder::build_context_from_roots(
-                global_root,
-                shared_root,
-                local_root,
+                &roots.global_root,
+                &roots.shared_root,
+                &roots.local_root,
                 binding.as_ref(),
                 runtime_config,
                 host_lifetime,
                 access,
             )?,
             binding,
-            global_root,
+            &roots.global_root,
             layout_report,
+            config_loader,
         )
     }
 
     pub(crate) fn build_from_resolved_config_write_free(
-        global_root: &Path,
-        shared_root: &Path,
-        local_root: &Path,
+        roots: &OrbitRuntimeRoots,
         binding: Option<WorkspaceRuntimeBinding>,
         runtime_config: &orbit_config::ResolvedConfig,
         layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
         host_lifetime: HostLifetime,
+        config_loader: RuntimeConfigLoader,
     ) -> Result<Self, OrbitError> {
         let mut runtime = Self::finish_from_context(
             builder::build_context_from_roots(
-                global_root,
-                shared_root,
-                local_root,
+                &roots.global_root,
+                &roots.shared_root,
+                &roots.local_root,
                 binding.as_ref(),
                 runtime_config,
                 host_lifetime,
                 builder::StateAccess::WriteFree,
             )?,
             binding,
-            global_root,
+            &roots.global_root,
             layout_report,
+            config_loader,
         )?;
         runtime.write_free = true;
         Ok(runtime)
@@ -120,6 +119,7 @@ impl OrbitRuntime {
         binding: Option<WorkspaceRuntimeBinding>,
         global_root: &Path,
         layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
+        config_loader: RuntimeConfigLoader,
     ) -> Result<Self, OrbitError> {
         let host_resources = Arc::new(
             HostResourceMonitor::new(
@@ -131,6 +131,11 @@ impl OrbitRuntime {
         );
         Ok(Self {
             host_resources,
+            resource_profiles: Default::default(),
+            admission_policy: Default::default(),
+            admission_policy_snapshot: None,
+            config_loader,
+            host_load: Default::default(),
             context,
             write_free: false,
             workspace_binding: binding.map(Arc::new),
@@ -140,6 +145,8 @@ impl OrbitRuntime {
             coordination_write_owner: None,
             automation_execution_location: None,
             host_os: orbit_types::task::HostOs::current(),
+            registered_host_oses: Default::default(),
+            browser_kit_home: None,
             claim_known_red_budget: std::time::Duration::from_secs(600),
             ci_failure_time: None,
             workspace_catalog: None,
@@ -149,6 +156,8 @@ impl OrbitRuntime {
             layout_report: Arc::new(layout_report),
             _temp_dir: None,
             orphan_reconcile_hook: Arc::new(Mutex::new(None)),
+            validated_trees: Arc::default(),
+            pr_repair_checks: Arc::default(),
             #[cfg(test)]
             transition_read_hook: Arc::new(Mutex::new(None)),
         })
@@ -159,6 +168,7 @@ impl OrbitRuntime {
         workspace_root: &Path,
         runtime_config: &orbit_config::ResolvedConfig,
         temp_dir: builder::TempDir,
+        config_loader: RuntimeConfigLoader,
     ) -> Result<Self, OrbitError> {
         // Use a distinct checkout root so the normal workspace builder creates
         // its identity and task partition. A shared explicit data root assumes
@@ -191,6 +201,11 @@ impl OrbitRuntime {
         );
         Ok(Self {
             host_resources,
+            resource_profiles: Default::default(),
+            admission_policy: Default::default(),
+            admission_policy_snapshot: None,
+            config_loader,
+            host_load: Default::default(),
             context,
             write_free: false,
             workspace_binding: Some(Arc::new(binding)),
@@ -200,6 +215,10 @@ impl OrbitRuntime {
             coordination_write_owner: None,
             automation_execution_location: None,
             host_os: orbit_types::task::HostOs::current(),
+            registered_host_oses: Default::default(),
+            // An in-memory runtime reads no user's browser kit: its data root
+            // holds none.
+            browser_kit_home: Some(data_root.to_path_buf()),
             claim_known_red_budget: std::time::Duration::from_secs(600),
             ci_failure_time: None,
             workspace_catalog: None,
@@ -211,6 +230,8 @@ impl OrbitRuntime {
             layout_report: Arc::new(orbit_store::workflow::layout::LayoutUpgradeReport::default()),
             _temp_dir: Some(Arc::new(temp_dir)),
             orphan_reconcile_hook: Arc::new(Mutex::new(None)),
+            validated_trees: Arc::default(),
+            pr_repair_checks: Arc::default(),
             #[cfg(test)]
             transition_read_hook: Arc::new(Mutex::new(None)),
         })

@@ -49,7 +49,7 @@ fn recovery_uses_machine_bound_run_evidence_and_its_own_crew_draw() {
         ],
         vec!["branch", "fixture/candidate"],
     ] {
-        let output = orbit_common::fs::git::run_git(&owner_repo, &args).expect("seed owner Git");
+        let output = crate::git_test_support::run(&owner_repo, &args).expect("seed owner Git");
         assert!(output.success, "{args:?}: {}", output.stderr);
     }
     std::fs::write(
@@ -109,6 +109,7 @@ model = "fixture-b"
     jobs.complete_job_run_step(
         &leaf,
         &JobRunStepParams {
+            lock_wait_ms: None,
             step_index: 0,
             target_type: JobTargetType::Activity,
             target_id: "owner_only_step".into(),
@@ -232,7 +233,8 @@ model = "fixture-b"
         owner.get_task(&task_id).unwrap().status.to_string(),
         "backlog"
     );
-    let record = FinalRecoveryRecord::last(&owner.get_task_comments(&task_id).unwrap()).unwrap();
+    let record =
+        FinalRecoveryRecord::last(&owner.get_task_history(&task_id).unwrap(), &[]).unwrap();
     assert_eq!(record.run_id, recovery.run_id);
     assert_eq!(record.decision, "requeue");
     assert_eq!(record.outcome, "requeued");
@@ -242,7 +244,7 @@ model = "fixture-b"
         "owner_unrelated_job"
     );
     let candidate =
-        orbit_common::fs::git::run_git(&owner_repo, &["rev-parse", "fixture/candidate"]).unwrap();
+        crate::git_test_support::run(&owner_repo, &["rev-parse", "fixture/candidate"]).unwrap();
     assert!(candidate.success, "candidate evidence is preserved");
     assert_eq!(
         candidate.stdout.trim(),
@@ -277,6 +279,7 @@ model = "fixture-b"
             .complete_job_run_step(
                 &run.run_id,
                 &JobRunStepParams {
+                    lock_wait_ms: None,
                     step_index: 0,
                     target_type: JobTargetType::Activity,
                     target_id: "local_failure_step".into(),
@@ -680,5 +683,449 @@ fn a_friction_the_claimed_recovery_records_leaves_its_requeue_standing() {
         requeued.to_status,
         Some(TaskStatus::Backlog),
         "{requeued:?}"
+    );
+}
+
+/// [ORB-16727] A claimed PR leaf that exhausted its review budget escalates
+/// with the owner's `task requeue`, never with a resume of the leaf: generic
+/// resume cannot carry the claim to a new run. Run as its action names it,
+/// the requeue returns the task to the backlog. Its next claim is a new owner
+/// admission bound to its own leaf and is offered the candidate the failed
+/// claim kept. `landing_repair::requeued` executes such a continuation
+/// through the bound worker to its handoff.
+#[test]
+fn an_exhausted_claimed_review_requeues_onto_a_new_claim() {
+    use orbit_types::workflow::{ReviewBudget, ReviewLedger};
+
+    if !isolated(
+        module_path!(),
+        "an_exhausted_claimed_review_requeues_onto_a_new_claim",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let first = pair
+        .admission(&leaf)
+        .receipt
+        .and_then(|receipt| receipt.claim)
+        .expect("claim");
+
+    // The leaf's before-PR review spent its claim's whole budget on the
+    // candidate it synchronized.
+    let follower_workspace = pair.follower.workspace_id().unwrap();
+    let mut ledger = ReviewLedger::new(
+        &format!("{follower_workspace}/{task}/main/{}", first.claim_id),
+        vec![task.clone()],
+        ReviewBudget { minutes: 30 },
+        Utc::now(),
+    );
+    ledger.consumed_seconds = 1_800;
+    pair.follower
+        .review_store()
+        .unwrap()
+        .review_import_claimed_ledger(&follower_workspace, &ledger)
+        .unwrap();
+    let branch = format!("orbit/{task}-kept");
+    let head = "e".repeat(40);
+    let base = "c".repeat(40);
+    let mut state = pair
+        .follower_jobs
+        .read_run_state(&leaf)
+        .unwrap()
+        .unwrap_or_else(|| PipelineState::new(leaf.clone(), LEAF_JOB.into(), json!({})));
+    for (step, output) in [
+        ("commit", json!({"commit_sha": head})),
+        (
+            "prepare_branch",
+            json!({"head": branch, "head_sha": head, "base": "main", "base_sha": base}),
+        ),
+        (
+            "sync_base",
+            json!({"head": branch, "head_sha": head, "base": "main", "base_sha": base}),
+        ),
+        ("review_gate_admit", json!({"admitted": true})),
+    ] {
+        state.pipeline[step] = output;
+    }
+    state.final_recovery = Some(FinalRecoveryCheckpoint {
+        key: FinalRecoveryKey {
+            run_id: leaf.clone(),
+            attempt: 1,
+        },
+        failed_step_id: "review_gate_settle".into(),
+        task_id: task.clone(),
+        observed: None,
+        repair_commit: None,
+        resume_context: None,
+        base_ref: Some("main".into()),
+        admitted_at: Utc::now(),
+        decision: Some(FinalRecoveryDecision::Escalate {
+            diagnosis: "review budget exhausted".into(),
+            human_action: "Authorize a review reset".into(),
+        }),
+        outcome: Some("settled: recorded for the claim settlement".into()),
+    });
+    pair.follower.write_run_state(&leaf, &state).unwrap();
+    pair.leaf_fails_with(
+        &leaf,
+        "review_budget_exhausted: review_minutes_exhausted for this claim's lineage",
+    );
+    pair.pass_over(&drain, json!({"window_expired": true}));
+    assert_eq!(
+        pair.owner_claim(&first.claim_id)["claim"]["phase"],
+        "failed"
+    );
+    assert_eq!(pair.owner_status(&task), "blocked");
+
+    let comments = comments_of(&pair.owner_task(&task));
+    let requeue = format!("task requeue {task} --reason ");
+    assert!(
+        comments.contains(&requeue) && comments.contains("continues the candidate this claim kept"),
+        "the escalation names the owner's requeue onto the kept candidate: {comments}"
+    );
+    assert!(
+        !comments.contains(&format!("job resume {leaf}"))
+            && !comments.contains("task review-reset"),
+        "a claimed leaf is never reset and resumed: {comments}"
+    );
+
+    // The operator runs the requeue the action names.
+    pair.wire
+        .owner
+        .requeue_blocked_task(
+            &task,
+            "requeue after the claimed leaf exhausted its review budget",
+            false,
+        )
+        .expect("the owner requeues the blocked task");
+    assert_eq!(pair.owner_status(&task), "backlog");
+
+    let drain = pair.run_drain();
+    let next = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&next), task, "the task is pulled again");
+    let record = pair.admission(&next);
+    let second = record
+        .receipt
+        .as_ref()
+        .and_then(|receipt| receipt.claim.clone())
+        .expect("a new claim");
+    assert_ne!(
+        second.claim_id, first.claim_id,
+        "the continuation is a new admission"
+    );
+    assert_eq!(record.leaf_run_id.as_deref(), Some(next.as_str()));
+    assert_eq!(
+        pair.owner_claim(&second.claim_id)["bound_run"]["run_id"],
+        next.as_str(),
+        "the owner binds the new claim to the new leaf only"
+    );
+    let offered = super::candidate_carry::claim_candidate(&pair, &next)
+        .expect("the requeue keeps the candidate");
+    assert_eq!(
+        (offered.branch.as_str(), offered.head_sha.as_str()),
+        (branch.as_str(), head.as_str())
+    );
+
+    assert_eq!(
+        pair.owner_claim(&first.claim_id)["claim"]["phase"],
+        "failed",
+        "the failed claim never regains authority"
+    );
+}
+
+/// [ORB-16770] A claimed leaf that failed before its commit keeps no
+/// candidate: the owner's task records none, and its requeue says nothing is
+/// resumed. One that kept a candidate has it recorded on the task; once the
+/// task's specification changes its requeue is refused, as a published
+/// candidate's is, and `--discard-candidate` makes the next claim implement
+/// fresh.
+#[test]
+fn a_claimed_requeue_resumes_only_a_kept_candidate_the_task_still_answers_to() {
+    use orbit_types::task::CLAIM_CANDIDATE_KEPT_EVENT;
+
+    if !isolated(
+        module_path!(),
+        "a_claimed_requeue_resumes_only_a_kept_candidate_the_task_still_answers_to",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let kept_records = |task: &str| {
+        pair.wire
+            .owner
+            .get_task_history(task)
+            .unwrap()
+            .into_iter()
+            .filter(|entry| entry.event == CLAIM_CANDIDATE_KEPT_EVENT)
+            .count()
+    };
+
+    // The implementer failed before the leaf committed anything.
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    pair.leaf_fails_with(&leaf, "the implementer failed before committing");
+    pair.pass_over(&drain, json!({"window_expired": true}));
+    assert_eq!(pair.owner_status(&task), "blocked");
+    assert_eq!(kept_records(&task), 0, "no candidate, no record");
+    let requeued = pair
+        .wire
+        .owner
+        .requeue_blocked_task(&task, "nothing to keep", false)
+        .expect("the owner requeues the blocked task");
+    assert!(requeued["resumes"].is_null(), "{requeued:#}");
+    assert!(
+        requeued["next_step"]
+            .as_str()
+            .unwrap()
+            .contains("no published or kept candidate"),
+        "{requeued:#}"
+    );
+
+    // The next leaf commits and pushes its candidate, then fails.
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), task, "the task is pulled again");
+    let branch = format!("orbit/{task}-kept");
+    let head = "e".repeat(40);
+    let base = "c".repeat(40);
+    let mut state = pair
+        .follower_jobs
+        .read_run_state(&leaf)
+        .unwrap()
+        .unwrap_or_else(|| PipelineState::new(leaf.clone(), LEAF_JOB.into(), json!({})));
+    for (step, output) in [
+        ("commit", json!({"commit_sha": head})),
+        (
+            "prepare_branch",
+            json!({"head": branch, "head_sha": head, "base": "main", "base_sha": base}),
+        ),
+        (
+            "sync_base",
+            json!({"head": branch, "head_sha": head, "base": "main", "base_sha": base}),
+        ),
+        ("review_gate_admit", json!({"applies": false})),
+        ("review_gate_settle", json!({"applies": false})),
+        ("validate", json!({"decision": "passed"})),
+        ("push", json!({"branch": branch, "local_sha": head})),
+    ] {
+        state.pipeline[step] = output;
+    }
+    pair.follower.write_run_state(&leaf, &state).unwrap();
+    pair.leaf_fails_with(&leaf, "pr_open failed after the push");
+    pair.pass_over(&drain, json!({"window_expired": true}));
+    assert_eq!(pair.owner_status(&task), "blocked");
+    assert_eq!(kept_records(&task), 1, "the kept candidate is recorded");
+
+    // The operator rewrites the task: the candidate implements the old one.
+    pair.wire
+        .owner
+        .update_task_as_human(
+            &task,
+            orbit_core::application::task::TaskUpdateParams {
+                description: Some("A rewritten task the candidate does not implement.".into()),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .expect("the operator edits the task");
+    let refused = pair
+        .wire
+        .owner
+        .requeue_blocked_task(&task, "keep the candidate", false)
+        .expect_err("a candidate the task outgrew is not resumed");
+    let refused = refused.to_string();
+    assert!(
+        refused.contains("specification changed")
+            && refused.contains(&head)
+            && refused.contains("--discard-candidate"),
+        "{refused}"
+    );
+    assert_eq!(pair.owner_status(&task), "blocked", "nothing was changed");
+
+    let discarded = pair
+        .wire
+        .owner
+        .requeue_blocked_task(&task, "start over on the rewritten task", true)
+        .expect("the owner discards the candidate");
+    assert!(discarded["resumes"].is_null(), "{discarded:#}");
+    assert_eq!(discarded["candidate_discarded"], true, "{discarded:#}");
+    let drain = pair.run_drain();
+    let next = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&next), task, "the task is pulled again");
+    assert!(
+        super::candidate_carry::claim_candidate(&pair, &next).is_none(),
+        "the next claim implements fresh"
+    );
+}
+
+/// [ORB-16782] Claim A keeps a durable candidate. Claim B then fails before
+/// keeping one. Requeue of B reports the candidate the next admission offers,
+/// not "nothing was recorded". A specification change refuses that same
+/// candidate, and discarding it leaves the following claim nothing to resume.
+#[test]
+fn a_later_candidateless_claim_requeues_onto_the_kept_candidate() {
+    if !isolated(
+        module_path!(),
+        "a_later_candidateless_claim_requeues_onto_the_kept_candidate",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let requeue_note = |task: &str| {
+        pair.wire
+            .owner
+            .get_task_history(task)
+            .unwrap()
+            .into_iter()
+            .rev()
+            .find(|entry| entry.event == "operator_requeued")
+            .and_then(|entry| entry.note)
+            .unwrap_or_default()
+    };
+
+    // Claim A commits and pushes its candidate, then fails.
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let branch = format!("orbit/{task}-kept");
+    let head = "e".repeat(40);
+    let base = "c".repeat(40);
+    let mut state = pair
+        .follower_jobs
+        .read_run_state(&leaf)
+        .unwrap()
+        .unwrap_or_else(|| PipelineState::new(leaf.clone(), LEAF_JOB.into(), json!({})));
+    for (step, output) in [
+        ("commit", json!({"commit_sha": head})),
+        (
+            "prepare_branch",
+            json!({"head": branch, "head_sha": head, "base": "main", "base_sha": base}),
+        ),
+        (
+            "sync_base",
+            json!({"head": branch, "head_sha": head, "base": "main", "base_sha": base}),
+        ),
+        ("review_gate_admit", json!({"applies": false})),
+        ("review_gate_settle", json!({"applies": false})),
+        ("validate", json!({"decision": "passed"})),
+        ("push", json!({"branch": branch, "local_sha": head})),
+    ] {
+        state.pipeline[step] = output;
+    }
+    pair.follower.write_run_state(&leaf, &state).unwrap();
+    pair.leaf_fails_with(&leaf, "pr_open failed after the push");
+    pair.pass_over(&drain, json!({"window_expired": true}));
+    assert_eq!(pair.owner_status(&task), "blocked");
+
+    let kept = pair
+        .wire
+        .owner
+        .requeue_blocked_task(&task, "keep the pushed candidate", false)
+        .expect("the owner requeues onto the candidate claim A kept");
+    assert_eq!(kept["resumes"]["source"], "claim", "{kept:#}");
+    assert_eq!(kept["resumes"]["head_sha"], head.as_str(), "{kept:#}");
+    assert_eq!(kept["resumes"]["branch"], branch.as_str(), "{kept:#}");
+    assert!(
+        requeue_note(&task).contains("its claim kept"),
+        "the keeping claim is the stopped run: {}",
+        requeue_note(&task)
+    );
+
+    // Claim B fails before it produces a candidate, as a worktree setup
+    // failure does. Admission still offered A's candidate to this claim.
+    let drain = pair.run_drain();
+    let later = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&later), task, "the task is pulled again");
+    let offered = super::candidate_carry::claim_candidate(&pair, &later)
+        .expect("claim B is offered the candidate A kept");
+    assert_eq!(
+        (offered.branch.as_str(), offered.head_sha.as_str()),
+        (branch.as_str(), head.as_str())
+    );
+    pair.leaf_fails_with(&later, "worktree setup failed before a candidate");
+    pair.pass_over(&drain, json!({"window_expired": true}));
+    assert_eq!(pair.owner_status(&task), "blocked");
+
+    let again = pair
+        .wire
+        .owner
+        .requeue_blocked_task(&task, "the later claim kept nothing", false)
+        .expect("requeue still names the candidate the next claim resumes");
+    assert_eq!(again["resumes"]["source"], "claim", "{again:#}");
+    assert_eq!(again["resumes"]["head_sha"], head.as_str(), "{again:#}");
+    assert_eq!(again["resumes"]["branch"], branch.as_str(), "{again:#}");
+    assert_eq!(again["resumes"]["host_local"], false, "{again:#}");
+    assert!(
+        !again["next_step"]
+            .as_str()
+            .unwrap()
+            .contains("no published or kept candidate"),
+        "{again:#}"
+    );
+    assert!(
+        requeue_note(&task).contains("an earlier claim kept")
+            && requeue_note(&task).contains(&head),
+        "a candidate-less later claim is not named as the keeper: {}",
+        requeue_note(&task)
+    );
+
+    // The next admission offers that same candidate.
+    let drain = pair.run_drain();
+    let next = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&next), task, "the task is pulled again");
+    let offered = super::candidate_carry::claim_candidate(&pair, &next)
+        .expect("admission offers the candidate requeue reported");
+    assert_eq!(
+        (offered.branch.as_str(), offered.head_sha.as_str()),
+        (branch.as_str(), head.as_str())
+    );
+
+    // That claim also ends without a candidate, so the effective one is
+    // still A's when the operator changes the specification.
+    pair.leaf_fails_with(&next, "worktree setup failed before a candidate");
+    pair.pass_over(&drain, json!({"window_expired": true}));
+    assert_eq!(pair.owner_status(&task), "blocked");
+    pair.wire
+        .owner
+        .update_task_as_human(
+            &task,
+            orbit_core::application::task::TaskUpdateParams {
+                description: Some("A rewritten task the candidate does not implement.".into()),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .expect("the operator edits the task");
+    let refused = pair
+        .wire
+        .owner
+        .requeue_blocked_task(&task, "keep the candidate", false)
+        .expect_err("a candidate the task outgrew is not resumed");
+    let refused = refused.to_string();
+    assert!(
+        refused.contains("specification changed")
+            && refused.contains(&head)
+            && refused.contains("--discard-candidate"),
+        "{refused}"
+    );
+    assert_eq!(pair.owner_status(&task), "blocked", "nothing was changed");
+
+    let discarded = pair
+        .wire
+        .owner
+        .requeue_blocked_task(&task, "start over on the rewritten task", true)
+        .expect("the owner discards the candidate");
+    assert!(discarded["resumes"].is_null(), "{discarded:#}");
+    assert_eq!(discarded["candidate_discarded"], true, "{discarded:#}");
+    let drain = pair.run_drain();
+    let fresh = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&fresh), task, "the task is pulled again");
+    assert!(
+        super::candidate_carry::claim_candidate(&pair, &fresh).is_none(),
+        "a discarded candidate is not offered for resumption"
     );
 }

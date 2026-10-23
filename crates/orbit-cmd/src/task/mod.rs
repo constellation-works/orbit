@@ -2,6 +2,3 @@
 
 pub mod owner;
 pub mod store;
-
-#[cfg(test)]
-mod tests;

@@ -1,73 +1,41 @@
-use clap::{Args, Subcommand};
-use orbit_core::OrbitRuntime;
+//! The auto-task CLI, derived from the auto-task operation registry.
+//!
+//! Flags, help text and input projection are declared once in
+//! `orbit_common::governance::auto_task::operations`; the clap tree is the
+//! noun-agnostic adapter in [`super::super::operation_args`]. Every verb runs
+//! through the tool, including the CLI-only ones.
+//!
+//! What stays here is CLI-specific: [`prepare`] composes the per-field flags
+//! into the tool's structured fields, and [`render`] builds the text output.
+//! Both are exhaustive matches on [`AutoTaskVerb`].
 
+use clap::Args;
+use orbit_common::governance::auto_task::AutoTaskVerb;
+use orbit_core::OrbitRuntime;
+use serde_json::Value;
+
+use super::super::operation_args::Invocation;
+use super::prepare::prepare;
+use super::render::render;
 use crate::command::{CommandOut, Execute};
 
-use super::add::AutoTaskAddArgs;
-use super::delete::AutoTaskDeleteArgs;
-use super::list::AutoTaskListArgs;
-use super::mint::AutoTaskMintArgs;
-use super::recover::AutoTaskRecoverArgs;
-use super::reset::AutoTaskResetArgs;
-use super::restore::AutoTaskRestoreArgs;
-use super::show::AutoTaskShowArgs;
-use super::toggle::AutoTaskToggleArgs;
-use super::update::AutoTaskUpdateArgs;
-
 #[derive(Args)]
-#[command(about = "Define and manage recurring auto-task templates")]
+#[command(about = orbit_common::governance::auto_task::AUTO_TASK.cli_about)]
 pub struct AutoTaskCommand {
     #[command(subcommand)]
-    pub command: AutoTaskSubcommand,
+    pub command: Invocation<AutoTaskVerb>,
 }
 
 impl Execute for AutoTaskCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        self.command.execute(runtime)
-    }
-}
-
-#[derive(Subcommand)]
-pub enum AutoTaskSubcommand {
-    /// Create a new auto-task definition
-    Add(AutoTaskAddArgs),
-    /// List every auto-task definition in this workspace
-    List(AutoTaskListArgs),
-    /// Show a single definition by name
-    Show(AutoTaskShowArgs),
-    /// Update an existing definition (present fields only)
-    Update(AutoTaskUpdateArgs),
-    /// Enable or disable a definition (the kill-switch; not a delete)
-    Toggle(AutoTaskToggleArgs),
-    /// Delete a definition with its scheduler cursor and delivery consumer
-    /// state; a deleted shipped default stays out of later reseeds
-    Delete(AutoTaskDeleteArgs),
-    /// Reinstate a deleted shipped default with its shipped content
-    Restore(AutoTaskRestoreArgs),
-    /// Mint a task from a definition now (ignores schedule, dedupe, and
-    /// `enabled`; leaves the scheduler cursor untouched)
-    Mint(AutoTaskMintArgs),
-    /// Preview or apply the audited recovery for a delivery consumer stalled
-    /// by a settings change (retains all coverage debt)
-    Recover(AutoTaskRecoverArgs),
-    /// Preview or apply the audited reset of a delivery consumer: forget its
-    /// coverage debt and re-baseline at the branch head
-    Reset(AutoTaskResetArgs),
-}
-
-impl Execute for AutoTaskSubcommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        match self {
-            AutoTaskSubcommand::Add(args) => args.execute(runtime),
-            AutoTaskSubcommand::List(args) => args.execute(runtime),
-            AutoTaskSubcommand::Show(args) => args.execute(runtime),
-            AutoTaskSubcommand::Update(args) => args.execute(runtime),
-            AutoTaskSubcommand::Toggle(args) => args.execute(runtime),
-            AutoTaskSubcommand::Delete(args) => args.execute(runtime),
-            AutoTaskSubcommand::Restore(args) => args.execute(runtime),
-            AutoTaskSubcommand::Mint(args) => args.execute(runtime),
-            AutoTaskSubcommand::Recover(args) => args.execute(runtime),
-            AutoTaskSubcommand::Reset(args) => args.execute(runtime),
-        }
+        let Invocation { spec, mut input } = self.command;
+        let filter = prepare(spec.verb, &mut input)?;
+        let name = input
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
+        render(spec.verb, &name, value, filter)
     }
 }

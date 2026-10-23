@@ -1,9 +1,6 @@
 #![allow(missing_docs)]
 
 mod add;
-mod blocked_recovery;
-mod contention;
-mod final_recovery;
 mod lifecycle;
 mod paths;
 mod transitions;

@@ -1,0 +1,35 @@
+Inspect, reserve, and release task file locks
+
+Usage: orbit task locks [OPTIONS] <COMMAND>
+
+Commands:
+  list        Show files locked by active (in-progress/review) tasks and reservations
+  contention  Show which files the pending backlog collides on (what caps parallelism)
+  reserve     Claim a file surface for a bounded window before starting work on it
+  release     Release a stale task lock reservation (operator/admin escape hatch)
+
+Options:
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')

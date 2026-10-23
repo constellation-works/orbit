@@ -14,12 +14,10 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::canonical_selector_in_workspace;
-use orbit_types::task::{
-    Task, TaskStatus, automatic_dispatch_cmp_for_host, satisfy_completed_archived_dependencies,
-};
+use orbit_types::task::{Task, TaskStatus, satisfy_completed_archived_dependencies};
 
 use super::TaskCommitBoundary;
-use super::admission::{canonical_footprint, os_unavailable, overlaps};
+use super::admission::{canonical_footprint, overlaps};
 use super::lifecycle::DrainReleases;
 use crate::contracts::*;
 use crate::repository::task::v2::{TaskV2Store, task_history_from_events};
@@ -74,6 +72,12 @@ pub(super) struct Screen<'a> {
     /// Each task the owner's local drain admitted whose gate may not have
     /// reserved yet, with its footprint [ORB-15514].
     pub(super) owner_wave: &'a [(String, Vec<String>)],
+    /// Crew name to its executor `host_os`, when the executor declares one.
+    pub(super) executor_host_os:
+        &'a std::collections::BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
+    /// The requester's census row, upserted with whatever receipt this
+    /// admission commits [ORB-17304]; absent for the owner's own identity.
+    pub(super) census: Option<&'a ExecutorCensusEntry>,
 }
 
 impl Screen<'_> {
@@ -151,8 +155,16 @@ impl Screen<'_> {
         // A task whose `os:` tags the executor's OS does not satisfy stays
         // for a host that does, rather than being claimed and failed. The
         // tags are read at each admission, so a retag applies to the next.
-        if let Some(reason) = os_unavailable(task, request) {
+        if let Some(reason) = os_unavailable(request.os, task, self.executor_host_os) {
             receipt.os_unavailable.push(diagnostic(reason, Vec::new()));
+            return None;
+        }
+        // Nor one tagged `ui` that the executor has no verified browser kit
+        // to render.
+        if let Some(reason) = browser_kit_unavailable(request.browser_kit, task) {
+            receipt
+                .browser_kit_unavailable
+                .push(diagnostic(reason, Vec::new()));
             return None;
         }
         // A task the executor cannot run stays for the owner or another
@@ -167,8 +179,21 @@ impl Screen<'_> {
                 .push(diagnostic(reason, Vec::new()));
             return None;
         }
-        // Nor one this drain already gave back for its host's failure, nor
-        // any task once a release blamed the host whatever crew runs there
+        // Nor one whose work the executor's host load forecast has no room
+        // for: it stays until that host has room, or for another host.
+        if let Some(reason) = request
+            .admissible
+            .as_ref()
+            .and_then(|fit| fit.unfit_reason(task))
+        {
+            receipt
+                .capacity_unavailable
+                .push(diagnostic(reason, Vec::new()));
+            return None;
+        }
+        // Nor one this drain already gave back after an operator cancel or
+        // its host's failure, nor any task once a release blamed the host
+        // whatever crew runs there
         // [ORB-14257]; they stay for another host or a later drain.
         if let Some((why, release)) = self
             .drain_released
@@ -239,7 +264,6 @@ impl TaskCommitBoundary {
     /// (shared) boundary, with the statuses the backlog's dependencies have.
     pub(super) fn admission_snapshot(
         &self,
-        request: &AdmissionRequest,
         ordering: &AdmissionOrdering,
     ) -> Result<AdmissionSnapshot, OrbitError> {
         self.enter_ordinary(|| {
@@ -271,16 +295,13 @@ impl TaskCommitBoundary {
                     _ => {}
                 }
             }
-            backlog.sort_by(|left, right| {
-                automatic_dispatch_cmp_for_host(
-                    left,
-                    ordering.expiring_tasks.contains(&left.id),
-                    right,
-                    ordering.expiring_tasks.contains(&right.id),
-                    ordering.owner_os,
-                    request.os,
-                )
-            });
+            census_dispatch_order(
+                &mut backlog,
+                |id| ordering.expiring_tasks.contains(id),
+                ordering.census.as_ref(),
+                ordering.affinity,
+                &ordering.executor_host_os,
+            );
             let dependencies = backlog.iter().flat_map(Task::dependencies).collect();
             // `Host` reaches every partition, so it reads every dependency.
             let statuses = self

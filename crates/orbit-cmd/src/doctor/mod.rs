@@ -45,10 +45,12 @@ use serde::Serialize;
 use crate::task_store;
 
 mod automation;
+mod browser_kit;
 mod commands;
 mod git_protection;
 mod permissions;
 mod report;
+mod retired_config;
 mod system;
 mod task;
 mod worker_containment;
@@ -64,6 +66,7 @@ pub use commands::{
 pub use report::{
     doctor_report_probes, doctor_row_json, provider_limit_findings, run_doctor_report,
 };
+pub use retired_config::RetiredConfigKeyRepair;
 pub(crate) use system::{collect_lock_files, disk_space_check, process_is_alive};
 use task::*;
 use workspace::*;

@@ -7,18 +7,34 @@ use super::*;
 /// copies on write, while a write with no live snapshot mutates in place.
 pub(super) type PipelineSteps = Arc<HashMap<String, Value>>;
 
+pub(super) const CONFLICT_DIAGNOSTIC_KEYS: [&str; 2] = ["conflicting_paths", "conflicting_files"];
+
 pub(super) struct ExecCtx<'a> {
     pub(super) run_id: String,
     pub(super) audit: Arc<V2AuditWriter>,
     pub(super) host: &'a dyn RuntimeHost,
     pub(super) input: Value,
     pub(super) pipeline: Arc<Mutex<PipelineSteps>>,
+    /// Latest allowlisted conflict diagnostics, keyed by step id. Kept outside
+    /// the usable pipeline so they cannot satisfy templates or skip a step.
+    /// Nested contexts share this map. A newer conflict replaces both keys,
+    /// including explicit empty lists; final recovery clears pipeline entries
+    /// and does not clear this map, so a later success checkpoint cannot
+    /// resurrect the seed from the incomplete checkpoint.
+    pub(super) resumed_diagnostics: Arc<Mutex<HashMap<String, Value>>>,
     pub(super) recovery_activity: Option<ResolvedRecoveryActivity>,
     pub(super) failure_activity: Option<ResolvedRecoveryActivity>,
     /// [ORB-13907] The job's final recovery hook. Only the top-level context
     /// carries it: the hook answers for a failed top-level step, so nested
     /// block contexts leave it `None`.
     pub(super) final_recovery_activity: Option<ResolvedRecoveryActivity>,
+    /// The job's own `step_failure_recovery`, as its steps declare it. An
+    /// `--auto-fix` check repair the completion watcher admitted is routed
+    /// to it from a step whose recovery is the conflict leaf.
+    pub(super) check_repair_activity: Option<ResolvedRecoveryActivity>,
+    /// Top-level rebase step ids whose resolved continuation will execute host
+    /// validation. Computed after job validation; nested contexts clear it.
+    pub(super) recovery_validation_continuations: std::collections::HashSet<String>,
     /// `Some(value)` inside a fan-out worker. Rendered into template context
     /// as `{{ item }}`.
     pub(super) item: Option<Value>,
@@ -113,6 +129,20 @@ pub(super) struct StepOutcome {
 pub(super) fn record_pipeline(ctx: &ExecCtx<'_>, key: &str, v: Value) {
     let mut steps = ctx.pipeline.lock().unwrap_or_else(PoisonError::into_inner);
     Arc::make_mut(&mut steps).insert(key.to_string(), wrap_step_output(v));
+}
+
+/// Replace the step's allowlisted conflict diagnostics with the evidence from
+/// the conflict just observed.
+///
+/// `diagnostic` carries both keys. An empty list is a present value and must
+/// win over paths resumed from an older stop. The usable pipeline is separate
+/// and may be cleared by final recovery; this map is the source a later
+/// success checkpoint reads.
+pub(super) fn record_conflict_diagnostics(ctx: &ExecCtx<'_>, step_id: &str, diagnostic: &Value) {
+    ctx.resumed_diagnostics
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(step_id.to_string(), diagnostic.clone());
 }
 
 // ---------------------------------------------------------------------------

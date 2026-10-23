@@ -3,30 +3,44 @@
 mod add;
 mod baseline_hold;
 mod baseline_repair;
-mod blocked_recovery;
+pub(crate) use baseline_repair::BASELINE_RED_REPAIR_TAG;
+pub(crate) mod blocked_recovery;
 pub(crate) mod contention;
 mod context_repair;
 mod context_widening;
 mod desktop;
+mod external_merge;
+mod proposed;
+pub use proposed::ProposedTaskInput;
 mod provider_hold;
 pub(crate) mod provider_limit;
 pub(crate) use desktop::HandoffPullRequest;
 mod final_recovery;
 mod finding_verification;
+pub(crate) mod finding_verification_steps;
 mod helpers;
+pub(crate) mod legacy_decisions;
 mod lifecycle;
+pub(crate) mod light_delivery;
 mod lint;
 mod listing;
+mod os_readout;
 mod params;
 mod paths;
-mod pilot;
+pub(crate) mod pilot;
+mod post_deploy;
 mod pr_closure;
 mod pull_request_links;
 mod query;
 mod record_json;
 mod records;
+mod requeue;
 mod resolves;
 mod retained_candidate;
+pub(crate) use retained_candidate::RetainedCandidate;
+mod screened;
+mod steering;
+mod transient_infra;
 mod transitions;
 mod update;
 pub(crate) mod validation_tools;
@@ -41,12 +55,16 @@ pub(crate) use blocked_recovery::{
     BACKSTOP_DECISIONS, BACKSTOP_LANE_CONTRACT, BlockedRecoveryPreparation, recovery_checkout_path,
 };
 pub use blocked_recovery::{
-    BLOCKED_TASK_RECOVERY_JOB, BlockEpisode, BlockSource, BlockedRecoveryInput,
-    BlockedRecoveryTick, BlockedRecoveryView, EpisodeDisposition, FinalRecoveryRecord,
-    MAX_ACTIVE_BLOCKED_RECOVERIES, MAX_EPISODE_AGE_HOURS, episode_disposition,
+    BLOCKED_TASK_RECOVERY_JOB, BLOCKED_TASK_TRIAGED_EVENT, BlockEpisode, BlockSource,
+    BlockTriageDecision, BlockTriageRequest, BlockedNextStep, BlockedRecoveryInput,
+    BlockedRecoveryTick, BlockedRecoveryView, BlockedTriageView, EpisodeDisposition,
+    FinalRecoveryRecord, MAX_ACTIVE_BLOCKED_RECOVERIES, MAX_EPISODE_AGE_HOURS, TriageBasis,
+    TriageCandidacy, TriageEpisode, TriageOption, episode_disposition, triage_candidacy,
 };
 pub use contention::{LockContentionHotspot, LockContentionReport};
-pub use context_repair::ContextFileRestoration;
+pub use context_repair::{
+    CONTEXT_REPAIR_SWEEP_STATUSES, ContextFileRestoration, ContextRepairCandidate,
+};
 pub use final_recovery::{
     FINAL_RECOVERY_REQUEUED_EVENT, FinalRecoveryCompletion, FinalRecoveryOutcome,
     FinalRecoveryRequest, FinalRecoveryRequeueBound, FinalRecoveryTaskRevision,
@@ -58,38 +76,49 @@ pub use finding_verification::{
 };
 pub(crate) use finding_verification::{
     UNVERIFIED_REVIEW_FINDING, VERIFIABLE_STATUSES, VerdictWrite, VerifierAssignment,
-    finding_fingerprint, needs_verification, next_tier,
+    finding_fingerprint, latest_verification, needs_verification, next_tier,
 };
 pub use lint::{TaskLintFinding, TaskLintReport, TaskLintSeverity};
 pub use listing::{
     TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskListQuery, TaskPage,
     TaskRow,
 };
-pub(crate) use listing::{TaskEligibilityQuery, list_task_metadata_in};
+pub(crate) use listing::{TaskEligibilityQuery, metadata_task};
+pub use os_readout::TaskOsReadout;
 pub(crate) use params::TaskRecordUpdateParams;
 pub use params::{TaskAddParams, TaskUpdateParams};
 pub use paths::ContextCreationAuthorization;
+pub use pilot::task_pilot_warnings;
 pub(crate) use pilot::{
     HostOperationalHold, MachineRequirement, NativeOsHold, NativeOsRequirement, NoDiffClosure,
     OperatorValidationHold, OperatorValidationRequirement, PILOT_VERIFIED_NO_DIFF,
     PilotAdmissionHold, VerifiedNoDiff, normalize_pilot_self_blockers,
     operator_validation_requirements, pilot_blocker_task_ids,
 };
+pub(crate) use post_deploy::owed_criteria_json;
 pub use provider_limit::{
-    CrewProviderLimit, ProviderLimitReading, ProviderLimitsView, ProviderUsageStatus,
-    UngatedLaneLimit, short_time,
+    CrewProviderLimit, ProviderLimitReading, ProviderLimitThreshold, ProviderLimitsView,
+    ProviderUsageStatus, UngatedLaneLimit, short_time,
 };
 pub use pull_request_links::PullRequestLinks;
-pub use record_json::{task_record_json, task_show_field_json};
+pub use record_json::{task_record_json, task_show_field_json, task_show_json};
+pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskWriteScreen};
+pub use transient_infra::TransientInfraBlockedTask;
 pub(crate) use validation_tools::positive_validation_tools;
 
+pub use external_merge::ExternalMergeSettlement;
+pub(crate) use external_merge::settled_merge_commit;
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};
+pub use lifecycle::{
+    EXTERNAL_MERGE_SETTLED_EVENT, task_status_transition_allowed,
+    task_status_transition_required_field,
+};
 pub(crate) use lifecycle::{
-    ensure_completion_run_stopped, ensure_task_has_execution_plan,
+    ensure_completion_run_stopped, ensure_post_deploy_criteria_met, ensure_task_has_execution_plan,
     in_progress_transition_requires_plan, is_operator_rescue_close,
 };
-pub use lifecycle::{task_status_transition_allowed, task_status_transition_required_field};
-pub(crate) use paths::{compute_task_add_warnings, context_workspace_root};
+pub(crate) use paths::context_workspace_root;
+pub(crate) use resolves::pull_request_delivery;
 pub(crate) use update::admit_agent_artifact;
 
 #[cfg(test)]

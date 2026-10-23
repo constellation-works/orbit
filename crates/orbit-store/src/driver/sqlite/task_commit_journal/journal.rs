@@ -1,7 +1,8 @@
 //! Prepare, settle and list task commit journal rows.
 
 use orbit_common::OrbitError;
-use rusqlite::{TransactionBehavior, params};
+use orbit_common::storage::sqlite::sqlite_store_error;
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use crate::Store;
 use crate::contracts::{TaskCommitJournalRecord, TaskCommitJournalState};
@@ -16,7 +17,7 @@ impl Store {
                 [],
                 |row| row.get(0),
             )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         if path.is_empty() {
             return Err(OrbitError::Store(
                 "task coordination requires a file-backed journal".into(),
@@ -53,7 +54,7 @@ impl Store {
                         crate::now_string()
                     ],
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             Ok(())
         })
     }
@@ -85,7 +86,7 @@ impl Store {
                      WHERE journal_id = ?1 AND state = ?4",
                     params![journal_id, state.as_str(), crate::now_string(), from_state],
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             if affected != 1 {
                 return Err(OrbitError::Store(format!(
                     "task commit journal '{journal_id}' is no longer '{from_state}'; \
@@ -95,6 +96,31 @@ impl Store {
             }
             Ok(())
         })
+    }
+
+    /// One journal row's state, or `None` if no such row exists.
+    pub(crate) fn task_commit_journal_state(
+        &self,
+        journal_id: &str,
+    ) -> Result<Option<TaskCommitJournalState>, OrbitError> {
+        let state = self.with_read_connection(|conn| {
+            conn.query_row(
+                "SELECT state FROM task_commit_journal WHERE journal_id = ?1",
+                params![journal_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sqlite_store_error)
+        })?;
+        state
+            .map(|state| {
+                TaskCommitJournalState::parse(&state).ok_or_else(|| {
+                    OrbitError::Store(format!(
+                        "task commit journal '{journal_id}' has unknown state '{state}'"
+                    ))
+                })
+            })
+            .transpose()
     }
 
     /// Every unsettled decision for a workspace, oldest first. Recovery
@@ -111,7 +137,7 @@ impl Store {
                      WHERE workspace_id = ?1 AND state IN ('prepared', 'committed')
                      ORDER BY created_at ASC, journal_id ASC",
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map(params![workspace_id], |row| {
                     Ok((
@@ -123,12 +149,12 @@ impl Store {
                         row.get::<_, Option<String>>(5)?,
                     ))
                 })
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
 
             let mut records = Vec::new();
             for row in rows {
                 let (journal_id, workspace_id, task_id, state, intent_json, reservation_id) =
-                    row.map_err(|error| OrbitError::Store(error.to_string()))?;
+                    row.map_err(sqlite_store_error)?;
                 let state = TaskCommitJournalState::parse(&state).ok_or_else(|| {
                     OrbitError::Store(format!(
                         "task commit journal '{journal_id}' has unknown state '{state}'"

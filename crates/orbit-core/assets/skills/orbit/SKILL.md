@@ -27,6 +27,11 @@ checklist. An injected task snapshot is your starting context.
   the assigned work; the pipeline owns delivery and lifecycle transitions.
 - Verify artifacts, task/run state, diffs and checks. Agent messages are
   advisory. Do not report skipped validation as passing or merged as deployed.
+- To check a UI change in a browser, use the host's headless browser kit:
+  when it is verified, your environment carries `PLAYWRIGHT_MODULE`,
+  `PLAYWRIGHT_BROWSERS_PATH` and `ORBIT_BROWSER_KIT_ENV`. Source
+  `"$ORBIT_BROWSER_KIT_ENV"` in the shell that runs the check
+  ([Task execution](references/task-execution.md#checking-a-ui-in-a-browser)).
 - Use the installed `orbit` binary, never `cargo run -- ...`. Bare
   `orbit task ...` subcommands are the human surface and skip agent
   provenance; agents call `orbit tool run orbit.task.*`. Task IDs come from
@@ -57,7 +62,7 @@ plugin or passing protocol test alone does not prove rendering/context delivery.
 | Implement an assigned task | [Task execution](references/task-execution.md) |
 | Set dependencies, relations or validation tools | [Task fields](references/task-fields.md) |
 | Create or revise a task | [Task authoring](references/task-authoring.md) |
-| Review a deliverable | [Task review](references/task-review.md) |
+| Review a delivered diff | [Task review](references/task-review.md) |
 | Find prior tasks or frictions | [Search](references/search.md) |
 | Record a concrete recurring obstacle | [Friction](references/friction.md) |
 | Resolve tool transport, permissions or workspace routing | [Tool surface](references/tool-surface.md) |
@@ -71,7 +76,13 @@ MCP, automation or upgrade configuration, use [orbit-setup](../orbit-setup/SKILL
 ## Lifecycle essentials
 
 Normal delivery is `proposed → backlog → in-progress → review → done`.
-Starting proposed, someday or blocked work requires a plan and authorization.
-`done` requires review plus durable completion evidence. Terminal work is not
-reopened to fix regressions: create a linked repair task. Follow supported
-transitions and the assigned workflow; agents have no lifecycle force override.
+Moving to `in-progress` requires a plan from every status except `backlog`;
+starting `proposed`, `someday`, or `blocked` work also needs authorization.
+`done` is reachable only from `review` and needs completion evidence. The
+lifecycle table does not reopen `done` or `archived`; file a regression as a
+new task with a `regression_from` relation. Only an operator's
+`orbit task update <id> --status <status> --force` restores them, and
+`orbit task archive <id>` is that table's move to `archived` (`done` and
+`rejected` are not sources). `rejected` returns to `backlog` or
+`in-progress`. Follow supported transitions and the assigned workflow; agents
+have no lifecycle force override.

@@ -1,19 +1,23 @@
-# Task bundle local pipeline.
+# Single-task local delivery pipeline.
+#
+# Admission rejects more than one distinct task before creating a run or worktree.
+# `orbit run ship` and `task_auto_pipeline` coordinate multi-selection as separate
+# singleton leaves. Custom multi-task local jobs must use git_commit scope: per_task.
 #
 # Failure semantics:
-# - `implement_bundle` runs one task at a time in the shared worktree.
+# - `implement_bundle` implements the one admitted task.
 # - If `implement_one` fails, pending changes remain in the shared worktree for inspection.
-# - An implementer-declared blocker (`task_blocked_by_agent`) stops the bundle
+# - An implementer-declared blocker (`task_blocked_by_agent`) stops the leaf
 #   before the next step. Step and final recovery do not run, and pending
 #   changes stay in the worktree.
-# - If all implementations succeed, `commit` snapshots the bundle branch before merge.
+# - If implementation succeeds, `commit` snapshots the task branch before merge.
 # - `validate` runs `workflow.required_validation_commands` on that committed
 #   candidate; a failing command stops the run before anything is merged.
-# - Tasks move to `terminal_status` only after the full bundle commits and merges cleanly.
+# - The task moves to `terminal_status` only after its candidate commits and merges cleanly.
 # - ORB-11187: when the submitting operator authorized completion
 #   (`completion: done`), `complete_tasks` runs *after* `push`, so a failed merge
 #   or a failed push fails the run with the tasks still in `review`. Completion is
-#   never reached by a bundle whose publication did not succeed.
+#   never reached by a leaf whose publication did not succeed.
 #
 schemaVersion: 2
 kind: Job
@@ -32,11 +36,28 @@ spec:
   # live by `orbit run concurrency`) bounds how many of these run at once.
   max_active_runs: 0
   # ORB-13907: once step recovery is spent, a crew from
-  # `workflow.final_recovery_crews` gets one last look and returns a typed
+  # `workflow.purpose_crews.final_recovery` gets one last look and returns a typed
   # decision. `resume` reruns from the failed step or an earlier one of its
   # phase; any other decision is applied by Orbit's deterministic applier.
   # An empty crew pool skips it.
   final_recovery_activity: final_recovery
+  # Mid-run steering's promotion gate (docs/design/mid-run-steering/2_design.md
+  # §3). With `workflow.mid_run_steering.enabled`, the run does not reach
+  # `commit` while an operator comment past its steering watermark is
+  # undelivered. Each refusal spends one of `workflow.mid_run_steering.max_rounds`
+  # steering rounds: `implement_bundle` runs again, even for a carried
+  # candidate, so the implementer's next prompt carries the steering block onto
+  # the candidate still uncommitted in this worktree. When no round is left, or
+  # the last one delivered nothing, the task is blocked as `steering_unconsumed`
+  # naming the outstanding comments. An unreadable gate or a task gone terminal
+  # stops the run before `commit` as well. Steering off, nothing is read.
+  # A candidate `resume_candidate` carries past `implement_bundle` was built by
+  # the run it names as `source_run_id`, so the gate judges from that run's
+  # watermark, never from this run's start.
+  steering_gate:
+    before: commit
+    round: implement_bundle
+    candidate: resume_candidate
   default_input:
     task_ids: []
     auto_push: false
@@ -70,11 +91,11 @@ spec:
 
     # ORB-13985: a task whose last failed run preserved a candidate resumes
     # it rather than re-implementing: the candidate is squash-merged onto
-    # this base. A candidate that failed at `commit` or later runs owner
-    # validation; a pass skips `implement_bundle`. A conflict, failing
-    # validation or review refusal hands the implementer the applied
-    # candidate and that output to repair. A candidate preserved from
-    # `implement_bundle` or any step before `commit` is unfinished
+    # this base. A completed owner-local candidate that failed at `commit`
+    # or later is carried unvalidated and skips `implement_bundle`; the final
+    # gate judges its committed candidate. A conflict or review refusal hands
+    # the implementer the applied candidate and that output to repair. Work
+    # preserved from `implement_bundle` or before `commit` is unfinished
     # (ORB-14024): the implementer always runs on it. A discarded candidate,
     # a changed spec or a bundle implements fresh. ORB-14603: after a failed
     # claim, the candidate the owner kept from it is continued, never a local
@@ -93,7 +114,7 @@ spec:
       when: "{{ steps.resume_candidate.output.implement }} == true"
       loop:
         items: "{{ input.task_ids }}"
-        max_iterations: 256
+        max_iterations: 1
         steps:
           - id: implement_one
             recovery_activity: step_failure_recovery
@@ -105,6 +126,10 @@ spec:
               # ORB-15287: the pinned delivery base a deferred sandbox
               # validation must name.
               base_sha: "{{ steps.worktree.output.base_sha }}"
+              # ORB-15963: `validate` runs the required commands on the final
+              # candidate, so the envelope lists them for the implementer to
+              # leave to it.
+              final_validation: true
               resume_candidate: "{{ steps.resume_candidate.output.repair }}"
 
     - id: commit
@@ -155,7 +180,7 @@ spec:
     - id: mark_review
       loop:
         items: "{{ input.task_ids }}"
-        max_iterations: 256
+        max_iterations: 1
         steps:
           - id: mark_review_one
             target: activity:update_task
@@ -178,7 +203,7 @@ spec:
       when: "{{ input.completion }} == done"
       loop:
         items: "{{ input.task_ids }}"
-        max_iterations: 256
+        max_iterations: 1
         steps:
           - id: complete_one
             target: activity:task_complete

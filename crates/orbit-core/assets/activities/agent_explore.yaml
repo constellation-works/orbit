@@ -1,0 +1,152 @@
+# Read-only exploration an implement or review-repair agent delegates through
+# `orbit.agent.invoke`.
+#
+# The explorer answers one question about the delegating run's own worktree
+# and reports what it read. It runs inside Orbit's executor sandbox under the
+# read-only `reviewer` profile, so a write anywhere in the worktree is denied
+# when that sandbox wraps the provider. Where the wrapper is absent or
+# explicitly off, only a provider with an enforced read-only mode (Codex)
+# starts, in that mode; every other provider is refused before spawn.
+# It carries no trusted-host admission.
+#
+# It has no task-write, lifecycle, dispatch, commit or PR grant, and cannot
+# invoke another agent: the tool policy below refuses those tools, and the
+# admission refuses an invocation whose caller is itself an explorer.
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: agent_explore
+spec:
+  type: agent_loop
+  fsProfile: reviewer
+  require_completion_envelope: true
+  require_response_envelope: true
+  description: >
+    Read-only exploration delegated by an implement or review-repair run.
+    Reads the delegating run's own worktree in Orbit's sandbox, answers its
+    question, and lists the paths it read. Changes no file and no Orbit
+    record.
+  input_schema_json:
+    type: object
+    required: [prompt, workspace_path, cwd, parent_run_id]
+    properties:
+      prompt:
+        type: string
+      # The exact root of the delegating run's worktree: the child cwd.
+      workspace_path:
+        type: string
+      # The same root, declared as the assigned checkout so the engine
+      # validates the pair before it spawns anything.
+      repo_root:
+        type: string
+      # The directory the delegating agent asked about, inside that root.
+      cwd:
+        type: string
+      crew:
+        type: string
+      # Shortens the declared `wall_clock_timeout_seconds` below; it can never
+      # raise it.
+      timeout_seconds:
+        type: integer
+        minimum: 1
+        maximum: 3600
+      parent_run_id:
+        type: string
+      parent_task_id:
+        type: string
+      parent_activity:
+        type: string
+  output_schema_json:
+    type: object
+    required: [summary, paths_read]
+    properties:
+      summary:
+        type: string
+      findings:
+        type: array
+        items:
+          type: string
+      paths_read:
+        type: array
+        items:
+          type: string
+  instruction: |
+    You are a read-only explorer. Another agent, working on a change in this
+    checkout, delegated one question to you.
+
+    Input contains `prompt` (the question), `workspace_path` (the checkout
+    root you start in) and `cwd` (the directory the question is about, inside
+    that root).
+
+    Answer the question by reading files, searching and inspecting history.
+    Be concise and concrete: name files, symbols and `path:line` evidence the
+    delegating agent can act on.
+
+    Hard bounds — these are contract, not preference:
+    - Do not modify, create or delete any file. The checkout is read-only to
+      you and a write is denied.
+    - Do not run builds, tests, formatters or other validation, and do not
+      commit, push or touch a pull request.
+    - Do not change Orbit task state, dispatch work, submit a run or invoke
+      another agent.
+
+    Return exactly one Orbit response envelope:
+    {"schemaVersion":1,"status":"success","result":{
+      "summary":"the answer, in one or two paragraphs",
+      "findings":["concrete finding with its path:line evidence"],
+      "paths_read":["repository-relative path of every file you read"]
+    },"error":null}
+
+    `paths_read` is required: list every file you opened, relative to
+    `workspace_path`. If you could not answer, return the same envelope with
+    `"status":"failed"` and a non-empty `error.message` saying what blocked
+    you.
+  tool_disallow_list:
+    - orbit.agent.invoke
+    - orbit.auto_task.add
+    - orbit.auto_task.mint
+    - orbit.auto_task.update
+    - orbit.command.exec
+    - orbit.pipeline.invoke
+    - orbit.routine.control
+    - orbit.workflow.auto
+    - orbit.workflow.run.resume
+    - orbit.workflow.ship
+    - orbit.task.add
+    - orbit.task.update
+    - orbit.task.artifact.put
+    - orbit.task.pull
+    - orbit.task.reconcile_review
+    - orbit.task.requeue
+    - orbit.task.retry_handoff
+    - orbit.task.review_reset
+    - orbit.friction.add
+    - orbit.friction.update
+  proc_disallowed_programs:
+    - sudo
+    - su
+    - doas
+    - pkexec
+    - ssh
+    - scp
+    - sftp
+    - rsync
+    - nc
+    - ncat
+    - netcat
+    - socat
+    - systemctl
+    - loginctl
+    - shutdown
+    - reboot
+    - mount
+    - umount
+    - chroot
+    - nsenter
+    - unshare
+    - docker
+    - podman
+  on_denial: terminate
+  # `workflow.explore.timeout_seconds` is at most this; the engine shortens
+  # it to the admitted bound, never extends it.
+  wall_clock_timeout_seconds: 3600

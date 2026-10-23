@@ -244,6 +244,7 @@ impl ReviewedLeaf {
                 control: None,
                 sources: Vec::new(),
                 mutation_target: Vec::new(),
+                repaired_blob: Default::default(),
                 deferred: Vec::new(),
                 baseline: None,
             }],
@@ -317,6 +318,7 @@ impl ReviewedLeaf {
                 repository: REPOSITORY.into(),
             }),
             known_red: vec![],
+            light_delivery: Vec::new(),
         };
         self.pair
             .wire
@@ -358,6 +360,7 @@ impl ReviewedLeaf {
                 control: None,
                 sources: Vec::new(),
                 mutation_target: Vec::new(),
+                repaired_blob: Default::default(),
                 deferred: Vec::new(),
                 baseline: None,
             })
@@ -395,6 +398,7 @@ impl ReviewedLeaf {
         jobs.complete_job_run_step(
             &self.leaf,
             &JobRunStepParams {
+                lock_wait_ms: None,
                 step_index: 0,
                 target_type: JobTargetType::Activity,
                 target_id: step.into(),
@@ -576,14 +580,7 @@ pub(super) fn revision(repo: &Path, spec: &str) -> SourceRevision {
 /// and verdict comment land on the owner's task, the attempt ledger stays on
 /// the follower, and the owner accepts the handoff carrying the settled
 /// verdict and moves the task to `review`.
-#[test]
 fn a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence",
-    ) {
-        return;
-    }
     let mut leaf = ReviewedLeaf::admit();
     let pair = &leaf.pair;
     let pulls = pair.wire.calls("orbit.task.pull");
@@ -690,17 +687,75 @@ fn a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence() {
     );
 }
 
+/// Reviewer-baseline known reds travel in the certificate. The leaf owns
+/// no task row; accepting and replaying the handoff records the decision once.
+#[test]
+fn claimed_baseline_known_red_is_recorded_only_on_the_owner() {
+    use orbit_types::task::TaskDecision;
+    use orbit_types::workflow::{
+        KNOWN_RED_VALIDATION_EVENT, ReviewBaselineClaim, ReviewCertificate,
+    };
+
+    let command = "sh -c 'echo test suite::broken ... FAILED; exit 1'";
+    let mut leaf = ReviewedLeaf::admit_from(
+        &format!(
+            "[review]\nbefore_pr = true\nbaseline_commands = [{command:?}]\n\n[operation]\nreview_crew = \"{REVIEW_CREW}\"\n"
+        ),
+        "",
+    );
+    let admitted = leaf.admit_review();
+    let attempt = admitted["attempt_id"].as_str().unwrap();
+    leaf.reviewer_reports(attempt, ReviewVerdict::Accept, false);
+    let mut report: ReviewReport =
+        serde_json::from_slice(&leaf.owner_artifact(REVIEW_REPORT_ARTIFACT).unwrap()).unwrap();
+    report.verdict = ReviewVerdict::Reject;
+    report.findings.clear();
+    report.escalation = Some("The base shares this failure".into());
+    report.validation[0].command = command.into();
+    report.validation[0].outcome = ValidationOutcome::Failed;
+    report.validation[0].sources = vec!["unrelated.rs".into()];
+    report.validation[0].baseline = Some(ReviewBaselineClaim {
+        base_commit: leaf.base.commit.clone(),
+        outcome: ValidationOutcome::Failed,
+        failures: vec!["suite::broken".into()],
+    });
+    leaf.put_report(&report);
+    let local_before = leaf.pair.follower.get_task(&leaf.task);
+    assert!(local_before.is_err(), "the claimed task has no local row");
+    let settled = leaf
+        .settle()
+        .expect("known red never writes the absent local task");
+    assert_eq!(settled["gate"], "passed", "{settled}");
+    assert_eq!(leaf.settle().unwrap(), settled, "leaf settlement replays");
+    assert!(leaf.pair.follower.get_task(&leaf.task).is_err());
+    let certificate: ReviewCertificate =
+        serde_json::from_slice(&leaf.owner_artifact(REVIEW_GATE_ARTIFACT).unwrap()).unwrap();
+    assert_eq!(certificate.known_red.len(), 1);
+    let evidence: HandoffReviewEvidence =
+        serde_json::from_value(settled["handoff_evidence"].clone()).unwrap();
+    let head = revision(&leaf.pair.follower_repo, "HEAD");
+    leaf.owner_accepts(evidence.clone(), &head).unwrap();
+    leaf.owner_accepts(evidence, &head)
+        .expect("owner acceptance replays");
+    let history = leaf.pair.wire.owner.get_task_history(&leaf.task).unwrap();
+    let decisions = history
+        .iter()
+        .filter(|entry| entry.event == KNOWN_RED_VALIDATION_EVENT)
+        .map(|entry| entry.decision.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        decisions,
+        vec![Some(TaskDecision::KnownRedValidation(
+            certificate.known_red[0].validation.clone(),
+        ))]
+    );
+    assert!(leaf.pair.follower.get_task(&leaf.task).is_err());
+}
+
 /// A reviewer that rejects the candidate stops the leaf before it pushes,
 /// as on the owner's own route: the findings are on the owner's task, and
 /// the leaf's failure settlement blocks it there.
-#[test]
 fn a_rejected_claimed_review_blocks_the_task_on_the_owner() {
-    if !isolated(
-        module_path!(),
-        "a_rejected_claimed_review_blocks_the_task_on_the_owner",
-    ) {
-        return;
-    }
     let mut leaf = ReviewedLeaf::admit();
     let admitted = leaf.admit_review();
     let attempt_id = admitted["attempt_id"].as_str().unwrap().to_string();
@@ -920,14 +975,7 @@ fn a_claimed_review_held_for_linux_codeql_is_fulfilled_by_the_owner() {
 /// no claim: its pass stops at the probe with the reason. The owner defines
 /// the crew, since its own load refuses a review crew it does not
 /// [ORB-15195].
-#[test]
 fn a_follower_without_the_review_crew_claims_nothing() {
-    if !isolated(
-        module_path!(),
-        "a_follower_without_the_review_crew_claims_nothing",
-    ) {
-        return;
-    }
     let pair = Pair::with_owner_config(
         &format!(
             "{}\n[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\n\
@@ -955,14 +1003,7 @@ fn a_follower_without_the_review_crew_claims_nothing() {
 /// elapsed reservation alone ends nothing: the live claim still reads and
 /// writes until the owner recovers it. The leaf's binding reaches the owner
 /// exactly as its run's broker forwards a bridged call.
-#[test]
 fn a_claimed_reviewers_manifest_read_needs_the_owners_active_claim() {
-    if !isolated(
-        module_path!(),
-        "a_claimed_reviewers_manifest_read_needs_the_owners_active_claim",
-    ) {
-        return;
-    }
     type Settle = fn(&ReviewedLeaf);
     let release: Settle = |leaf| {
         let (_, worker) = leaf.claim();
@@ -1156,3 +1197,12 @@ fn a_claimed_reviewers_manifest_read_needs_the_owners_active_claim() {
         }
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence_scenarios,
+    a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence,
+    a_rejected_claimed_review_blocks_the_task_on_the_owner,
+    a_follower_without_the_review_crew_claims_nothing,
+    a_claimed_reviewers_manifest_read_needs_the_owners_active_claim
+);

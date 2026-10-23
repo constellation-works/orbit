@@ -1,21 +1,24 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, fmtDuration } from './js/common.js';
-import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
-import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, renderDenialCount, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './js/audit.js';
-import { fetchAndRenderCodebase, wireCodebaseControls } from './js/codebase.js';
+import { bindTaskLink, captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
+import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
+import { initTaskCreate } from './js/task-create.js';
+import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, renderDenialCount, syncAuditControls, wireAuditSearch, } from './js/audit.js';
+import { applyCodebaseHashQuery, buildCodebaseHash, fetchAndRenderCodebase, wireCodebaseControls } from './js/codebase.js';
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
+import { fetchAndRenderAgents, getAgentsRole, placeholdAgentsAggregate, setAgentsRole, wireAgentControls } from './js/agents.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
 import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
-import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.js';
+import { initLogTail, fitLogPanelToViewport, placeDock, setDockMode } from './js/log-tail.js';
 import { renderDiagnostics } from './js/diagnostics.js';
 import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.js';
+import { fetchAndRenderResources, placeholdResourcesAggregate } from './js/resources.js';
 import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
 import { renderMarkdown } from './js/markdown.js';
-import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
+import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
-import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations, peekRoutineFailures } from './js/operations.js';
+import { drainHolderCounts, fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekRoutineFailures, setDrainLocks, startFleetIndicatorRefresh } from './js/operations.js';
 import { onDrainReadinessChange } from './js/drain-waits.js';
 import { onTaskRuntimeChange, setRunningRuns, setTaskLocks } from './js/task-runtime.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
@@ -91,6 +94,7 @@ const frictionAccordionMedia = window.matchMedia(FRICTION_ACCORDION_QUERY);
 const $ = (id) => document.getElementById(id);
 
 let searchQuery = "";
+let cancelTaskLookup = () => {};
 let activeStatuses = new Set(DEFAULT_ACTIVE_STATUSES);
 let lastTasks = [];
 // Paging metadata from task-list envelopes drives the visible range and
@@ -109,7 +113,13 @@ let lastRunSourcesUnavailable = [];
 let lastDiagnostics = { errors: null, incidents: null };
 let lastFrictionPayload = { stats: {}, tags: [], items: [] };
 let activeTab = "tasks";
-let activeDiagSubtab = "runs";
+// Health: the rail subtab and the view
+// Incidents shows. Analytics: the rail subtab and the view Reliability shows.
+let activeDiagSubtab = "incidents";
+let activeJobsSubtab = "live";
+let activeIncidentsView = "incidents";
+let activeAnalyticsSubtab = "metrics";
+let activeReliabilityView = "pipeline";
 let activeKnowledgeSubtab = "frictions";
 let activeOperationsSubtab = "routines";
 let refreshSequence = 0;
@@ -120,6 +130,7 @@ let frictionStatusFilter = DEFAULT_FRICTION_STATUS_FILTER;
 
 // Health strip state
 let lastSummary = null;
+let jobsInFlightSequence = 0;
 
 // ORB-00030: workspaces the dashboard is serving. Empty/one entry => single
 // mode (no selector). More than one => global mode (selector shown).
@@ -143,6 +154,7 @@ function taskContext() {
         lastTasks[index] = updatedTask;
       }
     },
+    cancelTaskLookup: () => cancelTaskLookup(),
     getSearchQuery: () => searchQuery,
     setSearchQuery: (value) => { searchQuery = value; },
     getActiveStatuses: () => activeStatuses,
@@ -167,10 +179,16 @@ function auditContext() {
   };
 }
 
+// The Health list panel's view: Incidents' signature list or
+// error feed. Events and Doctor have their own panels.
+function diagListView() {
+  return activeDiagSubtab === "incidents" ? activeIncidentsView : activeDiagSubtab;
+}
+
 function diagnosticsContext() {
   return {
     getLastDiagnostics: () => lastDiagnostics,
-    getActiveDiagSubtab: () => activeDiagSubtab,
+    getActiveDiagSubtab: diagListView,
     refreshDiagnostics: () => refreshDashboard(),
     loadMoreErrors: (limit) => {
       errorDiagLimit = Math.min(Number(limit) || errorDiagLimit, 200);
@@ -186,7 +204,7 @@ function diagnosticsContext() {
     fmtRelative,
     fmtDuration,
     // ORB-10871: incident expansion states exact first/last timestamps, not
-    // just "3h ago" — the raw evidence has to be locatable in the Audit view.
+    // just "3h ago" — the raw evidence has to be locatable in Events.
     fmtAbsTime,
     truncate,
     setActiveTab: sAT,
@@ -199,8 +217,19 @@ function routerContext() {
     // getters/setters for router-owned state (kept in app.js per extraction contract)
     getTab: () => activeTab,
     setTab: (v) => { activeTab = v; },
+    getJobsSubtab: () => activeJobsSubtab,
+    setJobsSubtab: (v) => { activeJobsSubtab = v; },
     getDiagSubtab: () => activeDiagSubtab,
     setDiagSubtab: (v) => { activeDiagSubtab = v; },
+    getIncidentsView: () => activeIncidentsView,
+    setIncidentsView: (v) => { activeIncidentsView = v; },
+    getAnalyticsSubtab: () => activeAnalyticsSubtab,
+    setAnalyticsSubtab: (v) => { activeAnalyticsSubtab = v; },
+    getReliabilityView: () => activeReliabilityView,
+    setReliabilityView: (v) => { activeReliabilityView = v; },
+    // The Agents role is owned by agents.js, which renders it.
+    getAgentsRole,
+    setAgentsRole,
     getKnowledgeSubtab: () => activeKnowledgeSubtab,
     setKnowledgeSubtab: (v) => { activeKnowledgeSubtab = v; },
     getOperationsSubtab: () => activeOperationsSubtab,
@@ -228,29 +257,32 @@ function routerContext() {
     // callbacks (close over app.js scope)
     refreshDashboard,
     renderDiagnostics: () => renderDiagnostics(diagnosticsContext()),
-    // ORB-10588: Reliability aggregates server-side across workspaces, so a
-    // subtab switch can fetch straight away instead of waiting for the next
-    // refresh tick (and without the aggregate-view guard the other diagnostics
-    // fetches need).
+    // ORB-10588: Reliability › Pipeline aggregates server-side across
+    // workspaces, so opening it can fetch straight away instead of waiting
+    // for the next refresh tick (and without the aggregate-view guard the
+    // per-workspace views need).
     fetchReliability: () => fetchAndRenderReliability().catch((e) => console.error("Failed to fetch reliability metrics", e)),
     fetchMetrics: () => fetchAndRenderMetrics().catch((e) => console.error("Failed to fetch metrics", e)),
+    fetchResources: () => fetchAndRenderResources().catch((e) => console.error("Failed to fetch resource profiles", e)),
+    fetchAgents: () => fetchAndRenderAgents().catch((e) => console.error("Failed to fetch the agent scorecard", e)),
     // ORB-14830: Doctor reads its report when the view opens, never per tick.
     openDoctor: () => openDoctor().catch((e) => console.error("Failed to run doctor", e)),
     fitLogPanelToViewport,
-    showDrainDock: () => setDockMode("drain"),
+    setDrainView: (mode) => setDockMode(mode),
+    placeDock,
 
-    // audit pass-throughs (re-exported here for router; imported at top of this file)
+    // Events and Codebase pass-throughs (re-exported here for router;
+    // imported at top of this file)
     applyAuditHashQuery,
-    setAuditSubtab,
-    getActiveAuditSubtab,
-    setActiveAuditSubtabFromButton,
     buildAuditHash,
     syncAuditControls,
+    applyCodebaseHashQuery,
+    buildCodebaseHash,
 
     // ORB-10874: tasks pass-throughs (mirrors the audit ones above) so the
     // status/search filters shown on the Tasks tab are represented in the
     // hash and survive reload/back-navigation the same way audit's do.
-    applyTasksHashQuery: (query) => applyTasksHashQuery(query, taskContext()),
+    applyTasksHashQuery: (query, page) => applyTasksHashQuery(query, taskContext(), page),
     buildTasksHash: () => buildTasksHash(taskContext()),
     syncTaskControls: () => syncTaskControls(taskContext()),
   };
@@ -318,7 +350,6 @@ function runDetailContext() {
     fmtDuration,
     fmtRelative,
     fmtAbsTime,
-    truncate,
     // run action builders (from runs.js) and nav for renderRunDetailMeta
     navigateToRun: nTR,
     setActiveTab: sAT,
@@ -352,22 +383,33 @@ function renderBodyBlock(body, fallbackClass) {
   ]);
 }
 
+// The last locks read and the workspace it belongs to.
+let lastLocks = null;
+
 function renderLocksPanel(payload) {
-  // The In progress rows count each task's locked files from the same read.
+  // The In progress rows count each task's locked files from the same read,
+  // and the Drain summary and wait rows read it too.
   setTaskLocks(payload);
+  setDrainLocks(payload);
+  lastLocks = { payload, workspace: getWorkspace() };
+  paintLocksPanel(payload);
+}
+
+function paintLocksPanel(payload) {
   const body = $("locks-body");
   const count = $("locks-count");
   if (!body || !count) return;
   const byTask = Array.isArray(payload && payload.by_task) ? payload.by_task : [];
+  const byReservation = Array.isArray(payload && payload.by_reservation) ? payload.by_reservation : [];
   const totalLocked = Number.isFinite(Number(payload && payload.total_locked))
     ? Number(payload.total_locked)
     : 0;
   const totalTasks = Number.isFinite(Number(payload && payload.total_tasks))
     ? Number(payload.total_tasks)
     : byTask.length;
-  count.textContent = `${totalLocked} files · ${totalTasks} tasks`;
+  count.textContent = `${totalLocked} ${totalLocked === 1 ? "file" : "files"} · ${totalTasks} ${totalTasks === 1 ? "task" : "tasks"}`;
 
-  if (byTask.length === 0) {
+  if (byTask.length === 0 && byReservation.length === 0) {
     const empty = el("div", { class: "locks-empty", text: "No files currently locked." });
     empty.dataset.key = "locks-empty";
     empty.dataset.hash = "locks-empty";
@@ -375,39 +417,51 @@ function renderLocksPanel(payload) {
     return;
   }
 
-  // One line per task: who holds the locks, its status, how many paths and
-  // which run. The paths themselves fold away, and stay open across refreshes
-  // once opened, so a dozen tasks never bury the dock in file paths.
+  // One row per task: who holds the locks, its status, how many paths and how
+  // many waiting tasks it holds back, then its title and run. The paths fold
+  // away and stay open across refreshes once opened, so a dozen tasks never
+  // bury the card in file paths. The task link sits outside the disclosure
+  // (a link cannot live in a summary); an invisible copy of the id keeps its
+  // place in the row, and the link is laid over it.
+  const blocking = drainHolderCounts();
   const nodes = byTask.map((task) => {
     const taskId = String(task.id || "");
     const files = Array.isArray(task.context_files) ? task.context_files : [];
+    const blocks = blocking.get(taskId) || 0;
+    const title = typeof task.title === "string" ? task.title.trim() : "";
     const group = el("div", { class: "lock-task-group" });
     group.dataset.key = `lock-task-${taskId}`;
-    group.dataset.hash = JSON.stringify(task);
+    group.dataset.hash = JSON.stringify([task, blocks]);
     const details = detailsPanel(`lock-task-${taskId}`, { class: "lock-task-details" });
 
-    const idButton = el("button", {
+    const idButton = el("a", {
       class: "lock-task-id mono",
       text: taskId,
-      title: `Open ${taskId} in the task list`,
+      title: title ? `Open ${taskId}: ${title}` : `Open ${taskId} in the task list`,
     });
-    idButton.type = "button";
-    idButton.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      openVisibleTask(taskId, taskContext());
-    });
+    // Locks live on Drain, so opening a task must navigate to Tasks too.
+    bindTaskLink(idButton, taskId);
 
     const header = el("summary", { class: "lock-task-header" }, [
+      el("span", { class: "lock-task-id-space mono", text: taskId, "aria-hidden": "true" }),
       statusPill(task.status || "unknown"),
       el("span", { class: "lock-count", text: `${files.length} ${files.length === 1 ? "file" : "files"}` }),
+      blocks > 0 ? el("span", {
+        class: "lock-blocks",
+        text: `blocks ${blocks}`,
+        title: `${blocks} waiting ${blocks === 1 ? "task waits" : "tasks wait"} on ${taskId}`,
+      }) : null,
     ]);
-    if (task.job_run_id) {
-      header.appendChild(el("span", {
-        class: "lock-job mono",
-        text: shortRunId(task.job_run_id),
-        title: `job_run=${task.job_run_id}`,
-      }));
+    const job = task.job_run_id ? el("span", {
+      class: "lock-job mono",
+      text: shortRunId(task.job_run_id),
+      title: `job_run=${task.job_run_id}`,
+    }) : null;
+    if (title || job) {
+      header.appendChild(el("span", { class: "lock-task-meta" }, [
+        title ? el("span", { class: "lock-task-title", text: title, title }) : null,
+        job,
+      ]));
     }
     details.appendChild(header);
 
@@ -424,6 +478,44 @@ function renderLocksPanel(payload) {
     group.appendChild(idButton);
     return group;
   });
+  for (const reservation of byReservation) {
+    const key = `lock-reservation-${reservation.reservation_id}`;
+    const files = Array.isArray(reservation.files) ? reservation.files : [];
+    const taskIds = Array.isArray(reservation.task_ids) ? reservation.task_ids : [];
+    const group = el("div", { class: "lock-task-group lock-reservation-group" });
+    group.dataset.key = key;
+    group.dataset.hash = JSON.stringify(reservation);
+    const details = detailsPanel(key, { class: "lock-task-details" });
+    const holders = el("span", { class: "lock-reservation-holders" });
+    for (const taskId of taskIds) {
+      const link = el("a", { class: "mono", text: String(taskId) });
+      bindTaskLink(link, String(taskId));
+      holders.appendChild(link);
+    }
+    if (!taskIds.length) holders.appendChild(el("span", { text: "Manual reservation" }));
+    const header = el("summary", { class: "lock-task-header" }, [
+      el("span", {
+        class: "lock-reservation-label",
+        text: "Reservation",
+        title: reservation.expires_at ? `Expires ${reservation.expires_at}` : "Reserved lock surface",
+      }),
+      el("span", { class: "lock-count", text: `${files.length} ${files.length === 1 ? "file" : "files"}` }),
+      el("span", { class: "lock-task-meta" }, [
+        holders,
+        reservation.owner_run_id ? el("span", {
+          class: "lock-job mono",
+          text: shortRunId(reservation.owner_run_id),
+          title: `job_run=${reservation.owner_run_id}`,
+        }) : null,
+      ]),
+    ]);
+    details.appendChild(header);
+    const list = el("div", { class: "lock-file-list" });
+    for (const file of files) list.appendChild(el("div", { class: "lock-file-row mono", text: String(file), title: String(file) }));
+    details.appendChild(list);
+    group.appendChild(details);
+    nodes.push(group);
+  }
   syncNodes(body, nodes);
 }
 
@@ -928,15 +1020,18 @@ function wireTaskIdResolver() {
   function adoptWorkspace(workspaceId) {
     if (!workspaceId || workspaceId === getWorkspace()) return false;
     setWorkspace(workspaceId);
+    rememberWorkspace();
     persistScopeToUrl();
     const selector = $("workspace-select");
     if (selector) selector.value = workspaceId;
     return true;
   }
 
-  async function openLookedUpTask(task, workspaceId, seq) {
+  async function openLookedUpTask(task, workspaceId) {
     const workspaceChanged = adoptWorkspace(workspaceId);
-    sAT("tasks", { refresh: false });
+    sAT(buildTasksHash(taskContext()).slice(1), { refresh: false });
+    // Routing retires the prior lookup state; this result now owns that route.
+    const seq = lookupSeq;
     if (workspaceChanged) {
       await refreshDashboard();
       if (seq !== lookupSeq || getWorkspace() !== workspaceId) return;
@@ -955,6 +1050,7 @@ function wireTaskIdResolver() {
     }
     input.value = "";
     clearLookupStatus();
+    refreshDashboard();
   }
 
   function otherActiveWorkspaces(exceptId) {
@@ -967,9 +1063,16 @@ function wireTaskIdResolver() {
   }
 
   async function lookupTask(id) {
+    cancelTaskSearchDebounce();
+    // Enter commits the text now, including a pending or unsuccessful lookup.
+    // A successful result removes q when it replaces the search with a detail.
+    if (window.location.hash.split("?")[0] === "#tasks") {
+      window.history.replaceState(null, "", buildTasksHash(taskContext()));
+    }
     const seq = ++lookupSeq;
     const workspaceAtStart = getWorkspace();
-    const stillCurrent = () => seq === lookupSeq && getWorkspace() === workspaceAtStart;
+    const visit = captureWorkspaceVisit();
+    const stillCurrent = () => seq === lookupSeq && visit.isCurrent();
     const discardIfStale = () => {
       if (stillCurrent()) return false;
       if (seq === lookupSeq) clearLookupStatus();
@@ -988,7 +1091,7 @@ function wireTaskIdResolver() {
       }
       if (discardIfStale()) return;
       if (primary.res.ok && primary.body && primary.body.id) {
-        await openLookedUpTask(primary.body, primary.workspaceId, seq);
+        await openLookedUpTask(primary.body, primary.workspaceId);
         return;
       }
 
@@ -1016,7 +1119,7 @@ function wireTaskIdResolver() {
 
     const hit = probed.find((result) => result && result.res && result.res.ok && result.body && result.body.id);
     if (hit) {
-      await openLookedUpTask(hit.body, hit.workspaceId, seq);
+      await openLookedUpTask(hit.body, hit.workspaceId);
       return;
     }
     if (probed.some((result) => result && result.network)) {
@@ -1034,6 +1137,14 @@ function wireTaskIdResolver() {
   }
 
   resolveTaskById = lookupTask;
+  cancelTaskLookup = () => {
+    lookupSeq += 1;
+    clearLookupStatus();
+  };
+  $("task-search-clear")?.addEventListener("click", () => {
+    clearTaskSearch(taskContext());
+    input.focus();
+  });
 
   // Editing the query abandons any lookup still in flight.
   input.addEventListener("input", () => {
@@ -1079,14 +1190,12 @@ function renderAggregatePlaceholders() {
   resetSummaryCounts();
 }
 
-// Most Diagnostics panels are fed exclusively by per-workspace endpoints and
-// remain unavailable in aggregate mode. Runs is the exception: its body is
+// Most Health panels are fed exclusively by per-workspace endpoints and
+// remain unavailable in aggregate mode. Jobs History is the exception: its body is
 // managed by the bounded /api/job-runs/all response and must not be overwritten
 // by these placeholders.
 function renderDiagnosticsPlaceholders() {
   renderPanelPlaceholder("diag-body");
-  placeholdScoreboardAggregate();
-  placeholdMetricsAggregate();
   const diagCount = $("diag-count");
   if (diagCount) diagCount.textContent = "—";
 }
@@ -1103,16 +1212,9 @@ function renderKnowledgeDetailPlaceholder(prefix) {
   if (count) count.textContent = "—";
 }
 
-// The Runs and Audit rail counts are fed by the per-workspace
-// /api/audit/summary endpoint, so in aggregate mode and on a workspace switch
-// they are cleared rather than showing the last-selected workspace's numbers as
-// if they were machine-wide.
+// Health denials are scoped to the summary window.
 function resetSummaryCounts() {
-  setRailCount("rail-count-diag-runs", null);
-  setRailCount("rail-count-audit", null);
   renderDenialCount(null);
-  const runsCount = $("rail-count-diag-runs");
-  if (runsCount) delete runsCount.dataset.window;
 }
 
 // ORB-10874: the single-workspace list endpoint filters server-side, so the
@@ -1137,6 +1239,7 @@ function tasksListPath(base = "/api/tasks") {
     sp.set("status", "none");
   }
   if (searchQuery) sp.set("q", searchQuery);
+  if (taskPilotWarningsFilter()) sp.set("pilot", "warnings");
   if (taskPageCursor) sp.set("cursor", taskPageCursor);
   const qs = sp.toString();
   return qs ? `${base}?${qs}` : base;
@@ -1219,8 +1322,8 @@ function fetchAndRenderTasks() {
 // the right workspace, and again for each host selected [ORB-14680]: a
 // workspace id the new host also lists stays selected, "All workspaces" stays
 // the aggregate of that host's workspaces, and anything else becomes that
-// host's default. Failures are non-fatal (single-workspace fallback) and
-// resolve false so the next refresh tries again.
+// host's remembered workspace, live drain or default. Failures are non-fatal
+// (single-workspace fallback) and resolve false so the next refresh tries again.
 async function initWorkspaceSelector() {
   const wasAggregate = isAggregateView() || isAggregateLinked();
   const hostRevision = getHostRevision();
@@ -1237,6 +1340,8 @@ async function initWorkspaceSelector() {
   dashboardWorkspaces = Array.isArray(entries) ? entries : [];
   // Feed the shared aggregate-view predicate (common.js): multi-workspace mode
   // is what makes the "All workspaces" (no concrete workspace) view possible.
+  // This also marks cardinality as known for this host visit, after the stale
+  // response check above, so scope chips can safely offer aggregate selection.
   setMultiWorkspace(dashboardWorkspaces.length > 1);
   if (dashboardWorkspaces.length <= 1) {
     const railWorkspace = $("rail-workspace");
@@ -1251,19 +1356,36 @@ async function initWorkspaceSelector() {
     return true; // single mode: selected implicitly, no selector needed
   }
 
-  // Default to the workspace flagged by the server (the cwd workspace, if the
-  // server was launched inside one) so every tab works out of the box; else the
-  // first active workspace. "All workspaces" (aggregate) is an explicit choice.
-  // A link can also name a workspace that is gone or unavailable; the selector
-  // has no option for it, so keeping it would fail every panel with no way to
-  // recover from the selector. Treat it like no workspace and repair the URL.
-  // An explicit aggregate link (`workspace=all`) is a choice, not a missing one.
+  // A shareable URL (including explicit All workspaces) wins. Otherwise
+  // restore this browser's choice for the selected host, then prefer an active
+  // drain on that host before the registry default. Never wait on remote fleet
+  // fan-out to select a local workspace.
   const linked = getWorkspace();
-  const linkedIsServable = (wasAggregate && !linked) || dashboardWorkspaces.some((w) => w.id === linked && w.status === "active");
+  const servable = id => dashboardWorkspaces.some(w => w.id === id && w.status === "active");
+  const linkedIsServable = (wasAggregate && !linked) || servable(linked);
   if (!linkedIsServable) {
-    const def = dashboardWorkspaces.find((w) => w.is_default);
-    const firstActive = dashboardWorkspaces.find((w) => w.status === "active");
-    const initial = (def || firstActive || dashboardWorkspaces[0]).id;
+    const remembered = getRememberedWorkspace();
+    let initial = remembered === ALL_WORKSPACES_TOKEN ? null : servable(remembered) ? remembered : undefined;
+    if (initial === undefined) {
+      const revision = getWorkspaceRevision();
+      let fleet;
+      try {
+        fleet = await fetchJson("/api/fleet/drains");
+      } catch (error) {
+        console.error("Unable to read drains for the initial workspace", error);
+      }
+      if (hostRevision !== getHostRevision()) return false;
+      // A choice made while this request was pending wins over the fallback.
+      if (revision !== getWorkspaceRevision()) {
+        buildWorkspaceSelector();
+        return true;
+      }
+      const live = fleet?.items?.find(row => !row.error && servable(row.workspace_id)
+        && ["draining", "pulling", "winding_down"].includes(row.phase));
+      const def = dashboardWorkspaces.find(w => w.is_default && w.status === "active");
+      const firstActive = dashboardWorkspaces.find(w => w.status === "active");
+      initial = live?.workspace_id || (def || firstActive || dashboardWorkspaces[0]).id;
+    }
     setWorkspace(initial);
     if (linked) persistScopeToUrl();
   }
@@ -1293,6 +1415,7 @@ function buildWorkspaceSelector() {
 
   select.addEventListener("change", () => {
     setWorkspace(select.value);
+    rememberWorkspace();
     persistScopeToUrl();
     refreshDashboard();
   });
@@ -1319,6 +1442,7 @@ function buildWorkspaceSelector() {
 // is the single writer; this wrapper stays for the existing call sites.
 function persistWorkspaceToUrl(id) {
   setWorkspace(id);
+  rememberWorkspace();
   persistScopeToUrl();
 }
 
@@ -1353,33 +1477,77 @@ function activeRefreshJobs() {
   } else {
     add("Health summary", fetchAndRenderSummary());
   }
-  // Keep the chrome indicator current even when Tasks and its dock are hidden.
+  add("Jobs in flight", fetchJobsInFlight());
+  // Keep the chrome indicator current on every page.
   add("Drain", fetchAndRenderAutoDrainPane());
 
   if (activeTab === "tasks") {
     add("Tasks", fetchAndRenderTasks());
-    // /api/tasks/locks is per-workspace; skip it in aggregate mode (the locks
-    // panel shows the placeholder rendered above).
+    // Task rows show their locked-file counts, and the dock beside them holds
+    // the Locks held panel.
     if (!aggregate && !document.hidden) add("Locked files", fetchAndRenderTaskLocks());
     // When each running task's run started, for the In progress rows' elapsed
     // time. Only while that group can show.
     if (!aggregate && activeStatuses.has("in-progress")) add("Running runs", fetchRunningRuns());
-    // The dock's Drain card; without a concrete workspace it renders its own
-    // read-only note instead of fetching.
     return jobs;
   }
 
-  if (activeTab === "audit") {
-    if (getActiveAuditSubtab() === "codebase") {
-      add("Audit › Codebase", fetchAndRenderCodebase());
-    } else {
-      add("Audit › Events", fetchAndRenderAudit(auditContext()));
+  if (activeTab === "drain") {
+    if (!aggregate && !document.hidden) add("Locked files", fetchAndRenderTaskLocks());
+    return jobs;
+  }
+
+  if (activeTab === "analytics") {
+    // ORB-10588: /api/metrics/reliability takes the whole DashboardState, not
+    // the `Ws` extractor, so Pipeline answers in aggregate mode too. Tools
+    // renders the summary read above on every tick; Codebase placeholds
+    // itself without a concrete workspace.
+    if (activeAnalyticsSubtab === "reliability") {
+      if (activeReliabilityView === "pipeline") add("Analytics › Reliability", fetchAndRenderReliability());
+      return jobs;
     }
+    if (activeAnalyticsSubtab === "codebase") {
+      add("Analytics › Codebase", fetchAndRenderCodebase());
+      return jobs;
+    }
+    if (aggregate) {
+      placeholdScoreboardAggregate();
+      placeholdMetricsAggregate();
+      placeholdResourcesAggregate();
+      return jobs;
+    }
+    if (activeAnalyticsSubtab === "resources") {
+      // This host's delivery resource profiles for the selected workspace.
+      add("Analytics › Resources", fetchAndRenderResources());
+      return jobs;
+    }
+    if (activeAnalyticsSubtab === "cost") {
+      // ORB-15921: Cost kept the managed-execution panel from Scoreboard.
+      // Every refresh honors the shared dashboard window. A mismatched
+      // window, a superseded request, or a stale workspace visit is not painted.
+      add("Analytics › Cost", fetchAndRenderScoreboard());
+      return jobs;
+    }
+    // ORB-15746: trends follow the shared window like Cost.
+    add("Analytics › Metrics", fetchAndRenderMetrics());
+    return jobs;
+  }
+
+  if (activeTab === "agents") {
+    // The scorecards follow the shared window; one cached scan serves every
+    // role, window and row. The aggregate view has no workspace to rank.
+    if (aggregate) placeholdAgentsAggregate();
+    else add(`Agents › ${getAgentsRole()}`, fetchAndRenderAgents());
     return jobs;
   }
 
   if (activeTab === "knowledge") {
     add("Knowledge › Frictions", fetchAndRenderFrictions());
+    return jobs;
+  }
+
+  if (activeTab === "jobs") {
+    add(`Jobs › ${activeJobsSubtab}`, activeJobsSubtab === "history" ? fetchAndRenderRuns() : fetchAndRenderJobs());
     return jobs;
   }
 
@@ -1415,63 +1583,37 @@ function activeRefreshJobs() {
   }
 
   if (activeTab === "diagnostics") {
-    // Most diagnostics fetches are per-workspace. Runs has a bounded aggregate
-    // endpoint; Metrics, errors, friction and Scoreboard still require a
-    // concrete workspace and show placeholders without one.
-    // ORB-10588: /api/metrics/reliability takes the whole DashboardState, not
-    // the `Ws` extractor, so it answers in aggregate mode too — it is fetched
-    // ahead of the guard below rather than being placeheld with the rest.
-    if (activeDiagSubtab === "reliability") {
-      add("Health › Reliability", fetchAndRenderReliability());
-      return jobs;
-    }
+    // Most Health fetches are per-workspace. Runs has a bounded aggregate
+    // endpoint; Incidents and Errors show placeholders without a concrete
+    // workspace, and Events placeholds itself.
     // Doctor runs on open and on its own Refresh button, never on this tick;
     // the tick only repaints the report's age (or reads it the first time).
     if (activeDiagSubtab === "doctor") {
       add("Health › Doctor", openDoctor());
       return jobs;
     }
-    if (aggregate && activeDiagSubtab === "runs") {
-      renderDiagnosticsPlaceholders();
-      add("Runs", fetchAndRenderRuns());
+    const view = diagListView();
+    if (view === "events") {
+      add("Health › Events", fetchAndRenderAudit(auditContext()));
       return jobs;
     }
     if (aggregate) {
       renderDiagnosticsPlaceholders();
       return jobs;
     }
-    if (activeDiagSubtab === "scoreboard") {
-      // ORB-10444: Scoreboard folded in from the retired top-level tab.
-      // ORB-10872: every refresh honors the shared dashboard window so
-      // delivery/operations and Managed Execution stay on the same cutoff.
-      // A mismatched window, a superseded request, or a stale workspace
-      // visit is not painted.
-      add("Health › Scoreboard", fetchAndRenderScoreboard());
-      return jobs;
-    }
-    if (activeDiagSubtab === "metrics") {
-      // ORB-15746: trends follow the shared window like the Scoreboard.
-      add("Health › Metrics", fetchAndRenderMetrics());
-      return jobs;
-    }
-    if (activeDiagSubtab === "runs") {
-      add("Runs", fetchAndRenderRuns());
-    } else {
-      const subtab = activeDiagSubtab;
-      // Incidents may narrow the shared window to its own 6h segment.
-      const windowFor = () => (subtab === "incidents" ? getIncidentWindow() : getWindow());
-      const selectedWindow = windowFor();
-      const incidentClass = getIncidentClass();
-      const limit = subtab === "errors" ? errorDiagLimit : DIAG_LIMIT;
-      const path = subtab === "incidents"
-        ? `/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}&class=${encodeURIComponent(incidentClass)}&limit=${incidentDiagLimit}`
-        : `/api/diagnostics/${subtab}?since=${encodeURIComponent(selectedWindow)}&limit=${limit}`;
-      add(subpanel("diag-subtabs", subtab), requestPanel("diag-body", path, () => fetchJson(path), (payload) => {
-        lastDiagnostics[subtab] = payload;
-        if (activeDiagSubtab === subtab && windowFor() === selectedWindow
-          && (subtab !== "incidents" || getIncidentClass() === incidentClass)) renderDiagnostics(diagnosticsContext());
-      }, "diag-count"));
-    }
+    // Incidents may narrow the shared window to its own 6h segment.
+    const windowFor = () => (view === "incidents" ? getIncidentWindow() : getWindow());
+    const selectedWindow = windowFor();
+    const incidentClass = getIncidentClass();
+    const limit = view === "errors" ? errorDiagLimit : DIAG_LIMIT;
+    const path = view === "incidents"
+      ? `/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}&class=${encodeURIComponent(incidentClass)}&limit=${incidentDiagLimit}`
+      : `/api/diagnostics/${view}?since=${encodeURIComponent(selectedWindow)}&limit=${limit}`;
+    add(view === "errors" ? "Health › Errors" : "Health › Incidents", requestPanel("diag-body", path, () => fetchJson(path), (payload) => {
+      lastDiagnostics[view] = payload;
+      if (diagListView() === view && windowFor() === selectedWindow
+        && (view !== "incidents" || getIncidentClass() === incidentClass)) renderDiagnostics(diagnosticsContext());
+    }, "diag-count"));
   }
   return jobs;
 }
@@ -1499,7 +1641,18 @@ function fetchAndRenderRuns() {
     lastRunsLoading = false;
     lastRunSourcesUnavailable = unavailable;
     renderRuns(lastRuns);
-  }, "diag-count");
+  }, "runs-count");
+}
+
+function fetchJobsInFlight() {
+  const sequence = ++jobsInFlightSequence;
+  const revision = getWorkspaceRevision();
+  const aggregate = isAggregateView();
+  return fetchJson(`${aggregate ? "/api/job-runs/all" : "/api/job-runs"}?state=active&limit=1`).then((payload) => {
+    if (revision !== getWorkspaceRevision() || sequence !== jobsInFlightSequence) return;
+    const count = Number.isFinite(payload.total) ? payload.total : listItems(payload).length;
+    setRailCount("rail-count-jobs", count, false, "Pending and running job runs, not tasks. One task is several pipeline runs. Independent of the History window and filters.", formatJobsRailCount);
+  });
 }
 
 function fetchRunningRuns() {
@@ -1510,7 +1663,11 @@ function fetchRunningRuns() {
 }
 
 function fetchAndRenderTaskLocks() {
-  return requestPanel("locks-body", "locks", () => fetchJson("/api/tasks/locks"), renderLocksPanel, "locks-count");
+  const visit = captureWorkspaceVisit();
+  return requestPanel("locks-body", "locks", () => fetchJson("/api/tasks/locks"), renderLocksPanel, "locks-count").catch(error => {
+    if (visit.isCurrent()) setTaskLocks(null);
+    throw error;
+  });
 }
 
 function fetchAndRenderRunDetail() {
@@ -1597,8 +1754,11 @@ function fetchAndRenderRunLogs() {
 }
 
 function fetchAndRenderSummary() {
-  const since = effectiveAuditWindow() || "24h";
-  return requestPanel("audit-summary-body", "summary", () => fetchJson(`/api/audit/summary?since=${encodeURIComponent(since)}`), (data) => {
+  // Tools follows Analytics' shared window, independently of an Events
+  // drill-down's cutoff. The summary endpoint requires a bounded window.
+  const toolsOpen = activeTab === "analytics" && activeAnalyticsSubtab === "reliability" && activeReliabilityView === "tools";
+  const since = (toolsOpen ? (getWindow() === "all" ? "24h" : getWindow()) : effectiveAuditWindow()) || "24h";
+  return requestPanel("audit-summary-body", since, () => fetchJson(`/api/audit/summary?since=${encodeURIComponent(since)}`), (data) => {
     lastSummary = data;
     renderSummaryCounts(data);
     renderAuditSummary(data, auditContext());
@@ -1645,30 +1805,18 @@ function fetchAndRenderFrictions() {
 // blocked colour so a failure count is legible from any tab without opening
 // the tab it belongs to. Every value here comes from a fetch the dashboard
 // already makes — this adds no endpoint.
-function setRailCount(id, value, alert = false, title = "") {
+function setRailCount(id, value, alert = false, title = "", format = formatBigInt) {
   const node = $(id);
   if (!node) return;
   const empty = value == null || value === 0;
-  node.textContent = empty ? "" : formatBigInt(value);
+  node.textContent = empty ? "" : format(value);
   node.classList.toggle("alert", Boolean(alert) && !empty);
   node.title = empty ? "" : title;
 }
 
-// The windowed counts of /api/audit/summary ride on the rail: failed runs on
-// Runs, audited events and denials on Audit. Their titles keep each count's
-// definition.
+// Health's denial badge follows the summary window.
 function renderSummaryCounts(data) {
-  if (!data) return;
-  const windowLabel = data.window || getWindow();
-  setRailCount("rail-count-diag-runs", data.failed_runs, true,
-    `Failed, timeout and interrupted job runs in the ${windowLabel} window. Click this count to open Runs on Failed for the same window.`);
-  const runsCount = $("rail-count-diag-runs");
-  if (runsCount) {
-    if (data.failed_runs) runsCount.dataset.window = String(windowLabel);
-    else delete runsCount.dataset.window;
-  }
-  setRailCount("rail-count-audit", data.events, false, `Audited events in the ${windowLabel} window.`);
-  renderDenialCount(data);
+  if (data) renderDenialCount(data);
 }
 
 function formatBigInt(n) {
@@ -1677,10 +1825,16 @@ function formatBigInt(n) {
   return String(n);
 }
 
+// The Jobs badge counts pipeline runs (a task has one run per leg), so the
+// unit is on the badge. Other rail counts keep their own labels.
+function formatJobsRailCount(n) {
+  return `${formatBigInt(n)} ${n === 1 ? "run" : "runs"}`;
+}
+
 // The connection line names the destination the way the rail does, not by its
-// route: an operator on Runs should not read "diagnostics/runs".
+// route: the connection line uses the destination label.
 function refreshLabel() {
-  return destinationLabel(activeTab, activeDiagSubtab);
+  return destinationLabel(activeTab);
 }
 
 // Chrome retains values when a panel fails. Mark the whole snapshot until a
@@ -1688,7 +1842,7 @@ function refreshLabel() {
 // and renderers that replace it while other panels are still failing.
 function markRefreshStale(stale) {
   const suffix = lastCleanRefresh
-    ? `Stale · as of ${lastCleanRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}`
+    ? `Stale · as of ${formatClock(lastCleanRefresh, { seconds: false })}`
     : "Stale · no successful refresh yet";
   for (const node of document.querySelectorAll(".rail-count, #global-drain-state")) {
     const previous = node.dataset.refreshStaleSuffix;
@@ -1727,7 +1881,12 @@ async function ensureHostScope() {
     const rebuild = { hostRevision: getHostRevision() };
     workspaceRebuild = rebuild;
     rebuild.done = initWorkspaceSelector()
-      .then((loaded) => { if (!loaded && workspaceRebuild === rebuild) workspacesWanted = true; })
+      .then((loaded) => {
+        // Rebuild scope chips after both cardinality and selection settle. A
+        // shared id across hosts does not trigger a workspace-change listener.
+        if (loaded) setWorkspaceNames(dashboardWorkspaces);
+        else if (workspaceRebuild === rebuild) workspacesWanted = true;
+      })
       .finally(() => { if (workspaceRebuild === rebuild) workspaceRebuild = null; });
   }
   if (workspaceRebuild) await workspaceRebuild.done;
@@ -1814,9 +1973,10 @@ onWorkspaceChange(() => {
     if ($(id)) $(id).textContent = "—";
   }
   resetSummaryCounts();
+  setRailCount("rail-count-jobs", null);
 });
 resetPanel("tasks-body", "tasks-count");
-resetPanel("runs-body", "diag-count");
+resetPanel("runs-body", "runs-count");
 resetPanel("diag-body", "diag-count");
 
 const tasksContext = taskContext();
@@ -1824,6 +1984,8 @@ const tasksContext = taskContext();
 // rows when it changes what they say about a backlog task's wait.
 onDrainReadinessChange(() => {
   if (activeTab === "tasks") renderTasks(lastTasks, taskContext());
+  // Each lock row counts the waiting tasks it holds back.
+  if (lastLocks && lastLocks.workspace && lastLocks.workspace === getWorkspace()) paintLocksPanel(lastLocks.payload);
 });
 // Run start times and file locks arrive apart from the task list too.
 onTaskRuntimeChange(() => {
@@ -1831,33 +1993,70 @@ onTaskRuntimeChange(() => {
 });
 buildChips(tasksContext);
 wireSearch(tasksContext);
+wireTaskPane(tasksContext);
+initTaskCreate({ getWorkspaces: () => dashboardWorkspaces });
 wireFrictionSearch();
 wireFrictionStatusFilter();
 wireFrictionResponsiveDetail();
 wireTaskIdResolver();
 buildAuditChips(auditContext());
 wireAuditSearch(auditContext());
-wireCodebaseControls(() => { window.location.hash = buildAuditHash(); });
+wireCodebaseControls(() => { window.location.hash = buildCodebaseHash(); });
+wireAgentControls();
+function syncClockControls() {
+  const zone = getClockZone();
+  const localTitle = `Show times in this browser's zone (${zoneName()})`;
+  for (const button of document.querySelectorAll(".clock-zone-btn")) {
+    const on = button.dataset.zone === zone;
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-pressed", String(on));
+    button.title = button.dataset.zone === "utc" ? "Show times in UTC, matching the CLI" : localTitle;
+  }
+}
+
+function wireClockControls() {
+  for (const button of document.querySelectorAll(".clock-zone-btn")) {
+    if (button.dataset.wired === "true") continue;
+    button.dataset.wired = "true";
+    button.addEventListener("click", () => {
+      if (!setClockZone(button.dataset.zone)) return;
+      syncClockControls();
+      refreshDashboard();
+    });
+  }
+  syncClockControls();
+}
+
 $("refresh-btn").addEventListener("click", refreshDashboard);
+wireClockControls();
 initHostResources();
 wireReliabilityWindowSelector();
 wireDoctorPanel();
 setScopeChangeListener(() => {
   persistScopeToUrl();
   syncWindowSelectors();
-  if (activeTab === "diagnostics") {
-    const url = new URL(window.location.href);
-    url.hash = `diagnostics/${activeDiagSubtab}?window=${encodeURIComponent(getWindow())}`;
-    if (url.href !== window.location.href) history.replaceState(null, "", url);
-  } else if (activeTab === "audit") {
-    const next = buildAuditHash();
+  // A window change rewrites the Health or Analytics hash in place, so a
+  // reload or copied link keeps it.
+  const next = scopeRouteHash();
+  if (next) {
     const url = new URL(window.location.href);
     url.hash = next.replace(/^#/, "");
     if (url.href !== window.location.href) history.replaceState(null, "", url);
   }
   refreshDashboard();
 });
-initOperations({ getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab });
+function selectFleetScope(host, workspace) {
+  const changed = chooseHost(host);
+  if (changed) workspacesWanted = true;
+  setWorkspace(workspace);
+  if (workspace) rememberWorkspace();
+  persistScopeToUrl();
+  if (!changed) buildWorkspaceSelector();
+  sAT("drain", { refresh: false });
+  refreshDashboard();
+}
+
+initOperations({ getTab: () => activeTab, selectFleetScope, getJobsSubtab: () => activeJobsSubtab, getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab });
 initConfig();
 
 initRuns(runsContext());
@@ -1873,11 +2072,14 @@ workspacesWanted = true;
 await ensureHostScope();
 persistScopeToUrl();
 syncWindowSelectors();
+// Warm the shared fleet snapshot alongside the router's first poll so a slow
+// host cannot delay the selected view. Both reuse the same in-flight read;
+// warmup paints the indicator when the snapshot arrives.
+void startFleetIndicatorRefresh().catch(error => console.error(error));
 iT();
 
 initLogTail();
-// The status bar's Open log shows the full tail: Tasks, with the dock on Log.
+// The status bar opens the full tail on Drain.
 document.getElementById("log-statusbar-open")?.addEventListener("click", () => {
-  setDockMode("log");
-  sAT("tasks");
+  sAT("drain/log");
 });

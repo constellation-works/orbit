@@ -188,10 +188,13 @@ impl<'a> Source<'a> {
                     .insert(mapping.canonical.commit.clone(), Some(association));
                 continue;
             }
+            // Retained waived and excluded landings are restated too, so
+            // replay can move them onto their canonical commits.
             if let Some(delivery) = state
                 .pending
                 .iter()
                 .chain(&state.waived)
+                .chain(state.excluded.iter().map(|item| &item.delivery))
                 .find(|delivery| delivery.after.commit == mapping.orphan.commit)
             {
                 probe.associations.insert(

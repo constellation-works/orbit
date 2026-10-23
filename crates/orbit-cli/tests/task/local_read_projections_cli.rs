@@ -2,11 +2,22 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::fs;
+use std::path::Path;
+
+use chrono::{DateTime, SecondsFormat, Utc};
+use orbit_core::application::task::{
+    FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest,
+};
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::{ActorIdentity, OrbitRuntime};
+use orbit_engine::{RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update};
+use orbit_types::task::{ExecutionLocation, ExternalRef, TaskComplexity, TaskStatus};
+use orbit_types::workflow::{JobRun, JobRunState};
+use serde_json::{Value, json};
 
 use crate::isolated_cli_fixture;
 use isolated_cli_fixture::Fixture;
 
-#[test]
 fn local_read_projections_return_registered_keys_task_flow_and_artifact_manifest() {
     let fixture = Fixture::new();
     let keys = fixture.json(&["config", "keys", "--json"]);
@@ -88,7 +99,6 @@ fn local_read_projections_return_registered_keys_task_flow_and_artifact_manifest
     assert_eq!(fixture.json(&["task", "show", id, "--json"]), before);
 }
 
-#[test]
 fn task_show_formats_status_history_and_whole_second_timestamps_without_changing_json() {
     let fixture = Fixture::new();
     let id = fixture.json(&["task", "list", "--json"])[0]["id"]
@@ -193,12 +203,175 @@ fn task_show_formats_status_history_and_whole_second_timestamps_without_changing
     );
 }
 
+#[test]
+fn task_show_summarizes_active_run_and_limits_artifacts() {
+    if crate::isolated_test::run_in_child(
+        "local_read_projections_cli::task_show_summarizes_active_run_and_limits_artifacts",
+    ) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let shown_workspace = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown_workspace["orbit_root"].as_str().unwrap());
+    let run_id = "jrun-show-summary";
+    let now = Utc::now();
+    let id = {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("task-show-fixture"));
+        let run = JobRun {
+            run_id: run_id.into(),
+            job_id: "local-run-fixture".into(),
+            attempt: 1,
+            state: JobRunState::Running,
+            scheduled_at: now,
+            created_at: now,
+            started_at: Some(now),
+            finished_at: None,
+            duration_ms: None,
+            pid: None,
+            pid_start_time: None,
+            input: None,
+            retry_source_run_id: None,
+            knowledge_metrics: None,
+            resolved_crew: None,
+            crew_model: None,
+            steps: Vec::new(),
+            executed_on: Some(ExecutionLocation {
+                machine_id: "machine-show-fixture".into(),
+                machine_name: Some("show-fixture-host".into()),
+            }),
+        };
+        runtime
+            .sqlite_store()
+            .unwrap()
+            .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &run, None)
+            .unwrap();
+        let task = runtime
+            .add_task(TaskAddParams {
+                title: "Run summary fixture".into(),
+                acceptance_criteria: vec!["Show the active run".into()],
+                complexity: TaskComplexity::Low,
+                status: Some(TaskStatus::InProgress),
+                external_refs: vec![ExternalRef::github_pr("42").unwrap()],
+                ..Default::default()
+            })
+            .unwrap();
+        runtime
+            .update_task_as_human(
+                &task.id.to_string(),
+                TaskUpdateParams {
+                    pr_status: Some(Some("approve".into())),
+                    ..Default::default()
+                },
+                "task-show-fixture".into(),
+            )
+            .unwrap();
+        runtime
+            .apply_task_automation_update(
+                &task.id.to_string(),
+                TaskAutomationUpdate {
+                    job_run_id: Some(run_id.into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        task.id.to_string()
+    };
+
+    let source = fixture.repo.join("show-summary.txt");
+    for index in 0..7 {
+        fs::write(&source, format!("artifact {index}\n")).unwrap();
+        let source_path = source.to_str().unwrap();
+        let artifact_path = format!("reports/show-summary-{index}.txt");
+        fixture
+            .command(&[
+                "task",
+                "artifact",
+                "put",
+                &id,
+                source_path,
+                "--path",
+                &artifact_path,
+            ])
+            .assert()
+            .success();
+    }
+
+    let json_before = fixture.json(&["task", "show", &id, "--json"]);
+    assert_eq!(json_before["job_run_id"], run_id);
+    assert_eq!(json_before["pr_status"], "approve");
+    assert_eq!(json_before["artifacts"].as_array().unwrap().len(), 7);
+    assert_eq!(
+        json_before["artifacts"][6]["path"],
+        "reports/show-summary-6.txt"
+    );
+
+    let plain = fixture
+        .command(&["task", "show", &id])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let plain = String::from_utf8(plain).unwrap();
+    assert!(
+        plain.contains("Run: jrun-show-summary on show-fixture-host (running)"),
+        "{plain}"
+    );
+    assert!(plain.contains("PR: #42 (approve)"));
+    assert!(!plain.contains("PR Status:"));
+    assert!(!plain.contains("github-pr: 42"));
+    assert!(plain.contains("Artifacts: 7 total (showing first 5)"));
+    let artifact_lines = plain
+        .lines()
+        .filter(|line| line.starts_with("  - reports/show-summary-"))
+        .collect::<Vec<_>>();
+    assert_eq!(artifact_lines.len(), 5, "{plain}");
+    for index in 0..5 {
+        assert!(plain.contains(&format!("reports/show-summary-{index}.txt")));
+    }
+    assert!(!plain.contains("reports/show-summary-5.txt"));
+    assert!(!plain.contains("reports/show-summary-6.txt"));
+
+    let fields = fixture
+        .command(&[
+            "task",
+            "show",
+            &id,
+            "--fields",
+            "job_run_id,job_run_machine,external_refs,pr_status",
+        ])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let fields = String::from_utf8(fields).unwrap();
+    assert!(fields.contains("Field: job_run_id\njrun-show-summary"));
+    assert!(fields.contains("Field: pr_status\napprove"));
+    assert!(!fields.contains("Run:"));
+    assert!(!fields.contains("PR: #42"));
+    assert_eq!(
+        fixture.json(&["task", "show", &id, "--json"]),
+        json_before,
+        "text and --fields rendering must not mutate the JSON projection"
+    );
+}
+
 /// `orbit task show --json` and `task list --json` serve the same task JSON as
 /// the tool host's `orbit.task.show` and `orbit.task.list`: one base
 /// projection (including `job_run_machine`) and, for the full record, the same
 /// sidecars, artifact manifest and crew enrichment. A tool-host write response
 /// keeps the base record without the sidecars.
-#[test]
 fn task_show_and_list_json_match_the_tool_host_projection() {
     let fixture = Fixture::new();
     let id = fixture.json(&["task", "list", "--json"])[0]["id"]
@@ -295,4 +468,690 @@ fn task_show_and_list_json_match_the_tool_host_projection() {
             "every list row carries job_run_machine: {row}"
         );
     }
+}
+
+/// A run-blocked task with an escalation recorded without another status change.
+fn block_with_final_recovery(runtime: &OrbitRuntime, repo: &Path, id: &str, run_id: &str) {
+    runtime
+        .apply_task_automation_update(
+            id,
+            TaskAutomationUpdate {
+                job_run_id: Some(run_id.into()),
+                ..blocked_workflow_failure_update(
+                    "task_pr_pipeline",
+                    run_id,
+                    Some("STEP_FAILED"),
+                    Some("step `implement` completed with success=false"),
+                )
+            },
+        )
+        .unwrap();
+    let task = runtime.get_task(id).unwrap();
+    let observed = runtime.final_recovery_revision(&task).unwrap();
+    let outcome = runtime
+        .apply_final_recovery(
+            &FinalRecoveryRequest {
+                task_id: id.to_string(),
+                run_id: run_id.to_string(),
+                observed,
+                repo_root: repo.to_path_buf(),
+                base_ref: "main".into(),
+                completion: FinalRecoveryCompletion::Review,
+                requeue_bound: Default::default(),
+            },
+            Some(&json!({
+                "decision": "escalate",
+                "diagnosis": "the failure needs an operator",
+                "human_action": "move the task back to backlog after fixing the cause",
+            })),
+        )
+        .unwrap();
+    assert_eq!(outcome, FinalRecoveryOutcome::Escalated { reason: None });
+}
+
+fn guidance_lines(id: &str, run_id: &str, at: &str) -> (String, String) {
+    let formatted = DateTime::parse_from_rfc3339(at)
+        .unwrap()
+        .with_timezone(&Utc)
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
+    (
+        format!(
+            "Next: move the task back to backlog with `orbit task update {id} --status backlog` to run it again"
+        ),
+        format!("Final Recovery: escalate (escalated) by run {run_id} at {formatted}"),
+    )
+}
+
+/// Local `orbit task show` text, its `--json`, and `orbit.task.show` carry the
+/// same blocked guidance. List rows omit it. A task with neither key prints
+/// neither line.
+fn task_show_prints_blocked_guidance_on_cli_and_tool() {
+    let fixture = Fixture::new();
+    let blocked = fixture.json(&["task", "list", "--json"])[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let plain = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Plain show",
+        "--complexity",
+        "low",
+        "--acceptance-criteria",
+        "Stay quiet",
+        "--json",
+    ])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let run_id = "jrun-show-guidance";
+    // A managed run exports worker authority. The fixture runtime must not
+    // inherit it: the marker fails construction when this temp root has no
+    // binding, and the other variables would point the write at the live store.
+    {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("show-guidance-fixture"));
+        block_with_final_recovery(&runtime, &fixture.repo, &blocked, run_id);
+    }
+
+    let without_workspace = |mut doc: Value| {
+        doc.as_object_mut().unwrap().remove("workspace");
+        doc
+    };
+    let cli = without_workspace(fixture.json(&["task", "show", &blocked, "--json"]));
+    let input = json!({"id": blocked}).to_string();
+    let tool = without_workspace(fixture.json(&[
+        "tool",
+        "run",
+        "orbit.task.show",
+        "--full",
+        "--input",
+        &input,
+    ]));
+    assert_eq!(cli, tool, "CLI and tool host serve one show record");
+    assert_eq!(
+        cli["next_step"],
+        json!({
+            "run_id": run_id,
+            "resume_command": null,
+            "requeue_command": format!("orbit task update {blocked} --status backlog"),
+        })
+    );
+    assert_eq!(cli["final_recovery"]["run_id"], run_id);
+    assert_eq!(cli["final_recovery"]["decision"], "escalate");
+    assert_eq!(cli["final_recovery"]["outcome"], "escalated");
+    assert!(cli["final_recovery"]["at"].as_str().unwrap().contains('T'));
+    for extra in ["status_transitions", "job_run_navigable"] {
+        assert!(
+            cli.get(extra).is_none(),
+            "the tool show does not add dashboard extra `{extra}`"
+        );
+    }
+
+    let human = fixture
+        .command(&["task", "show", &blocked])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8(human).unwrap();
+    let (next_line, recovery_line) = guidance_lines(
+        &blocked,
+        run_id,
+        cli["final_recovery"]["at"].as_str().unwrap(),
+    );
+    assert!(
+        human.lines().any(|line| line == next_line),
+        "local show Next: line:\n{human}"
+    );
+    assert!(
+        human.lines().any(|line| line == recovery_line),
+        "local show Final Recovery: line:\n{human}"
+    );
+
+    let quiet = fixture
+        .command(&["task", "show", &plain])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let quiet = String::from_utf8(quiet).unwrap();
+    assert!(
+        !quiet.lines().any(|line| line.starts_with("Next:")),
+        "an unblocked task prints no Next: line:\n{quiet}"
+    );
+    assert!(
+        !quiet
+            .lines()
+            .any(|line| line.starts_with("Final Recovery:")),
+        "a task with no decision prints no Final Recovery: line:\n{quiet}"
+    );
+    let quiet_json = fixture.json(&["task", "show", &plain, "--json"]);
+    assert!(quiet_json.get("next_step").is_none());
+    assert!(quiet_json.get("final_recovery").is_none());
+
+    let listed = fixture.json(&["task", "list", "--json"]);
+    let tool_listed = fixture.json(&["tool", "run", "orbit.task.list", "--full", "--input", "{}"]);
+    for rows in [
+        listed.as_array().unwrap(),
+        tool_listed["tasks"].as_array().unwrap(),
+    ] {
+        let row = rows.iter().find(|row| row["id"] == blocked).unwrap();
+        assert!(
+            row.get("next_step").is_none() && row.get("final_recovery").is_none(),
+            "a list row omits show guidance: {row}"
+        );
+    }
+}
+
+/// [ORB-17401] An object-valued single-field `orbit.task.show` projection keeps
+/// its value under an explicit `--fields`, as scalar, array and multi-field
+/// projections already do. An ordinary record filtered by `--fields` stays a
+/// keyed selection, and `terminal` keeps its own key.
+fn task_show_object_field_projection_keeps_its_value_under_fields() {
+    let fixture = Fixture::new();
+    let id = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Object projection",
+        "--complexity",
+        "low",
+        "--acceptance-criteria",
+        "Keep readiness",
+        "--json",
+    ])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let field = json!({"id": id, "field": "readiness"}).to_string();
+    let proposed_readiness = fixture.json(&["task", "show", &id, "--json"])["readiness"].clone();
+    assert!(
+        proposed_readiness.is_object(),
+        "a proposed task carries a readiness object: {proposed_readiness}"
+    );
+    assert_eq!(
+        fixture.json(&[
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            &field,
+            "--fields",
+            "readiness",
+        ]),
+        json!({ "readiness": proposed_readiness }),
+        "a proposed readiness object survives its single-field projection"
+    );
+
+    fixture.json(&["task", "update", &id, "--status", "backlog", "--json"]);
+    let backlog_readiness = fixture.json(&["task", "show", &id, "--json"])["readiness"].clone();
+    assert!(
+        backlog_readiness.is_object(),
+        "a backlog task carries a readiness object: {backlog_readiness}"
+    );
+    assert_eq!(
+        fixture.json(&[
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            &field,
+            "--fields",
+            "readiness",
+        ]),
+        json!({ "readiness": backlog_readiness }),
+        "a backlog readiness object survives its single-field projection"
+    );
+
+    let title = json!({"id": id, "field": "title"}).to_string();
+    assert_eq!(
+        fixture.json(&[
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            &title,
+            "--fields",
+            "title",
+        ]),
+        json!({ "title": "Object projection" }),
+        "a scalar single-field projection"
+    );
+    let criteria = json!({"id": id, "field": "acceptance_criteria"}).to_string();
+    assert_eq!(
+        fixture.json(&[
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            &criteria,
+            "--fields",
+            "acceptance_criteria",
+        ]),
+        json!({ "acceptance_criteria": ["Keep readiness"] }),
+        "an array single-field projection"
+    );
+    let pair = json!({"id": id, "fields": ["title", "readiness"]}).to_string();
+    assert_eq!(
+        fixture.json(&[
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            &pair,
+            "--fields",
+            "title,readiness",
+        ]),
+        json!({ "title": "Object projection", "readiness": backlog_readiness }),
+        "a multi-field projection is already keyed"
+    );
+    let record = json!({"id": id}).to_string();
+    assert_eq!(
+        fixture.json(&[
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            &record,
+            "--fields",
+            "readiness",
+        ]),
+        json!({ "readiness": backlog_readiness }),
+        "an ordinary record filtered by --fields stays a keyed selection"
+    );
+    let terminal = json!({"id": id, "field": "terminal"}).to_string();
+    assert_eq!(
+        fixture.json(&[
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            &terminal,
+            "--fields",
+            "terminal",
+        ]),
+        json!({ "terminal": false }),
+        "terminal keeps its own key"
+    );
+}
+
+#[test]
+fn local_read_projection_contracts() {
+    for (name, check) in [
+        (
+            "local_read_projections_return_registered_keys_task_flow_and_artifact_manifest",
+            local_read_projections_return_registered_keys_task_flow_and_artifact_manifest as fn(),
+        ),
+        (
+            "task_show_formats_status_history_and_whole_second_timestamps_without_changing_json",
+            task_show_formats_status_history_and_whole_second_timestamps_without_changing_json
+                as fn(),
+        ),
+        (
+            "task_show_and_list_json_match_the_tool_host_projection",
+            task_show_and_list_json_match_the_tool_host_projection as fn(),
+        ),
+        (
+            "task_show_prints_blocked_guidance_on_cli_and_tool",
+            task_show_prints_blocked_guidance_on_cli_and_tool as fn(),
+        ),
+        (
+            "task_show_object_field_projection_keeps_its_value_under_fields",
+            task_show_object_field_projection_keeps_its_value_under_fields as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
+}
+
+/// The public show record explains the current block, including an escalation
+/// recorded while the task was already blocked, without leaking stale reasons.
+#[test]
+fn task_show_explains_latest_block() {
+    if crate::isolated_test::run_in_child(
+        "local_read_projections_cli::task_show_explains_latest_block",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let id = fixture.json(&["task", "list", "--json"])[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let _authority = orbit_common::test_env::unset(
+        orbit_common::test_env::INHERITED_AUTHORITY_ENV
+            .iter()
+            .copied(),
+    );
+    let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+        .unwrap()
+        .with_actor(ActorIdentity::human("block-readout-fixture"));
+    runtime
+        .apply_task_automation_update(
+            &id,
+            blocked_workflow_failure_update(
+                "ship",
+                "jrun-first-block",
+                Some("STEP_FAILED"),
+                Some("Required check failed"),
+            ),
+        )
+        .unwrap();
+    let failed = fixture.json(&["task", "show", &id, "--json"]);
+    assert_eq!(failed["block"]["reason"], "Required check failed");
+    assert_eq!(failed["block"]["cause"], "run");
+    assert_eq!(failed["block"]["run_id"], "jrun-first-block");
+    assert!(failed["block"]["at"].as_str().is_some());
+
+    block_with_final_recovery(&runtime, &fixture.repo, &id, "jrun-latest-escalation");
+    let escalated = fixture.json(&["task", "show", &id, "--json"]);
+    assert_eq!(
+        escalated["block"]["reason"],
+        "the failure needs an operator"
+    );
+    assert_eq!(
+        escalated["block"]["next_action"],
+        "move the task back to backlog after fixing the cause"
+    );
+    assert_eq!(escalated["block"]["run_id"], "jrun-latest-escalation");
+    assert_eq!(escalated["next_step"]["run_id"], "jrun-latest-escalation");
+    assert_eq!(escalated["block"]["at"], escalated["final_recovery"]["at"]);
+    let index = escalated["block"]["comment_index"].as_u64().unwrap() as usize;
+    assert!(
+        escalated["comments"][index]["message"]
+            .as_str()
+            .unwrap()
+            .contains("human_action:")
+    );
+    assert_eq!(
+        escalated,
+        fixture.json(&["task", "show", &id, "--json"]),
+        "show is read-only"
+    );
+    let input = json!({"id": id}).to_string();
+    assert_eq!(
+        escalated["block"],
+        fixture.json(&[
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--full",
+            "--input",
+            &input
+        ])["block"]
+    );
+
+    runtime
+        .apply_task_automation_update(
+            &id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let queued = fixture.json(&["task", "show", &id, "--json"]);
+    assert!(queued.get("block").is_none());
+    assert!(queued.get("next_step").is_none());
+    runtime
+        .apply_task_automation_update(
+            &id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Blocked),
+                status_event: Some("status_changed".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let unknown = fixture.json(&["task", "show", &id, "--json"]);
+    assert!(
+        unknown["block"]["reason"].is_null(),
+        "a newer unexplained block must not reuse the escalation"
+    );
+    assert!(unknown["block"]["run_id"].is_null());
+    assert!(unknown["block"]["comment_index"].is_null());
+}
+
+/// [ORB-17206] An escalated block with a local run in failed, timeout or
+/// interrupted state offers the resume route in `next_step`.
+#[test]
+fn task_show_offers_resume_for_resumable_escalated_run() {
+    if crate::isolated_test::run_in_child(
+        "local_read_projections_cli::task_show_offers_resume_for_resumable_escalated_run",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let id = fixture.json(&["task", "list", "--json"])[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let _authority = orbit_common::test_env::unset(
+        orbit_common::test_env::INHERITED_AUTHORITY_ENV
+            .iter()
+            .copied(),
+    );
+    let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+        .unwrap()
+        .with_actor(ActorIdentity::human("escalation-resume-fixture"));
+    let run_id = "jrun-escalated-failed";
+    let now = Utc::now();
+    let run = JobRun {
+        run_id: run_id.into(),
+        job_id: "task_pr_pipeline".into(),
+        attempt: 1,
+        state: JobRunState::Failed,
+        scheduled_at: now,
+        created_at: now,
+        started_at: Some(now),
+        finished_at: Some(now),
+        duration_ms: Some(1000),
+        pid: None,
+        pid_start_time: None,
+        input: None,
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+        executed_on: None,
+    };
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &run, None)
+        .unwrap();
+    block_with_final_recovery(&runtime, &fixture.repo, &id, run_id);
+
+    let cli = fixture.json(&["task", "show", &id, "--json"]);
+    assert_eq!(
+        cli["next_step"]["resume_command"],
+        json!(format!("orbit job resume {run_id}"))
+    );
+    assert_eq!(
+        cli["next_step"]["requeue_command"],
+        format!("orbit task update {id} --status backlog")
+    );
+    assert_eq!(cli["next_step"]["run_id"], run_id);
+
+    let human = fixture
+        .command(&["task", "show", &id])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8(human).unwrap();
+    assert!(
+        human.lines().any(|line| line == format!(
+            "Next: run `orbit job resume {run_id}` to retry the failed work, or move the task back to backlog with `orbit task update {id} --status backlog`"
+        )),
+        "resumable Next line:\n{human}"
+    );
+
+    let nonlocal_id = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Nonlocal escalated",
+        "--complexity",
+        "low",
+        "--acceptance-criteria",
+        "Stay unresumed",
+        "--json",
+    ])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let nonlocal_run_id = "jrun-escalated-nonlocal";
+    let nonlocal_run = JobRun {
+        run_id: nonlocal_run_id.into(),
+        job_id: "task_pr_pipeline".into(),
+        attempt: 1,
+        state: JobRunState::Failed,
+        scheduled_at: now,
+        created_at: now,
+        started_at: Some(now),
+        finished_at: Some(now),
+        duration_ms: Some(1000),
+        pid: None,
+        pid_start_time: None,
+        input: None,
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+        executed_on: Some(ExecutionLocation {
+            machine_id: "machine-other".into(),
+            machine_name: Some("other-host".into()),
+        }),
+    };
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &nonlocal_run, None)
+        .unwrap();
+    block_with_final_recovery(&runtime, &fixture.repo, &nonlocal_id, nonlocal_run_id);
+    let nonlocal_cli = fixture.json(&["task", "show", &nonlocal_id, "--json"]);
+    assert_eq!(nonlocal_cli["next_step"]["resume_command"], Value::Null);
+    assert_eq!(
+        nonlocal_cli["next_step"]["requeue_command"],
+        format!("orbit task update {nonlocal_id} --status backlog")
+    );
+    assert_eq!(nonlocal_cli["next_step"]["run_id"], nonlocal_run_id);
+    let nonlocal_human = fixture
+        .command(&["task", "show", &nonlocal_id])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let nonlocal_human = String::from_utf8(nonlocal_human).unwrap();
+    assert!(
+        nonlocal_human.lines().any(|line| line == format!(
+            "Next: move the task back to backlog with `orbit task update {nonlocal_id} --status backlog` to run it again"
+        )),
+        "nonlocal Next line:\n{nonlocal_human}"
+    );
+    assert!(
+        !nonlocal_human.contains("cannot be resumed"),
+        "nonlocal run must not claim it cannot be resumed:\n{nonlocal_human}"
+    );
+
+    let nonresumable_id = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Nonresumable escalated",
+        "--complexity",
+        "low",
+        "--acceptance-criteria",
+        "Stay unresumed",
+        "--json",
+    ])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let nonresumable_run_id = "jrun-escalated-succeeded";
+    let nonresumable_run = JobRun {
+        run_id: nonresumable_run_id.into(),
+        job_id: "task_pr_pipeline".into(),
+        attempt: 1,
+        state: JobRunState::Success,
+        scheduled_at: now,
+        created_at: now,
+        started_at: Some(now),
+        finished_at: Some(now),
+        duration_ms: Some(1000),
+        pid: None,
+        pid_start_time: None,
+        input: None,
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+        executed_on: None,
+    };
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &nonresumable_run, None)
+        .unwrap();
+    block_with_final_recovery(
+        &runtime,
+        &fixture.repo,
+        &nonresumable_id,
+        nonresumable_run_id,
+    );
+    let nonresumable_cli = fixture.json(&["task", "show", &nonresumable_id, "--json"]);
+    assert_eq!(nonresumable_cli["next_step"]["resume_command"], Value::Null);
+    assert_eq!(
+        nonresumable_cli["next_step"]["requeue_command"],
+        format!("orbit task update {nonresumable_id} --status backlog")
+    );
+    assert_eq!(nonresumable_cli["next_step"]["run_id"], nonresumable_run_id);
+    let nonresumable_human = fixture
+        .command(&["task", "show", &nonresumable_id])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let nonresumable_human = String::from_utf8(nonresumable_human).unwrap();
+    assert!(
+        nonresumable_human.lines().any(|line| line == format!(
+            "Next: move the task back to backlog with `orbit task update {nonresumable_id} --status backlog` to run it again"
+        )),
+        "nonresumable Next line:\n{nonresumable_human}"
+    );
+    assert!(
+        !nonresumable_human.contains("cannot be resumed"),
+        "nonresumable run must not claim it cannot be resumed:\n{nonresumable_human}"
+    );
 }

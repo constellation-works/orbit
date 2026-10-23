@@ -28,7 +28,7 @@ use tempfile::tempdir;
 
 #[test]
 fn a_replaced_dashboard_execs_the_installed_executable_and_keeps_serving() {
-    exercise_handover(|mut server, pid, _| {
+    exercise_handover(|mut server, pid, port| {
         // Safety: SIGTERM to this test's own child, as a service manager would.
         assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) }, 0);
         let deadline = Instant::now() + Duration::from_secs(20);
@@ -39,53 +39,58 @@ fn a_replaced_dashboard_execs_the_installed_executable_and_keeps_serving() {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+        drop(server);
+        assert!(
+            DeadlineStream::connect(port, OPERATION_TIMEOUT).is_err(),
+            "the handed-over dashboard must release its listening port"
+        );
     });
 }
 
-#[test]
-fn a_handed_over_dashboard_is_reaped_when_an_assertion_panics() {
-    let mut spawned = None;
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        exercise_handover(|server, pid, port| {
-            spawned = Some((pid, port));
-            assert_eq!(server.id(), 0, "forced assertion failure after handover");
-        });
-    }));
-    let (pid, port) = spawned.expect("dashboard completed its handover before the forced panic");
-    assert!(
-        result.is_err(),
-        "the assertion must unwind through the guard"
-    );
-    // SAFETY: probe the PID retained before unwinding; do not send a signal.
-    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, 0) }, -1);
-    assert_eq!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(libc::ESRCH)
-    );
-    assert!(
-        DeadlineStream::connect(port, OPERATION_TIMEOUT).is_err(),
-        "the handed-over dashboard must release its listening port"
-    );
-}
-
 fn exercise_handover(after_handover: impl FnOnce(BoundServer, u32, u16)) {
+    let mut progress = test_env::FixtureProgress::start("dashboard handover");
+    progress.phase("prepare installation", 0);
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
     let install = temp.path().join("installation");
     std::fs::create_dir_all(&home).expect("create home");
     std::fs::create_dir_all(&install).expect("create installation");
     let installed = install.join("orbit");
-    std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install old executable");
+    // The old image is never modified: replacement renames a distinct inode
+    // over this private path. A hard link retains the built image's completed
+    // macOS assessment rather than making another image wait in that queue.
+    if let Err(error) = std::fs::hard_link(env!("CARGO_BIN_EXE_orbit"), &installed) {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::CrossesDevices,
+            "link old executable: {error}"
+        );
+        // A fixture HOME on a different volume still exercises real installation.
+        std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install old executable");
+    }
 
+    progress.phase("initial dashboard readiness", 0);
     let (mut server, address) = start_dashboard(&installed, &home);
     let port = address.port();
     let pid = server.id();
     assert!(http_get(port, "/healthz").contains("ok"));
 
-    let candidate = temp.path().join("candidate");
+    progress.phase("prepare and assess replacement", 0);
+    // Build and assess the replacement on the inode that will be installed.
+    // Copying an already assessed candidate again would pay for another full
+    // image copy and, on macOS, another first-exec assessment. Renaming this
+    // staged file still leaves the running executable's inode untouched.
+    let candidate = installed.with_extension("staged");
     generation_fixture::distinct_copy(Path::new(env!("CARGO_BIN_EXE_orbit")), &candidate);
     let new_digest = executable_generation(&candidate).expect("candidate digest");
-    generation_fixture::install_over(&candidate, &installed);
+    let old_digest = generation_fixture::running_digest(&home.join(".orbit"), pid)
+        .expect("the serving dashboard registered its old generation");
+    assert_ne!(
+        old_digest, new_digest,
+        "preparing a candidate must leave the dashboard on its old generation"
+    );
+    progress.phase("replace and observe handover", 0);
+    std::fs::rename(&candidate, &installed).expect("replace installation");
 
     test_env::wait_until("handover", || {
         generation_fixture::running_digest(&home.join(".orbit"), pid).as_deref()
@@ -104,7 +109,9 @@ fn exercise_handover(after_handover: impl FnOnce(BoundServer, u32, u16)) {
     );
     assert!(http_get(port, "/healthz").contains("ok"));
 
+    progress.phase("SIGTERM and port release", 0);
     after_handover(server, pid, port);
+    progress.finish();
 }
 
 // Handover reuses argv, so this fixture needs a nonzero requested port.

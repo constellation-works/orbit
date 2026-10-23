@@ -261,9 +261,7 @@ impl OrbitRuntime {
             if let Some(diagnostic) = self.tool_registry().inactive_diagnostic(name) {
                 return Err(OrbitError::PolicyDenied(diagnostic));
             }
-            return Err(OrbitError::PolicyDenied(format!(
-                "tool '{name}' is inactive on the agent tool surface; it is an admin/human-only operation not reachable by agents"
-            )));
+            return Err(OrbitError::PolicyDenied(inactive_agent_refusal(name)));
         }
         // A plugin this workspace switched off registers nothing, so its
         // tools would otherwise read as unknown. Name the toggle instead.
@@ -356,6 +354,30 @@ impl OrbitRuntime {
             };
             Ok(((), event))
         })
+    }
+}
+
+/// The refusal for an inactive built-in on the agent surface. Where a supported
+/// agent call does the same job, the refusal names it, so the caller is pointed
+/// at that call rather than left at a dead end. It never offers a capability
+/// override.
+fn inactive_agent_refusal(name: &str) -> String {
+    let refusal = format!(
+        "tool '{name}' is inactive on the agent tool surface; it is an admin/human-only operation not reachable by agents"
+    );
+    match agent_alternative(name) {
+        Some(alternative) => format!("{refusal}. {alternative}"),
+        None => refusal,
+    }
+}
+
+/// The supported agent call that replaces an inactive tool.
+fn agent_alternative(name: &str) -> Option<&'static str> {
+    match name {
+        "orbit.friction.list" => {
+            Some("Agents list friction with orbit.search (kind \"friction\", no query)")
+        }
+        _ => None,
     }
 }
 

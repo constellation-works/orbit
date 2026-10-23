@@ -24,8 +24,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use orbit_common::OrbitError;
-use orbit_common::storage::sqlite::apply_default_pragmas;
+use orbit_common::storage::sqlite::{apply_default_pragmas, sqlite_error};
+use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::Connection;
 
 use crate::driver::sqlite::connection::register_sql_functions;
@@ -53,9 +53,7 @@ impl ReadPool {
     /// Pop an idle reader or open a fresh one. Never waits on other readers.
     pub(crate) fn checkout(&self) -> Result<(u64, Connection), OrbitError> {
         let generation = self.generation.load(Ordering::Acquire);
-        let idle = self
-            .idle
-            .lock()
+        let idle = orbit_common::fs::lock_wait::mutex(&self.idle)
             .map_err(|e| OrbitError::Store(format!("read pool mutex poisoned: {e}")))?
             .pop();
         let connection = match idle {
@@ -70,9 +68,7 @@ impl ReadPool {
     /// allowed to open the SQLite files has exited: WAL sidecars may have been
     /// retired and recreated while those cached readers were idle.
     pub(crate) fn clear_idle(&self) -> Result<(), OrbitError> {
-        let mut idle = self
-            .idle
-            .lock()
+        let mut idle = orbit_common::fs::lock_wait::mutex(&self.idle)
             .map_err(|e| OrbitError::Store(format!("read pool mutex poisoned: {e}")))?;
         self.generation.fetch_add(1, Ordering::Release);
         idle.clear();
@@ -82,7 +78,7 @@ impl ReadPool {
     /// Return a reader to the idle list, dropping it when the list is full
     /// (or when the pool mutex is poisoned — losing a connection is fine).
     fn checkin(&self, generation: u64, conn: Connection) {
-        if let Ok(mut idle) = self.idle.lock()
+        if let Ok(mut idle) = orbit_common::fs::lock_wait::mutex(&self.idle)
             && generation == self.generation.load(Ordering::Acquire)
             && idle.len() < MAX_IDLE_READERS
         {
@@ -91,11 +87,21 @@ impl ReadPool {
     }
 
     fn open_reader(&self) -> Result<Connection, OrbitError> {
-        let conn = Connection::open(&self.path)
-            .map_err(|e| OrbitError::Store(format!("open reader connection: {e}")))?;
+        let conn = Connection::open(&self.path).map_err(|e| {
+            sqlite_error(
+                StorageLayer::Store,
+                &e,
+                format!("open reader connection: {e}"),
+            )
+        })?;
         apply_default_pragmas(&conn)?;
-        conn.pragma_update(None, "query_only", "ON")
-            .map_err(|e| OrbitError::Store(format!("failed to set query_only: {e}")))?;
+        conn.pragma_update(None, "query_only", "ON").map_err(|e| {
+            sqlite_error(
+                StorageLayer::Store,
+                &e,
+                format!("failed to set query_only: {e}"),
+            )
+        })?;
         register_sql_functions(&conn)?;
         Ok(conn)
     }

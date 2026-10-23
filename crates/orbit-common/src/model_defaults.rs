@@ -102,3 +102,11 @@ pub const PI_DEFAULT_MODEL: &str = "sonnet";
 /// and looks the vendor up in its provider catalog, so a bare model id does
 /// not resolve. [ORB-11295]
 pub const OPENCODE_DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4-5";
+
+/// Default model for the Muse Code execution lane.
+///
+/// Muse Code is Meta's terminal coding agent; its `--model` takes an id from
+/// the Muse model catalog (`muse model-profile show <model>` resolves one).
+/// The executor identity stays `muse` whichever model the crew selects, so
+/// the lane is never inferred from this string. [ORB-16577]
+pub const MUSE_DEFAULT_MODEL: &str = "muse-spark-1.3";

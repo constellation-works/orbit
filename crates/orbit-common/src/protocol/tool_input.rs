@@ -1,17 +1,7 @@
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::OrbitError;
-
-pub const RETIRED_TASK_ADD_INPUT_FIELDS: &[&str] = &[
-    "plan",
-    "status",
-    "parent_id",
-    "source_task_id",
-    "external_refs",
-    "context",
-    "comment",
-    "dependencies",
-];
 
 /// Top-level keys that are transport/session wrappers, not tool arguments.
 ///
@@ -19,6 +9,13 @@ pub const RETIRED_TASK_ADD_INPUT_FIELDS: &[&str] = &[
 /// advertised parameters. They stay allowed even when the tool's JSON Schema
 /// sets `additionalProperties: false` on the argument object.
 pub const TOOL_INPUT_TRANSPORT_WRAPPER_KEYS: &[&str] = &["_meta", "workspace"];
+
+/// Top-level attribution keys the tool boundary reads for every Orbit builtin.
+///
+/// Identity resolution takes the caller's agent family from these keys when
+/// the session asserts none, so they are meaningful input even for an
+/// operation that declares no parameter of that name.
+pub const TOOL_INPUT_IDENTITY_KEYS: &[&str] = &["agent", "model"];
 
 /// Refuse unknown top-level tool-argument keys with a did-you-mean hint.
 ///
@@ -55,27 +52,6 @@ pub fn reject_unknown_tool_fields(input: &Value, allowed: &[&str]) -> Result<(),
             .map(|name| vec![name.to_string()])
             .unwrap_or_default(),
     ))
-}
-
-/// Refuse retired `orbit.task.add` fields that used to be stripped silently.
-///
-/// These names are not misspellings of add parameters; they belong on
-/// `orbit.task.update` (or a later follow-up). The error names the field and
-/// the tool that accepts it.
-pub fn reject_retired_task_add_input_fields(input: &Value) -> Result<(), OrbitError> {
-    let Some(object) = input.as_object() else {
-        return Ok(());
-    };
-
-    for field in RETIRED_TASK_ADD_INPUT_FIELDS {
-        if object.contains_key(*field) {
-            return Err(OrbitError::InvalidInput(format!(
-                "unknown field '{field}' (orbit.task.add does not accept '{field}'; \
-                 set it with orbit.task.update)"
-            )));
-        }
-    }
-    Ok(())
 }
 
 fn unknown_tool_field_message(unknown: &[String], suggestion: Option<&str>) -> String {
@@ -186,6 +162,14 @@ pub fn required_string(
             return Ok(trimmed.to_string());
         }
     }
+    Err(missing_tool_field(input, canonical))
+}
+
+/// The refusal for input that omits the required field `canonical`.
+///
+/// When the input carries a known synonym of the field instead (`task_id` for
+/// `id`), the refusal names it and suggests the field.
+pub fn missing_tool_field(input: &Value, canonical: &str) -> OrbitError {
     // Task-owner routing reads required fields before dispatch can reject
     // unknown arguments. Preserve the field hint on that early error path.
     if let Some(object) = input.as_object()
@@ -194,15 +178,15 @@ pub fn required_string(
                 == Some(canonical)
         })
     {
-        return Err(OrbitError::invalid_input_with_suggestions(
+        return OrbitError::invalid_input_with_suggestions(
             format!(
                 "missing `{canonical}`; {}",
                 unknown_tool_field_message(std::slice::from_ref(unknown), Some(canonical)),
             ),
             vec![canonical.to_string()],
-        ));
+        );
     }
-    Err(OrbitError::InvalidInput(format!("missing `{canonical}`")))
+    OrbitError::InvalidInput(format!("missing `{canonical}`"))
 }
 
 pub fn optional_string(input: &Value, key: &str) -> Result<Option<String>, OrbitError> {
@@ -419,5 +403,47 @@ pub fn parse_duration_seconds(raw: &str) -> Result<u64, OrbitError> {
     };
     seconds.ok_or_else(|| {
         OrbitError::InvalidInput(format!("duration '{raw}' is too large to represent"))
+    })
+}
+
+/// Parse a `since` window into an instant: an RFC3339 timestamp, a naive
+/// `YYYY-MM-DDTHH:MM:SS` or `YYYY-MM-DD HH:MM:SS` timestamp read as UTC, or a
+/// duration measured back from now.
+///
+/// The caller supplies the duration grammar as `parse_duration`, so each
+/// surface keeps its own rule for bare numbers. Overflowing durations are
+/// refused with the input as the caller wrote it.
+pub fn parse_since_with(
+    raw: &str,
+    parse_duration: impl FnOnce(&str) -> Result<u64, OrbitError>,
+) -> Result<DateTime<Utc>, OrbitError> {
+    let value = raw.trim();
+
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(value) {
+        return Ok(parsed.with_timezone(&Utc));
+    }
+
+    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S") {
+        return Ok(naive.and_utc());
+    }
+    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
+        return Ok(naive.and_utc());
+    }
+
+    let seconds = parse_duration(value)?;
+    let seconds = i64::try_from(seconds).map_err(|_| {
+        OrbitError::InvalidInput(format!(
+            "duration '{raw}' is too large to convert into a timestamp"
+        ))
+    })?;
+    let duration = chrono::Duration::try_seconds(seconds).ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "duration '{raw}' is too large to convert into a timestamp"
+        ))
+    })?;
+    Utc::now().checked_sub_signed(duration).ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "duration '{raw}' is too large to convert into a timestamp"
+        ))
     })
 }

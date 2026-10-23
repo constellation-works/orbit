@@ -83,6 +83,19 @@ know why it failed and that a rerun can succeed. A sandbox denial or provider
 failure is not inherently transient; repeated identical failures need a repair
 or configuration correction before another attempt.
 
+Every return from `blocked` to `backlog` is authenticated the same way.
+`orbit task requeue`, a plain `orbit task update --status backlog`, and the
+same move through MCP, HTTP or the dashboard all apply the same publication
+pre-flight in the shared core operation before writing: a task whose
+specification changed after its run published a pull request, or with a pull
+request or preserved candidate no handoff receipt binds, is refused with the
+same discard/explicit-source-repair guidance and stays `blocked` with
+nothing written. An authenticated failure-handoff publication (or no
+publication on record) returns to `backlog` — with the requeue's
+preservation recorded when there is one to resume — and an update with
+`--discard-candidate` still discards the candidate and closes its pull
+requests so the next run implements fresh.
+
 When a run stops on a rebase conflict, final recovery can repair the conflict
 files and resume. The next conflict recovery adopts those repairs and continues
 the stopped rebase, so don't abort it or stage files by hand. Adoption still
@@ -103,8 +116,13 @@ claim. Orbit already keeps what it can. A claimed leaf's candidate stays with
 its released claim. A reviewer stopped mid-review leaves its uncommitted
 repair as a marked commit at `refs/orbit/candidates/<task>/<run>-review`.
 The attempt's report stays on the task. The task's next claim continues from
-those automatically. When you must decide what happens next, follow these
-steps:
+those automatically. An owner-local delivery leaf that died after opening its
+pull request, with its task in `review`, is resumed on that pull request once by
+the owner drain's next pass, when that drain holds the leaf's `--complete` and
+`--auto-fix` grants. An `--auto-fix` drain also hands a conflicting or red pull
+request of a task with no live run back to its stopped leaf's completion step,
+unless an operator holds the task. When you
+must decide what happens next, follow these steps:
 
 1. **Diagnose with `orbit_agent_invoke`.** Run it on the host that owns the
    preserved worktree, with `cwd` set to that worktree (`orbit run show
@@ -143,10 +161,35 @@ the remaining work. Discard a candidate only deliberately, with
 
 ## Close a rescued blocked task
 
-When a blocked task's work landed outside its run (its PR was merged by hand),
-close the task rather than rerunning it. First confirm that no run is live on
-it and that the merged commit meets its acceptance criteria. Then, as an
-operator in the owning workspace's checkout, run:
+When a task's delivery PR was merged by hand, Orbit settles the task to `done`
+from the merge. Each `orbit run auto` pass settles a `blocked`, `in-progress` or
+`review` task whose delivery PR is among the recent merges into its target
+branch, when no run or claim of its own is live. To settle one task now, run
+`orbit task settle-merged <task-id>` in the owning workspace's checkout. It reads
+each PR Orbit recorded for the task, including a held or kept PR from a released
+or failed claim even without an accepted handoff. That PR must name the task and
+be merged into the landing branch its claim's admission receipt recorded; a
+missing or expired receipt cannot prove it. An owed post-deploy measurement still
+requires the operator's met record.
+
+A claimed handoff whose completion authority an operator revoked keeps its
+claim `handed_off` and its task in `review`; Approve is refused and the
+revocation is final. When exactly that handoff's PR merged into its landing
+branch outside Orbit, `orbit task settle-merged <task-id>` settles it: one
+owner store write ends the claim as `revoked` and moves the task to `done`.
+It is refused while an owner landing job still carries the handoff or a merge
+intent is unresolved. When the PR will not merge, recover the claim to
+`blocked` or `backlog` instead. The owner console's authority line names both
+steps. The command names the reason when the task
+does not settle. The settlement starts no work, so another task's claim on the
+same files does not refuse it. History records it as `external_merge_settled`, with a
+landing note naming the PR and merge commit
+([stuck job runs](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/stuck-job-runs.md#a-delivery-pull-request-merged-outside-orbit)).
+
+When the work landed some other way (a commit, or a PR that is not the task's
+delivery PR), close the task rather than rerunning it. First confirm that no
+run is live on it and that the merged commit meets its acceptance criteria.
+Then, as an operator in the owning workspace's checkout, run:
 
 ```bash
 export ORBIT_OPERATOR=1
@@ -186,6 +229,76 @@ repository setting only when the user's authorization covers that change;
 opening a PR does not grant that permission. Verify actual merge and reconcile
 task state with the evidence. Do not rerun implementation solely because the
 completion step failed.
+
+## Explicit source repair of stopped owner publications
+
+An operator on the owning host can inspect a published candidate without
+resuming its failed attempt:
+
+```bash
+orbit tool run orbit.workflow.run.resume --input '{"id":"<source-run>","source_repair":{"action":"inspect","task_id":"<task-id>"}}'
+```
+
+Submit the returned `binding` unchanged with `action: "submit"`, the same
+`task_id`, a new bounded `request_key`, and a `diagnosis` naming the observed
+failure and remaining source work. This is an explicit source decision. It
+creates a new attempt with current required commands, configured review,
+`completion: "review"` and `auto_fix: false`. It grants no merge authority.
+Keep the identical key, binding and diagnosis when a submission reply is lost:
+the durable reservation/link returns the same successor, even after it stops.
+Each newly published head needs another explicit inspection and fresh key;
+automatic fixes and explicit generations share the PR repair budget. Generic
+resume still cannot replay an admitted source-repair attempt.
+
+In addition to cancelled publications and failed publications with an applied
+requeue, inspection supports two conclusively stopped failed owner shapes
+after final recovery escalated:
+
+- **An admitted source repair pushed before `pr_open` failed.** Its original
+  system reservation and unique run link, successful branch adoption, host
+  commit, prepare, synchronization, review/publication chain and push must
+  agree. The original admission supplies the existing PR identity when no
+  successful `pr_open` checkpoint exists. The old source evidence remains
+  immutable. Host-recorded selector additions from that attempt are accounted
+  for when comparing its original task scope; other meaning/scope changes
+  refuse admission.
+- **The terminal failure hook published a repair.** The durable
+  `pr_failure_handoff` checkpoint must name the exact task, run, failed step,
+  setup owner/base, preservation commit, push and PR. Its commit must have an
+  authenticated host candidate or immutable setup base as its preservation
+  parent. The handoff's recorded task specification must still match. That
+  persisted specification covers description and acceptance criteria; it does
+  not certify historical selector hints or review approval. Inspection binds
+  the full current meaning/scope for submission and source application. The
+  retained handoff commit is selected even when it advances past the failed
+  validation candidate. If its worktree and local branch are gone, existing
+  exact commit objects and the unchanged remote branch lease permit
+  reconstruction. A local branch present at another head still refuses.
+
+Neither route treats publication as validation. The new worktree integrates
+the exact retained candidate onto the current remote base, preserves its PR
+and branch under the exact lease, and requires fresh complete host gates and
+normal configured review. A handoff repair was not certified by the old
+candidate's checks. Failure receipts and historical checkpoints are retained;
+there is no requeue/history rewrite or claimed held-evidence amendment here.
+
+Both inspection and submission freshly observe the origin repository,
+remote branch and provider PR number, URL, head, branch and base branch. The
+PR must remain open and unmerged with automatic merge explicitly disabled;
+a draft remains a draft. Missing, contradictory or changed evidence refuses
+before reservation. A live/foreign/claimed source or a newer attempt that
+may have written a candidate cannot be bypassed by selecting an older head.
+Newer owner attempts between the source and the task's current binding are
+bound together in `binding.superseded`, and a change to any of them voids
+the binding. Each must be conclusively stopped and either cancelled, or failed
+at or before candidate adoption with a settled (escalated or requeued) final
+recovery, no failure handoff other than one that published nothing
+(`no_candidate`), and a clean retained worktree. A failed attempt that reached
+implementation or left work behind is a resume candidate, not a successor to
+set aside
+([stuck job runs](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/stuck-job-runs.md#a-cancelled-published-source-repair)).
+Diagnose the named missing receipt or identity mismatch, then inspect again;
+do not invent a checkpoint, copy another run's admission, or weaken gates.
 
 ## Repair tasks and activity boundaries
 

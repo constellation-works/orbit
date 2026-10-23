@@ -1,0 +1,689 @@
+//! Settling released attempts, drifted reports, bundle reports, and the
+//! three outcomes of a reviewer that fixes its own findings [ORB-13989].
+
+use std::fs;
+
+use chrono::{Duration, Utc};
+use orbit_engine::DispatchError;
+use orbit_types::workflow::{
+    FindingDisposition, REVIEW_GATE_ARTIFACT, ReviewAttemptState, ReviewFinding, ReviewGateRefusal,
+    ReviewVerdict,
+};
+use serde_json::json;
+
+use super::review_support::{
+    BEFORE_PR, counterfactual, gated_bundle_fixture, gated_fixture, git, report, write_report,
+    write_report_bytes,
+};
+
+fn a_failed_reviewer_step_leaves_no_open_attempt_and_is_charged_reviewer_runtime_only() {
+    let gated = gated_fixture(BEFORE_PR);
+    gated.start(&gated.run_id, Utc::now() - Duration::minutes(40));
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"]
+        .as_str()
+        .expect("attempt")
+        .to_string();
+    // The reviewer timed out after 15 minutes and its retry failed after 5;
+    // backoff, recovery and the run's other 20 minutes ran no reviewer.
+    gated.reviewer_ran(&gated.run_id, &admission, 900);
+    gated.reviewer_ran(&gated.run_id, &admission, 300);
+
+    gated.release(&gated.run_id, &admission);
+    let ledger = gated.ledger(&admission);
+    assert!(
+        ledger.open_attempt().is_none(),
+        "a failed reviewer step never leaves its attempt open"
+    );
+    let released = &ledger.attempts[0];
+    assert_eq!(
+        released.state,
+        ReviewAttemptState::Settled {
+            verdict: ReviewVerdict::Incomplete
+        }
+    );
+    assert!(released.released_at.is_some());
+    assert_eq!(
+        ledger.consumed_seconds, 1200,
+        "exactly the two reviewer invocations are charged"
+    );
+
+    let resumed = gated.resume(&gated.run_id);
+    gated.reviewer_ran(&resumed, &admission, 60);
+    write_report(
+        &gated.fixture.runtime,
+        &gated.task_id,
+        &report(&attempt_id, ReviewVerdict::Accept, false),
+    );
+    let settled = gated
+        .settle_in(&resumed, &admission)
+        .expect("the resumed run settles the released attempt");
+    assert_eq!(settled["gate"], "passed");
+    let ledger = gated.ledger(&admission);
+    assert_eq!(ledger.attempts.len(), 1, "settling consumed no new start");
+    assert_eq!(
+        ledger.attempts[0].state,
+        ReviewAttemptState::Settled {
+            verdict: ReviewVerdict::Accept
+        }
+    );
+    assert!(ledger.attempts[0].released_at.is_none());
+    assert_eq!(
+        ledger.consumed_seconds, 1260,
+        "the resumed reviewer adds its own runtime, not the time between runs"
+    );
+
+    gated.release(&resumed, &admission);
+    assert_eq!(
+        gated.ledger(&admission).attempts[0].state,
+        ReviewAttemptState::Settled {
+            verdict: ReviewVerdict::Accept
+        },
+        "a release never rewrites a settled verdict"
+    );
+}
+
+fn a_drifted_report_on_a_later_bundle_task_still_settles() {
+    let gated = gated_bundle_fixture(BEFORE_PR, 2);
+    let admission = gated.admit().expect("admit");
+    fs::write(
+        gated.fixture.repo.join("src.txt"),
+        "implementation target\nimplemented\nreviewed\n",
+    )
+    .expect("reviewer repair");
+    let drifted = json!({
+        "schema_version": "1",
+        "attempt_id": admission["attempt_id"],
+        "verdict": "Passed-With-Repairs",
+        "summary": "Added the missing note.",
+        "findings": [{
+            "id": 1,
+            "severity": "low",
+            "summary": "Missing note",
+            "paths": "src.txt",
+            "disposition": "repaired",
+        }],
+        "validation": [{"id": 1, "command": "make ci-fast", "outcome": "PASS"}],
+    });
+    write_report_bytes(
+        &gated.fixture.runtime,
+        &gated.bundle[1],
+        serde_json::to_vec(&drifted).expect("serialize"),
+    );
+
+    let settled = gated
+        .settle(&admission)
+        .expect("drift that keeps the report's meaning settles");
+    assert_eq!(
+        settled["verdict"], "accept_with_fixes",
+        "the pre-ORB-13989 label still reads as the same decision"
+    );
+    let certificate = gated.certificate();
+    assert_eq!(certificate.findings.len(), 1);
+    assert_eq!(certificate.findings[0].id, "1");
+    assert_eq!(
+        certificate.findings[0].disposition,
+        FindingDisposition::Repaired
+    );
+}
+
+fn the_most_severe_bundle_report_decides_and_refuses_without_retry() {
+    let gated = gated_bundle_fixture(BEFORE_PR, 2);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt");
+    write_report(
+        &gated.fixture.runtime,
+        &gated.bundle[0],
+        &report(attempt_id, ReviewVerdict::Accept, false),
+    );
+    write_report(
+        &gated.fixture.runtime,
+        &gated.bundle[1],
+        &report(attempt_id, ReviewVerdict::Reject, false),
+    );
+
+    let error = gated
+        .settle(&admission)
+        .expect_err("changes required blocks");
+    assert!(
+        matches!(
+            error,
+            DispatchError::ReviewGateRefused {
+                refusal: ReviewGateRefusal::Blocked,
+                ..
+            }
+        ),
+        "a settled verdict is a decision, not a retryable fault: {error}"
+    );
+    let certificate = gated.certificate();
+    assert_eq!(certificate.verdict, ReviewVerdict::Reject);
+}
+
+/// [ORB-13989] A reviewer with fixable findings fixes them. Settlement
+/// records the fixes as one reviewer commit on top of the untouched
+/// implementation commit, posts every finding with what changed for it as a
+/// task comment, and hands the PR steps the revalidation trigger and the
+/// "Review fixes" body section.
+fn fixable_findings_become_one_reviewer_commit_over_the_untouched_implementation() {
+    let gated = gated_fixture(BEFORE_PR);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt");
+    gated.reviewer_edits("implementation target\nimplemented\nnote\n");
+    write_report(
+        &gated.fixture.runtime,
+        &gated.task_id,
+        &report(attempt_id, ReviewVerdict::AcceptWithFixes, true),
+    );
+
+    let settled = gated.settle(&admission).expect("fixed findings accept");
+    assert_eq!(settled["gate"], "passed");
+    assert_eq!(settled["verdict"], "accept_with_fixes");
+    assert_eq!(settled["reviewer_fixed"], true);
+    assert_eq!(
+        settled["implementation_head_sha"],
+        gated.implementation_sha.as_str()
+    );
+
+    let head = gated.log("HEAD", "%H");
+    assert_eq!(settled["reviewed_head_sha"], head.as_str());
+    assert_eq!(
+        gated.log("HEAD^", "%H"),
+        gated.implementation_sha,
+        "the implementation commit is never amended"
+    );
+    assert!(
+        gated.log("HEAD", "%s").starts_with("review: "),
+        "the reviewer commit is `review: <summary>`"
+    );
+    // [ORB-16768] The reviewer commit names the reviewer's resolved model
+    // under the reviewer role address, never the implementer's identity.
+    assert_eq!(
+        gated.log("HEAD", "%an <%ae>"),
+        "orbit[review-model] <codex-reviewer@orbit.local>",
+        "the reviewer commit is attributed to the reviewer, not the implementer"
+    );
+    assert_ne!(
+        gated.log("HEAD", "%an <%ae>"),
+        gated.log("HEAD^", "%an <%ae>"),
+        "the reviewer and implementer commits stay distinguishable"
+    );
+    assert!(
+        gated
+            .log("HEAD", "%(trailers:key=Orbit-Review-Crew,valueonly)")
+            .contains("reviewers"),
+        "the reviewer commit names the reviewer crew"
+    );
+
+    let certificate = gated.certificate();
+    assert_eq!(certificate.repair_commits.len(), 1);
+    assert_eq!(certificate.repair_commits[0].commit, head);
+    let comment = gated
+        .comments()
+        .into_iter()
+        .find(|comment| comment.contains(attempt_id))
+        .expect("the settlement posts its findings on the task");
+    for expected in ["F1", "Missing trailing note", "Appended the trailing note"] {
+        assert!(comment.contains(expected), "{expected} in {comment}");
+    }
+    let fixes = settled["review_fixes"].as_str().expect("review fixes");
+    assert!(
+        fixes.starts_with("## Review fixes"),
+        "the PR body section: {fixes}"
+    );
+    assert!(fixes.contains(&head) && fixes.contains("Appended the trailing note"));
+}
+
+/// [ORB-13989] No findings: `accept` adds no reviewer commit, while the PR
+/// still carries the raw validation evidence from the certificate.
+fn no_findings_accepts_without_a_reviewer_commit() {
+    let gated = gated_fixture(BEFORE_PR);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt");
+    write_report(
+        &gated.fixture.runtime,
+        &gated.task_id,
+        &report(attempt_id, ReviewVerdict::Accept, false),
+    );
+
+    let settled = gated.settle(&admission).expect("accept");
+    assert_eq!(settled["verdict"], "accept");
+    assert_eq!(settled["reviewer_fixed"], false);
+    assert!(
+        settled["review_fixes"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("## Review validation")
+    );
+    assert_eq!(
+        settled["reviewed_head_sha"],
+        gated.implementation_sha.as_str()
+    );
+    assert_eq!(gated.log("HEAD", "%H"), gated.implementation_sha);
+    assert!(gated.certificate().repair_commits.is_empty());
+    assert!(
+        gated
+            .comments()
+            .iter()
+            .any(|comment| comment.contains(attempt_id)),
+        "an accept is recorded on the task too"
+    );
+}
+
+/// [ORB-13989] A finding the reviewer cannot fix is `reject`: settlement
+/// refuses without retry so the failure handoff blocks the task, nothing
+/// goes back to an implementer, and the candidate keeps the implementation
+/// commit plus the reviewer's commit for whatever it did fix.
+fn an_unfixable_finding_rejects_and_preserves_both_commits() {
+    let gated = gated_fixture(BEFORE_PR);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt");
+    gated.reviewer_edits("implementation target\nimplemented\nnote\n");
+    let mut rejected = report(attempt_id, ReviewVerdict::Reject, true);
+    rejected.findings.push(ReviewFinding {
+        id: "F2".to_string(),
+        severity: "high".to_string(),
+        summary: "The approach contradicts the acceptance criteria".to_string(),
+        paths: vec!["src.txt".to_string()],
+        disposition: FindingDisposition::Open,
+        change: None,
+    });
+    write_report(&gated.fixture.runtime, &gated.task_id, &rejected);
+
+    let error = gated.settle(&admission).expect_err("reject blocks");
+    assert!(
+        matches!(
+            error,
+            DispatchError::ReviewGateRefused {
+                refusal: ReviewGateRefusal::Blocked,
+                ..
+            }
+        ),
+        "a reject is a decision, not a retryable fault: {error}"
+    );
+    let certificate = gated.certificate();
+    assert_eq!(certificate.verdict, ReviewVerdict::Reject);
+    assert_eq!(certificate.findings.len(), 2);
+    assert_eq!(
+        gated.log("HEAD^", "%H"),
+        gated.implementation_sha,
+        "the implementation commit is preserved under the reviewer commit"
+    );
+    assert_eq!(
+        certificate.repair_commits[0].commit,
+        gated.log("HEAD", "%H")
+    );
+    let ledger = gated.ledger(&admission);
+    assert_eq!(ledger.attempts.len(), 1, "one review per candidate");
+    let comment = gated
+        .comments()
+        .into_iter()
+        .find(|comment| comment.contains(attempt_id))
+        .expect("the findings comment");
+    for finding in [
+        "F1",
+        "F2",
+        "The approach contradicts the acceptance criteria",
+    ] {
+        assert!(comment.contains(finding), "{finding} in {comment}");
+    }
+}
+
+/// [ORB-14616] ORB-14521's accept: a test-only candidate whose reviewer
+/// proved the repaired test guards a production file outside the scope by
+/// mutating that file and restoring it. Listed as the counterfactual's
+/// `mutation_target` and left byte-identical, it settles `accept`; left
+/// modified, the review settles `incomplete` naming the file; and the
+/// control's checks (its `sources`) must still lie inside the scope.
+/// [ORB-14632] The repository compares the target between the reviewed and
+/// the final candidate, so a target the reviewer moved away (which the
+/// repair commit records as a rename) is caught at its original path, and a
+/// target spelled as an absolute or out-of-repository path is refused rather
+/// than passed beside a fix.
+/// [ORB-16447] F2026-10-423's shape: a control on `src.txt`, the file the
+/// review's own repair changed, restores it to the repaired blob its record
+/// declares and settles `accept_with_fixes`. Declaring none, restoring it
+/// only partly, or declaring a blob for a residue the repair swept into a
+/// file no repaired finding lists stays refused.
+fn a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration() {
+    enum Mutation {
+        None,
+        Modified,
+        MovedAway,
+        /// The control's residue left in the repaired `src.txt`.
+        RepairResidue,
+    }
+    /// When the record's `repaired_blob` for a path was hashed.
+    enum Declared {
+        None,
+        /// After the repair, before the control mutated anything.
+        BeforeControl(&'static str),
+        /// After the control: a hash of whatever it left behind.
+        AfterControl(&'static str),
+    }
+    struct Case {
+        name: &'static str,
+        /// `accept_with_fixes` with a repair of `src.txt`, or `accept`.
+        fixed: bool,
+        sources: &'static [&'static str],
+        /// `{repo}` reads as the fixture checkout's absolute path.
+        targets: &'static [&'static str],
+        mutation: Mutation,
+        declared: Declared,
+        escalation: Option<&'static str>,
+    }
+    for case in [
+        Case {
+            name: "restored byte-identical",
+            fixed: false,
+            sources: &["src.txt"],
+            targets: &["README.md"],
+            mutation: Mutation::None,
+            declared: Declared::None,
+            escalation: None,
+        },
+        Case {
+            name: "restored beside a fix, spelled as a relative or file: path",
+            fixed: true,
+            sources: &["src.txt"],
+            targets: &["./README.md", "file:README.md"],
+            mutation: Mutation::None,
+            declared: Declared::None,
+            escalation: None,
+        },
+        Case {
+            name: "left modified in the final candidate",
+            fixed: false,
+            sources: &["src.txt"],
+            targets: &["README.md"],
+            mutation: Mutation::Modified,
+            declared: Declared::None,
+            escalation: Some("control `make test-guard` mutated `README.md`"),
+        },
+        Case {
+            name: "moved away beside a fix",
+            fixed: true,
+            sources: &["src.txt"],
+            targets: &["README.md"],
+            mutation: Mutation::MovedAway,
+            declared: Declared::None,
+            escalation: Some("control `make test-guard` mutated `README.md`"),
+        },
+        Case {
+            name: "spelled as an absolute path and left modified beside a fix",
+            fixed: true,
+            sources: &["src.txt"],
+            targets: &["{repo}/README.md"],
+            mutation: Mutation::Modified,
+            declared: Declared::None,
+            escalation: Some("README.md`, which is not a repository-relative path"),
+        },
+        Case {
+            name: "spelled outside the repository",
+            fixed: false,
+            sources: &["src.txt"],
+            targets: &["../README.md"],
+            mutation: Mutation::None,
+            declared: Declared::None,
+            escalation: Some(
+                "names mutation_target `../README.md`, which is not a repository-relative path",
+            ),
+        },
+        Case {
+            name: "checks outside the scope",
+            fixed: false,
+            sources: &["README.md"],
+            targets: &["README.md"],
+            mutation: Mutation::None,
+            declared: Declared::None,
+            escalation: Some("negative control `make test-guard` names `README.md`, outside"),
+        },
+        Case {
+            name: "a repaired file restored to its declared repaired blob",
+            fixed: true,
+            sources: &["src.txt"],
+            targets: &["src.txt"],
+            mutation: Mutation::None,
+            declared: Declared::BeforeControl("./src.txt"),
+            escalation: None,
+        },
+        Case {
+            name: "a repaired file restored with no declared repaired blob",
+            fixed: true,
+            sources: &["src.txt"],
+            targets: &["src.txt"],
+            mutation: Mutation::None,
+            declared: Declared::None,
+            escalation: Some(
+                "mutated `src.txt`, which this review's own repair changed, but \
+                 declares no `repaired_blob`",
+            ),
+        },
+        Case {
+            name: "a repaired file restored only partly",
+            fixed: true,
+            sources: &["src.txt"],
+            targets: &["src.txt"],
+            mutation: Mutation::RepairResidue,
+            declared: Declared::BeforeControl("src.txt"),
+            escalation: Some("not as the repaired blob"),
+        },
+        Case {
+            name: "residue swept into the repair of a file no repaired finding lists",
+            fixed: true,
+            sources: &["src.txt"],
+            targets: &["README.md"],
+            mutation: Mutation::Modified,
+            declared: Declared::AfterControl("README.md"),
+            escalation: Some(
+                "control `make test-guard` mutated `README.md`, which the final candidate does \
+                 not carry byte-identical",
+            ),
+        },
+    ] {
+        let gated = gated_fixture(BEFORE_PR);
+        let admission = gated.admit().expect("admit");
+        let attempt_id = admission["attempt_id"].as_str().expect("attempt");
+        let repo = &gated.fixture.repo;
+        if case.fixed {
+            gated.reviewer_edits("implementation target\nimplemented\nnote\n");
+        }
+        let hash = |path: &str| (path.to_string(), git(repo, &["hash-object", path]));
+        let mut repaired_blob = match case.declared {
+            Declared::BeforeControl(path) => Some(hash(path)),
+            Declared::None | Declared::AfterControl(_) => None,
+        };
+        match case.mutation {
+            Mutation::None => {}
+            Mutation::RepairResidue => {
+                fs::write(
+                    repo.join("src.txt"),
+                    "implementation target\nimplemented\nnote\nmutated\n",
+                )
+                .expect("leave the control's residue");
+            }
+            Mutation::Modified => {
+                fs::write(repo.join("README.md"), "fixture\nmutated\n")
+                    .expect("mutate the guarded file");
+            }
+            Mutation::MovedAway => {
+                fs::create_dir_all(repo.join("docs")).expect("destination directory");
+                fs::rename(repo.join("README.md"), repo.join("docs/README.md"))
+                    .expect("move the guarded file away");
+            }
+        }
+        if let Declared::AfterControl(path) = case.declared {
+            repaired_blob = Some(hash(path));
+        }
+        let verdict = if case.fixed {
+            ReviewVerdict::AcceptWithFixes
+        } else {
+            ReviewVerdict::Accept
+        };
+        let mut reported = report(attempt_id, verdict, case.fixed);
+        let targets = case
+            .targets
+            .iter()
+            .map(|target| target.replace("{repo}", &repo.display().to_string()))
+            .collect::<Vec<_>>();
+        let targets = targets.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut control = counterfactual(case.sources, &targets);
+        control.repaired_blob.extend(repaired_blob);
+        reported.validation.push(control);
+        write_report(&gated.fixture.runtime, &gated.task_id, &reported);
+
+        let settled = gated.settle(&admission);
+        let certificate = gated.certificate();
+        match case.escalation {
+            None => {
+                let settled = settled.unwrap_or_else(|error| panic!("{}: {error}", case.name));
+                assert_eq!(settled["verdict"], verdict.as_str(), "{}", case.name);
+                assert_eq!(certificate.verdict, verdict, "{}", case.name);
+                assert!(certificate.validation_complete, "{}", case.name);
+                assert_eq!(
+                    gated.log("HEAD", "%H") == gated.implementation_sha,
+                    !case.fixed,
+                    "{}: only a fix adds a repair commit",
+                    case.name
+                );
+            }
+            Some(expected) => {
+                let error = settled.expect_err(case.name);
+                assert!(
+                    error.to_string().contains("review_gate_blocked"),
+                    "{}: {error}",
+                    case.name
+                );
+                assert_eq!(
+                    certificate.verdict,
+                    ReviewVerdict::Incomplete,
+                    "{}",
+                    case.name
+                );
+                let escalation = certificate.escalation.unwrap_or_default();
+                assert!(escalation.contains(expected), "{}: {escalation}", case.name);
+            }
+        }
+    }
+}
+
+/// [ORB-16447] A repaired file's control is restored only on the repair this
+/// attempt's settlement records. A commit on the candidate that carries the
+/// restored file and its declared repaired blob, but names another attempt
+/// or was committed by someone other than the reviewer, is refused before
+/// any verdict, and no certificate is issued.
+fn a_repaired_target_restores_only_on_the_attempts_own_repair() {
+    for (name, trailer_attempt) in [
+        ("a repair commit of another attempt", Some("rvw-foreign-1")),
+        ("this attempt's trailer committed by someone else", None),
+    ] {
+        let gated = gated_fixture(BEFORE_PR);
+        let admission = gated.admit().expect("admit");
+        let attempt_id = admission["attempt_id"].as_str().expect("attempt");
+        let repo = &gated.fixture.repo;
+        gated.reviewer_edits("implementation target\nimplemented\nnote\n");
+        let mut control = counterfactual(&["src.txt"], &["src.txt"]);
+        control.repaired_blob.insert(
+            "src.txt".to_string(),
+            git(repo, &["hash-object", "src.txt"]),
+        );
+        let mut reported = report(attempt_id, ReviewVerdict::AcceptWithFixes, true);
+        reported.validation.push(control);
+        write_report(&gated.fixture.runtime, &gated.task_id, &reported);
+        git(repo, &["add", "-A"]);
+        let message = format!(
+            "review: reviewer repairs\n\nOrbit-Review-Attempt: {}",
+            trailer_attempt.unwrap_or(attempt_id)
+        );
+        git(repo, &["commit", "-m", &message]);
+
+        let error = gated.settle(&admission).expect_err(name).to_string();
+        assert!(
+            error.contains("candidate_changed"),
+            "{name}: the commit is no repair of this attempt: {error}"
+        );
+        assert!(
+            gated
+                .fixture
+                .runtime
+                .get_task_artifact(&gated.task_id, REVIEW_GATE_ARTIFACT)
+                .expect("read")
+                .is_none(),
+            "{name}: no certificate rests on a repair the host did not record"
+        );
+    }
+}
+
+/// A repair outside the admitted selectors widens them and changes the
+/// task-meaning digest. Consumption stays the runtime of the attempt that
+/// was reserved under the admission digest.
+#[test]
+fn widening_selectors_reports_the_reviewers_consumed_time() {
+    if !crate::admission_audit::isolate(
+        module_path!(),
+        "widening_selectors_reports_the_reviewers_consumed_time",
+    ) {
+        return;
+    }
+
+    let gated = gated_fixture(BEFORE_PR);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"]
+        .as_str()
+        .expect("attempt")
+        .to_string();
+    let admitted_digest = gated.ledger(&admission).attempts[0]
+        .task_meaning_digest
+        .clone();
+    gated.reviewer_ran(&gated.run_id, &admission, 900);
+    fs::write(
+        gated.fixture.repo.join("README.md"),
+        "fixture\nreviewed outside the admitted selectors\n",
+    )
+    .expect("reviewer repair outside selectors");
+    let mut repaired = report(&attempt_id, ReviewVerdict::AcceptWithFixes, true);
+    repaired.findings[0].paths = vec!["README.md".to_string()];
+    repaired.findings[0].change = Some("Noted the out-of-scope repair".to_string());
+    write_report(&gated.fixture.runtime, &gated.task_id, &repaired);
+
+    let settled = gated
+        .settle(&admission)
+        .expect("a repair outside the admitted selectors still settles");
+    assert_eq!(settled["gate"], "passed");
+    assert_eq!(settled["consumed"]["seconds"], 900);
+
+    let certificate = gated.certificate();
+    assert_eq!(
+        certificate.consumed.seconds, 900,
+        "widening selectors must not zero the reviewer's consumed time"
+    );
+    assert!(
+        certificate
+            .selectors_widened
+            .iter()
+            .any(|selector| selector == "file:README.md"),
+        "the repair outside the admitted selectors widens them: {:?}",
+        certificate.selectors_widened
+    );
+    assert_ne!(
+        certificate.task_meaning_digest, admitted_digest,
+        "the certificate keeps the post-widening task-meaning digest"
+    );
+    assert_eq!(
+        gated.ledger(&admission).attempts[0].task_meaning_digest,
+        admitted_digest,
+        "settlement leaves the attempt on the digest it was admitted under"
+    );
+}
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_failed_reviewer_step_leaves_no_open_attempt_and_is_charged_reviewer_runtime_only_scenarios,
+    a_failed_reviewer_step_leaves_no_open_attempt_and_is_charged_reviewer_runtime_only,
+    a_drifted_report_on_a_later_bundle_task_still_settles,
+    the_most_severe_bundle_report_decides_and_refuses_without_retry,
+    fixable_findings_become_one_reviewer_commit_over_the_untouched_implementation,
+    no_findings_accepts_without_a_reviewer_commit,
+    an_unfixable_finding_rejects_and_preserves_both_commits,
+    a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration,
+    a_repaired_target_restores_only_on_the_attempts_own_repair
+);

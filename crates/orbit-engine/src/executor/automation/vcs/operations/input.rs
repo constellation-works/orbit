@@ -31,3 +31,40 @@ pub(super) fn valid_expected_remote_sha(value: Option<&str>) -> bool {
         matches!(sha.len(), 40 | 64) && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
     })
 }
+
+/// Read a provider string without changing its contents or refusal context.
+pub(super) fn text<'a>(
+    value: &'a Value,
+    key: &str,
+    refuse: fn(&str) -> OrbitError,
+) -> Result<&'a str, OrbitError> {
+    value[key]
+        .as_str()
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| refuse(key))
+}
+
+/// Provider identities must be positive unsigned integers.
+pub(super) fn number(
+    value: &Value,
+    key: &str,
+    refuse: fn(&str) -> OrbitError,
+) -> Result<u64, OrbitError> {
+    value[key]
+        .as_u64()
+        .filter(|number| *number > 0)
+        .ok_or_else(|| refuse(key))
+}
+
+/// Refuse a provider identity that differs from the expected observation.
+pub(super) fn same(
+    actual: &Value,
+    expected: &Value,
+    label: &str,
+    refuse: fn(&str) -> OrbitError,
+) -> Result<(), OrbitError> {
+    if actual != expected {
+        return Err(refuse(&format!("foreign or changed {label}")));
+    }
+    Ok(())
+}

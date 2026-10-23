@@ -23,7 +23,7 @@ use orbit_agent::loop_engine::InMemorySink;
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 use orbit_engine::{
-    DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, JobOutcome, RuntimeHost,
+    DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, JobOutcome,
     V2AuditWriter, execute_job_with_resume,
 };
 use orbit_types::workflow::activity_job::{ActivityV2, JobV2};
@@ -165,7 +165,7 @@ exec '{real_git}' "$@"
 
     /// The commit the remote's branch holds, if any.
     fn remote_head(&self) -> Option<String> {
-        let output = Command::new("git")
+        let output = crate::git_test_support::command()
             .args([
                 "rev-parse",
                 "--verify",
@@ -236,12 +236,12 @@ impl ForgeHost {
             state.record_step(*index, JobRunState::Success, Some(output.clone()), None);
         }
         state.sync_pipeline(outcome.pipeline.clone());
-        state.forge_hold = outcome.forge_hold.clone();
+        state.pull_drain.forge_hold = outcome.forge_hold.clone();
         state
     }
 }
 
-impl RuntimeHost for ForgeHost {
+impl orbit_engine::test_support::NullRuntimeHost for ForgeHost {
     fn run_deterministic(
         &self,
         action: &str,
@@ -374,7 +374,6 @@ fn execute(job: &JobV2, host: &ForgeHost, resume: Option<&PipelineState>) -> Job
 
 /// A contaminated origin must be rejected before the wrapper simulates a
 /// forge response, increments push attempts, or delegates to real Git.
-#[test]
 fn a_forge_wrapper_refuses_a_non_local_origin_before_pushing() {
     super::git_fixture::isolated(
         module_path!(),
@@ -386,7 +385,7 @@ fn a_forge_wrapper_refuses_a_non_local_origin_before_pushing() {
             listener.set_nonblocking(true).unwrap();
             let url = format!("https://{}/remote.git", listener.local_addr().unwrap());
             git(&fixture.workspace(), &["remote", "set-url", "origin", &url]);
-            let output = Command::new("git")
+            let output = crate::git_test_support::command()
                 .args(["-c", "core.hooksPath=/dev/null", "push", "origin", BRANCH])
                 .current_dir(fixture.workspace())
                 .output()
@@ -412,7 +411,6 @@ fn a_forge_wrapper_refuses_a_non_local_origin_before_pushing() {
     );
 }
 
-#[test]
 fn an_outage_inside_the_backoff_budget_costs_waits_and_no_step_failure() {
     super::git_fixture::isolated(
         module_path!(),
@@ -445,7 +443,6 @@ fn an_outage_inside_the_backoff_budget_costs_waits_and_no_step_failure() {
     );
 }
 
-#[test]
 fn an_outage_past_the_budget_holds_the_run_and_a_resume_pushes_the_same_head() {
     super::git_fixture::isolated(
         module_path!(),
@@ -486,7 +483,8 @@ fn an_outage_past_the_budget_holds_the_run_and_a_resume_pushes_the_same_head() {
             // The forge is still down when the clock first resumes: the resumed run
             // holds again and keeps the lineage's first hold time.
             let mut state = held.persisted_state(&outcome);
-            state.forge_hold.as_mut().unwrap().held_since = hold.held_at - TimeDelta::minutes(30);
+            state.pull_drain.forge_hold.as_mut().unwrap().held_since =
+                hold.held_at - TimeDelta::minutes(30);
             fixture.refuse(ALWAYS);
             let still_down = ForgeHost::default();
             let again = execute(&job, &still_down, Some(&state));
@@ -526,7 +524,6 @@ fn an_outage_past_the_budget_holds_the_run_and_a_resume_pushes_the_same_head() {
 /// held run, so its push keeps retrying past its budget inside a window: the
 /// same run pushes the same head once the forge accepts it, and opens the
 /// pull request without implementing or reviewing again.
-#[test]
 fn a_push_window_retries_past_the_budget_and_lands_the_same_head() {
     super::git_fixture::isolated(
         module_path!(),
@@ -563,7 +560,6 @@ fn a_push_window_retries_past_the_budget_and_lands_the_same_head() {
 
 /// [ORB-14634] Past its window the push holds as before, and the hold dates
 /// from the forge's first refusal rather than from the last.
-#[test]
 fn a_push_window_that_closes_holds_since_the_first_refusal() {
     super::git_fixture::isolated(
         module_path!(),
@@ -590,4 +586,42 @@ fn a_push_window_that_closes_holds_since_the_first_refusal() {
             assert_eq!(host.actions(), ["implement", "review"]);
         },
     );
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn forge_hold_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "forge_hold_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_forge_wrapper_refuses_a_non_local_origin_before_pushing",
+                a_forge_wrapper_refuses_a_non_local_origin_before_pushing,
+            ),
+            (
+                "an_outage_inside_the_backoff_budget_costs_waits_and_no_step_failure",
+                an_outage_inside_the_backoff_budget_costs_waits_and_no_step_failure,
+            ),
+            (
+                "an_outage_past_the_budget_holds_the_run_and_a_resume_pushes_the_same_head",
+                an_outage_past_the_budget_holds_the_run_and_a_resume_pushes_the_same_head,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn forge_hold_contracts_2() {
+    crate::git_fixture::isolated(module_path!(), "forge_hold_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_push_window_retries_past_the_budget_and_lands_the_same_head",
+                a_push_window_retries_past_the_budget_and_lands_the_same_head,
+            ),
+            (
+                "a_push_window_that_closes_holds_since_the_first_refusal",
+                a_push_window_that_closes_holds_since_the_first_refusal,
+            ),
+        ]);
+    });
 }

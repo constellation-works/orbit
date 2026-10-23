@@ -1,5 +1,7 @@
 //! Review verdicts and validation records [ORB-11333].
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -236,9 +238,19 @@ pub struct ReviewValidation {
     /// file a test-only change guards. They may lie outside the candidate's
     /// scope, unlike `sources` (the candidate's checks that rejected the
     /// mutation), but settlement refuses the record unless each one is
-    /// byte-identical in the final candidate to the reviewed candidate.
+    /// byte-identical in the final candidate to the reviewed candidate, or
+    /// carries the blob [`Self::repaired_blob`] declares for it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mutation_target: Vec<String>,
+    /// [ORB-16447] For a `mutation_target` the review's own repair changed,
+    /// keyed by that target: the Git blob id (`git hash-object <path>`) of
+    /// its repaired state, taken before the control mutated it. Settlement
+    /// accepts such a target only when a repaired finding lists it, the
+    /// attempt's own repair commit changed it, and the final candidate
+    /// carries exactly this blob; a declared blob the final candidate does
+    /// not carry is refused even when the target is otherwise unchanged.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub repaired_blob: BTreeMap<String, String>,
     /// [ORB-14334] Deferral notices the run printed (`DEFERRED: …`), one per
     /// sandbox-confined path it returned from without executing, as a test
     /// does when the agent lane's own sandbox refuses a nested one. A

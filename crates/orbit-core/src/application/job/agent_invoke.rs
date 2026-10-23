@@ -51,6 +51,9 @@ use crate::application::job::pipeline::{
     PipelineInvokeResult, PipelineSubmission, RetryKey, input_hash,
 };
 use crate::runtime::audit::run::RunProviderProcess;
+use crate::runtime::authorization::{AgentInvokeAdmission, AgentInvokeAuthorizer};
+
+use super::agent_explore::{AgentInvocation, EXPLORE_JOB_ID};
 
 /// Catalog job that carries one agent invocation.
 pub const AGENT_INVOKE_JOB_ID: &str = "agent_invoke_pipeline";
@@ -191,6 +194,10 @@ pub struct AgentInvokeAnswer {
     pub final_message_bytes: Option<u64>,
     /// The complete captured stdout holding the full message, when it was cut.
     pub final_message_blob_ref: Option<String>,
+    /// The paths an explorer read to answer [ORB-16814]. `None` for an
+    /// operator's invocation, whose `extra` keeps any such field as returned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paths_read: Option<Vec<String>>,
 }
 
 /// Live evidence from the provider child [ORB-13899].
@@ -208,20 +215,56 @@ pub struct AgentInvokeProgress {
 /// envelope `result` key is `extra`.
 const ANSWER_FIELDS: [&str; 3] = ["summary", "findings", "next_steps"];
 
+/// The envelope `result` key an explorer lists the paths it read under.
+const PATHS_READ_FIELD: &str = "paths_read";
+
 impl OrbitRuntime {
     /// Admit and submit one exploration invocation.
     ///
     /// Order is the contract: the operator check happens before validation,
     /// and both happen before anything durable exists. An unauthorized caller
     /// therefore never creates a run record, a worktree, or a process.
+    ///
+    /// This is the operator surface (`orbit run agent`). A managed run's
+    /// caller is held to the trusted-host operation here and refused; only
+    /// [`Self::submit_agent_invocation`] routes one to the sandboxed explorer.
     pub fn submit_agent_invoke_run(
         &self,
         request: AgentInvokeRequest<'_>,
     ) -> Result<AgentInvokeSubmission, OrbitError> {
-        let authorizer = self.admit_agent_invoke(request.session_context)?;
+        let authorizer = self.admit_trusted_host_agent_invoke(request.session_context)?;
+        self.submit_trusted_host_invocation(authorizer, request)
+    }
 
+    /// Admit and submit one invocation for whichever caller this is: an
+    /// operator's trusted-host invocation, or a managed implement or
+    /// review-repair run's sandboxed read-only explorer [ORB-16814].
+    pub fn submit_agent_invocation(
+        &self,
+        request: AgentInvokeRequest<'_>,
+    ) -> Result<AgentInvocation, OrbitError> {
+        match self.admit_agent_invoke(request.session_context)? {
+            AgentInvokeAdmission::Operator(authorizer) => self
+                .submit_trusted_host_invocation(authorizer, request)
+                .map(AgentInvocation::TrustedHost),
+            AgentInvokeAdmission::ManagedRun(caller) => self
+                .submit_explore_run(caller, request)
+                .map(AgentInvocation::Explore),
+        }
+    }
+
+    fn submit_trusted_host_invocation(
+        &self,
+        authorizer: AgentInvokeAuthorizer,
+        request: AgentInvokeRequest<'_>,
+    ) -> Result<AgentInvokeSubmission, OrbitError> {
         let prompt = require_non_empty(request.prompt, "prompt")?;
         let cwd = self.resolve_workspace_cwd("cwd", request.cwd)?;
+        // Containment alone cannot identify a checkout: linked worktrees can
+        // live beneath the primary's .orbit directory. Derive the assigned
+        // identity from Git's shared directory, never from caller metadata.
+        let primary_root = self.paths().repo_root.canonicalize()?;
+        let linked_root = crate::paths::find_linked_worktree_root(&cwd, &primary_root);
         let crew = self.canonical_crew_name(request.crew)?;
         let timeout_seconds = resolve_timeout(request.timeout_seconds)?;
         let provider_sandbox =
@@ -241,12 +284,17 @@ impl OrbitRuntime {
             authorizer_provenance: authorizer.provenance.to_string(),
             caller_machine_id: authorizer.remote_caller_machine_id,
             authorized_at: Utc::now().to_rfc3339(),
-            workspace_path: self.paths().repo_root.display().to_string(),
+            workspace_path: linked_root
+                .as_ref()
+                .unwrap_or(&primary_root)
+                .display()
+                .to_string(),
             cwd: cwd.display().to_string(),
         };
 
-        let input = json!({
+        let mut input = json!({
             "prompt": prompt,
+            "workspace_path": cwd.display().to_string(),
             "cwd": cwd.display().to_string(),
             "crew": crew,
             "timeout_seconds": timeout_seconds,
@@ -254,6 +302,12 @@ impl OrbitRuntime {
             TRUSTED_HOST_ADMISSION_KEY: serde_json::to_value(&admission)
                 .map_err(|error| OrbitError::Execution(format!("encode admission: {error}")))?,
         });
+        // The engine requires a matching exact-root pair for a distinct
+        // checkout. Primary/interior invocations intentionally have no pair:
+        // declaring the primary as an assigned worktree is refused there.
+        if let Some(root) = linked_root {
+            input["repo_root"] = json!(root);
+        }
 
         let (invoke, deduplicated) =
             self.submit_trusted_host_pipeline_run(input, &actor, request.idempotency_key)?;
@@ -439,7 +493,8 @@ pub fn agent_invoke_result(
     state: Option<&PipelineState>,
     process: Option<&RunProviderProcess>,
 ) -> Option<AgentInvokeResult> {
-    if run.job_id != AGENT_INVOKE_JOB_ID {
+    let explore = run.job_id == EXPLORE_JOB_ID;
+    if run.job_id != AGENT_INVOKE_JOB_ID && !explore {
         return None;
     }
     let output = state
@@ -483,7 +538,7 @@ pub fn agent_invoke_result(
         summary: field("summary")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-        answer: output.map(|output| invocation_answer(output, stdout_blob_ref.as_deref())),
+        answer: output.map(|output| invocation_answer(output, stdout_blob_ref.as_deref(), explore)),
         progress: process.map(|process| AgentInvokeProgress {
             last_activity_at: process.last_activity_at.map(|ts| ts.to_rfc3339()),
             latest_message: process.latest_message.clone(),
@@ -506,7 +561,13 @@ pub fn agent_invoke_result(
 /// `extra` is the envelope `result` keys the engine recorded, less the named
 /// ones. Outputs written before that record existed have no `extra`: Orbit's
 /// own fields share the object and cannot be told apart from the agent's.
-fn invocation_answer(output: &Value, stdout_blob_ref: Option<&str>) -> AgentInvokeAnswer {
+///
+/// An explorer's answer also names the paths it read, lifted out of `extra`.
+fn invocation_answer(
+    output: &Value,
+    stdout_blob_ref: Option<&str>,
+    explore: bool,
+) -> AgentInvokeAnswer {
     let field = |key: &str| output.get(key);
     let list = |key: &str| {
         field(key)
@@ -520,6 +581,7 @@ fn invocation_answer(output: &Value, stdout_blob_ref: Option<&str>) -> AgentInvo
         .flatten()
         .filter_map(Value::as_str)
         .filter(|key| !ANSWER_FIELDS.contains(key))
+        .filter(|key| !(explore && *key == PATHS_READ_FIELD))
         .filter_map(|key| field(key).map(|value| (key.to_string(), value.clone())))
         .collect();
     let final_message_truncated = field("final_message_truncated")
@@ -540,6 +602,15 @@ fn invocation_answer(output: &Value, stdout_blob_ref: Option<&str>) -> AgentInvo
         final_message_blob_ref: final_message_truncated
             .then(|| stdout_blob_ref.map(ToOwned::to_owned))
             .flatten(),
+        paths_read: explore.then(|| {
+            field(PATHS_READ_FIELD)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        }),
     }
 }
 
@@ -559,7 +630,7 @@ fn bounded_preview(text: &str) -> String {
     text[..floor_char_boundary(text, RESULT_PREVIEW_LIMIT_BYTES)].to_string()
 }
 
-fn require_non_empty<'a>(value: &'a str, field: &str) -> Result<&'a str, OrbitError> {
+pub(super) fn require_non_empty<'a>(value: &'a str, field: &str) -> Result<&'a str, OrbitError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err(OrbitError::InvalidInput(format!("`{field}` is required")));

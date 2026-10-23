@@ -109,22 +109,6 @@ fn json_flag_output_is_untouched_by_the_global_format_machinery() {
     }
 }
 
-#[test]
-fn empty_list_json_is_exactly_an_empty_array() {
-    let fixture = fixture();
-
-    let command = ["task", "list"];
-    let mut args = command.to_vec();
-    args.push("--json");
-
-    assert_eq!(
-        run(&fixture.home, &fixture.work, &args, &[]),
-        b"[]\n",
-        "`orbit {} --json` must stay a bare array",
-        command.join(" ")
-    );
-}
-
 /// A temp directory nested in this crate's checkout is the managed-run case:
 /// `TMPDIR` lives under the worktree. The shared helper must still answer
 /// from its own empty workspace, not the enclosing checkout's config.

@@ -19,18 +19,19 @@ mod lock;
 mod private;
 
 pub use super::file_lock::{
-    DEFAULT_FILE_LOCK_TIMEOUT, FileLockGuard, FileLockHolderInfo, FileLockOptions, FileLockTimeout,
-    acquire_exclusive_file_lock, hold_step, read_file_lock_holder, try_acquire_exclusive_file_lock,
+    DEFAULT_FILE_LOCK_TIMEOUT, FileLockGuard, FileLockHolderInfo, FileLockOptions, FileLockProbe,
+    FileLockTimeout, LeaseFile, acquire_exclusive_file_lock, hold_step, probe_file_lock,
+    read_file_lock_holder, try_acquire_exclusive_file_lock,
 };
 pub(crate) use atomic::{DURABLE_SYNC_HOLDS, atomic_write_private_bytes};
 pub use atomic::{
     RELAXED_DURABILITY_ENV, StagedTextFile, atomic_write_bytes, atomic_write_text,
-    atomic_write_text_volatile, durability_syncs_relaxed, relaxed_durability_requested,
-    remove_path_if_exists, sqlite_synchronous, sync_file, sync_file_data, sync_parent_dir,
-    write_new_private_text, write_text_with_parent,
+    atomic_write_text_volatile, durability_syncs_relaxed, durability_syncs_requested,
+    relaxed_durability_requested, remove_path_if_exists, sqlite_synchronous, sync_file,
+    sync_file_data, sync_parent_dir, write_new_private_text, write_text_with_parent,
 };
 pub use lock::{
-    LockFileNaming, with_exclusive_file_lock, with_exclusive_file_lock_named,
+    HeldFileLock, hold_exclusive_file_lock_options, with_exclusive_file_lock,
     with_exclusive_file_lock_named_options, with_exclusive_file_lock_options,
     with_shared_file_lock, with_shared_file_lock_options,
 };

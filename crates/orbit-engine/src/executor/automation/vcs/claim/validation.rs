@@ -2,6 +2,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_types::task::{LightDeliveryDecision, SKIP_VALIDATION_TAG};
 use orbit_types::workflow::handoff::{
     HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffKnownRed, HandoffValidationLog,
 };
@@ -16,15 +17,17 @@ use crate::context::{ClaimExecutionContext, RuntimeHost};
 use crate::executor::automation::input::input_string_field;
 
 use super::super::baseline::{
-    baseline_red_failure, candidate_failure, compare_with_base, run_validation_command,
+    baseline_red_failure, candidate_failure, compare_candidate_with_base, run_validation_command,
 };
 use super::super::deferred_sandbox::{claimed_deferred_replays, with_replays};
 use super::super::flaky::rerun_failed_tests;
-use super::super::git::normalize_base_branch;
-use super::super::required_command::{RequiredCommandRun, bounded_validation_text};
+use super::super::git::{BaseSyncMode, normalize_base_branch};
+use super::super::light_delivery::light_delivery_decision;
+use super::super::required::command::{RequiredCommandRun, bounded_validation_text};
+use super::super::validation_log::{FailureLog, rerun_log};
 use super::input::{refused, required_workspace};
-use super::no_diff;
 use super::observe::{claimed_base_sync, observe, observe_with, require_clean_candidate};
+use super::{already_resolved, no_diff};
 
 /// Run the owner's required commands on the exact candidate and attach one
 /// captured log per command to the owner's copy of the task.
@@ -72,6 +75,21 @@ use super::observe::{claimed_base_sync, observe, observe_with, require_clean_can
 /// after the required commands, here outside the agent sandbox, and must
 /// report executed tests. The pre-publication output names it in
 /// `replayed`, which the pin step expects among the results.
+///
+/// [ORB-15747] An implementer's already-resolved outcome belongs to the
+/// NoDiff route, which replays its named tests on the base
+/// ([`super::already_resolved`]); a candidate that changes the base is
+/// refused for one.
+///
+/// [ORB-16855] When the owner's task carries `skip-validation` and the
+/// owner's captured `workflow.light_delivery_paths` covers every path the
+/// candidate changes on its base, no command or replay runs and the decision
+/// is `skipped_light_delivery`; the pin step re-judges the published
+/// candidate before attaching nothing.
+///
+/// [ORB-15764] A `no-diff-expected` skip checkpoint on that route runs no
+/// command or replay at all and records `skipped_no_diff_expected` with no
+/// validation references ([`super::no_diff`]).
 pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
@@ -93,6 +111,12 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
     if let Some(prevalidated) = input.get("prevalidated").filter(|value| !value.is_null()) {
         return pin_prevalidated(host, &context, &workspace_path, input, prevalidated);
     }
+    if already_resolved::declared(input)?.is_some() {
+        return Err(refused(
+            "an already-resolved outcome hands off its unchanged base, but this candidate \
+             changes it; deliver the change without `already_resolved`, or revert it",
+        ));
+    }
     let pending = context.ship_mode == "pr"
         && input
             .get("pull_request")
@@ -111,8 +135,14 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
     };
     require_clean_candidate(&workspace_path, &candidate)?;
 
-    let replays = claimed_deferred_replays(host, input)?;
-    let commands = with_replays(context.required_commands.clone(), &replays);
+    let light = light_validation(host, &context, &workspace_path, &candidate)?;
+    let (replays, commands) = if light.is_some() {
+        (Vec::new(), Vec::new())
+    } else {
+        let replays = claimed_deferred_replays(host, input)?;
+        let commands = with_replays(context.required_commands.clone(), &replays);
+        (replays, commands)
+    };
     let (results, validation_env) = run_claimed_commands(
         host,
         &context,
@@ -146,10 +176,43 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
             output["decision"] = json!(SKIPPED_NO_REQUIRED_COMMANDS);
             output["note"] = json!(NO_REQUIRED_COMMANDS_NOTE);
         }
+        mark_light(&mut output, light.as_ref());
         return Ok(output);
     }
     let references = attach_handoff_logs(host, &context, &candidate, &results)?;
-    passed_output(&context, &candidate, &references, results, validation_env)
+    let mut output = passed_output(&context, &candidate, &references, results, validation_env)?;
+    mark_light(&mut output, light.as_ref());
+    Ok(output)
+}
+
+/// The owner task's `skip-validation` decision for this claimed candidate
+/// when the tag applies [ORB-16855]: the owner's captured allow-list
+/// covers every path the candidate changes on its base, so no required
+/// command or deferral replay runs. The owner re-judges the candidate, and
+/// records the decision in history, when it accepts the handoff.
+fn light_validation<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &ClaimExecutionContext,
+    workspace_path: &Path,
+    candidate: &HandoffCandidate,
+) -> Result<Option<LightDeliveryDecision>, OrbitError> {
+    Ok(light_delivery_decision(
+        host,
+        workspace_path,
+        &candidate.base.commit,
+        &candidate.candidate.commit,
+        std::slice::from_ref(&context.task_id),
+        SKIP_VALIDATION_TAG,
+    )?
+    .filter(LightDeliveryDecision::applies))
+}
+
+/// Record an applied `skip-validation` decision as the step's decision.
+fn mark_light(output: &mut Value, light: Option<&LightDeliveryDecision>) {
+    if let Some(light) = light {
+        output["decision"] = json!(SKIPPED_LIGHT_DELIVERY);
+        output["note"] = json!(light.note());
+    }
 }
 
 /// One required command's result on a claimed candidate: it passed, or it
@@ -169,6 +232,19 @@ pub(super) struct ClaimedResult {
     known_red: Option<HandoffKnownRed>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     flaky: Option<FlakyValidation>,
+}
+
+impl ClaimedResult {
+    /// A command that passed outright with `output`.
+    pub(super) fn passed(command: String, output: String) -> Self {
+        Self {
+            command,
+            output,
+            exit_code: 0,
+            known_red: None,
+            flaky: None,
+        }
+    }
 }
 
 /// Run `commands` on the observed candidate, in order, and return each
@@ -269,7 +345,25 @@ fn pin_prevalidated<H: RuntimeHost + ?Sized>(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let expected = with_replays(context.required_commands.clone(), &replayed);
+    let light = if input_string_field(prevalidated, "decision").as_deref()
+        == Some(SKIPPED_LIGHT_DELIVERY)
+    {
+        let light = light_validation(host, context, workspace_path, &candidate)?;
+        if light.is_none() {
+            return Err(refused(
+                "required validation was skipped for `skip-validation`, but the published \
+                 candidate no longer keeps the tag; rerun validation",
+            ));
+        }
+        light
+    } else {
+        None
+    };
+    let expected = if light.is_some() {
+        Vec::new()
+    } else {
+        with_replays(context.required_commands.clone(), &replayed)
+    };
     if results
         .iter()
         .map(|result| result.command.as_str())
@@ -312,7 +406,9 @@ fn pin_prevalidated<H: RuntimeHost + ?Sized>(
         .get("validation_env")
         .cloned()
         .unwrap_or(Value::Null);
-    passed_output(context, &candidate, &references, results, validation_env)
+    let mut output = passed_output(context, &candidate, &references, results, validation_env)?;
+    mark_light(&mut output, light.as_ref());
+    Ok(output)
 }
 
 /// Attach one typed log per command to the owner's task: a passed command's,
@@ -444,29 +540,19 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
     let commit = &candidate.candidate.commit;
     let workspace_path = required_workspace(input)?;
     let check = (!run.passed && run.missing_tool.is_none() && run.infrastructure_failure.is_none())
-        .then(|| {
-            compare_with_base(
-                host,
-                &workspace_path,
-                &candidate.base.commit,
-                &run.command,
-                run.selection(),
-            )
-        });
+        .then(|| compare_candidate_with_base(host, &workspace_path, &candidate.base.commit, run));
     let coverage_failure = run.coverage_failure(commit, replay);
-    if let Some(check) = check.as_ref().filter(|_| coverage_failure.is_none())
-        && let Some(failures) = check.known_red(run)
-    {
-        return Ok((
-            Some(HandoffKnownRed {
+    let known_red = check
+        .as_ref()
+        .filter(|_| coverage_failure.is_none())
+        .and_then(|check| {
+            check.known_red(run).map(|failures| HandoffKnownRed {
                 base_sha: check.base_sha.clone(),
                 selection: run.selection().cloned(),
                 failures: failures.clone(),
-            }),
-            None,
-        ));
-    }
-    let rerun = if coverage_failure.is_none() {
+            })
+        });
+    let rerun = if coverage_failure.is_none() && known_red.is_none() {
         rerun_failed_tests(
             host,
             &workspace_path,
@@ -481,56 +567,30 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
     let red = check.as_ref().is_some_and(|check| check.reproduces(run));
     let log_path = format!("validation/{}/{index}.failed.json", context.claim_id);
     let base_path = format!("validation/{}/{index}.baseline.json", context.claim_id);
-    let log = json!({
-        "schema_version": 1,
+    let log = FailureLog {
+        run,
+        run_id: &context.run_id,
+        tested_head: commit,
+        base_sha: Some(&candidate.base.commit),
+        baseline: check.as_ref(),
+        baseline_path: Some(&base_path),
+        flaky: rerun.as_ref().and_then(|rerun| rerun.flaky.as_ref()),
+        known_red: known_red.is_some(),
+        network_transient: run.network_evidence.is_some(),
+    }
+    .record(json!({
         "role": "candidate",
         "workspace_id": context.workspace_id,
         "task_id": context.task_id,
         "claim_id": context.claim_id,
         "machine_id": context.machine_id,
-        "run_id": context.run_id,
-        "tested_head": commit,
-        "base_sha": candidate.base.commit,
-        "command": run.command,
-        "exit_code": run.exit_code,
-        "timed_out": run.timed_out,
-        "output": run.output,
-        "host_output_refusal": run.host_output_refusal.as_ref().map(|refusal| json!({
-            "reason": refusal.reason.as_str(),
-            "detail": refusal.detail,
-        })),
-        "validation_env": run.environment_record(),
-        "flaky": rerun.as_ref().and_then(|rerun| rerun.flaky.as_ref()),
-        "failure_kind": if rerun.as_ref().is_some_and(|rerun| rerun.flaky.is_some()) {
-            json!("flaky")
-        } else if red {
-            json!("baseline_red")
-        } else if check.as_ref().is_some_and(|check| check.infrastructure_failure().is_some()) {
-            json!("environment")
-        } else if run.network_evidence.is_some() {
-            json!("transient")
-        } else {
-            run.failure_kind()
-        },
-        "network_retries": run.network_retries,
-        "summary": run.summary,
-        "baseline": check.as_ref().map(|check| check.record(Some(&base_path))),
-    });
+    }));
     // The logs are evidence for whoever reads the owner's task; failing to
     // deliver them must not hide the typed failure itself.
     let rerun_path = format!("validation/{}/{index}.rerun.json", context.claim_id);
     let mut logs = vec![(&log_path, log)];
     if let Some(rerun) = &rerun {
-        logs.push((
-            &rerun_path,
-            json!({
-                "schema_version": 1, "role": "candidate_rerun", "run_id": context.run_id,
-                "tested_head": commit, "command": rerun.run.command,
-                "exit_code": rerun.run.exit_code, "timed_out": rerun.run.timed_out,
-                "output": rerun.run.output, "summary": rerun.run.summary,
-                "validation_env": rerun.run.environment_record(), "flaky": rerun.flaky,
-            }),
-        ));
+        logs.push((&rerun_path, rerun_log(rerun, &context.run_id, commit)));
     }
     if let Some(check) = &check {
         logs.push((&base_path, check.log(&context.run_id)));
@@ -538,6 +598,16 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
     for (path, content) in logs {
         if let Err(error) = serde_json::to_vec(&content)
             .map_err(|error| OrbitError::Execution(error.to_string()))
+            .and_then(|bytes| {
+                super::super::required::evidence::retain(
+                    host,
+                    std::slice::from_ref(&context.task_id),
+                    &context.run_id,
+                    path,
+                    &bytes,
+                    true,
+                )
+            })
             .and_then(|bytes| host.attach_claim_validation_log(path, bytes))
         {
             tracing::warn!(
@@ -545,6 +615,9 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
                 "could not attach a claimed validation failure log: {error}"
             );
         }
+    }
+    if let Some(known_red) = known_red {
+        return Ok((Some(known_red), None));
     }
     if let Some(record) = rerun.as_ref().and_then(|rerun| rerun.flaky.as_ref()) {
         require_clean_candidate(&workspace_path, candidate)?;
@@ -570,7 +643,7 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
     }
     if let Some(check) = check.as_ref().filter(|_| red) {
         let hold = BaselineRedHold {
-            base_ref: claimed_base_ref(context, input),
+            base_ref: claimed_base_ref(context, input)?,
             base_sha: check.base_sha.clone(),
             command: run.command.clone(),
             run_id: context.run_id.clone(),
@@ -594,13 +667,13 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
 }
 
 /// The base ref this claim synchronized onto, as the owner names it.
-fn claimed_base_ref(context: &ClaimExecutionContext, input: &Value) -> String {
+fn claimed_base_ref(context: &ClaimExecutionContext, input: &Value) -> Result<String, OrbitError> {
     let branch = normalize_base_branch(&context.base_branch)
         .unwrap_or_else(|_| context.base_branch.trim().to_string());
-    match claimed_base_sync(context, input).as_deref() {
-        Ok("remote") => format!("origin/{branch}"),
-        _ => branch,
-    }
+    Ok(match claimed_base_sync(context, input)? {
+        BaseSyncMode::Remote => format!("origin/{branch}"),
+        BaseSyncMode::Local => branch,
+    })
 }
 
 /// The decision a validation step records when the workspace requires no
@@ -608,6 +681,16 @@ fn claimed_base_ref(context: &ClaimExecutionContext, input: &Value) -> String {
 pub(in crate::executor::automation::vcs) const SKIPPED_NO_REQUIRED_COMMANDS: &str =
     "skipped_no_required_commands";
 
+/// The decision a validation step records when every delivered task carries
+/// `skip-validation` and the candidate changes only
+/// `workflow.light_delivery_paths` [ORB-16855].
+pub(in crate::executor::automation::vcs) const SKIPPED_LIGHT_DELIVERY: &str =
+    "skipped_light_delivery";
+
 /// Why that decision ran nothing, in the step's own output.
 pub(in crate::executor::automation::vcs) const NO_REQUIRED_COMMANDS_NOTE: &str = "no required validation commands configured \
      (`workflow.required_validation_commands` is empty); no check ran";
+
+#[cfg(test)]
+#[path = "tests/validation.rs"]
+mod tests;

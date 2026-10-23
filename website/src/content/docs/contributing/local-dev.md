@@ -10,9 +10,9 @@ sidebar:
 Prerequisites and the first build are in the repository's
 [`CONTRIBUTING.md`](https://github.com/constellation-works/orbit/blob/main/CONTRIBUTING.md).
 
-Run targeted checks while you iterate. Before you hand off a task, run the full
-pre-review set. `make ci-fast` alone is not enough, because it runs no Rust
-tests:
+Run checks for the behavior you changed while you iterate: focused tests,
+Clippy on the crates you touched, and goldens when you change a golden surface.
+These targets are available for broader checks when needed:
 
 ```bash
 make ci-fast
@@ -21,8 +21,10 @@ make ci-lint
 make goldens
 ```
 
-The full `make ci` is the merge gate and runs in CI on every pull request. For
-what each gate covers, see [PR Workflow](../pr-workflow/#checks).
+There is no blanket local pre-handoff gate for a task that delivers a diff.
+Required PR checks gate formatting, guardrails, lint, goldens, and the full
+test suite. `make ci-fast` runs no Rust tests. For the current validation
+policy and what each target covers, see [PR Workflow](../pr-workflow/#checks).
 
 ## Website
 

@@ -183,25 +183,26 @@ fn follow_rotation_drains_archive_then_preserves_filters_and_partial_records() {
 
 #[test]
 fn follow_truncation_resets_offset_and_discards_the_previous_partial_record() {
-    for json in [true, false] {
-        let fixture = crate::git_repo::WorkCheckout::new();
-        let path = fixture.work.join("orbit.jsonl");
-        let ready = "r".repeat(1024);
-        fs::write(&path, format!("{}\n", event(&ready, "WARN", "orbit.test"))).unwrap();
-        let follower = Follower::start(&fixture, &path, json);
-        follower.expect_record(&ready, json);
-        append(&path, b"{\"old_partial\":");
-        follower.expect_no_record();
+    // The formatted follower stays covered by
+    // `follow_rotation_drains_archive_then_preserves_filters_and_partial_records`.
+    let json = true;
+    let fixture = crate::git_repo::WorkCheckout::new();
+    let path = fixture.work.join("orbit.jsonl");
+    let ready = "r".repeat(1024);
+    fs::write(&path, format!("{}\n", event(&ready, "WARN", "orbit.test"))).unwrap();
+    let follower = Follower::start(&fixture, &path, json);
+    follower.expect_record(&ready, json);
+    append(&path, b"{\"old_partial\":");
+    follower.expect_no_record();
 
-        let replacement = event("after-truncate", "ERROR", "orbit.test");
-        let split = replacement.len() / 2;
-        fs::write(&path, &replacement.as_bytes()[..split]).unwrap();
-        follower.expect_no_record();
-        append(&path, &replacement.as_bytes()[split..]);
-        append(&path, b"\n");
-        follower.expect_record("after-truncate", json);
-        follower.expect_no_record();
-    }
+    let replacement = event("after-truncate", "ERROR", "orbit.test");
+    let split = replacement.len() / 2;
+    fs::write(&path, &replacement.as_bytes()[..split]).unwrap();
+    follower.expect_no_record();
+    append(&path, &replacement.as_bytes()[split..]);
+    append(&path, b"\n");
+    follower.expect_record("after-truncate", json);
+    follower.expect_no_record();
 }
 
 fn one_shot_tail(fixture: &crate::git_repo::WorkCheckout, path: &Path) -> Output {
@@ -411,15 +412,20 @@ fn tail_merges_agent_history_and_follows_both_feeds() {
     .unwrap();
     let follower = Follower::start(&fixture, &path, true);
     follower.expect_record("agent-history", true);
+    // Live follow polls one feed, then the other, with no merged ordering
+    // across feeds. Appending to both before observing either lets the
+    // follower's poll land between the appends and emit them in either
+    // order. Observe each record before appending the next, so the
+    // sequence the follower can emit is the sequence asserted here.
     append(
         &path,
         format!("{}\n", event("operational-live", "WARN", "orbit.test")).as_bytes(),
     );
+    follower.expect_record("operational-live", true);
     append(
         &agent,
         format!("{}\n", event("agent-live", "WARN", "orbit.test")).as_bytes(),
     );
-    follower.expect_record("operational-live", true);
     follower.expect_record("agent-live", true);
     fs::rename(&agent, fixture.work.join("orbit-agent.jsonl.old")).unwrap();
     fs::write(
@@ -467,5 +473,32 @@ fn one_shot_tail_renders_supervisor_agent_output_with_provider_source() {
         &words[1..],
         ["claude", "INF", "[stdout]", "hello", "from", "the", "agent"],
         "agent output must render as `provider  INF  [stream] line`: {stdout}"
+    );
+}
+
+#[test]
+fn one_shot_tail_labels_a_double_colon_target_by_its_last_segment() {
+    let fixture = crate::git_repo::WorkCheckout::new();
+    let path = fixture.work.join("orbit.jsonl");
+    let record = event(
+        "qualified",
+        "INFO",
+        "orbit_engine::activity_job::step_runner",
+    );
+    fs::write(&path, format!("{record}\n")).unwrap();
+    let output = tail_command(&fixture, &path)
+        .output()
+        .expect("log tail output");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let words: Vec<&str> = stdout.split_whitespace().collect();
+    assert_eq!(
+        &words[1..],
+        ["step_runner", "INF", "qualified"],
+        "a `::` target must show the same source label as the dashboard: {stdout}"
     );
 }

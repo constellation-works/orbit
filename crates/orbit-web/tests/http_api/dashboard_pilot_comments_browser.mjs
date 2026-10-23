@@ -51,7 +51,9 @@ try {
   await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture`);
   await page.waitForFunction(() => window.pilotReady);
   await page.evaluate(() => document.fonts.ready);
-  const card = page.locator('.comment-card');
+  // The thread is the selected task's Comments tab in the pane.
+  await page.locator('#task-detail-body').getByRole('tab', { name: /^Comments/ }).click();
+  const card = page.locator('#task-detail-body .comment-card');
   await card.scrollIntoViewIfNeeded();
   const fields = await card.locator('.comment-body').evaluate(body => Object.fromEntries(
     [...body.querySelectorAll('dt')].map(label => [label.textContent, label.nextElementSibling.textContent]),

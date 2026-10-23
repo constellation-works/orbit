@@ -1,0 +1,565 @@
+//! `orbit_cmd::update::run_update` against a fake installation and mirror:
+//! input bounds, candidate admission, downgrade authority, the bundled
+//! Bubblewrap refresh and the recovery command a failed convergence prints.
+
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::thread::JoinHandle;
+
+use orbit_cmd::update::channel::release_archive_name;
+use orbit_cmd::update::source::MIRROR_LATEST_FILE;
+use orbit_cmd::update::{UpdateOutcome, UpdateReport, UpdateRequest, run_update};
+use orbit_common::security::release::{
+    RELEASE_CHECKSUMS_FILENAME, RELEASE_CHECKSUMS_SIGNATURE_FILENAME,
+};
+
+use super::release_fixture::{FakeBinary, Fixture, TEST_TARGET, request};
+
+/// Larger than every release input limit; sparse, so it costs no disk.
+const OVERSIZED_INPUT_BYTES: u64 = 1 << 30;
+const RELEASE_METADATA_LIMIT_BYTES: usize = 256 * 1024;
+
+fn read_http_request_head(stream: &mut impl Read) -> Vec<u8> {
+    let mut head = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        stream.read_exact(&mut byte).expect("HTTP request head");
+        head.push(byte[0]);
+    }
+    head
+}
+
+fn release_metadata(tag: &str, size: usize) -> Vec<u8> {
+    let prefix = format!("{{\"tag_name\":\"{tag}\",\"body\":\"");
+    let suffix = b"\"}";
+    assert!(size > prefix.len() + suffix.len());
+    let mut body = prefix.into_bytes();
+    body.resize(size - suffix.len(), b'x');
+    body.extend_from_slice(suffix);
+    body
+}
+
+fn release_api_server(
+    body: Vec<u8>,
+    content_length: bool,
+    send_body: bool,
+) -> (String, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("local release API fixture");
+    let address = listener.local_addr().expect("release API address");
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("release API request");
+        let request = read_http_request_head(&mut stream);
+        assert!(
+            String::from_utf8_lossy(&request)
+                .starts_with("GET /repos/constellation-works/orbit/releases/latest "),
+            "unexpected release API request: {}",
+            String::from_utf8_lossy(&request)
+        );
+        if content_length {
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .expect("release API headers");
+        } else {
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+                .expect("release API headers");
+        }
+        if send_body {
+            stream.write_all(&body).expect("release API body");
+        }
+    });
+    (format!("http://{address}"), server)
+}
+
+fn update_check_accepts_release_metadata_above_64_kib() {
+    let version = env!("CARGO_PKG_VERSION");
+    let (base, server) =
+        release_api_server(release_metadata(&format!("v{version}"), 85_541), true, true);
+    let temp = tempfile::tempdir().expect("CLI fixture root");
+    let cwd = temp.path().join("cwd");
+    let home = temp.path().join("home");
+    let mirror = temp.path().join("mirror");
+    for path in [&cwd, &home, &mirror] {
+        std::fs::create_dir_all(path).expect("CLI fixture directory");
+    }
+
+    let mut command = super::orbit(&cwd, &home, &mirror);
+    command
+        .args(["update", "--check", "--json"])
+        .env_remove("ORBIT_UPDATE_RELEASE_DIR")
+        .env("ORBIT_TEST_RELEASE_API_BASE", base);
+    let output = super::output_of(&mut command).expect("run update check");
+    server.join().expect("release API server completed");
+
+    assert!(
+        output.status.success(),
+        "update check failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("update report JSON");
+    assert_eq!(report["outcome"], "already_current", "{report}");
+    assert_eq!(report["target_version"], version, "{report}");
+}
+
+fn update_check_refuses_streamed_metadata_over_its_release_limit() {
+    let over_limit = release_metadata(
+        &format!("v{}", env!("CARGO_PKG_VERSION")),
+        RELEASE_METADATA_LIMIT_BYTES + 1,
+    );
+    let (base, server) = release_api_server(over_limit, false, true);
+    let temp = tempfile::tempdir().expect("CLI fixture root");
+    let cwd = temp.path().join("cwd");
+    let home = temp.path().join("home");
+    let mirror = temp.path().join("mirror");
+    for path in [&cwd, &home, &mirror] {
+        std::fs::create_dir_all(path).expect("CLI fixture directory");
+    }
+
+    let mut command = super::orbit(&cwd, &home, &mirror);
+    command
+        .args(["update", "--check", "--json"])
+        .env_remove("ORBIT_UPDATE_RELEASE_DIR")
+        .env("ORBIT_TEST_RELEASE_API_BASE", base);
+    let output = super::output_of(&mut command).expect("run oversized update check");
+    server.join().expect("release API server completed");
+
+    assert!(!output.status.success(), "oversized metadata was accepted");
+    let error: serde_json::Value =
+        serde_json::from_slice(&output.stderr).expect("structured update error");
+    assert_eq!(error["code"], "execution_failed", "{error}");
+    assert!(
+        error["error"]
+            .as_str()
+            .is_some_and(|message| message.contains("262144-byte release input limit")),
+        "oversized metadata should stop at the release limit: {error}"
+    );
+}
+
+fn update_check_refuses_declared_oversized_metadata_before_reading_its_body() {
+    let over_limit = release_metadata(
+        &format!("v{}", env!("CARGO_PKG_VERSION")),
+        RELEASE_METADATA_LIMIT_BYTES + 1,
+    );
+    let (base, server) = release_api_server(over_limit, true, false);
+    let temp = tempfile::tempdir().expect("CLI fixture root");
+    let cwd = temp.path().join("cwd");
+    let home = temp.path().join("home");
+    let mirror = temp.path().join("mirror");
+    for path in [&cwd, &home, &mirror] {
+        std::fs::create_dir_all(path).expect("CLI fixture directory");
+    }
+
+    let mut command = super::orbit(&cwd, &home, &mirror);
+    command
+        .args(["update", "--check", "--json"])
+        .env_remove("ORBIT_UPDATE_RELEASE_DIR")
+        .env("ORBIT_TEST_RELEASE_API_BASE", base);
+    let output = super::output_of(&mut command).expect("run oversized update check");
+    server.join().expect("release API server completed");
+
+    assert!(!output.status.success(), "oversized metadata was accepted");
+    let error: serde_json::Value =
+        serde_json::from_slice(&output.stderr).expect("structured update error");
+    assert_eq!(error["code"], "execution_failed", "{error}");
+    assert!(
+        error["error"]
+            .as_str()
+            .is_some_and(|message| message.contains("262144-byte release input limit")),
+        "declared oversized metadata should be refused before reading its body: {error}"
+    );
+}
+
+fn oversized_mirror_inputs_fail_before_executable_replacement() {
+    for asset_class in [
+        MIRROR_LATEST_FILE,
+        RELEASE_CHECKSUMS_FILENAME,
+        RELEASE_CHECKSUMS_SIGNATURE_FILENAME,
+        "archive",
+    ] {
+        let fixture = Fixture::new("0.18.0");
+        fixture.publish("0.19.0", FakeBinary::Healthy);
+        let asset = if asset_class == "archive" {
+            release_archive_name(TEST_TARGET)
+        } else {
+            asset_class.to_string()
+        };
+        let input = fixture.mirror_input("0.19.0", &asset);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&input)
+            .expect("published input")
+            .set_len(OVERSIZED_INPUT_BYTES)
+            .expect("oversized sparse input");
+        let original = std::fs::read(&fixture.executable).expect("installed executable");
+        let error =
+            run_update(&fixture.environment(), &request()).expect_err("oversized mirror input");
+        assert!(
+            error.to_string().contains("-byte release input limit"),
+            "{asset}: {error}"
+        );
+        assert_eq!(
+            std::fs::read(&fixture.executable).expect("installed executable"),
+            original
+        );
+        assert!(!fixture.staging_file_remains());
+    }
+}
+
+fn successful_read_only_inspection_cannot_authorize_a_downgrade() {
+    let fixture = Fixture::new("0.19.0");
+    fixture.publish("0.18.0", FakeBinary::ReadOnlyStore);
+    let mut requested = request();
+    requested.allow_downgrade = true;
+    let before = std::fs::read(&fixture.executable).expect("old executable");
+    run_update(&fixture.environment(), &requested).expect_err("read-only candidate refused");
+    assert_eq!(
+        std::fs::read(&fixture.executable).expect("old executable"),
+        before
+    );
+}
+
+fn a_replacement_without_admission_protocol_is_refused_before_installation() {
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::NoAdmissionContract);
+    let before = std::fs::read(&fixture.executable).expect("installed executable");
+    let error = run_update(&fixture.environment(), &request()).expect_err("unprotected candidate");
+    assert!(
+        error
+            .to_string()
+            .contains("does not support executable generation admission")
+    );
+    assert_eq!(
+        std::fs::read(&fixture.executable).expect("installed executable"),
+        before
+    );
+    assert!(fixture.invocations().is_empty());
+}
+
+fn an_update_refreshes_an_installed_bundled_bubblewrap_with_the_new_release() {
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::Healthy);
+    let mut environment = fixture.environment();
+    environment.bundled_bwrap_installed = true;
+
+    let report = run_update(&environment, &request()).expect("update");
+
+    assert_eq!(report.exit_code(), 0, "{report:?}");
+    let refresh = "0.19.0: init --host-prerequisites-only --non-interactive";
+    assert_eq!(
+        fixture.invocations().last().map(String::as_str),
+        Some(refresh),
+        "the replacement executable must refresh the bundled Bubblewrap, without --root"
+    );
+
+    // A host without one installed never has its Bubblewrap touched.
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::Healthy);
+    run_update(&fixture.environment(), &request()).expect("update");
+    assert!(
+        !fixture
+            .invocations()
+            .iter()
+            .any(|line| line.contains("init")),
+        "{:?}",
+        fixture.invocations()
+    );
+}
+
+fn parse_retry_request_from_recovery(report: &UpdateReport) -> UpdateRequest {
+    let recovery = report.recovery.as_deref().expect("recovery text");
+    let marker = "Re-run `";
+    let start = recovery.find(marker).expect("Re-run marker") + marker.len();
+    let end = recovery[start..].find('`').expect("closing backtick") + start;
+    let command = &recovery[start..end];
+    let mut request = UpdateRequest::default();
+    let words: Vec<&str> = command.split_whitespace().collect();
+    let mut i = 0;
+    while i < words.len() {
+        if words[i] == "--version" && i + 1 < words.len() {
+            request.target_version = Some(words[i + 1].to_string());
+            i += 2;
+        } else if words[i] == "--allow-downgrade" {
+            request.allow_downgrade = true;
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    request
+}
+
+fn recovery_hint_targets_requested_version_when_newer_release_is_published() {
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::FailsMigrationConfirm);
+    fixture.publish("0.20.0", FakeBinary::Healthy);
+
+    let mut requested = request();
+    requested.target_version = Some("0.19.0".to_string());
+    let report = run_update(&fixture.environment(), &requested).expect("update");
+
+    assert_eq!(report.outcome, UpdateOutcome::NeedsRecovery);
+    assert_eq!(report.target_version, "0.19.0");
+    assert!(report.replaced);
+
+    let retry_request = parse_retry_request_from_recovery(&report);
+    assert_eq!(retry_request.target_version.as_deref(), Some("0.19.0"));
+    assert!(!retry_request.allow_downgrade);
+
+    fixture.repair_migration();
+    let retry_report = run_update(&fixture.environment(), &retry_request).expect("retry update");
+
+    assert_eq!(retry_report.outcome, UpdateOutcome::AlreadyCurrent);
+    assert_eq!(retry_report.target_version, "0.19.0");
+    assert_eq!(fixture.installed_reports(), "orbit 0.19.0");
+}
+
+fn recovery_hint_preserves_allow_downgrade_when_retrying_older_release() {
+    let fixture = Fixture::new("0.19.0");
+    fixture.publish("0.18.0", FakeBinary::FailsMigrationConfirm);
+    fixture.publish("0.20.0", FakeBinary::Healthy);
+
+    let mut requested = request();
+    requested.target_version = Some("0.18.0".to_string());
+    requested.allow_downgrade = true;
+    let report = run_update(&fixture.environment(), &requested).expect("downgrade update");
+
+    assert_eq!(report.outcome, UpdateOutcome::NeedsRecovery);
+    assert_eq!(report.target_version, "0.18.0");
+    assert_eq!(report.current_version, "0.19.0");
+    assert!(report.replaced);
+
+    let retry_request = parse_retry_request_from_recovery(&report);
+    assert_eq!(retry_request.target_version.as_deref(), Some("0.18.0"));
+    assert!(retry_request.allow_downgrade);
+
+    fixture.repair_migration();
+    let retry_report = run_update(&fixture.environment(), &retry_request).expect("retry downgrade");
+
+    assert_eq!(retry_report.outcome, UpdateOutcome::AlreadyCurrent);
+    assert_eq!(retry_report.target_version, "0.18.0");
+    assert_eq!(fixture.installed_reports(), "orbit 0.18.0");
+}
+
+#[test]
+fn update_flow_contracts_0() {
+    if crate::isolated_test::run_in_child("update::flow::update_flow_contracts_0") {
+        return;
+    }
+    let _trace = super::release_fixture::trace_contract_rows();
+    for (name, check) in [
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        (
+            "a_hanging_candidate_probe_times_out_without_holding_an_authority",
+            a_hanging_candidate_probe_times_out_without_holding_an_authority as fn(),
+        ),
+        (
+            "oversized_mirror_inputs_fail_before_executable_replacement",
+            oversized_mirror_inputs_fail_before_executable_replacement as fn(),
+        ),
+        (
+            "successful_read_only_inspection_cannot_authorize_a_downgrade",
+            successful_read_only_inspection_cannot_authorize_a_downgrade as fn(),
+        ),
+        (
+            "a_replacement_without_admission_protocol_is_refused_before_installation",
+            a_replacement_without_admission_protocol_is_refused_before_installation as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn update_flow_contracts_1() {
+    if crate::isolated_test::run_in_child("update::flow::update_flow_contracts_1") {
+        return;
+    }
+    let _trace = super::release_fixture::trace_contract_rows();
+    for (name, check) in [
+        (
+            "update_check_accepts_release_metadata_above_64_kib",
+            update_check_accepts_release_metadata_above_64_kib as fn(),
+        ),
+        (
+            "update_check_refuses_streamed_metadata_over_its_release_limit",
+            update_check_refuses_streamed_metadata_over_its_release_limit as fn(),
+        ),
+        (
+            "update_check_refuses_declared_oversized_metadata_before_reading_its_body",
+            update_check_refuses_declared_oversized_metadata_before_reading_its_body as fn(),
+        ),
+        (
+            "an_update_refreshes_an_installed_bundled_bubblewrap_with_the_new_release",
+            an_update_refreshes_an_installed_bundled_bubblewrap_with_the_new_release as fn(),
+        ),
+        (
+            "recovery_hint_targets_requested_version_when_newer_release_is_published",
+            recovery_hint_targets_requested_version_when_newer_release_is_published as fn(),
+        ),
+        (
+            "recovery_hint_preserves_allow_downgrade_when_retrying_older_release",
+            recovery_hint_preserves_allow_downgrade_when_retrying_older_release as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+/// The version probe times out only after its real child starts. Exercise the
+/// public updater directly so the clock seam avoids a minute of wall-clock wait
+/// on macOS; generation admission must remain free during and after the probe.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
+    use orbit_common::fs::generation::{GenerationGuard, executable_generation};
+    use orbit_common::test_env::with_supervision_clock;
+    use std::cell::{Cell, RefCell};
+    use std::time::{Duration, Instant};
+
+    let fixture = Fixture::new("0.18.0");
+    let environment = fixture.environment();
+    let authority = &environment.admission_roots[0];
+    let probing = authority.with_file_name("probe-started");
+    let candidate = format!(
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo $$ > '{}'; exec sleep 600; fi\nexit 0\n",
+        probing.display()
+    );
+    fixture.publish_script("0.19.0", candidate.as_bytes());
+    let digest = executable_generation(&fixture.executable).expect("installed digest");
+    drop(GenerationGuard::acquire(authority, &digest).expect("initialize generation"));
+    let generation = authority.join(".generation.lock");
+    let before_generation = std::fs::read(&generation).expect("generation record");
+    let before = std::fs::read(&fixture.executable).expect("installed bytes");
+    let observed = std::rc::Rc::new(Cell::new(false));
+    let clock_observed = observed.clone();
+    let admission_free_during_probe = std::rc::Rc::new(Cell::new(false));
+    let clock_admission_free_during_probe = admission_free_during_probe.clone();
+    let admission_probe = std::rc::Rc::new(RefCell::new(None));
+    let clock_admission_probe = admission_probe.clone();
+    let clock_roots = environment.admission_roots.clone();
+    let install_dir = fixture
+        .executable
+        .parent()
+        .expect("install directory")
+        .to_path_buf();
+    let clock_ticks = Cell::new(0u32);
+    let origin = Instant::now();
+    let error = with_supervision_clock(
+        move || {
+            let probe_started = || {
+                std::fs::read_to_string(&probing)
+                    .ok()
+                    .and_then(|pid| pid.trim().parse::<libc::pid_t>().ok())
+                    .is_some()
+            };
+            // Force the child to start before the staged probe's initial clock
+            // sample. The installed-version probe runs before staging, so it
+            // must retain the unadvanced clock. This ordering exposed the
+            // remaining hang after the admission callback repair.
+            if !clock_observed.get()
+                && std::fs::read_dir(&install_dir)
+                    .expect("install directory")
+                    .any(|entry| {
+                        entry
+                            .expect("install entry")
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with(".orbit-update-staged")
+                    })
+            {
+                orbit_common::test_env::wait_until(
+                    "the staged version probe to start",
+                    probe_started,
+                );
+            }
+            if probe_started() {
+                if !clock_observed.replace(true) {
+                    // Admission can wait for a live participant. Keep that
+                    // check off the supervisor's clock callback so a blocked
+                    // check cannot prevent the probe deadline from advancing.
+                    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+                    let roots = clock_roots.clone();
+                    let probe = std::thread::spawn(move || {
+                        let available = match orbit_cmd::update::acquire_admissions(&roots) {
+                            Ok(admissions) => {
+                                drop(admissions);
+                                true
+                            }
+                            Err(_) => false,
+                        };
+                        let _ = result_tx.send(available);
+                        available
+                    });
+                    *clock_admission_probe.borrow_mut() = Some(probe);
+                    clock_admission_free_during_probe.set(
+                        result_rx
+                            .recv_timeout(Duration::from_secs(5))
+                            .unwrap_or(false),
+                    );
+                }
+                // Keep advancing after readiness: if readiness precedes the
+                // first sample, a single fixed jump becomes the deadline's
+                // origin and never expires. Each later read must advance too.
+                clock_ticks.set(clock_ticks.get() + 1);
+                origin + Duration::from_secs(3_601) * clock_ticks.get()
+            } else {
+                origin
+            }
+        },
+        || run_update(&environment, &request()).expect_err("candidate probe must time out"),
+    );
+    assert!(
+        admission_free_during_probe.get(),
+        "a live candidate probe must not hold generation admission"
+    );
+    assert!(
+        admission_probe
+            .borrow_mut()
+            .take()
+            .expect("admission probe started")
+            .join()
+            .expect("admission probe thread"),
+        "generation admission must remain available during the candidate probe"
+    );
+    assert!(
+        observed.get(),
+        "the intended candidate actually started its probe"
+    );
+    let message = error.to_string();
+    assert!(message.contains("did not finish within"), "{message}");
+    assert!(message.contains("--version"), "{message}");
+    assert!(message.contains("nothing was replaced"), "{message}");
+    let pid: libc::pid_t = std::fs::read_to_string(authority.with_file_name("probe-started"))
+        .expect("probe pid")
+        .trim()
+        .parse()
+        .expect("numeric probe pid");
+    // SAFETY: signal zero only observes the fixture's recorded child. The
+    // updater must have reaped it before returning the timeout error.
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        -1,
+        "timed-out candidate is still alive"
+    );
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+    assert_eq!(std::fs::read(&fixture.executable).unwrap(), before);
+    assert_eq!(std::fs::read(&generation).unwrap(), before_generation);
+    assert!(
+        !fixture.staging_file_remains(),
+        "timed-out staging must be cleaned"
+    );
+    assert!(!super::integrity::backup_path(&fixture.executable).exists());
+    drop(
+        orbit_cmd::update::acquire_admissions(&environment.admission_roots)
+            .expect("the timed-out update must release every authority"),
+    );
+}

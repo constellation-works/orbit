@@ -25,27 +25,49 @@ use orbit_types::workflow::{
 const ARTIFACT: &str = "evidence/host-sandbox-probe.json";
 const LOG_ARTIFACT: &str = "evidence/host-sandbox-probe.log.json";
 
+mod deferred;
+mod sandbox;
+
 /// A claimed leaf whose follower resolves `cargo` to a stand-in running
 /// `tests/host/<target>.sh` from the checkout it is started in, with the
 /// candidate's probe committed as `probe`, and its review admitted under the
 /// returned attempt.
 fn leaf_with_probe(probe: &str) -> (ReviewedLeaf, String) {
+    leaf_with_probe_at(probe, false)
+}
+
+fn leaf_with_probe_at(probe: &str, before_landing: bool) -> (ReviewedLeaf, String) {
     let home = PathBuf::from(std::env::var("HOME").expect("the isolated child's HOME"));
     let bin = home.join("host-evidence-bin");
     std::fs::create_dir_all(&bin).unwrap();
     let cargo = bin.join("cargo");
-    // `cargo test -p <package> --test <target> [filter] -- --nocapture`
-    std::fs::write(&cargo, "#!/bin/sh\nexec sh \"tests/host/$5.sh\"\n").unwrap();
+    // `cargo test -p <package> --test <target> [filter] -- --nocapture`; the
+    // probe gets the filter, or `--` without one.
+    std::fs::write(&cargo, "#!/bin/sh\nexec sh \"tests/host/$5.sh\" \"$6\"\n").unwrap();
     std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let mut leaf = ReviewedLeaf::admit_with_follower_config(&format!(
+    let follower_config = format!(
         "[workflow.validation_env]\nlogin_shell = false\npath = [\"{}\"]\n",
         bin.display()
-    ));
+    );
+    let mut leaf = if before_landing {
+        ReviewedLeaf::admit_from(
+            &format!(
+                "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = \"{}\"\n",
+                super::claimed_review::REVIEW_CREW
+            ),
+            &follower_config,
+        )
+    } else {
+        ReviewedLeaf::admit_with_follower_config(&follower_config)
+    };
     let repo = leaf.pair.follower_repo.clone();
     std::fs::create_dir_all(repo.join("tests/host")).unwrap();
     std::fs::write(repo.join("tests/host/probe.sh"), probe).unwrap();
     git(&repo, &["add", "tests"]);
     git(&repo, &["commit", "-q", "-m", "Add the sandbox probe"]);
+    if before_landing {
+        leaf.gate_input["before_landing"] = json!(true);
+    }
     let admitted = leaf.admit_review();
     let attempt_id = admitted["attempt_id"].as_str().unwrap().to_string();
     (leaf, attempt_id)
@@ -83,6 +105,7 @@ fn reviewer_needs_host(leaf: &ReviewedLeaf, attempt_id: &str, command: &str, os:
             control: None,
             sources: Vec::new(),
             mutation_target: Vec::new(),
+            repaired_blob: Default::default(),
             deferred: Vec::new(),
             baseline: None,
         })
@@ -213,11 +236,7 @@ fn a_claimed_hosts_sandbox_test_run_lets_the_review_pass_and_the_owner_accept() 
 
 /// A probe that skips itself is missing evidence, never a pass: the result
 /// is not attached, the log names the skip, and the review holds.
-#[test]
 fn a_self_skipped_host_run_holds_the_review() {
-    if !isolated(module_path!(), "a_self_skipped_host_run_holds_the_review") {
-        return;
-    }
     let (leaf, attempt_id) = leaf_with_probe(
         "echo 'SKIP: the probe needs a kernel feature'\n\
          echo 'test probe ... ok'\n\
@@ -251,14 +270,7 @@ fn a_self_skipped_host_run_holds_the_review() {
 
 /// A command outside the closed grammar, or carrying shell syntax, is
 /// refused with its typed reason and never reaches a shell; the review holds.
-#[test]
 fn a_host_sandbox_test_outside_the_grammar_is_refused_and_never_run() {
-    if !isolated(
-        module_path!(),
-        "a_host_sandbox_test_outside_the_grammar_is_refused_and_never_run",
-    ) {
-        return;
-    }
     for (command, reason) in [
         (
             "cargo test -p orbit-exec --test probe; touch ran-outside-grammar",
@@ -300,3 +312,10 @@ fn a_host_sandbox_test_outside_the_grammar_is_refused_and_never_run() {
         );
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_self_skipped_host_run_holds_the_review_scenarios,
+    a_self_skipped_host_run_holds_the_review,
+    a_host_sandbox_test_outside_the_grammar_is_refused_and_never_run
+);

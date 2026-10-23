@@ -15,7 +15,6 @@ use tempfile::tempdir;
 const OLD_REMOTE: &str = "git@github.com:example/orbit.git";
 const NEW_REMOTE: &str = "ssh://github.com/example/orbit-renamed.git";
 
-#[test]
 fn force_init_binds_first_origin_and_preserves_task_partition_and_publication() {
     let home = tempdir().expect("home");
     let repo = tempdir().expect("repo");
@@ -197,7 +196,6 @@ fn force_init_binds_first_origin_and_preserves_task_partition_and_publication() 
     );
 }
 
-#[test]
 fn force_init_recovers_identity_with_an_unchanged_non_portable_origin() {
     for origin in [
         "/local/source.git",
@@ -210,9 +208,14 @@ fn force_init_recovers_identity_with_an_unchanged_non_portable_origin() {
             .host_default_branch()
             .no_commit()
             .build();
-        crate::git_repo::run(repo.path(), &["remote", "add", "origin", origin]);
         initialize_workspace(repo.path(), home.path(), "non-portable-origin-owner");
         let registry_path = home.path().join(".orbit/workspaces.json");
+        // Legacy registrations may already contain credentials. Recovery must
+        // preserve those records even though fresh init now refuses them.
+        let mut legacy = read_json(&registry_path);
+        legacy["workspaces"][0]["git_remote"] = origin.into();
+        fs::write(&registry_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        crate::git_repo::run(repo.path(), &["remote", "add", "origin", origin]);
         let initial_registry = read_json(&registry_path);
         assert_eq!(initial_registry["workspaces"][0]["git_remote"], origin);
         let identity_path = repo.path().join(".orbit/config.yaml");
@@ -269,6 +272,60 @@ fn force_init_recovers_identity_with_an_unchanged_non_portable_origin() {
 }
 
 #[test]
+fn fresh_init_refuses_credentials_before_writing_workspace_state() {
+    for origin in [
+        "https://operator:supersecret@github.com/example/orbit.git",
+        "https://supersecret@github.com/example/orbit.git",
+        "ssh://git:supersecret@github.com/example/orbit.git",
+        "git:supersecret@github.com:example/orbit.git",
+        "https://operator:supersecret@github.com",
+        "git:supersecret@github.com:",
+        "https://operator:supersecret/fragment@github.com/example/orbit.git",
+    ] {
+        let home = tempdir().expect("home");
+        let repo = tempdir().expect("repo");
+        crate::git_repo::run(repo.path(), &["init"]);
+        crate::git_repo::run(repo.path(), &["remote", "add", "origin", origin]);
+        fs::write(repo.path().join(".gitignore"), "operator-file\n").unwrap();
+        orbit(repo.path(), home.path())
+            .args(["workspace", "init", "--name", "orbit"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("must not contain credentials"))
+            .stderr(predicate::str::contains("supersecret").not());
+        assert!(!home.path().join(".orbit/workspaces.json").exists());
+        assert!(!repo.path().join(".orbit").exists());
+        assert_eq!(
+            fs::read_to_string(repo.path().join(".gitignore")).unwrap(),
+            "operator-file\n"
+        );
+    }
+    // Credential-free portable and local origins retain fresh-init support.
+    for safe_origin in [
+        OLD_REMOTE,
+        "https://github.com/example/orbit.git",
+        "ssh://git@github.com/example/orbit.git",
+        "/local/source.git",
+        "file:///local/source.git",
+        "ssh://git@github.com",
+        "https://github.com",
+        "not-a-remote",
+    ] {
+        let safe_home = tempdir().expect("safe home");
+        let safe_repo = tempdir().expect("safe repo");
+        crate::git_repo::run(safe_repo.path(), &["init"]);
+        crate::git_repo::run(safe_repo.path(), &["remote", "add", "origin", safe_origin]);
+        orbit(safe_repo.path(), safe_home.path())
+            .args(["workspace", "init", "--name", "orbit"])
+            .assert()
+            .success();
+        assert_eq!(
+            read_json(&safe_home.path().join(".orbit/workspaces.json"))["workspaces"][0]["git_remote"],
+            safe_origin
+        );
+    }
+}
+
 fn force_init_rejects_invalid_origins_before_first_binding_and_on_retry() {
     let home = tempdir().expect("home");
     let repo = tempdir().expect("repo");
@@ -304,7 +361,6 @@ fn force_init_rejects_invalid_origins_before_first_binding_and_on_retry() {
     }
 }
 
-#[test]
 fn force_init_cannot_bind_first_origin_from_a_replica_or_foreign_owner() {
     let home = tempdir().expect("home");
     let repo = tempdir().expect("repo");
@@ -345,7 +401,6 @@ fn force_init_cannot_bind_first_origin_from_a_replica_or_foreign_owner() {
     }
 }
 
-#[test]
 fn owner_can_dry_run_apply_read_back_and_retry_source_remote_rebind() {
     let home = tempdir().expect("home");
     let repo = tempdir().expect("repo");
@@ -485,7 +540,6 @@ fn owner_can_dry_run_apply_read_back_and_retry_source_remote_rebind() {
     assert_eq!(verified["remote"], NEW_REMOTE);
 }
 
-#[test]
 fn credential_bearing_rebind_is_redacted_and_does_not_mutate() {
     let home = tempdir().expect("home");
     let repo = tempdir().expect("repo");
@@ -517,7 +571,6 @@ fn credential_bearing_rebind_is_redacted_and_does_not_mutate() {
     );
 }
 
-#[test]
 fn source_remote_help_names_inspection_dry_run_and_rebind() {
     let home = tempdir().expect("home");
     let cwd = tempdir().expect("cwd");
@@ -643,4 +696,53 @@ fn orbit(cwd: &Path, home: &Path) -> assert_cmd::Command {
         .env("USERPROFILE", home)
         .env_remove("ORBIT_HOME");
     command
+}
+
+#[test]
+fn source_remote_contracts_0() {
+    if crate::isolated_test::run_in_child("workspace_source_remote::source_remote_contracts_0") {
+        return;
+    }
+    for (name, check) in [
+        (
+            "force_init_binds_first_origin_and_preserves_task_partition_and_publication",
+            force_init_binds_first_origin_and_preserves_task_partition_and_publication as fn(),
+        ),
+        (
+            "force_init_recovers_identity_with_an_unchanged_non_portable_origin",
+            force_init_recovers_identity_with_an_unchanged_non_portable_origin as fn(),
+        ),
+        (
+            "force_init_rejects_invalid_origins_before_first_binding_and_on_retry",
+            force_init_rejects_invalid_origins_before_first_binding_and_on_retry as fn(),
+        ),
+        (
+            "force_init_cannot_bind_first_origin_from_a_replica_or_foreign_owner",
+            force_init_cannot_bind_first_origin_from_a_replica_or_foreign_owner as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn source_remote_contracts_1() {
+    for (name, check) in [
+        (
+            "owner_can_dry_run_apply_read_back_and_retry_source_remote_rebind",
+            owner_can_dry_run_apply_read_back_and_retry_source_remote_rebind as fn(),
+        ),
+        (
+            "credential_bearing_rebind_is_redacted_and_does_not_mutate",
+            credential_bearing_rebind_is_redacted_and_does_not_mutate as fn(),
+        ),
+        (
+            "source_remote_help_names_inspection_dry_run_and_rebind",
+            source_remote_help_names_inspection_dry_run_and_rebind as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

@@ -11,16 +11,6 @@ mod dispatch;
 mod plugin;
 mod registry;
 
-/// Test-only reach-through to dispatch's activity-allowlist override, so a
-/// sibling test module does not import a private dispatch item directly.
-#[cfg(test)]
-pub(crate) mod dispatch_test_support {
-    pub(crate) use super::dispatch::override_activity_tools_for_test;
-}
-
-#[cfg(test)]
-mod tests;
-
 #[cfg(unix)]
 pub(crate) use dispatch::RunDispatch;
 pub use dispatch::{
@@ -39,7 +29,6 @@ pub use plugin::{
     PluginSecretValue, PluginSeedAction, PluginSeedOutcome, PluginSkillLink, PluginSummary,
     PluginSyncOutcome, PluginTestOptions, PluginTestOutcome, PluginTestReport, PluginToolSummary,
     PluginUpgradeOptions, PluginUpgradeResult, PluginValidationReport, execute_global_plugin_tool,
-    host_plugin_cli_groups, host_plugin_mcp_definitions, host_plugin_rows,
-    host_plugin_workspace_tool_owners, migrate_plugin_sidecars,
+    host_plugin_cli_groups, host_plugin_mcp_definitions, host_plugin_rows, migrate_plugin_sidecars,
 };
 pub use registry::{DoctorResult, DoctorStatus, ToolInfo};

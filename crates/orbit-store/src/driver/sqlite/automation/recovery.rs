@@ -6,8 +6,11 @@ use super::codec::{decode, encode};
 use crate::Store;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::workflow::automation::recovery::{RecoveryRecord, ReissuedAction};
-use orbit_types::workflow::automation::{AutomationState, BatchAttempt, BatchState};
+use orbit_common::storage::sqlite::sqlite_store_error;
+use orbit_types::workflow::automation::recovery::{
+    HistoryReplayRecord, RecoveryRecord, ReissuedAction,
+};
+use orbit_types::workflow::automation::{AutomationState, BatchAttempt, BatchState, Delivery};
 use rusqlite::{TransactionBehavior, params};
 
 pub(super) fn commit(
@@ -39,7 +42,7 @@ pub(super) fn commit(
                     previous_json
                 ],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         if changed == 0 {
             return Ok(false);
@@ -54,7 +57,7 @@ pub(super) fn commit(
                 record_json
             ],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
         Ok(true)
     })
@@ -85,7 +88,7 @@ pub(super) fn reset(
                 "DELETE FROM automation_consumers WHERE consumer=?1 AND generation=?2 AND state_json=?3",
                 params![previous.consumer, previous.generation, previous_json],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         if changed == 0 {
             return Ok(false);
@@ -100,7 +103,7 @@ pub(super) fn reset(
                 record_json
             ],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
         Ok(true)
     })
@@ -181,7 +184,7 @@ pub(super) fn stall(
                 ],
             )
             .map(|changed| changed == 1)
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     })
 }
 
@@ -195,15 +198,15 @@ pub(super) fn list(
             .prepare(
                 "SELECT record_json FROM automation_recoveries WHERE consumer=?1 ORDER BY recorded_at DESC,rowid DESC LIMIT ?2",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let rows = stmt
             .query_map(params![consumer, limit.min(100)], |row| {
                 row.get::<_, String>(0)
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
-        rows.map(|row| decode(&row.map_err(|e| OrbitError::Store(e.to_string()))?))
+        rows.map(|row| decode(&row.map_err(sqlite_store_error)?))
             .collect()
     })
 }
@@ -211,7 +214,8 @@ pub(super) fn list(
 /// A recovery may move the recorded configuration identity and replace one
 /// settled attempt. Everything else — the cursors, the pending window, waived
 /// and excluded landings, unresolved evidence and the frozen batch itself —
-/// must arrive unchanged, so no recovery can skip or cover an obligation.
+/// must arrive unchanged, so no recovery can skip or cover an obligation. A
+/// history replay may move commit identities only along its proven mapping.
 fn validate(
     previous: &AutomationState,
     next: &AutomationState,
@@ -228,8 +232,6 @@ fn validate(
         || previous.branch != next.branch
         || previous.baseline != next.baseline
         || previous.covered != next.covered
-        || previous.waived != next.waived
-        || previous.excluded != next.excluded
         // Recovery is how a stalled consumer resumes, so it always leaves the
         // marker cleared rather than carrying the old reason forward.
         || next.stall.is_some()
@@ -256,6 +258,8 @@ fn validate(
     }
 
     if previous.observed != next.observed
+        || previous.waived != next.waived
+        || previous.excluded != next.excluded
         || previous.pending != next.pending
         || previous.pending_commits != next.pending_commits
         || previous.unresolved != next.unresolved
@@ -287,7 +291,7 @@ fn validate_history_replay(
     previous: &AutomationState,
     next: &AutomationState,
     record: &RecoveryRecord,
-    replay: &orbit_types::workflow::automation::recovery::HistoryReplayRecord,
+    replay: &HistoryReplayRecord,
 ) -> Result<(), OrbitError> {
     let invalid = || OrbitError::InvalidInput("invalid automation history replay".into());
     if record.adopted_settings
@@ -378,6 +382,7 @@ fn validate_history_replay(
         .filter(|commit| !mapped_orphans.contains(commit.as_str()));
 
     if added != recorded
+        || !retained_remapped(previous, next, replay)
         || next.unresolved != expected_unresolved
         || !retained_commits
             .into_iter()
@@ -415,6 +420,71 @@ fn validate_history_replay(
     }
 
     Ok(())
+}
+
+/// Waived and excluded landings keep their list, order, key, attribution and
+/// audit facts. One touching a rewritten commit moves to exactly the mapped
+/// images of its commits inside the canonical window; any other stays as is.
+fn retained_remapped(
+    previous: &AutomationState,
+    next: &AutomationState,
+    replay: &HistoryReplayRecord,
+) -> bool {
+    let images = replay
+        .mappings
+        .iter()
+        .map(|mapping| {
+            (
+                mapping.orphan.commit.as_str(),
+                mapping.canonical.commit.as_str(),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let maps_to = |old: &str, new: &str| images.get(old).copied().unwrap_or(old) == new;
+    let remapped = |old: &Delivery, new: &Delivery| {
+        if !old
+            .commits
+            .iter()
+            .any(|commit| images.contains_key(commit.as_str()))
+        {
+            return old == new;
+        }
+        old.key == new.key
+            && old.repository == new.repository
+            && old.branch == new.branch
+            && old.task_ids == new.task_ids
+            && old.unattributed == new.unattributed
+            && old.evidence_reference == new.evidence_reference
+            && old.landed_at == new.landed_at
+            && maps_to(&old.after.commit, &new.after.commit)
+            && old.commits.len() == new.commits.len()
+            && old
+                .commits
+                .iter()
+                .zip(&new.commits)
+                .all(|(old, new)| maps_to(old, new))
+            && new
+                .commits
+                .iter()
+                .all(|commit| next.pending_commits.contains(commit))
+    };
+
+    previous.waived.len() == next.waived.len()
+        && previous
+            .waived
+            .iter()
+            .zip(&next.waived)
+            .all(|(old, new)| remapped(old, new))
+        && previous.excluded.len() == next.excluded.len()
+        && previous
+            .excluded
+            .iter()
+            .zip(&next.excluded)
+            .all(|(old, new)| {
+                old.exclusion == new.exclusion
+                    && old.decided_at == new.decided_at
+                    && remapped(&old.delivery, &new.delivery)
+            })
 }
 
 /// The reissued attempt keeps the frozen batch and its obligations, takes the

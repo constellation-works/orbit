@@ -1,10 +1,12 @@
-//! A pass-listed variable the launching shell does not hold is reported at
-//! drain/job start, on the run, and by `orbit doctor` [ORB-14777].
+//! A pass-listed variable or crew `env` source the launching shell does not
+//! hold is reported at drain, ship and job start, on the run, and by
+//! `orbit doctor` [ORB-14777].
 //!
 //! The 2026-10-08 incident: a worker OAuth token named in `execution.env.pass`
 //! was missing from the shell that started the drain, nothing said so, and
 //! agents fell back to the desktop login. A warning is the contract: starting
-//! still succeeds, the names (never values) are on stderr and the run record.
+//! still succeeds, the names (never values) are in a drain or ship receipt's
+//! `warning` (stderr for a job start) and on the run record.
 
 use std::cell::Cell;
 use std::fs;
@@ -28,6 +30,7 @@ const AMBIENT_SECRET: &str = "ambient-secret-that-must-never-be-printed";
 const NOT_PASSED: &str = "FIXTURE_NOT_PASS_LISTED";
 const EMPTY: &str = "FIXTURE_EMPTY_TOKEN";
 const JOB: &str = "env_pass_fixture";
+const CREW_SOURCE: &str = "FIXTURE_CREW_ENV_SOURCE";
 
 mod cleanup;
 
@@ -87,7 +90,7 @@ impl Fixture {
         }
         let jobs = root.join("resources/jobs");
         fs::create_dir_all(&jobs).expect("job catalog");
-        for name in [JOB, "workspace_auto_pipeline"] {
+        for name in [JOB, "workspace_auto_pipeline", "task_auto_pipeline"] {
             fs::write(
                 jobs.join(format!("{name}.yaml")),
                 format!(
@@ -113,6 +116,22 @@ impl Fixture {
         fs::write(&path, config.to_string()).expect("write config");
     }
 
+    /// Add a global `[crews.<name>]` on the fixture's provider whose `env`
+    /// holds `entry`.
+    fn crew_env(&self, name: &str, entry: &str) {
+        let path = self.home.join(".orbit/config.toml");
+        let mut config: DocumentMut = fs::read_to_string(&path)
+            .expect("read config")
+            .parse()
+            .expect("parse config");
+        config["crews"][name]["provider"] = value("codex");
+        config["crews"][name]["model"] = value("gpt-6-sol");
+        let mut env = Array::new();
+        env.push(entry);
+        config["crews"][name]["env"] = value(env);
+        fs::write(&path, config.to_string()).expect("write config");
+    }
+
     /// `set` names the pass-listed variables the launching shell holds.
     fn command(&self, set: &[(&str, &str)]) -> assert_cmd::Command {
         let mut command = cargo_bin_cmd!("orbit");
@@ -126,7 +145,8 @@ impl Fixture {
             .env_remove(UNSET)
             .env_remove(SET)
             .env_remove(NOT_PASSED)
-            .env_remove(EMPTY);
+            .env_remove(EMPTY)
+            .env_remove(CREW_SOURCE);
         for (name, secret) in set {
             command.env(name, secret);
         }
@@ -212,7 +232,6 @@ fn assert_recorded(fixture: &Fixture, started: &Value, unset: &[&str]) {
     );
 }
 
-#[test]
 fn job_start_warns_once_naming_only_the_unset_variable_and_records_it() {
     let fixture = Fixture::new();
     let (started, stderr) = fixture.start(&[(SET, SECRET)], &["run", "job", JOB, "--json"]);
@@ -237,8 +256,10 @@ fn job_start_warns_once_naming_only_the_unset_variable_and_records_it() {
     );
 }
 
-#[test]
-fn drain_start_warns_and_records_the_unset_variable() {
+/// A drain or ship start reports the unset name with its other notices: in
+/// the JSON receipt's `warning`, and as a `Warning:` line in text, never as a
+/// bare stderr line.
+fn drain_and_ship_starts_report_the_unset_variable_and_record_it() {
     let fixture = Fixture::new();
     // Both CLI workflow entry points launch the worker from the installed
     // binary, so install the tested one the way the detached-worker tests do.
@@ -247,14 +268,41 @@ fn drain_start_warns_and_records_the_unset_variable() {
     fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install tested binary");
 
     let (started, stderr) = fixture.start(&[(SET, SECRET)], &["run", "auto", "--json"]);
-    let warnings = warning_lines(&stderr);
-    assert_eq!(warnings.len(), 1, "one warning per start: {stderr}");
-    assert!(warnings[0].contains(UNSET), "{stderr}");
+    assert!(warning_lines(&stderr).is_empty(), "{stderr}");
+    let receipt = started["warning"].as_str().unwrap_or_default();
+    let warnings = warning_lines(receipt);
+    assert_eq!(warnings.len(), 1, "one warning per start: {started}");
+    assert!(warnings[0].contains(UNSET), "{started}");
+    assert!(
+        !warnings[0].contains(SET),
+        "the set variable is not named as unset: {started}"
+    );
     assert_warning_has_no_repeated_spaces(warnings[0]);
     assert_recorded(&fixture, &started, &[UNSET]);
+
+    fixture.submitted.set(true);
+    let output = fixture
+        .command(&[(SET, SECRET)])
+        .args(["run", "ship", "--mode", "local"])
+        .output()
+        .expect("spawn orbit");
+    assert!(output.status.success(), "ship failed: {output:?}");
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    let stderr = String::from_utf8(output.stderr).expect("stderr");
+    assert!(warning_lines(&stderr).is_empty(), "{stderr}");
+    assert!(!stdout.contains(SECRET), "ship printed a pass-listed value");
+    let warnings = warning_lines(&stdout);
+    assert!(
+        warnings.len() == 1 && warnings[0].starts_with("Warning: ") && warnings[0].contains(UNSET),
+        "the unset name is a `Warning:` line with the ship's notices: {stdout}"
+    );
+    let run_id = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("Run ID: "))
+        .unwrap_or_else(|| panic!("ship names its run: {stdout}"));
+    assert_recorded(&fixture, &serde_json::json!({ "run_id": run_id }), &[UNSET]);
 }
 
-#[test]
 fn start_with_every_pass_listed_variable_set_is_silent_and_records_nothing() {
     let fixture = Fixture::new();
     let (started, stderr) = fixture.start(
@@ -265,7 +313,6 @@ fn start_with_every_pass_listed_variable_set_is_silent_and_records_nothing() {
     assert_recorded(&fixture, &started, &[]);
 }
 
-#[test]
 fn doctor_warns_for_an_unset_pass_listed_variable_and_is_ok_when_all_are_set() {
     let fixture = Fixture::new();
     let unset = fixture.doctor_row(&[(SET, SECRET)]);
@@ -285,6 +332,66 @@ fn doctor_warns_for_an_unset_pass_listed_variable_and_is_ok_when_all_are_set() {
     );
 
     let ok = fixture.doctor_row(&[(SET, SECRET), (UNSET, SECRET)]);
+    assert_eq!(ok["status"], "ok", "{ok}");
+}
+
+/// A crew whose `env` source the launching shell does not hold is named
+/// (crew and source, never a value) at a job start and on the run, a drain's
+/// window excludes it, and `orbit doctor` reports it until the source is set.
+fn crew_env_source_unset_is_warned_recorded_excluded_and_reported() {
+    let fixture = Fixture::new();
+    let entry = format!("OPENAI_API_KEY={CREW_SOURCE}");
+    fixture.crew_env("sol-credits", &entry);
+    let pass_set = [(SET, SECRET), (UNSET, SECRET)];
+
+    let (started, stderr) = fixture.start(&pass_set, &["run", "job", JOB, "--json"]);
+    let warnings: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.contains("sol-credits"))
+        .collect();
+    assert_eq!(warnings.len(), 1, "one crew warning per start: {stderr}");
+    assert!(
+        warnings[0].contains(CREW_SOURCE) && warnings[0].contains("OPENAI_API_KEY"),
+        "the warning names the source and the variable it feeds: {stderr}"
+    );
+    let shown = fixture.show(started["run_id"].as_str().expect("run id"));
+    let shown: Value = serde_json::from_slice(&shown.stdout).expect("run show JSON");
+    assert_eq!(
+        shown["run"]["crew_env_unset"],
+        serde_json::json!([{ "crew": "sol-credits", "env": [entry] }]),
+        "the run records the crew and its unset entry, names only"
+    );
+
+    let installed = fixture.home.join(".orbit/bin/orbit");
+    fs::create_dir_all(installed.parent().unwrap()).expect("installation directory");
+    fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install tested binary");
+    let (drain, _) = fixture.start(&pass_set, &["run", "auto", "--json"]);
+    assert!(
+        drain["warning"]
+            .as_str()
+            .is_some_and(|warning| warning.contains("sol-credits")),
+        "the drain receipt names the excluded crew: {drain}"
+    );
+    let shown = fixture.show(drain["run_id"].as_str().expect("drain run id"));
+    let shown: Value = serde_json::from_slice(&shown.stdout).expect("drain show JSON");
+    let window: Vec<&str> = shown["run"]["input"]["allowed_crews"]
+        .as_array()
+        .map(|crews| crews.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    assert!(
+        window.contains(&"sol") && !window.contains(&"sol-credits"),
+        "the drain's window excludes only the crew whose source is unset: {window:?}"
+    );
+
+    let unset = fixture.doctor_row(&pass_set);
+    assert_eq!(unset["status"], "warning", "{unset}");
+    assert!(
+        unset["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("sol-credits") && message.contains(CREW_SOURCE)),
+        "{unset}"
+    );
+    let ok = fixture.doctor_row(&[(SET, SECRET), (UNSET, SECRET), (CREW_SOURCE, SECRET)]);
     assert_eq!(ok["status"], "ok", "{ok}");
 }
 
@@ -740,4 +847,33 @@ fn clock_credential_loader_child() {
         finish.send(()).unwrap();
         reader.join().unwrap();
     });
+}
+
+#[test]
+fn pass_list_warning_contracts() {
+    for (name, check) in [
+        (
+            "job_start_warns_once_naming_only_the_unset_variable_and_records_it",
+            job_start_warns_once_naming_only_the_unset_variable_and_records_it as fn(),
+        ),
+        (
+            "drain_and_ship_starts_report_the_unset_variable_and_record_it",
+            drain_and_ship_starts_report_the_unset_variable_and_record_it as fn(),
+        ),
+        (
+            "start_with_every_pass_listed_variable_set_is_silent_and_records_nothing",
+            start_with_every_pass_listed_variable_set_is_silent_and_records_nothing as fn(),
+        ),
+        (
+            "doctor_warns_for_an_unset_pass_listed_variable_and_is_ok_when_all_are_set",
+            doctor_warns_for_an_unset_pass_listed_variable_and_is_ok_when_all_are_set as fn(),
+        ),
+        (
+            "crew_env_source_unset_is_warned_recorded_excluded_and_reported",
+            crew_env_source_unset_is_warned_recorded_excluded_and_reported as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

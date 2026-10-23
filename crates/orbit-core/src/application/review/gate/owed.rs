@@ -110,10 +110,6 @@ fn linux_codeql(required: &ReviewEvidenceRequirement) -> bool {
         && required.os.is_none_or(|os| os == EvidenceHostOs::Linux)
 }
 
-/// The admission decision of a run that settles a held review without a
-/// reviewer.
-pub(super) const EVIDENCE_RECEIVED_DECISION: &str = "evidence_received";
-
 /// The held review `candidate` settles without a reviewer: the task's hold
 /// names only checks its certificate recorded as owed, every one of them has
 /// arrived for the held tree, and `candidate` is that tree on the held base
@@ -218,6 +214,7 @@ impl Judgement {
                     control: None,
                     sources: Vec::new(),
                     mutation_target: Vec::new(),
+                    repaired_blob: Default::default(),
                     deferred: Vec::new(),
                     baseline: None,
                 });
@@ -301,6 +298,7 @@ impl Judgement {
                     control: None,
                     sources: Vec::new(),
                     mutation_target: Vec::new(),
+                    repaired_blob: Default::default(),
                     deferred: Vec::new(),
                     baseline: None,
                 });

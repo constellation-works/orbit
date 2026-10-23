@@ -31,10 +31,13 @@ use crate::context::{
     FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
     FinalRecoveryApplied, TaskAutomationUpdate,
 };
-use crate::executor::automation::vcs::absorbed::{
-    AbsorbedCandidate, is_candidate_absorbed, verify_absorbed_candidate,
-};
+use crate::executor::automation::vcs::absorbed::{AbsorbedCandidate, verify_absorbed_candidate};
 use crate::executor::automation::vcs::git::{git_command_success, git_output};
+
+/// How long the authenticated completion retry waits before it reads the
+/// pull request again [ORB-17140].
+const COMPLETION_OBSERVATION_RETRY_BACKOFF: std::time::Duration =
+    std::time::Duration::from_secs(10);
 
 /// What the executor does after the hook.
 #[derive(Debug, PartialEq, Eq)]
@@ -83,10 +86,10 @@ impl FinalRecoveryBudget {
 }
 
 /// The failed run's worktree, as its earliest step reported it.
-struct RunWorktree {
-    workspace_path: String,
+pub(super) struct RunWorktree {
+    pub(super) workspace_path: String,
     base_ref: Option<String>,
-    base_sha: Option<String>,
+    pub(super) base_sha: Option<String>,
 }
 
 /// Run the job's final recovery for the failure of top-level step
@@ -96,9 +99,11 @@ pub(super) fn attempt_final_recovery(
     job: &JobV2,
     ctx: &ExecCtx<'_>,
     step_index: usize,
-    error_message: &str,
+    error: &DispatchError,
     budget: &mut FinalRecoveryBudget,
 ) -> FinalRecoveryVerdict {
+    let error_text = error.to_string();
+    let error_message = error_text.as_str();
     let Some(activity) = ctx.final_recovery_activity.as_ref() else {
         return FinalRecoveryVerdict::Skipped;
     };
@@ -109,6 +114,14 @@ pub(super) fn attempt_final_recovery(
     };
     if matches!(budget, FinalRecoveryBudget::Spent) {
         return skip("final recovery already ran for this run");
+    }
+    // A normal base race is owned by the deterministic preparation boundary.
+    // Its refusal/exhaustion preserves the candidate; an agent cannot renew
+    // its host authority or replenish its bounded attempts and deadline.
+    if step.id == "sync_base" && error_message.contains("prepared_base_refresh_refused:") {
+        return skip(
+            "host-owned preparation recovery refused or exhausted; preserve the candidate without source repair",
+        );
     }
     // [ORB-13987] No decision about the task fixes a host that lacks a tool;
     // the failure handoff keeps the candidate for a resume instead.
@@ -186,10 +199,12 @@ pub(super) fn attempt_final_recovery(
             failed_step_id: step.id.clone(),
             decision,
             resume_step_index: None,
+            preserved_steps: Vec::new(),
             repair_commit: None,
             resume_context: None,
             workspace_path: worktree.workspace_path.into(),
             completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
+            infrastructure: None,
         };
         return conclude(job, ctx, step, activity, &application, None, None);
     }
@@ -197,7 +212,7 @@ pub(super) fn attempt_final_recovery(
     // base is settled from the host-certified evidence, re-observed here,
     // without dispatching an agent. A refusal leaves the agent its look, and
     // tells it why.
-    let absorbed = is_candidate_absorbed(error_message).then(|| {
+    let absorbed = matches!(error, DispatchError::CandidateAbsorbed { .. }).then(|| {
         verify_absorbed_candidate(
             ctx.host,
             &ctx.run_id,
@@ -234,12 +249,139 @@ pub(super) fn attempt_final_recovery(
         None => None,
     };
 
+    // A deterministic delivery step that lost only to a lock or a locked
+    // store judged nothing about the candidate, and no agent can make the
+    // holder let go. The host blocks the task on that condition; once the run
+    // has stopped, a passing probe requeues it onto the same candidate
+    // (`orbit task recheck-blocked --confirm` and the owner's clock tick).
+    // A claimed leaf is left to its agent: its task is the owner's, which
+    // settles the claim through its own recovery and never sees this class.
+    if let DispatchError::DeterministicActionFailed { action, message } = error
+        && ctx.input.get("claimed").and_then(Value::as_bool) != Some(true)
+        && let Some(class) =
+            orbit_types::workflow::TransientInfrastructure::of_action_failure(action, message)
+    {
+        let application = FinalRecoveryApplication {
+            task_id,
+            failed_step_id: step.id.clone(),
+            decision: FinalRecoveryDecision::Escalate {
+                diagnosis: format!(
+                    "step `{}` failed on transient infrastructure ({}): {}; the candidate was not \
+                     judged. Original error: {}",
+                    step.id,
+                    class.as_str(),
+                    class.describe(),
+                    bounded_recovery_text("error", &ctx.run_id, error_message, 4 * 1024),
+                ),
+                human_action: "Nothing, unless it recurs: once this run has stopped and the \
+                               condition clears, `orbit task recheck-blocked --confirm` (and the \
+                               clock tick) requeue the task onto the candidate its failure handoff \
+                               published. After the run stops, `orbit task requeue` does it at \
+                               once."
+                    .into(),
+            },
+            resume_step_index: None,
+            preserved_steps: Vec::new(),
+            repair_commit: None,
+            resume_context: None,
+            workspace_path: worktree.workspace_path.into(),
+            completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
+            infrastructure: Some(class),
+        };
+        return conclude(job, ctx, step, activity, &application, None, None);
+    }
+
+    // Read-only completion transport failures spend the same durable final
+    // recovery budget, but need neither an agent nor a replacement candidate.
+    // The single retry waits out a short outage first; the cumulative
+    // completion deadline keeps counting through the wait.
+    if matches!(
+        error,
+        DispatchError::CompletionObservationUnavailable { .. }
+    ) {
+        let authentication = ctx
+            .host
+            .authenticate_completion_tail(&ctx.run_id, &task_id, &step.id);
+        let refusal = match authentication {
+            Ok(true) => {
+                crate::executor::automation::vcs::fixed_wait(COMPLETION_OBSERVATION_RETRY_BACKOFF);
+                let rationale =
+                    "authenticated unchanged publication; retry current completion observation"
+                        .to_string();
+                let application = FinalRecoveryApplication {
+                    task_id,
+                    failed_step_id: step.id.clone(),
+                    decision: FinalRecoveryDecision::Resume {
+                        step_id: step.id.clone(),
+                        rationale: rationale.clone(),
+                    },
+                    resume_step_index: Some(step_index as u32),
+                    preserved_steps: Vec::new(),
+                    repair_commit: None,
+                    resume_context: Some(FinalRecoveryResume {
+                        step_id: step.id.clone(),
+                        failed_step_id: step.id.clone(),
+                        rationale,
+                        refusal: bounded_recovery_text(
+                            "refusal",
+                            &ctx.run_id,
+                            error_message,
+                            MAX_RECOVERY_ERROR_MESSAGE_BYTES,
+                        ),
+                        refused_output: Value::Null,
+                    }),
+                    workspace_path: worktree.workspace_path.into(),
+                    completion_done: ctx.input.get("completion").and_then(Value::as_str)
+                        == Some("done"),
+                    infrastructure: None,
+                };
+                return conclude(
+                    job,
+                    ctx,
+                    step,
+                    activity,
+                    &application,
+                    Some(step_index),
+                    None,
+                );
+            }
+            Ok(false) => "host has no authenticated completion prefix".to_string(),
+            Err(error) => error.to_string(),
+        };
+        // A refusal must not reach an agent that can request the same stale
+        // prefix again. Preserve the publication for explicit governed repair.
+        let application = FinalRecoveryApplication {
+            task_id,
+            failed_step_id: step.id.clone(),
+            decision: FinalRecoveryDecision::Escalate {
+                diagnosis: format!("unchanged completion reuse refused: {refusal}; original error: {error_message}"),
+                human_action: "Inspect the publication and admit current-policy source repair when its evidence or inputs changed.".into(),
+            },
+            resume_step_index: None,
+            preserved_steps: Vec::new(),
+            repair_commit: None,
+            resume_context: None,
+            workspace_path: worktree.workspace_path.into(),
+            completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
+            infrastructure: None,
+        };
+        return conclude(job, ctx, step, activity, &application, None, None);
+    }
+
     // These observations belong to the engine, not the activity's response.
     // A worktree without a resolvable HEAD may still settle a task, but cannot
     // authorize a moved HEAD in a later commit step.
     let head_before = git_output(
         std::path::Path::new(&worktree.workspace_path),
         &["rev-parse", "--verify", "HEAD^{commit}"],
+    )
+    .ok();
+    let root_before = std::path::Path::new(&worktree.workspace_path)
+        .canonicalize()
+        .ok();
+    let branch_before = git_output(
+        std::path::Path::new(&worktree.workspace_path),
+        &["symbolic-ref", "--quiet", "HEAD"],
     )
     .ok();
     let dispatch = final_recovery_input(job, ctx, step_index, &task_id, &worktree, error_message)
@@ -250,31 +392,67 @@ pub(super) fn attempt_final_recovery(
             input
         })
         .and_then(|input| dispatch_final_recovery(ctx, step, activity, &input));
-    let decision = match dispatch {
-        Ok(output) => FinalRecoveryDecision::from_output(Some(&decision_payload(&output))),
-        Err(message) => FinalRecoveryDecision::Escalate {
-            diagnosis: format!(
-                "final recovery activity `{}` did not return a decision: {message}",
-                activity.name
-            ),
-            human_action: "Inspect the failed run and its final-recovery invocation, then move \
-                           the task by hand."
-                .to_string(),
-        },
+    let (decision, recovery_model) = match dispatch {
+        Ok((output, model)) => (
+            FinalRecoveryDecision::from_output(Some(&decision_payload(&output))),
+            model,
+        ),
+        Err(message) => (
+            FinalRecoveryDecision::Escalate {
+                diagnosis: format!(
+                    "final recovery activity `{}` did not return a decision: {message}",
+                    activity.name
+                ),
+                human_action:
+                    "Inspect the failed run and its final-recovery invocation, then move \
+                               the task by hand."
+                        .to_string(),
+            },
+            None,
+        ),
     };
     let (mut decision, mut resume_index, downgrade) = admit_resume_step(job, step_index, decision);
+    let commit_index = job.steps[1..=step_index]
+        .iter()
+        .position(|step| {
+            matches!(&step.body, JobV2StepBody::Target(target)
+            if matches!(&target.spec, ActivityV2Spec::Deterministic(spec)
+                if spec.action == "git_commit"))
+        })
+        .map(|index| index + 1);
+    if resume_index.is_some()
+        && let Some(index) = commit_index
+        && let Err(refusal) = recovery::commit_final_recovery_repair(
+            ctx,
+            step,
+            activity,
+            &job.steps[index],
+            &task_id,
+            &worktree,
+            root_before
+                .as_deref()
+                .zip(head_before.as_deref())
+                .zip(branch_before.as_deref())
+                .map(|((root, head), branch)| (root, head, branch)),
+            recovery_model.as_deref(),
+        )
+    {
+        decision = FinalRecoveryDecision::Escalate {
+            diagnosis: format!("{refusal}; original error before recovery: {error_message}"),
+            human_action:
+                "Inspect the refused repair and its candidate ownership before resuming the run."
+                    .into(),
+        };
+        resume_index = None;
+    }
     let repair_commit = resume_index
         .and_then(|_| observe_repair_commit(&worktree.workspace_path, head_before.as_deref()));
     if repair_commit.is_some()
-        && let Some(commit_index) = job.steps[1..=step_index].iter().position(|step| {
-            matches!(&step.body, JobV2StepBody::Target(target)
-                if matches!(&target.spec, ActivityV2Spec::Deterministic(spec)
-                    if spec.action == "git_commit"))
-        })
+        && let Some(commit_index) = commit_index
     {
         // A repair is a new candidate. Even a request to resume settlement
         // must rerun commit, validation, admission and review first.
-        let index = resume_index.unwrap_or(step_index).min(commit_index + 1);
+        let index = resume_index.unwrap_or(step_index).min(commit_index);
         if let FinalRecoveryDecision::Resume { step_id, .. } = &mut decision {
             *step_id = job.steps[index].id.clone();
         }
@@ -303,15 +481,22 @@ pub(super) fn attempt_final_recovery(
         }
         _ => None,
     };
+    let preserved_steps = if resume_index.is_some() && repair_commit.is_none() {
+        preserved_publication_steps(job, ctx, &task_id, &worktree)
+    } else {
+        Vec::new()
+    };
     let application = FinalRecoveryApplication {
         task_id,
         failed_step_id: step.id.clone(),
         decision: decision.clone(),
         resume_step_index: resume_index.map(|index| index as u32),
+        preserved_steps,
         repair_commit,
         resume_context,
         workspace_path: worktree.workspace_path.into(),
         completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
+        infrastructure: None,
     };
     conclude(
         job,
@@ -348,10 +533,12 @@ fn settle_absorbed(
             ),
         },
         resume_step_index: None,
+        preserved_steps: Vec::new(),
         repair_commit: None,
         resume_context: None,
         workspace_path: worktree.workspace_path.into(),
         completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
+        infrastructure: None,
     };
     conclude(job, ctx, step, activity, &application, None, None)
 }
@@ -432,6 +619,7 @@ fn conclude(
                             at: chrono::Utc::now(),
                             by: "system".to_string(),
                             message: format!("Final recovery for run `{}`: {detail}.", ctx.run_id),
+                            operation_id: None,
                         }],
                         ..Default::default()
                     },
@@ -557,16 +745,21 @@ fn final_recovery_input(
     Ok(input)
 }
 
-/// Dispatch the activity under its configured crew, returning its output.
+/// Dispatch the activity under its configured crew, returning its output and
+/// the dispatched spec's resolved model [ORB-16768].
 fn dispatch_final_recovery(
     ctx: &ExecCtx<'_>,
     step: &JobV2Step,
     activity: &ResolvedRecoveryActivity,
     input: &Value,
-) -> Result<Value, String> {
+) -> Result<(Value, Option<String>), String> {
     let mut spec = crew_overridden_recovery_spec(activity, ctx, input)
         .map_err(|error| format!("crew: {error}"))?
         .unwrap_or_else(|| activity.spec.clone());
+    let recovery_model = match &spec {
+        ActivityV2Spec::AgentLoop(agent) => agent.model.clone(),
+        ActivityV2Spec::Deterministic(_) => None,
+    };
     if let ActivityV2Spec::AgentLoop(agent) = &mut spec {
         agent.instruction.push_str(&format!(
             "\n\nFor this failure, resume only from one of these step ids. The first \
@@ -586,7 +779,7 @@ fn dispatch_final_recovery(
     .map_err(|error| error.to_string())?;
     persist_dispatch_invocation(ctx, &activity.name, input, &dispatch);
     if dispatch.success {
-        Ok(dispatch.output)
+        Ok((dispatch.output, recovery_model))
     } else {
         Err(dispatch
             .message
@@ -697,4 +890,48 @@ fn emit_final_recovery_event(
             detail: detail.map(redacted_recovery_diagnostic),
         },
     );
+}
+
+/// Keep only a complete, exact host publication chain. Incomplete or foreign
+/// history gets no continuation and still meets the immutable setup guard.
+fn preserved_publication_steps(
+    job: &JobV2,
+    ctx: &ExecCtx<'_>,
+    task: &str,
+    worktree: &RunWorktree,
+) -> Vec<u32> {
+    use crate::executor::automation::vcs::{PUBLISHED_REPLAY_STEPS, published_candidate_matches};
+    let Some(state) = ctx.host.read_run_state(&ctx.run_id).ok().flatten() else {
+        return Vec::new();
+    };
+    let root = std::path::Path::new(&worktree.workspace_path);
+    let Some(pin) = &worktree.base_sha else {
+        return Vec::new();
+    };
+    let Ok(head) = git_output(root, &["rev-parse", "--verify", "HEAD^{commit}"]) else {
+        return Vec::new();
+    };
+    if !published_candidate_matches(&state, &ctx.run_id, task, root, pin, &head).unwrap_or(false) {
+        return Vec::new();
+    }
+    PUBLISHED_REPLAY_STEPS
+        .into_iter()
+        .map(|(id, action)| {
+            let (index, step) = job
+                .steps
+                .iter()
+                .enumerate()
+                .find(|(_, step)| step.id == id)?;
+            if !matches!(&step.body, JobV2StepBody::Target(target)
+            if matches!(&target.spec, ActivityV2Spec::Deterministic(spec) if spec.action == action))
+                || state.step_output(index as u32) != state.pipeline.get(id)
+                || state.step_states.get(&(index as u32))
+                    != Some(&orbit_types::workflow::JobRunState::Success)
+            {
+                return None;
+            }
+            Some(index as u32)
+        })
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default()
 }

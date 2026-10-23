@@ -34,7 +34,7 @@ scheduled until the clock runs.
 orbit clock status
 orbit clock pause                       # stop scheduled ticks
 orbit clock enable
-orbit clock set --cadence-seconds 300   # whole minutes only
+orbit clock set --cadence-seconds 300   # whole minutes only; a paused clock stays paused
 ```
 
 A paused clock still allows a manual `orbit clock tick`, and pausing it leaves
@@ -94,7 +94,11 @@ policy:
 - **`target`** must be a job (`job:<name>`). To schedule one activity, wrap it
   in a one-step job.
 - **`missed_run`** handles slots missed while the machine slept. `skip`, the
-  default, waits for the next slot. `catch_up_once` fires one make-up run.
+  default, waits for the next slot and records each missed one with the reason
+  `missed_run: skip` (`orbit routine list --json` shows it on `last_fire.detail`).
+  `catch_up_once` fires one make-up run. The seeded worktree-gc routine uses
+  `catch_up_once`, so a gap runs GC once. `orbit doctor` warns when an enabled
+  routine's last success is older than three times its schedule interval.
 - **`overlap: forbid`**, the default, skips a fire while the previous one is
   still running. After `timeout_minutes`, the stuck fire is recorded as timed
   out and stops blocking.

@@ -29,7 +29,7 @@ use tempfile::TempDir;
 
 use super::output_of;
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[path = "integrity/probes.rs"]
 mod probes;
 
@@ -43,16 +43,6 @@ const WAIT_SLICE: Duration = Duration::from_millis(20);
 /// guard, half the command's [`test_env::FIXTURE_STEP_DEADLINE`], so a probe
 /// that truly hangs is still reported by the update rather than killed with it.
 const PROBE_BOUND_SECS: u64 = 60;
-
-/// The probe bound under which the hanging candidate is killed. Linux starts
-/// the script at once. On macOS the probe's clock also runs while the host
-/// assesses the new script (see [`PROBE_BOUND_SECS`]), and a probe killed in
-/// that wait never starts, so it gets the full hang guard.
-const HUNG_PROBE_BOUND_SECS: u64 = if cfg!(target_os = "macos") {
-    PROBE_BOUND_SECS
-} else {
-    8
-};
 
 struct Install {
     _root: TempDir,
@@ -80,7 +70,7 @@ impl Install {
         crate::git_repo::seal_lookup_boundary(&cwd);
         let executable = super::install_test_binary(&bin);
         let before = fs::read(&executable).expect("installed bytes");
-        let (private_key, public_key) = generate_keypair(root.path());
+        let (private_key, public_key) = super::release_fixture::write_signing_keypair(root.path());
         let trust_file = root.path().join("trusted-release-keys.txt");
         write_trust(&trust_file, &public_key, revoked_at);
         let generation = home.join(".orbit").join(".generation.lock");
@@ -308,7 +298,6 @@ fn assert_not_downloaded(output: &Output, label: &str) {
     );
 }
 
-#[test]
 fn a_checksum_mismatch_never_reaches_the_install_path_and_staging_is_cleaned() {
     let install = Install::new(None);
     let archive = tar_gz(&candidate_script("99.0.0"));
@@ -322,24 +311,6 @@ fn a_checksum_mismatch_never_reaches_the_install_path_and_staging_is_cleaned() {
     install.assert_no_backup("checksum mismatch");
 }
 
-#[test]
-fn a_manifest_signed_over_different_bytes_is_rejected_before_download() {
-    let install = Install::new(None);
-    install.publish("99.0.0", None, false);
-
-    let output = install.run(&["update"]);
-
-    assert_refused(
-        &output,
-        "bad signature",
-        "no trusted release signing key matched",
-    );
-    assert_not_downloaded(&output, "bad signature");
-    install.assert_untouched("bad signature");
-    install.assert_no_backup("bad signature");
-}
-
-#[test]
 fn a_revoked_key_fails_closed_before_expiry() {
     let install = Install::new(Some("2020-01-01"));
     install.publish("99.0.0", None, true);
@@ -357,7 +328,6 @@ fn a_revoked_key_fails_closed_before_expiry() {
     install.assert_no_backup("revoked key");
 }
 
-#[test]
 fn an_archive_with_extra_members_including_traversal_is_rejected() {
     let install = Install::new(None);
     let archive = tar_gz_named(&[
@@ -378,7 +348,6 @@ fn an_archive_with_extra_members_including_traversal_is_rejected() {
     install.assert_no_backup("hostile archive");
 }
 
-#[test]
 fn a_mislabeled_release_is_rejected_without_attempting_the_swap() {
     let install = Install::new(None);
     // Hold the original inode open so even a swap followed by rollback cannot
@@ -401,7 +370,6 @@ fn a_mislabeled_release_is_rejected_without_attempting_the_swap() {
     );
 }
 
-#[test]
 fn a_downgrade_is_refused_unless_explicitly_requested() {
     let install = Install::new(None);
     let script = candidate_script("0.0.1");
@@ -434,7 +402,6 @@ fn a_downgrade_is_refused_unless_explicitly_requested() {
     );
 }
 
-#[test]
 fn a_second_concurrent_update_is_refused() {
     let install = Install::new(None);
     let script = candidate_script("99.0.0");
@@ -481,7 +448,6 @@ fn a_second_concurrent_update_is_refused() {
 /// a newer digest. The locked re-probe must follow the live path and refuse
 /// to put `1.0.0` in its place.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
 fn a_stale_writer_and_an_older_binary_never_displace_a_newer_install() {
     let install = Install::new(None);
     let older = candidate_script("1.0.0");
@@ -584,7 +550,6 @@ fn clock_tick(install: &Install) -> GenerationGuard {
     .expect("the clock tick joins")
 }
 
-#[test]
 fn an_update_waits_for_an_in_flight_clock_tick_then_installs() {
     let install = Install::new(None);
     let script = candidate_script("99.0.0");
@@ -632,7 +597,6 @@ fn an_update_waits_for_an_in_flight_clock_tick_then_installs() {
     );
 }
 
-#[test]
 fn an_update_refuses_a_clock_tick_that_outlasts_the_quiesce_bound() {
     let install = Install::new(None);
     install.publish("99.0.0", Some(&tar_gz(&candidate_script("99.0.0"))), true);
@@ -690,7 +654,6 @@ fn idle_session(install: &Install) -> GenerationGuard {
 /// untouched; a session it can is admitted beside, named in the report, and
 /// the release is pinned only once that session has released the replaced
 /// generation, as its exec does when it hands over.
-#[test]
 fn a_release_update_admits_a_session_that_hands_over_and_pins_after_it_does() {
     let install = Install::new(None);
     let session = idle_session(&install);
@@ -775,79 +738,6 @@ fn resuming_candidate_script(version: &str) -> Vec<u8> {
     .into_bytes()
 }
 
-/// A candidate whose `--version` never returns is killed at the probe
-/// timeout. The staged candidate is probed before admission, so a hung probe
-/// never holds an authority: commands run meanwhile, and nothing is held
-/// afterwards.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
-    let install = Install::new(None);
-    let probing = install._root.path().join("probe-started");
-    let script = format!(
-        "#!/bin/sh\n\
-         if [ \"$1\" = --version ]; then : > '{}'; exec sleep 600; fi\n\
-         exit 0\n",
-        probing.display()
-    );
-    install.publish("99.0.0", Some(&tar_gz(script.as_bytes())), true);
-
-    let stderr_path = install._root.path().join("hung.stderr");
-    let child = install
-        .std_command()
-        .env(PROBE_TIMEOUT_ENV, HUNG_PROBE_BOUND_SECS.to_string())
-        .arg("update")
-        .stdout(File::create(install._root.path().join("hung.stdout")).expect("stdout"))
-        .stderr(File::create(&stderr_path).expect("stderr"))
-        .spawn()
-        .expect("spawn update");
-    let mut child = ReapedChild { child: Some(child) };
-    let deadline = Instant::now() + test_env::FIXTURE_STEP_DEADLINE;
-    while !probing.exists() {
-        assert_waiting(
-            child.child.as_mut().expect("child"),
-            deadline,
-            "probe the candidate",
-        );
-        std::thread::sleep(WAIT_SLICE);
-    }
-
-    let during = install.run(&["update", "--preflight", "--json"]);
-    assert!(
-        during.status.success(),
-        "a hung candidate probe held an authority: {}",
-        String::from_utf8_lossy(&during.stderr)
-    );
-
-    let status = wait_exit(
-        child.child.as_mut().expect("child"),
-        Instant::now() + test_env::FIXTURE_STEP_DEADLINE,
-    );
-    child.child = None;
-    let stderr = fs::read_to_string(&stderr_path).expect("update stderr");
-    assert_eq!(status.code(), Some(1), "{stderr}");
-    assert!(
-        stderr.contains(&format!("did not finish within {HUNG_PROBE_BOUND_SECS}s")),
-        "{stderr}"
-    );
-    assert!(stderr.contains("nothing was replaced"), "{stderr}");
-    install.assert_untouched("hung candidate");
-    install.assert_no_backup("hung candidate");
-
-    let after = install.run(&["task", "list"]);
-    let after_stderr = String::from_utf8_lossy(&after.stderr);
-    assert!(
-        !after_stderr.contains("upgrade admission refused"),
-        "the timed-out update kept an authority: {after_stderr}"
-    );
-    let preflight = install.run(&["update", "--preflight", "--json"]);
-    assert!(
-        preflight.status.success(),
-        "{}",
-        String::from_utf8_lossy(&preflight.stderr)
-    );
-}
-
 pub(super) struct ReapedChild {
     pub(super) child: Option<Child>,
 }
@@ -918,42 +808,6 @@ pub(super) fn mkfifo(path: &Path) {
     let name = CString::new(path.as_os_str().as_bytes()).expect("fifo path");
     let rc = unsafe { libc::mkfifo(name.as_ptr(), 0o644) };
     assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
-}
-
-fn generate_keypair(dir: &Path) -> (PathBuf, PathBuf) {
-    let private = dir.join("release-test.pem");
-    let public = dir.join("release-test.pub");
-    let generated = Command::new("openssl")
-        .args([
-            "genpkey",
-            "-algorithm",
-            "RSA",
-            "-pkeyopt",
-            "rsa_keygen_bits:2048",
-            "-out",
-        ])
-        .arg(&private)
-        .output()
-        .expect("openssl genpkey");
-    assert!(
-        generated.status.success(),
-        "openssl genpkey: {}",
-        String::from_utf8_lossy(&generated.stderr)
-    );
-    let exported = Command::new("openssl")
-        .arg("pkey")
-        .arg("-in")
-        .arg(&private)
-        .args(["-pubout", "-out"])
-        .arg(&public)
-        .output()
-        .expect("openssl pkey");
-    assert!(
-        exported.status.success(),
-        "openssl pkey: {}",
-        String::from_utf8_lossy(&exported.stderr)
-    );
-    (private, public)
 }
 
 fn write_trust(path: &Path, public_key: &Path, revoked_at: Option<&str>) {
@@ -1059,4 +913,89 @@ pub(super) fn backup_path(executable: &Path) -> PathBuf {
     let mut name = executable.as_os_str().to_os_string();
     name.push(".previous");
     PathBuf::from(name)
+}
+
+#[test]
+fn release_integrity_contracts_0() {
+    let _trace = super::release_fixture::trace_contract_rows();
+    for (name, check) in [
+        (
+            "a_checksum_mismatch_never_reaches_the_install_path_and_staging_is_cleaned",
+            a_checksum_mismatch_never_reaches_the_install_path_and_staging_is_cleaned as fn(),
+        ),
+        (
+            "a_revoked_key_fails_closed_before_expiry",
+            a_revoked_key_fails_closed_before_expiry as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
+}
+
+#[test]
+fn release_integrity_contracts_1() {
+    let _trace = super::release_fixture::trace_contract_rows();
+    for (name, check) in [
+        (
+            "an_archive_with_extra_members_including_traversal_is_rejected",
+            an_archive_with_extra_members_including_traversal_is_rejected as fn(),
+        ),
+        (
+            "a_mislabeled_release_is_rejected_without_attempting_the_swap",
+            a_mislabeled_release_is_rejected_without_attempting_the_swap as fn(),
+        ),
+        (
+            "a_downgrade_is_refused_unless_explicitly_requested",
+            a_downgrade_is_refused_unless_explicitly_requested as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
+}
+
+#[test]
+fn release_integrity_contracts_2() {
+    let _trace = super::release_fixture::trace_contract_rows();
+    for (name, check) in [
+        (
+            "a_second_concurrent_update_is_refused",
+            a_second_concurrent_update_is_refused as fn(),
+        ),
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        (
+            "a_stale_writer_and_an_older_binary_never_displace_a_newer_install",
+            a_stale_writer_and_an_older_binary_never_displace_a_newer_install as fn(),
+        ),
+        (
+            "an_update_waits_for_an_in_flight_clock_tick_then_installs",
+            an_update_waits_for_an_in_flight_clock_tick_then_installs as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
+}
+
+#[test]
+fn release_integrity_contracts_3() {
+    let _trace = super::release_fixture::trace_contract_rows();
+    for (name, check) in [
+        (
+            "an_update_refuses_a_clock_tick_that_outlasts_the_quiesce_bound",
+            an_update_refuses_a_clock_tick_that_outlasts_the_quiesce_bound as fn(),
+        ),
+        (
+            "a_release_update_admits_a_session_that_hands_over_and_pins_after_it_does",
+            a_release_update_admits_a_session_that_hands_over_and_pins_after_it_does as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
 }

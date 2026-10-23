@@ -44,6 +44,14 @@ orbit task update "$TASK_ID" --approve --note "Scope reviewed."
 you can't combine `--approve` with field edits or `--status`. The note is
 recorded in the task's status history.
 
+While a non-terminal local run lists the task in its submitted `task_ids`,
+`--approve` on the CLI and **Approve** on the dashboard both refuse. The
+error names that run, and the task, its comments, and its history stay as
+they were. Stop the run, then approve. Forcing a status with `--force` is a
+separate override and still applies. A drain authorized with
+`--approve-proposed` approves through its own path and is not refused
+because its run lists the task.
+
 The two gates are independent:
 
 - **Entering the backlog takes an explicit approval.** You give it in the
@@ -111,6 +119,11 @@ any open status → blocked | archived
    (`orbit task update`, the dashboard, or `orbit.task.update`) accepts it
    afterwards.
 
+Criteria the task pilot identifies as requiring a deployed build can remain
+owed after delivery. The task stays in `review`, even with `--complete`, until
+an operator records every outstanding measurement as met. A successful run or
+an execution summary cannot replace that evidence.
+
 A refused transition is an `invalid_input` error that names both statuses and
 the missing precondition.
 
@@ -135,22 +148,55 @@ A good task states:
 ## Review layers
 
 Orbit can review a delivery at three points. Before-PR and before-landing
-review are alternatives: `review.before_pr` and `review.before_landing` cannot
-both be `true`. After-landing review is a separate switch and can be enabled
-alongside either one. The two config switches default to `false`; the
-after-landing auto-task ships disabled.
+review are alternatives: `review.timing` selects at most one of them.
+After-landing review is a separate switch and can be enabled alongside either
+one. `review.timing` defaults to `off`; the after-landing auto-task ships
+disabled.
 
 | Layer | When it runs | What it can change | How to enable it | What it blocks |
 |---|---|---|---|---|
-| Before-PR | Before Orbit opens the pull request. | The reviewer can fix the candidate before the PR exists. | Set `review.before_pr = true` with `orbit config set review.before_pr true`. | PR creation waits for review and fixes. It requires the PR delivery route. |
-| Before-landing | After Orbit opens the pull request, while hosted CI runs. | The reviewer can fix the PR head; Orbit validates and pushes the fix onto the open PR. | Set `review.before_landing = true` with `orbit config set review.before_landing true`. | Merge waits for an approved, settled head. Any other outcome leaves the PR open and the task in `review`. |
+| Before-PR | Before Orbit opens the pull request. | The reviewer can fix the candidate before the PR exists. | Set `review.timing = "before_pr"` with `orbit config set review.timing before_pr`. | PR creation waits for review and fixes. It requires the PR delivery route. |
+| Before-landing | After Orbit opens the pull request, while hosted CI runs. | The reviewer can fix the PR head; Orbit validates and pushes the fix onto the open PR. | Set `review.timing = "before_landing"` with `orbit config set review.timing before_landing`. | Merge waits for an approved, settled head. Any other outcome leaves the PR open and the task in `review`. |
 | After-landing | In batches after deliveries land. | The review task records confirmed findings as follow-up bug tasks; it does not change an already-landed delivery. | Run `orbit auto-task toggle delivery-code-review on`. | It does not block a delivery from landing. A batch remains owed until it has valid review evidence. |
 
-The dashboard's Config tab shows all three switches and their source. For the
+On a fresh workspace, the first `orbit config set` needs
+`--seed-from-global` to create its config with your current security settings,
+for example `orbit config set --seed-from-global review.timing before_pr`.
+
+The dashboard's Settings page shows all three switches and their source. For the
 same effective state, use `orbit config show` or `orbit doctor`; the first two
 reviews show their time limit, and after-landing shows when its next batch is
 due. After-landing review is independent of the choice between before-PR and
 before-landing review.
+
+### Adding review to one run
+
+`orbit run ship` and `orbit run auto` accept `--review before-pr` or
+`--review before-landing`. The dashboard's **Start a window** card has the same
+choice under **Review before landing**. The option adds a review layer to that
+run only and leaves workspace configuration unchanged. It can only add review,
+never remove or swap it:
+
+| Workspace policy | `--review before-pr` | `--review before-landing` |
+|---|---|---|
+| Applies no layer | Adds before-PR review | Adds before-landing review |
+| `review.timing = "before_pr"` | Accepted; policy already applies it | Refused, naming the key and its source |
+| `review.timing = "before_landing"` | Refused, naming the key and its source | Accepted; policy already applies it |
+
+Before any run is created, Orbit also refuses the option when:
+
+- neither `workflow.purpose_crews.pre_landing_review` nor `workflow.purpose_crews.review`
+  is set, because there is no reviewer crew to run it;
+- the run uses local-only delivery, which has no pull request to review; or
+- the run is a pull drain (`orbit run auto --pull`), because the owner decides
+  review for the claims it hands out.
+
+In a drain, a task routed to local-only delivery waits in the backlog for the
+window and is not started. Child runs inherit the layer from their parent, and
+a resumed run keeps the layer it captured. `orbit run show` reports the layer
+and its origin on its `Review:` line, and the dashboard's run detail page shows
+it in the **review** cell. The option never adds after-landing review, which
+stays the `delivery-code-review` auto-task.
 
 Write testable acceptance criteria. Prefer "command X exits successfully" or
 "file Y contains Z" over "the behavior feels better."

@@ -9,13 +9,14 @@ use orbit_store::contracts::{
     InvocationInsertParams, InvocationQuery, InvocationRecord, InvocationStoreBackend,
     ProviderLedgerEntry, TaskInvocationMetrics, TaskListFilter, ToolInvocationMetrics,
 };
-use orbit_store::scoreboard_summary::{NormalizedTokenSummary, OrchestrationModelSummary};
 use orbit_types::telemetry::{ProviderLimitObservation, TokenUsage};
+use orbit_types::workflow::ProviderCrewOutage;
 use serde::{Deserialize, Serialize};
 
 use crate::OrbitRuntime;
+use crate::metrics::cost::{NormalizedTokenSummary, OrchestrationModelSummary};
 
-pub use orbit_store::scoreboard_summary::{
+pub use crate::metrics::cost::{
     OrchestrationBucketKind as OrchestratorMetricsBucketKind,
     OrchestrationBucketSummary as OrchestratorInvocationMetricsBucket,
 };
@@ -247,6 +248,21 @@ impl OrbitRuntime {
         open_invocation_store(self)?.list_tool_invocation_metrics()
     }
 
+    /// Recorded model of the latest invocation of an activity in each run.
+    /// Run identities are scoped to this runtime's workspace; no detailed
+    /// invocation traces or tool calls are hydrated.
+    pub(crate) fn recorded_activity_models(
+        &self,
+        activity_id: &str,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<String>>, OrbitError> {
+        open_invocation_store(self)?.latest_activity_models(
+            self.stores().jobs().workspace_id(),
+            activity_id,
+            run_ids,
+        )
+    }
+
     /// Lists invocation records. A run id only names a run within one
     /// workspace, so a `job_run_id` filter without a workspace is scoped to
     /// this runtime's.
@@ -282,8 +298,8 @@ impl OrbitRuntime {
     }
 
     /// [ORB-14695] Records a provider usage limit in this host's store,
-    /// unless a newer observation for its provider, scope and window stands.
-    /// Returns whether it was stored.
+    /// unless a newer observation for its provider account, scope and window
+    /// stands. Returns whether it was stored.
     pub fn record_provider_limit(
         &self,
         observation: &ProviderLimitObservation,
@@ -295,31 +311,49 @@ impl OrbitRuntime {
             .record_provider_limit(observation)
     }
 
-    /// [ORB-14695] The latest provider usage limit per provider, scope and
-    /// window this host observed, newest first.
+    /// [ORB-14695] The latest provider usage limit per provider account,
+    /// scope and window this host observed, newest first.
     pub fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError> {
         self.context.stores().host.provider_limit.provider_limits()
     }
 
-    /// [ORB-14699] The provider's invocations since `since`, oldest first,
-    /// across this host; `provider_names` are the names it goes by.
+    /// [ORB-16379] Records a crew this host's provider was unavailable for,
+    /// unless a stored outage of the crew lasts at least as long. Returns
+    /// whether it was stored.
+    pub fn record_provider_crew_outage(
+        &self,
+        outage: &ProviderCrewOutage,
+    ) -> Result<bool, OrbitError> {
+        self.context
+            .stores()
+            .host
+            .provider_limit
+            .record_provider_crew_outage(outage)
+    }
+
+    /// [ORB-16379] This host's crew outages lasting past `now`.
+    pub(crate) fn provider_crew_outages(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<ProviderCrewOutage>, OrbitError> {
+        self.context
+            .stores()
+            .host
+            .provider_limit
+            .provider_crew_outages(now)
+    }
+
+    /// [ORB-14699] The provider account's invocations since `since`, oldest
+    /// first, across this host; `provider_names` are the names the provider
+    /// goes by, and `account` the crew account, `None` for the default login
+    /// [ORB-17288].
     pub(crate) fn provider_ledger_entries(
         &self,
         provider_names: &[String],
+        account: Option<&str>,
         since: DateTime<Utc>,
     ) -> Result<Vec<ProviderLedgerEntry>, OrbitError> {
-        open_invocation_store(self)?.list_provider_ledger_entries(provider_names, since)
-    }
-
-    /// Refreshes the read-side token scoreboard from persisted invocation telemetry.
-    ///
-    /// No-op when the invocation watermark matches the last successful write.
-    pub(crate) fn refresh_token_scoreboard(&self) -> Result<(), OrbitError> {
-        let store = open_invocation_store(self)?;
-        orbit_store::token_scoreboard::write_token_scoreboard(
-            &self.context.paths().scoreboard_dir,
-            store.as_ref(),
-        )
+        open_invocation_store(self)?.list_provider_ledger_entries(provider_names, account, since)
     }
 
     /// Aggregates this workspace's managed invocation telemetry by canonical task orchestrator.

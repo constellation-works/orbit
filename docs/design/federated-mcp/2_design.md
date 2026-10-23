@@ -2,7 +2,7 @@
 title: Federated MCP — Design
 owner: grok
 last_updated: 2026-10-12
-last_validated: 2026-10-12
+last_validated: 2026-10-19
 status: Draft
 feature: federated-mcp
 doc_role: design
@@ -22,7 +22,7 @@ The prescriptive invariants live in [specs/federated-workspace-mcp.md](./specs/f
 
 ## 1. Operator-configured remotes, implicit local destination
 
-The shipped gateway is a mux in front of the accepting machine plus the SSH stdio remotes the operator registered with `orbit host add` in `~/.orbit/hosts.toml` ([host-registry host-commands](../host-registry/specs/host-commands.md), [ORB-14448]). For one release a lone legacy `~/.orbit/mcp-destinations.toml` is still read; both files at once fail closed with `host_file_conflict`. Local workspaces need no entry; a missing or empty file is a useful local-only federated server. A legacy row that names this machine's `machine_id` is collapsed to the single in-process local route; the host file refuses such an entry outright. The mux does not:
+The shipped gateway is a mux in front of the accepting machine plus the SSH stdio remotes the operator registered with `orbit host add` in `~/.orbit/hosts.toml` ([host-registry host-commands](../host-registry/specs/host-commands.md), [ORB-14448]). For one release a lone legacy `~/.orbit/mcp-destinations.toml` is still read; both files at once fail closed with `host_file_conflict`. Local workspaces need no entry; a missing file or an empty `hosts` list is a useful local-only federated server. A legacy row that names this machine's `machine_id` is collapsed to the single in-process local route; the host file refuses such an entry outright. The mux does not:
 
 - grow host-registry into a fleet inventory;
 - auto-discover the owner checkout of a repository;
@@ -118,6 +118,8 @@ It must not fall back to a local workspace, another host with a matching `ws_*`,
 The precedence above covers everything decidable **before** the destination sees the call. Two rules cover what happens after [ORB-11023].
 
 **Two budgets, not one.** SSH setup, the MCP handshake, discovery, and `tools/list` share one probe budget, because a caller cannot tell those phases apart. The routed `tools/call` gets its own, larger budget, stamped when its request is written. A single session-wide deadline would spend the tool's execution time on the round trips that merely chose the destination, and would cap every routed tool — including `orbit.command.exec` and `orbit.workflow.ship` — at whatever classification left over.
+
+Destination sessions reuse the direct proxy's [SSH connection defaults](../mcp-bridge/2_design.md#direct-ssh-stdio): private hashed control sockets and a 60-second idle master, with native user SSH settings taking precedence. MCP processes, discovery, handshakes, and request budgets remain per session; this shares the transport without caching destination health or replaying a call.
 
 **A lost answer after dispatch is `outcome_unknown`, not `unreachable_destination`.** Once the request is on the wire the destination may have run and committed it, and killing the SSH child does not undo remote work. `unreachable_destination` means a delivery miss, which invites a retry; retrying a possibly-committed `orbit.task.add` or `orbit.workflow.ship` duplicates it. A loss *before* the request is written — including a failed write — is still `unreachable_destination`, because nothing was delivered. `outcome_unknown` is a post-dispatch outcome and does not enter the precedence ladder.
 

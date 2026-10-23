@@ -2,23 +2,53 @@
 //! claim-receipt deletion.
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use crate::Store;
-use crate::contracts::TaskCoordinationRow;
+use crate::contracts::{ExecutorCensusEntry, TaskCoordinationRow};
 
 impl Store {
     /// Pure-SQL coordination facts (idle receipts) need no bundle replay.
+    /// An idle admission receipt carries its requester's census row, which
+    /// lands in the same transaction.
     pub(crate) fn insert_task_coordination_row(
         &self,
         workspace: &str,
         row: &TaskCoordinationRow,
+        census: Option<&ExecutorCensusEntry>,
     ) -> Result<(), OrbitError> {
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             tx.tx.execute(
                 "INSERT INTO task_coordination_rows(workspace_id,kind,row_id,payload_json,journal_id,created_at) VALUES (?1,?2,?3,?4,'sql-only',?5)",
                 params![workspace, row.kind, row.row_id, row.payload_json, crate::now_string()],
-            ).map_err(|e| OrbitError::Store(e.to_string()))?;
+            ).map_err(sqlite_store_error)?;
+            if let Some(entry) = census {
+                super::upsert_executor_census_in(tx.connection(), workspace, entry)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Publish pure-SQL coordination rows in one transaction, each inserted
+    /// or, when its identity already exists, given the new payload.
+    pub(crate) fn upsert_sql_task_coordination_rows(
+        &self,
+        workspace: &str,
+        rows: &[TaskCoordinationRow],
+    ) -> Result<(), OrbitError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let now = crate::now_string();
+            for row in rows {
+                tx.tx.execute(
+                    "INSERT INTO task_coordination_rows(workspace_id,kind,row_id,payload_json,journal_id,created_at) VALUES (?1,?2,?3,?4,'sql-only',?5)
+                     ON CONFLICT(workspace_id,kind,row_id) DO UPDATE SET payload_json=excluded.payload_json",
+                    params![workspace, row.kind, row.row_id, row.payload_json, now],
+                ).map_err(sqlite_store_error)?;
+            }
             Ok(())
         })
     }
@@ -35,7 +65,7 @@ impl Store {
             tx.tx.execute(
                 "UPDATE task_coordination_rows SET payload_json=?5 WHERE workspace_id=?1 AND kind=?2 AND row_id=?3 AND payload_json=?4",
                 params![workspace, old.kind, old.row_id, old.payload_json, payload],
-            ).map(|n| n == 1).map_err(|e| OrbitError::Store(e.to_string()))
+            ).map(|n| n == 1).map_err(sqlite_store_error)
         })
     }
 
@@ -69,14 +99,14 @@ impl Store {
                                WHERE j.journal_id = r.journal_id
                                  AND j.state IN ('prepared', 'committed'))",
                     )
-                    .map_err(|e| OrbitError::Store(e.to_string()))?;
+                    .map_err(sqlite_store_error)?;
                 stmt.query_map(
                     params![workspace, receipt_kind, created_before, claim_ids],
                     |row| row.get::<_, String>(0),
                 )
-                .map_err(|e| OrbitError::Store(e.to_string()))?
+                .map_err(sqlite_store_error)?
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| OrbitError::Store(e.to_string()))?
+                .map_err(sqlite_store_error)?
             };
             let mut delete = tx
                 .tx
@@ -84,11 +114,11 @@ impl Store {
                     "DELETE FROM task_coordination_rows
                      WHERE workspace_id = ?1 AND kind IN (?2, ?3) AND row_id = ?4",
                 )
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
             for receipt_id in &receipt_ids {
                 delete
                     .execute(params![workspace, receipt_kind, sidecar_kind, receipt_id])
-                    .map_err(|e| OrbitError::Store(e.to_string()))?;
+                    .map_err(sqlite_store_error)?;
             }
             Ok(receipt_ids.len())
         })
@@ -108,7 +138,7 @@ impl Store {
                      WHERE workspace_id = ?1 AND kind = ?2
                      ORDER BY row_id ASC",
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map(params![workspace_id, kind], |row| {
                     Ok(TaskCoordinationRow {
@@ -117,9 +147,47 @@ impl Store {
                         payload_json: row.get(2)?,
                     })
                 })
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|error| OrbitError::Store(error.to_string()))
+                .map_err(sqlite_store_error)
+        })
+    }
+
+    /// Rows of `kind` with the optional payload of `related_kind` at the
+    /// same identity. The left join reads the whole set in one statement and
+    /// probes the related rows through the coordination primary key.
+    pub(crate) fn task_coordination_rows_with_related_payload(
+        &self,
+        workspace_id: &str,
+        kind: &str,
+        related_kind: &str,
+    ) -> Result<Vec<(TaskCoordinationRow, Option<String>)>, OrbitError> {
+        self.with_read_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT r.kind, r.row_id, r.payload_json, related.payload_json
+                     FROM task_coordination_rows r
+                     LEFT JOIN task_coordination_rows related
+                       ON related.workspace_id = r.workspace_id
+                         AND related.kind = ?3 AND related.row_id = r.row_id
+                     WHERE r.workspace_id = ?1 AND r.kind = ?2
+                     ORDER BY r.row_id ASC",
+                )
+                .map_err(sqlite_store_error)?;
+            let rows = stmt
+                .query_map(params![workspace_id, kind, related_kind], |row| {
+                    Ok((
+                        TaskCoordinationRow {
+                            kind: row.get(0)?,
+                            row_id: row.get(1)?,
+                            payload_json: row.get(2)?,
+                        },
+                        row.get(3)?,
+                    ))
+                })
+                .map_err(sqlite_store_error)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_store_error)
         })
     }
 
@@ -147,7 +215,7 @@ impl Store {
                        AND row_id >= ?3 AND row_id < ?4
                      ORDER BY row_id ASC",
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map(params![workspace_id, kind, prefix, upper], |row| {
                     Ok(TaskCoordinationRow {
@@ -156,9 +224,42 @@ impl Store {
                         payload_json: row.get(2)?,
                     })
                 })
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|error| OrbitError::Store(error.to_string()))
+                .map_err(sqlite_store_error)
+        })
+    }
+
+    /// Coordination rows of one kind whose payload contains `needle`, a
+    /// prefilter for a caller that decodes each and keeps exact matches.
+    /// Encode `needle` as the payload encodes the value it stands for, so no
+    /// matching row is left out.
+    pub(crate) fn task_coordination_rows_containing(
+        &self,
+        workspace_id: &str,
+        kind: &str,
+        needle: &str,
+    ) -> Result<Vec<TaskCoordinationRow>, OrbitError> {
+        self.with_read_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT kind, row_id, payload_json
+                     FROM task_coordination_rows
+                     WHERE workspace_id = ?1 AND kind = ?2 AND instr(payload_json, ?3) > 0
+                     ORDER BY row_id ASC",
+                )
+                .map_err(sqlite_store_error)?;
+            let rows = stmt
+                .query_map(params![workspace_id, kind, needle], |row| {
+                    Ok(TaskCoordinationRow {
+                        kind: row.get(0)?,
+                        row_id: row.get(1)?,
+                        payload_json: row.get(2)?,
+                    })
+                })
+                .map_err(sqlite_store_error)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_store_error)
         })
     }
 
@@ -184,7 +285,7 @@ impl Store {
                 },
             )
             .optional()
-            .map_err(|error| OrbitError::Store(error.to_string()))
+            .map_err(sqlite_store_error)
         })
     }
 }

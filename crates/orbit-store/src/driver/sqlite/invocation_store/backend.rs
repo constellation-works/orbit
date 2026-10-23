@@ -17,6 +17,15 @@ impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::connect
         Self::list_invocation_records(self, filter)
     }
 
+    fn latest_activity_models(
+        &self,
+        workspace_id: &str,
+        activity_id: &str,
+        run_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, Option<String>>, orbit_common::OrbitError> {
+        Self::latest_activity_models(self, workspace_id, activity_id, run_ids)
+    }
+
     fn list_invocation_accounting_facts(
         &self,
         query: &crate::contracts::InvocationAccountingQuery,
@@ -27,21 +36,16 @@ impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::connect
     fn list_provider_ledger_entries(
         &self,
         provider_names: &[String],
+        account: Option<&str>,
         since: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<crate::contracts::ProviderLedgerEntry>, orbit_common::OrbitError> {
-        Self::list_provider_ledger_entries(self, provider_names, since)
+        Self::list_provider_ledger_entries(self, provider_names, account, since)
     }
 
     fn list_activity_invocation_metrics(
         &self,
     ) -> Result<Vec<crate::contracts::ActivityInvocationMetrics>, orbit_common::OrbitError> {
         Self::list_activity_invocation_metrics(self)
-    }
-
-    fn list_agent_invocation_metrics(
-        &self,
-    ) -> Result<Vec<crate::contracts::AgentInvocationMetrics>, orbit_common::OrbitError> {
-        Self::list_agent_invocation_metrics(self)
     }
 
     fn get_task_invocation_metrics(
@@ -51,20 +55,9 @@ impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::connect
         Self::get_task_invocation_metrics(self, task_id)
     }
 
-    fn list_top_task_invocation_metrics(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<crate::contracts::TaskInvocationMetrics>, orbit_common::OrbitError> {
-        Self::list_top_task_invocation_metrics(self, limit)
-    }
-
     fn list_tool_invocation_metrics(
         &self,
     ) -> Result<Vec<crate::contracts::ToolInvocationMetrics>, orbit_common::OrbitError> {
         Self::list_tool_invocation_metrics(self)
-    }
-
-    fn invocation_scoreboard_watermark(&self) -> Result<Option<u64>, orbit_common::OrbitError> {
-        Self::invocation_scoreboard_watermark(self)
     }
 }

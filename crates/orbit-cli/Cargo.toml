@@ -16,6 +16,7 @@ name = "orbit"
 path = "src/main.rs"
 
 [dependencies]
+base64.workspace = true
 chrono.workspace = true
 clap.workspace = true
 colored = "2"
@@ -38,6 +39,8 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+# Enable the loopback-only latest-release endpoint seam in CLI process tests.
+orbit-cmd = { path = "../orbit-cmd", features = ["test-release-api-base"] }
 # Real sandbox broker integration against the built CLI and MCP transport.
 orbit-engine = { path = "../orbit-engine" }
 orbit-exec = { path = "../orbit-exec" }
@@ -49,6 +52,8 @@ predicates.workspace = true
 regex.workspace = true
 # Settings › Hosts HTTP API against a served dashboard [ORB-14451].
 reqwest.workspace = true
+# Signs the fake release mirror `orbit_cmd::update` tests verify against.
+rsa.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
@@ -57,6 +62,8 @@ sha2.workspace = true
 tar.workspace = true
 tempfile.workspace = true
 toml.workspace = true
+# Counts the task store's lock acquisitions behind `config show`.
+tracing-subscriber.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

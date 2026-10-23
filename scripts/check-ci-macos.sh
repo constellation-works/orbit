@@ -5,17 +5,30 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 workflow="${CI_MACOS_WORKFLOW:-$repo_root/.github/workflows/ci-macos.yml}"
 evidence_output=""
 # --workspace-build lists the filtered tests from one
-# `cargo test --workspace --lib --bins --tests --no-run` build instead of a
-# `cargo test -p <crate>` build per filter. Per-package invocations resolve
-# features differently from the workspace build (resolver 2), so on a runner
-# that also runs the workspace-wide nextest pass they recompile serde, tokio,
-# hyper, reqwest and every workspace crate up to orbit-core a second time.
-# The default keeps the per-package listing for callers whose `-p` artifacts
-# are already warm (the macOS job, local runs). [DANI-10428]
+# `cargo test --workspace --lib --bins --tests --examples --no-run` build
+# instead of a `cargo test -p <crate>` build per filter. Per-package
+# invocations resolve features differently from the workspace build (resolver
+# 2), so on a runner that also runs the workspace-wide nextest pass they
+# recompile serde, tokio, hyper, reqwest and every workspace crate up to
+# orbit-core a second time. That build also lints workspace members with
+# clippy-driver and the flags the former `clippy-all-targets` phase passed
+# (`-D warnings -A clippy::disallowed_methods`). `--examples` is required
+# because `--all-targets` lints examples and `--tests` does not. This repo has
+# no benches. Dependencies keep the configured sccache rustc wrapper; Cargo
+# chains it in front of clippy-driver for workspace members. The default keeps
+# the per-package listing, without that lint, for callers whose `-p` artifacts
+# are already warm (the macOS job, local runs without --workspace-build).
+# [DANI-10428]
+# --packages CRATE,... (with --workspace-build) builds only those crates, the
+# pull-request test build of the affected crates, and lists only the filters
+# that name one of them. A filter naming another crate is unaffected by the
+# change: that crate's sources and dependencies did not change, and an edit to
+# the workflow itself runs the full build.
 workspace_build=""
+packages=""
 
 usage() {
-  echo "usage: $0 [--evidence-output PATH] [--workspace-build]" >&2
+  echo "usage: $0 [--evidence-output PATH] [--workspace-build [--packages CRATE,...]]" >&2
   exit 2
 }
 
@@ -30,16 +43,22 @@ while [[ $# -gt 0 ]]; do
       workspace_build=1
       shift
       ;;
+    --packages)
+      [[ -n "${2:-}" ]] || usage
+      packages="$2"
+      shift 2
+      ;;
     *) usage ;;
   esac
 done
+[[ -z "$packages" || -n "$workspace_build" ]] || usage
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "check-ci-macos: python3 is required; install it before running" >&2
   exit 1
 fi
 
-python3 - "$repo_root" "$workflow" "$evidence_output" "$workspace_build" <<'PY'
+python3 - "$repo_root" "$workflow" "$evidence_output" "$workspace_build" "$packages" <<'PY'
 from __future__ import annotations
 
 import hashlib
@@ -59,6 +78,7 @@ repo_root = Path(sys.argv[1]).resolve()
 workflow = Path(sys.argv[2]).resolve()
 evidence_output = Path(sys.argv[3]).resolve() if sys.argv[3] else None
 workspace_build = bool(sys.argv[4])
+selected_packages = [name for name in sys.argv[5].split(",") if name]
 
 if not workflow.is_file():
     print(f"check-ci-macos: workflow does not exist: {workflow}", file=sys.stderr)
@@ -71,46 +91,41 @@ def indentation(line: str) -> int:
     return len(line) - len(line.lstrip(" "))
 
 
-def pull_request_paths() -> list[str]:
-    entries: list[str] = []
+def inline_branch_entries(stripped: str) -> list[str]:
+    # Entries of a one-line `branches: [a, b]` list, with quotes removed. A
+    # word-boundary match would also accept `agent-main-experimental`, because
+    # `-` is a non-word character.
+    match = re.fullmatch(r"branches:\s*\[([^\]]*)\]", stripped)
+    if match is None:
+        return []
+    return [entry.strip().strip("'\"") for entry in match.group(1).split(",")]
 
-    for index, line in enumerate(lines):
-        if line.strip() != "pull_request:":
+
+def runs_on_agent_main_pushes() -> bool:
+    # The macOS workflow runs on agent-main pushes, not pull requests: its
+    # checks are not required, and its failures are repaired after merge.
+    # Read the block-form `on:` mapping without an optional YAML dependency.
+    in_events = False
+    in_push = False
+    push_indent = None
+    for line in lines:
+        stripped = re.sub(r"\s+#.*$", "", line).strip()
+        if not stripped or stripped.startswith("#"):
             continue
-
-        event_indent = indentation(line)
-        paths_index = None
-        paths_indent = None
-        cursor = index + 1
-        while cursor < len(lines):
-            candidate = lines[cursor]
-            stripped = candidate.strip()
-            if stripped and indentation(candidate) <= event_indent:
-                break
-            if stripped == "paths:":
-                paths_index = cursor
-                paths_indent = indentation(candidate)
-                break
-            cursor += 1
-
-        if paths_index is None or paths_indent is None:
+        indent = indentation(line)
+        if not in_events:
+            in_events = indent == 0 and stripped == "on:"
             continue
-
-        cursor = paths_index + 1
-        while cursor < len(lines):
-            candidate = lines[cursor]
-            stripped = candidate.strip()
-            if stripped and indentation(candidate) <= paths_indent:
-                break
-            if stripped.startswith("-") and indentation(candidate) > paths_indent:
-                value = stripped[1:].strip()
-                value = re.sub(r"\s+#.*$", "", value).strip()
-                if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-                    value = value[1:-1]
-                entries.append(value)
-            cursor += 1
-
-    return entries
+        if indent == 0:
+            break
+        if in_push and indent <= push_indent:
+            in_push = False
+        if stripped == "push:":
+            in_push, push_indent = True, indent
+            continue
+        if in_push and "agent-main" in inline_branch_entries(stripped):
+            return True
+    return False
 
 
 # A filter whose tests compile only on Darwin carries this marker. The Linux
@@ -239,21 +254,35 @@ def filtered_cargo_tests() -> list[FilteredTest]:
 
 errors: list[str] = []
 
-for path in pull_request_paths():
-    if path.startswith("!") or any(character in path for character in "*?["):
-        continue
-    if not (repo_root / path).exists():
-        errors.append(f"pull_request.paths entry does not exist: {path}")
+if not runs_on_agent_main_pushes():
+    errors.append("workflow must run on agent-main pushes (push: branches: [..., agent-main])")
 
 filtered_tests = filtered_cargo_tests()
 if not filtered_tests:
     errors.append("no filtered cargo test commands found in the macOS workflow")
 
 
+def failure_output(result: subprocess.CompletedProcess[str]) -> str:
+    # `--message-format json` moves rustc's diagnostics to stdout as
+    # `compiler-message` objects. The lint name, file and line exist only in
+    # their rendered text; stderr keeps cargo's one-line summary.
+    rendered: list[str] = []
+    for line in result.stdout.splitlines():
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(message, dict) and message.get("reason") == "compiler-message":
+            text = message.get("message", {}).get("rendered", "").strip()
+            if text:
+                rendered.append(text)
+    return "\n".join([*rendered, result.stderr.strip()]).strip()
+
+
 def run_listing(command: list[str], label: str) -> str | None:
     result = subprocess.run(command, cwd=repo_root, capture_output=True, text=True, check=False)
     if result.returncode != 0:
-        errors.append(f"{label} (exit {result.returncode}): {result.stderr.strip()}")
+        errors.append(f"{label} (exit {result.returncode}): {failure_output(result)}")
         return None
     return result.stdout
 
@@ -267,22 +296,38 @@ class TestBinary(NamedTuple):
 def workspace_test_executables() -> dict[str, list[TestBinary]]:
     """Map each workspace package to the test binaries of one workspace build.
 
-    These are the exact artifacts `cargo nextest run --workspace --lib --bins
-    --tests` uses, so listing from them adds no compile work. Doctests are not
-    listed (the per-package path includes them); the guard only needs >= 1 match.
+    The build is what `cargo nextest run --workspace --lib --bins --tests`
+    runs, plus examples so the folded all-targets lint covers them. Listing
+    still selects only the binaries the workflow filters name. Doctests are
+    not listed (the per-package path includes them); the guard only needs
+    >= 1 match.
     """
     metadata = run_listing(
         ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
         "cargo metadata failed",
     )
+    if metadata is None:
+        return {}
+    packages = json.loads(metadata)["packages"]
+    selection = ["--workspace", "--lib"]
+    if selected_packages:
+        # Cargo rejects --lib when no selected crate has a library.
+        has_library = any({"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"} & set(target["kind"])
+                          for package in packages if package["name"] in selected_packages
+                          for target in package.get("targets", []))
+        selection = [argument for name in selected_packages for argument in ("-p", name)]
+        selection += ["--lib"] if has_library else []
+    # The all-targets lint flags come from the shared wrapper. The nextest run,
+    # doctests and the sandbox gate use it too, so they reuse these artifacts.
     build = run_listing(
-        ["cargo", "test", "--workspace", "--lib", "--bins", "--tests", "--locked", "--no-run",
-         "--message-format", "json"],
+        [str(repo_root / "scripts/with-test-build-lint.sh"),
+         "cargo", "test", *selection, "--bins", "--tests", "--examples",
+         "--locked", "--no-run", "--message-format", "json"],
         "workspace test build failed",
     )
-    if metadata is None or build is None:
+    if build is None:
         return {}
-    names = {pkg["id"]: pkg["name"] for pkg in json.loads(metadata)["packages"]}
+    names = {pkg["id"]: pkg["name"] for pkg in packages}
     executables: dict[str, list[TestBinary]] = {}
     for line in build.splitlines():
         if not line.startswith("{"):
@@ -371,6 +416,9 @@ for step in filtered_tests:
     if step.darwin_only and platform.system() != "Darwin":
         print(f"check-ci-macos: {step.describe()} is Darwin-only; listed by the macOS job")
         continue
+    if selected_packages and step.package not in selected_packages:
+        print(f"check-ci-macos: {step.describe()} names a crate outside this build; not listed")
+        continue
     listing = list_filtered_tests(step)
     if listing is None:
         continue
@@ -386,7 +434,7 @@ if errors:
         print(f"check-ci-macos: {error}", file=sys.stderr)
     raise SystemExit(1)
 
-print("check-ci-macos: workflow paths and filtered tests passed")
+print("check-ci-macos: workflow push coverage and filtered tests passed")
 
 if evidence_output is not None:
     required_environment = {
@@ -424,6 +472,17 @@ if evidence_output is not None:
         Path("scripts/test-qa-full-sweep.py"),
         Path(".github/workflows/ci-macos.yml"),
     ]
+    # The workflow wrapper retains completed libtest output, including notices
+    # from successful children. Listing alone cannot emit execution credit.
+    import runpy
+    harness = runpy.run_path(str(repo_root / "scripts/test-qa-full-sweep.py"))
+    execution = [json.loads(path.read_text()) for path in
+                 sorted((repo_root / ".orbit/tmp/macos-native-execution").glob("*.json"))]
+    try:
+        harness["validate_native_execution"](execution, repo_root, checked_out_commit)
+    except (ValueError, KeyError, TypeError) as error:
+        print(f"check-ci-macos: incomplete native execution: {error}", file=sys.stderr)
+        raise SystemExit(1) from error
     report = {
         "schema_version": 1,
         "evidence_type": "orbit-macos-platform",
@@ -436,6 +495,7 @@ if evidence_output is not None:
             "macos-required-workflow-is-current",
             "macos-check-ran-on-matching-revision",
         ],
+        "execution": execution,
         "producer": {
             "system": "github-actions",
             "repository": os.environ["GITHUB_REPOSITORY"],

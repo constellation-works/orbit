@@ -1,8 +1,10 @@
 //! Retention for the host store: audit rows and unreferenced audit blobs
-//! (`orbit gc audit`), and the pipeline state of old terminal runs
-//! (`orbit gc runs`).
+//! (`orbit gc audit`), the pipeline state of old terminal runs with the
+//! host's per-minute resource history and admission forecasts
+//! (`orbit gc runs`), and applied task commit journal rows
+//! (`orbit gc journal`).
 //!
-//! Both plan by default and delete only when asked. Deletes run in batches of
+//! Each plans by default and deletes only when asked. Deletes run in batches of
 //! [`RETENTION_BATCH_ROWS`], each its own short write transaction, with a
 //! pause between them so other writers are not starved while a long history
 //! is pruned. Neither runs `VACUUM`: freed pages stay on the freelist, which
@@ -14,7 +16,9 @@ use std::time::{Duration, Instant, SystemTime};
 use chrono::{DateTime, Utc};
 use orbit_common::storage::blob_sweep::{self, AuditBlobRoot, SweepEntry, SweepOutcome};
 use orbit_store::contracts::{
-    AuditRetentionTable, RetentionSelection, StoreRetentionBackend, StoreSpace,
+    AuditRetentionTable, JournalRetentionCandidates, ResourceMinutesTable,
+    ResourceUsageStoreBackend, RetentionIdSource, RetentionSelection, RetentionWorkspaceScope,
+    StoreRetentionBackend, StoreSpace,
 };
 use serde::Serialize;
 
@@ -24,6 +28,10 @@ use crate::{OrbitError, OrbitRuntime};
 const RETENTION_BATCH_ROWS: usize = 1_000;
 /// Pause between batches, so a queued writer gets the lock.
 const BATCH_PAUSE: Duration = Duration::from_millis(20);
+/// Per-minute run and host resource history, and the admission forecasts
+/// checked against it, are kept this long, whatever the configured windows:
+/// profiles and the accuracy report read the last 30 days.
+pub const RESOURCE_MINUTES_RETENTION_DAYS: u32 = 30;
 /// A blob written or reused this recently is never swept, whatever the
 /// reference scan saw: it covers a write published while the scan ran.
 const BLOB_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
@@ -101,6 +109,16 @@ pub struct AuditGcReport {
     pub store: StoreSpaceReport,
 }
 
+/// Resource history rows past [`RESOURCE_MINUTES_RETENTION_DAYS`] in one
+/// host-wide table, and how many an apply removed.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResourceMinutesRetentionReport {
+    pub table: &'static str,
+    pub retention_days: u32,
+    pub rows: u64,
+    pub rows_removed: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RunGcReport {
     pub apply: bool,
@@ -110,6 +128,26 @@ pub struct RunGcReport {
     pub runs: u64,
     pub state_bytes: u64,
     pub runs_archived: u64,
+    /// The host's per-minute resource history and admission forecasts, pruned
+    /// on their own fixed window.
+    pub resource_minutes: Vec<ResourceMinutesRetentionReport>,
+    pub writes: BatchReport,
+    pub store: StoreSpaceReport,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JournalGcReport {
+    pub apply: bool,
+    pub retention_days: u32,
+    pub cutoff: DateTime<Utc>,
+    /// Applied journal rows settled before the cutoff, less each task's
+    /// newest applied row.
+    pub rows: u64,
+    pub bytes: u64,
+    pub rows_removed: u64,
+    /// The read that selected the rows. It holds no write lock; each delete
+    /// batch names its rows by primary key.
+    pub selection_ms: u64,
     pub writes: BatchReport,
     pub store: StoreSpaceReport,
 }
@@ -136,6 +174,15 @@ pub struct StoreRetentionOverview {
 struct RetentionDays {
     audit: u32,
     runs: u32,
+    journal: u32,
+}
+
+/// One workspace plus the unregistered partitions this pass may also touch.
+/// `legacy_ids` is `None` when those partitions could not be confirmed, which
+/// keeps the pass on this workspace alone.
+struct RetentionPass {
+    workspace_id: String,
+    legacy_ids: Option<Vec<String>>,
 }
 
 impl OrbitRuntime {
@@ -147,13 +194,40 @@ impl OrbitRuntime {
         Ok(RetentionDays {
             audit: config.snapshot.retention_audit_days,
             runs: config.snapshot.retention_runs_days,
+            journal: config.snapshot.retention_journal_days,
+        })
+    }
+
+    /// Partitions this pass may touch. Legacy ids are the stored ids absent
+    /// from the registered set; resolving them once keeps each batch on the
+    /// `(workspace_id, time)` index. When the registry is missing or a
+    /// checkout's partition id cannot be confirmed, legacy ids stay `None`
+    /// and only this workspace is selected.
+    fn retention_pass(&self, source: RetentionIdSource) -> Result<RetentionPass, OrbitError> {
+        let workspace_id = self.workspace_id()?;
+        let Some(registered) = registered_workspace_ids(self)? else {
+            return Ok(RetentionPass {
+                workspace_id,
+                legacy_ids: None,
+            });
+        };
+        let stored = self.sqlite_store()?.distinct_workspace_ids(source)?;
+        let legacy_ids = stored
+            .into_iter()
+            .filter(|id| id != &workspace_id && !registered.contains(id))
+            .collect();
+        Ok(RetentionPass {
+            workspace_id,
+            legacy_ids: Some(legacy_ids),
         })
     }
 
     /// Plan, or with `apply` perform, audit retention: rows of the command
-    /// audit and of this workspace's run audit older than the cutoff, then
-    /// the blobs under this workspace's audit root that nothing names.
-    /// `retention_days` overrides `retention.audit_days`.
+    /// audit and of this workspace's run audit, plus run-audit rows of
+    /// workspace ids that are no longer registered, older than the cutoff,
+    /// then the blobs under this workspace's audit root that nothing names.
+    /// Another registered workspace keeps its own window. `retention_days`
+    /// overrides `retention.audit_days`.
     pub fn gc_audit(
         &self,
         apply: bool,
@@ -162,20 +236,24 @@ impl OrbitRuntime {
         let days = resolve_override(retention_days, self.retention_days()?.audit)?;
         let cutoff = cutoff_for(days)?;
         let store = self.sqlite_store()?;
-        let workspace_id = self.workspace_id()?;
+        let pass = self.retention_pass(RetentionIdSource::RunAudit)?;
+        let workspace_scope = RetentionWorkspaceScope {
+            workspace_id: &pass.workspace_id,
+            legacy_ids: pass.legacy_ids.as_deref(),
+        };
         let mut writes = BatchReport::default();
         let mut tables = Vec::new();
-        for (table, scope) in [
+        for (table, scope_name) in [
             (AuditRetentionTable::Command, "host"),
             (AuditRetentionTable::Run, "workspace"),
         ] {
             let RetentionSelection { rows, bytes } =
-                store.audit_retention_selection(table, &workspace_id, cutoff)?;
+                store.audit_retention_selection(table, workspace_scope, cutoff)?;
             let rows_removed = if apply && rows > 0 {
                 run_batches(&mut writes, || {
                     store.prune_audit_retention_batch(
                         table,
-                        &workspace_id,
+                        workspace_scope,
                         cutoff,
                         RETENTION_BATCH_ROWS,
                     )
@@ -185,13 +263,13 @@ impl OrbitRuntime {
             };
             tables.push(RetentionTableReport {
                 table: table.table_name(),
-                scope,
+                scope: scope_name,
                 rows,
                 bytes,
                 rows_removed,
             });
         }
-        let blobs = self.sweep_audit_blobs(&store, apply, &workspace_id, cutoff)?;
+        let blobs = self.sweep_audit_blobs(&store, apply, workspace_scope, cutoff)?;
         Ok(AuditGcReport {
             apply,
             retention_days: days,
@@ -204,27 +282,44 @@ impl OrbitRuntime {
     }
 
     /// Plan, or with `apply` perform, run retention: drop the pipeline state
-    /// of this workspace's terminal runs that finished before the cutoff and
-    /// stamp their `archived_at`. Run rows and steps stay, so `run show`, run
-    /// history and the scoreboard keep working. `retention_days` overrides
-    /// `retention.runs_days`.
+    /// of this workspace's terminal runs, and of unregistered workspace ids,
+    /// that finished before the cutoff, and stamp their `archived_at`.
+    /// Another registered workspace keeps its own window. Run rows and steps
+    /// stay with the durable commit outcome, so run history and succeeded
+    /// candidate durations keep working. `retention_days` overrides
+    /// `retention.runs_days`; both require at least 30 days for reliability
+    /// dedupe and forecast-accuracy limiter shares. The host's per-minute resource
+    /// history and admission forecasts older than
+    /// [`RESOURCE_MINUTES_RETENTION_DAYS`] go in the same pass.
     pub fn gc_runs(
         &self,
         apply: bool,
         retention_days: Option<u32>,
     ) -> Result<RunGcReport, OrbitError> {
-        let days = resolve_override(retention_days, self.retention_days()?.runs)?;
+        let days = match retention_days {
+            Some(days) => days,
+            None => self.retention_days()?.runs,
+        };
+        if days < 30 {
+            return Err(OrbitError::InvalidInput(
+                "run retention must be at least 30 days: Reliability Pipeline echo dedupe and forecast-accuracy per-drain limiter shares require 30 days of run state".to_string(),
+            ));
+        }
         let cutoff = cutoff_for(days)?;
         let store = self.sqlite_store()?;
-        let workspace_id = self.workspace_id()?;
+        let pass = self.retention_pass(RetentionIdSource::JobRuns)?;
+        let workspace_scope = RetentionWorkspaceScope {
+            workspace_id: &pass.workspace_id,
+            legacy_ids: pass.legacy_ids.as_deref(),
+        };
         let RetentionSelection { rows, bytes } =
-            store.run_state_retention_selection(&workspace_id, cutoff)?;
+            store.run_state_retention_selection(workspace_scope, cutoff)?;
         let mut writes = BatchReport::default();
         let runs_archived = if apply && rows > 0 {
             let archived_at = Utc::now();
             run_batches(&mut writes, || {
                 store.archive_run_states_batch(
-                    &workspace_id,
+                    workspace_scope,
                     cutoff,
                     archived_at,
                     RETENTION_BATCH_ROWS,
@@ -233,6 +328,28 @@ impl OrbitRuntime {
         } else {
             0
         };
+        let resource_cutoff = cutoff_for(RESOURCE_MINUTES_RETENTION_DAYS)?;
+        let mut resource_minutes = Vec::new();
+        for table in [
+            ResourceMinutesTable::Run,
+            ResourceMinutesTable::Host,
+            ResourceMinutesTable::AdmissionForecast,
+        ] {
+            let rows = store.resource_minutes_older_than(table, resource_cutoff)?;
+            let rows_removed = if apply && rows > 0 {
+                run_batches(&mut writes, || {
+                    store.prune_resource_minutes_batch(table, resource_cutoff, RETENTION_BATCH_ROWS)
+                })?
+            } else {
+                0
+            };
+            resource_minutes.push(ResourceMinutesRetentionReport {
+                table: table.table_name(),
+                retention_days: RESOURCE_MINUTES_RETENTION_DAYS,
+                rows,
+                rows_removed,
+            });
+        }
         Ok(RunGcReport {
             apply,
             retention_days: days,
@@ -240,6 +357,57 @@ impl OrbitRuntime {
             runs: rows,
             state_bytes: bytes,
             runs_archived,
+            resource_minutes,
+            writes,
+            store: store.store_space()?.into(),
+        })
+    }
+
+    /// Plan, or with `apply` perform, journal retention: delete this
+    /// workspace's applied task commit journal rows, and those of
+    /// unregistered workspace ids, settled before the cutoff, keeping each
+    /// task's newest applied row. Recovery replays only prepared and
+    /// committed rows, which are never selected; aborted rows stay too.
+    /// Another registered workspace keeps its own window. The rows are
+    /// selected once, by a read, then deleted by primary key in batches of
+    /// `RETENTION_BATCH_ROWS`, so no write transaction scans the table.
+    /// `retention_days` overrides `retention.journal_days`.
+    pub fn gc_journal(
+        &self,
+        apply: bool,
+        retention_days: Option<u32>,
+    ) -> Result<JournalGcReport, OrbitError> {
+        let days = resolve_override(retention_days, self.retention_days()?.journal)?;
+        let cutoff = cutoff_for(days)?;
+        let store = self.sqlite_store()?;
+        let pass = self.retention_pass(RetentionIdSource::CommitJournal)?;
+        let workspace_scope = RetentionWorkspaceScope {
+            workspace_id: &pass.workspace_id,
+            legacy_ids: pass.legacy_ids.as_deref(),
+        };
+        let started = Instant::now();
+        let JournalRetentionCandidates { journal_ids, bytes } =
+            store.journal_retention_candidates(workspace_scope, cutoff)?;
+        let selection_ms = elapsed_ms(started);
+        let mut writes = BatchReport::default();
+        let mut rows_removed = 0;
+        if apply {
+            for (index, batch) in journal_ids.chunks(RETENTION_BATCH_ROWS).enumerate() {
+                if index > 0 {
+                    std::thread::sleep(BATCH_PAUSE);
+                }
+                rows_removed +=
+                    timed_batch(&mut writes, || store.delete_applied_journal_rows(batch))? as u64;
+            }
+        }
+        Ok(JournalGcReport {
+            apply,
+            retention_days: days,
+            cutoff,
+            rows: journal_ids.len() as u64,
+            bytes,
+            rows_removed,
+            selection_ms,
             writes,
             store: store.store_space()?.into(),
         })
@@ -251,15 +419,26 @@ impl OrbitRuntime {
         let days = self.retention_days()?;
         let audit_cutoff = cutoff_for(days.audit)?;
         let store = self.sqlite_store()?;
-        let workspace_id = self.workspace_id()?;
+        let audit_pass = self.retention_pass(RetentionIdSource::RunAudit)?;
+        let audit_scope = RetentionWorkspaceScope {
+            workspace_id: &audit_pass.workspace_id,
+            legacy_ids: audit_pass.legacy_ids.as_deref(),
+        };
         let mut audit_rows = 0;
         let mut audit_bytes = 0;
         for table in [AuditRetentionTable::Command, AuditRetentionTable::Run] {
-            let selection = store.audit_retention_selection(table, &workspace_id, audit_cutoff)?;
+            let selection = store.audit_retention_selection(table, audit_scope, audit_cutoff)?;
             audit_rows += selection.rows;
             audit_bytes += selection.bytes;
         }
-        let runs = store.run_state_retention_selection(&workspace_id, cutoff_for(days.runs)?)?;
+        let run_pass = self.retention_pass(RetentionIdSource::JobRuns)?;
+        let runs = store.run_state_retention_selection(
+            RetentionWorkspaceScope {
+                workspace_id: &run_pass.workspace_id,
+                legacy_ids: run_pass.legacy_ids.as_deref(),
+            },
+            cutoff_for(days.runs)?,
+        )?;
         let root = AuditBlobRoot::new(&self.paths().audit_dir);
         let past_cutoff = SystemTime::from(audit_cutoff);
         let marked: HashSet<String> = root
@@ -296,7 +475,7 @@ impl OrbitRuntime {
         &self,
         store: &dyn StoreRetentionBackend,
         apply: bool,
-        workspace_id: &str,
+        scope: RetentionWorkspaceScope<'_>,
         cutoff: DateTime<Utc>,
     ) -> Result<BlobSweepReport, OrbitError> {
         let root = AuditBlobRoot::new(&self.paths().audit_dir);
@@ -342,7 +521,7 @@ impl OrbitRuntime {
         }
         report.stale_markers = stale_markers.len() as u64;
         if !candidates.is_empty() {
-            store.visit_blob_reference_text(Some((workspace_id, cutoff)), &mut |text| {
+            store.visit_blob_reference_text(Some((scope, cutoff)), &mut |text| {
                 blob_sweep::for_each_blob_hash(text, |hash| {
                     candidates.remove(hash);
                 });
@@ -372,6 +551,57 @@ impl OrbitRuntime {
     }
 }
 
+/// Catalog ids, checkout ids, and each readable checkout's partition id.
+/// `Ok(None)` means the set could not be confirmed, so the caller must not
+/// treat any other id as unregistered.
+fn registered_workspace_ids(runtime: &OrbitRuntime) -> Result<Option<HashSet<String>>, OrbitError> {
+    let path = orbit_registry::workspace_registry::registry_path_for(&runtime.global_root());
+    if !path.is_file() {
+        tracing::warn!(
+            path = %path.display(),
+            "store retention kept this workspace only; the workspace registry is missing"
+        );
+        return Ok(None);
+    }
+    let registry = match orbit_registry::workspace_registry::load_registry_from_read_only(&path) {
+        Ok(load) => load.registry,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "store retention kept this workspace only; the workspace registry could not be read"
+            );
+            return Ok(None);
+        }
+    };
+    let mut ids = HashSet::new();
+    for workspace in &registry.workspaces {
+        insert_workspace_id(&mut ids, &workspace.id);
+    }
+    for checkout in &registry.checkouts {
+        insert_workspace_id(&mut ids, &checkout.workspace_id);
+        match orbit_store::workspace_id_for_orbit_dir(&checkout.orbit_dir) {
+            Ok(id) => insert_workspace_id(&mut ids, &id),
+            Err(OrbitError::InvalidInput(_)) => {}
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    orbit_dir = %checkout.orbit_dir.display(),
+                    "store retention kept this workspace only; a checkout partition id could not be confirmed"
+                );
+                return Ok(None);
+            }
+        }
+    }
+    Ok(Some(ids))
+}
+
+fn insert_workspace_id(ids: &mut HashSet<String>, id: &str) {
+    let id = id.trim();
+    if !id.is_empty() {
+        ids.insert(id.to_string());
+    }
+}
+
 fn resolve_override(requested: Option<u32>, configured: u32) -> Result<u32, OrbitError> {
     match requested {
         Some(0) => Err(OrbitError::InvalidInput(
@@ -396,15 +626,27 @@ fn run_batches(
 ) -> Result<u64, OrbitError> {
     let mut total = 0u64;
     loop {
-        let started = Instant::now();
-        let removed = batch()?;
-        let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        writes.batches += 1;
-        writes.max_batch_ms = writes.max_batch_ms.max(elapsed);
+        let removed = timed_batch(writes, &mut batch)?;
         total += removed as u64;
         if removed < RETENTION_BATCH_ROWS {
             return Ok(total);
         }
         std::thread::sleep(BATCH_PAUSE);
     }
+}
+
+/// Run one write transaction, recording its duration.
+fn timed_batch(
+    writes: &mut BatchReport,
+    batch: impl FnOnce() -> Result<usize, OrbitError>,
+) -> Result<usize, OrbitError> {
+    let started = Instant::now();
+    let removed = batch()?;
+    writes.batches += 1;
+    writes.max_batch_ms = writes.max_batch_ms.max(elapsed_ms(started));
+    Ok(removed)
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }

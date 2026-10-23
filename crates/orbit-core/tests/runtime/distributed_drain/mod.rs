@@ -21,7 +21,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -58,10 +58,13 @@ mod admission;
 mod allow_crew;
 #[cfg(unix)]
 mod auth_recovery;
+mod auto_concurrency;
 mod before_landing;
 mod before_pr;
+mod browser_kit;
 mod cancel;
 mod candidate_carry;
+mod capacity_backoff;
 #[cfg(unix)]
 mod claimed_held_pull_request;
 #[cfg(unix)]
@@ -70,27 +73,40 @@ mod claimed_host_gates;
 mod claimed_owed_evidence;
 mod claimed_owner;
 mod claimed_review;
+mod claimed_steering;
+mod claimed_tag_instructions;
 mod desktop_completion;
 mod failure_class;
 mod flaky_validation;
 #[cfg(unix)]
 mod forge_hold;
+mod host_os_executor;
 #[cfg(unix)]
 mod interrupted_review;
 mod landing_attribution;
 mod landing_repair;
 mod no_diff;
 mod ordering;
+#[cfg(unix)]
+mod orphaned_supervisor;
+mod owner_busy;
 mod owner_gates;
 mod partial_candidate;
 mod pilot;
+mod post_deploy;
 mod provider_limit;
 mod rebased_landing;
 mod recovery;
+mod regression_attribution;
+mod requeue;
 mod settlement;
+mod settlement_review;
 mod single_pass;
+mod unavailable_hold;
 mod waiting;
 mod window_extension;
+#[cfg(unix)]
+mod worker_exit_settlement;
 mod worktree_gc;
 
 const OWNER: &str = "hm_owner";
@@ -130,7 +146,7 @@ fn isolated(module_path: &str, test: &str) -> bool {
     if std::env::var(MARKER).as_deref() == Ok(test) {
         return true;
     }
-    let home = TempDir::new().unwrap();
+    let home = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     // libtest names a test by its module path below the crate root; the
     // caller's `module_path!()` carries the concern module the test lives in.
     let qualified = format!(
@@ -152,7 +168,7 @@ fn isolated(module_path: &str, test: &str) -> bool {
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .current_dir(home.path());
-    let logs = TempDir::new().unwrap();
+    let logs = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let output = orbit_common::test_env::run_child_test(&mut command, &qualified, logs.path());
     orbit_common::test_env::assert_child_test_passed(
         &qualified,
@@ -162,6 +178,8 @@ fn isolated(module_path: &str, test: &str) -> bool {
     );
     false
 }
+
+type PullBarrier = Box<dyn FnOnce() -> Result<(), OrbitError> + Send>;
 
 /// The follower's route to the owner. Every call reaches the owner's tool
 /// boundary as the follower's SSH session would; a reply marked lost is
@@ -205,6 +223,8 @@ struct Wire {
     /// Run once when the next settlement arrives, before the owner answers:
     /// an operator acting while a pass is delivering.
     before_settle: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Run once after the follower's fit, before the owner handles a pull.
+    before_pull: Mutex<Option<PullBarrier>>,
 }
 
 impl Wire {
@@ -274,6 +294,7 @@ impl Wire {
             owner_completion_authority: None,
             review: None,
             known_red: vec![],
+            light_delivery: Vec::new(),
         };
         let request = format!("handoff:{}", handoff.claim_id);
         self.owner
@@ -304,15 +325,24 @@ impl DrainOwnerTransport for Wire {
             .lock()
             .unwrap()
             .push((name.to_string(), input.clone()));
+        if name == "orbit.task.pull" {
+            let barrier = self.before_pull.lock().unwrap().take();
+            if let Some(barrier) = barrier {
+                barrier()?;
+            }
+        }
         if *self.unreachable.lock().unwrap() {
             return Err(OrbitError::UnreachableDestination(
                 "ssh: connect to host owner port 22: Connection timed out".into(),
             ));
         }
-        if name == "orbit.drain.claim.settle"
-            && let Some(operator) = self.before_settle.lock().unwrap().take()
-        {
-            operator();
+        if name == "orbit.drain.claim.settle" {
+            // Operator stop/cancel may itself settle; release the hook lock
+            // before letting the callback re-enter the transport.
+            let operator = self.before_settle.lock().unwrap().take();
+            if let Some(operator) = operator {
+                operator();
+            }
         }
         if name == "orbit.drain.claim.settle"
             && let Some(message) = self.refuse_settle.lock().unwrap().clone()
@@ -464,21 +494,34 @@ fn open_runtime(root: &Path, machine: &str) -> (OrbitRuntime, PathBuf) {
     let repo = root.join(machine).join("repo");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(&repo).unwrap();
-    let git_boundary = std::process::Command::new("git")
-        .args(["init", "--bare", "--initial-branch=main", "-q"])
-        .arg(repo.join(".git"))
-        .output()
-        .unwrap();
-    assert!(
-        git_boundary.status.success(),
-        "initialize fixture Git discovery boundary: {}",
-        String::from_utf8_lossy(&git_boundary.stderr)
-    );
+    git_boundary().write(&repo.join(".git"));
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+    crate::fixture_template::seed_store(&global);
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
         .expect("runtime")
         .with_automation_machine_identity(Some(machine.to_string()));
     (calm_host(runtime), repo)
+}
+
+/// The empty bare repository each fixture checkout copies to its `.git`, so
+/// Git discovery stops there instead of reaching a surrounding checkout.
+/// It is initialized once per process; every checkout owns its copy.
+fn git_boundary() -> &'static crate::fixture_template::TreeTemplate {
+    static TEMPLATE: OnceLock<crate::fixture_template::TreeTemplate> = OnceLock::new();
+    TEMPLATE.get_or_init(|| {
+        let scratch = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let init = crate::git_test_support::command()
+            .args(["init", "--bare", "--initial-branch=main", "-q"])
+            .arg(scratch.path())
+            .output()
+            .unwrap();
+        assert!(
+            init.status.success(),
+            "initialize fixture Git discovery boundary: {}",
+            String::from_utf8_lossy(&init.stderr)
+        );
+        crate::fixture_template::TreeTemplate::capture(scratch.path())
+    })
 }
 
 /// `runtime` admitting against a pinned calm resource sample, never the live
@@ -493,6 +536,18 @@ fn calm_host(runtime: OrbitRuntime) -> OrbitRuntime {
 /// An approved owner task scoped to `file`, ready for admission, on `crew`
 /// when one is named.
 fn backlog_task(owner: &OrbitRuntime, repo: &Path, file: &str, crew: Option<&str>) -> String {
+    backlog_task_with_input(owner, repo, file, crew, json!({}))
+}
+
+/// Create requirements and provenance atomically with the task; requirements
+/// cannot be revised later through task updates.
+fn backlog_task_with_input(
+    owner: &OrbitRuntime,
+    repo: &Path,
+    file: &str,
+    crew: Option<&str>,
+    extra: Value,
+) -> String {
     std::fs::create_dir_all(repo.join("src")).unwrap();
     std::fs::write(repo.join(file), "fn work() {}\n").unwrap();
     let mut input = json!({
@@ -507,6 +562,9 @@ fn backlog_task(owner: &OrbitRuntime, repo: &Path, file: &str, crew: Option<&str
     });
     if let Some(crew) = crew {
         input["crew"] = json!(crew);
+    }
+    for (key, value) in extra.as_object().expect("extra task fields") {
+        input[key] = value.clone();
     }
     let task = owner.run_tool("orbit.task.add", input).expect("add task");
     let id = task["id"].as_str().unwrap().to_string();
@@ -565,6 +623,43 @@ impl Pair {
         Self::with_owner_host("", "", &vec![None; tasks], host)
     }
 
+    /// [`Self::new`] with `config` as the follower's global `config.toml`,
+    /// where machine-wide settings such as `machine.auto_concurrency` live.
+    fn with_follower_global(tasks: usize, config: &str) -> Self {
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let global = root.path().join(FOLLOWER).join("global");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::write(global.join("config.toml"), config).unwrap();
+        let (owner, owner_repo) = open_runtime(root.path(), OWNER);
+        let tasks = (0..tasks)
+            .map(|n| backlog_task(&owner, &owner_repo, &format!("src/f{n}.rs"), None))
+            .collect();
+        Self::follower_of(Arc::new(root), owner, owner_repo, tasks, FOLLOWER)
+    }
+
+    /// [`Self::with_owner_config`] with `follower_global` as the follower's
+    /// global `config.toml`, where a crew's `env` is set [ORB-17288].
+    fn with_follower_global_crews(
+        owner_config: &str,
+        follower_global: &str,
+        crews: &[Option<&str>],
+    ) -> Self {
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let orbit = root.path().join(OWNER).join("repo/.orbit");
+        std::fs::create_dir_all(&orbit).unwrap();
+        std::fs::write(orbit.join("config.toml"), owner_config).unwrap();
+        let global = root.path().join(FOLLOWER).join("global");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::write(global.join("config.toml"), follower_global).unwrap();
+        let (owner, owner_repo) = open_runtime(root.path(), OWNER);
+        let tasks = crews
+            .iter()
+            .enumerate()
+            .map(|(n, crew)| backlog_task(&owner, &owner_repo, &format!("src/f{n}.rs"), *crew))
+            .collect();
+        Self::follower_of(Arc::new(root), owner, owner_repo, tasks, FOLLOWER)
+    }
+
     /// [`Self::with_configs`] with the owner's runtime passed through `host`.
     fn with_owner_host(
         owner_config: &str,
@@ -572,7 +667,7 @@ impl Pair {
         crews: &[Option<&str>],
         host: impl FnOnce(OrbitRuntime) -> OrbitRuntime,
     ) -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let orbit = root.path().join(OWNER).join("repo/.orbit");
         std::fs::create_dir_all(&orbit).unwrap();
         std::fs::write(orbit.join("config.toml"), owner_config).unwrap();
@@ -631,6 +726,7 @@ impl Pair {
             prefix_hosts: Mutex::default(),
             by_id_reads: Mutex::default(),
             before_settle: Mutex::default(),
+            before_pull: Mutex::default(),
         });
         let (follower, follower_repo) = open_runtime(root.path(), machine);
         let follower = follower
@@ -667,11 +763,16 @@ impl Pair {
     /// The leaf ends the way a leaf whose step failed ends: the step's error
     /// recorded, then the run terminal, with no settlement of its own.
     fn leaf_fails_with(&self, leaf: &str, error: &str) {
-        let now = Utc::now();
+        self.leaf_fails_at(leaf, error, Utc::now());
+    }
+
+    /// [`Self::leaf_fails_with`], the leaf ending at `now`.
+    fn leaf_fails_at(&self, leaf: &str, error: &str, now: chrono::DateTime<Utc>) {
         self.follower_jobs
             .complete_job_run_step(
                 leaf,
                 &JobRunStepParams {
+                    lock_wait_ms: None,
                     step_index: 0,
                     target_type: JobTargetType::Activity,
                     target_id: "implement_one".into(),
@@ -951,6 +1052,13 @@ fn launchable_providers(runtime: &OrbitRuntime) {
 
 /// Point `provider` at `command`, as an operator's executor definition does.
 fn follower_cli(runtime: &OrbitRuntime, provider: &str, command: &str) {
+    // Rewriting the command must keep a declared `host_os`. Dropping it would
+    // make a Mac-only executor look unrestricted on this stand-in.
+    let host_os = runtime
+        .get_executor_def(provider)
+        .ok()
+        .flatten()
+        .and_then(|def| def.host_os);
     runtime
         .upsert_executor_def(&ExecutorDef {
             name: provider.to_string(),
@@ -965,18 +1073,24 @@ fn follower_cli(runtime: &OrbitRuntime, provider: &str, command: &str) {
             env: Default::default(),
             sandbox: None,
             allow_fallback: false,
+            host_os,
             created_at: None,
             updated_at: None,
         })
         .expect("executor");
 }
 
-/// A stand-in worker, reaped the moment it exits so a stop can see it gone.
+/// A stand-in worker whose single reaper owns the child until completion.
 /// On Unix it leads its own group unless a test supplies a shared group.
 struct Worker {
     pid: u32,
+    completion: Arc<std::sync::OnceLock<std::io::Result<std::process::ExitStatus>>>,
     exited: std::sync::mpsc::Receiver<()>,
+    shutdown: std::sync::mpsc::Sender<()>,
+    reaper: Option<std::thread::JoinHandle<()>>,
 }
+
+const WORKER_WAIT_BUDGET: Duration = Duration::from_secs(5);
 
 impl Worker {
     fn spawn() -> Self {
@@ -999,7 +1113,16 @@ impl Worker {
         Self::spawn_command(command)
     }
 
-    fn spawn_command(mut command: std::process::Command) -> Self {
+    fn spawn_command(command: std::process::Command) -> Self {
+        Self::spawn_command_with_reap_hook(command, || {})
+    }
+
+    /// The cancellation matrix can hold the actual owned-child wait without
+    /// sleeps, synthetic load, or changing production cancellation budgets.
+    fn spawn_command_with_reap_hook(
+        mut command: std::process::Command,
+        before_reap: impl FnOnce() + Send + 'static,
+    ) -> Self {
         let mut child = command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -1007,32 +1130,101 @@ impl Worker {
             .spawn()
             .expect("worker process");
         let pid = child.id();
+        // Bind before the reaper can consume ownership. Shared-group workers
+        // must be signalled individually, never through OwnedChild's group API.
+        #[cfg(unix)]
+        let bound =
+            orbit_common::process::signal::BoundProcess::bind(pid, None).unwrap_or_else(|error| {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("bind owned worker: {error}");
+            });
+        let completion = Arc::new(std::sync::OnceLock::new());
+        let completed = Arc::clone(&completion);
         let (exited, on_exit) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = child.wait();
+        let (shutdown, on_shutdown) = std::sync::mpsc::channel();
+        let reaper = std::thread::spawn(move || {
+            let result = loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break Ok(status),
+                    Err(error) => break Err(error),
+                    Ok(None) => {}
+                }
+                if matches!(
+                    on_shutdown.recv_timeout(Duration::from_millis(20)),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    continue;
+                }
+                #[cfg(unix)]
+                let signal = bound
+                    .as_ref()
+                    .map_or(Ok(false), |process| process.signal(9));
+                #[cfg(not(unix))]
+                let signal = child.kill().map(|()| true);
+                before_reap();
+                // Only this thread ever waits on or kills the owned Child.
+                // A bound signal cannot target a recycled numeric PID.
+                break child.wait().and_then(|status| signal.map(|_| status));
+            };
+            completed.set(result).expect("one owned-child completion");
+            drop(child);
             let _ = exited.send(());
         });
         Self {
             pid,
+            completion,
             exited: on_exit,
+            shutdown,
+            reaper: Some(reaper),
         }
     }
 
-    /// Whether the process has exited and been reaped.
+    /// Whether the process has successfully exited and been reaped. Reading
+    /// the notification never consumes the retained terminal result.
     fn stopped(&self) -> bool {
-        self.exited.recv_timeout(Duration::from_secs(5)).is_ok()
+        if self.completion.get().is_none() {
+            let _ = self.exited.recv_timeout(WORKER_WAIT_BUDGET);
+        }
+        self.completion.get().is_some_and(Result::is_ok)
     }
 
     fn running(&self) -> bool {
-        self.exited.try_recv().is_err()
+        self.completion.get().is_none()
     }
 }
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        let _ = std::process::Command::new("kill")
-            .args(["-9", &self.pid.to_string()])
-            .status();
+        let deadline = std::time::Instant::now() + WORKER_WAIT_BUDGET;
+        let _ = self.shutdown.send(());
+        let completed = self.stopped();
+        // Completion precedes the thread's return. Bound joining as well as
+        // reaping so fixture resources cannot outlive an unobserved reaper.
+        while self
+            .reaper
+            .as_ref()
+            .is_some_and(|reaper| !reaper.is_finished())
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            completed,
+            "owned worker reap failed: {:?}",
+            self.completion.get()
+        );
+        assert!(
+            self.reaper
+                .as_ref()
+                .is_some_and(|reaper| reaper.is_finished()),
+            "worker reaper exceeded its join budget"
+        );
+        self.reaper
+            .take()
+            .expect("owned reaper")
+            .join()
+            .expect("worker reaper");
     }
 }
 
@@ -1073,6 +1265,8 @@ fn handoff(record: &LocalPullAdmission) -> TaskHandoff {
         execution_summary: "Outcome: success".into(),
         validation: vec![],
         footprint_widening: vec![],
+        owed_criteria: vec![],
+        regression_from: vec![],
     }
 }
 
@@ -1138,7 +1332,7 @@ fn publish_origin(repo: &Path) {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
+    let output = crate::git_test_support::command()
         .arg("-C")
         .arg(dir)
         .args([

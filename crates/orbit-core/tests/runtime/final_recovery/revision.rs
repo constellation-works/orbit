@@ -94,13 +94,7 @@ fn assert_refused(case: &str, applied: FinalRecoveryApplied) {
     );
 }
 
-#[test]
 fn writes_the_recovery_may_cause_leave_its_requeue_standing() {
-    if !super::super::dispatch_admission::isolated(
-        "final_recovery::revision::writes_the_recovery_may_cause_leave_its_requeue_standing",
-    ) {
-        return;
-    }
     let fixture = fixture("[\"sol\"]");
     // An earlier run's recovery widened the task too; its selector is
     // ordinary scope now and does not disturb this recovery's exemption.
@@ -127,6 +121,7 @@ fn writes_the_recovery_may_cause_leave_its_requeue_standing() {
                 at: Utc::now(),
                 by: "system".to_string(),
                 message: format!("run {run}: final recovery repaired the worktree"),
+                operation_id: None,
             }],
             ..Default::default()
         },
@@ -146,13 +141,7 @@ fn writes_the_recovery_may_cause_leave_its_requeue_standing() {
     assert_eq!(fixture.status(&task), "backlog");
 }
 
-#[test]
 fn a_lifecycle_change_after_the_failure_still_refuses_the_decision() {
-    if !super::super::dispatch_admission::isolated(
-        "final_recovery::revision::a_lifecycle_change_after_the_failure_still_refuses_the_decision",
-    ) {
-        return;
-    }
     let fixture = fixture("[\"sol\"]");
     let human = |task: &str, params: TaskUpdateParams| {
         fixture
@@ -199,12 +188,22 @@ fn a_lifecycle_change_after_the_failure_still_refuses_the_decision() {
             )
         }),
         ("a status round trip", &|task| {
-            for status in ["backlog", "in_progress"] {
+            for status in [
+                orbit_core::TaskStatus::Backlog,
+                orbit_core::TaskStatus::InProgress,
+            ] {
                 fixture
                     .runtime
-                    .run_tool(
-                        "orbit.task.update",
-                        json!({"id": task, "status": status, "model": "codex"}),
+                    .clone()
+                    .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+                    .force_update_task_with_identity(
+                        task,
+                        TaskUpdateParams {
+                            status: Some(status),
+                            ..Default::default()
+                        },
+                        None,
+                        None,
                     )
                     .unwrap();
             }
@@ -231,13 +230,7 @@ fn a_lifecycle_change_after_the_failure_still_refuses_the_decision() {
     }
 }
 
-#[test]
 fn an_edit_to_recovery_widened_selectors_after_the_failure_refuses_the_decision() {
-    if !super::super::dispatch_admission::isolated(
-        "final_recovery::revision::an_edit_to_recovery_widened_selectors_after_the_failure_refuses_the_decision",
-    ) {
-        return;
-    }
     let fixture = fixture("[\"sol\"]");
     let recovered = "file:src/recovered.rs".to_string();
     let without = |selectors: Vec<String>, selector: &str| {
@@ -280,13 +273,7 @@ fn an_edit_to_recovery_widened_selectors_after_the_failure_refuses_the_decision(
     assert_eq!(context_files(&fixture, &task), before);
 }
 
-#[test]
 fn a_revision_observed_before_the_digest_compares_by_update_time() {
-    if !super::super::dispatch_admission::isolated(
-        "final_recovery::revision::a_revision_observed_before_the_digest_compares_by_update_time",
-    ) {
-        return;
-    }
     let fixture = fixture("[\"sol\"]");
     let legacy = |run: &str| {
         let mut state = fixture.state(run);
@@ -322,3 +309,12 @@ fn a_revision_observed_before_the_digest_compares_by_update_time() {
     assert_refused("any write after a legacy observation", applied);
     assert_eq!(fixture.status(&task), "in-progress");
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    writes_the_recovery_may_cause_leave_its_requeue_standing_scenarios,
+    writes_the_recovery_may_cause_leave_its_requeue_standing,
+    a_lifecycle_change_after_the_failure_still_refuses_the_decision,
+    an_edit_to_recovery_widened_selectors_after_the_failure_refuses_the_decision,
+    a_revision_observed_before_the_digest_compares_by_update_time
+);

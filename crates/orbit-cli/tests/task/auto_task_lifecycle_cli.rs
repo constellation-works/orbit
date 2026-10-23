@@ -8,20 +8,202 @@ use std::path::PathBuf;
 use crate::isolated_cli_fixture;
 use isolated_cli_fixture::Fixture;
 
+/// `delete` and `reset` are governed `operator`; a fixture is non-interactive.
+fn operator(fixture: &Fixture, args: &[&str]) -> assert_cmd::Command {
+    let mut command = fixture.command(args);
+    command.env("ORBIT_OPERATOR", "1");
+    command
+}
+
+pub(crate) fn operator_json(fixture: &Fixture, args: &[&str]) -> serde_json::Value {
+    let output = operator(fixture, args)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&output).unwrap_or_else(|error| panic!("JSON for {args:?}: {error}"))
+}
+
+/// Settings failures must not publish a definition that blocks a repaired retry.
 #[test]
+fn auto_task_add_settings_failure_leaves_no_definition_and_allows_retry() {
+    if crate::isolated_test::run_in_child(
+        "auto_task_lifecycle_cli::auto_task_add_settings_failure_leaves_no_definition_and_allows_retry",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let shipped = fixture.json(&["auto-task", "show", "backlog-hygiene", "--json"]);
+    let shipped_path = PathBuf::from(shipped["definition_source"]["path"].as_str().unwrap());
+    let dir = shipped_path.parent().unwrap();
+    // With existing definitions, the loader rejects settings before add can
+    // reach its writes. An empty catalog exercises the failing settings drop.
+    fs::rename(dir, fixture._temp.path().join("seeded-auto-tasks")).unwrap();
+    fs::create_dir(dir).unwrap();
+    let settings = dir.join(".orbit-auto-task-settings.json");
+    fs::create_dir(&settings).unwrap();
+    let args = [
+        "auto-task",
+        "add",
+        "--name",
+        "fixture-retry-add",
+        "--every-minutes",
+        "60",
+        "--title",
+        "Retryable add",
+        "--json",
+    ];
+    let failure = fixture.command(&args).assert().failure();
+    let stderr = String::from_utf8_lossy(&failure.get_output().stderr);
+    assert!(stderr.contains("must be a regular file"), "{stderr}");
+    let definition = dir.join("fixture-retry-add.yaml");
+    assert!(
+        !definition.exists(),
+        "a failed settings drop must not publish the definition"
+    );
+
+    fs::remove_dir(&settings).unwrap();
+    let added = fixture.json(&args);
+    assert_eq!(added["name"], "fixture-retry-add");
+    assert!(definition.is_file());
+    assert_eq!(
+        fixture.json(&["auto-task", "show", "fixture-retry-add", "--json"])["name"],
+        added["name"]
+    );
+}
+
+/// A manifest failure must leave restore retryable after the manifest is repaired.
+#[test]
+fn auto_task_restore_manifest_failure_leaves_no_definition_and_allows_retry() {
+    if crate::isolated_test::run_in_child(
+        "auto_task_lifecycle_cli::auto_task_restore_manifest_failure_leaves_no_definition_and_allows_retry",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let shipped = fixture.json(&["auto-task", "show", "backlog-hygiene", "--json"]);
+    let path = PathBuf::from(shipped["definition_source"]["path"].as_str().unwrap());
+    let original = fs::read(&path).unwrap();
+    operator_json(
+        &fixture,
+        &["auto-task", "delete", "backlog-hygiene", "--json"],
+    );
+    let manifest = path.parent().unwrap().join(".orbit-managed-assets.json");
+    let saved_manifest = fs::read(&manifest).unwrap();
+    fs::write(&manifest, "invalid manifest").unwrap();
+    let args = ["auto-task", "restore", "backlog-hygiene", "--json"];
+    let failure = fixture.command(&args).assert().failure();
+    let stderr = String::from_utf8_lossy(&failure.get_output().stderr);
+    assert!(
+        stderr.contains("managed asset manifest") && stderr.contains("is invalid"),
+        "{stderr}"
+    );
+    assert!(
+        !path.exists(),
+        "a failed manifest update must not publish the restored definition"
+    );
+
+    fs::write(&manifest, saved_manifest).unwrap();
+    let restored = fixture.json(&args);
+    assert_eq!(restored["name"], "backlog-hygiene");
+    assert_eq!(fs::read(&path).unwrap(), original);
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    assert!(state["assets"]["backlog-hygiene"].is_string());
+    assert!(state.get("optedOut").is_none_or(|names| {
+        !names
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("backlog-hygiene"))
+    }));
+}
+
+fn auto_task_cli_update_preserves_explicit_empty_text_arguments() {
+    let fixture = Fixture::new();
+    let added = fixture.json(&[
+        "auto-task",
+        "add",
+        "--name",
+        "fixture-empty-text-update",
+        "--description",
+        "Original definition description",
+        "--every-minutes",
+        "60",
+        "--title",
+        "Original task title",
+        "--body",
+        "Original task body",
+        "--json",
+    ]);
+    assert_eq!(added["description"], "Original definition description");
+    assert_eq!(added["template"]["title"], "Original task title");
+    assert_eq!(added["template"]["description"], "Original task body");
+
+    let omitted = fixture.json(&[
+        "auto-task",
+        "update",
+        "fixture-empty-text-update",
+        "--dedupe",
+        "always",
+        "--json",
+    ]);
+    assert_eq!(omitted["description"], "Original definition description");
+    assert_eq!(omitted["template"]["title"], "Original task title");
+    assert_eq!(omitted["template"]["description"], "Original task body");
+
+    let cleared = fixture.json(&[
+        "auto-task",
+        "update",
+        "fixture-empty-text-update",
+        "--description",
+        "",
+        "--body",
+        "",
+        "--json",
+    ]);
+    assert_eq!(cleared["description"], "");
+    assert_eq!(cleared["template"]["description"], "");
+    assert_eq!(cleared["template"]["title"], "Original task title");
+
+    fixture
+        .command(&[
+            "auto-task",
+            "update",
+            "fixture-empty-text-update",
+            "--title",
+            "",
+            "--json",
+        ])
+        .assert()
+        .failure();
+    let after_refusal = fixture.json(&["auto-task", "show", "fixture-empty-text-update", "--json"]);
+    assert_eq!(after_refusal["description"], cleared["description"]);
+    assert_eq!(
+        after_refusal["template"]["description"],
+        cleared["template"]["description"]
+    );
+    assert_eq!(
+        after_refusal["template"]["title"], cleared["template"]["title"],
+        "a refused empty title must leave the task title unchanged"
+    );
+}
+
 fn auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist() {
     let fixture = Fixture::new();
     let shipped = fixture.json(&["auto-task", "show", "backlog-hygiene", "--json"]);
     let shipped_path = PathBuf::from(shipped["definition_source"]["path"].as_str().unwrap());
     let original = fs::read(&shipped_path).unwrap();
-    let removed = fixture.json(&[
-        "auto-task",
-        "delete",
-        "backlog-hygiene",
-        "--reason",
-        "Disposable fixture opt-out",
-        "--json",
-    ]);
+    let removed = operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "delete",
+            "backlog-hygiene",
+            "--reason",
+            "Disposable fixture opt-out",
+            "--json",
+        ],
+    );
     assert_eq!(removed["opted_out"], true);
     assert!(!shipped_path.exists());
     fixture
@@ -58,32 +240,41 @@ fn auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist() {
     let minted = fixture.json(&["auto-task", "mint", "fixture-open-task", "--json"]);
     let id = minted["id"].as_str().unwrap();
     let task_before = fixture.json(&["task", "show", id, "--json"]);
+    assert_eq!(
+        task_before["origin"], "automation",
+        "a task an auto-task definition mints records automation as its origin"
+    );
     let definition_before = fixture.json(&["auto-task", "show", "fixture-open-task", "--json"]);
-    fixture
-        .command(&[
+    operator(
+        &fixture,
+        &[
             "auto-task",
             "delete",
             "fixture-open-task",
             "--reason",
             "Refused while open",
             "--json",
-        ])
-        .assert()
-        .failure();
+        ],
+    )
+    .assert()
+    .failure();
     assert_eq!(
         fixture.json(&["auto-task", "show", "fixture-open-task", "--json"]),
         definition_before
     );
     assert_eq!(fixture.json(&["task", "show", id, "--json"]), task_before);
-    let forced = fixture.json(&[
-        "auto-task",
-        "delete",
-        "fixture-open-task",
-        "--reason",
-        "Explicit disposable force",
-        "--force",
-        "--json",
-    ]);
+    let forced = operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "delete",
+            "fixture-open-task",
+            "--reason",
+            "Explicit disposable force",
+            "--force",
+            "--json",
+        ],
+    );
     assert_eq!(forced["opted_out"], false);
     assert!(
         forced["open_tasks"]
@@ -100,7 +291,6 @@ fn auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist() {
     assert_eq!(fixture.json(&["task", "show", id, "--json"]), task_before);
 }
 
-#[test]
 fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes() {
     use orbit_core::application::automation::consumer_key;
 
@@ -165,18 +355,24 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
     assert_eq!(after.generation, original.generation + 1);
     assert_eq!(after.baseline, original.baseline);
     assert_eq!(after.pending, original.pending);
-    let reset_preview = fixture.json(&["auto-task", "reset", &definition.name, "--json"]);
+    let reset_preview = operator_json(
+        &fixture,
+        &["auto-task", "reset", &definition.name, "--json"],
+    );
     assert_eq!(reset_preview["applied"], false);
     assert_eq!(reset_preview["generation"], after.generation);
     assert_eq!(store.automation_state(&consumer).unwrap(), Some(after));
-    let reset = fixture.json(&[
-        "auto-task",
-        "reset",
-        &definition.name,
-        "--reason",
-        "Disposable reset",
-        "--json",
-    ]);
+    let reset = operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "reset",
+            &definition.name,
+            "--reason",
+            "Disposable reset",
+            "--json",
+        ],
+    );
     assert_eq!(reset["applied"], true);
     assert!(store.automation_state(&consumer).unwrap().is_none());
     let records = store.automation_recoveries(&consumer, 10).unwrap();
@@ -197,21 +393,117 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
         1,
         "consumer operations must not mint or dispatch a task"
     );
-    fixture
-        .command(&[
+    operator(
+        &fixture,
+        &[
             "auto-task",
             "reset",
             "missing-consumer",
             "--reason",
             "Refused",
             "--json",
-        ])
-        .assert()
-        .failure();
+        ],
+    )
+    .assert()
+    .failure();
     assert_eq!(store.automation_recoveries(&consumer, 10).unwrap().len(), 2);
 }
 
-#[test]
+fn auto_task_cli_reset_and_forced_delete_work_when_origin_branch_is_missing() {
+    use chrono::Utc;
+    use orbit_core::application::automation::{consumer_key, evaluate_auto_task};
+
+    let fixture = Fixture::new();
+    git(
+        &fixture,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/fixture/origin.git",
+        ],
+    );
+    let trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0});
+    let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
+    let consumer = consumer_key(&runtime, "auto-task", &definition.name).unwrap();
+    let store = runtime.automation_store().unwrap();
+    let original = store.automation_state(&consumer).unwrap().unwrap();
+
+    // The local branch remains available, but origin no longer serves it.
+    move_origin_head_off_branch(&fixture);
+    git(
+        &fixture,
+        &["push", "-q", "origin", "--delete", "fixture-delivery"],
+    );
+    assert_eq!(
+        git(&fixture, &["rev-parse", "refs/heads/fixture-delivery"]),
+        original.observed.commit
+    );
+
+    let preview = operator_json(
+        &fixture,
+        &["auto-task", "reset", &definition.name, "--json"],
+    );
+    assert_eq!(preview["applied"], false);
+    assert_eq!(store.automation_state(&consumer).unwrap(), Some(original));
+
+    let reset = operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "reset",
+            &definition.name,
+            "--reason",
+            "Reset after origin branch deletion",
+            "--json",
+        ],
+    );
+    assert_eq!(reset["applied"], true);
+    assert!(store.automation_state(&consumer).unwrap().is_none());
+    assert!(
+        store
+            .automation_recoveries(&consumer, 10)
+            .unwrap()
+            .iter()
+            .any(|record| record.reason == "Reset after origin branch deletion")
+    );
+
+    // Recreate the origin branch to establish a fresh consumer, then remove
+    // it again so forced deletion exercises teardown under the same failure.
+    publish_origin_if_configured(&fixture);
+    evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
+    move_origin_head_off_branch(&fixture);
+    git(
+        &fixture,
+        &["push", "-q", "origin", "--delete", "fixture-delivery"],
+    );
+    let removed = operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "delete",
+            &definition.name,
+            "--reason",
+            "Delete after origin branch deletion",
+            "--force",
+            "--json",
+        ],
+    );
+    assert_eq!(removed["consumer"]["reset"], true);
+    assert!(store.automation_state(&consumer).unwrap().is_none());
+    assert!(
+        store
+            .automation_recoveries(&consumer, 10)
+            .unwrap()
+            .iter()
+            .any(|record| record.reason == "Delete after origin branch deletion")
+    );
+    fixture
+        .command(&["auto-task", "show", &definition.name, "--json"])
+        .assert()
+        .failure();
+}
+
 fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor() {
     use orbit_common::security::release::sha256_hex;
     use orbit_core::application::auto_tasks::{
@@ -270,17 +562,19 @@ fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor
     };
     let definition_before = show_definition();
 
-    fixture
-        .command(&[
+    operator(
+        &fixture,
+        &[
             "auto-task",
             "delete",
             name,
             "--reason",
             "Disposable failing delete",
             "--json",
-        ])
-        .assert()
-        .failure();
+        ],
+    )
+    .assert()
+    .failure();
     assert!(
         store.automation_state(&consumer).unwrap().is_none(),
         "the failure must come after teardown applied the consumer reset"
@@ -293,14 +587,17 @@ fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor
     assert_eq!(show_definition(), definition_before);
 
     fs::remove_file(&ref_lock).unwrap();
-    let removed = fixture.json(&[
-        "auto-task",
-        "delete",
-        name,
-        "--reason",
-        "Disposable delete",
-        "--json",
-    ]);
+    let removed = operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "delete",
+            name,
+            "--reason",
+            "Disposable delete",
+            "--json",
+        ],
+    );
     assert_eq!(removed["cursor_removed"], true);
     assert_eq!(
         removed["consumer"]["released_refs"],
@@ -315,7 +612,6 @@ fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor
     assert!(git(&fixture, &["for-each-ref", &pin]).is_empty());
 }
 
-#[test]
 fn auto_task_waive_batch_reports_an_unregistered_required_tool_as_a_warning() {
     use chrono::Utc;
     use orbit_core::application::automation::consumer_key;
@@ -492,7 +788,6 @@ fn fixture_git_commits_and_refs_stay_in_the_fixture() {
     );
 }
 
-#[test]
 fn auto_task_add_and_schedule_update_reject_retired_integrated_qa_coverage() {
     let fixture = Fixture::new();
     let retired = r#"{"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"integrated_qa_v1","max_items":20,"retries":0}"#;
@@ -555,7 +850,7 @@ fn auto_task_add_and_schedule_update_reject_retired_integrated_qa_coverage() {
 /// An enabled delivery auto-task over a disposable `fixture-delivery` branch,
 /// baselined by one public evaluation. No landing, obligation, provider
 /// process, or action is introduced.
-fn baselined_delivery_consumer(
+pub(crate) fn baselined_delivery_consumer(
     fixture: &Fixture,
     trigger: &serde_json::Value,
 ) -> (
@@ -642,6 +937,27 @@ pub(crate) fn publish_origin_if_configured(fixture: &Fixture) {
     );
 }
 
+/// Keep the bare origin's HEAD on a different branch so it permits deletion
+/// of the watched branch in lifecycle fixtures.
+fn move_origin_head_off_branch(fixture: &Fixture) {
+    let bare = fixture.repo.with_file_name("origin.git");
+    let bare_path = bare.display().to_string();
+    git(
+        fixture,
+        &["push", "-q", "origin", "HEAD:refs/heads/fixture-keep"],
+    );
+    git(
+        fixture,
+        &[
+            "--git-dir",
+            &bare_path,
+            "symbolic-ref",
+            "HEAD",
+            "refs/heads/fixture-keep",
+        ],
+    );
+}
+
 #[test]
 fn doctor_scans_all_consumer_pages_and_warns_on_a_later_read_failure() {
     use orbit_core::application::automation::{consumer_key, stalled_consumers};
@@ -707,6 +1023,7 @@ fn doctor_scans_all_consumer_pages_and_warns_on_a_later_read_failure() {
         escalated_at: None,
         friction_id: None,
         divergence: None,
+        crew_hold: None,
     });
     assert!(store.automation_stall(&baseline, &stalled).unwrap());
     let listed = stalled_consumers(&runtime).unwrap();
@@ -740,7 +1057,6 @@ fn doctor_scans_all_consumer_pages_and_warns_on_a_later_read_failure() {
 /// A review task that closed without accepted coverage once left its consumer
 /// `admitted` forever: reset and recover refused it as executing and nothing
 /// reported it. Its task being terminal is what makes it not executing.
-#[test]
 fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
     use chrono::Utc;
     use orbit_core::application::automation::consumer_key;
@@ -825,7 +1141,10 @@ fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
     };
 
     // While the task is open its executor may still submit evidence.
-    let preview = fixture.json(&["auto-task", "reset", &definition.name, "--json"]);
+    let preview = operator_json(
+        &fixture,
+        &["auto-task", "reset", &definition.name, "--json"],
+    );
     assert!(
         preview["refusals"]
             .as_array()
@@ -859,16 +1178,114 @@ fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
             .contains(&serde_json::json!("active_execution"))
     );
 
-    let reset = fixture.json(&[
-        "auto-task",
-        "reset",
-        &definition.name,
-        "--reason",
-        "The review task closed without coverage evidence",
-        "--json",
-    ]);
+    let reset = operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "reset",
+            &definition.name,
+            "--reason",
+            "The review task closed without coverage evidence",
+            "--json",
+        ],
+    );
     assert_eq!(reset["applied"], true);
     assert!(store.automation_state(&consumer).unwrap().is_none());
+
+    // Recreate the closed action's checkpoint, then deterministically admit a
+    // live replacement after Core's liveness probe and before reset applies.
+    // This exercises the public runtime boundary including real retained refs.
+    assert!(store.automation_initialize(&baselined).unwrap());
+    assert!(
+        store
+            .automation_commit(&baselined, &admitted, None)
+            .unwrap()
+    );
+    let live = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Live replacement review",
+        "--complexity",
+        "low",
+        "--acceptance-criteria",
+        "Attach coverage evidence",
+        "--json",
+    ]);
+    let mut replacement = admitted.clone();
+    replacement.generation += 1;
+    let active = replacement.active.as_mut().unwrap();
+    active.attempt += 1;
+    active.action_key = format!("automation:{}:{}", active.batch.id, active.attempt);
+    active.action_id = Some(live["id"].as_str().unwrap().to_string());
+    let pin = format!(
+        "refs/orbit/automation/{}/fixture-batch/through",
+        orbit_common::security::release::sha256_hex(consumer.as_bytes()),
+    );
+    git(&fixture, &["update-ref", &pin, "HEAD"]);
+    let pinned = git(&fixture, &["rev-parse", &pin]);
+    let history = store.automation_recoveries(&consumer, 10).unwrap();
+    let request = orbit_types::workflow::automation::recovery::ResetRequest {
+        reason: "discard the closed review's debt".into(),
+        force: false,
+    };
+    let error = orbit_core::test_support::with_reset_probe_hook(
+        {
+            let store = store.clone();
+            let previous = admitted.clone();
+            let next = replacement.clone();
+            move || assert!(store.automation_commit(&previous, &next, None).unwrap())
+        },
+        || {
+            orbit_core::application::automation::reset_auto_task(
+                &runtime,
+                &definition,
+                &request,
+                Utc::now(),
+            )
+        },
+    )
+    .expect_err("a live replacement cannot inherit the closed review's terminal proof");
+    assert!(
+        error.to_string().contains("concurrent_evaluation"),
+        "{error}"
+    );
+    assert_eq!(
+        store.automation_state(&consumer).unwrap(),
+        Some(replacement)
+    );
+    assert_eq!(store.automation_recoveries(&consumer, 10).unwrap(), history);
+    assert_eq!(git(&fixture, &["rev-parse", &pin]), pinned);
+
+    let preview = operator_json(
+        &fixture,
+        &["auto-task", "reset", &definition.name, "--json"],
+    );
+    assert!(
+        preview["refusals"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("action_executing"))
+    );
+    let forced = operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "reset",
+            &definition.name,
+            "--force",
+            "--reason",
+            "Explicitly abandon the live replacement",
+            "--json",
+        ],
+    );
+    assert_eq!(forced["applied"], true);
+    assert!(store.automation_state(&consumer).unwrap().is_none());
+    assert_eq!(
+        store.automation_recoveries(&consumer, 10).unwrap().len(),
+        history.len() + 1
+    );
+    assert!(git(&fixture, &["for-each-ref", "--format=%(refname)", &pin]).is_empty());
 }
 
 /// The auto-task defaults seeded into every workspace stay inert, declare a
@@ -984,6 +1401,24 @@ fn seeded_auto_task_defaults_are_inert_portable_and_name_only_callable_tools() {
             }
         }
     }
+    // The blocked-task triage's precondition is what keeps it from minting
+    // an empty task every hour; `show` must say it is there.
+    let triage = fixture.json(&["auto-task", "show", "blocked-task-triage", "--json"]);
+    assert_eq!(triage["skip_unless_blocked_candidates"], true);
+    let shown = fixture
+        .command(&["auto-task", "show", "blocked-task-triage"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let shown = String::from_utf8(shown).unwrap();
+    assert!(
+        shown.lines().any(|line| line
+            .trim_start()
+            .starts_with("skip_unless_blocked_candidates:")),
+        "{shown}"
+    );
     assert!(
         deliveries > 0 && preconditions > 0 && tool_calls > 0 && run_reads > 0,
         "the seeded defaults must exercise every check: {deliveries} deliveries, \
@@ -1148,4 +1583,66 @@ fn provider_landings_carry_the_tasks_that_recorded_the_pull_request() {
         delivery(9)["unattributed"],
         orbit_types::workflow::automation::UNATTRIBUTED_NO_LANDING_TASK
     );
+}
+
+#[test]
+fn auto_task_lifecycle_and_recovery() {
+    if crate::isolated_test::run_in_child(
+        "auto_task_lifecycle_cli::auto_task_lifecycle_and_recovery",
+    ) {
+        return;
+    }
+    for (name, check) in [
+        (
+            "auto_task_cli_update_preserves_explicit_empty_text_arguments",
+            auto_task_cli_update_preserves_explicit_empty_text_arguments as fn(),
+        ),
+        (
+            "auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist",
+            auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist as fn(),
+        ),
+        (
+            "auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes",
+            auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes as fn(),
+        ),
+        (
+            "auto_task_cli_reset_and_forced_delete_work_when_origin_branch_is_missing",
+            auto_task_cli_reset_and_forced_delete_work_when_origin_branch_is_missing as fn(),
+        ),
+        (
+            "auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor",
+            auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor as fn(),
+        ),
+        (
+            "auto_task_waive_batch_reports_an_unregistered_required_tool_as_a_warning",
+            auto_task_waive_batch_reports_an_unregistered_required_tool_as_a_warning as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
+}
+
+#[test]
+fn retired_coverage_and_closed_actions() {
+    if crate::isolated_test::run_in_child(
+        "auto_task_lifecycle_cli::retired_coverage_and_closed_actions",
+    ) {
+        return;
+    }
+    for (name, check) in [
+        (
+            "auto_task_add_and_schedule_update_reject_retired_integrated_qa_coverage",
+            auto_task_add_and_schedule_update_reject_retired_integrated_qa_coverage as fn(),
+        ),
+        (
+            "auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled",
+            auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
 }

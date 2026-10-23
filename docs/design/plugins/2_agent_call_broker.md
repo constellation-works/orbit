@@ -5,11 +5,11 @@ summary: "Design: a per-run host broker runs plugin backends for sandboxed agent
 owner: claude
 status: Draft
 tags: [plugins, security, sandbox, secrets, ipc]
-paths: ["crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/runtime/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
+paths: ["crates/orbit-core/src/adapter/engine_host/actions/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/runtime/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
 related_artifacts: [ORB-13038, ORB-13008, ORB-13009, ORB-14017, ORB-14194, F2026-09-230]
-last_updated: 2026-10-08
-last_validated: 2026-10-09
+last_updated: 2026-10-21
+last_validated: 2026-10-21
 ---
 
 # Design: host-side broker for agent-initiated plugin calls
@@ -93,7 +93,7 @@ to be spawned from outside the agent sandbox.
 The in-sandbox path has two more defects today, even before any deny is added. Neither agent
 profile grants writes to `state/plugins/` or `state/plugin-secrets/`
 (`append_linux_runtime_write_roots` and `append_orbit_child_runtime_write_roots` in
-`crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/`). So an agent-initiated call
+`crates/orbit-core/src/adapter/engine_host/actions/sandbox/`). So an agent-initiated call
 cannot:
 
 - create a missing `{{plugin_state}}` or write to it, even when the backend holds an `fs.write`
@@ -156,21 +156,26 @@ agent and every command it runs could read it, and it would bypass the tools' re
 Nothing that changes GitHub is on the list.
 
 **Claimed-owner calls.** The only other built-ins the broker carries are a claimed worker's
-owner calls (`CLAIMED_OWNER_TOOLS`): `orbit.task.show`, `orbit.task.add`,
-`orbit.friction.add`, `orbit.task.artifact.get` and `orbit.task.artifact.put`. A claimed leaf's
+owner calls (`CLAIMED_OWNER_TOOLS`): `orbit.task.show`, `orbit.search`, `orbit.task.list`,
+`orbit.task.add`, `orbit.friction.add`, `orbit.task.artifact.get` and `orbit.task.artifact.put`. A claimed leaf's
 task lives on its owner, another machine reached over SSH, and every agent sandbox masks
 `~/.ssh` (policy-sandbox [2_design.md](../policy-sandbox/2_design.md) §7.1), so the worker's own
 SSH route can only fail host-key verification. With `ORBIT_PLUGIN_BROKER` set, the nested
 `orbit` of a worker whose claim names a remote owner sends exactly these calls to the broker.
 The broker carries them only for the run bound to the claim, whose task is the claimed task,
 and takes the task, claim and owner from those records, never from the request. Each call is
-scoped to the claim: a read or an artifact names the claimed task; a new task must name the
+scoped to the claim: task show and artifact calls name the claimed task, while search and task
+listing read the claimed workspace; a new task must name the
 claimed task as `spawned_from`, and may relate to nothing else, except that a claimed review
 task's finding may also name the task that introduced it as `regression_from` ([ORB-14792]); a
-friction may name only the claimed task as the one it was found during. A request field the call does not need, or an
-internal (`_`-prefixed) field, is refused. The activity's own tool policy still applies.
+friction may name only the claimed task as the one it was found during. Internal
+(`_`-prefixed) fields are refused; task show and artifact calls also use closed field
+allowlists. The activity's own tool policy still applies.
 Claimed mode keeps `orbit.task.update` denied, while `orbit.task.show` remains available as a
-read scoped to the claimed task.
+read scoped to the claimed task. The claimed task's own `regression_from` relation does not cross
+the broker either: the implementer returns the culprit in its output, and the owner records the
+relation when it accepts the handoff ([distributed-drain design](../distributed-drain/2_design.md),
+claimed-mode implementation).
 
 The broker holds no copy of the claimed task, so it admits a `regression_from` relation by shape
 alone. The owner decides. It accepts one only when the claimed task carries the provenance tag of
@@ -180,10 +185,12 @@ claimed task's `regression_from` is refused as before. A worker cannot change th
 tags. The owner records the claim, bound run and executing machine as the new task's first
 comment.
 
-`orbit.search` and `orbit.task.list` are not on the list. A claimed worker therefore cannot run
-the duplicate search a review template asks for. Its prompt says to file without it, and the
-owner's triage dedupes. Opening a read across every task in the owner's store to every claimed
-worker was rejected: the list stays scoped to the claimed task. A finding the owner still refuses
+`orbit.search` and `orbit.task.list` read the owner's authoritative records in the claimed
+workspace, so a claimed worker can check for duplicate findings before filing. The binding
+supplies the destination; search refuses federated `workspaces` and `all_workspaces` scope,
+including their aliases, and both tools refuse internal (`_`-prefixed) fields. Task show and
+artifacts remain scoped to the claimed task, and `orbit.task.update` remains denied.
+A finding the owner still refuses
 is returned in the implementer's `unfiled_findings` output. The claimed handoff attaches it to
 the claimed task as `unfiled-findings.json` (schema version 1, the task, claim and run, and the
 finding objects), through the claim, and notes the count in the handed-off summary.
@@ -247,9 +254,9 @@ PID and, on Linux, its Bubblewrap PID namespace, and then blocks in `spawn_with_
 the provider exits. That process is outside the sandbox and stays alive for the whole agent
 run. It already holds the run's authoritative context: run ID, task ID, workspace, the
 activity's tool allowlist (`ORBIT_ACTIVITY_TOOLS`), and the resolved filesystem profile the
-agent was sandboxed with. Nothing in Orbit listens on a local socket today: the only listeners
-are the TCP ones behind `orbit web serve` and `orbit mcp listen`. So there is no existing
-authenticated channel to reuse, and the broker is new.
+agent was sandboxed with. The per-run broker supplies the authenticated local socket; the
+TCP listeners behind `orbit web serve` and `orbit mcp listen` are separate and are not reused
+for this channel.
 
 The broker is a bounded listener thread owned by that process. It starts before the agent is
 spawned, and when the agent exits it is torn down together with any in-flight backend process
@@ -259,7 +266,7 @@ existing host seam (`RuntimeHost`) and not through a new crate dependency.
 
 **Which calls it serves.** Every call a sandboxed nested `orbit` makes to a tool whose
 registration is a plugin backend, plus the five host-credentialed reads and the claimed
-reviewer's artifact calls above. That covers `orbit tool run <ns>.<verb>`, its
+worker's owner calls above. That covers `orbit tool run <ns>.<verb>`, its
 `orbit <ns> <verb>` spelling, and `tools/call` on an agent's `orbit mcp serve`. Tool listing,
 schemas and `--help` still come from the nested `orbit`. Those need only the plugin rows,
 install trees and grant witnesses, which stay readable. Calls that are not made from inside an
@@ -397,11 +404,13 @@ service side regardless.
   no worktree gets no broker, with a warning.
 - A worker parses the §4.3 request. `schema_version`, `tool`, an object `input` and an
   absolute `cwd` are required; `workspace` defaults to none, `entry_point` to `cli` and
-  `dry_run` to false. Anything else is `plugin_broker_invalid_request`.
+  `dry_run` to false. A missing or invalid required field, or an invalid optional field,
+  is `plugin_broker_invalid_request`; unrecognized fields are ignored.
 - The request is refused with `plugin_broker_refused` when its `cwd` does not resolve inside
   the run's worktree, it names a workspace other than the run's, it asks for a dry run (the
-  nested `orbit` answers those itself), or it names a tool that is neither a plugin tool nor
-  one of the five read-only `github.*` tools (§3). The run's policy applies fail-closed: an activity whose allowlist names nothing admits no
+  nested `orbit` answers those itself), or it names a tool outside the plugin tools, the
+  five read-only `github.*` tools and `CLAIMED_OWNER_TOOLS` (§3). Claimed-owner calls also pass
+  the claim-specific scope checks described above. The run's policy applies fail-closed: an activity whose allowlist names nothing admits no
   brokered call, where an in-process call with no activity would be unrestricted.
 - The call runs through the same audited dispatch and tool chokepoint as an in-process call,
   with an `agent` session, the run's allowlist or deny policy, and the backend's `context`
@@ -583,7 +592,7 @@ witnesses when it builds the tool surface) and `state/plugin-callbacks/`.
   `/private/var` rule the plugin profile uses) after every allow, so the deny is the last
   match.
 
-**As implemented.** The v2 host prepares the mask for every OS-sandboxed launch, a sandboxed
+**As implemented.** The engine host prepares the mask for every OS-sandboxed launch, a sandboxed
 `local_shell` step included, and carries it on the resolved sandbox beside, not inside, the
 agent's filesystem profile, so the §5 profile intersection is unchanged. Preparation creates
 each directory component without following links and refuses a link, a non-directory or a

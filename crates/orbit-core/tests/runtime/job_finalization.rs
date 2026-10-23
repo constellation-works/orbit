@@ -22,7 +22,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(with_step: bool) -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("global");
         let workspace = root.path().join("repo/.orbit");
         let jobs_dir = global.join("resources/jobs");
@@ -77,13 +77,7 @@ impl Fixture {
     }
 }
 
-#[test]
 fn foreground_replay_setup_failure_finalizes_with_its_original_cause() {
-    if !super::dispatch_admission::isolated(
-        "job_finalization::foreground_replay_setup_failure_finalizes_with_its_original_cause",
-    ) {
-        return;
-    }
     let fixture = Fixture::new(false);
     // A historical run can retain a crew removed from today's configuration.
     let source = fixture.queued(json!({"crew": "removed-crew"}));
@@ -127,13 +121,7 @@ enum SummaryFault {
     Step,
 }
 
-#[test]
 fn successful_runs_stay_successful_when_final_summary_writes_fail() {
-    if !super::dispatch_admission::isolated(
-        "job_finalization::successful_runs_stay_successful_when_final_summary_writes_fail",
-    ) {
-        return;
-    }
     // Empty workers exercise the synthetic fallback; a real activity exercises
     // the audit-derived worker summary. Pipeline faults use empty jobs so no
     // execution checkpoint is affected.
@@ -221,3 +209,39 @@ fn successful_runs_stay_successful_when_final_summary_writes_fail() {
         }
     }
 }
+
+fn incomplete_step_diagnostics_survive_without_making_resume_skip_the_step() {
+    use orbit_engine::RuntimeHost;
+    let fixture = Fixture::new(false);
+    let run = fixture.queued(json!({}));
+    let state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+    fixture
+        .jobs
+        .initialize_run_state(&run.run_id, &state)
+        .unwrap();
+    let diagnostic = json!({
+        "conflicting_paths": ["file.txt"],
+        "conflicting_files": [{"path": "file.txt", "deterministically_resolvable": false}],
+    });
+    fixture
+        .runtime
+        .checkpoint_step_diagnostic(&run.run_id, "sync_base", &diagnostic)
+        .unwrap();
+    let persisted = fixture.jobs.read_run_state(&run.run_id).unwrap().unwrap();
+    assert_eq!(
+        persisted.pipeline_step_output("sync_base"),
+        Some(&diagnostic)
+    );
+    assert!(
+        persisted.step_states.is_empty(),
+        "diagnostics cannot certify completion"
+    );
+}
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    foreground_replay_setup_failure_finalizes_with_its_original_cause_scenarios,
+    foreground_replay_setup_failure_finalizes_with_its_original_cause,
+    successful_runs_stay_successful_when_final_summary_writes_fail,
+    incomplete_step_diagnostics_survive_without_making_resume_skip_the_step
+);

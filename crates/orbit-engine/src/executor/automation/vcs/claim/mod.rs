@@ -31,9 +31,11 @@
 //!
 //! Commands run exactly as on the owner's own delivery path: the same shell,
 //! environment, timeout, output capture and failure text
-//! ([`super::required_command`]), the same network reruns and the same
+//! ([`super::required::command`]), the same network reruns and the same
 //! comparison of a failure with the base ([`super::baseline`]).
 
+mod already_resolved;
+mod artifacts;
 mod carry;
 mod delivery;
 mod handoff;
@@ -43,16 +45,19 @@ mod observe;
 mod published;
 mod validation;
 
+pub(super) use artifacts::import_implementation_evidence;
 pub(in crate::executor::automation) use carry::claim_candidate_carry;
 pub(super) use carry::{carry_to_durable_ref, push_candidate_ref};
 pub(super) use delivery::{delivery, slug};
 pub(in crate::executor::automation) use handoff::claim_handoff;
 pub use handoff::implementer_summary;
 pub(super) use handoff::{carries_implementer_output, require_clean_checkout};
+pub(super) use no_diff::carries_no_diff_artifacts;
 pub use no_diff::observe_no_diff_candidate;
-pub(super) use no_diff::{carries_no_diff_artifacts, import_implementation_evidence};
 pub use observe::observe_candidate;
 pub(super) use published::observe_accepted_revision;
-pub use published::observe_published_candidate;
+pub use published::{observe_accepted_published_handoff, observe_published_candidate};
 pub(in crate::executor::automation) use validation::claim_validate;
-pub(super) use validation::{NO_REQUIRED_COMMANDS_NOTE, SKIPPED_NO_REQUIRED_COMMANDS};
+pub(super) use validation::{
+    NO_REQUIRED_COMMANDS_NOTE, SKIPPED_LIGHT_DELIVERY, SKIPPED_NO_REQUIRED_COMMANDS,
+};

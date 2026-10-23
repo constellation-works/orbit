@@ -16,9 +16,24 @@ pub struct CrewConfig {
     pub provider: Option<Provider>,
     pub model: Option<String>,
     pub reasoning_effort: Option<orbit_types::identity::ReasoningEffort>,
+    /// The crew's `[crews.<name>] env` entries, names only. Dispatch overlays
+    /// them on the agent environment through
+    /// [`crate::RuntimeHost::crew_agent_subprocess_environment`].
+    pub env: Vec<orbit_types::identity::CrewEnvVar>,
+    /// The crew's name when it sets `env` and so is its own provider account
+    /// ([`orbit_types::identity::Crew::account`]); `None` for a crew on its
+    /// provider's default login.
+    pub account: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PrConfig {
     pub task_url_template: Option<String>,
+    /// `pr.close_on_terminal`: a run's `pr_open` also closes the earlier open
+    /// delivery pull requests of the tasks it publishes, so each task keeps
+    /// one. Off for hosts bound to no workspace configuration.
+    pub close_superseded: bool,
+    /// `pr.delivery_authors`: forge logins whose pull requests count as
+    /// Orbit's. Empty means the login that opened this run's pull request.
+    pub delivery_authors: Vec<String>,
 }

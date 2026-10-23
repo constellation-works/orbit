@@ -253,14 +253,16 @@ pub(crate) fn build_context_from_roots(
             .snapshot
             .execution_proc_spawn_max_timeout_minutes,
     ) * 60_000;
+    let agent_stall_minutes = runtime_config.snapshot.execution_agent_stall_minutes;
     let persistence = runtime_config.persistence.clone();
     let actor = ActorIdentity::from_env();
-    let scoring_enabled = runtime_config.scoring_enabled;
     let automation_stall_window_minutes = runtime_config.automation_stall_window_minutes;
     // Config owns PR settings as plain data; Core is the composition layer
     // that translates them into the execution engine's shape.
     let pr_config = PrConfig {
         task_url_template: runtime_config.pr.task_url_template.clone(),
+        close_superseded: runtime_config.pr.close_on_terminal,
+        delivery_authors: runtime_config.pr.delivery_authors.clone(),
     };
     let workflow_base_branch = runtime_config.workflow_base_branch.clone();
     let workflow_auto_ship = runtime_config.workflow_auto_ship;
@@ -272,12 +274,21 @@ pub(crate) fn build_context_from_roots(
         .snapshot
         .workflow_distributed_completion
         .clone();
+    let admission_affinity = runtime_config.snapshot.admission_affinity();
     // Config admitted the mode's spelling; Core translates it into the exec
     // layer's policy, as it does for PR settings above.
+    let shell_probe = runtime_config.snapshot.shell_probe();
     let validation_env = orbit_exec::ValidationEnvPolicy {
-        login_shell: runtime_config.snapshot.workflow_validation_env_login_shell,
-        interactive: runtime_config.snapshot.workflow_validation_env_interactive,
+        login_shell: shell_probe.probes(),
+        interactive: shell_probe.interactive(),
         path: runtime_config.snapshot.workflow_validation_env_path.clone(),
+        build_output_env: runtime_config
+            .snapshot
+            .workflow_validation_env_build_output_env
+            .clone(),
+        cargo_incremental: runtime_config
+            .snapshot
+            .workflow_validation_env_cargo_incremental,
         path_mode: orbit_exec::ValidationPathMode::parse(
             &runtime_config.snapshot.workflow_validation_env_path_mode,
         )
@@ -310,26 +321,29 @@ pub(crate) fn build_context_from_roots(
             execution_env_policy,
             codex_execution_policy,
             proc_spawn_max_timeout_ms,
+            agent_stall_minutes,
         ),
         OrbitRuntimeSettings::new(
             persistence,
             actor,
-            scoring_enabled,
             automation_stall_window_minutes,
             pr_config,
             runtime_config.pr.clone(),
             workflow_base_branch,
             workflow_auto_ship,
             runtime_config.resource_throttle.clone(),
+            runtime_config.auto_concurrency.clone(),
             workflow_required_validation_commands,
             runtime_config.snapshot.review_baseline_commands.clone(),
             validation_env,
             workflow_distributed_completion,
+            admission_affinity,
             runtime_config.snapshot.task_pilot_freshness(),
             crews,
             default_crew,
             runtime_config.complexity_crews.clone(),
             runtime_config.snapshot.final_recovery_crews().to_vec(),
+            runtime_config.snapshot.purpose_crews(),
             runtime_config.snapshot.provider_limit_policy(),
             operation,
             runtime_config.snapshot.worker_containment(),
@@ -338,8 +352,26 @@ pub(crate) fn build_context_from_roots(
                 .machine()
                 .task_prefix
                 .unwrap_or_else(|| "ORB".to_string()),
+            runtime_config.snapshot.host_shutdown_hold_minutes(),
             runtime_config.snapshot.worktree_reclaim.clone(),
             runtime_config.snapshot.worktree_reclaim_below_free_mib,
+            runtime_config.snapshot.worktree_parked_reclaim_after_hours,
+            runtime_config.snapshot.mid_run_steering(),
+            runtime_config.tag_instructions.clone(),
+            crate::runtime::task::locks::UnlockedContextPaths::new(
+                &runtime_config.snapshot.workflow_unlocked_context_paths,
+            )?,
+            runtime_config
+                .snapshot
+                .workflow_unlocked_path_validation_commands
+                .clone(),
+            runtime_config.snapshot.workflow_generated_paths.clone(),
+            runtime_config
+                .snapshot
+                .workflow_light_delivery_paths
+                .clone(),
+            runtime_config.snapshot.regression_risk(),
+            runtime_config.snapshot.explore(),
         ),
     ))
 }

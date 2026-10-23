@@ -4,8 +4,8 @@ use orbit_types::task::TaskStatus;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AdmissionShipContract, ClaimEvidence, ClaimRun, ExecutionClaim, ExecutionClaimPhase,
-    ExecutionLocation, PreservedClaimCandidate, TaskCoordinationRow,
+    AdmissionShipContract, ClaimAttribution, ClaimEvidence, ClaimRun, ExecutionClaim,
+    ExecutionClaimPhase, ExecutionLocation, PreservedClaimCandidate, TaskCoordinationRow,
 };
 
 /// A typed release the owner applied, kept on the claim's lifecycle state so
@@ -29,21 +29,29 @@ pub struct ClaimReleaseRecord {
     /// task's release budget.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub provider_limit: bool,
+    /// The release was for the owner's own busy store
+    /// (`ClaimFailure::owner_busy`), which blames neither the drain's host
+    /// nor its crew nor the task: admission does not keep the task or the
+    /// host from that drain, and the release does not count against the
+    /// task's release budget.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub owner_busy: bool,
 }
 
 impl ClaimReleaseRecord {
     /// Whether this release counts against the task's release budget.
     #[must_use]
     pub fn budgeted(&self) -> bool {
-        self.class.budgeted() && !self.provider_limit
+        self.class.budgeted() && !self.provider_limit && !self.owner_busy
     }
 }
 
-/// What a claimed leaf's failure or release settlement told the owner, kept
-/// on the claim's lifecycle state [ORB-14439]. The leaf ran on another host,
-/// so the owner's run history never records it; this is the owner's only
-/// durable account of why it ended. Claims settled before the record existed
-/// carry none.
+/// What a claimed leaf's settlement told the owner, kept on the claim's
+/// lifecycle state [ORB-14439]. The leaf ran on another host, so the owner's
+/// run history never records it; this is the owner's only durable account of
+/// why it ended and of the crew and model it ran as. Claims settled before
+/// the record existed carry none, and a typed handoff records one only since
+/// the record kept the leaf's crew and model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimSettlementRecord {
     /// The settlement the leaf sent. A release the owner turned into a
@@ -55,8 +63,14 @@ pub struct ClaimSettlementRecord {
     pub failure_class: Option<orbit_types::workflow::ClaimFailureClass>,
     /// The typed failure's reason, else the settlement summary; bounded.
     pub reason: String,
+    /// The crew the leaf ran as: the settlement's own report, else the crew
+    /// its typed failure or unusable provider named.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
+    /// The model the leaf's crew resolved to, when its follower reported it.
+    /// Absent for a follower that predates the report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_model: Option<String>,
     /// The first leaf step that did not complete, when the leaf kept a
     /// candidate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -68,8 +82,17 @@ pub struct ClaimSettlementRecord {
 const MAX_SETTLEMENT_REASON_BYTES: usize = 1024;
 
 impl ClaimSettlementRecord {
+    /// The record of `evidence`. Crew and model come from the evidence's own
+    /// report first, then from what the follower `reported` beside it, and
+    /// the crew last from the typed failure or unusable provider.
     #[must_use]
-    pub fn of(kind: ClaimSettlementKind, evidence: &ClaimEvidence, settled_at: String) -> Self {
+    pub fn of(
+        kind: ClaimSettlementKind,
+        evidence: &ClaimEvidence,
+        reported: &ClaimAttribution,
+        settled_at: String,
+    ) -> Self {
+        let named = |value: &Option<String>| value.clone().filter(|value| !value.trim().is_empty());
         let failure = evidence.failure.as_ref();
         let reason = failure
             .map(|failure| failure.reason.as_str())
@@ -82,19 +105,115 @@ impl ClaimSettlementRecord {
             evidence: ClaimSettlementEvidence::of(evidence),
             failure_class: failure.map(|failure| failure.class),
             reason: reason[..cut].to_string(),
-            crew: failure
-                .and_then(|failure| failure.crew.clone())
+            crew: named(&evidence.crew)
+                .or_else(|| named(&reported.crew))
+                .or_else(|| failure.and_then(|failure| failure.crew.clone()))
                 .or_else(|| {
                     evidence
                         .provider_unavailable
                         .as_ref()
                         .and_then(|provider| provider.crew.clone())
                 }),
+            crew_model: named(&evidence.crew_model).or_else(|| named(&reported.crew_model)),
             failed_step_id: failure
                 .and_then(|failure| failure.candidate.as_ref())
                 .and_then(|candidate| candidate.failed_step_id.clone()),
             settled_at,
         }
+    }
+}
+
+/// The status note of the owner's `claim_failed` history entry: what the
+/// leaf's settlement told the owner, in the `key=value` shape of a run
+/// failure's note (`workflow run failed: job=…, run_id=…, error=…`), so task
+/// history and every reader of it see the cause. The settlement record stays
+/// the typed source; claims failed before the note existed record none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimFailedNote {
+    /// The machine the leaf ran on, by name when the claim recorded one.
+    pub host: String,
+    /// The leaf run, on the executing host's store; `None` when the claim
+    /// failed before a leaf was bound.
+    pub run_id: Option<String>,
+    pub evidence: ClaimSettlementEvidence,
+    pub failure_class: Option<orbit_types::workflow::ClaimFailureClass>,
+    pub failed_step_id: Option<String>,
+    /// The settlement's bounded reason, redacted when rendered.
+    pub reason: String,
+}
+
+const CLAIM_FAILED_NOTE_PREFIX: &str = "claimed leaf failed: ";
+
+impl ClaimFailedNote {
+    #[must_use]
+    pub fn of(
+        record: &ClaimSettlementRecord,
+        executed_on: &orbit_types::task::ExecutionLocation,
+        run: Option<&ClaimRun>,
+    ) -> Self {
+        Self {
+            host: executed_on
+                .machine_name
+                .clone()
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| executed_on.machine_id.clone()),
+            run_id: run.map(|run| run.run_id.clone()),
+            evidence: record.evidence,
+            failure_class: record.failure_class,
+            failed_step_id: record.failed_step_id.clone(),
+            reason: record.reason.clone(),
+        }
+    }
+
+    /// The note text. Field values never contain the `, ` separator, and the
+    /// reason, last, is redacted.
+    #[must_use]
+    pub fn text(&self) -> String {
+        let value = |value: Option<&str>| {
+            value
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map_or_else(|| "-".to_string(), |value| value.replace([',', ' '], "_"))
+        };
+        let reason = orbit_common::security::redaction::redact_all(self.reason.trim());
+        format!(
+            "{CLAIM_FAILED_NOTE_PREFIX}host={}, run_id={}, evidence={}, failure_class={}, \
+             failed_step={}, error={}",
+            value(Some(&self.host)),
+            value(self.run_id.as_deref()),
+            self.evidence.as_str(),
+            value(self.failure_class.map(|class| class.as_str())),
+            value(self.failed_step_id.as_deref()),
+            if reason.is_empty() { "-" } else { &reason },
+        )
+    }
+
+    /// Read a note [`Self::text`] wrote; `None` for any other note.
+    #[must_use]
+    pub fn parse(note: &str) -> Option<Self> {
+        let rest = note.strip_prefix(CLAIM_FAILED_NOTE_PREFIX)?;
+        let (header, reason) = rest.split_once(", error=")?;
+        let mut fields = std::collections::BTreeMap::new();
+        for field in header.split(", ") {
+            let (key, value) = field.split_once('=')?;
+            fields.insert(key, Some(value).filter(|value| *value != "-"));
+        }
+        let field = |key: &str| fields.get(key).copied().flatten().map(str::to_string);
+        Some(Self {
+            host: field("host").unwrap_or_default(),
+            run_id: field("run_id"),
+            evidence: ClaimSettlementEvidence::parse(fields.get("evidence").copied().flatten()?)?,
+            failure_class: match field("failure_class") {
+                Some(class) => Some(serde_json::from_value(serde_json::Value::String(class)).ok()?),
+                None => None,
+            },
+            failed_step_id: field("failed_step"),
+            reason: if reason == "-" {
+                String::new()
+            } else {
+                reason.to_string()
+            },
+        })
     }
 }
 
@@ -106,6 +225,9 @@ pub enum ClaimSettlementKind {
     Fail,
     /// The leaf gave its claim back unfinished.
     Release,
+    /// The leaf handed off its typed candidate; the record keeps its crew and
+    /// model, and its execution summary as the reason.
+    Handoff,
 }
 
 /// The evidence class of a claimed leaf's settlement, most specific first.
@@ -125,7 +247,7 @@ pub enum ClaimSettlementEvidence {
     /// Only a typed [`ClaimEvidence::failure`].
     Failure,
     /// Only a summary: an untyped settlement, such as a leaf that never
-    /// launched because the owner refused its bind.
+    /// launched because the owner refused its bind, or a typed handoff.
     Summary,
 }
 
@@ -162,12 +284,29 @@ impl ClaimSettlementEvidence {
             Self::Summary => "summary",
         }
     }
+
+    /// The class a wire name names.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        [
+            Self::ProviderUnavailable,
+            Self::BaselineRed,
+            Self::ForgeUnavailable,
+            Self::EvidenceHold,
+            Self::FinalRecovery,
+            Self::Failure,
+            Self::Summary,
+        ]
+        .into_iter()
+        .find(|class| class.as_str() == name)
+    }
 }
 
 /// A claimed leaf ended because its crew's provider could not be used on the
 /// executing host (an authentication failure, for instance), not because the
 /// work failed. Its claim is released to the backlog and the crew is excluded
-/// for the rest of the executor's drain window.
+/// on the executor: for the rest of its drain window after an authentication
+/// failure, for a bounded backoff after a capacity failure.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderUnavailable {
     /// The crew the leaf ran as.
@@ -225,6 +364,12 @@ pub enum ClaimMutation {
         reason: String,
     },
     Fail(ClaimEvidence),
+    /// Mid-run steering's watermark for the claim's bound leaf run
+    /// (`docs/design/mid-run-steering/2_design.md` §3): the leaf records on
+    /// the owner what each task-context prompt it built carried, so the
+    /// owner's record, never the leaf's replica, is what its promotion gate
+    /// reads. Only the bound leaf may send it, while its claim runs.
+    Steering(ClaimSteeringRecord),
     /// The executor gives an unfinished claim back: the task returns to the
     /// backlog and the claim is revoked. The summary is the reason and is
     /// required; the comment, when present, is posted on the task.
@@ -242,10 +387,23 @@ pub enum ClaimMutation {
     },
     /// Reserve the single live landing attempt for a handoff, or record the
     /// owner job that carries the reserved attempt. Handoff identity is the
-    /// deduplication key; a stopped attempt reopens as the next attempt.
+    /// deduplication key; a stopped attempt reopens as the next attempt. A
+    /// dispatched attached attempt requires exact terminal owner-job evidence
+    /// from the owner store, retained as a stop in the attempt history.
     DispatchLanding {
         handoff_id: String,
         job_run_id: Option<String>,
+    },
+    /// Atomically compare a stopped, terminal-job dispatched, or uncertain
+    /// attempt and reserve its retry; caller-supplied state is never stop proof.
+    RetryLanding(orbit_types::workflow::handoff::LandingRetryRequest),
+    /// Owner-only durable base-update reservation; acceptance remains immutable.
+    ReserveBaseUpdate(orbit_types::workflow::PrBaseUpdateReservation),
+    /// Attach only the run carrying this receipt's exact reserved attempt.
+    AttachLandingRetry {
+        handoff_id: String,
+        request_key: String,
+        job_run_id: String,
     },
     /// Complete an authorized landing against verified external merge evidence.
     /// Refused while a merge intent is unresolved or the authority is stale.
@@ -253,16 +411,37 @@ pub enum ClaimMutation {
         handoff_id: String,
         evidence: String,
     },
+    /// Settle a handed-off claim whose completion authority an operator
+    /// revoked and whose candidate pull request then merged outside Orbit.
+    /// The claim ends `revoked` and the task moves `review -> done` with
+    /// `note` in this one commit. It grants no completion authorization,
+    /// records no merge intent or landing attempt and leaves the revoked
+    /// landing request revoked. Refused for any other pull request or branch,
+    /// an unrevoked handoff, a dispatched landing attempt or an unresolved
+    /// merge intent.
+    SettleExternalMerge {
+        handoff_id: String,
+        pull_request: u64,
+        base_branch: String,
+        merge_commit: String,
+        note: String,
+    },
     /// Stop the live attempt with durable evidence, leaving the task in review.
     /// A `repairable` stop — the candidate conflicts with, or is stale
     /// against, its base — instead moves an original claim to
     /// `repair_pending`, and blocks the task when the claim is already its
-    /// repair [ORB-14261].
+    /// repair [ORB-14261]. A `requeue` stop — the candidate fails its own
+    /// required check after that repair is spent — ends the claim and
+    /// returns the task to the backlog with the candidate and the stop
+    /// evidence kept for its next run, and blocks the task once its landing
+    /// repair budget is spent [ORB-16890].
     StopLanding {
         handoff_id: String,
         reason: String,
         #[serde(default)]
         repairable: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        requeue: bool,
     },
 }
 
@@ -283,9 +462,57 @@ pub struct ClaimInspection {
     /// offered to the task's next claim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preserved_candidate: Option<PreservedClaimCandidate>,
-    /// [ORB-14439] The failure or release settlement the claim's leaf sent.
+    /// [ORB-14439] The settlement the claim's leaf sent: its failure, its
+    /// release or its typed handoff. Handoff attribution is projected from
+    /// a separate immutable coordination row; lifecycle storage retains the
+    /// fail/release vocabulary older readers support.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settlement: Option<ClaimSettlementRecord>,
+    /// Mid-run steering's watermark for the claim's bound leaf run, recorded
+    /// through [`ClaimMutation::Steering`]. It belongs to that run, and every
+    /// settlement keeps it, so a later run continuing the claim's candidate
+    /// starts from it rather than delivering the same comments again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steering: Option<orbit_types::workflow::SteeringWatermark>,
+}
+
+/// What a claimed leaf's task-context prompt carried, as the leaf records it
+/// on its owner through [`ClaimMutation::Steering`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ClaimSteeringRecord {
+    /// The prompt carried no steering block; `newest` is the newest comment
+    /// it included.
+    Snapshot {
+        step_id: String,
+        newest: Option<orbit_types::workflow::CommentLogMark>,
+        built_at: chrono::DateTime<chrono::Utc>,
+    },
+    /// The prompt led with a steering block carrying `delivered` in full and
+    /// cutting `truncated` down. Every operator comment up to `through` has
+    /// now reached one of the run's prompts in full. The owner records a
+    /// `steering_delivered` task history event in the same commit.
+    Delivery {
+        step_id: String,
+        through: Option<orbit_types::workflow::CommentLogMark>,
+        delivered: Vec<orbit_types::workflow::CommentLogMark>,
+        truncated: Vec<orbit_types::workflow::CommentLogMark>,
+        built_at: chrono::DateTime<chrono::Utc>,
+    },
+}
+
+/// A claimed leaf's steering records, read from its owner.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimSteeringReading {
+    /// The watermark the leaf's own claim recorded; absent until its run
+    /// built a task-context prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim: Option<orbit_types::workflow::SteeringWatermark>,
+    /// The watermark of the task's most recent other claim that recorded
+    /// one: the baseline for a leaf that carries that claim's candidate and
+    /// built no prompt of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inherited: Option<orbit_types::workflow::SteeringWatermark>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -305,4 +532,13 @@ pub(crate) struct ClaimCommitEffects {
     pub friction: Option<(crate::contracts::FrictionAddParams, String)>,
     pub execution_origin: Option<ExecutionLocation>,
     pub worker_update: Option<ClaimWorkerUpdate>,
+    /// Culprit tasks an accepted handoff attributes the task's regression
+    /// to, added to its relations as `regression_from` in this commit.
+    pub regression_from: Vec<String>,
+    /// The claim id and bound run a worker's evidence write was authenticated
+    /// against, which the owner stamps on coverage it commits [ORB-15962].
+    pub claimed_submission: Option<(String, ClaimRun)>,
+    /// The requesting executor's census row an admission upserts with its
+    /// receipt [ORB-17304].
+    pub census: Option<super::ExecutorCensusEntry>,
 }

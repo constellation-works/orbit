@@ -152,7 +152,7 @@
   },
   {
     "name": "orbit.agent.invoke",
-    "description": "Submit an asynchronous agent invocation for exploration or debugging and return its run ID, or wait for its answer with `wait_seconds`. Queued submissions include `queued: true`, a one-based `queue_position` and a warning. The agent runs on the host outside Orbit's filesystem sandbox, as the same OS user as Orbit, so it can reach anything that user can; it is admitted per invocation and requires operator capability — the same test for a session that arrived over SSH as for a local one. Track it with `orbit.workflow.run.show`: `agent_invocation.answer` carries the agent's summary, findings, next_steps, any other result fields and its bounded final message, and `agent_invocation.progress` its latest message and last activity while it runs. Read the complete output with `orbit run logs <RUN_ID>` and stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, and dispatches nothing.",
+    "description": "Submit an asynchronous agent invocation for exploration or debugging and return its run ID, or wait for its answer with `wait_seconds`. Queued submissions include `queued: true`, a one-based `queue_position` and a warning. An operator's invocation runs on the host outside Orbit's filesystem sandbox, as the same OS user as Orbit, so it can reach anything that user can; it is admitted per invocation and requires operator capability — the same test for a session that arrived over SSH as for a local one. An implement or review-repair agent may instead delegate a read-only question when `workflow.explore.enabled` is on: it gets a sandboxed explorer from the explorer crew pool that reads its own worktree, cannot write or change Orbit state, and is bounded by per-run call, concurrency, timeout and answer-size budgets; every other agent is refused, and a refusal never stops the caller's run. Track it with `orbit.workflow.run.show`: `agent_invocation.answer` carries the agent's summary, findings, next_steps, any other result fields and its bounded final message, and `agent_invocation.progress` its latest message and last activity while it runs. Read the complete output with `orbit run logs <RUN_ID>` and stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, and dispatches nothing.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -160,25 +160,25 @@
     "parameters": [
       {
         "name": "prompt",
-        "description": "What to investigate. The invoked agent reports back; it makes no Orbit task, lifecycle, commit, or pull-request change.",
+        "description": "What to investigate. The invoked agent reports back; it makes no Orbit task, lifecycle, commit, or pull-request change. An explorer lists the paths it read in `answer.paths_read`.",
         "param_type": "string",
         "required": true
       },
       {
         "name": "cwd",
-        "description": "Absolute working directory the agent starts in. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller.",
+        "description": "Absolute working directory the agent starts in. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller. An explorer's must be inside the calling run's own worktree.",
         "param_type": "string",
         "required": true
       },
       {
         "name": "crew",
-        "description": "Configured crew selecting the provider, model, and reasoning effort. Defaults to the workspace's default crew.",
+        "description": "Configured crew selecting the provider, model, and reasoning effort. Defaults to the workspace's default crew. An explorer's must be in `workflow.purpose_crews.explorer`, which it is drawn from when omitted.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "timeout_seconds",
-        "description": "Provider wall-clock bound in seconds, excluding queue time. Defaults to 1800; must be from 1 to 7200, the activity's enforced ceiling.",
+        "description": "Provider wall-clock bound in seconds, excluding queue time. Defaults to 1800; must be from 1 to 7200, the activity's enforced ceiling. An explorer defaults to, and may not exceed, `workflow.explore.timeout_seconds`.",
         "param_type": "integer",
         "required": false
       },
@@ -196,8 +196,88 @@
       },
       {
         "name": "provider_sandbox",
-        "description": "Per-invocation inner-sandbox override for the selected crew's provider (Codex: `read-only`, `workspace-write`, or `danger-full-access`). Tightens or names the provider sandbox for this run only; values the provider does not support are refused. The submission result reports the effective mode as `provider:mode`.",
+        "description": "Per-invocation inner-sandbox override for the selected crew's provider (Codex: `read-only`, `workspace-write`, or `danger-full-access`). Tightens or names the provider sandbox for this run only; values the provider does not support are refused. The submission result reports the effective mode as `provider:mode`. Operator invocations only: an explorer is always read-only.",
         "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.agents.scorecard",
+    "description": "Rank one agent role's crews and models over the window: each term's count per 100 units of the role's work, weighted and summed, then pulled down toward the fleet average when above it. Rows below the minimum support are listed last without a rank; a role whose terms are not computed yet answers status not_computed with its terms and no rows. Scans the workspace once per call (cache_ttl_seconds 0). The payload the dashboard's Agents view reads.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "role",
+        "description": "The agent role to score: orchestrators, implementers, reviewers or pilots.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "window",
+        "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d, the scan's reach). Default: 30d.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "min_support",
+        "description": "Units of the role's work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.agents.show",
+    "description": "One row of an agent role's scorecard and, for each term, its count, rate and contribution with the task IDs behind the count and the records that make it. Use it to follow a count from `orbit.agents.scorecard` to its tasks. Scans the workspace once per call (cache_ttl_seconds 0).",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "role",
+        "description": "The agent role to score: orchestrators, implementers, reviewers or pilots.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "crew",
+        "description": "The row's crew; for orchestrators, the orchestrator name tasks record.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "row_model",
+        "description": "The row's model (`model unknown` for runs that recorded none); optional when the crew has one row.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "window",
+        "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d, the scan's reach). Default: 30d.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "min_support",
+        "description": "Units of the role's work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10.",
+        "param_type": "integer",
         "required": false
       },
       {
@@ -375,6 +455,168 @@
     ]
   },
   {
+    "name": "orbit.codebase.analytics",
+    "description": "Rank the workspace's repository paths by how often tasks that declared them regressed, widened their footprint onto them, were blocked by a run failure or were rejected after a run, plus lock contention and paths reserved together. Every ranking is a rate over distinct tasks with its numerator and denominator; `overlap` lists the paths found in several rankings. `regressions` also breaks its regression_from links down by nature, escape, fix layer and detector, cross-tabs nature x escape and escape x layer, and rates the regressed tasks' crews and complexities; nature, escape, layer and detected_by filter it. The same payload the dashboard's Codebase view reads.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "window",
+        "description": "Counted period ending now: 7d, 30d, 90d or all. Default: 90d.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "min_support",
+        "description": "Smallest denominator a ranked row needs, at least 1. Default: 15.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "rollup",
+        "description": "How paths are grouped: file, dir (parent directory) or crate. Default: file.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "nature",
+        "description": "Count only regressions whose regression_from link records this nature; `absent` keeps links stored without a classification, distinct from `unclassified`.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "escape",
+        "description": "Count only regressions whose regression_from link records this escape; `absent` keeps links stored without a classification, distinct from `unclassified`.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "layer",
+        "description": "Count only regressions whose fix sits in this layer, read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "detected_by",
+        "description": "Count only regressions found this way, read from the regression task's tags, else its filer.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.codebase.related",
+    "description": "Rank files by landed co-change Jaccard with a repository-relative file path. Reports conditional rate, shared and individual task support, reservation coupling when present, undeclared landed partners and the tasks behind the counts. Excludes bulk tasks; missing local landed objects are reported as unavailable. Read-only; never fetches Git objects.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "path",
+        "description": "A repository-relative file path, including a deleted file with landed history.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "window",
+        "description": "Landed period ending now. Default: 30d.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "min_support",
+        "description": "Minimum shared landed tasks, at least 1. Default: 15.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "top",
+        "description": "Maximum partners, from 1 to 100. Default: 10.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.codebase.show",
+    "description": "One repository path's standing in every codebase ranking: rate, numerator, denominator, place in the ranking, and the task IDs behind each numerator (refused requesters for lock contention, reserving requesters for each coupled pair). Each regressed task lists its regression_from links with nature, escape, layer and detected_by; the same filters as `orbit.codebase.analytics` narrow them. Use it to follow a rate from `orbit.codebase.analytics` to its tasks.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "path",
+        "description": "A ranked key at the chosen rollup: a file path, a directory, or a crate such as crates/orbit-core/. A trailing slash is optional.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "window",
+        "description": "Counted period ending now: 7d, 30d, 90d or all. Default: 90d.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "min_support",
+        "description": "Smallest denominator a ranked row needs, at least 1. Default: 15.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "rollup",
+        "description": "How paths are grouped: file, dir (parent directory) or crate. Default: file.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "nature",
+        "description": "Count only regressions whose regression_from link records this nature; `absent` keeps links stored without a classification, distinct from `unclassified`.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "escape",
+        "description": "Count only regressions whose regression_from link records this escape; `absent` keeps links stored without a classification, distinct from `unclassified`.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "layer",
+        "description": "Count only regressions whose fix sits in this layer, read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "detected_by",
+        "description": "Count only regressions found this way, read from the regression task's tags, else its filer.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "orbit.command.exec",
     "description": "Execute a command as an explicit argv array in an explicit working directory and return its stdout, stderr, and exit status, within a deadline. Requires operator capability and the workspace claim; withheld from managed runs.",
     "enabled": true,
@@ -467,6 +709,18 @@
         "description": "The executor's durable settlement: `{\"AcceptHandoff\": <typed handoff>}` for a published pull request, `{\"Fail\": <evidence>}`, or `{\"Release\": <evidence>}` to hand an unfinished claim back. Nothing else settles a claim.",
         "param_type": "object",
         "required": true
+      },
+      {
+        "name": "crew",
+        "description": "Optional. The crew the leaf run resolved. Attribution only: the owner records it on the claim's settlement record, after any crew the settlement's own evidence names, and never uses it to validate or decide the settlement.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "crew_model",
+        "description": "Optional. The model the leaf's crew resolved to. Attribution only, like `crew`.",
+        "param_type": "string",
+        "required": false
       }
     ]
   },
@@ -481,7 +735,7 @@
   },
   {
     "name": "orbit.drain.probe",
-    "description": "Read-only preflight for the distributed drain, served by the workspace owner. Reports the owner machine, binary version, distributed-drain protocol schema, the capabilities this session holds, the diagnostic caller machine, the owner-resolved ship configuration, and both review switches (`review.before_pr` and the after-landing auto-task). Declaring `caller_version`, `caller_schema`, or `caller_before_pr` also reports the first refusal an admission would raise, in the order admission applies it. It creates no request receipt, reservation, claim, or task transition, and it is never a health check for admission itself.",
+    "description": "Read-only preflight for the distributed drain, served by the workspace owner. Reports the owner machine, binary version, distributed-drain protocol schema, the capabilities this session holds, the diagnostic caller machine, the owner-resolved ship configuration, and both review switches (`review.timing` and the after-landing auto-task). Declaring `caller_version`, `caller_schema`, or `caller_before_pr` also reports the first refusal an admission would raise, in the order admission applies it. It creates no request receipt, reservation, claim, or task transition, and it is never a health check for admission itself.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -507,7 +761,7 @@
       },
       {
         "name": "caller_before_pr",
-        "description": "Optional. The executor's `review.before_pr`. Diagnostic only: a claimed leaf runs the before-PR review the owner's ship contract captures, never the executor's own. After-landing review never affects admission.",
+        "description": "Optional. Whether the executor's `review.timing` is `before_pr`. Diagnostic only: a claimed leaf runs the before-PR review the owner's ship contract captures, never the executor's own. After-landing review never affects admission.",
         "param_type": "boolean",
         "required": false
       }
@@ -628,6 +882,74 @@
       {
         "name": "title",
         "description": "Optional replacement one-line title, at most 120 characters; an empty string restores derivation from the body",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.orchestrator.scorecard",
+    "description": "Deprecated alias of `orbit.agents.scorecard` with role orchestrators, removed in the next release: returns that payload with a `deprecation` note naming the replacement.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "window",
+        "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d). Default: 30d.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "min_support",
+        "description": "Units of work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.orchestrator.show",
+    "description": "Deprecated alias of `orbit.agents.show` with role orchestrators and the orchestrator as crew, removed in the next release: returns that payload with a `deprecation` note naming the replacement.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "orchestrator",
+        "description": "The orchestrator name a task's orchestrator attribution records: the row's crew.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "row_model",
+        "description": "The row's model (`model unknown` for tasks that recorded none); optional when the crew has one row.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "window",
+        "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d). Default: 30d.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "min_support",
+        "description": "Units of work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "param_type": "string",
         "required": false
       }
@@ -923,13 +1245,13 @@
       },
       {
         "name": "type",
-        "description": "Optional task type",
+        "description": "Optional task type (defaults to chore)",
         "param_type": "string",
         "required": false
       },
       {
         "name": "relations",
-        "description": "Optional typed task relations as an array of {type, target} objects",
+        "description": "Optional typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified",
         "param_type": "array",
         "required": false
       },
@@ -946,8 +1268,20 @@
         "required": false
       },
       {
+        "name": "orchestrator_model",
+        "description": "Optional model the orchestrator runs, only when it differs from the `orchestrator` crew's configured model. Omitted, the task records that crew's configured model at creation. Requires an orchestrator, is set once at creation and never updated. Unrelated to `model`, which labels the writer",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "origin",
+        "description": "Optional reason the task was filed: `operator_request` when a human asked for the work, `orchestrator_initiative` when the orchestrator decided on its own, `automation` for a system filer. Omitted, it stays unset, except that system filers and sweep findings record `automation`.",
+        "param_type": "string",
+        "required": false
+      },
+      {
         "name": "fields",
-        "description": "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, readiness, orchestrator, created_at, updated_at, comments, history, artifacts.",
+        "description": "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, readiness, pilot_warnings, orchestrator, orchestrator_model, orchestrator_model_source, origin, created_at, updated_at, comments, history, artifacts.",
         "param_type": "string_list",
         "required": false
       },
@@ -1013,7 +1347,7 @@
   },
   {
     "name": "orbit.task.artifact.put",
-    "description": "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, one delivery_examinations entry per delivery (examined and skipped paths matching its diff, verdict, rationale), examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context. A file that does not parse as the evidence schema is refused here with the parse error, so fix and re-put it; stale, unauthorized or path-mismatched evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage. A review-report.json is validated against the before-PR review report contract and refused, naming the field, when it does not match; a counterfactual control's `mutation_target` lists the files it temporarily changed, apart from the `sources` naming the checks that rejected the change.",
+    "description": "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, one delivery_examinations entry per delivery (examined and skipped paths matching its diff, verdict, rationale), examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context. Batch/action IDs, consumer, epoch, input_digest and examined_commits/examined_deliveries/findings list elements are strings, not frozen objects; each checks entry is an object with string subject, method and observation. A schema refusal names the field/index and parse error (including the expected type for type mismatches); correct that field using the assigned evidence template, preserve its version and frozen identity, then re-put the corrected file; stale, unauthorized or path-mismatched evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage. A review-report.json is validated against the before-PR review report contract and refused, naming the field, when it does not match; a counterfactual control's `mutation_target` lists the files it temporarily changed, apart from the `sources` naming the checks that rejected the change, and `repaired_blob` maps a target the review's own repair changed to the blob of its repaired state.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1027,7 +1361,7 @@
       },
       {
         "name": "source_path",
-        "description": "Source file to store as a task artifact. Resolved against the caller cwd, then confined to the workspace checkout after symlink resolution. Absolute paths and symlinks that escape the workspace are rejected. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`); sources under `/tmp` are outside the workspace and are refused.",
+        "description": "Source file to store as a task artifact. Resolved against the caller cwd, not the checkout root, so a file that exists only at the checkout root is refused with the absolute path to pass. Then confined to the workspace checkout after symlink resolution. Absolute paths and symlinks that escape the workspace are rejected. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`); sources under `/tmp` are outside the workspace and are refused.",
         "param_type": "string",
         "required": true
       },
@@ -1040,6 +1374,70 @@
       {
         "name": "model",
         "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.task.block_triage",
+    "description": "Triage escalated blocks. `candidates` lists every blocked task with whether its current block episode awaits triage: its final-recovery decision escalated, or it has none and the backstop will never decide it; an episode already triaged or touched by a human after the block is excluded. Each other action records one decision on a qualifying episode, as one task comment plus a history marker, and refuses any other episode. `requeue` returns the task to the backlog as a final-recovery requeue, counted against the shared final-recovery requeue bound (2 per 24 hours): past the bound, for a task tagged security or security-review, or for a run another machine executed, it is recorded as refused and the task stays blocked; when the count cannot be read nothing is written. `propose` records the quoted blocker, two or three options with consequences and ready-to-apply replacement text, and a recommendation, and changes nothing else. `report` records the human action and changes nothing else. Never completes, rejects or archives a task.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "workspace",
+        "description": "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "action",
+        "description": "candidates, requeue, propose, or report",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "id",
+        "description": "requeue, propose, report: the blocked task",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "blocker",
+        "description": "requeue, propose, report: the escalation reason, quoted in the comment",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "reason",
+        "description": "requeue: the repair applied and why the task can run again; report: the specific action only a human can take",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "options",
+        "description": "propose: two or three {summary, consequences, replacement} objects; replacement is the exact text for each changed description section or criterion",
+        "param_type": "array",
+        "required": false
+      },
+      {
+        "name": "recommended",
+        "description": "propose: 1-based index of the recommended option",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "agent",
+        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
         "param_type": "string",
         "required": false
       }
@@ -1093,7 +1491,7 @@
   },
   {
     "name": "orbit.task.list",
-    "description": "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Optional filters: status, parent, type, tag, dependency readiness, path.",
+    "description": "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Optional filters: status, parent, type, origin, tag, dependency readiness, path, runs_on. os_requirement is derived from OS tags intersected with the stored crew executor host_os, with source and unresolved/conflict states.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1118,6 +1516,12 @@
         "required": false
       },
       {
+        "name": "origin",
+        "description": "Optional task origin filter: operator_request, orchestrator_initiative or automation. Tasks without a recorded origin never match.",
+        "param_type": "string",
+        "required": false
+      },
+      {
         "name": "job_run_id",
         "description": "Filter by job run ID",
         "param_type": "string",
@@ -1127,6 +1531,12 @@
         "name": "tag",
         "description": "Filter by tag. Repeat or pass an array for AND semantics.",
         "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "runs_on",
+        "description": "Filter by effective host OS: linux, macos or windows. Intersects OS tags with the stored crew executor. Unrestricted tasks match; unresolved crews and conflicts do not.",
+        "param_type": "string",
         "required": false
       },
       {
@@ -1173,7 +1583,19 @@
       },
       {
         "name": "priority",
-        "description": "Bounded view priority filter",
+        "description": "Optional task priority filter",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "external_ref",
+        "description": "Optional exact external reference filter in `system:id` form",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "has_ref",
+        "description": "Optional external reference system filter: keep tasks with any reference in this system",
         "param_type": "string",
         "required": false
       },
@@ -1219,7 +1641,7 @@
       },
       {
         "name": "caller_before_pr",
-        "description": "The `review.before_pr` the executor's drain captured at submission. Diagnostic only: a claimed leaf runs the before-PR review the owner's `ship` contract captures, never the executor's own. After-landing review never affects admission.",
+        "description": "Whether the executor's drain captured `review.timing = before_pr` at submission. Diagnostic only: a claimed leaf runs the before-PR review the owner's `ship` contract captures, never the executor's own. After-landing review never affects admission.",
         "param_type": "boolean",
         "required": true
       },
@@ -1231,7 +1653,7 @@
       },
       {
         "name": "review_gate",
-        "description": "Whether the executor's claimed PR leaf runs the before-PR review the `ship` contract captures. An owner with `review.before_pr` on refuses an executor that does not declare it as `before_pr_unsupported`. Omitted: `false`.",
+        "description": "Whether the executor's claimed PR leaf runs the before-PR review the `ship` contract captures. An owner with `review.timing = before_pr` refuses an executor that does not declare it as `before_pr_unsupported`. Omitted: `false`.",
         "param_type": "boolean",
         "required": false
       },
@@ -1263,6 +1685,12 @@
         "name": "os",
         "description": "The executor's host OS: `linux`, `macos` or `windows`. A task tagged `os:<name>` is admitted only to an executor whose OS it names, and is otherwise skipped and stays in the backlog. Omitted: only tasks without an `os:` tag are admissible.",
         "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "browser_kit",
+        "description": "Whether the executor's host has a verified headless browser kit. A task tagged `ui` is admitted only to an executor that declares one, and is otherwise skipped and stays in the backlog. Omitted: `false`.",
+        "param_type": "boolean",
         "required": false
       }
     ]
@@ -1326,6 +1754,98 @@
     ]
   },
   {
+    "name": "orbit.task.requeue",
+    "description": "Return a blocked task to the backlog so its next run resumes the candidate and pull request its stopped run published, re-authenticating that publication exactly as automatic adoption does, or the latest candidate a claim of the task kept. A later claim that ended without a candidate does not replace that one. Requires trusted operator authority; unavailable to managed runs. A task whose run has not stopped, or whose claim is unsettled, is refused. A changed task specification is refused with the option to set discard_candidate, which closes the task's undelivered Orbit pull requests and lets the next run implement fresh.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "workspace",
+        "description": "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "id",
+        "description": "Blocked task to requeue",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "reason",
+        "description": "Required explanation retained in the task history",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "discard_candidate",
+        "description": "Discard the published or kept candidate, close the task's undelivered Orbit pull requests and let the next run implement fresh",
+        "param_type": "boolean",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.task.retry_handoff",
+    "description": "Retry a stopped or uncertain authorized handoff on its explicit owner workspace. Requires trusted operator authority; unavailable to managed runs. Compare the exact accepted candidate/base and latest attempt/state, supply a reason and a durable request_key. Replaying identical input returns the original landing run. The normal landing job reconciles external intent and rechecks all merge gates.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "workspace",
+        "description": "Explicit owner logical workspace ID or absolute checkout path",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "handoff_id",
+        "description": "Immutable accepted handoff identity",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "expected_candidate_commit",
+        "description": "Accepted candidate commit the operator observed",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "expected_base_commit",
+        "description": "Accepted base commit the operator observed",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "expected_latest_attempt",
+        "description": "Latest landing attempt number the operator observed",
+        "param_type": "integer",
+        "required": true
+      },
+      {
+        "name": "expected_latest_state",
+        "description": "Latest state; dispatched is eligible only with unresolved intent and no live owner job",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "reason",
+        "description": "Required operator reason retained durably",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "request_key",
+        "description": "Durable request key; reuse exactly after a lost reply",
+        "param_type": "string",
+        "required": true
+      }
+    ]
+  },
+  {
     "name": "orbit.task.review_reset",
     "description": "Record an operator decision closing the open review attempt and renewing one explicitly selected lineage budget while preserving every attempt. Requires trusted operator authority; unavailable to managed runs. Inspect the returned ledger after a lost reply before retrying.",
     "enabled": true,
@@ -1367,7 +1887,7 @@
   },
   {
     "name": "orbit.task.show",
-    "description": "Fetch a single Orbit task as JSON. `id` is a globally unique primary key resolved through the host task registry by default; cwd, MCP initialize metadata, and linked-worktree runtime identities are not used as filters. An optional `workspace` argument is an explicit fail-closed filter only. Use the optional `fields` projection (or single-field alias `field`) to retrieve only specific task fields, including the derived read-only `terminal` field. The `crew` field selects execution, while `orchestrator` records orchestration attribution. `field: \"delivery\"` (optional `run_id`) reports what a delivery run committed and landed for the task: typed status, base/head and landed commit SHAs, PR number, timestamps and provenance only, from the host's own commit and merge step records. Missing or inconsistent evidence is reported as unavailable, never inferred. Full run details stay on the operator-only `orbit.workflow.run.show`.",
+    "description": "Fetch a single Orbit task as JSON. `id` is a globally unique primary key resolved through the host task registry by default; cwd, MCP initialize metadata, and linked-worktree runtime identities are not used as filters. An optional `workspace` argument is an explicit fail-closed filter only. Use the optional `fields` projection (or single-field alias `field`) to retrieve only specific task fields, including the derived read-only `terminal` field. `os_requirement` reports tags intersected with the stored crew executor host_os, its source, and unresolved/conflict states; it is never persisted. The `crew` field selects execution, while `orchestrator` records orchestration attribution. `field: \"delivery\"` (optional `run_id`) reports what a delivery run committed and landed for the task: typed status, base/head and landed commit SHAs, PR number, timestamps and provenance only, from the host's own commit and merge step records. Missing or inconsistent evidence is reported as unavailable, never inferred. Full run details stay on the operator-only `orbit.workflow.run.show`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1399,7 +1919,7 @@
       },
       {
         "name": "fields",
-        "description": "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. A single derived `terminal` selection remains keyed as an object. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, readiness, orchestrator, created_at, updated_at, comments, history, artifacts. `crew` is execution selection; `orchestrator` is separate orchestration attribution. `delivery` alone returns what a delivery run committed and landed for this task instead of task fields.",
+        "description": "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. A single derived `terminal` selection remains keyed as an object. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, readiness, pilot_warnings, orchestrator, orchestrator_model, orchestrator_model_source, origin, created_at, updated_at, comments, history, artifacts. `crew` is execution selection; `orchestrator` is separate orchestration attribution. `delivery` alone returns what a delivery run committed and landed for this task instead of task fields.",
         "param_type": "string_list",
         "required": false
       },
@@ -1493,7 +2013,7 @@
       },
       {
         "name": "relations",
-        "description": "Replacement typed task relations as an array of {type, target} objects",
+        "description": "Replacement typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified",
         "param_type": "array",
         "required": false
       },
@@ -1600,6 +2120,12 @@
         "required": false
       },
       {
+        "name": "origin",
+        "description": "Replacement reason the task was filed: operator_request, orchestrator_initiative or automation. Corrects a recorded origin; it cannot be cleared.",
+        "param_type": "string",
+        "required": false
+      },
+      {
         "name": "context_files",
         "description": "Replacement task context selectors as a comma-separated string or array of strings. Omit both `context_files` and `context` to preserve the current list. A supplied value replaces the whole list; it does not append. An empty array `[]` clears the list, as does a comma-only string such as `\",\"`; an empty string is rejected. The string `\"[]\"` is treated as a selector, not an empty list. To extend scope, read the current list and send the full union of existing and new selectors. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files referenced only for context. Prefer canonical selectors: `file:path`, `dir:path`, or `symbol:path#name:kind`. Legacy raw paths are accepted and upgraded automatically. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.",
         "param_type": "string_list",
@@ -1619,7 +2145,7 @@
       },
       {
         "name": "fields",
-        "description": "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, readiness, orchestrator, created_at, updated_at, comments, history, artifacts.",
+        "description": "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, readiness, pilot_warnings, orchestrator, orchestrator_model, orchestrator_model_source, origin, created_at, updated_at, comments, history, artifacts.",
         "param_type": "string_list",
         "required": false
       },
@@ -1682,9 +2208,33 @@
         "required": false
       },
       {
+        "name": "auto_concurrency",
+        "description": "Start only: off, shadow or enforce for this local drain. Omitted captures machine.auto_concurrency.mode. Retained on resume/restart; changes no configuration. Unsupported for pull drains",
+        "param_type": "string",
+        "required": false
+      },
+      {
         "name": "concurrency",
-        "description": "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize. The drain's only ceiling: delivery jobs impose none of their own",
+        "description": "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize. Status previews this ceiling; omitted uses the live local drain, then live pull drain, then default. The drain's only ceiling: delivery jobs impose none of their own",
         "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "task",
+        "description": "Status only: one task ID or a list to explain instead of the bounded backlog",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "limit",
+        "description": "Status only: maximum tasks to explain, including an explicit selection (1-500; default 50)",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "allow_crew",
+        "description": "Status only: configured crews to evaluate; omitted uses the live drain's restriction, if any",
+        "param_type": "string_list",
         "required": false
       },
       {
@@ -1709,6 +2259,12 @@
         "name": "complete",
         "description": "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review. Does not approve proposed tasks",
         "param_type": "boolean",
+        "required": false
+      },
+      {
+        "name": "review",
+        "description": "Start only: add this review layer before landing (before-pr or before-landing) to the window when workspace policy applies none; every task it admits inherits it. The layer policy already applies is accepted unchanged; the other layer, a workspace that sets neither workflow.purpose_crews.pre_landing_review nor workflow.purpose_crews.review and a workspace that delivers locally are refused. It can only add review. Omitted keeps workspace policy",
+        "param_type": "string",
         "required": false
       },
       {
@@ -1745,7 +2301,7 @@
   },
   {
     "name": "orbit.workflow.run.list",
-    "description": "List durable workflow runs newest-first with optional bounded filters.",
+    "description": "List durable workflow runs newest-first with optional bounded filters. Requires operator capability; agent sessions are refused.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1803,7 +2359,7 @@
   },
   {
     "name": "orbit.workflow.run.resume",
-    "description": "Resume a terminal resumable workflow run as a new linked run.",
+    "description": "Resume a terminal resumable workflow run as a new linked run, or explicitly authorize review-only same-PR source repair of an eligible owner-local publication, including successful publication with unmet acceptance. Requires operator capability; agent sessions are refused.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1820,12 +2376,18 @@
         "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
         "param_type": "string",
         "required": false
+      },
+      {
+        "name": "source_repair",
+        "description": "Explicit operator recovery of an eligible stopped owner-local publication. Inspect: {action: inspect, task_id} returns binding, review and policy_digest. Submit: {action: submit, task_id, request_key, binding, diagnosis}; successful-publication rework also requires unmet_acceptance evidence and the inspected current policy_digest. Supply the exact binding object. Diagnosis and unmet_acceptance accept 1-32768 bytes each. Captures current review and workflow.required_validation_commands: configured commands require fresh candidate evidence; an empty list records skipped_no_required_commands, not a passing check, and does not waive configured review or hosted required checks. Reuses the original PR; grants no completion, merge or auto-fix authority.",
+        "param_type": "object",
+        "required": false
       }
     ]
   },
   {
     "name": "orbit.workflow.run.show",
-    "description": "Fetch one durable workflow run by ID. The full response puts agent invocation outcome, failure reason, and any parsed answer under top-level `agent_invocation`; with `view: bounded`, find them at `run.agent_invocation`. The answer contains summary, findings, next steps, and extra result fields; stdout blob references retain the complete provider output.",
+    "description": "Fetch one durable workflow run by ID. The full response puts agent invocation outcome, failure reason, and any parsed answer under top-level `agent_invocation`; with `view: bounded`, find them at `run.agent_invocation`. The answer contains summary, findings, next steps, and extra result fields; stdout blob references retain the complete provider output. Requires operator capability; agent sessions are refused.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1887,6 +2449,12 @@
         "name": "allowed_crews",
         "description": "Optional configured crews this explicit shipment may dispatch; excluded crews are rejected before provider invocation.",
         "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "review",
+        "description": "Optional review layer before landing (`before-pr` or `before-landing`) this run adds when workspace policy applies none. The layer policy already applies is accepted unchanged; the other layer, a workspace that sets neither workflow.purpose_crews.pre_landing_review nor workflow.purpose_crews.review and local-only delivery are refused before the run starts. It can only add review. Omitted keeps workspace policy.",
+        "param_type": "string",
         "required": false
       },
       {

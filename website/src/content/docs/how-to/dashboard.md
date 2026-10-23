@@ -79,7 +79,8 @@ panel, action, log tail, and the load, memory, and disk chips show that host.
 The chips are labelled with its name. The workspace picker then lists that
 host's workspaces: the workspace you had stays selected if the host also
 lists it, **All workspaces** stays the aggregate of that host's workspaces,
-and anything else falls back to that host's default.
+and anything else falls back to that host's remembered workspace, a workspace
+with a live drain, then its registry default.
 
 The serving dashboard reaches the host over SSH, with the SSH identity of the
 machine that serves the dashboard, not your browser's machine. It opens a
@@ -111,7 +112,7 @@ expected on the default port, `7878`.
   it (`on build-box`) and that machine is registered on the serving host, the
   name links to that run on that host, as `?host=<name>&workspace=<workspace>&window=<window>#runs?run_id=<run>`.
   An unregistered machine stays plain text.
-- **Run links.** Every run link (Drain, Jobs, Routines, Tasks, Audit, Health) uses that
+- **Run links.** Every run link (Drain, Jobs, Routines, Tasks, Health, Analytics) uses that
   same form and carries the selected host, workspace and time window, so a link
   opened in a new tab or copied shows the run in that scope.
 - **Read-only.** Writes to another host go through the serving dashboard's
@@ -127,8 +128,19 @@ host switch. **Show** on a row switches the dashboard to that host.
 ## Workspace scope
 
 With more than one workspace registered, the left rail has a workspace picker.
-The dashboard opens on the `--workspace` match, else the workspace containing
-the current directory, else the first active workspace.
+An explicit `?workspace=` link (including the `--workspace` match and
+`workspace=all`) takes precedence. Otherwise, the dashboard restores the last
+workspace you chose in this browser for the selected host. If that workspace
+is unavailable, or browser storage is disabled, it selects an active workspace
+with a live drain, then the registry default (the workspace containing the
+server's current directory when available), then the first active workspace.
+Choosing **All workspaces** in the picker is remembered too.
+
+The header drain chip counts workspace/host pairs across registered hosts,
+for example **2 of 20 workspaces draining**. A workspace registered on two
+hosts counts twice. Click the chip to open the **All workspaces** fleet drains,
+grouped by host with one line per workspace; select a workspace to inspect it
+on its host.
 
 - **All workspaces** lists tasks from every served workspace. Automation, the
   auto-drain, settings, and other per-workspace panels are read-only there.
@@ -137,7 +149,8 @@ the current directory, else the first active workspace.
 - Inactive workspaces show as `<name> (unavailable)` and cannot be selected.
 - The URL holds the host, workspace, and time window, so a reload or copied
   link opens the same view.
-- **Health → Reliability** covers every workspace, whatever is selected.
+- **Analytics → Reliability → Pipeline** covers every workspace, whatever is
+  selected.
 
 Confirm the selected workspace before you act. A count or metric does not
 prove that a particular task or run succeeded.
@@ -146,47 +159,55 @@ prove that a particular task or run succeeded.
 
 | Rail | Shows |
 |---|---|
-| **Tasks** | Tasks, with the ones waiting on you first. The right dock holds the [auto-drain](#auto-drain) card and a live log. |
+| **Tasks** | Tasks, with the ones waiting on you first. The right dock holds the auto-drain card, a simple **Start a window** card, the locks held and a live log; an open task takes its place. |
 | **Runs** | Job runs, newest first, and run detail. |
-| **Audit** | Recent events and a 24-hour summary. |
-| **Health** | Incidents, Doctor, Errors, Reliability, Metrics, and Scoreboard. |
+| **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
+| **Analytics** | How delivery is trending: **Metrics**, **Reliability** (with **Pipeline** and **Tools** tabs), **Codebase**, and **Cost**. |
+| **Agents** | How well each agent role does its part, ranked by crew and model: **Orchestrators**, **Implementers**, **Reviewers**, and **Pilots**. |
 | **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Jobs**. |
 | **Knowledge** | Friction records. |
 | **Plugins** | Installed plugins and the panels they add. |
 | **Settings** | Effective, Workspace file, Global file, Crews, Keys, System, and Hosts. |
 
-The top bar shows live load, memory, and disk readings for the serving host,
-the drain state when a delivery window is active, and **Refresh**. Counts in
+The top bar shows live load, memory, and disk readings for the serving host
+(plus disk I/O stall on Linux hosts), its provider usage with each provider's
+windows together (`claude 15% 5h | 32% 7d`), the drain state when a delivery window is active, and **Refresh**. Counts in
 the selected window sit on the rail: failed, timed-out, and interrupted runs
-under **Runs**, and audited events under **Audit**. Click a rail count to open
-the view behind it.
+under **Runs**, and doctor warnings, policy denials, and failing routines under
+**Health**. Click a rail count to open the view behind it. The denial count
+opens **Health → Incidents → Events** filtered to denials.
 
 View URLs keep older section names: `#diagnostics/…` is Health,
 `#operations/…` is Automation, and `#config/…` is Settings.
 
 ## Tasks
 
-Search by ID or title, or filter by status. Press Enter on a full task ID to
-open it even when the filter, page, or selected workspace hides it.
+Search by ID or title, or filter by status. Done, Rejected, Archived,
+Someday, All, and Not ready are under **More**. Press Enter on a full task ID
+to open it even when the filter, page, or selected workspace hides it.
+**New task** proposes a task.
 
 Tasks are grouped in the order you act on them: **Awaiting approval**
-(`proposed`), review, blocked, in progress, then backlog. Each row carries the
-action its group waits on: **Approve** on a proposed task, **Ship** on a
-backlog task, and **View run** on a task in progress.
+(`proposed`), review, blocked, in progress, then backlog. Each row shows the
+title on its first line and the full task ID on its second, followed by what a
+backlog task waits on (`Waits on ORB-77`, `Throttled`) or where a running or
+blocked task's run is. Each row carries the action its group waits on:
+**Approve** on a proposed task, **Ship** on a backlog task, and **View run**
+on a task in progress.
 
 Open a task to see its detail and every action its status allows:
 
 | Action | Shown for |
 |---|---|
 | **ship** | `backlog`. Runs the workspace's ship mode (`pr` or `local`). Disabled while a ship run for the task is in flight. |
-| **approve** | `proposed` or `review`. |
+| **approve** | `proposed` or `review`. Refused while a non-terminal local run lists the task; the error names that run, and the task, its comments, and its history stay unchanged. Stop the run, then approve. |
 | **reject** | `proposed`, `review`, or `backlog`. |
 | **archive** | Any status except `archived`. |
 | **comment** | Any status. |
 
-The row's status and crew dropdowns are editable when a workspace is
-selected, or in **All workspaces** for a row that names its owner. The status
-list shows every status:
+The row's crew dropdown and the detail's status dropdown are editable when a
+workspace is selected, or in **All workspaces** for a row that names its
+owner. The status list shows every status:
 
 - Moves the [lifecycle table](../../concepts/tasks/#transition-rules) allows
   still ask for the evidence they need, such as a plan or completion summary.
@@ -195,9 +216,24 @@ list shows every status:
   same as `orbit task update <id> --status <status> --force` and is recorded
   in task history as a `forced` event. Agents cannot force a status.
 
-The right dock has two modes. **Drain** shows the [auto-drain](#auto-drain)
-card and the files tasks currently lock. **Log** is a live `orbit.log` tail
-you can filter to **all**, **err**, **deny**, or **warn**.
+The right dock has two tabs. **Drain** shows the auto-drain card, a simple
+**Start a window** card (window length, parallel tasks, admission control and
+what happens after a task ships; see [auto-drain](#auto-drain)) and the files
+tasks currently lock. Every other `orbit run auto` option is on the Drain
+page's **Start a window** tab. On a replica checkout, the Tasks card disables
+Start, shows why local draining is refused, and links to the Drain composer
+to pull from the owner. There the card states a host throttle as its own amber note and draws each
+forecast peak as a bar against its threshold. **Log** is a
+live `orbit.log` tail you can filter to **all**, **err**, **deny**, or
+**warn**. Opening a task replaces the dock with the task's detail; below
+1000px wide the dock is only on the Drain page.
+
+A task's detail leads with **Details**: status, complexity, crew, the
+operating systems it can run on, who created and carried it, its run and the
+machine it ran on, its pull request, when it was created and updated, and its
+tags. A circled *i* beside a value explains it on hover or focus. Its tabs are
+**Overview**, **Delivery** (only for a task with a delivery claim), **History**,
+**Runs**, **Artifacts**, and **Comments**.
 
 ### Edit task metadata
 
@@ -208,8 +244,8 @@ do not dispatch work.
 |---|---|
 | **description** | Left column. **edit** opens a Markdown editor. |
 | **acceptance criteria** | Left column, collapsed section. **edit**, then one criterion per line. |
-| **complexity** | **properties** card. Pick **low**, **medium**, **hard**, or **xhard**; it saves on change. A stored **unassessed** is shown but cannot be picked. |
-| **tags** | **edit** in the **properties** card header. Separate tags with commas or newlines. |
+| **complexity** | **Details**. Pick **low**, **medium**, **hard**, or **xhard**; it saves on change. A stored **unassessed** is shown but cannot be picked. |
+| **tags** | **edit** after the tags in **Details**. Separate tags with commas or newlines. |
 | **context files** | **context files** section. **edit**, then one selector per line: `file:…`, `dir:…`, or `symbol:…`. |
 
 Text fields save with **save** and discard with **cancel**. A failed save
@@ -236,11 +272,19 @@ state and the accepted handoff.
 
 The auto-drain card starts and stops a
 [delivery window](../continuous-delivery/): a time-bounded run that ships
-approved backlog tasks in parallel. It sits at the top of the Tasks dock's
-**Drain** mode, with the **Start a window** card below it; `#auto-drain` and
-`#operations/auto-drain` open it. It needs a single active workspace.
+approved backlog tasks in parallel. It leads the **Drain** page's
+**Overview** tab, with **Fleet drains** and **Locks held** beside it (below
+it on a narrow screen); `#drain`, `#auto-drain` and `#operations/auto-drain`
+open it. The page's **Start a window** tab (`#drain/start`) starts one. It
+needs a single active workspace.
 
-![The Drain dock: the Auto-drain card with its state, workspace leaf slots, and Send pending results, then Start a window with its eligible and waiting counts, window length, parallel tasks, completion mode, proposed-task handling, and Start.](../../../assets/dashboard/dashboard-drain-card.png)
+Above the cards, an amber banner says when a host resource throttle is
+holding admissions: which resource, when admissions resume and since when,
+with a gauge of the reading against its resume and stop thresholds. Summary
+tiles follow: the window's state, slots in use, the queue's waiting and
+eligible counts, and locked files with how many tasks hold them.
+
+![The Drain page: a header with Overview and Log tabs; an amber banner saying admissions are paused while host load is throttled, with a gauge against its resume and stop thresholds; summary tiles for the window state, slots in use, the queue and locked files; the Auto-drain card with its slots and forecast; and Why 2 tasks are waiting, with each wait reason. A right column holds Fleet drains above Locks held.](../../../assets/dashboard/dashboard-drain-card.png)
 
 The card shows:
 
@@ -250,26 +294,62 @@ The card shows:
   here too.
 - **Capacity.** Running tasks against the limit, free slots, and what a window
   started now would admit.
+- **Admission forecast.** The last pass's forecast time, CPU and memory peaks
+  against the admit thresholds (for example `85.6% / 98%`, then
+  `peak at +10m · 27.4 cores · 12.4 pts under the ceiling`), the tasks it
+  admitted with the profile that priced each one, and any candidate enforce
+  held. A pass that built no
+  forecast says `no forecast this pass` and, when an earlier forecast was
+  kept, shows that one too. Shadow decisions are marked hypothetical; they
+  do not hold anyone.
+- **How this window was started.** Each setting the live window recorded,
+  with the flag or configuration key that set it, and `not recorded` for one
+  it did not record. Below it are the equivalent `orbit run auto` command with
+  **Copy command**, and **Start a window like this**, which opens the composer
+  with those settings.
+- **Pulling from the owner.** On a replica running a pull window: the claim
+  budget `held − min(reviewing, N) < N` with this window's figures, its claimed
+  tasks by stage, and any settlement the owner refused, with its remedy.
 - **Readiness.** **Start a window** counts the tasks eligible now and those
   waiting, from a read-only readiness snapshot. The task list's **Backlog**
   card splits the same snapshot into **Eligible now**, **Waiting on locks**,
   **Waiting on capacity**, and **Waiting, other**; click one to filter the
   card. Each backlog row's dot shows its pool, and its tooltip names the wait,
-  such as `Waits on ABC-2` and the lock they contend for.
+  such as `Waits on ABC-2` and the lock they contend for. On the Drain page,
+  **Why N tasks are waiting** splits the same snapshot by pool and lists each
+  wait with its count, a link to the task it waits on, and what that task
+  holds. **Locks held** lists each task holding locked files, its status,
+  file count, and how many waiting tasks it blocks; expand a row for the
+  paths.
+
+**Start a window** offers every option of `orbit run auto`, each with its
+flag beside it. A sticky footer sums the window up, lists anything that blocks
+**Start** or warns, and shows the equivalent command with **Copy command**.
+Refusals use the command line's own words, and the server refuses whatever the
+command line refuses (an unknown crew, for example) before any run exists.
 
 | Control | Effect |
 |---|---|
-| **Window length** | `15m` to `8h`. |
+| **Where the work comes from** | **Local backlog** (`--workspace`) drains this workspace's backlog on its owner. **Pull from the owner** (`--pull <workspace> --host <owner>`) claims the owner's work from a replica and hands each result back. Pull is offered only on a replica, and Local is blocked there. A pull window greys the options the owner decides. |
+| **Window length** | **One pass** (no `--for`), or `30m` to `12h` (`--for`). |
 | **Parallel tasks** | How many tasks run at once. Blank uses the runtime default (5). Anything but a whole number of 1 or more disables **Start**. |
-| **When a task finishes** | **Stop at review** (default) leaves shipped tasks in `review`. **Mark done** moves every task the window ships from `review` to `done`, not only those in the readiness snapshot before the window starts. **Mark done** needs an operator session. |
-| **Proposed tasks** | **Leave for me** (default) leaves `proposed` tasks for you. **Approve qualifying** (`--approve-proposed`) lets every pass approve proposed tasks that have context files and an assessed complexity (or the `no-diff-expected` tag) and a clean task-pilot verification, including tasks filed while the window runs; `no-auto-approve` tasks are skipped. It needs an operator session and is disabled on a replica, where only the owner approves work. A live window started with it shows **Approving proposed tasks** with its approved and held counts. |
-| **Start … window** | After a confirmation, runs `orbit run auto` with these settings. Reads **Start another … window** while one is draining. |
+| **Mark shipped tasks done** | Off (default) leaves shipped tasks in `review`. On moves every task the window ships from `review` to `done`, not only those in the readiness snapshot before the window starts. It needs an operator session. |
+| **Approve qualifying proposals** | Off (default) leaves `proposed` tasks for you. On (`--approve-proposed`) lets every pass approve proposed tasks that have context files and an assessed complexity (or the `no-diff-expected` tag) and a clean task-pilot verification, including tasks filed while the window runs; `no-auto-approve` tasks are skipped. It needs an operator session and is disabled on a replica, where only the owner approves work. A live window started with it shows **Approving proposed tasks** with its approved and held counts. A hold for pilot warnings also shows each finding's kind and first line. |
+| **Auto-fix PR blockers** | Off by default. Repairs failed required checks and merge conflicts on the window's own PRs through the existing watcher and repair ledger. Needs an operator session on the owner machine; disabled on pull replicas with a visible reason. It never grants merging or proposed-task approval; merging still requires **Mark shipped tasks done**. |
+| **Review before landing** | **Workspace policy** (default) leaves review to `review.timing`. **Add before-PR review** or **Add before-landing review** (`--review`) adds that layer to this window only when policy applies none. The layer policy already applies is accepted, and the other one, a workspace that sets neither `workflow.purpose_crews.pre_landing_review` nor `workflow.purpose_crews.review`, and local-only delivery are refused when you start. Disabled on a replica, where the owner decides review. See [Review layers](../../concepts/tasks/#adding-review-to-one-run). |
+| **Allowed crews** | The configured crews this window may start (`--allow-crew`). All selected is unrestricted. |
+| **Complexity pools** | For each tier, **Workspace** keeps `workflow.<tier>_complexity_crews`, **Override** replaces it for this window with `crew` or `crew:weight` entries, and **Off** turns it off (`--<tier>-complexity-crews`). Disabled for a pull window. |
+| **Strict worker containment** | Requires a systemd user scope for the coordinator and every worker (`--strict-worker-containment`). |
+| **Workspace claim token** | The token for this workspace's exclusive claim when another operator holds one (`--claim-token`). It never appears in the command, the confirmation or the run's detail. |
+| **Start … window** | After a confirmation, runs `orbit run auto` with these settings and returns to **Overview**. Reads **Start another … window** while one is draining, **Run one pass** for one pass, and **Start pulling for …** or **Claim once** for a pull. |
 | **Stop** | Stops new admissions (`orbit run auto --stop`). Admitted workers keep running; this is not cancellation. Needs an operator session. |
 | **Send pending results** | Replaces **Stop** when no window is admitting. Delivers pull settlements this replica recorded but has not yet delivered to its owner. Needs an operator session. |
 
 Without operator capability you can still start a window that stops at
-review; **Mark done** and **Approve qualifying** stay disabled and say why. Nothing is reserved or
-started until you click **Start**. Results appear in the card's status line.
+review; **Mark shipped tasks done**, **Approve qualifying proposals**, and **Auto-fix PR blockers** stay disabled and say why. Each control's help is behind the circled *i* beside its label. Nothing is reserved or
+started until you click **Start**. Results appear in the card's status line,
+including whether auto-fix was enabled. If the submission response is lost, check
+the window and run history before starting again; the browser does not retry it.
 
 On a replica, a live pull drain counts as a window. The header reads **Pull
 drain**, and the **Stop** confirmation says admitted leaves stay claimed by
@@ -306,28 +386,147 @@ the confirmation names. The run detail shows the claim (`pull_claim`), and a
 pull drain's detail lists the crews its window can run and those it excluded,
 with the reason.
 
+A delivery run's detail has a **review** cell with the review layer it
+captured and its origin: the run's own `--review` option, workspace policy
+with the key's source, or the owner's claim.
+
 These counts answer different questions:
 
 | Where | Counts |
 |---|---|
 | **Runs** rail count | Job runs that failed, timed out, or were interrupted in the window that count was computed for. Click the count to open Runs on **Failed** for that window; the list total matches the count. |
 | Runs **Failed** filter | Failed, timed-out, and interrupted runs in the selected window. **All** drops the state filter and keeps the window. |
-| **Audit** rail count | Audited events in the selected window. |
-| **Health → Errors** | Step and event failures in the selected window. The panel header names the window and reports when retention or the stderr read cap leaves part of it unread. |
+| **Health** denial count | Policy denials in the window that count was computed for. Click it to open **Events** filtered to denials. |
+| **Health → Incidents → Errors** | Step and event failures in the selected window. The panel header names the window and reports when retention or the stderr read cap leaves part of it unread. |
 
 From a terminal, the same facts come from `orbit task show <task-id>`,
 `orbit run show <run-id>`, and `orbit audit list`.
 
-The Audit **Failure categories**, **Unexpected Failures by Callable Tool**,
-and **Lifecycle diagnostics** views, plus the Health scoreboard, use the capped
-incident scan. When the scan reaches its limit, each view marks its counts as
-**capped** and shows partial coverage. These counts cover only the newest
-non-success audit rows in the selected window; older failures and affected runs
-may be omitted. Per-tool unexpected-failure rates use the scanned failure
-counts with successful-call counts from the full window, so rates may be
-understated. A zero in the scoreboard means no incidents in that scanned
-sample. Total audited events and raw tool-call counts still cover the full
-window.
+**Events** opens on the **failure + denied** filter, because nearly every
+audited call is a successful poll. Choose **all** to list every status. A
+link from an incident lists its events whatever their status.
+
+The **Analytics → Reliability → Tools** cards for **Failure categories**,
+**Unexpected Failures by Callable Tool**, and **Lifecycle diagnostics** use
+the capped incident scan. When the scan reaches its limit, each card marks its
+counts as **capped** and shows partial coverage. These counts cover only the newest non-success audit rows in the
+selected window; older failures and affected runs may be omitted. Per-tool
+unexpected-failure rates use the scanned failure counts with successful-call
+counts from the full window, so rates may be understated. Total audited events
+and raw tool-call counts still cover the full window.
+
+Tools follows the Analytics window independently of an Events cutoff. With
+an **all** window, its bounded summary uses **24h**, named in the cards.
+Select a tool on **Tools** to open its events for the window the card shows.
+Exact incident-event links select **all** statuses because they list the
+recorded event IDs without a status restriction. **Analytics → Cost** shows
+managed-execution cost and token usage for the selected window.
+
+## Agents
+
+**Agents** ranks the crews and models behind each agent role in the
+selected workspace and time window. Pick a role from the tabs above the panel;
+each tab shows how many rows it ranks. A role whose scorecard is not computed
+yet says so and lists the terms it will be scored on.
+
+- **Who each problem counts against** splits the window's problems by the role
+  they count against. Every problem counts against one role, or is not scored
+  (for example, rework caused by infrastructure). Select a legend entry to open
+  that role.
+- **The ranking** lists one row per crew and model, with a rate per 100 units
+  of work for each term and the score. Rows with fewer than 10 units are greyed,
+  unranked, and listed last.
+- **The detail column** shows the selected row: its score, its raw score and
+  the fleet average (a row above the average is pulled down toward it, the
+  more the less work backs it; a row below keeps its raw score), how each
+  term adds to or takes from
+  the score, the tasks behind its biggest penalty (each opens the task), and
+  context such as active hours that is shown but never scored. Select another
+  row to change it.
+- **How the score works** lists every term with its weight and definition and
+  the smoothing formula. It stays open while the page refreshes.
+
+The **Orchestrators** tab replaces Analytics → Orchestrators, and old
+`#analytics/orchestrators` links open it. An orchestrator earns one point per
+landed task, whatever its complexity, and loses one per spec defect or
+spec-caused rework, all per 100 owned tasks. Complexity does not count because
+the orchestrator sets it when filing or piloting a task. Rework caused by the
+crew and review rejects count against **Implementers**, and reviewer fixes
+that failed revalidation count against **Reviewers**. Rework and regressions
+with no recorded cause count against no one; their number shows under the
+score as `N unclassified`, because such a score rests on less evidence.
+The **Rework by cause** panel shows where each orchestrator's rework went.
+
+The **Implementers** tab ranks each crew and model separately. It credits
+weighted landed work and first-pass accepts, and counts review rejects,
+reviewer repairs, crew-caused rework, and regressions that escaped because
+there was no test. A review reject is counted once; regressions the reviewer
+missed count against Reviewers. Each task counts once per crew and model
+that started an implementation run in the window.
+
+**Score against cost** plots the score against recorded USD per weighted
+landed task. Higher and farther left is better. The dashed frontier joins
+supported rows no other supported row matches or beats on both measures
+while improving at least one. Ties stay on the frontier. Grey points have too
+little work to rank and cannot set it. Unpriced rows stay in the ranking and
+are omitted from the plot. Cost uses recorded delivery-run invocations,
+including delivery reviews and repairs, and prefers provider cost to derived
+pricing. Missing or unpriced telemetry and rows with no landed work show a
+dash; a dash does not mean free work.
+
+The **First reviews by tier** table compares each row's first reviews needing
+changes (rejects or reviewer repairs) with the fleet rate for the same tier,
+including that row. A dash means no first reviews. The detail column also
+shows median completed run time and tasks by tier. Cost, time and tier
+comparisons never change the score. On a phone, the ranking and tier table
+scroll within their own boxes and the detail stacks below the ranking.
+
+The **Reviewers** tab ranks the reviewers of the review gate, and the review
+jobs that file findings as tasks, by how their verdicts turned out. A reviewer
+earns for findings and fixes that held: fixes that passed revalidation, open
+findings on a reject whose cited files the next run changed, and filed
+findings that finding verification confirmed, each weighted by severity. It
+loses for findings that were disposed or rejected by verification, for false
+rejects (the next run changed none of the cited files and the next review
+accepted), for fixes that failed revalidation, for `review_missed` regressions
+against work it accepted, and for incomplete reviews not caused by
+infrastructure. How often a reviewer accepts or rejects is never scored.
+
+- **Provisional.** A review younger than 30 days can still be charged a
+  `review_missed` regression filed later, so while the window has such reviews
+  a banner says how many, and those scores can still fall.
+- **accepts often** tags a reviewer whose accept rate is 10 or more points
+  above the other reviewers' on the same task tiers. It is shown, never scored.
+- The **How verdicts turned out** panel splits each reviewer's reviews into
+  accepted and held up, caught a real problem, false alarm, missed a
+  regression, and unresolved (not judged yet, incomplete, or fixes that
+  failed).
+
+The **Pilots** tab grades each task-pilot crew and model on the done tasks
+whose newest pilot assessment was written in the window, compared with the
+files each task actually landed. Bulk tasks (more than 12 landed files) and
+`no-diff-expected` tasks are left out. It credits **F1 lift**, the F1 points the
+pilot's selectors gained over the filer's own selectors, and **tier
+calibration**, tasks assessed at the tier their cost placed them in. It counts
+**costly misses**, landed files no pilot selector covered that a base conflict
+or the task's own refused lock request named, and **lock-wait hours**, the
+time other tasks waited on paths the task reserved through a pilot selector
+that covered none of its landed files. The detail column also shows recall,
+precision and F1 against the landed diff, the filer's F1, and missed and unused
+selectors. This ranking replaces the task-pilot tile Analytics → Codebase used
+to show.
+
+The observed tier ranks the window's assessed tasks by total implementation
+cost and cuts the ranking into tiers in the same proportions the pilots
+assigned. The **Tier calibration** panel shows one matrix per row: assessed
+tier down the side, observed tier across the top. The diagonal is on tier.
+**Too easy** counts tasks assessed below their observed tier and **too hard**
+tasks assessed above it. **Not placed** counts tasks without a tier or a
+priced implementation. Cost only places tasks in tiers; it is never scored.
+
+With **all** selected, Agents covers the last 90 days. From a terminal,
+`orbit agents scorecard --role <role>` prints the same ranking and
+`orbit agents show --role <role> --crew <crew>` one row's tasks.
 
 ## Automation
 
@@ -565,7 +764,7 @@ Two gates apply:
    read-only, even for an operator. The exception is task actions on rows that
    name their owner, and the machine-global **Settings › Hosts** view.
 2. **Operator capability.** Needed for routine and auto-task switches,
-   **Mint now**, **Run ▸**, clock controls, **Mark done**, **Stop** and
+   **Mint now**, **Run ▸**, clock controls, **Mark shipped tasks done**, **Stop** and
    **Send pending results**, settings writes, plugin enable and disable, and the
    owner's handoff approve, revoke, and claim-recovery actions.
 
@@ -605,6 +804,9 @@ tasks done, resuming requires operator capability and otherwise returns
 `403` with `code: authorization_denied` and `operation: auto_drain.complete`.
 Starting a window with `approve_proposed` set without operator capability
 returns the same `403` with `operation: auto_drain.approve_proposed`.
+Starting with `auto_fix: true` requires operator capability too and returns
+`operation: auto_drain.auto_fix` on refusal. Owner admission and workspace claims
+are checked by the shared drain submission path before a run is persisted.
 **Replay run** requires operator capability for any source run.
 
 ## Troubleshooting
@@ -618,7 +820,7 @@ returns the same `403` with `operation: auto_drain.approve_proposed`.
 | Automation buttons disabled | Select one active workspace. If the reason mentions operator authority, see [Authorization](#authorization). `connect` cannot upgrade a remote server it did not start. |
 | Ship returns `409` `ship_run_in_flight` | The task already has an unfinished ship run. Open the named `run_id`. |
 | `409` `workspace_claim_held` | Another operator holds the workspace claim. Wait for it to expire or inspect the holder; do not retry in a loop. |
-| **Runs** rail count disagrees with **Health → Errors** | They count different things. See [Runs and errors](#runs-and-errors). |
+| **Runs** rail count disagrees with **Health → Incidents → Errors** | They count different things. See [Runs and errors](#runs-and-errors). |
 | Settings save says "no workspace config exists yet" | Expected on the first write. Choose **Copy global policy** or **Start empty**. |
 | Settings save returns an admission error | `orbit config set` refuses the value too. The message lists the accepted values. |
 | New workspace missing after `orbit workspace init` | Click **Refresh**. The server reloads `workspaces.json` when it changes, and keeps the last good list if the file is malformed. |

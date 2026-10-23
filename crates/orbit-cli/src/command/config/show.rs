@@ -16,9 +16,10 @@ pub struct ConfigShowArgs {
     /// including built-in defaults for keys that file omits.
     #[arg(long, value_enum, default_value_t = ConfigScopeArg::Effective)]
     pub scope: ConfigScopeArg,
-    /// List every key, including sections whose keys are all unset and
-    /// therefore collapse to a one-line summary by default.
-    #[arg(long)]
+    /// List every key, including unconfigured advanced keys and sections
+    /// whose keys are all unset, plus the Paths, Crew purposes and Review
+    /// summaries.
+    #[arg(long, visible_alias = "advanced")]
     pub all: bool,
 }
 
@@ -29,8 +30,15 @@ impl Execute for ConfigShowArgs {
             let review = review_switches(runtime);
             let mut json = effective_json(runtime, effective.values());
             json["review"] = review.json;
+            let purposes = orbit_core::application::config::crew_purposes_view(effective.values());
             let mut text = effective_text(runtime, effective.values(), self.all);
-            text.push_str(&review.text);
+            // Crew purposes and Review restate rows the sections above already
+            // print. The default view omits them; `--all` and `--json` keep them.
+            if self.all {
+                text.push_str(&crew_purposes_text(&purposes));
+                text.push_str(&review.text);
+            }
+            json["crew_purposes"] = purposes;
             return Ok(Payload::detail(json, text).into());
         }
 
@@ -47,8 +55,8 @@ impl Execute for ConfigShowArgs {
 }
 
 /// Every automatic-review switch with its source [ORB-13992]: before-PR
-/// review (`review.before_pr`, minutes, crew), before-landing review
-/// (`review.before_landing`) and after-landing review (the
+/// review (`review.timing = before_pr`, minutes, crew), before-landing review
+/// (`review.timing = before_landing`) and after-landing review (the
 /// `delivery-code-review` auto-task, its next batch and health).
 struct ReviewView {
     json: JsonValue,
@@ -71,6 +79,41 @@ fn review_switches(runtime: &OrbitRuntime) -> ReviewView {
         ),
     };
     ReviewView { json, text }
+}
+
+/// The `Crew purposes:` block `orbit config show` prints.
+fn crew_purposes_text(view: &JsonValue) -> String {
+    let mut text = String::from("\nCrew purposes:\n");
+    for row in view.as_array().into_iter().flatten() {
+        let field = |name: &str| row[name].as_str().unwrap_or("-");
+        let pool = row["pool"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(JsonValue::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let line = if row["configured"].as_bool() == Some(true) {
+            format!("{pool} ({}, {})", field("key"), field("source"))
+        } else if field("resolved_from") == field("key") {
+            format!("none ({} is empty or unset)", field("key"))
+        } else if row["source"].is_null() {
+            format!("unset; falls back to {}", field("resolved_from"))
+        } else if pool.is_empty() {
+            format!(
+                "unset; falls back to {} (empty, so workflow.default_crew)",
+                field("resolved_from")
+            )
+        } else {
+            format!(
+                "unset; falls back to {} [{pool}] ({})",
+                field("resolved_from"),
+                field("source")
+            )
+        };
+        text.push_str(&format!("  {}: {line}\n", field("purpose")));
+    }
+    text
 }
 
 fn effective_json(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> JsonValue {

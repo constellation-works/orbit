@@ -30,7 +30,7 @@ mod store;
 
 pub use crate::contracts::{
     FrictionAddParams, FrictionListFilter, FrictionRehomeOutcome, FrictionRehomeParams,
-    FrictionReportedCount, FrictionUpdateParams, StoredFrictionRecord,
+    FrictionUpdateParams, StoredFrictionRecord,
 };
 pub(crate) use store::read_page;
 

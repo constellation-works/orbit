@@ -1,8 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
 
 // ExecutorResourceSpec is the persisted wire shape; ExecutorDef is the runtime shape.
 use crate::resource::ExecutorResourceSpec;
@@ -168,6 +169,17 @@ pub struct ExecutorDef {
     /// degrade to bare exec? Default `false` (fail-closed).
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_fallback: bool,
+    /// Host operating systems this executor can run on.
+    ///
+    /// Omitted (or null) means every host. A present value is a non-empty
+    /// subset of `linux`, `macos` and `windows`. Admission intersects it with
+    /// the task's `os:` tags; it does not change what those tags mean.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_executor_host_os"
+    )]
+    pub host_os: Option<BTreeSet<crate::task::HostOs>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -194,6 +206,34 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// `host_os` on an executor definition: absent or null is unrestricted, and a
+/// present list must name at least one of `linux`, `macos` or `windows`.
+pub fn deserialize_executor_host_os<'de, D>(
+    deserializer: D,
+) -> Result<Option<BTreeSet<crate::task::HostOs>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(values) = Option::<Vec<String>>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    if values.is_empty() {
+        return Err(D::Error::custom(
+            "host_os must list at least one of linux, macos, windows; omit host_os to allow every host",
+        ));
+    }
+    let mut hosts = BTreeSet::new();
+    for value in values {
+        let Some(os) = crate::task::HostOs::parse(&value) else {
+            return Err(D::Error::custom(format!(
+                "unknown host_os `{value}`; expected linux, macos, or windows"
+            )));
+        };
+        hosts.insert(os);
+    }
+    Ok(Some(hosts))
+}
+
 impl ExecutorDef {
     pub fn from_resource_spec(
         name: String,
@@ -213,6 +253,7 @@ impl ExecutorDef {
             env,
             sandbox,
             allow_fallback,
+            host_os,
             created_at: spec_created_at,
             updated_at: spec_updated_at,
         } = spec;
@@ -230,6 +271,7 @@ impl ExecutorDef {
             env,
             sandbox,
             allow_fallback,
+            host_os,
             created_at: created_at.or(spec_created_at),
             updated_at: updated_at.or(spec_updated_at),
         }

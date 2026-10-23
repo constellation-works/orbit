@@ -20,12 +20,18 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
     use McpToolAnnotations as A;
     Some(match canonical_name {
         // Observation of Orbit's own state.
-        "orbit.auto_task.list"
+        "orbit.agents.scorecard"
+        | "orbit.agents.show"
+        | "orbit.auto_task.list"
         | "orbit.auto_task.show"
+        | "orbit.codebase.analytics"
+        | "orbit.codebase.show"
         | "orbit.drain.claims"
         | "orbit.friction.show"
         | "orbit.friction.stats"
         | "orbit.friction.tags"
+        | "orbit.orchestrator.scorecard"
+        | "orbit.orchestrator.show"
         | "orbit.search"
         | "orbit.task.artifact.get"
         | "orbit.task.eligible"
@@ -53,10 +59,17 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         "orbit.friction.update" => A::destructive(false),
         "orbit.task.artifact.put" => A::destructive(true),
         "orbit.task.review_reset" => A::destructive(false),
+        // Supersedes a recorded escalation; with `discard_candidate` it also
+        // closes the published pull request.
+        "orbit.task.requeue" => A::destructive(false),
+        // A requeue supersedes a recorded escalation; a second decision on
+        // the same block episode is refused rather than a no-op.
+        "orbit.task.block_triage" => A::destructive(false),
 
         // Starts work outside Orbit's own state: an agent, a workflow run's
         // agents, or an arbitrary process.
-        "orbit.task.reconcile_review"
+        "orbit.task.retry_handoff"
+        | "orbit.task.reconcile_review"
         | "orbit.pipeline.invoke"
         | "orbit.workflow.auto"
         | "orbit.routine.control"

@@ -1,4 +1,6 @@
+pub(crate) mod admission_load_store;
 pub(crate) mod audit_event_store;
+pub(crate) mod codebase_facts_store;
 pub(crate) mod connection;
 pub(crate) mod invocation_store;
 pub(crate) mod job_run_store;
@@ -7,6 +9,7 @@ pub(crate) mod plugin_store;
 pub(crate) mod provider_limit_store;
 pub(crate) mod read_pool;
 pub(crate) mod reliability_store;
+pub(crate) mod resource_usage_store;
 pub(crate) mod retention;
 pub(crate) mod routine_store;
 pub(crate) mod task_commit_journal;

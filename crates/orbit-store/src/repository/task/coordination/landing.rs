@@ -12,18 +12,239 @@
 //! cannot reach `review -> done` through this path either.
 use chrono::Utc;
 use orbit_common::{ClaimRefusalKind, OrbitError};
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{TaskHistoryEntry, TaskStatus};
+use orbit_types::workflow::PostDeployRecord;
 use orbit_types::workflow::handoff::*;
+use serde_json::Value;
 
 use super::TaskCommitBoundary;
 use super::lifecycle::{decode, invalid, row};
 use crate::contracts::*;
+use crate::driver::sqlite::job_run_store::SqliteJobRunStore;
 
 const ATTEMPT: &str = "distributed-landing-attempt-v1";
+const HISTORY: &str = "distributed-landing-attempt-history-v1";
+const RETRY: &str = "distributed-landing-retry-v1";
 
 impl TaskCommitBoundary {
-    /// Every recorded attempt, newest state included. Read-only inspection for
-    /// the owner consumer and its operators.
+    /// The immutable operator receipt for this handoff and request key.
+    pub fn landing_retry_receipt(
+        &self,
+        handoff_id: &str,
+        request_key: &str,
+    ) -> Result<Option<LandingRetryReceipt>, OrbitError> {
+        self.enter_ordinary(|| {
+            self.coordination_row(RETRY, &retry_id(handoff_id, request_key))?
+                .map(|r| decode(&r.payload_json))
+                .transpose()
+        })
+    }
+
+    /// A specific attempt, including its retained stopped evidence after retry.
+    pub fn landing_attempt_record(
+        &self,
+        handoff_id: &str,
+        number: u32,
+    ) -> Result<Option<LandingAttempt>, OrbitError> {
+        self.enter_ordinary(|| {
+            if let Some(raw) = self.attempt_row(handoff_id)? {
+                let attempt: LandingAttempt = decode(&raw.payload_json)?;
+                if attempt.attempt == number {
+                    return Ok(Some(attempt));
+                }
+            }
+            self.coordination_row(HISTORY, &format!("{handoff_id}:{number}"))?
+                .map(|r| decode(&r.payload_json))
+                .transpose()
+        })
+    }
+
+    pub(super) fn verify_reserved_landing_retry(
+        &self,
+        auth: &ClaimInvocation,
+        state: &ClaimInspection,
+        request: &LandingRetryRequest,
+    ) -> Result<(), OrbitError> {
+        if state.claim.phase != ExecutionClaimPhase::HandedOff {
+            return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
+        }
+        self.check_handoff_landing(auth, state)?;
+        let receipt: LandingRetryReceipt = decode(
+            &self
+                .coordination_row(RETRY, &retry_id(&request.handoff_id, &request.request_key))?
+                .ok_or_else(|| invalid("retry receipt missing"))?
+                .payload_json,
+        )?;
+        let attempt: LandingAttempt = decode(
+            &self
+                .attempt_row(&request.handoff_id)?
+                .ok_or_else(|| invalid("retry attempt missing"))?
+                .payload_json,
+        )?;
+        if attempt.attempt != receipt.attempt || attempt.state != LandingAttemptState::Dispatched {
+            return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn attach_landing_retry(
+        &self,
+        auth: &ClaimInvocation,
+        state: &ClaimInspection,
+        handoff_id: &str,
+        request_key: &str,
+        run_id: &str,
+        params: &mut TaskCoordinationCommitParams,
+        effects: &mut ClaimCommitEffects,
+    ) -> Result<(), OrbitError> {
+        let receipt: LandingRetryReceipt = decode(
+            &self
+                .coordination_row(RETRY, &retry_id(handoff_id, request_key))?
+                .ok_or_else(|| invalid("retry receipt missing"))?
+                .payload_json,
+        )?;
+        let attempt: LandingAttempt = decode(
+            &self
+                .attempt_row(handoff_id)?
+                .ok_or_else(|| invalid("retry attempt missing"))?
+                .payload_json,
+        )?;
+        if attempt.attempt != receipt.attempt {
+            return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
+        }
+        self.dispatch_landing_attempt(
+            auth,
+            state,
+            handoff_id,
+            Some(&run_id.to_string()),
+            params,
+            effects,
+        )
+    }
+
+    pub(super) fn reserve_landing_retry(
+        &self,
+        auth: &ClaimInvocation,
+        state: &ClaimInspection,
+        request: &LandingRetryRequest,
+        params: &mut TaskCoordinationCommitParams,
+        effects: &mut ClaimCommitEffects,
+    ) -> Result<(), OrbitError> {
+        if !auth.operator || state.claim.phase != ExecutionClaimPhase::HandedOff {
+            return Err(invalid("current operator handed-off context required"));
+        }
+        if request.request_key.trim().is_empty()
+            || request.request_key.len() > 128
+            || request.reason.trim().is_empty()
+            || request.reason.len() > 2000
+        {
+            return Err(invalid("retry requires a bounded request key and reason"));
+        }
+        self.check_handoff_landing(auth, state)?;
+        let accepted = self.accepted_handoff(&auth.claim_id)?;
+        if accepted.handoff_id != request.handoff_id
+            || accepted.handoff.candidate.candidate.commit != request.expected_candidate_commit
+            || accepted.handoff.candidate.base.commit != request.expected_base_commit
+        {
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::HandoffCandidateMismatch,
+            ));
+        }
+        let raw = self
+            .attempt_row(&request.handoff_id)?
+            .ok_or_else(|| invalid("retry requires a prior attempt"))?;
+        let attempt: LandingAttempt = decode(&raw.payload_json)?;
+        if attempt.attempt != request.expected_latest_attempt
+            || attempt.state != request.expected_latest_state
+        {
+            return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
+        }
+        match attempt.state {
+            LandingAttemptState::Stopped => {}
+            LandingAttemptState::Dispatched if attempt.job_run_id.is_some() => {
+                // Eligibility comes from this owner's durable run, not request
+                // state, missing liveness, reservation age, or a caller boolean.
+                self.terminal_landing_job_evidence(&attempt)?;
+            }
+            LandingAttemptState::Dispatched if state.unresolved_merge_intent.is_some() => {}
+            _ => return Err(invalid("retry requires a stopped or uncertain landing")),
+        }
+        self.dispatch_landing_attempt(auth, state, &request.handoff_id, None, params, effects)?;
+        let number =
+            if attempt.state == LandingAttemptState::Dispatched && attempt.job_run_id.is_none() {
+                attempt.attempt
+            } else {
+                attempt
+                    .attempt
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("landing attempt exhausted"))?
+            };
+        params.rows.push(row(
+            RETRY,
+            &retry_id(&request.handoff_id, &request.request_key),
+            &LandingRetryReceipt {
+                request: request.clone(),
+                actor: auth.machine_id.clone(),
+                attempt: number,
+                created_at: Utc::now(),
+            },
+        )?);
+        params.status_note = Some(request.reason.clone());
+        params.status_event = Some("landing_retry_reserved".into());
+        Ok(())
+    }
+    /// Prove the attached run belongs to this exact owner dispatch and has
+    /// irreversibly ended. Read in the reservation's admission section; terminal
+    /// job states cannot be restarted in place. The scoped action key fences
+    /// foreign/misattached runs even when their IDs or input resemble this one.
+    fn terminal_landing_job_evidence(
+        &self,
+        attempt: &LandingAttempt,
+    ) -> Result<String, OrbitError> {
+        let jobs = SqliteJobRunStore::new(self.store.clone(), &self.workspace_id);
+        let run_id = attempt
+            .job_run_id
+            .as_deref()
+            .ok_or_else(|| invalid("terminal owner landing job evidence required"))?;
+        if jobs
+            .automation_job_for_key(&format!(
+                "landing:{}:{}",
+                attempt.handoff_id, attempt.attempt
+            ))?
+            .as_deref()
+            != Some(run_id)
+        {
+            return Err(invalid("landing job does not match the owner dispatch key"));
+        }
+        let run = jobs
+            .get_job_run(run_id)?
+            .ok_or_else(|| invalid("terminal owner landing job evidence missing"))?;
+        if run.job_id != "task_landing_pipeline"
+            || run
+                .input
+                .as_ref()
+                .and_then(|input| input.get("handoff_id"))
+                .and_then(serde_json::Value::as_str)
+                != Some(attempt.handoff_id.as_str())
+            || run
+                .input
+                .as_ref()
+                .and_then(|input| input.get("task_id"))
+                .and_then(serde_json::Value::as_str)
+                != Some(attempt.task_id.as_str())
+            || !run.state.is_terminal()
+        {
+            return Err(invalid("exact terminal owner landing job required"));
+        }
+        Ok(format!(
+            "Owner landing job '{run_id}' is terminal ({}); retained for guarded recovery",
+            run.state
+        ))
+    }
+
+    /// The latest attempt for each handoff. Historical stops remain available
+    /// through `landing_attempt_record`. Read-only owner inspection.
     pub fn landing_attempts(&self) -> Result<Vec<LandingAttempt>, OrbitError> {
         self.enter_ordinary(|| {
             self.coordination_rows(ATTEMPT)?
@@ -71,7 +292,7 @@ impl TaskCommitBoundary {
     /// carries an already open attempt.
     ///
     /// `job_run_id` is the whole distinction. `None` opens an attempt: the
-    /// first one, or the next after a stop or an owner job that died. `Some`
+    /// first one, or the next after a stop or a proven terminal owner job. `Some`
     /// attaches that job to the open attempt and refuses to replace a different
     /// job — a second consumer has to open its own attempt, and the merge-intent
     /// guard still refuses a second external merge either way.
@@ -128,18 +349,34 @@ impl TaskCommitBoundary {
                     ));
                 }
                 match job_run_id {
-                    // A stopped attempt reopens deliberately, and so does one
-                    // whose job is gone. The candidate, evidence and authority
-                    // are rechecked before any merge intent, so a stale
-                    // candidate stops again instead of merging unvalidated work.
+                    // A dispatched attempt may advance only with exact terminal
+                    // owner-job evidence. Archive the reconciled stop atomically
+                    // with its successor; never clear an uncertain merge intent.
                     None => {
+                        if attempt.state == LandingAttemptState::Dispatched
+                            && attempt.job_run_id.is_some()
+                        {
+                            let evidence = self.terminal_landing_job_evidence(&attempt)?;
+                            attempt.state = LandingAttemptState::Stopped;
+                            attempt.evidence = Some(evidence);
+                            attempt.updated_at = now;
+                        }
                         if attempt.state != LandingAttemptState::Dispatched
                             || attempt.job_run_id.is_some()
                         {
-                            attempt.attempt = attempt.attempt.saturating_add(1);
+                            params.rows.push(row(
+                                HISTORY,
+                                &format!("{handoff_id}:{}", attempt.attempt),
+                                &attempt,
+                            )?);
+                            attempt.attempt = attempt
+                                .attempt
+                                .checked_add(1)
+                                .ok_or_else(|| invalid("landing attempt exhausted"))?;
                             attempt.state = LandingAttemptState::Dispatched;
                             attempt.job_run_id = None;
                             attempt.evidence = None;
+                            attempt.created_at = now;
                         }
                     }
                     Some(run_id) => {
@@ -170,12 +407,16 @@ impl TaskCommitBoundary {
     /// Complete an authorized landing. `evidence` is the owner's verified merge
     /// evidence — the provider's merged pull request or the local target ref —
     /// recorded in task history alongside the transition it permitted.
+    /// Persisted unresolved criteria, including a prior handoff's obligations,
+    /// leave the task in `review` until an operator records them met.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn complete_landing_attempt(
         &self,
         auth: &ClaimInvocation,
         state: &ClaimInspection,
         handoff_id: &str,
         evidence: &str,
+        history: &[TaskHistoryEntry],
         params: &mut TaskCoordinationCommitParams,
         effects: &mut ClaimCommitEffects,
     ) -> Result<(), OrbitError> {
@@ -198,9 +439,76 @@ impl TaskCommitBoundary {
             .replacements
             .push((old, row(ATTEMPT, handoff_id, &attempt)?));
         self.settle_landing_request(handoff_id, LandingStartState::Completed, effects)?;
-        params.status = Some(TaskStatus::Done);
+        let owes =
+            PostDeployRecord::read(history).is_some_and(|record| !record.outstanding().is_empty());
+        params.status = (!owes).then_some(TaskStatus::Done);
         params.status_note = Some(evidence.into());
         params.status_event = Some("landing_completed".into());
+        Ok(())
+    }
+
+    /// Check a [`ClaimMutation::SettleExternalMerge`]: `pull_request`, merged
+    /// into `base_branch`, is exactly the candidate pull request of the
+    /// claim's accepted handoff on its landing branch; an operator revoked
+    /// that handoff's completion authority; no owner landing job still
+    /// carries it and no merge intent is unresolved; and the task owes no
+    /// criterion after deploy. An unrevoked handoff is refused: approval or
+    /// the owner landing job completes it.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn check_external_merge_settlement(
+        &self,
+        auth: &ClaimInvocation,
+        state: &ClaimInspection,
+        handoff_id: &str,
+        pull_request: u64,
+        base_branch: &str,
+        merge_commit: &str,
+        history: &[TaskHistoryEntry],
+    ) -> Result<(), OrbitError> {
+        if !auth.operator || state.claim.phase != ExecutionClaimPhase::HandedOff {
+            return Err(invalid(
+                "current operator handoff settlement context required",
+            ));
+        }
+        if merge_commit.trim().is_empty() {
+            return Err(invalid("verified merge evidence required"));
+        }
+        if state.unresolved_merge_intent.is_some() {
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::UnresolvedMergeIntent,
+            ));
+        }
+        let accepted = self.accepted_handoff(&auth.claim_id)?;
+        if accepted.handoff_id != handoff_id {
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::HandoffIdentityMismatch,
+            ));
+        }
+        if !self.handoff_authority_revoked(handoff_id)? {
+            return Err(invalid(
+                "handoff completion authority is not revoked; approval or the owner landing \
+                 job completes this handoff",
+            ));
+        }
+        if let Some(raw) = self.attempt_row(handoff_id)?
+            && decode::<LandingAttempt>(&raw.payload_json)?.state == LandingAttemptState::Dispatched
+        {
+            return Err(invalid("an owner landing job still carries this handoff"));
+        }
+        let candidate = &accepted.handoff.candidate;
+        if candidate.delivery
+            != (HandoffDelivery::PullRequest {
+                number: pull_request,
+            })
+            || candidate.landing_branch != base_branch
+        {
+            return Err(invalid(
+                "the merged pull request is not this handoff's candidate on its landing branch",
+            ));
+        }
+        if PostDeployRecord::read(history).is_some_and(|record| !record.outstanding().is_empty()) {
+            return Err(invalid("the task owes acceptance criteria after deploy"));
+        }
         Ok(())
     }
 
@@ -208,12 +516,23 @@ impl TaskCommitBoundary {
     /// with its authorization intact; a repair is a new validated handoff.
     ///
     /// A `repairable` stop — the candidate conflicts with, or is stale
-    /// against, its base — makes that new handoff automatic [ORB-14261]. The
+    /// against, its base [ORB-14261], or its pull request fails a hosted
+    /// check the candidate caused [ORB-15956] — makes that new handoff
+    /// automatic. The
     /// handoff's authority is revoked so nothing lands it, and the outcome
     /// tells the caller what becomes of the claim: an original claim waits in
     /// `repair_pending` with its task back `in-progress` for one repair leaf;
     /// a claim that already is that repair fails and blocks its task with
-    /// both attempts' evidence.
+    /// both attempts' human reasons. The raw stop string, including an
+    /// `owner_landing_refusal` diagnostic, stays on the landing attempt.
+    ///
+    /// A `requeue` stop — the candidate fails its own required check once
+    /// that one repair is spent [ORB-16890] — revokes the handoff's
+    /// authority too, and the claim ends: the task returns to the backlog
+    /// with the accepted candidate and the stop's human reason kept for its
+    /// next run, owner or follower, which repairs that candidate. Past
+    /// [`LANDING_REPAIR_BUDGET`] such returns the task blocks instead, with
+    /// every counted stop's reason, and the candidate is still kept.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn stop_landing_attempt(
         &self,
@@ -222,6 +541,7 @@ impl TaskCommitBoundary {
         handoff_id: &str,
         reason: &str,
         repairable: bool,
+        requeue: bool,
         params: &mut TaskCoordinationCommitParams,
         effects: &mut ClaimCommitEffects,
     ) -> Result<LandingStop, OrbitError> {
@@ -237,14 +557,18 @@ impl TaskCommitBoundary {
             ));
         }
         let (old, mut attempt) = self.live_attempt(auth, handoff_id)?;
+        let displayed = operator_stop_reason(reason);
         attempt.state = LandingAttemptState::Stopped;
-        attempt.evidence = Some(reason.into());
+        attempt.evidence = Some(reason.to_string());
         attempt.updated_at = Utc::now();
         effects
             .replacements
             .push((old, row(ATTEMPT, handoff_id, &attempt)?));
-        params.status_note = Some(reason.into());
+        params.status_note = Some(displayed.clone());
         params.status_event = Some("landing_stopped".into());
+        if requeue {
+            return self.requeue_landing_repair(auth, state, &displayed, params, effects);
+        }
         if !repairable {
             return Ok(LandingStop::Stopped);
         }
@@ -254,15 +578,15 @@ impl TaskCommitBoundary {
                 self.revoke_handoff_authority(
                     auth,
                     &format!(
-                        "landing stopped on a conflicting or stale base; an automatic repair \
-                         replaces this handoff: {reason}"
+                        "landing stopped on a repairable failure; an automatic repair \
+                         replaces this handoff: {displayed}"
                     ),
                     params,
                     effects,
                 )?;
                 params.status = Some(TaskStatus::InProgress);
                 params.status_note = Some(format!(
-                    "{reason}; the candidate waits for one automatic repair leaf, which \
+                    "{displayed}; the candidate waits for one automatic repair leaf, which \
                      re-applies it onto the current base, revalidates it and hands it off again"
                 ));
                 Ok(LandingStop::Repair)
@@ -270,7 +594,7 @@ impl TaskCommitBoundary {
             Some(first) => {
                 self.revoke_handoff_authority(
                     auth,
-                    &format!("the automatic repair's landing stopped on its base again: {reason}"),
+                    &format!("the automatic repair's landing stopped again: {displayed}"),
                     params,
                     effects,
                 )?;
@@ -279,11 +603,159 @@ impl TaskCommitBoundary {
                     first,
                     &state.claim.claim_id,
                     &accepted,
-                    reason,
+                    &displayed,
                 )))
             }
         }
     }
+
+    /// [ORB-16890] End a claim whose candidate fails its own required check
+    /// once its automatic repair is spent: keep the accepted candidate with
+    /// the stop's human reason for the task's next run and return the task
+    /// to the backlog, or block it once the landing repair budget is spent.
+    fn requeue_landing_repair(
+        &self,
+        auth: &ClaimInvocation,
+        state: &ClaimInspection,
+        displayed: &str,
+        params: &mut TaskCoordinationCommitParams,
+        effects: &mut ClaimCommitEffects,
+    ) -> Result<LandingStop, OrbitError> {
+        let accepted = self.accepted_handoff(&auth.claim_id)?;
+        let candidate = &accepted.handoff.candidate;
+        let pull_request = match &candidate.delivery {
+            HandoffDelivery::PullRequest { number } => Some(number.to_string()),
+            _ => None,
+        };
+        let kept = Box::new(PreservedClaimCandidate {
+            candidate: ClaimCandidateRef {
+                branch: candidate.source_branch.clone(),
+                head_sha: candidate.candidate.commit.clone(),
+                // A pull request's head branch is on `origin`, so a run on
+                // any host can fetch the candidate from it.
+                published: pull_request.is_some(),
+                pull_request,
+                pull_request_head: None,
+                source_run_id: state.bound_run.as_ref().map(|run| run.run_id.clone()),
+                // The leaf delivered it: the candidate is complete.
+                failed_step_id: None,
+                durable_ref: None,
+                carry_failure: None,
+                interrupted_review: None,
+                landing_stop: Some(displayed.to_string()),
+            },
+            task_spec_digest: self.full_task(&auth.task_id)?.spec_digest(),
+            recorded_at: Utc::now().to_rfc3339(),
+        });
+        let events = self
+            .bundle_store
+            .read_bundle_lightweight(&auth.task_id)?
+            .events;
+        let spent = landing_repairs_spent(events.iter().map(|event| event.event_type.as_str()));
+        if spent >= LANDING_REPAIR_BUDGET {
+            self.revoke_handoff_authority(
+                auth,
+                &format!(
+                    "the candidate failed its own required check at landing again and the \
+                     task's landing repair budget is spent: {displayed}"
+                ),
+                params,
+                effects,
+            )?;
+            params.status = Some(TaskStatus::Blocked);
+            params.status_note = Some(format!(
+                "{displayed}; the landing repair budget ({LANDING_REPAIR_BUDGET} backlog returns) \
+                 is spent, so the task is blocked for an operator"
+            ));
+            let earlier = requeued_since_exhaustion(&events);
+            let comment =
+                repair_budget_comment(&earlier, &state.claim.claim_id, &accepted, displayed);
+            return Ok(LandingStop::RepairBudgetExhausted { comment, kept });
+        }
+        self.revoke_handoff_authority(
+            auth,
+            &format!(
+                "landing stopped on a required check the candidate fails; the task's next run \
+                 repairs this candidate: {displayed}"
+            ),
+            params,
+            effects,
+        )?;
+        params.status = Some(TaskStatus::Backlog);
+        params.status_note = Some(format!(
+            "{displayed}; the claim ends and the task returns to the backlog, where its next run \
+             repairs this candidate and publishes it again (landing repair {} of \
+             {LANDING_REPAIR_BUDGET})",
+            spent + 1
+        ));
+        Ok(LandingStop::Requeue(kept))
+    }
+}
+
+/// The notes of the landing repair requeues the budget counted, oldest first.
+fn requeued_since_exhaustion(events: &[orbit_types::task::TaskEventRowV2]) -> Vec<String> {
+    let mut notes = Vec::new();
+    for event in events {
+        match event.event_type.as_str() {
+            LANDING_REPAIR_REQUEUED_EVENT => notes.push(format!(
+                "{}: {}",
+                event.at.to_rfc3339(),
+                event.note.as_deref().unwrap_or("no note recorded")
+            )),
+            LANDING_REPAIR_EXHAUSTED_EVENT => notes.clear(),
+            _ => {}
+        }
+    }
+    notes
+}
+
+/// The blocked task's comment once its landing repair budget is spent: this
+/// stop's candidate and reason, and every counted requeue's note.
+fn repair_budget_comment(
+    earlier: &[String],
+    claim_id: &str,
+    accepted: &AcceptedHandoff,
+    reason: &str,
+) -> String {
+    let mut comment = format!(
+        "Landing repair budget exhausted: the handed-off candidate failed its own required \
+         check at landing again after {} backlog returns, so the task is blocked for an \
+         operator. The candidate is kept for the run after the task is unblocked.\n\n\
+         This attempt (claim {claim_id}, handoff {}): {}\nStopped: {reason}\n\nEarlier stops:",
+        earlier.len(),
+        accepted.handoff_id,
+        describe_candidate(&accepted.handoff.candidate),
+    );
+    for note in earlier {
+        comment.push_str(&format!("\n- {note}"));
+    }
+    comment
+}
+
+/// Operator text for a landing stop.
+///
+/// The landing attempt keeps the raw evidence string. An
+/// `owner_landing_refusal` diagnostic stays there; status notes, revocation
+/// reasons, the repair leaf's stop text and the blocked comment carry its
+/// capped human `reason.value`. Any other evidence, including an older
+/// plain string, is shown unchanged.
+pub(super) fn operator_stop_reason(evidence: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(evidence) else {
+        return evidence.to_string();
+    };
+    if value.get("kind").and_then(Value::as_str) != Some("owner_landing_refusal") {
+        return evidence.to_string();
+    }
+    value
+        .pointer("/reason/value")
+        .and_then(Value::as_str)
+        .filter(|reason| !reason.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| evidence.to_string())
+}
+
+fn retry_id(handoff_id: &str, request_key: &str) -> String {
+    orbit_common::security::release::sha256_hex(format!("{handoff_id}\0{request_key}").as_bytes())
 }
 
 /// What a landing stop did to its claim.
@@ -295,25 +767,36 @@ pub(super) enum LandingStop {
     /// The automatic repair is spent: the claim fails and the task blocks with
     /// this comment.
     Blocked(String),
+    /// [ORB-16890] The claim ends and the task returns to the backlog; the
+    /// claim keeps this candidate for the task's next run.
+    Requeue(Box<PreservedClaimCandidate>),
+    /// [ORB-16890] The landing repair budget is spent: the claim fails, the
+    /// task blocks with this comment, and the claim keeps the candidate.
+    RepairBudgetExhausted {
+        comment: String,
+        kept: Box<PreservedClaimCandidate>,
+    },
 }
 
-/// The blocked task's comment: both attempts' candidates and stop evidence,
-/// so an operator sees why the automatic repair could not land either.
+/// The blocked task's comment: both attempts' candidates and the human
+/// reason each stop recorded, so an operator sees why the automatic repair
+/// could not land either. A diagnostic object stays on the attempt.
 fn repair_exhausted_comment(
     first: &ClaimRepair,
     repair_claim_id: &str,
     repaired: &AcceptedHandoff,
     reason: &str,
 ) -> String {
+    let first_reason = operator_stop_reason(&first.stop_evidence);
+    let reason = operator_stop_reason(reason);
     format!(
-        "Automatic repair exhausted: the repaired handoff's landing stopped on its base \
-         again, so the task is blocked for an operator.\n\n\
-         First attempt (claim {}, handoff {}): {}\nStopped: {}\n\n\
+        "Automatic repair exhausted: the repaired handoff's landing stopped again, so the \
+         task is blocked for an operator.\n\n\
+         First attempt (claim {}, handoff {}): {}\nStopped: {first_reason}\n\n\
          Repair attempt (claim {repair_claim_id}, handoff {}): {}\nStopped: {reason}",
         first.repairs_claim_id,
         first.handoff_id,
         describe_candidate(&first.candidate),
-        first.stop_evidence,
         repaired.handoff_id,
         describe_candidate(&repaired.handoff.candidate),
     )

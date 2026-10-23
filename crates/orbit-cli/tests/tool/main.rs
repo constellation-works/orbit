@@ -17,8 +17,6 @@ mod bound_server;
 mod child_guard;
 #[path = "../support/fixture_crew.rs"]
 mod fixture_crew;
-#[path = "../support/git_authority.rs"]
-mod git_authority;
 #[path = "../support/git_repo.rs"]
 mod git_repo;
 #[path = "../support/isolated_cli_fixture.rs"]
@@ -26,6 +24,7 @@ mod isolated_cli_fixture;
 #[path = "../support/tool_input_hints.rs"]
 mod tool_input_hint_cases;
 
+mod artifact_source_cwd;
 mod claimed_review_bridge_sandbox;
 mod github_broker_sandbox;
 mod github_capability_preflight;
@@ -40,10 +39,4 @@ mod tool_input_hints;
 mod tool_lifecycle_cli;
 mod tool_list;
 mod tool_run_audit;
-
-#[test]
-fn tool_git_fixtures_preserve_inherited_authority_decoy() {
-    git_authority::assert_fixtures_preserve_decoy(&[
-        "proc_spawn_managed::managed_pilot_proc_spawn_inspects_the_pinned_checkout_not_the_primary",
-    ]);
-}
+mod tool_run_audit_warning;

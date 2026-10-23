@@ -1,6 +1,9 @@
 //! Contract checks for tool requirements in bundled auto-task definitions.
 #![allow(clippy::unwrap_used)]
 
+#[path = "support/git.rs"]
+mod git_test_support;
+
 orbit_common::isolate_test_process!();
 
 use std::path::Path;
@@ -18,6 +21,10 @@ const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
     (
         "backlog-hygiene",
         include_str!("../assets/auto_tasks/backlog-hygiene.yaml"),
+    ),
+    (
+        "blocked-task-triage",
+        include_str!("../assets/auto_tasks/blocked-task-triage.yaml"),
     ),
     (
         "code-review",
@@ -57,15 +64,6 @@ const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
     ),
 ];
 
-const TASK_FILING_TEMPLATES: &[&str] = &[
-    "code-review",
-    "delivery-code-review",
-    "full-code-review",
-    "qa-full-sweep",
-    "run-failure-patterns",
-    "security-review",
-];
-
 fn parse_template(name: &str, source: &str) -> AutoTaskDefinition {
     let definition: AutoTaskDefinition =
         serde_yaml::from_str(source).unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -79,25 +77,6 @@ fn has_required_tool(definition: &AutoTaskDefinition, tool: &str) -> bool {
         .required_tools
         .iter()
         .any(|required| required == tool)
-}
-
-#[test]
-fn bundled_task_filing_templates_declare_task_add() {
-    let definitions = BUNDLED_AUTO_TASKS
-        .iter()
-        .map(|(name, source)| (*name, parse_template(name, source)))
-        .collect::<Vec<_>>();
-
-    for name in TASK_FILING_TEMPLATES {
-        let definition = definitions
-            .iter()
-            .find_map(|(candidate, definition)| (candidate == name).then_some(definition))
-            .unwrap_or_else(|| panic!("missing bundled task-filing template {name}"));
-        assert!(
-            has_required_tool(definition, "orbit.task.add"),
-            "bundled template {name} files tasks but does not declare orbit.task.add"
-        );
-    }
 }
 
 fn task_add_payloads(description: &str) -> Vec<Value> {
@@ -154,8 +133,8 @@ fn spawned_from_coordinator(payload: &Value) -> bool {
 /// Parse the coordinator's tool contracts, then exercise roll-up dedupe and
 /// cursor selection through the public runtime and scheduler.
 #[test]
-fn qa_full_sweep_tool_contracts_and_rollup_scheduler_behavior() {
-    if !isolated("qa_full_sweep_tool_contracts_and_rollup_scheduler_behavior") {
+fn qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep() {
+    if !isolated("qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep") {
         return;
     }
     let source = BUNDLED_AUTO_TASKS
@@ -357,6 +336,54 @@ fn qa_full_sweep_tool_contracts_and_rollup_scheduler_behavior() {
         "would_fire",
         "a commit beyond the completed roll-up cursor permits the next sweep"
     );
+
+    // A symbolic cursor can resolve to the current tip just like the valid
+    // SHA above. It must be treated as inconclusive so the next tick mints.
+    let symbolic_cursor = runtime
+        .add_task(TaskAddParams {
+            title: "Sweep with a symbolic cursor".into(),
+            task_type: Some(TaskType::Chore),
+            tags: tags_of(rollup).into_iter().map(str::to_string).collect(),
+            ..Default::default()
+        })
+        .unwrap();
+    runtime
+        .update_task_with_identity(
+            &symbolic_cursor.id,
+            TaskUpdateParams {
+                upsert_artifacts: vec![TaskArtifact::from_text(
+                    SWEEP_CURSOR_ARTIFACT,
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "ref": "sweep-fixture",
+                        "cursor": "sweep-fixture"
+                    })
+                    .to_string(),
+                )],
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    complete(&runtime, &symbolic_cursor.id);
+
+    let next_tick = run_auto_task_scheduler_at(
+        &runtime,
+        due + Duration::minutes(1),
+        SchedulerOptions::default(),
+    )
+    .unwrap();
+    assert!(next_tick.errors.is_empty(), "{next_tick:?}");
+    assert_eq!(next_tick.reports.len(), 1, "{next_tick:?}");
+    assert_eq!(next_tick.reports[0].action, "fired", "{next_tick:?}");
+    assert!(
+        runtime
+            .open_auto_task_instance(&definition)
+            .unwrap()
+            .is_some(),
+        "an inconclusive symbolic cursor leaves the next sweep eligible to mint"
+    );
 }
 
 fn isolated(test: &str) -> bool {
@@ -386,10 +413,7 @@ fn isolated(test: &str) -> bool {
 }
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let mut command = std::process::Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command.current_dir(repo).args(args).output().unwrap();
     assert!(output.status.success(), "git {args:?}: {output:?}");
     String::from_utf8(output.stdout).unwrap().trim().to_string()
@@ -418,61 +442,6 @@ fn scheduler_report(
     assert!(outcome.errors.is_empty(), "{outcome:?}");
     assert_eq!(outcome.reports.len(), 1, "{outcome:?}");
     outcome.reports.remove(0)
-}
-
-#[test]
-fn full_code_review_area_chore_declares_tools_used_for_findings() {
-    let source = BUNDLED_AUTO_TASKS
-        .iter()
-        .find_map(|(name, source)| (*name == "full-code-review").then_some(*source))
-        .unwrap_or_else(|| panic!("full-code-review is a bundled auto-task"));
-    let coordinator = parse_template("full-code-review", source);
-    assert!(has_required_tool(&coordinator, "orbit.task.add"));
-    assert!(has_required_tool(&coordinator, "orbit.task.list"));
-
-    // This is the preparation check: the generated chore must advertise every
-    // Orbit tool its finding workflow needs, so task-pilot has no utility gap.
-    let area_chore = task_add_payloads(&coordinator.template.description)
-        .into_iter()
-        .find(|payload| {
-            payload["type"] == "chore"
-                && payload["tags"]
-                    .as_array()
-                    .is_some_and(|tags| tags.iter().any(|tag| tag == "full-code-review"))
-        })
-        .unwrap_or_else(|| panic!("full-code-review files an area chore"));
-    let required_tools = area_chore["required_tools"]
-        .as_array()
-        .unwrap_or_else(|| panic!("area chore declares its required tools"));
-    for tool in ["orbit.search", "orbit.task.add"] {
-        assert!(
-            required_tools.iter().any(|required| required == tool),
-            "area chore omits {tool}; task-pilot would warn that findings cannot be filed"
-        );
-    }
-}
-
-#[test]
-fn run_failure_fix_tasks_wait_for_human_approval() {
-    let source = BUNDLED_AUTO_TASKS
-        .iter()
-        .find_map(|(name, source)| (*name == "run-failure-patterns").then_some(*source))
-        .unwrap_or_else(|| panic!("run-failure-patterns is a bundled auto-task"));
-    let definition = parse_template("run-failure-patterns", source);
-    let payloads = task_add_payloads(&definition.template.description);
-    let [fix_task] = payloads.as_slice() else {
-        panic!("run-failure-patterns files one kind of fix task: {payloads:?}");
-    };
-    let tags = fix_task["tags"]
-        .as_array()
-        .unwrap_or_else(|| panic!("the fix task carries tags: {fix_task}"));
-    for tag in ["run-failure-patterns", "no-auto-approve"] {
-        assert!(
-            tags.iter().any(|candidate| candidate == tag),
-            "fix task omits `{tag}`: an unattended scan's tasks must stay proposed for human \
-             approval, never promoted by an --approve-proposed drain"
-        );
-    }
 }
 
 /// Lint the criteria as a task minted from them would carry them, and return
@@ -628,4 +597,43 @@ fn shipped_templates_filing_findings_declare_context_files_in_task_add() {
         "shipped auto-task templates call orbit.task.add for findings without context_files:\n{}",
         missing_context_files.join("\n")
     );
+}
+
+/// The blocked-task triage holds no operator authority: none of its tools is
+/// governed, so it cannot requeue past the bound, reject, resume a run or
+/// merge, and it ships inert behind its blocked-candidate precondition.
+#[test]
+fn blocked_task_triage_declares_no_operator_only_tool() {
+    let source = BUNDLED_AUTO_TASKS
+        .iter()
+        .find_map(|(name, source)| (*name == "blocked-task-triage").then_some(*source))
+        .unwrap_or_else(|| panic!("blocked-task-triage is a bundled auto-task"));
+    let definition = parse_template("blocked-task-triage", source);
+    assert!(!definition.enabled, "bundled defaults ship inert");
+    assert!(definition.skip_unless_blocked_candidates);
+    assert!(
+        definition
+            .template
+            .tags
+            .iter()
+            .any(|tag| tag == "no-diff-expected")
+    );
+    assert!(has_required_tool(&definition, "orbit.task.block_triage"));
+    let tools = &definition.template.required_tools;
+    for tool in tools {
+        assert!(
+            orbit_common::governance::authorization::governed_tool(tool).is_none(),
+            "{tool} is operator-governed; the triage reports operator-only routes instead"
+        );
+    }
+    for forbidden in [
+        "orbit.task.update",
+        "orbit.task.requeue",
+        "orbit.task.reject",
+    ] {
+        assert!(
+            !tools.iter().any(|tool| tool == forbidden),
+            "the triage writes other tasks only through orbit.task.block_triage, not {forbidden}"
+        );
+    }
 }

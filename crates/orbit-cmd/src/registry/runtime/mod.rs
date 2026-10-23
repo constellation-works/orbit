@@ -27,6 +27,6 @@ mod selection;
 
 pub use factory::{
     RegisteredRuntimeFactory, RegisteredRuntimeStamp, ResolvedWorkspaceBinding,
-    ResolvedWorkspaceSelection, resolved_workspace_binding, workspace_runtime_binding,
+    ResolvedWorkspaceSelection, workspace_runtime_binding,
 };
 pub use selection::{global_root_for, selector_looks_like_path};

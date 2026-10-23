@@ -11,6 +11,7 @@ pub(crate) mod incidents;
 mod inspect;
 pub(crate) mod members;
 mod ownership;
+mod pilot_presence;
 pub(crate) mod pilot_reservation;
 mod pins;
 pub(crate) mod preparation;
@@ -22,6 +23,7 @@ mod source_cache;
 pub(crate) mod stall;
 mod task;
 
+pub(crate) use after_landing::review_crew_overrides_definition;
 pub use after_landing::{
     AfterLandingHealth, AfterLandingSource, after_landing_health, after_landing_switch,
 };
@@ -38,6 +40,8 @@ pub use inspect::{
 };
 pub use pins::{AttemptPinCleanup, pin_attempt_source, release_unreferenced_attempt_pins};
 pub use recovery::recover_auto_task;
+#[cfg(feature = "test-support")]
+pub use reset::probe_hook::with_reset_probe_hook;
 pub use reset::{ConsumerTeardown, reset_auto_task};
 pub(crate) use reset::{consumer_teardown_refusals, tear_down_auto_task_consumer};
 pub(crate) use source_cache::SourceCache;

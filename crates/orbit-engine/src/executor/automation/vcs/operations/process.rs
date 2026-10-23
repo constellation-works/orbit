@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, PrivateVcsFailure, PrivateVcsFailureClass};
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 
 /// Bounded attempts for private automation PR lookup and reconciled creation,
@@ -11,11 +11,16 @@ pub(in crate::executor::automation::vcs) const GITHUB_TRANSIENT_ATTEMPTS: u32 = 
 pub(in crate::executor::automation::vcs) const GITHUB_TRANSIENT_RETRY_DELAY: Duration =
     Duration::from_millis(500);
 
-/// Retry a private automation VCS read-only PR lookup (`PR_LIST`, `PR_VIEW`,
-/// or `PR_STATUS`) across a bounded number of attempts when GitHub answers with
-/// a transient failure. `pr_open` calls the first two operations to check for
-/// an existing PR before deciding whether to create one; `PR_STATUS` is used
-/// during completion. Pushes have their own remote-confirming retry path;
+/// Retry a private automation VCS read-only lookup across a bounded number
+/// of attempts when GitHub answers with a transient failure. This includes
+/// PR lists, views and status, repository identity and merge capabilities,
+/// and CI and check-annotation reads without a completion deadline.
+/// Deadline-bounded reads retain their caller's observation recovery.
+/// `pr_open` calls
+/// `PR_LIST` and `PR_VIEW` to check for an existing PR before deciding whether
+/// to create one, and `PR_LIST_OPEN` to find the tasks' earlier PRs once it
+/// created one; `PR_STATUS`, repository identity and merge capabilities are
+/// used during completion and landing. Pushes have their own remote-confirming retry path;
 /// PR creation and merge are never retried in this process wrapper: `pr_open`
 /// reconciles ambiguous create failures by looking up the head before retrying,
 /// while resending a merge risks a duplicate side effect.
@@ -30,16 +35,13 @@ pub(super) fn execute_with_transient_retry(
     loop {
         match execute(program, args.to_vec(), current_dir, timeout_ms, operation) {
             Ok(result) => return Ok(result),
-            Err(error)
-                if attempt < GITHUB_TRANSIENT_ATTEMPTS
-                    && is_transient_github_failure(&error.to_string()) =>
-            {
+            Err(error) if attempt < GITHUB_TRANSIENT_ATTEMPTS && is_transient(&error) => {
                 tracing::warn!(target: "orbit_engine::executor::automation::vcs::operations",
                     operation,
                     attempt,
                     "retrying private automation VCS lookup after a transient GitHub failure"
                 );
-                std::thread::sleep(GITHUB_TRANSIENT_RETRY_DELAY);
+                super::super::remote_probe::fixed_wait(GITHUB_TRANSIENT_RETRY_DELAY);
                 attempt += 1;
             }
             Err(error) => return Err(error),
@@ -47,23 +49,108 @@ pub(super) fn execute_with_transient_retry(
     }
 }
 
-/// True when a private automation VCS failure looks like a transient GitHub
-/// gateway or GraphQL failure (502/503/504, a request timeout, or GitHub's
-/// generic "Something went wrong while executing your query" response) rather
-/// than a permanent failure such as auth, an unknown head, or an invalid
-/// selector. Permanent failures must fail on the first attempt.
-pub(in crate::executor::automation::vcs) fn is_transient_github_failure(message: &str) -> bool {
+/// Whether `error` is a private automation VCS failure the provider reported
+/// as transient.
+pub(in crate::executor::automation::vcs) fn is_transient(error: &OrbitError) -> bool {
+    error
+        .private_vcs_failure()
+        .is_some_and(|failure| failure.class.is_transient())
+}
+
+/// `wrapper`, an Orbit diagnostic that reports `cause`, keeping the class of
+/// the private VCS failure `cause` carries. Any other wrapper is returned
+/// unchanged: an Orbit refusal is never a transient provider failure.
+pub(in crate::executor::automation::vcs) fn carry_class(
+    cause: &OrbitError,
+    wrapper: OrbitError,
+) -> OrbitError {
+    match (cause.private_vcs_failure(), wrapper) {
+        (Some(failure), OrbitError::Execution(message)) => {
+            OrbitError::PrivateVcs(Box::new(PrivateVcsFailure {
+                operation: failure.operation.clone(),
+                class: failure.class,
+                message,
+            }))
+        }
+        (_, wrapper) => wrapper,
+    }
+}
+
+/// The class of one failed private automation VCS process, read from the
+/// diagnostic `succeeded` renders for it.
+///
+/// Transient: HTTP 499, any three-digit HTTP 5xx, a TLS handshake timeout
+/// (`net/http: TLS handshake timeout` or `tls: handshake timeout`) or a
+/// connection the peer reset, even when the URL is not GraphQL, a request
+/// timeout, or GitHub's generic "Something
+/// went wrong while executing your query" response. Permanent failures such
+/// as auth, an unknown head, or an invalid selector must fail on the first
+/// attempt [ORB-16340]. A transient failure is an observation failure unless
+/// a credential, permission, rate-limit or permanent-HTTP diagnostic appears
+/// anywhere in it. Orbit's own refusals never reach this text: they stay
+/// [`OrbitError::Execution`], which is never transient.
+fn classify(message: &str) -> PrivateVcsFailureClass {
     let text = message.to_ascii_lowercase();
-    text.contains("http 502")
-        || text.contains("http 503")
-        || text.contains("http 504")
+    let transient = transient_http_499(&text)
+        || transient_http_5xx(&text)
         || text.contains("we couldn't respond to your request in time")
         || (text.contains("graphql")
             && text.contains("something went wrong while executing your query"))
         || (text.contains("graphql") && text.contains("timeout"))
+        || text.contains("tls handshake timeout")
+        || text.contains("tls: handshake timeout")
+        || text.contains("connection reset by peer");
+    if !transient {
+        PrivateVcsFailureClass::Other
+    } else if [
+        "http 400",
+        "http 401",
+        "http 403",
+        "http 404",
+        "http 409",
+        "http 410",
+        "http 422",
+        "http 429",
+        "bad credentials",
+        "permission",
+        "not accessible by integration",
+        "authentication",
+        "saml",
+        "rate limit",
+    ]
+    .iter()
+    .any(|token| text.contains(token))
+    {
+        PrivateVcsFailureClass::Transient
+    } else {
+        PrivateVcsFailureClass::TransientObservation
+    }
 }
 
-pub(super) fn execute(
+/// `HTTP 500` through `HTTP 599`. A longer token (`http 5000`) and a URL
+/// (`https://`) do not match.
+fn transient_http_5xx(text: &str) -> bool {
+    text.match_indices("http ").any(|(index, prefix)| {
+        let status = &text[index + prefix.len()..];
+        let bytes = status.as_bytes();
+        bytes.len() >= 3
+            && bytes[0] == b'5'
+            && bytes[1].is_ascii_digit()
+            && bytes[2].is_ascii_digit()
+            && bytes.get(3).is_none_or(|byte| !byte.is_ascii_digit())
+    })
+}
+
+/// `HTTP 499`. A longer token (`http 4990`) and a URL fragment do not match.
+fn transient_http_499(text: &str) -> bool {
+    text.match_indices("http ").any(|(index, prefix)| {
+        let status = &text[index + prefix.len()..];
+        let bytes = status.as_bytes();
+        bytes.starts_with(b"499") && bytes.get(3).is_none_or(|byte| !byte.is_ascii_digit())
+    })
+}
+
+pub(in crate::executor::automation::vcs) fn execute(
     program: &str,
     args: Vec<String>,
     current_dir: Option<&Path>,
@@ -116,10 +203,15 @@ pub(super) fn succeeded(
     operation: &str,
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
     if !result.success {
-        return Err(OrbitError::Execution(format!(
+        let message = format!(
             "private automation VCS {operation} failed: {}",
             result.stderr.trim()
-        )));
+        );
+        return Err(OrbitError::PrivateVcs(Box::new(PrivateVcsFailure {
+            operation: operation.to_string(),
+            class: classify(&message),
+            message,
+        })));
     }
     Ok(result)
 }

@@ -27,7 +27,7 @@ use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
 use crate::layering::{
-    reject_workspace_machine_table, resolve_workspace_file_document,
+    reject_workspace_crew_env, reject_workspace_machine_table, resolve_workspace_file_document,
     validate_staged_global_document, validate_staged_workspace_document,
 };
 use crate::operation::OperationLayerSource;
@@ -347,7 +347,7 @@ impl ConfigStore {
             .unwrap_or_default();
         Err(OrbitError::InvalidInput(format!(
             "config key '{key}' belongs to the global config only; rerun with --global to edit \
-             this machine's settings{global_path}"
+             it{global_path}"
         )))
     }
 
@@ -418,6 +418,19 @@ impl ConfigStore {
             ));
         }
         let value = parse_value_literal(raw_value);
+        // Loading clamps legacy persisted run windows so the CLI remains
+        // usable, but an explicit write must not persist an unsafe window.
+        // Check the parsed literal (including hexadecimal TOML integers)
+        // before mutating the document, for every config-store writer.
+        if key == "retention.runs_days"
+            && let Some(days) = value.as_integer()
+            && days < 30
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "{key} has invalid value {days}; expected 30..=36500: Reliability Pipeline \
+                 echo dedupe and forecast-accuracy per-drain limiter shares require 30 days of run state"
+            )));
+        }
         let segments: Vec<&str> = key.split('.').collect();
         // The non-empty segment check above makes `split_last` always `Some`;
         // still handle it as an error rather than `expect()` because this is
@@ -464,16 +477,43 @@ impl ConfigStore {
     /// below this machine's identity to fall back to, and clearing one of its
     /// three keys would leave a partial `[machine]` table that fails closed on
     /// the next load. `machine.worker_*` limits unset to their defaults.
+    ///
+    /// A removed or deprecated registry key is the other exception.
+    /// `orbit config get` and `set` refuse it, and this method still removes
+    /// it so `orbit doctor --fix-retired-config-keys` can delete a key the
+    /// operator can no longer write.
     pub fn unset_value(&mut self, key: &str) -> Result<bool, OrbitError> {
-        registry::admit_settable_config_key(key)?;
-        if registry::is_machine_identity_key(key) {
-            return Err(OrbitError::InvalidInput(format!(
-                "config key '{key}' cannot be unset: this machine's identity has no layer to \
-                 fall back to, and a partial [machine] table does not load. Rename it with \
-                 `orbit config set --global machine.name <value>` instead"
-            )));
+        if !registry::is_compatibility_config_key(key) {
+            registry::admit_settable_config_key(key)?;
+            if registry::is_machine_identity_key(key) {
+                return Err(OrbitError::InvalidInput(format!(
+                    "config key '{key}' cannot be unset: this machine's identity has no layer to \
+                     fall back to, and a partial [machine] table does not load. Rename it with \
+                     `orbit config set --global machine.name <value>` instead"
+                )));
+            }
         }
         Ok(self.remove_path(key))
+    }
+
+    /// Remove a diagnosed unknown key or whole table from this document.
+    ///
+    /// Rechecks the staged document so a stale diagnosis cannot remove a known
+    /// setting. Literal dots in TOML keys remain separate from path separators.
+    pub fn remove_unknown_key(
+        &mut self,
+        key: &crate::UnknownConfigKey,
+    ) -> Result<bool, OrbitError> {
+        let document = toml::from_str(&self.doc.to_string())
+            .map_err(|error| OrbitError::InvalidInput(format!("invalid staged config: {error}")))?;
+        if !crate::unknown_config_keys_present(&document)
+            .iter()
+            .any(|current| current.segments == key.segments)
+        {
+            return Ok(false);
+        }
+        let segments: Vec<_> = key.segments.iter().map(String::as_str).collect();
+        Ok(self.remove_segments(&segments))
     }
 
     /// Remove a whole `[crews.<name>]` table, reporting whether it existed.
@@ -501,6 +541,10 @@ impl ConfigStore {
     /// table and the leaf exists.
     fn remove_path(&mut self, key: &str) -> bool {
         let segments: Vec<&str> = key.split('.').collect();
+        self.remove_segments(&segments)
+    }
+
+    fn remove_segments(&mut self, segments: &[&str]) -> bool {
         let Some((last, ancestors)) = segments.split_last() else {
             return false;
         };
@@ -572,7 +616,10 @@ impl ConfigStore {
             ))
         })?;
         match self.scope {
-            ConfigScope::Workspace => reject_workspace_machine_table(&document, &self.path),
+            ConfigScope::Workspace => {
+                reject_workspace_machine_table(&document, &self.path)?;
+                reject_workspace_crew_env(&document, &self.path)
+            }
             ConfigScope::Global => reject_global_plugin_enablement(&document, &self.path),
         }
     }
@@ -717,6 +764,7 @@ fn crew_field_value(resolved: &ResolvedConfig, key: &str) -> Result<Option<JsonV
         "description" => serde_json::json!(crew.description),
         "tags" => serde_json::json!(crew.tags),
         "enabled" => serde_json::json!(crew.enabled),
+        "env" => serde_json::json!(crew.env),
         _ => JsonValue::Null,
     }))
 }

@@ -4,11 +4,33 @@ use chrono::{DateTime, Local, SecondsFormat};
 use clap::Args;
 use comfy_table::Cell;
 use orbit_cmd::registry_routines::{routine_statuses, routine_statuses_for_workspace};
-use orbit_core::application::routines::RetiredRoutine;
+use orbit_core::application::routines::{FireField, RetiredRoutine, RoutineField};
 use serde_json::json;
 
 use crate::command::{CommandOut, Payload};
 use crate::output::table::{Column, Table};
+
+const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
+    ("name", RoutineField::Name),
+    ("source", RoutineField::Source),
+    ("origin", RoutineField::Origin),
+    ("target", RoutineField::Target),
+    ("enabled", RoutineField::Enabled),
+    ("paused_at", RoutineField::PausedAt),
+    ("effective", RoutineField::Effective),
+    ("cron", RoutineField::Cron),
+    ("next_due", RoutineField::NextDue),
+    (
+        "last_fire",
+        RoutineField::LastFire(&[
+            ("slot", FireField::Slot),
+            ("attempt", FireField::Attempt),
+            ("state", FireField::State),
+            ("run_id", FireField::RunId),
+            ("detail", FireField::Detail),
+        ]),
+    ),
+];
 
 #[derive(Args)]
 pub struct RoutineListArgs {
@@ -34,57 +56,17 @@ impl RoutineListArgs {
             .listed_retired(self.include_inactive_plugins)
             .collect();
 
-        let statuses: Vec<_> = report
-            .statuses
-            .iter()
-            .map(|status| {
-                json!({
-                    "name": status.routine.definition.name,
-                    "source": status.routine.source_workspace,
-                    "origin": status.routine.origin.as_str(),
-                    "target": status.routine.definition.target.as_ref_string(),
-                    "enabled": status.routine.definition.enabled,
-                    "paused_at": status.paused_at,
-                    "effective": status.effective(),
-                    "cron": status.routine.definition.trigger.cron,
-                    "next_due": status.next_due,
-                    "last_fire": status.last_fire.as_ref().map(|fire| json!({
-                        "slot": fire.slot,
-                        "attempt": fire.attempt,
-                        "state": fire.state.as_str(),
-                        "run_id": fire.run_id,
-                    })),
-                })
-            })
-            .collect();
         let doc = json!({
             "machine_name": report.machine_name,
             "machine_id": report.machine_id,
-            "routines": statuses,
-            "retired": retired.iter().map(|routine| json!({
-                "name": routine.name,
-                "source": routine.source_workspace,
-                "origin": routine.origin.as_str(),
-                "path": routine.path.display().to_string(),
-                "target": format!("job:{}", routine.job),
-                "reason": routine.reason,
-                "plugin_inactive": routine.skipped,
-            })).collect::<Vec<_>>(),
-            "owner_only": report.owner_only.iter().map(|owned| json!({
-                "name": owned.routine.definition.name,
-                "source": owned.routine.source_workspace,
-                "origin": owned.routine.origin.as_str(),
-                "path": owned.routine.path.display().to_string(),
-                "target": owned.routine.definition.target.as_ref_string(),
-                "enabled": owned.routine.definition.enabled,
-                "owner_machine": owned.owner_machine,
-                "reason": owned.reason,
-            })).collect::<Vec<_>>(),
-            "load_errors": report.load_errors.iter().map(|e| json!({
-                "source_workspace": e.source_workspace,
-                "path": e.path.as_ref().map(|p| p.display().to_string()),
-                "message": e.message,
-            })).collect::<Vec<_>>(),
+            "routines": report
+                .statuses
+                .iter()
+                .map(|status| status.project(ROUTINE_COLUMNS))
+                .collect::<Vec<_>>(),
+            "retired": report.retired_rows(self.include_inactive_plugins),
+            "owner_only": report.owner_only_rows(),
+            "load_errors": report.load_error_rows(),
         });
 
         // `orbit routine show <name>` prints a routine's full definition.

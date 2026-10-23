@@ -10,9 +10,11 @@
 
 mod admission;
 mod certificate;
+mod gate_note;
 mod history;
 mod ledger;
 mod records;
+mod refusal;
 mod report;
 mod verdict;
 
@@ -22,13 +24,16 @@ mod tests;
 pub use admission::{
     CommitIdentity, DEFAULT_REVIEW_MINUTES, REVIEW_ADMISSION_KEY, REVIEW_BASELINE_ARTIFACT,
     REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
-    REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewBudget, ReviewCrewPoolMember, ReviewTiming,
+    REVIEW_REPORT_ARTIFACT, REVIEW_REQUEST_KEY, REVIEW_RUN_OPTION_SOURCE, ReviewAdmission,
+    ReviewBudget, ReviewCrewPoolMember, ReviewGateAdmissionOutput, ReviewGateAdmitted,
+    ReviewGateDecision, ReviewGateNotApplicable, ReviewGateReviewer, ReviewLayer, ReviewTiming,
     is_reserved_review_artifact,
 };
 pub use certificate::{
     HostCandidateOverride, HostGateResult, HostKnownRed, LandingTransformation, ReviewCertificate,
     ReviewConsumption, ReviewInvalidation, ReviewLanding, ReviewManifest, ReviewerIdentity,
 };
+pub use gate_note::ReviewGateHistoryNote;
 pub use history::{
     REVIEW_REPORT_HISTORY_ARTIFACT, REVIEW_REPORT_HISTORY_LIMIT, REVIEW_REPORT_HISTORY_VERSION,
     ReviewReportHistory, ReviewReportRevision,
@@ -39,6 +44,7 @@ pub use ledger::{
     ReviewerInvocationEvent, seconds_between,
 };
 pub use records::{RecordGap, RetiredValidation, record_gap};
+pub use refusal::ReviewGateRefusal;
 pub use report::{FindingDisposition, ReviewFinding, ReviewReport};
 pub use verdict::{
     NegativeControl, RetainedObligation, ReviewAssurance, ReviewBaselineClaim, ReviewValidation,

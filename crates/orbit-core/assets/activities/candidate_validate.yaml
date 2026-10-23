@@ -37,8 +37,11 @@ spec:
     commit is first attributed to the delivered tasks; a path no selector owns
     widens a task's selectors with review provenance rather than failing. An
     empty requirement list runs nothing and records
-    `skipped_no_required_commands`. A gate a delivered task's implementer
-    handed off with Bubblewrap deferrals (the task's
+    `skipped_no_required_commands`. A candidate whose delivered tasks all
+    carry `skip-validation` and whose every changed path since `base_sha`
+    matches `workflow.light_delivery_paths` runs nothing and records
+    `skipped_light_delivery`, and each task's history records the decision.
+    A gate a delivered task's implementer handed off with Bubblewrap deferrals (the task's
     `deferred-sandbox-validation.json`) runs after the required commands,
     outside any agent sandbox, and must report executed tests; one that
     still defers is a `validation_environment` failure.
@@ -77,10 +80,10 @@ spec:
         type: string
       decision:
         type: string
-        enum: [passed, passed_with_known_red, passed_with_flaky_tests, skipped_no_required_commands]
+        enum: [passed, passed_with_known_red, passed_with_flaky_tests, skipped_no_required_commands, skipped_light_delivery]
       note:
         type: string
-        description: Why no command ran, when the requirement list is empty.
+        description: Why no command ran, when the requirement list is empty or the light-delivery skip applied.
       commands:
         type: array
         description: The commands that passed.

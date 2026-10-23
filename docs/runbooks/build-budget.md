@@ -4,7 +4,7 @@ summary: Run Cargo builds within Orbit's host-wide cross-worktree admission and 
 tags: [operations, performance, rust]
 paths: ["Makefile", "scripts/build-budget.py"]
 related_artifacts: [ORB-11754, ORB-11760]
-last_validated: 2026-10-11
+last_validated: 2026-10-18
 ---
 
 # Bound Concurrent Orbit Repository Builds
@@ -18,7 +18,7 @@ private Cargo target directory.
 The repository's heavy Make targets enter the budget automatically: `build`, `release`,
 `run`, `check`, `test`, `clippy`, `ci`, `ci-test-affected`, `ci-lint`, `goldens`, `install`, and `watch`. `make ci` holds
 one slot around the complete CI script; its nested Cargo commands inherit that admission
-instead of reacquiring a slot. `dev` is covered through its `build` prerequisite.
+instead of reacquiring a slot. `dev` is covered through the budget-wrapped `cargo build` in its own recipe.
 `make ci-test-affected` selects packages without a slot, then admits each runtime
 test and doctest command. A docs-only diff does not acquire a build slot.
 
@@ -40,7 +40,7 @@ scripts/build-budget.py -- cargo test -p orbit-core command::job
 
 An ordinary `cargo ...` remains the explicit escape path when admission is inappropriate.
 For a Make target, `ORBIT_BUILD_BUDGET=0 make check` bypasses only slot admission and still
-sets the resolved Cargo job count and test-thread setting.
+sets the resolved Cargo job count, test-thread setting, and child priority policy.
 
 ## Configuration
 
@@ -68,9 +68,11 @@ default of 2. An explicit environment setting overrides the host file.
 The optional `cargo-jobs` file sets Cargo parallelism, using a decimal integer from 1
 through 1024. Precedence is `ORBIT_CARGO_JOBS`, `CARGO_BUILD_JOBS`, `cargo-jobs`, then the
 default of 4. These environment and file settings are deliberate capacity decisions and
-may exceed the defaults. `ORBIT_BUILD_BUDGET` must be `0` or `1`; invalid values exit with
+may exceed the defaults. `scripts/build-budget.py --cargo-jobs` prints the resolved value
+without taking a slot; `ci-guardrails.sh` sizes its repository-guard pool from it, so guard
+fan-out stays within the same Cargo job count. `ORBIT_BUILD_BUDGET` must be `0` or `1`; invalid values exit with
 status 64 before running the command. `ORBIT_BUILD_BUDGET=0` bypasses only slot admission
-and still applies the resolved Cargo job count.
+and still applies the resolved Cargo job count and the child priority policy.
 
 The optional `test-threads` file, or `ORBIT_TEST_THREADS`, sets how many test threads each
 admitted command may use, as a decimal integer from 1 through 1024. Precedence is
@@ -149,6 +151,30 @@ Fresh managed `proc.spawn` calls include accumulated queue credit in the activit
 remaining budget, while their configured per-call timeout still applies. Prefer
 the provider's native long-running shell transport for build validation.
 
+## Child priority
+
+Commands the wrapper launches run at lower CPU and IO priority than Orbit's control
+processes, so a saturated host favors the store, lock holders, and CLI over compilation:
+
+- CPU: niceness is raised to at least 10. This is a floor, not a setting: a caller already
+  nicer than 10 keeps its level, and the wrapper never lowers it.
+  The macOS worker profile grants `system-sched` only for `(target self)` so
+  a child can raise its own niceness. It does not grant scheduling changes to
+  another process; macOS still refuses priority elevation by an unprivileged
+  process. A worker already running under an older profile keeps that profile
+  until its next launch, and may still refuse the niceness change.
+- IO (Linux only): the command runs in the best-effort class at level 7, the lowest
+  best-effort level, through `ionice -c 2 -n 7`. The idle class is not used, because it can
+  starve compilation while Orbit's store keeps issuing IO. Where `ionice` is not on `PATH`,
+  the IO class is left unchanged and the CPU policy still applies.
+
+The policy covers both admitted runs and the budget bypass (`ORBIT_BUILD_BUDGET=0`). Cargo
+invoked directly, outside the wrapper, keeps the caller's priority.
+
+`ORBIT_BUILD_LOW_PRIORITY=0` restores the caller's priority for every wrapped command. It is
+read from the environment only, and any value other than `0` or `1` exits with status 64
+before the command runs.
+
 ## Verification
 
 Run the deterministic process test without compiling the workspace:
@@ -162,7 +188,20 @@ success, failure, and termination, release despite a surviving detached child, s
 forwarding and status preservation, nested admission, job-count and test-thread precedence
 and export, bypass, invalid settings, `make run` releasing its slot before application
 runtime, and
-`make watch` admitting each check/test iteration without retaining a slot while idle.
+`make watch` admitting each check/test iteration without retaining a slot while idle. It
+also asserts child niceness and IO class for admitted and bypassed runs, and that the
+opt-out and a caller already nicer than the floor keep their priority.
+On a native macOS host, the `orbit-exec` sandbox integration tests run this
+script under the compiled worker profile and check the scheduling boundary:
+
+```bash
+ORBIT_REQUIRE_SANDBOX_EXEC=1 cargo test -p orbit-exec --test sandbox sandbox_exec_build_budget_self_test_passes_under_worker_profile
+ORBIT_REQUIRE_SANDBOX_EXEC=1 cargo test -p orbit-exec --test sandbox sandbox_exec_scheduling_changes_are_self_only_and_unprivileged
+```
+
+An apply refusal inside an existing worker defers these integration tests;
+it does not prove that the new profile's scheduling grant works. The native
+host commands above require sandbox application and fail on that refusal.
 Commands expected to run have a 30-second bound to allow delayed admission or
 interpreter startup. The wait-reporting case polls for an elapsed-time progress
 line and limits the number of lines relative to the observation time, so a slow

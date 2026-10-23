@@ -1,25 +1,12 @@
-use std::io;
 use std::path::Path;
-use std::process::{Child, ChildStdin, ExitStatus};
-use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Duration, Instant};
 
-#[cfg(unix)]
-use std::fs::File;
-#[cfg(unix)]
-use std::io::Write;
-#[cfg(unix)]
-use std::os::fd::{AsFd, AsRawFd, FromRawFd, IntoRawFd};
-
 use orbit_common::process::build_budget::{WAIT_DIRECTORY_ENV, read_waits};
-#[cfg(unix)]
-use orbit_common::process::identity::{KernelLiveness, probe_process_group_liveness};
-#[cfg(unix)]
-use orbit_common::process::pipe::set_nonblocking;
-use orbit_common::process::stopped_descendants::{StoppedDescendant, StoppedDescendantWatch};
-use wait_timeout::ChildExt;
+use orbit_common::process::stopped_descendants::StoppedDescendant;
+use orbit_common::process::supervisor::{
+    Periodic, ProcessStopCause, Stdin, Stream, SupervisedChild, Supervision, Termination,
+};
 
 use super::super::super::dispatcher::ResolvedSandbox;
 use super::super::spawn::{SpawnError, SpawnedChild, spawn_child_with_optional_sandbox};
@@ -27,23 +14,43 @@ use super::capture::{
     CapturedOutput, OutputProgress, RollingOutputCapture, default_output_capture_limit,
     finish_captured_output,
 };
-#[cfg(unix)]
-use super::output::{
-    CancelPairHook, PipeCancel, PollOutcome, pipe_cancellation, poll_pipe_or_cancel,
-};
-use super::output::{
-    OUTPUT_READER_JOIN_TIMEOUT, OutputReaderContext, join_output_reader, spawn_output_reader,
-};
+use super::output::{OutputLineContext, TracedCaptureSink};
 
-type SpawnOutput = (CapturedOutput, CapturedOutput, Option<i32>, Duration, bool);
-
-const PROCESS_GROUP_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
+type SpawnOutput = (
+    CapturedOutput,
+    CapturedOutput,
+    Option<i32>,
+    Duration,
+    bool,
+    bool,
+);
 
 /// Newest stdout bytes a progress sample carries. Large enough for one
 /// provider event holding a long assistant message.
 const PROGRESS_WINDOW_BYTES: usize = 64 * 1024;
 
-type WaitHook<'a> = &'a dyn Fn(&mut Child) -> std::io::Result<Option<ExitStatus>>;
+/// How long output readers may keep draining after the provider's process
+/// group is gone. Only a holder outside the group (a helper the agent left in
+/// its own session) keeps a pipe open that long.
+pub(super) const OUTPUT_DRAIN_BUDGET: Duration = Duration::from_millis(500);
+
+#[cfg(test)]
+thread_local! {
+    static FIXTURE_DRAIN_BUDGET: std::cell::Cell<Duration> = const { std::cell::Cell::new(OUTPUT_DRAIN_BUDGET) };
+}
+
+/// Bound escaped-pipe cleanup in stdin fixtures without changing the production guard.
+#[cfg(test)]
+pub(super) fn with_output_drain_budget<T>(budget: Duration, operation: impl FnOnce() -> T) -> T {
+    struct Restore(Duration);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FIXTURE_DRAIN_BUDGET.with(|slot| slot.set(self.0));
+        }
+    }
+    let _restore = Restore(FIXTURE_DRAIN_BUDGET.with(|slot| slot.replace(budget)));
+    operation()
+}
 
 /// Samples a running child's stdout every `interval` until it exits, so a
 /// long invocation is observable before it finishes.
@@ -88,35 +95,14 @@ pub(in crate::activity_job::cli_runner) struct SpawnWithTimeoutRequest<'a> {
     /// deadline. Checked between waits on the child, like `on_progress`.
     pub(in crate::activity_job::cli_runner) stopped_descendants:
         Option<StoppedDescendantReporter<'a>>,
-    /// Test seam for exercising wait failures without depending on another
-    /// thread reaping the child between wait calls. Injected hooks are
-    /// try_wait-style (non-blocking); production blocks in `wait_timeout`.
-    pub(in crate::activity_job::cli_runner) wait: Option<WaitHook<'a>>,
-    /// Test seam: each live output reader increments this counter for the
-    /// lifetime of its thread so tests can observe finalization without
-    /// sampling process-wide thread counts.
-    pub(in crate::activity_job::cli_runner) live_readers: Option<Arc<AtomicUsize>>,
-    /// Test seam for supervising an already-spawned child with its ownership
-    /// guards intact. Production always spawns from the request fields.
+    /// A child [`spawn_for_supervision`] already spawned, for a caller that
+    /// works on it before supervision starts. Without it, the child is
+    /// spawned from the request fields.
     pub(in crate::activity_job::cli_runner) spawned_child: Option<SpawnedChild>,
-    /// Test seam for exercising pipe workers when the pollable cancellation
-    /// channel cannot be constructed.
-    #[cfg(unix)]
-    pub(in crate::activity_job::cli_runner) cancel_pair: Option<CancelPairHook<'a>>,
-}
-
-struct StdinWriterHandle {
-    join: thread::JoinHandle<()>,
-    #[cfg(unix)]
-    cancel: PipeCancel,
-}
-
-impl StdinWriterHandle {
-    fn cancel(self) -> thread::JoinHandle<()> {
-        #[cfg(unix)]
-        self.cancel.cancel();
-        self.join
-    }
+    /// End the run when stdout, stderr and the process tree's CPU time have
+    /// all stayed flat for this long. `None` or zero leaves only the
+    /// wall-clock deadline.
+    pub(in crate::activity_job::cli_runner) stall_window: Option<Duration>,
 }
 
 /// Spawn the child [`spawn_with_timeout`] will supervise. A caller that needs
@@ -154,11 +140,8 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
         on_spawn,
         on_progress,
         stopped_descendants,
-        wait,
-        live_readers,
         spawned_child,
-        #[cfg(unix)]
-        cancel_pair,
+        stall_window,
     } = request;
 
     let started = Instant::now();
@@ -167,83 +150,31 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
         Some(spawned) => spawned,
         None => spawn_for_supervision(program, args, env, cwd, sandbox, trace.provider)?,
     };
+    // The mount plan outlives supervision, which reaps the child (or kills
+    // and reaps it on unwind) before returning.
     let SpawnedChild {
-        mut child,
-        // The temp profile must outlive the child — drop it after wait.
-        _profile_temp,
-        // Linux mount descriptors also outlive the child. Dropping a cloned
-        // SQLite DB descriptor earlier can release the host's lease locks.
-        _linux_mount_plan,
+        child,
+        _linux_mount_plan: mount_plan,
     } = spawned;
-
-    // Report the PID before any blocking work: the whole point is to be
-    // observable during a long invocation, and the child is already running.
-    if let Some(on_spawn) = on_spawn {
-        on_spawn(child.id());
-    }
-
-    let stdin_writer = match child
-        .stdin
-        .take()
-        .map(|stdin| {
-            spawn_stdin_writer(
-                stdin,
-                stdin_bytes,
-                #[cfg(unix)]
-                cancel_pair,
-            )
-        })
-        .transpose()
-    {
-        Ok(writer) => writer,
-        Err(err) => {
-            kill_child_process_tree(&mut child);
-            return Err(SpawnError {
-                permanent: err.kind() == io::ErrorKind::Unsupported,
-                message: format!("stdin {program}: {err}"),
-            });
-        }
+    let mut child = SupervisedChild::adopt(child);
+    let stdin = if child.child_mut().stdin.is_some() {
+        provider_stdin(program, stdin_bytes)?
+    } else {
+        Stdin::Null
     };
 
     let output_limit = output_capture_limit.unwrap_or_else(default_output_capture_limit);
     let stdout_buf = Arc::new(Mutex::new(RollingOutputCapture::new(output_limit)));
     let stderr_buf = Arc::new(Mutex::new(RollingOutputCapture::new(output_limit)));
     let dispatch = tracing::dispatcher::get_default(Clone::clone);
-
-    let stdout_reader = child.stdout.take().map(|handle| {
-        spawn_output_reader(
-            handle,
-            Arc::clone(&stdout_buf),
-            OutputReaderContext {
-                provider: trace.provider.to_string(),
-                stream: "stdout",
-                job_run_id: trace.job_run_id.to_string(),
-                task_id: trace.task_id.map(ToString::to_string),
-                cwd: trace.cwd.map(ToString::to_string),
-                dispatch: dispatch.clone(),
-            },
-            live_readers.clone(),
-            #[cfg(unix)]
-            cancel_pair,
-        )
-    });
-    let stderr_reader = child.stderr.take().map(|handle| {
-        spawn_output_reader(
-            handle,
-            Arc::clone(&stderr_buf),
-            OutputReaderContext {
-                provider: trace.provider.to_string(),
-                stream: "stderr",
-                job_run_id: trace.job_run_id.to_string(),
-                task_id: trace.task_id.map(ToString::to_string),
-                cwd: trace.cwd.map(ToString::to_string),
-                dispatch,
-            },
-            live_readers,
-            #[cfg(unix)]
-            cancel_pair,
-        )
-    });
+    let line_context = |stream| OutputLineContext {
+        provider: trace.provider.to_string(),
+        stream,
+        job_run_id: trace.job_run_id.to_string(),
+        task_id: trace.task_id.map(ToString::to_string),
+        cwd: trace.cwd.map(ToString::to_string),
+        dispatch: dispatch.clone(),
+    };
 
     let deadline = deadline_start + timeout;
     let wait_directory = env
@@ -251,7 +182,10 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
         .rev()
         .find(|(name, _)| name == WAIT_DIRECTORY_ENV)
         .map(|(_, value)| Path::new(value));
-    let extended_deadline = || {
+    // Build-budget queue credit extends the deadline while the provider runs.
+    // The deadline is kept on the supervision clock and handed to the
+    // supervisor as the matching real instant.
+    let extendable_deadline = || {
         let credit = wait_directory.map_or(0, |directory| {
             read_waits(
                 directory,
@@ -259,81 +193,127 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
             )
             .deadline_extension_ms
         });
-        deadline + Duration::from_millis(credit)
-    };
-    let sample_progress = || {
-        if let Some(progress) = on_progress.as_ref()
-            && let Ok(capture) = stdout_buf.lock()
-        {
-            let sample = OutputProgress {
-                observed_bytes: capture.observed_bytes,
-                recent: capture.recent(PROGRESS_WINDOW_BYTES),
-            };
-            drop(capture);
-            (progress.report)(&sample);
+        let deadline = deadline + Duration::from_millis(credit);
+        let (real, clock) = (Instant::now(), supervision_now());
+        match deadline.checked_duration_since(clock) {
+            Some(remaining) => real + remaining,
+            None => real.checked_sub(clock - deadline).unwrap_or(real),
         }
     };
-    let mut stopped_watch = stopped_descendants.map(|reporter| StoppedWatch {
-        watch: StoppedDescendantWatch::new(reporter.threshold),
-        report: reporter.report,
-    });
-    let wait_result = wait_until_exit_or_deadline(
-        &mut child,
-        deadline,
-        wait,
-        on_progress
-            .as_ref()
-            .map(|progress| (progress.interval, &sample_progress as &dyn Fn())),
-        stopped_watch.as_mut(),
-        wait_directory.map(|_| &extended_deadline as &dyn Fn() -> Instant),
-    );
-    // `wait` failures are host-side and not clearly deterministic — leave
-    // them retryable after the common cleanup below.
-    let (exit_status, wait_error, timed_out) = match wait_result {
-        Ok(None) => (None, None, true),
-        Ok(exit_status) => (exit_status, None, false),
-        Err(err) => (None, Some(err), false),
+    let root_pid = child.child_mut().id();
+    let mut stall_watch = stall_window
+        .filter(|window| !window.is_zero())
+        .map(|window| super::stall::StallWatch::new(window, root_pid));
+    // Read the interval before the callback borrows the watch.
+    let stall_interval = stall_watch
+        .as_ref()
+        .map(super::stall::StallWatch::sample_interval);
+    let mut last_progress: Option<Instant> = None;
+    let mut sample_supervision = || {
+        if let Some(progress) = on_progress.as_ref() {
+            let due = last_progress.is_none_or(|sampled| sampled.elapsed() >= progress.interval);
+            if due && let Ok(capture) = stdout_buf.lock() {
+                let sample = OutputProgress {
+                    observed_bytes: capture.observed_bytes,
+                    recent: capture.recent(PROGRESS_WINDOW_BYTES),
+                };
+                drop(capture);
+                (progress.report)(&sample);
+                last_progress = Some(Instant::now());
+            }
+        }
+        let watch = stall_watch.as_mut()?;
+        let (Ok(stdout), Ok(stderr)) = (stdout_buf.lock(), stderr_buf.lock()) else {
+            return None;
+        };
+        let decision = watch.poll(stdout.observed_bytes, stderr.observed_bytes);
+        drop(stdout);
+        drop(stderr);
+        decision
     };
+    let periodic_interval = match (
+        stall_interval,
+        on_progress.as_ref().map(|progress| progress.interval),
+    ) {
+        (Some(stall), Some(progress)) => Some(stall.min(progress)),
+        (Some(stall), None) => Some(stall),
+        (None, Some(progress)) => Some(progress),
+        (None, None) => None,
+    };
+    #[cfg(test)]
+    let output_drain_budget = FIXTURE_DRAIN_BUDGET.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    let output_drain_budget = OUTPUT_DRAIN_BUDGET;
+    let outcome = child.supervise(Supervision {
+        stdin,
+        stdout: Stream::Sink(Box::new(TracedCaptureSink::new(
+            Arc::clone(&stdout_buf),
+            line_context("stdout"),
+        ))),
+        stderr: Stream::Sink(Box::new(TracedCaptureSink::new(
+            Arc::clone(&stderr_buf),
+            line_context("stderr"),
+        ))),
+        timeout: None,
+        clock: None,
+        extendable_deadline: Some(&extendable_deadline),
+        termination: Termination::KillNow,
+        cancelled: None,
+        // Whether a provider run should forward SIGINT/SIGTERM to its group
+        // is open; the worker's own shutdown and Core's recovery handle it.
+        intercept_signals: false,
+        drain_budget: output_drain_budget,
+        cap_drain_at_deadline: false,
+        require_eof: false,
+        stopped_descendants: stopped_descendants
+            .as_ref()
+            .map(|reporter| reporter.threshold),
+        on_stopped_descendant: stopped_descendants.as_ref().map(|reporter| reporter.report),
+        on_spawn,
+        every: periodic_interval.map(|interval| Periodic {
+            interval,
+            run: &mut sample_supervision,
+        }),
+    });
+    drop(mount_plan);
 
-    let stdin_join = stdin_writer.map(StdinWriterHandle::cancel);
-    kill_child_process_tree(&mut child);
-
-    // The join is bounded on every exit path, not only after a timeout. A
-    // reader returns when the last writer closes the pipe, and a helper the
-    // agent left in its own session (`setsid`) keeps the write end open after
-    // the child itself exits and after the group kill above. An unbounded
-    // join there never returns, no finish event is emitted, and the run's
-    // reservation is never released.
-    let reader_join_deadline = Instant::now() + OUTPUT_READER_JOIN_TIMEOUT;
-    if let Some(join) = stdin_join {
-        // The nonblocking writer observes cancellation within one poll
-        // interval, fitting inside the readers' existing shared window.
-        // Join before returning to release its prompt and owned descriptors.
-        let _ = join.join();
-    }
-    if let Some(h) = stdout_reader {
-        join_output_reader(h, reader_join_deadline);
-    }
-    if let Some(h) = stderr_reader {
-        join_output_reader(h, reader_join_deadline);
-    }
-
+    // Supervision has joined both sinks' workers, so the captures are final.
     let stdout = finish_captured_output(&stdout_buf, output_limit);
     let stderr = finish_captured_output(&stderr_buf, output_limit);
-
-    if let Some(err) = wait_error {
-        drop((stdout, stderr));
-        return Err(SpawnError::transient(format!("wait {program}: {err}")));
-    }
-
-    let exit_code = exit_status.as_ref().and_then(|s| s.code());
-    let duration = started.elapsed();
-    Ok((stdout, stderr, exit_code, duration, timed_out))
+    // Supervision failures are host-side and not clearly deterministic:
+    // leave them retryable.
+    let outcome =
+        outcome.map_err(|err| SpawnError::transient(format!("supervise {program}: {err}")))?;
+    let stalled = outcome.stop_causes.iter().any(|cause| {
+        matches!(
+            cause,
+            ProcessStopCause::Requested {
+                reason: super::stall::STALL_STOP_REASON,
+            }
+        )
+    });
+    Ok((
+        stdout,
+        stderr,
+        outcome.exit_code,
+        started.elapsed(),
+        outcome.timed_out,
+        stalled,
+    ))
 }
 
-struct StoppedWatch<'a> {
-    watch: StoppedDescendantWatch,
-    report: &'a dyn Fn(&StoppedDescendant),
+#[cfg(unix)]
+fn provider_stdin(_program: &str, bytes: &[u8]) -> Result<Stdin, SpawnError> {
+    Ok(Stdin::Payload(bytes.to_vec()))
+}
+
+/// Native non-Unix stdin supervision is unsupported; Windows runs Orbit
+/// through WSL2.
+#[cfg(not(unix))]
+fn provider_stdin(program: &str, _bytes: &[u8]) -> Result<Stdin, SpawnError> {
+    Err(SpawnError::permanent(format!(
+        "stdin {program}: bounded provider stdin supervision requires Unix (use WSL2 on Windows)"
+    )))
 }
 
 /// Only deadline decisions use the injected clock; cleanup retains real guards.
@@ -343,161 +323,4 @@ fn supervision_now() -> Instant {
         return now;
     }
     Instant::now()
-}
-
-/// Block until the child exits or `deadline` elapses.
-///
-/// Production uses `wait_timeout` for the remaining wall-clock budget so a
-/// long-running agent does not wake 40 times per second. The test `wait` hook
-/// is try_wait-style and may still poll.
-///
-/// With `progress`, production waits in slices of its interval and samples
-/// between them, so sampling stops once a wait reports the exit. `stopped`
-/// slices the wait the same way, and samples the child's process tree only
-/// while the child is unreaped.
-fn wait_until_exit_or_deadline(
-    child: &mut Child,
-    deadline: Instant,
-    wait: Option<WaitHook<'_>>,
-    progress: Option<(Duration, &dyn Fn())>,
-    mut stopped: Option<&mut StoppedWatch<'_>>,
-    extended_deadline: Option<&dyn Fn() -> Instant>,
-) -> io::Result<Option<ExitStatus>> {
-    let mut next_sample = progress.map(|(interval, _)| supervision_now() + interval);
-    loop {
-        let deadline = extended_deadline.map_or(deadline, |read| read());
-        let mut slice_end = next_sample.map_or(deadline, |next| next.min(deadline));
-        if extended_deadline.is_some() {
-            slice_end = slice_end.min(supervision_now() + Duration::from_millis(100));
-        }
-        if let Some(stopped) = stopped.as_ref() {
-            slice_end = slice_end.min(stopped.watch.next_sample_at());
-        }
-        let remaining = slice_end.saturating_duration_since(supervision_now());
-        let result = match wait {
-            Some(wait) => wait(child),
-            None => child.wait_timeout(remaining),
-        };
-        match result {
-            Ok(Some(status)) => return Ok(Some(status)),
-            Ok(None) => {
-                let now = supervision_now();
-                if now >= extended_deadline.map_or(deadline, |read| read()) {
-                    return Ok(None);
-                }
-                if let (Some((interval, sample)), Some(next)) = (progress, next_sample)
-                    && now >= next
-                {
-                    sample();
-                    next_sample = Some(now + interval);
-                }
-                if let Some(stopped) = stopped.as_deref_mut() {
-                    for descendant in stopped.watch.poll(child.id()) {
-                        (stopped.report)(&descendant);
-                    }
-                }
-                if wait.is_some() {
-                    thread::sleep(Duration::from_millis(25));
-                }
-            }
-            Err(err) => return Err(err),
-        }
-    }
-}
-
-#[cfg(unix)]
-fn spawn_stdin_writer(
-    stdin: ChildStdin,
-    bytes: &[u8],
-    cancel_pair: Option<CancelPairHook<'_>>,
-) -> io::Result<StdinWriterHandle> {
-    let fd = stdin.into_raw_fd();
-    // SAFETY: `into_raw_fd` transferred sole ownership of the stdin pipe.
-    let mut writer = unsafe { File::from_raw_fd(fd) };
-    // Unlike a ready read, a large write can block even after POLLOUT.
-    // Nonblocking mode is mandatory before starting the worker.
-    set_nonblocking(writer.as_fd())?;
-    let (cancel, watch) = pipe_cancellation(cancel_pair);
-    let bytes = bytes.to_vec();
-    let join = thread::Builder::new().spawn(move || {
-        let mut remaining = bytes.as_slice();
-        while !remaining.is_empty() {
-            match poll_pipe_or_cancel(writer.as_raw_fd(), libc::POLLOUT, &watch) {
-                PollOutcome::Ready => match writer.write(remaining) {
-                    Ok(0) => break,
-                    Ok(n) => remaining = &remaining[n..],
-                    Err(err)
-                        if matches!(
-                            err.kind(),
-                            io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
-                        ) =>
-                    {
-                        continue;
-                    }
-                    Err(_) => break,
-                },
-                PollOutcome::Cancelled | PollOutcome::Failed => break,
-            }
-        }
-    })?;
-    Ok(StdinWriterHandle { join, cancel })
-}
-
-#[cfg(not(unix))]
-fn spawn_stdin_writer(_stdin: ChildStdin, _bytes: &[u8]) -> io::Result<StdinWriterHandle> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "bounded provider stdin supervision requires Unix (use WSL2 on Windows)",
-    ))
-}
-
-/// Kills the child's whole process group, reaps the leader and waits for the
-/// group to drain. A caller that abandons a spawned child must use this, not
-/// `Child::kill`: descendants the child forked share its group, and only the
-/// group kill reaches them.
-pub(in crate::activity_job::cli_runner) fn kill_child_process_tree(child: &mut Child) {
-    #[cfg(unix)]
-    {
-        let child_id = child.id();
-        let _ = signal_child_process_group(child_id, libc::SIGKILL);
-        let _ = child.kill();
-        let _ = child.wait();
-        wait_for_process_group_exit(child_id);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-}
-
-#[cfg(unix)]
-fn wait_for_process_group_exit(child_id: u32) {
-    // An id beyond `pid_t` names no group. Pgid 0 probes as exited, so it never waits.
-    let pgid = libc::pid_t::try_from(child_id).unwrap_or(0);
-    let deadline = Instant::now() + PROCESS_GROUP_CLEANUP_TIMEOUT;
-    while probe_process_group_liveness(pgid) != KernelLiveness::Exited {
-        let _ = signal_child_process_group(child_id, libc::SIGKILL);
-        if Instant::now() >= deadline {
-            break;
-        }
-        thread::sleep(Duration::from_millis(1));
-    }
-}
-
-#[cfg(unix)]
-fn signal_child_process_group(child_id: u32, signal: libc::c_int) -> std::io::Result<()> {
-    if child_id == 0 || child_id > i32::MAX as u32 {
-        return Ok(());
-    }
-    let rc = unsafe { libc::killpg(child_id as libc::pid_t, signal) };
-    if rc == 0 {
-        return Ok(());
-    }
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
-        Ok(())
-    } else {
-        Err(error)
-    }
 }

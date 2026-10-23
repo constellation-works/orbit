@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -7,6 +7,7 @@ use crate::policy::FsProfile;
 use crate::resource::ResourceError;
 use crate::workflow::{
     AuthProbe, ExecutorSandboxKind, ExecutorType, ModelPairOverride, StdoutFormat,
+    deserialize_executor_host_os,
 };
 
 pub const EXECUTOR_RESOURCE_SCHEMA_VERSION: u32 = 2;
@@ -192,6 +193,14 @@ pub struct ExecutorResourceSpec {
     pub sandbox: Option<ExecutorSandboxKind>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_fallback: bool,
+    /// Host operating systems this executor can run on. Omitted means every
+    /// host. See [`crate::workflow::ExecutorDef::host_os`].
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_executor_host_os"
+    )]
+    pub host_os: Option<BTreeSet<crate::task::HostOs>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

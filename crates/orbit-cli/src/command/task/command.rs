@@ -1,25 +1,19 @@
-use clap::{Args, Subcommand};
+use crate::command::locks::LocksContentionArgs;
+use clap::{ArgMatches, Args, Command, FromArgMatches, Subcommand};
+use orbit_common::governance::task::{TASK, TaskVerb};
 use orbit_core::OrbitRuntime;
 
-use crate::command::locks::LocksCommand;
+use super::super::operation_args::Invocation;
 use crate::command::{CommandOut, Execute};
 
-use super::add::TaskAddArgs;
 use super::archive::TaskArchiveArgs;
-use super::artifact::TaskArtifactCommand;
-use super::eligible::TaskEligibleArgs;
 use super::export::TaskExportArgs;
 use super::flow::TaskFlowArgs;
 use super::import::TaskImportArgs;
-use super::lint::TaskLintArgs;
-use super::list::TaskListArgs;
 use super::publication::TaskPublicationCommand;
 use super::recheck_blocked::TaskRecheckBlockedArgs;
-use super::reconcile_review::TaskReconcileReviewCommand;
 use super::reindex::TaskReindexArgs;
-use super::review_reset::TaskReviewResetArgs;
-use super::show::TaskShowArgs;
-use super::update::TaskUpdateArgs;
+use super::settle_merged::TaskSettleMergedArgs;
 
 /// Grouped `orbit task` help, rendered the same way `orbit run` and the root
 /// command render theirs: a hand-rolled template, because clap's derive has no
@@ -48,8 +42,13 @@ Health:
   review-reset Reset one review lineage budget with an audited reason
   reconcile-review
                Validate and review a recovered delivery's changed merged head
+  retry-handoff
+               Retry a stopped authorized handoff through normal owner landing
+  requeue      Requeue a blocked task onto its published candidate
   recheck-blocked
-               Requeue tasks blocked by a provider launcher that now resolves
+               Requeue tasks whose infrastructure block has cleared
+  settle-merged
+               Settle tasks whose delivery pull request merged outside Orbit
 
 Bundles:
   export       Export task bundles to a portable tar.zst archive
@@ -71,7 +70,7 @@ Run `orbit task <COMMAND> --help` for a command's own options and examples.";
 
 #[derive(Args)]
 #[command(
-    about = "Create, update, and manage tasks",
+    about = TASK.cli_about,
     override_usage = "orbit task <COMMAND>",
     help_template = TASK_HELP_TEMPLATE,
     after_help = TASK_AFTER_HELP
@@ -79,17 +78,6 @@ Run `orbit task <COMMAND> --help` for a command's own options and examples.";
 pub struct TaskCommand {
     #[command(subcommand)]
     pub command: TaskSubcommand,
-}
-
-/// Host selection shared by task commands that can deliver a tool call.
-#[derive(Args)]
-pub(crate) struct TaskHostArgs {
-    /// Host that `--workspace` names, by registered host name or `machine_id`
-    /// (see `orbit host list`). Orbit reads that host's live workspace list and
-    /// uses the selector it lists for the workspace. Without it, a task id goes
-    /// to the host its prefix names.
-    #[arg(long, global = true, value_name = "HOST")]
-    pub host: Option<String>,
 }
 
 impl Execute for TaskCommand {
@@ -100,43 +88,20 @@ impl Execute for TaskCommand {
 
 #[derive(Subcommand)]
 pub enum TaskSubcommand {
-    /// Create a new task
-    Add(TaskAddArgs),
-    /// Update task fields, or take the next approval step with `--approve`
-    /// (proposed -> backlog, review -> done)
-    Update(TaskUpdateArgs),
+    // Task reads, writes, artifacts, locks and the review verbs, derived
+    // from the task operation registry.
+    #[command(flatten)]
+    Operation(TaskInvocation),
     /// Archive a task
     Archive(TaskArchiveArgs),
-    /// List tasks with optional filters
-    List(TaskListArgs),
-    /// List backlog/proposed tasks you can pick up without colliding with work
-    /// in flight
-    ///
-    /// A task is eligible when its context-file lock surface overlaps no
-    /// in-progress or review task's surface — the same lock test automatic
-    /// dispatch applies. Nothing else is checked: not dependencies, complexity,
-    /// groups or crew, and candidates are not checked against each other.
-    /// Read-only: nothing is reserved, reconciled or changed.
-    Eligible(TaskEligibleArgs),
-    /// Show detailed information about a task, found by ID with an optional
-    /// workspace filter
-    Show(TaskShowArgs),
-    /// Manage task artifact files
-    Artifact(TaskArtifactCommand),
-    /// Lint tasks for context-file and acceptance-criteria problems; `--restore-pruned` re-declares recorded selectors
-    Lint(TaskLintArgs),
     /// Show filed-vs-closed rates over time — whether the backlog is draining
     Flow(TaskFlowArgs),
-    /// Inspect, reserve, and release task file locks
-    Locks(LocksCommand),
-    /// Reset a review lineage budget with an audited operator reason
-    ReviewReset(TaskReviewResetArgs),
-    /// Validate and independently review the already-merged head of a
-    /// recovered follower delivery so its task can complete from review
-    ReconcileReview(TaskReconcileReviewCommand),
-    /// Re-check tasks blocked by a missing provider launcher; `--confirm` returns
-    /// the ones whose launcher now resolves to backlog
+    /// Re-check tasks blocked by a missing provider launcher or transient
+    /// infrastructure; `--confirm` returns the cleared ones to backlog
     RecheckBlocked(TaskRecheckBlockedArgs),
+    /// Settle tasks to done whose delivery pull request was merged outside
+    /// Orbit
+    SettleMerged(TaskSettleMergedArgs),
     /// Export task bundles to a portable tar.zst archive
     Export(TaskExportArgs),
     /// Import task bundles from a tar.zst archive
@@ -150,23 +115,71 @@ pub enum TaskSubcommand {
 impl Execute for TaskSubcommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         match self {
-            TaskSubcommand::Add(args) => args.execute(runtime),
-            TaskSubcommand::Update(args) => args.execute(runtime),
             TaskSubcommand::Archive(args) => args.execute(runtime),
-            TaskSubcommand::List(args) => args.execute(runtime),
-            TaskSubcommand::Eligible(args) => args.execute(runtime),
-            TaskSubcommand::Show(args) => args.execute(runtime),
-            TaskSubcommand::Artifact(cmd) => cmd.execute(runtime),
-            TaskSubcommand::Lint(args) => args.execute(runtime),
+            TaskSubcommand::Operation(invocation) => invocation.execute(runtime),
             TaskSubcommand::Flow(args) => args.execute(runtime),
-            TaskSubcommand::Locks(cmd) => cmd.execute(runtime),
             TaskSubcommand::RecheckBlocked(args) => args.execute(runtime),
-            TaskSubcommand::ReviewReset(args) => args.execute(runtime),
-            TaskSubcommand::ReconcileReview(command) => command.execute(runtime),
+            TaskSubcommand::SettleMerged(args) => args.execute(runtime),
             TaskSubcommand::Export(args) => args.execute(runtime),
             TaskSubcommand::Import(args) => args.execute(runtime),
             TaskSubcommand::Publication(command) => command.execute(runtime),
             TaskSubcommand::Reindex(args) => args.execute(runtime),
+        }
+    }
+}
+
+/// Migrated operations plus the existing contention command, which has no tool.
+pub enum TaskInvocation {
+    Registry(Invocation<TaskVerb>),
+    Contention(LocksContentionArgs),
+}
+
+impl Subcommand for TaskInvocation {
+    fn augment_subcommands(cmd: Command) -> Command {
+        Invocation::<TaskVerb>::augment_subcommands(cmd).mut_subcommand("locks", |cmd| {
+            let mut cmd = cmd;
+            for (index, spec) in TASK
+                .operations
+                .iter()
+                .filter(|spec| spec.cli_path.first() == Some(&"locks"))
+                .enumerate()
+            {
+                let order = if index == 0 { 0 } else { index + 1 };
+                cmd = cmd.mut_subcommand(spec.cli_path[1], |cmd| cmd.display_order(order));
+            }
+            cmd.subcommand(
+                LocksContentionArgs::augment_args(Command::new("contention")).display_order(1),
+            )
+        })
+    }
+    fn augment_subcommands_for_update(cmd: Command) -> Command {
+        Self::augment_subcommands(cmd)
+    }
+    fn has_subcommand(name: &str) -> bool {
+        Invocation::<TaskVerb>::has_subcommand(name)
+    }
+}
+
+impl FromArgMatches for TaskInvocation {
+    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
+        if let Some(("locks", group)) = matches.subcommand()
+            && let Some(("contention", leaf)) = group.subcommand()
+        {
+            return LocksContentionArgs::from_arg_matches(leaf).map(Self::Contention);
+        }
+        Invocation::from_arg_matches(matches).map(Self::Registry)
+    }
+    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
+        *self = Self::from_arg_matches(matches)?;
+        Ok(())
+    }
+}
+
+impl Execute for TaskInvocation {
+    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        match self {
+            Self::Registry(invocation) => super::operation::execute(invocation, runtime),
+            Self::Contention(args) => args.execute(runtime),
         }
     }
 }

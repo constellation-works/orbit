@@ -71,14 +71,7 @@ fn state(pair: &Pair, drain: &str) -> PipelineState {
 /// The window answers expired, the operator extends, and the pass the job
 /// then runs with that stale answer keeps the drain alive and requests work
 /// under the new deadline.
-#[test]
 fn an_extension_after_the_window_answer_keeps_the_drain_requesting() {
-    if !isolated(
-        module_path!(),
-        "an_extension_after_the_window_answer_keeps_the_drain_requesting",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let lapsed = Utc::now() - Duration::minutes(5);
     let drain = timed_drain(&pair, lapsed);
@@ -93,21 +86,14 @@ fn an_extension_after_the_window_answer_keeps_the_drain_requesting() {
     assert!(!pair.wire.calls("orbit.drain.probe").is_empty(), "{pass}");
     assert_eq!(pair.wire.calls("orbit.task.pull").len(), 1, "{pass}");
     assert_eq!(pair.run_state(&drain), JobRunState::Running);
-    assert!(state(&pair, &drain).pull_window_close.is_none());
+    assert!(state(&pair, &drain).pull_drain.pull_window_close.is_none());
 }
 
 /// The extension lands while the pass that read the window closed is
 /// delivering the drain's last settlement. The pass rereads the deadline
 /// where it decides to end, so the drain keeps running and its next pass
 /// requests work.
-#[test]
 fn an_extension_accepted_during_the_closing_pass_keeps_the_drain_alive() {
-    if !isolated(
-        module_path!(),
-        "an_extension_accepted_during_the_closing_pass_keeps_the_drain_alive",
-    ) {
-        return;
-    }
     let pair = Pair::new(2);
     let drain = timed_drain(&pair, Utc::now() + Duration::minutes(10));
     let leaf = pair.running_leaf(&drain, 1);
@@ -133,7 +119,7 @@ fn an_extension_accepted_during_the_closing_pass_keeps_the_drain_alive() {
     assert_eq!(pass["done"], false, "{pass}");
     assert_eq!(pair.wire.calls("orbit.task.pull").len(), 1, "{pass}");
     assert_eq!(pair.run_state(&drain), JobRunState::Running);
-    assert!(state(&pair, &drain).pull_window_close.is_none());
+    assert!(state(&pair, &drain).pull_drain.pull_window_close.is_none());
 
     let next = pair.pass_over(&drain, stale_expired());
     assert_eq!(next["done"], false, "{next}");
@@ -143,14 +129,7 @@ fn an_extension_accepted_during_the_closing_pass_keeps_the_drain_alive() {
 /// With no extension the stale answer ends the drain, and the close is
 /// recorded where an extension reads it: a later extension is refused and
 /// retunes nothing. A stopped drain whose deadline is still open ends too.
-#[test]
 fn a_closed_pull_window_ends_the_drain_and_refuses_a_later_extension() {
-    if !isolated(
-        module_path!(),
-        "a_closed_pull_window_ends_the_drain_and_refuses_a_later_extension",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let drain = timed_drain(&pair, Utc::now() - Duration::minutes(5));
 
@@ -159,16 +138,16 @@ fn a_closed_pull_window_ends_the_drain_and_refuses_a_later_extension() {
     assert_eq!(pass["admitting"], false, "{pass}");
     assert!(pair.wire.calls("orbit.drain.probe").is_empty());
     assert!(pair.wire.calls("orbit.task.pull").is_empty());
-    assert!(state(&pair, &drain).pull_window_close.is_some());
+    assert!(state(&pair, &drain).pull_drain.pull_window_close.is_some());
 
     let error = extend(&pair.follower, &drain, Some(4))
         .unwrap_err()
         .to_string();
     assert!(error.contains("closed its window"), "{error}");
     let closed = state(&pair, &drain);
-    assert!(closed.drain_window_extension.is_none());
+    assert!(closed.pull_drain.drain_window_extension.is_none());
     assert!(
-        closed.drain_worker_limit.is_none(),
+        closed.pull_drain.drain_worker_limit.is_none(),
         "a refused extension retunes nothing"
     );
 
@@ -188,3 +167,11 @@ fn a_closed_pull_window_ends_the_drain_and_refuses_a_later_extension() {
     assert_eq!(pass["done"], true, "{pass}");
     assert!(pair.wire.calls("orbit.task.pull").is_empty());
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    an_extension_after_the_window_answer_keeps_the_drain_requesting_scenarios,
+    an_extension_after_the_window_answer_keeps_the_drain_requesting,
+    an_extension_accepted_during_the_closing_pass_keeps_the_drain_alive,
+    a_closed_pull_window_ends_the_drain_and_refuses_a_later_extension
+);

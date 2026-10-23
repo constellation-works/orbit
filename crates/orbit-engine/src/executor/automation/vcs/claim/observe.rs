@@ -48,7 +48,7 @@ pub fn observe_candidate(
     landing_branch: &str,
     delivery: HandoffDelivery,
     fallback_repository: &str,
-    base_sync: &str,
+    base_sync: BaseSyncMode,
 ) -> Result<HandoffCandidate, OrbitError> {
     let source_branch = match source {
         Some(branch) => branch.to_string(),
@@ -63,19 +63,10 @@ pub fn observe_candidate(
         ));
     }
     let candidate = revision(workspace_path, &source_branch)?;
-    let sync_mode = match base_sync.trim() {
-        "local" => BaseSyncMode::Local,
-        "remote" => BaseSyncMode::Remote,
-        other => {
-            return Err(OrbitError::InvalidInput(format!(
-                "base_sync must be 'local' or 'remote', got '{other}'"
-            )));
-        }
-    };
-    let base_ref = match resolve_worktree_start_point(workspace_path, base_branch, sync_mode) {
+    let base_ref = match resolve_worktree_start_point(workspace_path, base_branch, base_sync) {
         Ok(base_ref) => base_ref,
         Err(error)
-            if sync_mode == BaseSyncMode::Remote
+            if base_sync == BaseSyncMode::Remote
                 && !matches!(delivery, HandoffDelivery::NoDiff { .. })
                 && matches!(&error, OrbitError::Execution(message) | OrbitError::ExecutionTimeout { message, .. } if message.starts_with(TRANSIENT_FAILURE_MARKER)) =>
         {
@@ -183,7 +174,7 @@ pub(super) fn observe_with(
         &context.landing_branch,
         delivery,
         &context.workspace_id,
-        &claimed_base_sync(context, input)?,
+        claimed_base_sync(context, input)?,
     )?;
     if let Some(declared) = input_string_field(input, "base_sha") {
         let contains_declared = git_command_success(
@@ -238,13 +229,13 @@ pub(super) fn require_clean_candidate(
 pub(super) fn claimed_base_sync(
     context: &ClaimExecutionContext,
     input: &Value,
-) -> Result<String, OrbitError> {
-    if let Some(value) = input_string_field(input, "base_sync") {
-        return Ok(value);
+) -> Result<BaseSyncMode, OrbitError> {
+    if input.get("base_sync").and_then(Value::as_str).is_some() {
+        return BaseSyncMode::from_input(input);
     }
     match context.ship_mode.as_str() {
-        "local" => Ok("local".to_string()),
-        "pr" => Ok("remote".to_string()),
+        "local" => Ok(BaseSyncMode::Local),
+        "pr" => Ok(BaseSyncMode::Remote),
         other => Err(refused(format!(
             "claimed leaf ship mode '{other}' has no base sync mode"
         ))),

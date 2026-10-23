@@ -1,17 +1,3 @@
-pub mod add;
-pub mod artifact_get;
 pub mod artifact_put;
-pub mod delete;
-pub mod eligible;
 pub(super) mod guarded;
-pub mod lint;
-pub mod list;
-pub mod locks;
-pub mod reconcile_review;
-pub mod reject;
-pub mod review_reset;
-pub mod show;
-pub mod update;
-
-#[cfg(test)]
-mod tests;
+mod operation;

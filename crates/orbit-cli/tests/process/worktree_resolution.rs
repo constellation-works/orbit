@@ -16,7 +16,6 @@ use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::tempdir;
 
-#[test]
 fn tool_run_explicit_workspace_resolves_from_home_and_temp_directory() {
     let temp = tempdir().expect("fixture");
     let home = temp.path().join("home");
@@ -138,7 +137,6 @@ fn tool_run_explicit_workspace_resolves_from_home_and_temp_directory() {
     );
 }
 
-#[test]
 fn config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -208,13 +206,11 @@ fn config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides() 
     );
 }
 
-#[test]
 fn submodule_bootstrap_and_runtime_keep_the_submodule_workspace() {
     check_submodule_roots(false);
 }
 
 #[cfg(unix)]
-#[test]
 fn submodule_roots_remain_independent_when_git_is_unavailable() {
     check_submodule_roots(true);
 }
@@ -259,7 +255,6 @@ fn check_submodule_roots(without_git: bool) {
     }
 }
 
-#[test]
 fn submodule_runtime_respects_its_registered_data_directory() {
     let temp = tempdir().expect("submodule fixture");
     let home = temp.path().join("home");
@@ -295,7 +290,6 @@ fn submodule_runtime_respects_its_registered_data_directory() {
 }
 
 #[cfg(unix)]
-#[test]
 fn linked_worktree_gitfile_fallback_checks_the_common_directory() {
     let temp = tempdir().expect("worktree fixture");
     let home = temp.path().join("home");
@@ -437,7 +431,6 @@ fn restore_permissions_guard_restores_the_mode_when_the_test_panics() {
 }
 
 #[cfg(unix)]
-#[test]
 fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validation() {
     let temp = tempdir().expect("fixture");
     let home = temp.path().join("home");
@@ -509,9 +502,233 @@ fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validati
         !lock.exists(),
         "failed validation must not leave a lock file"
     );
+
+    // Selector resolution has a different contract: a failed status save is
+    // best-effort, so it still reports the filesystem-validated inactive row.
+    // Let lock acquisition succeed and make only the atomic save fail.
+    drop(_restore_global);
+    fs::write(&lock, b"").expect("prepare existing registry lock");
+    let _restore_global = RestorePermissions::set_mode(&global, 0o555);
+    let selector = listed[0]["id"].as_str().expect("registered workspace id");
+    let failed = orbit_command(&unrelated, &home, &[], None)
+        .args(["--workspace", selector, "workspace", "show", "--json"])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&failed.get_output().stderr);
+    assert!(
+        stderr.contains("is invalid on this machine"),
+        "selector must use validated status despite the failed save: {stderr}"
+    );
+    assert_eq!(
+        fs::read(global.join("workspaces.json")).expect("registry after best-effort save"),
+        before,
+        "best-effort selector validation must leave failed status writes unchanged"
+    );
 }
 
-#[test]
+fn auto_task_show_keeps_alternate_extension_candidates_local() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let main_repo = temp.path().join("repo");
+    let linked = temp.path().join("candidate");
+    fs::create_dir_all(&home).expect("home");
+    crate::git_repo::SeededRepo::new(&main_repo)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
+    crate::git_repo::run(
+        &main_repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "candidate",
+            linked.to_str().unwrap(),
+        ],
+    );
+    run_orbit_success(&main_repo, &home, &["workspace", "init"], None);
+    let shared = fs::canonicalize(main_repo.join(".orbit")).unwrap();
+    let local = fs::canonicalize(&linked).unwrap().join(".orbit");
+    write_auto_task_fixture(&shared, "Shared enabled body");
+    let shared_path = shared.join("auto_tasks/candidate-probe.yaml");
+    let shared_bytes = fs::read_to_string(&shared_path)
+        .unwrap()
+        .replace("enabled: false", "enabled: true");
+    fs::write(&shared_path, &shared_bytes).unwrap();
+    for extension in ["yml", "YML", "Yml"] {
+        write_auto_task_fixture(&local, "Local disabled body");
+        let canonical = local.join("auto_tasks/candidate-probe.yaml");
+        let alternate = canonical.with_extension(extension);
+        fs::rename(&canonical, &alternate).unwrap();
+        fs::write(
+            local.join("auto_tasks/.orbit-auto-task-settings.json"),
+            r#"{"schemaVersion":1,"definitions":{"candidate-probe":{"priority":"high"}}}"#,
+        )
+        .unwrap();
+        let shown = run_orbit_json(
+            &linked,
+            &home,
+            &["auto-task", "show", "candidate-probe", "--json"],
+            None,
+        );
+        assert_eq!(
+            shown["description"], "Local disabled body",
+            "extension {extension}"
+        );
+        assert_eq!(shown["enabled"], false);
+        assert_eq!(
+            shown["definition_source"]["root"],
+            local.to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            shown["definition_source"]["path"],
+            alternate.to_string_lossy().as_ref()
+        );
+        assert_eq!(shown["layering"]["settings"]["priority"], "high");
+        let listed = run_orbit_json(
+            &linked,
+            &home,
+            &["auto-task", "list", "--format", "json"],
+            None,
+        );
+        let rows: Vec<_> = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["name"] == "candidate-probe")
+            .collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["description"], shown["description"]);
+        assert_eq!(rows[0]["enabled"], false);
+        for args in [
+            vec!["auto-task", "mint", "candidate-probe"],
+            vec![
+                "auto-task",
+                "update",
+                "candidate-probe",
+                "--description",
+                "forbidden",
+            ],
+            vec!["auto-task", "toggle", "candidate-probe", "on"],
+            vec![
+                "auto-task",
+                "recover",
+                "candidate-probe",
+                "--adopt-settings",
+                "--reason",
+                "probe",
+            ],
+            vec!["auto-task", "reset", "candidate-probe", "--reason", "probe"],
+        ] {
+            let mut command = orbit_command(&linked, &home, &args, None);
+            if args[1] == "reset" {
+                command.env("ORBIT_OPERATOR", "1");
+            }
+            let refused = command.output().unwrap();
+            assert!(
+                !refused.status.success(),
+                "alternate read must not grant write authority: {args:?}"
+            );
+            let message = String::from_utf8_lossy(&refused.stderr);
+            assert!(
+                message.contains("no such auto-task")
+                    || message.contains("must be stored at its canonical .yaml path"),
+                "local canonical lookup must refuse {args:?}: {refused:?}"
+            );
+        }
+        let candidate_body = fs::read_to_string(&alternate).unwrap();
+        fs::write(
+            &alternate,
+            format!("# provenance: plugin:absent-probe@1.0.0\n{candidate_body}"),
+        )
+        .unwrap();
+        let plugin = run_orbit_json(
+            &linked,
+            &home,
+            &["auto-task", "show", "candidate-probe", "--json"],
+            None,
+        );
+        assert_eq!(plugin["inactive_plugin"]["namespace"], "absent-probe");
+        assert!(
+            plugin["skipped_reason"]
+                .as_str()
+                .unwrap()
+                .contains(alternate.to_str().unwrap())
+        );
+        let visible = run_orbit_json(
+            &linked,
+            &home,
+            &["auto-task", "list", "--format", "json"],
+            None,
+        );
+        assert!(
+            !visible
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["name"] == "candidate-probe")
+        );
+        let all = run_orbit_json(
+            &linked,
+            &home,
+            &["auto-task", "list", "--all", "--format", "json"],
+            None,
+        );
+        assert!(
+            all.as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["name"] == "candidate-probe"
+                    && row["inactive_plugin"]["namespace"] == "absent-probe")
+        );
+        // A second file with the same stem must not choose an arbitrary body.
+        write_auto_task_fixture(&local, "Ambiguous canonical body");
+        let duplicate = run_orbit_output(
+            &linked,
+            &home,
+            &["auto-task", "show", "candidate-probe", "--json"],
+            None,
+        );
+        assert!(!duplicate.status.success());
+        let refusal: Value = serde_json::from_slice(&duplicate.stderr).unwrap();
+        assert_eq!(refusal["code"], "invalid_input");
+        fs::remove_file(&canonical).unwrap();
+        fs::write(&alternate, "name: [malformed").unwrap();
+        let malformed = run_orbit_output(
+            &linked,
+            &home,
+            &["auto-task", "show", "candidate-probe", "--json"],
+            None,
+        );
+        assert!(
+            !malformed.status.success(),
+            "malformed {extension} must shadow shared body"
+        );
+        let refusal: Value = serde_json::from_slice(&malformed.stderr).unwrap();
+        assert_eq!(refusal["code"], "invalid_input");
+        let malformed_list = run_orbit_json(
+            &linked,
+            &home,
+            &["auto-task", "list", "--format", "json"],
+            None,
+        );
+        assert!(
+            !malformed_list
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["name"] == "candidate-probe"),
+            "list must not reveal the shared body either"
+        );
+        assert_eq!(fs::read_to_string(&shared_path).unwrap(), shared_bytes);
+        assert!(
+            !canonical.exists(),
+            "refused writes must not create canonical definition"
+        );
+        fs::remove_file(&alternate).unwrap();
+    }
+}
+
 fn auto_task_show_reports_and_honors_the_selected_definition_source() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -540,7 +757,162 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
     let main_orbit = main_repo.join(".orbit");
     let linked_orbit = linked_worktree.join(".orbit");
     write_auto_task_fixture(&main_orbit, "Primary checkout definition");
+
+    // An empty run-worktree catalog must not hide workspace definitions.
+    fs::create_dir_all(linked_orbit.join("auto_tasks")).expect("empty candidate catalog");
+    let primary_bytes = fs::read(main_orbit.join("auto_tasks/candidate-probe.yaml"))
+        .expect("primary definition before inspection");
+    fs::write(
+        main_orbit.join("auto_tasks/.orbit-auto-task-settings.json"),
+        r#"{"schemaVersion":1,"definitions":{"candidate-probe":{"priority":"high"}}}"#,
+    )
+    .expect("workspace settings");
+    {
+        let args = ["auto-task", "show", "candidate-probe", "--json"];
+        let shown = run_orbit_json(&linked_worktree, &home, &args, None);
+        assert_eq!(shown["description"], "Primary checkout definition");
+        assert_eq!(shown["template"]["priority"], "high");
+        assert_eq!(shown["layering"]["settings"]["priority"], "high");
+        assert_eq!(
+            shown["enabled"], false,
+            "disabled definitions remain inspectable"
+        );
+        assert_eq!(
+            shown["definition_source"]["root"],
+            main_orbit.to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            shown["definition_source"]["path"],
+            main_orbit
+                .join("auto_tasks/candidate-probe.yaml")
+                .to_string_lossy()
+                .as_ref()
+        );
+    }
+    for args in [
+        vec!["auto-task", "list", "--format", "json"],
+        vec!["tool", "run", "orbit.auto_task.list", "--input", "{}"],
+    ] {
+        let listed = run_orbit_json(&linked_worktree, &home, &args, None);
+        assert!(
+            listed
+                .as_array()
+                .expect("definition rows")
+                .iter()
+                .any(|row| {
+                    row["name"] == "candidate-probe"
+                        && row["description"] == "Primary checkout definition"
+                }),
+            "workspace definition missing from {listed}"
+        );
+    }
+    let missing = run_orbit_output(
+        &linked_worktree,
+        &home,
+        &["auto-task", "show", "absent-probe", "--json"],
+        None,
+    );
+    assert!(!missing.status.success());
+    let refusal: Value = serde_json::from_slice(&missing.stderr).expect("typed JSON refusal");
+    assert_eq!(refusal["code"], "invalid_input");
+    let error = refusal["error"].as_str().expect("refusal message");
+    assert!(
+        error.contains(main_orbit.to_str().expect("root")),
+        "searched workspace root: {error}"
+    );
+    assert!(
+        error.contains(linked_orbit.to_str().expect("root")),
+        "searched candidate root: {error}"
+    );
+    assert!(
+        error.contains("orbit auto-task list"),
+        "scope discovery command: {error}"
+    );
+    for args in [
+        vec!["auto-task", "mint", "candidate-probe"],
+        vec![
+            "auto-task",
+            "update",
+            "candidate-probe",
+            "--description",
+            "must stay local",
+        ],
+        vec!["auto-task", "toggle", "candidate-probe", "on"],
+        vec![
+            "auto-task",
+            "recover",
+            "candidate-probe",
+            "--adopt-settings",
+            "--reason",
+            "lookup probe",
+        ],
+        vec![
+            "auto-task",
+            "reset",
+            "candidate-probe",
+            "--reason",
+            "lookup probe",
+        ],
+    ] {
+        let mut command = orbit_command(&linked_worktree, &home, &args, None);
+        // Exercise the operator-only reset on the disposable fixture, as the
+        // lifecycle CLI fixtures do; no ambient authority reaches this child.
+        if args[1] == "reset" {
+            command.env("ORBIT_OPERATOR", "1");
+        }
+        let refused = command.output().expect("local write lookup");
+        assert!(
+            !refused.status.success(),
+            "shared inspection must not widen write scope: {args:?}"
+        );
+        assert!(
+            String::from_utf8_lossy(&refused.stderr).contains("no such auto-task"),
+            "local-only definition lookup must refuse before mutation: {refused:?}"
+        );
+    }
+    assert_eq!(
+        fs::read(main_orbit.join("auto_tasks/candidate-probe.yaml")).expect("primary after reads"),
+        primary_bytes
+    );
+    assert!(
+        fs::read_dir(linked_orbit.join("auto_tasks"))
+            .expect("candidate catalog")
+            .next()
+            .is_none(),
+        "reads and a refused mint must not create local definitions"
+    );
+
     write_auto_task_fixture(&linked_orbit, "Linked candidate definition");
+    fs::write(
+        linked_orbit.join("auto_tasks/.orbit-auto-task-settings.json"),
+        r#"{"schemaVersion":1,"definitions":{"candidate-probe":{"priority":"low"}}}"#,
+    )
+    .expect("candidate settings");
+    fs::write(
+        main_orbit.join("auto_tasks/workspace-only.yaml"),
+        String::from_utf8(primary_bytes.clone())
+            .expect("definition text")
+            .replace("candidate-probe", "workspace-only"),
+    )
+    .expect("shared-only definition for union listing");
+    let union = run_orbit_json(
+        &linked_worktree,
+        &home,
+        &["auto-task", "list", "--format", "json"],
+        None,
+    );
+    let rows = union.as_array().expect("union rows");
+    let candidates: Vec<_> = rows
+        .iter()
+        .filter(|row| row["name"] == "candidate-probe")
+        .collect();
+    assert_eq!(candidates.len(), 1, "candidate overrides shared body once");
+    assert_eq!(candidates[0]["description"], "Linked candidate definition");
+    assert_eq!(candidates[0]["template"]["priority"], "low");
+    assert!(
+        rows.iter().any(|row| row["name"] == "workspace-only"),
+        "a local candidate must not hide other shared names"
+    );
 
     let workspaces = run_orbit_json(
         &main_repo,
@@ -570,6 +942,10 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
     assert_eq!(
         from_worktree_logical["description"],
         "Linked candidate definition"
+    );
+    assert_eq!(
+        from_worktree_logical["layering"]["settings"]["priority"],
+        "low"
     );
     assert_eq!(
         from_worktree_logical["definition_source"]["root"],
@@ -710,6 +1086,143 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
         "writable routing must not create a worktree-local shadow store"
     );
 
+    fs::write(
+        linked_orbit.join("auto_tasks/candidate-probe.yaml"),
+        "invalid: [",
+    )
+    .expect("broken candidate");
+    let broken = run_orbit_output(
+        &linked_worktree,
+        &home,
+        &["auto-task", "show", "candidate-probe", "--json"],
+        None,
+    );
+    assert!(
+        !broken.status.success(),
+        "an invalid candidate must not fall back to the shared body"
+    );
+    let listed = run_orbit_json(
+        &linked_worktree,
+        &home,
+        &["auto-task", "list", "--format", "json"],
+        None,
+    );
+    assert!(
+        !listed
+            .as_array()
+            .expect("rows")
+            .iter()
+            .any(|row| row["name"] == "candidate-probe"),
+        "a broken local entry must shadow the shared definition"
+    );
+    // A shared plugin definition must carry its original inactive provenance.
+    let plugin_body = String::from_utf8(primary_bytes)
+        .expect("definition text")
+        .replace("candidate-probe", "plugin-probe");
+    fs::write(
+        main_orbit.join("auto_tasks/plugin-probe.yaml"),
+        format!("# provenance: plugin:absent-probe@1.0.0\n{plugin_body}"),
+    )
+    .expect("shared plugin definition");
+    let plugin = run_orbit_json(
+        &linked_worktree,
+        &home,
+        &["auto-task", "show", "plugin-probe", "--json"],
+        None,
+    );
+    assert_eq!(plugin["inactive_plugin"]["namespace"], "absent-probe");
+    assert!(
+        plugin["skipped_reason"]
+            .as_str()
+            .expect("inactive reason")
+            .contains(main_orbit.to_str().expect("root")),
+        "inactive reason must name the supplying catalog"
+    );
+    let visible = run_orbit_json(
+        &linked_worktree,
+        &home,
+        &["auto-task", "list", "--format", "json"],
+        None,
+    );
+    assert!(
+        !visible
+            .as_array()
+            .expect("rows")
+            .iter()
+            .any(|row| row["name"] == "plugin-probe"),
+        "inactive plugin definitions stay hidden"
+    );
+    let all = run_orbit_json(
+        &linked_worktree,
+        &home,
+        &["auto-task", "list", "--all", "--format", "json"],
+        None,
+    );
+    assert!(
+        all.as_array()
+            .expect("rows")
+            .iter()
+            .any(|row| row["name"] == "plugin-probe"
+                && row["inactive_plugin"]["namespace"] == "absent-probe")
+    );
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(
+            main_orbit.join("auto_tasks/workspace-only.yaml"),
+            linked_orbit.join("auto_tasks/workspace-only.yaml"),
+        )
+        .expect("symlink candidate");
+        let confined = run_orbit_output(
+            &linked_worktree,
+            &home,
+            &["auto-task", "show", "workspace-only", "--json"],
+            None,
+        );
+        assert!(
+            !confined.status.success(),
+            "a symlinked candidate cannot redirect or fall back"
+        );
+        let listed = run_orbit_json(
+            &linked_worktree,
+            &home,
+            &["auto-task", "list", "--format", "json"],
+            None,
+        );
+        assert!(
+            !listed
+                .as_array()
+                .expect("rows")
+                .iter()
+                .any(|row| row["name"] == "workspace-only"),
+            "a symlinked local entry must not expose the shared definition"
+        );
+    }
+
+    fs::write(
+        main_orbit.join("auto_tasks/shared-fault.yaml"),
+        "invalid: [",
+    )
+    .expect("shared catalog fault");
+    let doctor = run_orbit_output(&linked_worktree, &home, &["doctor", "--json"], None);
+    let checks: Vec<Value> = serde_json::from_slice(&doctor.stdout).expect("doctor rows");
+    let auto_tasks = checks
+        .iter()
+        .find(|row| row["check"] == "artifacts-auto-tasks")
+        .expect("auto-task health");
+    assert!(
+        auto_tasks["remediation"]
+            .as_str()
+            .expect("health remediation")
+            .contains(
+                main_orbit
+                    .join("auto_tasks/shared-fault.yaml")
+                    .to_str()
+                    .expect("fault path")
+            ),
+        "worktree diagnostics must inspect the shared catalog: {auto_tasks}"
+    );
+
     let outside_checkout = temp.path().to_string_lossy().into_owned();
     for rejected in ["no-such-workspace", outside_checkout.as_str()] {
         let mut command = cargo_bin_cmd!("orbit");
@@ -740,7 +1253,6 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
     }
 }
 
-#[test]
 fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -981,7 +1493,6 @@ fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
 /// The real detached worker must bootstrap, claim, and finish its run while an
 /// unrelated WAL writer holds the already-current task registry. The parent
 /// keeps supervising the child; no fixture claims the run on its behalf.
-#[test]
 fn detached_worker_bootstraps_and_claims_while_registry_writer_is_held() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -1085,7 +1596,6 @@ spec:
         .expect("release registry writer");
 }
 
-#[test]
 fn doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -1379,7 +1889,6 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
 /// It keeps a live holder record, and a dead record in a file a live process
 /// holds through the OS lock.
 #[cfg(unix)]
-#[test]
 fn doctor_stale_lock_repair_keeps_locks_a_live_process_holds() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -1438,11 +1947,10 @@ fn doctor_stale_lock_repair_keeps_locks_a_live_process_holds() {
     );
 }
 
-/// `--remove-graph` unlinks a symlinked graph location instead of deleting
-/// through it, and refuses to walk through a symlinked `knowledge` ancestor.
-/// Files outside the Orbit root survive both.
+/// `--remove-graph` refuses to walk through a symlinked `knowledge` ancestor.
+/// The public runtime cleanup matrix separately proves graph-leaf unlinking;
+/// this real CLI refusal keeps the ancestor link and outside sentinels.
 #[cfg(unix)]
-#[test]
 fn doctor_graph_cleanup_never_deletes_through_symlinks() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -1459,19 +1967,6 @@ fn doctor_graph_cleanup_never_deletes_through_symlinks() {
     fs::create_dir_all(&outside).expect("create outside");
     let outside_marker = outside.join("keep.db");
     fs::write(&outside_marker, b"keep").expect("write outside marker");
-    let graph_link = orbit_dir.join("graph");
-    std::os::unix::fs::symlink(&outside, &graph_link).expect("link graph outside the root");
-
-    run_orbit_json(&repo, &home, &["doctor", "--remove-graph", "--json"], None);
-    assert!(
-        outside_marker.is_file(),
-        "cleanup must not follow a graph symlink"
-    );
-    assert!(
-        fs::symlink_metadata(&graph_link).is_err(),
-        "the graph link itself is removed"
-    );
-
     let external_graph = outside.join("graph");
     fs::create_dir_all(&external_graph).expect("create external graph");
     let external_graph_marker = external_graph.join("keep.db");
@@ -1507,7 +2002,6 @@ fn doctor_graph_cleanup_never_deletes_through_symlinks() {
 /// discovery, which beats walking up from a subdirectory. `--workspace`
 /// selects a registered checkout from outside any repository. An explicit
 /// root that is not an initialized workspace is refused, not adopted.
-#[test]
 fn root_resolution_precedence() {
     struct Case<'a> {
         name: &'a str,
@@ -1977,7 +2471,6 @@ updated_at: 2026-09-14T00:00:00Z
 
 /// [ORB-10981] `orbit --root <data-dir> doctor providers` from a cwd that is not
 /// the intended git checkout must not mint a checkout for `parent(data-dir)`.
-#[test]
 fn doctor_providers_with_explicit_root_does_not_bind_parent_of_data_dir() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -2051,7 +2544,6 @@ fn doctor_providers_with_explicit_root_does_not_bind_parent_of_data_dir() {
 
 /// [ORB-10981] Clean path: init + workspace init from the git checkout, no
 /// extra command from another cwd first.
-#[test]
 fn clean_root_workspace_init_then_auto_task_list_succeeds() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -2101,7 +2593,6 @@ fn clean_root_workspace_init_then_auto_task_list_succeeds() {
 
 /// [ORB-10981] `--force` must rebind a leftover synthetic sqlite checkout so
 /// later commands are not split-brain against `workspaces.json`.
-#[test]
 fn workspace_init_force_rebinds_synthetic_data_dir_checkout() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -2280,4 +2771,123 @@ fn seed_synthetic_data_dir_checkout(data_dir: &Path) {
 
 fn canonicalize_or_original(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+#[test]
+fn checkout_routing_contracts_0() {
+    for (name, check) in [
+        (
+            "tool_run_explicit_workspace_resolves_from_home_and_temp_directory",
+            tool_run_explicit_workspace_resolves_from_home_and_temp_directory as fn(),
+        ),
+        (
+            "config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides",
+            config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides as fn(),
+        ),
+        (
+            "submodule_bootstrap_and_runtime_keep_the_submodule_workspace",
+            submodule_bootstrap_and_runtime_keep_the_submodule_workspace as fn(),
+        ),
+        #[cfg(unix)]
+        (
+            "submodule_roots_remain_independent_when_git_is_unavailable",
+            submodule_roots_remain_independent_when_git_is_unavailable as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn checkout_routing_contracts_1() {
+    for (name, check) in [
+        (
+            "submodule_runtime_respects_its_registered_data_directory",
+            submodule_runtime_respects_its_registered_data_directory as fn(),
+        ),
+        #[cfg(unix)]
+        (
+            "linked_worktree_gitfile_fallback_checks_the_common_directory",
+            linked_worktree_gitfile_fallback_checks_the_common_directory as fn(),
+        ),
+        #[cfg(unix)]
+        (
+            "workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validation",
+            workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validation
+                as fn(),
+        ),
+        (
+            "auto_task_show_keeps_alternate_extension_candidates_local",
+            auto_task_show_keeps_alternate_extension_candidates_local as fn(),
+        ),
+        (
+            "auto_task_show_reports_and_honors_the_selected_definition_source",
+            auto_task_show_reports_and_honors_the_selected_definition_source as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn checkout_routing_contracts_2() {
+    for (name, check) in [
+        (
+            "auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root",
+            auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root as fn(),
+        ),
+        (
+            "detached_worker_bootstraps_and_claims_while_registry_writer_is_held",
+            detached_worker_bootstraps_and_claims_while_registry_writer_is_held as fn(),
+        ),
+        (
+            "doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean",
+            doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean as fn(),
+        ),
+        #[cfg(unix)]
+        (
+            "doctor_stale_lock_repair_keeps_locks_a_live_process_holds",
+            doctor_stale_lock_repair_keeps_locks_a_live_process_holds as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn checkout_routing_contracts_3() {
+    for (name, check) in [
+        #[cfg(unix)]
+        (
+            "doctor_graph_cleanup_never_deletes_through_symlinks",
+            doctor_graph_cleanup_never_deletes_through_symlinks as fn(),
+        ),
+        (
+            "root_resolution_precedence",
+            root_resolution_precedence as fn(),
+        ),
+        (
+            "doctor_providers_with_explicit_root_does_not_bind_parent_of_data_dir",
+            doctor_providers_with_explicit_root_does_not_bind_parent_of_data_dir as fn(),
+        ),
+        (
+            "clean_root_workspace_init_then_auto_task_list_succeeds",
+            clean_root_workspace_init_then_auto_task_list_succeeds as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn checkout_routing_contracts_4() {
+    tracing::info!(
+        case = "workspace_init_force_rebinds_synthetic_data_dir_checkout",
+        "CLI contract row"
+    );
+    workspace_init_force_rebinds_synthetic_data_dir_checkout();
 }

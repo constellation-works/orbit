@@ -8,10 +8,11 @@ use std::time::SystemTime;
 use orbit_common::OrbitError;
 use orbit_config::ResolvedConfig;
 use orbit_store::Store;
+use orbit_tools::plugin::manifest_digest;
 use orbit_types::plugin::{InstalledPlugin, MANIFEST_FILE_NAME, PluginStatus};
 use orbit_types::tool::{McpToolDefinition, McpToolScope};
 
-use crate::runtime::plugin::{build_witness, discovery, grants};
+use crate::runtime::plugin::{build_witness, cache, discovery, grants};
 
 /// One coherent plugin surface, including workspace visibility ownership.
 pub struct HostPluginMcpSurface {
@@ -23,7 +24,8 @@ pub struct HostPluginMcpSurface {
 
 /// Reuses config, a read-only store handle and the manifest-derived surface.
 /// Plugin rows are read at each boundary; unrelated audit writes do not
-/// invalidate the surface. File stamps also cover config and admission files.
+/// invalidate the surface. File stamps cover config and admission files, and
+/// definition paths and content digests cover contribution admission.
 #[derive(Default)]
 pub struct HostPluginMcpCache(Mutex<Option<CachedHost>>);
 
@@ -40,6 +42,63 @@ struct CachedHost {
 struct PluginStamp {
     rows: Vec<InstalledPlugin>,
     files: Vec<FileStamp>,
+    definitions: Vec<Option<Vec<DefinitionStamp>>>,
+}
+
+#[derive(PartialEq, Eq)]
+struct DefinitionStamp {
+    path: PathBuf,
+    digest: Option<String>,
+}
+
+impl PluginStamp {
+    fn read(store: &Store, global_root: &Path) -> Result<Self, OrbitError> {
+        let rows = store.list_plugins()?;
+        let files = rows
+            .iter()
+            .flat_map(|row| {
+                [
+                    FileStamp::read(&Path::new(&row.install_path).join(MANIFEST_FILE_NAME)),
+                    FileStamp::read(&grants::plugin_grant_witness_path(global_root, &row.name)),
+                    FileStamp::read(&build_witness::plugin_build_witness_path(
+                        global_root,
+                        &row.name,
+                    )),
+                ]
+            })
+            .collect();
+        let definitions = rows
+            .iter()
+            .map(|row| {
+                let plugin = cache::load_installed_plugin(row).ok()?;
+                // Resolve membership even for a refused contribution, so fixing
+                // an invalid file or a missing literal restores admission. Read
+                // bytes rather than relying on mtime/length: permission changes
+                // and same-sized edits must also invalidate the surface.
+                Some(
+                    plugin
+                        .definitions
+                        .activities
+                        .iter()
+                        .chain(&plugin.definitions.jobs)
+                        .chain(&plugin.definitions.routines)
+                        .chain(&plugin.definitions.auto_tasks)
+                        .map(|path| DefinitionStamp {
+                            path: path.clone(),
+                            digest: std::fs::read(path)
+                                .ok()
+                                .map(|bytes| manifest_digest(&bytes)),
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        Ok(Self {
+            rows,
+            files,
+            definitions,
+        })
+    }
 }
 
 #[derive(PartialEq, Eq)]
@@ -89,7 +148,8 @@ impl FileIdentity {
 
 impl HostPluginMcpCache {
     /// Return the same snapshot while plugin admission inputs remain unchanged.
-    /// Failed reads are never published as a reusable empty plugin surface.
+    /// Failed host config or store reads never publish an empty plugin surface.
+    /// Refused contributions are rechecked at each boundary to observe repairs.
     pub fn resolve(&self, global_root: &Path) -> Result<Arc<HostPluginMcpSurface>, OrbitError> {
         let mut cached = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         let config_stamp = FileStamp::read(&global_root.join("config.toml"));
@@ -122,21 +182,7 @@ impl HostPluginMcpCache {
             host.store = Store::open_read_only(&host.config.persistence.audit_db)?;
             host.database_identity = database_identity;
         }
-        let rows = host.store.list_plugins()?;
-        let files = rows
-            .iter()
-            .flat_map(|row| {
-                [
-                    FileStamp::read(&Path::new(&row.install_path).join(MANIFEST_FILE_NAME)),
-                    FileStamp::read(&grants::plugin_grant_witness_path(global_root, &row.name)),
-                    FileStamp::read(&build_witness::plugin_build_witness_path(
-                        global_root,
-                        &row.name,
-                    )),
-                ]
-            })
-            .collect();
-        let stamp = PluginStamp { rows, files };
+        let stamp = PluginStamp::read(&host.store, global_root)?;
         if let Some((previous, surface)) = &host.surface
             && *previous == stamp
         {
@@ -176,7 +222,8 @@ impl HostPluginMcpCache {
         });
         // Discovery reads its own snapshot. A concurrent lifecycle write (or
         // a failed discovery row read) must not publish under the earlier stamp.
-        if load.installed == stamp.rows {
+        // Contributions can change during discovery without changing any row.
+        if load.installed == stamp.rows && PluginStamp::read(&host.store, global_root)? == stamp {
             host.surface = Some((stamp, Arc::clone(&surface)));
         }
         Ok(surface)

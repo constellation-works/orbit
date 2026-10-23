@@ -1,4 +1,10 @@
 //! Delayed recovery of a pull drain's released authentication incidents.
+//!
+//! [ORB-17288] An incident belongs to one provider account: the crew that
+//! reported it when that crew sets `env` and so runs on its own credential,
+//! else the provider's default login. Incidents are probed once per account,
+//! the probe runs with that account's crew environment, and a passing probe
+//! re-admits only that account's crews.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,7 +35,12 @@ impl OrbitRuntime {
             }
         }
         exclusions.sort_by(|a, b| {
-            (&a.host, &a.provider, a.excluded_at).cmp(&(&b.host, &b.provider, b.excluded_at))
+            (&a.host, &a.provider, &a.account, a.excluded_at).cmp(&(
+                &b.host,
+                &b.provider,
+                &b.account,
+                b.excluded_at,
+            ))
         });
         exclusions.dedup();
         Ok(exclusions)
@@ -78,9 +89,18 @@ impl OrbitRuntime {
             .and_then(|run| run.finished_at)
             .or_else(|| leaf.as_ref().map(|run| run.created_at))
             .unwrap_or_else(Utc::now);
+        let account = crew.account().map(ToOwned::to_owned);
+        let relogin_hint = match &account {
+            Some(account) => self.account_relogin_hint(account),
+            None => probe.as_ref().map_or_else(
+                || relogin_hint(&provider),
+                |probe| probe.relogin_hint.clone(),
+            ),
+        };
         Ok(Some(PullAuthRecovery {
             exclusion: PullAuthExclusion {
                 provider: provider.clone(),
+                account,
                 host: record
                     .request
                     .run_context
@@ -89,11 +109,8 @@ impl OrbitRuntime {
                     .unwrap_or_else(|| record.destination.execution_machine_id.clone()),
                 excluded_at: at,
                 error_class: "provider_unavailable/auth".into(),
-                relogin_hint: probe.as_ref().map_or_else(
-                    || relogin_hint(&provider),
-                    |probe| probe.relogin_hint.clone(),
-                ),
-                credential_source: auth_credential_source(self, &provider),
+                relogin_hint,
+                credential_source: auth_credential_source(self, &provider, &crew.env),
                 next_probe_at: probe.as_ref().map(|_| at + INITIAL_DELAY),
                 attempts: 0,
             },
@@ -102,12 +119,13 @@ impl OrbitRuntime {
         }))
     }
 
-    /// Probe due auth exclusions once per provider. Reserving the backoff before
-    /// spawn makes a crash/retry wait too; capacity and refusal never enter here.
+    /// Probe due auth exclusions once per provider account. Reserving the
+    /// backoff before spawn makes a crash/retry wait too; capacity and
+    /// refusal never enter here.
     pub(crate) fn recover_pull_auth_exclusions(&self, run_id: &str) -> Result<(), OrbitError> {
         let stored = self
             .read_run_state(run_id)?
-            .map(|state| state.pull_auth_recovery)
+            .map(|state| state.pull_drain.pull_auth_recovery)
             .unwrap_or_default();
         let mut incidents = BTreeMap::new();
         for record in self.stores().jobs().local_pull_claims_admitted_by(run_id)? {
@@ -123,6 +141,7 @@ impl OrbitRuntime {
             .update_run_state(run_id, &mut |_, state| {
                 for (id, incident) in &incidents {
                     state
+                        .pull_drain
                         .pull_auth_recovery
                         .entry(id.clone())
                         .or_insert_with(|| incident.clone());
@@ -130,15 +149,20 @@ impl OrbitRuntime {
                 Ok(())
             })?;
         let now = Utc::now();
-        let due: BTreeSet<String> = incidents
+        let due: BTreeSet<(String, Option<String>)> = incidents
             .values()
             .filter(|incident| {
                 incident.recovered_at.is_none()
                     && incident.exclusion.next_probe_at.is_some_and(|at| at <= now)
             })
-            .map(|incident| incident.exclusion.provider.clone())
+            .map(|incident| {
+                (
+                    incident.exclusion.provider.clone(),
+                    incident.exclusion.account.clone(),
+                )
+            })
             .collect();
-        for provider in due {
+        for (provider, account) in due {
             // An operator may remove the declaration; retain the exclusion.
             let Some(probe) = self
                 .get_executor_def(&provider)?
@@ -149,7 +173,9 @@ impl OrbitRuntime {
             let ids: Vec<String> = incidents
                 .iter()
                 .filter(|(_, incident)| {
-                    incident.recovered_at.is_none() && incident.exclusion.provider == provider
+                    incident.recovered_at.is_none()
+                        && incident.exclusion.provider == provider
+                        && incident.exclusion.account == account
                 })
                 .map(|(id, _)| id.clone())
                 .collect();
@@ -157,29 +183,35 @@ impl OrbitRuntime {
             self.stores()
                 .jobs()
                 .update_run_state(run_id, &mut |_, state| {
-                    if state.drain_cancel.is_some() || state.drain_admissions_stop.is_some() {
+                    if state.pull_drain.drain_cancel.is_some()
+                        || state.pull_drain.drain_admissions_stop.is_some()
+                    {
                         return Ok(());
                     }
                     // Read the current due time under the store lock: a concurrent
                     // pass that reserved this probe wins and this one launches none.
                     if !ids.iter().any(|id| {
-                        state.pull_auth_recovery.get(id).is_some_and(|incident| {
-                            incident.recovered_at.is_none()
-                                && incident.exclusion.next_probe_at.is_some_and(|at| at <= now)
-                        })
+                        state
+                            .pull_drain
+                            .pull_auth_recovery
+                            .get(id)
+                            .is_some_and(|incident| {
+                                incident.recovered_at.is_none()
+                                    && incident.exclusion.next_probe_at.is_some_and(|at| at <= now)
+                            })
                     }) {
                         return Ok(());
                     }
                     let attempts = ids
                         .iter()
-                        .filter_map(|id| state.pull_auth_recovery.get(id))
+                        .filter_map(|id| state.pull_drain.pull_auth_recovery.get(id))
                         .map(|incident| incident.exclusion.attempts)
                         .max()
                         .unwrap_or(0)
                         .saturating_add(1);
                     let delay = (INITIAL_DELAY * 2_i32.pow(attempts.min(2))).min(MAX_DELAY);
                     for id in &ids {
-                        if let Some(incident) = state.pull_auth_recovery.get_mut(id) {
+                        if let Some(incident) = state.pull_drain.pull_auth_recovery.get_mut(id) {
                             incident.exclusion.attempts = attempts;
                             incident.exclusion.next_probe_at = Some(now + delay);
                         }
@@ -190,14 +222,22 @@ impl OrbitRuntime {
             if !reserved {
                 continue;
             }
-            let outcome = run_auth_probe(self, &provider, &probe, run_id, &self.paths().repo_root);
+            let crew_env = self.auth_probe_crew_env(account.as_deref());
+            let outcome = run_auth_probe(
+                self,
+                &provider,
+                &crew_env,
+                &probe,
+                run_id,
+                &self.paths().repo_root,
+            );
             let passed = outcome.as_ref().is_ok_and(|outcome| outcome.passed);
             let finished = Utc::now();
             self.stores()
                 .jobs()
                 .update_run_state(run_id, &mut |_, state| {
                     for id in &ids {
-                        if let Some(incident) = state.pull_auth_recovery.get_mut(id) {
+                        if let Some(incident) = state.pull_drain.pull_auth_recovery.get_mut(id) {
                             if let Ok(outcome) = &outcome {
                                 incident
                                     .exclusion
@@ -213,16 +253,53 @@ impl OrbitRuntime {
                     }
                     Ok(())
                 })?;
-            tracing::info!(target: "orbit.core.pull", run_id, %provider, passed, at = %finished, "authentication recovery probe completed");
+            let account = account.as_deref().unwrap_or("default");
+            tracing::info!(target: "orbit.core.pull", run_id, %provider, account, passed, at = %finished, "authentication recovery probe completed");
             if let Err(error) = outcome {
-                tracing::warn!(target: "orbit.core.pull", run_id, %provider, %error, "authentication probe failed; exclusion retained with backoff");
+                tracing::warn!(target: "orbit.core.pull", run_id, %provider, account, %error, "authentication probe failed; exclusion retained with backoff");
             }
         }
         Ok(())
     }
 }
 
-fn relogin_hint(provider: &str) -> String {
+impl OrbitRuntime {
+    /// The `[crews.<name>] env` a provider account's probe runs with: the
+    /// crew account's own, so the probe checks the credential its leaves
+    /// used, or none for the provider's default login, which runs on the
+    /// shared environment. A crew account this host no longer defines probes
+    /// with none.
+    fn auth_probe_crew_env(&self, account: Option<&str>) -> Vec<orbit_types::identity::CrewEnvVar> {
+        account
+            .and_then(|account| self.context.settings().crews().get(account))
+            .map(|crew| crew.env.clone())
+            .unwrap_or_default()
+    }
+
+    /// What renews a crew account's credential: the variables its
+    /// `[crews.<name>] env` passes, by name only.
+    pub(crate) fn account_relogin_hint(&self, account: &str) -> String {
+        let entries = self
+            .context
+            .settings()
+            .crews()
+            .get(account)
+            .map(|crew| {
+                crew.env
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        format!(
+            "Renew the credential crew `{account}` runs on: the variables its \
+             `[crews.{account}] env` passes ({entries}) on this host."
+        )
+    }
+}
+
+pub(crate) fn relogin_hint(provider: &str) -> String {
     match provider {
         "claude" => "Run `claude auth login`, or renew `claude setup-token` and pass CLAUDE_CODE_OAUTH_TOKEN in [execution.env].pass.".into(),
         "codex" => "Run `codex login`.".into(),
@@ -231,6 +308,7 @@ fn relogin_hint(provider: &str) -> String {
         "copilot" => "Run `copilot` and `/login`.".into(),
         "cursor" => "Run `cursor-agent login`.".into(),
         "grok" | "pi" | "opencode" => format!("Run `{provider}` and configure its provider credentials."),
+        "muse" => "Run `muse login`, or pass META_API_KEY in [execution.env].pass.".into(),
         _ => format!("Re-login with the `{provider}` CLI."),
     }
 }

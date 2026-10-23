@@ -1,10 +1,15 @@
 use std::fs;
 
+use std::path::Path;
+
 use chrono::{DateTime, Duration, Timelike, Utc};
 use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::AutoTaskAddParams;
 use orbit_core::V2AuditEventInsertParams;
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{
+    FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, TaskAddParams,
+};
+use orbit_engine::{RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use serde_json::{Value, json};
@@ -159,9 +164,9 @@ fn friction_polls_reuse_projection_without_mixing_months_or_limits() {
 }
 
 #[test]
-fn scoreboard_windows_scope_metrics_and_timestamp_arithmetic() {
+fn cost_and_metrics_windows_scope_rows_and_timestamp_arithmetic() {
     isolated(
-        "projections::scoreboard_windows_scope_metrics_and_timestamp_arithmetic",
+        "projections::cost_and_metrics_windows_scope_rows_and_timestamp_arithmetic",
         || {
             let fixture = Fixture::new();
             let now = Utc::now();
@@ -182,7 +187,7 @@ fn scoreboard_windows_scope_metrics_and_timestamp_arithmetic() {
                     .join(ts.format("%Y-%m").to_string());
                 fs::create_dir_all(&dir).unwrap();
                 fs::write(dir.join(format!("row-{index}.jsonl")), format!("{}\n", json!({
-                "ts":ts.to_rfc3339(),"job_run":"jrun-scoreboard","step":"implement",
+                "ts":ts.to_rfc3339(),"job_run":"jrun-windows","step":"implement",
                 "actor_identity":"http-metrics-fixture","step_duration_ms":100,"retry_count":retries,
                 "tool_invocations":1,"token_usage":10,
             }))).unwrap();
@@ -197,7 +202,7 @@ fn scoreboard_windows_scope_metrics_and_timestamp_arithmetic() {
             ] {
                 let before = Utc::now();
                 let result = json_ok(server.get(&format!(
-                    "/api/scoreboard?window={window}&workspace=ws_http_fixture"
+                    "/api/cost?window={window}&workspace=ws_http_fixture"
                 )));
                 let after = Utc::now();
                 let metrics = json_ok(server.get(&format!(
@@ -214,10 +219,6 @@ fn scoreboard_windows_scope_metrics_and_timestamp_arithmetic() {
                     "metrics must filter all month partitions before limiting: {window}"
                 );
                 assert_eq!(result["window"], window);
-                assert_eq!(
-                    result["agents"]["http-metrics-fixture"]["retries"], expected,
-                    "scoreboard {window} must use only its own population"
-                );
                 if let Some(duration) = duration {
                     let since =
                         DateTime::parse_from_rfc3339(result["window_since"].as_str().unwrap())
@@ -265,15 +266,23 @@ fn scoreboard_windows_scope_metrics_and_timestamp_arithmetic() {
                     .as_u16(),
                 400
             );
-            let default = json_ok(server.get("/api/scoreboard?workspace=ws_http_fixture"));
+            let default = json_ok(server.get("/api/cost?workspace=ws_http_fixture"));
             assert_eq!(default["window"], "all");
             assert_eq!(
                 server
-                    .get("/api/scoreboard?window=bogus&workspace=ws_http_fixture")
+                    .get("/api/cost?window=bogus&workspace=ws_http_fixture")
                     .status()
                     .as_u16(),
                 400
             );
+            // The retired scoreboard route answers with the cost body until
+            // its sunset, and says so in the response headers.
+            let alias = server.get("/api/scoreboard?window=24h&workspace=ws_http_fixture");
+            assert_eq!(alias.headers()["deprecation"], "true");
+            assert!(alias.headers().contains_key("sunset"));
+            let alias = json_ok(alias);
+            assert_eq!(alias["window"], "24h");
+            assert!(alias["orchestration"].is_object());
         },
     );
 }
@@ -489,7 +498,8 @@ fn auto_task_and_routine_schedules_distinguish_armed_and_hypothetical_times() {
 
 /// [ORB-14173] On a replica the dashboard lists the worktree GC routine as
 /// toggleable and the owner's work apart with the owner named; toggling the
-/// owner's routine is refused without a write.
+/// owner's routine is refused without a write, as is every other refused
+/// selection, each under its own error code.
 #[test]
 fn replica_routines_project_only_worktree_gc_as_toggleable() {
     isolated(
@@ -519,19 +529,53 @@ fn replica_routines_project_only_worktree_gc_as_toggleable() {
             let scheduled = report["routines"].as_array().unwrap();
             assert_eq!(scheduled.len(), 1, "{report}");
             assert_eq!(scheduled[0]["name"], "replica-gc", "{report}");
+            assert_eq!(scheduled[0]["origin"], "workspace", "{report}");
             let owner_only = report["owner_only"].as_array().unwrap();
             assert_eq!(owner_only.len(), 1, "{report}");
             assert_eq!(owner_only[0]["name"], "replica-ship");
             assert_eq!(owner_only[0]["owner_machine"], "hm_fixture_remote");
+            assert_eq!(
+                fs::canonicalize(owner_only[0]["path"].as_str().unwrap()).unwrap(),
+                fs::canonicalize(&ship_path).unwrap(),
+                "{report}"
+            );
 
-            let toggle = |name: &str, target: &str| {
+            let toggle_from = |name: &str, source: &str, target: &str, expected: bool| {
                 server.send(
                     "POST",
                     "/api/routines/toggle?workspace=ws_http_fixture",
-                    json!({"name":name,"source":"fixture","target":target,
-                        "machine_name":"http-fixture","expected_enabled":false,"enabled":true}),
+                    json!({"name":name,"source":source,"target":target,
+                        "machine_name":"http-fixture","expected_enabled":expected,"enabled":true}),
                 )
             };
+            let toggle = |name: &str, target: &str| toggle_from(name, "fixture", target, false);
+            let gc_path = routines.join("replica-gc.yaml");
+            let gc_before = fs::read(&gc_path).unwrap();
+            for (response, status, code) in [
+                (
+                    toggle("missing", "job:worktree_gc_pipeline"),
+                    404,
+                    "routine_not_found",
+                ),
+                (
+                    toggle_from("replica-gc", "elsewhere", "job:worktree_gc_pipeline", false),
+                    409,
+                    "workspace_mismatch",
+                ),
+                (
+                    toggle("replica-gc", "job:workspace_ship_pipeline"),
+                    409,
+                    "target_mismatch",
+                ),
+                (
+                    toggle_from("replica-gc", "fixture", "job:worktree_gc_pipeline", true),
+                    409,
+                    "stale_routine_state",
+                ),
+            ] {
+                error_code(response, status, code);
+                assert_eq!(fs::read(&gc_path).unwrap(), gc_before, "{code} wrote");
+            }
             let refused = error_code(
                 toggle("replica-ship", "job:workspace_ship_pipeline"),
                 409,
@@ -547,7 +591,7 @@ fn replica_routines_project_only_worktree_gc_as_toggleable() {
             let enabled = json_ok(toggle("replica-gc", "job:worktree_gc_pipeline"));
             assert_eq!(enabled["changed"], true, "{enabled}");
             assert!(
-                fs::read_to_string(routines.join("replica-gc.yaml"))
+                fs::read_to_string(&gc_path)
                     .unwrap()
                     .contains("enabled: true")
             );
@@ -718,92 +762,6 @@ fn policy_kpi_counts_decisions_and_preserves_refusal_evidence() {
 }
 
 #[test]
-fn scoreboard_notable_completion_excerpts_the_done_task_summary() {
-    isolated(
-        "projections::scoreboard_notable_completion_excerpts_the_done_task_summary",
-        || {
-            let fixture = Fixture::new();
-            let task = fixture
-                .runtime
-                .add_task(TaskAddParams {
-                    title: "Notable fixture".into(),
-                    description: "Scoreboard excerpt fixture".into(),
-                    priority: TaskPriority::High,
-                    status: Some(TaskStatus::Done),
-                    ..Default::default()
-                })
-                .unwrap();
-            let server = fixture.server(false);
-            json_ok(server.send(
-                "PATCH",
-                &format!("/api/tasks/{}?workspace=ws_http_fixture", task.id),
-                json!({"execution_summary": "Shipped   the\nfixture."}),
-            ));
-            let board = json_ok(server.get("/api/scoreboard?window=24h&workspace=ws_http_fixture"));
-            let items = board["notable_completions"]["items"].as_array().unwrap();
-            let item = items
-                .iter()
-                .find(|item| item["task_id"] == task.id.as_str())
-                .expect("the done task is a notable completion");
-            assert_eq!(item["summary_excerpt"], "Shipped the fixture.");
-        },
-    );
-}
-
-#[test]
-fn scoreboard_polls_reuse_window_memo_without_writing_summary() {
-    isolated(
-        "projections::scoreboard_polls_reuse_window_memo_without_writing_summary",
-        || {
-            let fixture = Fixture::new();
-            let summary_path = fixture.runtime.paths().scoreboard_dir.join("summary.json");
-            assert!(!summary_path.exists());
-            let server = fixture.server(false);
-            let first = json_ok(server.get("/api/scoreboard?window=1h&workspace=ws_http_fixture"));
-            assert!(
-                !summary_path.exists(),
-                "scoreboard GET must not create summary.json"
-            );
-            let now = Utc::now();
-            let metrics_dir = fixture
-                .runtime
-                .data_root()
-                .join("state/diagnostics/metrics")
-                .join(now.format("%Y-%m").to_string());
-            fs::create_dir_all(&metrics_dir).unwrap();
-            fs::write(metrics_dir.join("memo.jsonl"), format!("{}\n", json!({
-                "ts":now.to_rfc3339(), "job_run":"memo-fixture", "step":"implement",
-                "actor_identity":"http-memo-fixture", "step_duration_ms":100, "retry_count":7,
-                "tool_invocations":1, "token_usage":10,
-            }))).unwrap();
-            let repeated =
-                json_ok(server.get("/api/scoreboard?window=1h&workspace=ws_http_fixture"));
-            assert_eq!(
-                repeated, first,
-                "same-window poll must return the cached computation"
-            );
-            let other = json_ok(server.get("/api/scoreboard?window=24h&workspace=ws_http_fixture"));
-            assert_eq!(other["agents"]["http-memo-fixture"]["retries"], 7);
-            assert!(!summary_path.exists(), "a memo miss must also be read-only");
-
-            // Explicit persistence remains available, and a GET for another
-            // window must not replace that durable lifetime document.
-            fixture.runtime.generate_scoreboard_summary(None).unwrap();
-            let persisted = fs::read(&summary_path).unwrap();
-            let finite = json_ok(server.get("/api/scoreboard?window=7d&workspace=ws_http_fixture"));
-            assert_eq!(finite["window"], "7d");
-            assert_eq!(fs::read(&summary_path).unwrap(), persisted);
-            let lifetime = json_ok(server.get("/api/scoreboard?workspace=ws_http_fixture"));
-            assert_eq!(
-                lifetime,
-                json_ok(server.get("/api/scoreboard?window=all&workspace=ws_http_fixture")),
-                "omitted window and all share the canonical memo key"
-            );
-        },
-    );
-}
-
-#[test]
 fn dashboard_memo_polls_report_payload_age() {
     isolated(
         "projections::dashboard_memo_polls_report_payload_age",
@@ -812,7 +770,7 @@ fn dashboard_memo_polls_report_payload_age() {
             let server = fixture.server(false);
             for path in [
                 "/api/audit/summary?since=24h&workspace=ws_http_fixture",
-                "/api/scoreboard?window=1h&workspace=ws_http_fixture",
+                "/api/cost?window=1h&workspace=ws_http_fixture",
                 "/api/diagnostics/errors?since=24h&workspace=ws_http_fixture",
                 "/api/diagnostics/friction?month=2026-04&workspace=ws_http_fixture",
             ] {
@@ -851,7 +809,7 @@ fn github_pr_refs_link_the_pull_request_from_the_origin_remote() {
             let fixture = Fixture::new();
             let repo = fixture.path("repo");
             let git = |args: &[&str]| {
-                let status = std::process::Command::new("git")
+                let status = crate::git_test_support::command()
                     .args(args)
                     .current_dir(&repo)
                     .status()
@@ -1058,6 +1016,367 @@ fn task_detail_and_list_rows_serve_the_shared_task_projection() {
                     .is_some_and(|reason| !reason.is_empty()),
                 "the detail names why the crew is unresolved: {detail}"
             );
+        },
+    );
+}
+
+/// A run-blocked task with an escalation recorded without another status change.
+fn block_with_final_recovery(
+    runtime: &orbit_core::OrbitRuntime,
+    repo: &Path,
+    id: &str,
+    run_id: &str,
+) {
+    runtime
+        .apply_task_automation_update(
+            id,
+            TaskAutomationUpdate {
+                job_run_id: Some(run_id.into()),
+                ..blocked_workflow_failure_update(
+                    "task_pr_pipeline",
+                    run_id,
+                    Some("STEP_FAILED"),
+                    Some("step `implement` completed with success=false"),
+                )
+            },
+        )
+        .unwrap();
+    let task = runtime.get_task(id).unwrap();
+    let observed = runtime.final_recovery_revision(&task).unwrap();
+    let outcome = runtime
+        .apply_final_recovery(
+            &FinalRecoveryRequest {
+                task_id: id.to_string(),
+                run_id: run_id.to_string(),
+                observed,
+                repo_root: repo.to_path_buf(),
+                base_ref: "main".into(),
+                completion: FinalRecoveryCompletion::Review,
+                requeue_bound: Default::default(),
+            },
+            Some(&json!({
+                "decision": "escalate",
+                "diagnosis": "the failure needs an operator",
+                "human_action": "move the task back to backlog after fixing the cause",
+            })),
+        )
+        .unwrap();
+    assert_eq!(outcome, FinalRecoveryOutcome::Escalated { reason: None });
+}
+
+/// `GET /api/tasks/:id` serves the shared show record plus the dashboard extras.
+/// A blocked task's explanation and guidance match `orbit.task.show`.
+/// List rows and mutation responses omit show-only guidance.
+#[test]
+fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
+    isolated(
+        "projections::task_detail_includes_blocked_guidance_and_list_rows_omit_it",
+        || {
+            let fixture = Fixture::new();
+            let blocked = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Blocked guidance".into(),
+                    acceptance_criteria: vec!["Show the next step".into()],
+                    ..Default::default()
+                })
+                .unwrap()
+                .id;
+            let plain = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Plain detail".into(),
+                    acceptance_criteria: vec!["Stay quiet".into()],
+                    ..Default::default()
+                })
+                .unwrap()
+                .id;
+            let run_id = "jrun-http-guidance";
+            block_with_final_recovery(&fixture.runtime, &fixture.path("repo"), &blocked, run_id);
+
+            let server = fixture.server(true);
+            let raw =
+                json_ok(server.get(&format!("/api/tasks/{blocked}?workspace=ws_http_fixture")));
+            assert!(raw.get("status_transitions").is_some());
+            assert!(raw.get("job_run_navigable").is_some());
+            assert_eq!(
+                raw["next_step"],
+                json!({
+                    "run_id": run_id,
+                    "resume_command": null,
+                    "requeue_command": format!("orbit task update {blocked} --status backlog"),
+                })
+            );
+            assert_eq!(raw["final_recovery"]["run_id"], run_id);
+            assert_eq!(raw["final_recovery"]["decision"], "escalate");
+            assert_eq!(raw["final_recovery"]["outcome"], "escalated");
+            assert_eq!(raw["block"]["reason"], "the failure needs an operator");
+            assert_eq!(raw["block"]["run_id"], run_id);
+            assert_eq!(raw["block"]["at"], raw["final_recovery"]["at"]);
+            assert_eq!(
+                raw["block"]["next_action"],
+                "move the task back to backlog after fixing the cause"
+            );
+            assert!(raw["final_recovery"]["at"].as_str().unwrap().contains('T'));
+
+            let mut detail = raw.clone();
+            let stripped = detail.as_object_mut().unwrap();
+            for key in ["status_transitions", "job_run_navigable"] {
+                assert!(stripped.remove(key).is_some(), "dashboard extra `{key}`");
+            }
+            if let Some(readiness) = stripped.get_mut("readiness").and_then(Value::as_object_mut) {
+                readiness.remove("preparing");
+            }
+            let shown = fixture
+                .runtime
+                .run_tool("orbit.task.show", json!({"id": blocked}))
+                .unwrap();
+            assert_eq!(detail, shown, "the detail is the shared show record");
+            for extra in ["status_transitions", "job_run_navigable"] {
+                assert!(
+                    shown.get(extra).is_none(),
+                    "the tool show does not add dashboard extra `{extra}`"
+                );
+            }
+
+            let page = json_ok(server.get("/api/tasks?workspace=ws_http_fixture"));
+            let rows = page["items"]
+                .as_array()
+                .or_else(|| page.as_array())
+                .unwrap();
+            for id in [&blocked, &plain] {
+                let row = rows.iter().find(|row| row["id"] == id.as_str()).unwrap();
+                assert!(
+                    row.get("next_step").is_none() && row.get("final_recovery").is_none(),
+                    "a list row omits show guidance: {row}"
+                );
+            }
+            let listed = fixture
+                .runtime
+                .run_tool("orbit.task.list", json!({}))
+                .unwrap();
+            let tool_row = listed["tasks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == blocked.as_str())
+                .unwrap();
+            assert!(
+                tool_row.get("next_step").is_none() && tool_row.get("final_recovery").is_none(),
+                "orbit.task.list omits show guidance: {tool_row}"
+            );
+
+            let updated = json_ok(server.send(
+                "PATCH",
+                &format!("/api/tasks/{blocked}?workspace=ws_http_fixture"),
+                json!({"comment": "operator looked at the block"}),
+            ));
+            assert!(updated.get("status_transitions").is_some());
+            assert!(
+                updated.get("next_step").is_none() && updated.get("final_recovery").is_none(),
+                "a mutation response omits show guidance: {updated}"
+            );
+            let again =
+                json_ok(server.get(&format!("/api/tasks/{blocked}?workspace=ws_http_fixture")));
+            assert!(again.get("next_step").is_some() && again.get("final_recovery").is_some());
+
+            let quiet =
+                json_ok(server.get(&format!("/api/tasks/{plain}?workspace=ws_http_fixture")));
+            assert!(quiet.get("next_step").is_none() && quiet.get("final_recovery").is_none());
+            assert!(quiet.get("block").is_none());
+        },
+    );
+}
+
+/// Pilot warnings belong to the durable task payload even without a drain.
+/// Advisory findings are excluded; a clean pilot or leaving proposed clears them.
+#[test]
+fn task_payloads_expose_durable_holding_pilot_warnings() {
+    isolated(
+        "projections::task_payloads_expose_durable_holding_pilot_warnings",
+        || {
+            use orbit_core::application::task::TaskUpdateParams;
+            use orbit_types::task::{
+                TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME, TaskComplexity, TaskDecision,
+                TaskEventRowV2,
+            };
+            use orbit_types::workflow::{JobRunState, PipelineState};
+            use std::io::Write;
+            let fixture = Fixture::new();
+            let id = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Pilot warning fixture".into(),
+                    complexity: TaskComplexity::Low,
+                    tags: vec!["no-diff-expected".into()],
+                    description: "Durable findings".into(),
+                    acceptance_criteria: vec!["Expose full findings".into()],
+                    ..Default::default()
+                })
+                .unwrap()
+                .id;
+            let record = |operation: char, assessment: Value| {
+                fixture
+                    .runtime
+                    .update_task_as_human(
+                        &id,
+                        TaskUpdateParams {
+                            comment: Some(format!(
+                                "operation_id={}\n{}",
+                                operation.to_string().repeat(64),
+                                json!({"assessment": assessment})
+                            )),
+                            ..Default::default()
+                        },
+                        "task-pilot".into(),
+                    )
+                    .unwrap();
+                // Seed the typed automation event paired with this pilot receipt.
+                let dir = super::codebase::bundle_dir(&fixture.path(""), &id).unwrap();
+                let path = dir.join(TASK_EVENTS_FILE_NAME);
+                let count = fs::read_to_string(&path).unwrap().lines().count();
+                let event = TaskEventRowV2 {
+                    schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                    event_id: format!("EV-{:04}", count + 1),
+                    at: Utc::now(),
+                    by: "task-pilot".into(),
+                    event_type: "task_pilot_applied".into(),
+                    note: None,
+                    from_status: None,
+                    to_status: None,
+                    operation_id: Some(operation.to_string().repeat(64)),
+                    decision: (operation != 'b').then(|| TaskDecision::DrainApprovalHeld {
+                        classification: "warnings".into(),
+                    }),
+                };
+                let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+                writeln!(file, "{}", serde_json::to_string(&event).unwrap()).unwrap();
+            };
+            let assessment = json!({
+                "utility_warnings": [{"text": "Confirm the operator workflow.\nKeep this second line.", "holds_promotion": true}],
+                "surface_warnings": [{"text": "Optional polish", "holds_promotion": false}, "Update the task surface."],
+                "validation_tool_warnings": ["Browser evidence required."],
+            });
+            let expected = json!([
+                {"kind": "utility_warnings", "text": "Confirm the operator workflow.\nKeep this second line."},
+                {"kind": "surface_warnings", "text": "Update the task surface."},
+                {"kind": "validation_tool_warnings", "text": "Browser evidence required."},
+            ]);
+            record('a', assessment.clone());
+            let server = fixture.server(true);
+            let assert_payloads = |expected: &Value| {
+                let detail =
+                    json_ok(server.get(&format!("/api/tasks/{id}?workspace=ws_http_fixture")));
+                assert_eq!(&detail["pilot_warnings"], expected);
+                let page = json_ok(server.get("/api/tasks?workspace=ws_http_fixture"));
+                let rows = page["items"]
+                    .as_array()
+                    .or_else(|| page.as_array())
+                    .unwrap();
+                let row = rows.iter().find(|row| row["id"] == id).unwrap();
+                assert_eq!(&row["pilot_warnings"], expected);
+                let shown = fixture
+                    .runtime
+                    .run_tool(
+                        "orbit.task.show",
+                        json!({"id": id, "fields": ["pilot_warnings"]}),
+                    )
+                    .unwrap();
+                assert_eq!(&shown, expected);
+                let listed = fixture
+                    .runtime
+                    .run_tool("orbit.task.list", json!({}))
+                    .unwrap();
+                let row = listed["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["id"] == id)
+                    .unwrap();
+                assert_eq!(&row["pilot_warnings"], expected);
+            };
+            assert_payloads(&expected);
+            fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Newer clean task".into(),
+                    ..Default::default()
+                })
+                .unwrap();
+            // Warning filtering happens before pagination and keeps accurate totals.
+            for endpoint in ["/api/tasks", "/api/tasks/all"] {
+                let filtered = json_ok(server.get(&format!(
+                    "{endpoint}?workspace=ws_http_fixture&pilot=warnings&limit=1"
+                )));
+                assert_eq!(filtered["total"], 1, "{filtered}");
+                assert_eq!(filtered["items"][0]["id"], id);
+                assert!(filtered["next_cursor"].is_null(), "{filtered}");
+            }
+            let mut drain = fixture.seed_run(
+                "jrun-pilot-warning-view",
+                "workspace_auto_pipeline",
+                JobRunState::Running,
+            );
+            drain.input = Some(json!({"approve_proposed": true, "max_active_leaf_runs": 4}));
+            fixture.save_run(&drain);
+            fixture
+                .runtime
+                .write_run_state(
+                    &drain.run_id,
+                    &PipelineState::new(
+                        drain.run_id.clone(),
+                        drain.job_id.clone(),
+                        drain.input.clone().unwrap(),
+                    ),
+                )
+                .unwrap();
+            let readiness = fixture
+                .runtime
+                .workspace_auto_readiness(&[], None, 500, &[])
+                .unwrap();
+            let held = readiness["approvals"]["held"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["task_id"] == id)
+                .unwrap();
+            assert_eq!(
+                held["findings"], expected,
+                "CLI readiness reads the task's latest pilot source"
+            );
+            let card =
+                json_ok(server.get("/api/workflows/auto/readiness?workspace=ws_http_fixture"));
+            assert_eq!(card["approvals"]["held_by_reason"]["warnings"], 1);
+            let held = card["approvals"]["held"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["task_id"] == id)
+                .unwrap();
+            assert!(
+                held.get("findings").is_none(),
+                "the card's HTTP payload needs no finding prose"
+            );
+            // Ordinary operator comments do not erase the latest verification.
+            json_ok(server.send(
+                "PATCH",
+                &format!("/api/tasks/{id}?workspace=ws_http_fixture"),
+                json!({"comment": "Investigating"}),
+            ));
+            assert_payloads(&expected);
+            record(
+                'b',
+                json!({"utility_warnings": [], "surface_warnings": [], "validation_tool_warnings": []}),
+            );
+            assert_payloads(&json!([]));
+            record('c', assessment);
+            assert_payloads(&expected);
+            json_ok(server.send(
+                "POST",
+                &format!("/api/tasks/{id}/approve?workspace=ws_http_fixture"),
+                json!({}),
+            ));
+            assert_payloads(&json!([]));
         },
     );
 }

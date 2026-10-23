@@ -70,7 +70,7 @@ use orbit_automation::review::{in_scope, same_host_command, validation_evidence}
 use orbit_common::OrbitError;
 use orbit_engine::review_gate::{BaseFailureVerdict, ReplayBudget, verify_base_failure};
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::TaskHistoryEntry;
+use orbit_types::task::{TaskDecision, TaskHistoryEntry};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
     BaselineRedHold, CommitIdentity, HostCandidateOverride, HostKnownRed,
@@ -519,7 +519,7 @@ pub(super) fn baseline_red_refusal(holds: &[BaselineRedHold], attempt_id: &str) 
 
 /// Record each known-red check a passed review counted [ORB-15546] on every
 /// reviewed task's history, as delivery validation records its own
-/// [ORB-15375]: the note `pr_open` reads for the pull request. [ORB-15630]
+/// [ORB-15375]: the decision `pr_open` reads for the pull request. [ORB-15630]
 /// A host gate's known red is the claim's own validation verdict, which
 /// `pr_open` and the handoff already carry, so it is not recorded twice.
 pub(super) fn record_known_red(
@@ -527,6 +527,11 @@ pub(super) fn record_known_red(
     task_ids: &[String],
     known_red: &[HostKnownRed],
 ) -> Result<(), OrbitError> {
+    // The accepted certificate carries these decisions to the owner, which
+    // records them atomically with the handoff. A leaf owns no task history.
+    if runtime.worker_invocation().is_some() {
+        return Ok(());
+    }
     for known in known_red
         .iter()
         .filter(|known| known.evidence_artifact != REVIEW_GATE_ARTIFACT)
@@ -545,29 +550,47 @@ pub(super) fn record_known_red(
                 .unwrap_or_else(|| "no failure named".to_string())
         ));
         for task_id in task_ids {
-            runtime.with_mutation(|| {
-                let updated = runtime.stores().task_records().update(
-                    task_id,
-                    TaskRecordUpdateParams {
-                        actor: "system".into(),
-                        append_history: vec![TaskHistoryEntry {
-                            at: Utc::now(),
-                            by: "system".to_string(),
-                            event: KNOWN_RED_VALIDATION_EVENT.to_string(),
-                            note: Some(note.clone()),
-                            from_status: None,
-                            to_status: None,
-                        }],
-                        ..Default::default()
-                    },
-                )?;
-                Ok((
-                    updated,
-                    OrbitEvent::TaskUpdated {
-                        id: task_id.clone(),
-                    },
-                ))
-            })?;
+            runtime
+                .stores()
+                .tasks()
+                .with_task_write_lock(task_id, &mut || {
+                    // Read and append under one lock: a replay repairs partial
+                    // settlement without duplicating a completed decision.
+                    if runtime.get_task_history(task_id)?.iter().any(|entry| {
+                        entry.event == KNOWN_RED_VALIDATION_EVENT
+                            && KnownRedValidation::from_entry(entry).as_ref() == Some(record)
+                    }) {
+                        return Ok(());
+                    }
+                    runtime.with_mutation(|| {
+                        let updated = runtime.stores().task_records().update(
+                            task_id,
+                            TaskRecordUpdateParams {
+                                actor: "system".into(),
+                                append_history: vec![TaskHistoryEntry {
+                                    at: Utc::now(),
+                                    by: "system".to_string(),
+                                    event: KNOWN_RED_VALIDATION_EVENT.to_string(),
+                                    note: Some(note.clone()),
+                                    from_status: None,
+                                    to_status: None,
+                                    operation_id: None,
+                                    decision: Some(TaskDecision::KnownRedValidation(
+                                        record.clone(),
+                                    )),
+                                }],
+                                ..Default::default()
+                            },
+                        )?;
+                        Ok((
+                            updated,
+                            OrbitEvent::TaskUpdated {
+                                id: task_id.clone(),
+                            },
+                        ))
+                    })?;
+                    Ok(())
+                })?;
         }
     }
     Ok(())

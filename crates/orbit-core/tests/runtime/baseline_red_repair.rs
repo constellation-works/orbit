@@ -101,13 +101,7 @@ fn move_base_still_red(fixture: &Fixture) -> String {
     tip
 }
 
-#[test]
 fn the_first_hold_files_one_repair_task_and_later_holds_link_to_it_across_tasks_and_bases() {
-    if !super::dispatch_admission::isolated(
-        "baseline_red_repair::the_first_hold_files_one_repair_task_and_later_holds_link_to_it_across_tasks_and_bases",
-    ) {
-        return;
-    }
     // The fixture's own task is held by a hold written before holds kept
     // their failures: it has nothing to key a repair by.
     let (fixture, legacy) = held_on_red_base();
@@ -225,13 +219,7 @@ fn the_first_hold_files_one_repair_task_and_later_holds_link_to_it_across_tasks_
     assert_eq!(related(&filed[1]), vec![other]);
 }
 
-#[test]
 fn a_command_that_names_no_test_files_one_repair_from_its_output_tail() {
-    if !super::dispatch_admission::isolated(
-        "baseline_red_repair::a_command_that_names_no_test_files_one_repair_from_its_output_tail",
-    ) {
-        return;
-    }
     let (fixture, legacy) = held_on_red_base();
     let output = "checking README.md\nREADME.md: lint is red\nmake: *** [Makefile:3: ci-lint] \
                   Error 2\n";
@@ -280,13 +268,7 @@ fn a_command_that_names_no_test_files_one_repair_from_its_output_tail() {
     );
 }
 
-#[test]
 fn complete_failure_sets_key_repairs_before_display_truncation() {
-    if !super::dispatch_admission::isolated(
-        "baseline_red_repair::complete_failure_sets_key_repairs_before_display_truncation",
-    ) {
-        return;
-    }
     let (fixture, legacy) = held_on_red_base();
     let common = (0..20)
         .map(|i| format!("test runtime suite::a_{i:02}"))
@@ -397,13 +379,7 @@ fn complete_failure_sets_key_repairs_before_display_truncation() {
     assert_eq!(related(repair), vec![first, second, third]);
 }
 
-#[test]
 fn persisted_holds_without_a_digest_find_their_existing_repair() {
-    if !super::dispatch_admission::isolated(
-        "baseline_red_repair::persisted_holds_without_a_digest_find_their_existing_repair",
-    ) {
-        return;
-    }
     let (fixture, legacy) = held_on_red_base();
     // A persisted hold from before the digest field existed, rather than a
     // new constructor whose identity could change alongside the key code.
@@ -458,13 +434,7 @@ fn persisted_holds_without_a_digest_find_their_existing_repair() {
 /// [ORB-15412] A standing hold whose base already has a cached passing
 /// result lifts on the tick without filing a repair for the failure the base
 /// has since resolved.
-#[test]
 fn a_cached_green_base_lifts_a_hold_without_filing_its_repair() {
-    if !super::dispatch_admission::isolated(
-        "baseline_red_repair::a_cached_green_base_lifts_a_hold_without_filing_its_repair",
-    ) {
-        return;
-    }
     let (fixture, legacy) = held_on_red_base();
     let hold = BaselineRedHold {
         base_ref: "main".into(),
@@ -505,3 +475,13 @@ fn a_cached_green_base_lifts_a_hold_without_filing_its_repair() {
         "no repair for a resolved failure: {filed:?}"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    the_first_hold_files_one_repair_task_and_later_holds_link_to_it_across_tasks_and_bases_scenarios,
+    the_first_hold_files_one_repair_task_and_later_holds_link_to_it_across_tasks_and_bases,
+    a_command_that_names_no_test_files_one_repair_from_its_output_tail,
+    complete_failure_sets_key_repairs_before_display_truncation,
+    persisted_holds_without_a_digest_find_their_existing_repair,
+    a_cached_green_base_lifts_a_hold_without_filing_its_repair
+);

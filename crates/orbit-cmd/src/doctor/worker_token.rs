@@ -5,7 +5,10 @@
 //! which the Desktop revokes on refresh and so fails the run with a 401. Two
 //! places can lose the token: the workspace's effective `execution.env.pass`,
 //! and the clock's environment, which launchd starts with no login shell and
-//! which only gets it from `clock.env`. Values are never read into the row.
+//! which only gets it from `clock.env`. A Claude crew that maps its own
+//! credential through `[crews.<name>] env` needs neither the pass entry nor
+//! the shared token, only its source in `clock.env`. Values are never read
+//! into the row.
 
 use std::path::{Path, PathBuf};
 
@@ -64,7 +67,14 @@ impl PassHome {
 
 pub(super) struct WorkerTokenFacts {
     pub macos: bool,
+    /// A routed Claude crew relies on the shared credential `pass` admits.
     pub claude_routed: bool,
+    /// A routed Claude crew maps its own credential through
+    /// `[crews.<name>] env`.
+    pub crew_credentialed: bool,
+    /// The routed crews' credential sources an installed clock's
+    /// `clock.env` does not hold, as `crew (SOURCE)`. Names only.
+    pub crew_sources_missing_from_clock: Vec<String>,
     /// The workspace's effective `execution.env.pass`.
     pub pass: Vec<String>,
     pub clock: ClockCredentials,
@@ -86,7 +96,7 @@ pub(super) fn worker_token_row(facts: &WorkerTokenFacts) -> WorkspaceDoctorResul
             None,
         );
     }
-    if !facts.claude_routed {
+    if !facts.claude_routed && !facts.crew_credentialed {
         return row(
             WorkspaceDoctorStatus::Skipped,
             "no routed crew uses the claude provider".to_string(),
@@ -95,10 +105,11 @@ pub(super) fn worker_token_row(facts: &WorkerTokenFacts) -> WorkspaceDoctorResul
     }
     let mut problems = Vec::new();
     let mut fixes = Vec::new();
-    if !facts
-        .pass
-        .iter()
-        .any(|name| CREDENTIALS.contains(&name.as_str()))
+    if facts.claude_routed
+        && !facts
+            .pass
+            .iter()
+            .any(|name| CREDENTIALS.contains(&name.as_str()))
     {
         problems.push(format!(
             "`execution.env.pass` lists neither {OAUTH_TOKEN} nor {API_KEY}, so no Claude \
@@ -111,6 +122,7 @@ pub(super) fn worker_token_row(facts: &WorkerTokenFacts) -> WorkspaceDoctorResul
     }
     match &facts.clock {
         ClockCredentials::NoClock | ClockCredentials::Provided => {}
+        ClockCredentials::Missing | ClockCredentials::Mismatched(_) if !facts.claude_routed => {}
         ClockCredentials::Missing => {
             problems.push(format!(
                 "the clock's environment has no {OAUTH_TOKEN}: launchd runs `orbit clock tick` \
@@ -141,6 +153,17 @@ pub(super) fn worker_token_row(facts: &WorkerTokenFacts) -> WorkspaceDoctorResul
                 "Repair ~/.orbit/{CLOCK_ENV_FILE_NAME} (owner-only, regular file)."
             ));
         }
+    }
+    if !facts.crew_sources_missing_from_clock.is_empty() {
+        problems.push(format!(
+            "the clock's environment lacks the credential sources of crews {}, whose `env` maps \
+             their own credential",
+            facts.crew_sources_missing_from_clock.join(", ")
+        ));
+        fixes.push(format!(
+            "Put each source in ~/.orbit/{CLOCK_ENV_FILE_NAME} (mode 600) under the name the \
+             crew's `env` reads."
+        ));
     }
     if problems.is_empty() {
         return row(
@@ -208,23 +231,44 @@ fn clock_credentials(global_root: &Path, pass: &[String]) -> ClockCredentials {
     )
 }
 
+/// The routed Claude crews, split by whether each maps its own credential
+/// through `[crews.<name>] env`: `(shared, own)`, where `own` lists each
+/// credential source as `(crew, source)`.
+fn routed_claude_crews(config: &ResolvedConfig) -> (bool, Vec<(String, String)>) {
+    let Ok(names) = routed_crew_names(config) else {
+        return (false, Vec::new());
+    };
+    let mut shared = false;
+    let mut own = Vec::new();
+    for crew in names.iter().filter_map(|name| config.crews.get(name)) {
+        if crew.assignment.provider != "claude" {
+            continue;
+        }
+        let sources: Vec<(String, String)> = crew
+            .env
+            .iter()
+            .filter(|entry| CREDENTIALS.contains(&entry.name.as_str()))
+            .map(|entry| (crew.name.clone(), entry.source.clone()))
+            .collect();
+        if sources.is_empty() {
+            shared = true;
+        }
+        own.extend(sources);
+    }
+    (shared, own)
+}
+
 /// The `claude-worker-token` row for this workspace and host.
 pub(super) fn doctor_check_claude_worker_token(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let macos = cfg!(target_os = "macos");
     let global_root = runtime.global_root();
-    let claude_routed = macos
-        && ResolvedConfig::load(&ConfigRoots::new(&global_root, runtime.shared_root()))
-            .ok()
-            .is_some_and(|config| {
-                routed_crew_names(&config).is_ok_and(|names| {
-                    names.iter().any(|name| {
-                        config
-                            .crews
-                            .get(name)
-                            .is_some_and(|crew| crew.assignment.provider == "claude")
-                    })
-                })
-            });
+    let (claude_routed, crew_credentials) = if macos {
+        ResolvedConfig::load(&ConfigRoots::new(&global_root, runtime.shared_root()))
+            .map(|config| routed_claude_crews(&config))
+            .unwrap_or_default()
+    } else {
+        (false, Vec::new())
+    };
     let pass = runtime.env_pass_names();
     let clock = if macos {
         clock_credentials(&global_root, &pass)
@@ -234,8 +278,45 @@ pub(super) fn doctor_check_claude_worker_token(runtime: &OrbitRuntime) -> Worksp
     worker_token_row(&WorkerTokenFacts {
         macos,
         claude_routed,
+        crew_credentialed: !crew_credentials.is_empty(),
+        crew_sources_missing_from_clock: crew_sources_missing_from_clock(
+            &global_root,
+            &clock,
+            &crew_credentials,
+        ),
         pass,
         clock,
         pass_home: pass_home(runtime),
     })
+}
+
+/// `crew (SOURCE)` for each crew credential source an installed clock's
+/// `clock.env` does not hold. Empty without a clock, or when the file is
+/// refused (that row names the refusal).
+fn crew_sources_missing_from_clock(
+    global_root: &Path,
+    clock: &ClockCredentials,
+    crew_credentials: &[(String, String)],
+) -> Vec<String> {
+    if crew_credentials.is_empty()
+        || matches!(
+            clock,
+            ClockCredentials::NoClock | ClockCredentials::Refused(_)
+        )
+    {
+        return Vec::new();
+    }
+    let sources: Vec<String> = crew_credentials
+        .iter()
+        .map(|(_, source)| source.clone())
+        .collect();
+    let held = clock_env_file_names(global_root, &sources)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    crew_credentials
+        .iter()
+        .filter(|(_, source)| !held.contains(source))
+        .map(|(crew, source)| format!("{crew} ({source})"))
+        .collect()
 }

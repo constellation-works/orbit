@@ -5,6 +5,7 @@ use orbit_types::workspace::WorkspaceRegistry;
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Execute, Payload};
+use crate::output::table::{Column, Table};
 
 #[derive(Args)]
 pub struct WorkspaceListArgs {
@@ -17,100 +18,67 @@ impl Execute for WorkspaceListArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let global_root = runtime.global_root();
         let registry_path = workspace_registry::registry_path_for(&global_root);
-        let snapshot = workspace_registry::load_registry_from_read_only(&registry_path)?;
-        let mut registry = snapshot.registry;
-        let changed = workspace_registry::validate_workspaces(&mut registry);
-        if snapshot.migration_required || changed {
-            // Re-read under the lock: another writer may have changed the
-            // registry since the read-only inspection.
-            registry = workspace_registry::with_registry_lock(&registry_path, || {
-                let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-                if workspace_registry::validate_workspaces(&mut registry) {
-                    workspace_registry::save_registry_to(&registry, &registry_path)?;
-                }
-                Ok(registry)
-            })?;
-        }
-        Ok(Payload::detail(
-            workspace_list_json(&registry, self.all),
-            format_workspace_list(&registry, self.all),
-        )
-        .into())
+        let registry = workspace_registry::load_validated_registry_from(
+            &registry_path,
+            workspace_registry::WorkspaceValidationMode::Persist,
+        )?;
+        let records = workspace_list_records(&registry, self.all);
+        let table = workspace_list_table(&registry, self.all);
+        Ok(Payload::list(records, table).into())
     }
 }
 
-/// `workspace list` had no machine-readable form either; one record per
-/// registered workspace, carrying the same fields the text columns show
-/// (ORB-10586).
-fn workspace_list_json(registry: &WorkspaceRegistry, include_replicas: bool) -> Value {
-    Value::Array(
-        registry
-            .workspaces
-            .iter()
-            .filter(|workspace| {
-                include_replicas
-                    || registry
-                        .checkouts
-                        .iter()
-                        .find(|checkout| checkout.workspace_id == workspace.id)
-                        .is_none_or(|checkout| checkout.role != Some(orbit_types::workspace::WorkspaceCheckoutRole::Replica))
-            })
-            .map(|workspace| {
-                let checkout = registry
-                    .checkouts
-                    .iter()
-                    .find(|checkout| checkout.workspace_id == workspace.id);
-                json!({
-                    "id": workspace.id,
-                    "name": workspace.name,
-                    "status": workspace.status.to_string(),
-                    "ship_mode": orbit_core::resolved_ship_mode(workspace).as_input_value(),
-                    "owner_machine_id": workspace.owner_machine_id,
-                    "role": checkout.and_then(|checkout| checkout.role.map(|role| role.to_string())),
-                    "repo_root": checkout.map(|checkout| checkout.repo_root.to_string_lossy()),
+fn matching_workspaces(
+    registry: &WorkspaceRegistry,
+    include_replicas: bool,
+) -> impl Iterator<Item = &orbit_types::workspace::Workspace> {
+    registry.workspaces.iter().filter(move |workspace| {
+        include_replicas
+            || registry
+                .checkouts
+                .iter()
+                .find(|checkout| checkout.workspace_id == workspace.id)
+                .is_none_or(|checkout| {
+                    checkout.role != Some(orbit_types::workspace::WorkspaceCheckoutRole::Replica)
                 })
-            })
-            .collect(),
-    )
+    })
 }
 
-fn format_workspace_list(registry: &WorkspaceRegistry, include_replicas: bool) -> String {
-    let workspaces: Vec<_> = registry
-        .workspaces
-        .iter()
-        .filter(|workspace| {
-            include_replicas
-                || registry
-                    .checkouts
-                    .iter()
-                    .find(|checkout| checkout.workspace_id == workspace.id)
-                    .is_none_or(|checkout| {
-                        checkout.role
-                            != Some(orbit_types::workspace::WorkspaceCheckoutRole::Replica)
-                    })
+/// One record per registered workspace, carrying the same fields the text
+/// columns show (ORB-10586).
+fn workspace_list_records(registry: &WorkspaceRegistry, include_replicas: bool) -> Vec<Value> {
+    matching_workspaces(registry, include_replicas)
+        .map(|workspace| {
+            let checkout = registry
+                .checkouts
+                .iter()
+                .find(|checkout| checkout.workspace_id == workspace.id);
+            json!({
+                "id": workspace.id,
+                "name": workspace.name,
+                "status": workspace.status.to_string(),
+                "ship_mode": orbit_core::resolved_ship_mode(workspace).as_input_value(),
+                "owner_machine_id": workspace.owner_machine_id,
+                "role": checkout.and_then(|checkout| checkout.role.map(|role| role.to_string())),
+                "repo_root": checkout.map(|checkout| checkout.repo_root.to_string_lossy()),
+            })
         })
-        .collect();
-    if workspaces.is_empty() {
-        return "no workspaces registered\n".to_string();
-    }
+        .collect()
+}
 
-    let id_width = workspaces
-        .iter()
-        .map(|workspace| workspace.id.chars().count())
-        .max()
-        .unwrap_or_default()
-        .max("ID".len());
-    let mut output = format!(
-        "{:<20} {:<id_width$} {:<8} {:<10} {:<22} {:<8} ROOT\n",
-        "NAME",
-        "ID",
-        "STATUS",
-        "SHIP MODE",
-        "OWNER",
-        "ROLE",
-        id_width = id_width
-    );
-    for workspace in workspaces {
+fn workspace_list_table(registry: &WorkspaceRegistry, include_replicas: bool) -> Table {
+    let mut table = Table::new(vec![
+        Column::new("NAME"),
+        Column::new("ID").fixed(),
+        Column::new("STATUS").fixed(),
+        Column::new("SHIP MODE").fixed(),
+        Column::new("OWNER").fixed(),
+        Column::new("ROLE").fixed(),
+        Column::new("ROOT").path(),
+    ])
+    .empty_message("no workspaces registered");
+
+    for workspace in matching_workspaces(registry, include_replicas) {
         let checkout = registry
             .checkouts
             .iter()
@@ -125,17 +93,17 @@ fn format_workspace_list(registry: &WorkspaceRegistry, include_replicas: bool) -
             .and_then(|checkout| checkout.role)
             .map(|role| role.to_string())
             .unwrap_or_else(|| "-".to_string());
-        output.push_str(&format!(
-            "{:<20} {:<id_width$} {:<8} {:<10} {:<22} {:<8} {}\n",
-            workspace.name,
-            workspace.id,
+        table.add_row(vec![
+            workspace.name.clone(),
+            workspace.id.clone(),
             workspace.status.to_string(),
-            orbit_core::resolved_ship_mode(workspace).as_input_value(),
-            owner,
+            orbit_core::resolved_ship_mode(workspace)
+                .as_input_value()
+                .to_string(),
+            owner.to_string(),
             role,
             root,
-            id_width = id_width
-        ));
+        ]);
     }
-    output
+    table
 }

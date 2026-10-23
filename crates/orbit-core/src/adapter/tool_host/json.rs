@@ -4,16 +4,30 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use orbit_common::OrbitError;
 use orbit_types::task::{
-    ArtifactPresentation, MAX_TASK_ARTIFACT_CONTENT_BYTES, Task, TaskArtifact, TaskStatus,
-    artifact_presentation, is_valid_orb_task_id, task_base_json,
+    ArtifactPresentation, Task, TaskArtifact, TaskStatus, artifact_presentation,
+    is_valid_orb_task_id, task_base_json,
 };
 use serde_json::{Map, Value};
 
 use crate::OrbitRuntime;
-use crate::application::task::{TaskLintReport, task_record_json, task_show_field_json};
+use crate::application::task::{
+    TaskLintReport, TaskOsReadout, task_record_json, task_show_field_json, task_show_json,
+};
 
 pub(super) fn serialize_task(runtime: &OrbitRuntime, task: &Task) -> Result<Value, OrbitError> {
     serialize_task_record(runtime, task, true)
+}
+
+/// The full `orbit.task.show` record. This is [`task_show_json`] and nothing
+/// else: `next_step` and `final_recovery` are part of that record, present
+/// only when they apply.
+pub(super) fn serialize_task_show(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Result<Value, OrbitError> {
+    let status_by_id = task_reference_status_index(runtime, task)?;
+    let row = runtime.task_row_with_sidecars(task.clone())?;
+    task_show_json(runtime, &row, &status_by_id).map(Value::Object)
 }
 
 /// Serialize a task returned by a mutating tool.
@@ -45,6 +59,7 @@ fn serialize_task_record(
         return task_record_json(runtime, &row, &status_by_id).map(Value::Object);
     }
     let mut object = task_base_json(task, &status_by_id);
+    TaskOsReadout::new(runtime)?.insert_into(task, &mut object);
     runtime.task_crew_read(task).insert_into(&mut object);
     Ok(Value::Object(object))
 }
@@ -133,14 +148,7 @@ pub(super) fn serialize_task_artifact_read(
     artifact: &TaskArtifact,
 ) -> Result<Value, OrbitError> {
     let size = artifact.content.len();
-    if size as u64 > MAX_TASK_ARTIFACT_CONTENT_BYTES {
-        return Err(OrbitError::InvalidInput(format!(
-            "artifact '{}' on task '{task_id}' is {size} bytes, over the \
-             {MAX_TASK_ARTIFACT_CONTENT_BYTES} byte inline read limit; download it from \
-             /api/tasks/{task_id}/artifacts/{} instead",
-            artifact.path, artifact.path
-        )));
-    }
+    artifact.validate_inline_size(task_id)?;
 
     let presentation = artifact_presentation(&artifact.media_type, &artifact.content);
     let mut object = Map::new();

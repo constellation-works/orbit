@@ -1,7 +1,8 @@
 //! Friction allocation and publication inside a caller-owned SQLite transaction.
 use crate::contracts::FrictionAddParams;
 use chrono::{DateTime, SecondsFormat, Utc};
-use orbit_common::{OrbitError, governance::friction::derive_title};
+use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
+use orbit_common::{OrbitError, StorageLayer, governance::friction::derive_title};
 use orbit_types::record::{FrictionRecord, FrictionStatus};
 use rusqlite::Connection;
 
@@ -59,20 +60,26 @@ pub(crate) fn upsert_record(
             record.rehome_to,
         ],
     )
-    .map_err(|error| OrbitError::Store(format!("write friction record {}: {error}", record.id)))?;
+    .map_err(|error| {
+        sqlite_error(
+            StorageLayer::Store,
+            &error,
+            format!("write friction record {}: {error}", record.id),
+        )
+    })?;
 
     conn.execute(
         "DELETE FROM friction_record_tags WHERE workspace_id = ?1 AND friction_id = ?2",
         rusqlite::params![workspace_id, record.id],
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))?;
+    .map_err(sqlite_store_error)?;
     for tag in &record.tags {
         conn.execute(
             "INSERT OR IGNORE INTO friction_record_tags (workspace_id, friction_id, tag)
              VALUES (?1, ?2, ?3)",
             rusqlite::params![workspace_id, record.id, tag],
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
     Ok(())
 }
@@ -97,7 +104,7 @@ pub(crate) fn next_month_seq(
             rusqlite::params![workspace_id, month],
             |row| row.get(0),
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     if next > MAX_MONTH_SEQ {
         return Err(OrbitError::InvalidInput(format!(
             "friction log for {month} is full ({MAX_MONTH_SEQ} records); \

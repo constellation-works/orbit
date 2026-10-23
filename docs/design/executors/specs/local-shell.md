@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: the local-shell executor and the local_shell deterministic action"
 tags: ["executors", "activity-job"]
-last_validated: 2026-10-09
+last_validated: 2026-10-20
 ---
 
 # Spec: `local-shell`
@@ -181,8 +181,9 @@ Such a definition's fields keep working as step defaults:
 - `env` → environment additions.
 - `timeout_seconds` → the default wall-clock budget.
 
-Re-seeding never overwrites an installed `local-shell` definition, so operator
-customizations survive upgrades.
+Ordinary seeding never overwrites an installed `local-shell` definition, so operator
+customizations survive upgrades. `orbit init --force` is the explicit exception: it
+replaces the installed executor definitions with the shipped ones.
 
 Agent-shaped fields on a shell definition (`model_pair_override`, `model_flag`,
 `stdout_format`) are inert: nothing on this path reads them. The two resolution

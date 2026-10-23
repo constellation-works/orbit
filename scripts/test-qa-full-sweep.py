@@ -12,6 +12,7 @@ import re
 import runpy
 import select
 import signal
+import shlex
 import shutil
 import socket
 import subprocess
@@ -266,6 +267,15 @@ def validate_inventory(repo: Path, inventory: dict):
                     or any(not isinstance(name, str) or not name.strip() for name in tests)
                     or len(tests) != len(set(tests))):
                 errors.append(f"scenario {scenario['id']} has invalid required behavioral cases")
+        if "required_rows" in scenario:
+            rows = scenario["required_rows"]
+            if (not isinstance(rows, list) or not rows or len(rows) != len(set(rows))
+                    or any(not isinstance(row, str) or not row.strip() for row in rows)):
+                errors.append(f"scenario {scenario['id']} has invalid required behavioral rows")
+        for case, reason in scenario.get("coverage_gaps", {}).items():
+            if not case or not isinstance(reason, str) or not reason.strip():
+                errors.append(f"scenario {scenario['id']} has an unexplained boundary coverage gap")
+        errors.extend(validate_retired_cases(scenario))
         for surface in scenario.get("surfaces", []):
             claims.setdefault(surface, []).append(scenario["id"])
     for surface, reason in gaps.items():
@@ -293,6 +303,108 @@ def is_cargo_test(command):
     return len(command) >= 2 and Path(command[0]).name == "cargo" and command[1] == "test"
 
 
+_RETIRED_CASE_KEYS = {
+    "retired", "guarantee", "disposition", "reason",
+    "required_tests", "required_rows", "command", "command_tests", "command_rows",
+}
+_RETIRED_DISPOSITIONS = {"verified-equivalent", "standards-excluded"}
+
+
+def _nonempty_unique_strings(value):
+    return (isinstance(value, list) and bool(value)
+            and all(isinstance(item, str) and item.strip() for item in value)
+            and len(value) == len(set(value)))
+
+
+def validate_retired_cases(scenario):
+    """A disposition replaces a gap only when the sweep can execute its proof.
+
+    Unresolved ``coverage_gaps`` stay fail-closed elsewhere. A retired identity
+    cannot also be a gap, and a command must not select the retired test itself.
+    ``standards-excluded`` is an AGENTS.md prohibition, not a missing proof:
+    it still names the surviving executable cases.
+    """
+    errors = []
+    identifier = scenario.get("id", "<unknown>")
+    cases = scenario.get("retired_cases", [])
+    if not cases:
+        return errors
+    if scenario.get("kind") == "coverage-gap":
+        errors.append(f"scenario {identifier} cannot both be a coverage gap and record retired cases")
+    if not isinstance(cases, list):
+        return errors + [f"scenario {identifier} retired_cases must be a list"]
+    gaps = scenario.get("coverage_gaps", {})
+    if not isinstance(gaps, dict):
+        gaps = {}
+    scenario_tests = set(scenario.get("required_tests", []))
+    scenario_rows = set(scenario.get("required_rows", []))
+    seen = set()
+    for case in cases:
+        if not isinstance(case, dict):
+            errors.append(f"scenario {identifier} has a malformed retired case")
+            continue
+        unknown = sorted(set(case) - _RETIRED_CASE_KEYS)
+        if unknown:
+            errors.append(f"scenario {identifier} retired case has unknown keys {unknown}")
+        retired = case.get("retired")
+        if not isinstance(retired, str) or not retired.strip() or retired in seen:
+            errors.append(f"scenario {identifier} has an invalid or duplicate retired case identity")
+            continue
+        seen.add(retired)
+        if retired in gaps:
+            errors.append(
+                f"scenario {identifier} retired case {retired} is also an unresolved coverage gap")
+        guarantee = case.get("guarantee")
+        if not isinstance(guarantee, str) or not guarantee.strip():
+            errors.append(f"scenario {identifier} retired case {retired} has no observable guarantee")
+        disposition = case.get("disposition")
+        if disposition not in _RETIRED_DISPOSITIONS:
+            errors.append(f"scenario {identifier} retired case {retired} has an invalid disposition")
+        reason = case.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            errors.append(f"scenario {identifier} retired case {retired} has no disposition reason")
+        elif disposition == "standards-excluded" and "AGENTS.md" not in reason:
+            errors.append(
+                f"scenario {identifier} retired case {retired} standards exclusion must cite AGENTS.md")
+        for key in ("required_tests", "required_rows", "command_tests", "command_rows"):
+            if key in case and not _nonempty_unique_strings(case[key]):
+                errors.append(f"scenario {identifier} retired case {retired} has invalid {key}")
+        for key, universe in (("required_tests", scenario_tests), ("required_rows", scenario_rows)):
+            named = case.get(key, [])
+            if isinstance(named, list) and any(name not in universe for name in named if isinstance(name, str)):
+                errors.append(
+                    f"scenario {identifier} retired case {retired} {key} are not selected by the scenario")
+        command = case.get("command")
+        if ("command_tests" in case or "command_rows" in case) and command is None:
+            errors.append(
+                f"scenario {identifier} retired case {retired} command_tests or command_rows require an executable command")
+        if command is not None:
+            if (not isinstance(command, list) or not is_cargo_test(command)
+                    or ("--test" not in command and "--lib" not in command)):
+                errors.append(
+                    f"scenario {identifier} retired case {retired} command must be cargo test with --test or --lib")
+            elif any(isinstance(part, str) and retired in part for part in command):
+                errors.append(
+                    f"scenario {identifier} retired case {retired} command reselects the retired identity")
+            if "command_tests" not in case and "command_rows" not in case:
+                errors.append(
+                    f"scenario {identifier} retired case {retired} command names no executable selection")
+        for key in ("required_tests", "command_tests"):
+            named = case.get(key, [])
+            if isinstance(named, list) and retired in named:
+                errors.append(
+                    f"scenario {identifier} retired case {retired} reselects the retired identity as {key}")
+        selections = []
+        for key in ("required_tests", "required_rows", "command_tests", "command_rows"):
+            named = case.get(key, [])
+            if isinstance(named, list):
+                selections.extend(name for name in named if isinstance(name, str) and name.strip())
+        if not selections:
+            errors.append(
+                f"scenario {identifier} retired case {retired} names no surviving executable selection")
+    return errors
+
+
 def validate_cargo_target(command, packages):
     """Check the inventory's explicit package/target against Cargo metadata."""
     try:
@@ -311,12 +423,13 @@ def validate_cargo_target(command, packages):
         raise ValueError("Cargo scenario must select an existing package with -p") from error
 
 
-def cargo_inventory_errors(repo, inventory, *, list_cases=False):
+def cargo_inventory_errors(repo, inventory, *, list_cases=False, offline=False):
     scenarios = [item for item in inventory["scenarios"] if is_cargo_test(item.get("command", []))]
     errors = []
     with tempfile.TemporaryDirectory(prefix="orbit-qa-cargo-inventory-") as tmp:
         env = isolated_environment(Path(tmp))
-        metadata = run(["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
+        metadata = run(["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked",
+                        *(["--offline"] if offline else [])],
                        cwd=repo, env=env)
         try:
             if metadata.get("output_truncated"):
@@ -327,16 +440,31 @@ def cargo_inventory_errors(repo, inventory, *, list_cases=False):
             return [str(error)]
         for scenario in scenarios:
             try:
-                validate_cargo_target(scenario["command"], packages)
-                if list_cases:
-                    command = list(scenario["command"])
-                    if "--" not in command:
-                        command.append("--")
-                    command.append("--list")
-                    evidence = run(command, cwd=repo, env=env, timeout=1800)
-                    selected = validate_cargo_case_listing(evidence, scenario.get("required_tests", []))
-                    print(json.dumps({"scenario": scenario["id"], "command": command,
-                                      "selected_tests": selected, "behavioral_coverage": False}))
+                commands = [(scenario["command"], scenario.get("required_tests", []), None)]
+                for case in scenario.get("retired_cases") or []:
+                    if isinstance(case, dict) and case.get("command") is not None:
+                        commands.append((case["command"], case.get("command_tests", []), case.get("retired")))
+                for command, required_tests, retired in commands:
+                    validate_cargo_target(command, packages)
+                if list_cases and scenario.get("capability") == "linux" and platform.system() != "Linux":
+                    print(json.dumps({"scenario": scenario["id"], "selection_status": "NOT_RUN",
+                                      "missing_capability": "Linux-compiled behavioral cases",
+                                      "behavioral_coverage": False}))
+                    continue
+                if not list_cases:
+                    continue
+                for command, required_tests, retired in commands:
+                    listed = list(command)
+                    if "--" not in listed:
+                        listed.append("--")
+                    listed.append("--list")
+                    evidence = run(listed, cwd=repo, env=env, timeout=1800)
+                    selected = validate_cargo_case_listing(evidence, required_tests)
+                    body = {"scenario": scenario["id"], "command": listed,
+                            "selected_tests": selected, "behavioral_coverage": False}
+                    if retired:
+                        body["retired_case"] = retired
+                    print(json.dumps(body))
             except ValueError as error:
                 errors.append(f"{scenario['id']}: {error}")
     return errors
@@ -416,16 +544,99 @@ def candidate_source(repo: Path, excluded_paths=()):
             "status": status_lines}
 
 
+def execute_retired_case_commands(scenario, *, repo, env, candidate_id, excluded_paths):
+    """Run each disposition command as its own result row.
+
+    The row keeps the scenario id and carries no scenario assertions, so a
+    pass cannot shrink or replace the primary assertion set. A failure,
+    truncation, missing name, or skip/deferral notice stays on this row and
+    fails the required scenario. Sandbox deferrals are not rewritten to PASS.
+    """
+    rows = []
+    for case in scenario.get("retired_cases") or []:
+        command = case.get("command") if isinstance(case, dict) else None
+        if not command:
+            continue
+        evidence = run(list(command), cwd=repo, env=env, timeout=1800)
+        unchanged = candidate_source(repo, excluded_paths)["candidate_id"] == candidate_id
+        failure = None if unchanged else "source candidate changed while the scenario ran"
+        try:
+            validate_cargo_test_evidence(command, evidence, case.get("command_tests", []),
+                                         case.get("command_rows", []))
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+            failure = str(error) if failure is None else failure + "; " + str(error)
+        extra = finalize_result(evidence, [], candidate_id, failure)
+        extra["scenario"] = scenario["id"]
+        extra["retired_case"] = case.get("retired")
+        if scenario.get("capability") == "macos" and extra["outcome"] == "PASS":
+            extra.update(outcome="NOT_RUN", assertions=[], evidence_type="inventory-listing",
+                         inventory_assertions=["macos-required-workflow-is-current"],
+                         missing_capabilities=["actual matching-candidate macOS execution evidence"])
+        rows.append(extra)
+    return rows
+
+
 def finalize_result(evidence, assertions, candidate_id, failure=None, accept_nonzero=False):
+    """Classify one command without letting a capability notice hide a failure.
+
+    An exit-zero command whose evidence is otherwise valid is NOT_RUN when it
+    only lacks a capability. A nonzero exit (unless the caller accepts that
+    exit), a validation failure, or truncated output is FAIL. Notices and the
+    original diagnostics stay on the row in either case.
+    """
     evidence["assertions"] = assertions
     evidence["candidate_id"] = candidate_id
-    if (evidence["exit_code"] != 0 and not accept_nonzero) or failure:
+    notices = execution_notices(evidence)
+    if evidence.get("output_truncated"):
+        failure = (failure + "; " if failure else "") + "command output was truncated; execution evidence is incomplete"
+    failed = (evidence["exit_code"] != 0 and not accept_nonzero) or bool(failure)
+    if notices:
+        evidence["missing_capabilities"] = notices
+    if notices and not failed:
+        evidence["outcome"] = "NOT_RUN"
+        evidence["assertions"] = []
+        return evidence
+    if failed:
         evidence["outcome"] = "FAIL"
+        evidence["assertions"] = []
         if failure:
             evidence["stderr"] = (evidence.get("stderr") or "") + "\nassertion: " + failure
     else:
         evidence["outcome"] = "PASS"
     return evidence
+
+
+def execution_notices(evidence):
+    """A harness success cannot override an explicitly unavailable behavior."""
+    output = evidence.get("stdout", "") + "\n" + evidence.get("stderr", "")
+    notices = re.findall(r"^(?:SKIP:|DEFERRED:|skipping\b)[^\n]*",
+                         output, re.MULTILINE | re.IGNORECASE)
+    if isinstance(evidence.get("preparation"), dict):
+        notices.extend(execution_notices(evidence["preparation"]))
+    return sorted(set(notices))
+
+
+def verify_retained_evidence(results):
+    """Reopen every referenced byte after all producers have finished."""
+    for result in results:
+        retained = result.get("retained_evidence")
+        if not retained:
+            continue
+        try:
+            directory = Path(retained["directory"]).resolve()
+            files = retained["files"]
+            if not files:
+                raise ValueError("retained evidence manifest is empty")
+            for item in files:
+                path = (directory / item["path"]).resolve()
+                if not path.is_relative_to(directory) or not path.is_file():
+                    raise ValueError(f"retained evidence is missing or escapes its directory: {path}")
+                if hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
+                    raise ValueError(f"retained evidence hash mismatch: {path}")
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            result["outcome"] = "FAIL"
+            result["assertions"] = []
+            result["retained_evidence_error"] = str(error)
 
 
 def parse_json(evidence, description):
@@ -452,34 +663,172 @@ def validate_npm_result(repo, command, evidence):
     return body["assertions"]
 
 
-def validate_cargo_test_evidence(command, evidence, required_tests=()):
+def cargo_outer_suites(command, evidence):
+    """Attribute libtest reports to outer suites, never to captured test output.
+
+    Cargo's target announcements and each libtest running/count/results frame
+    must agree. With --show-output, diagnostic blocks belong to a named outer
+    case and end only at the complete outer successes/failures table. Raw
+    diagnostics remain available to notice and behavioral-row classification.
+    Unframed/interleaved reports (including ambiguous --nocapture) fail closed.
+    """
+    stdout = re.sub(r"\x1b\[[0-9;]*m", "", evidence.get("stdout", ""))
+    stderr = re.sub(r"\x1b\[[0-9;]*m", "", evidence.get("stderr", ""))
+    targets = re.findall(r"^\s*Running (.+)$|^\s*Doc-tests (.+)$", stderr, re.MULTILINE)
+    targets = [running or f"Doc-tests {doc}" for running, doc in targets]
+    if not targets:
+        raise ValueError("cargo test has no authoritative outer target announcements")
+    if re.search(r"^test result:", stderr, re.MULTILINE):
+        raise ValueError("cargo test has ambiguous summaries on stderr")
+    if "--test" in command:
+        name = command[command.index("--test") + 1]
+        source = rf"tests/{re.escape(name)}(?:\.rs|/main\.rs)"
+        binary = re.escape(name.replace("-", "_"))
+        if len(targets) != 1 or not re.fullmatch(rf"{source} \(.*/{binary}-[^/]+\)", targets[0]):
+            raise ValueError("cargo test executed the wrong or extra test target")
+    if "--lib" in command and (len(targets) != 1 or not targets[0].startswith("unittests ")):
+        raise ValueError("cargo test executed the wrong or extra library target")
+    suites = []
+    active = None
+    diagnostic = False
+    child_owner = None
+    pending_case = None
+    tables = {}
+    lines = stdout.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
+        if child_owner is not None:
+            if line == f"qa-child-output-end: {child_owner}":
+                child_owner = None
+            continue
+        # Serial libtest writes the case prefix before invoking it. A locked
+        # stdout frame can therefore split its result row across child output.
+        child_start = re.fullmatch(
+            r"(?:(test (\S+)(?: - should panic)? \.\.\. ))?qa-child-output-begin: (\S+)", line)
+        if child_start and not diagnostic:
+            if not active:
+                raise ValueError("cargo test child output has no owning outer suite")
+            child_owner = child_start[3]
+            if child_start[1]:
+                if pending_case or child_start[2] != child_owner:
+                    raise ValueError("cargo test child frame disagrees with pending outer case")
+                pending_case = (child_start[1], child_start[2])
+            if pending_case and pending_case[1] != child_owner:
+                raise ValueError("cargo test child frame disagrees with pending outer case")
+            active["child_owners"].add(child_owner)
+            continue
+        if line.startswith("qa-child-output-end:") and not diagnostic:
+            raise ValueError("cargo test child output has an unmatched end")
+        if pending_case:
+            if not line.strip():
+                continue
+            if not re.fullmatch(r"(ok|FAILED|ignored)(?:, .*)?", line):
+                raise ValueError("cargo test has an incomplete pending outer result")
+            line = pending_case[0] + line
+            pending_case = None
+        # Libtest encloses captured output under a known case. A diagnostic
+        # may itself contain running/results/FAILED lines; none owns a suite.
+        header = re.fullmatch(r"---- (.+) stdout ----", line)
+        if header and active and len(active["cases"]) == active["selected"]:
+            if header[1] not in active["cases"] or active["cases"][header[1]] == "ignored":
+                raise ValueError("cargo test captured output has ambiguous case ownership")
+            diagnostic = True
+            tables = {}
+            continue
+        if active and len(active["cases"]) == active["selected"] and line in ("successes:", "failures:"):
+            status = "ok" if line == "successes:" else "FAILED"
+            names = []
+            cursor = index
+            while cursor < len(lines) and lines[cursor].startswith("    "):
+                names.append(lines[cursor].strip())
+                cursor += 1
+            expected = {name for name, outcome in active["cases"].items() if outcome == status}
+            if names and len(names) == len(set(names)) and set(names) == expected:
+                tables[status] = expected
+                index = cursor
+                continue
+        summary = re.fullmatch(
+            r"test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; "
+            r"0 measured; \d+ filtered out; finished in [0-9.]+s", line)
+        if summary:
+            if not active:
+                raise ValueError("cargo test summary has no owning outer suite")
+            expected_tables = {status for status in ("ok", "FAILED")
+                               if status in active["cases"].values()}
+            if diagnostic and not expected_tables.issubset(tables):
+                continue
+            counts = [sum(outcome == status for outcome in active["cases"].values())
+                      for status in ("ok", "FAILED", "ignored")]
+            if len(active["cases"]) != active["selected"] or counts != [int(summary[n]) for n in (2, 3, 4)]:
+                raise ValueError("cargo test outer rows and completed counts disagree")
+            if any(active["cases"].get(owner) != "ok" for owner in active["child_owners"]):
+                raise ValueError("cargo test forwarded child output has no passing outer owner")
+            active["child_owners"] = sorted(active["child_owners"])
+            active.update(outcome=summary[1], passed=counts[0], failed=counts[1], ignored=counts[2])
+            suites.append(active)
+            active = None
+            diagnostic = False
+            tables = {}
+            continue
+        if diagnostic:
+            continue
+        if line.startswith("test result:"):
+            raise ValueError("cargo test has a malformed or truncated outer summary")
+        running = re.fullmatch(r"running (\d+) tests?", line)
+        if running:
+            if active:
+                raise ValueError("cargo test has ambiguous overlapping outer suites")
+            active = {"selected": int(running[1]), "cases": {}, "child_owners": set()}
+            continue
+        case = re.fullmatch(r"test (.+?)(?: - should panic)? \.\.\. (ok|FAILED|ignored)(?:, .*)?", line)
+        if case:
+            if not active or case[1] in active["cases"]:
+                raise ValueError("cargo test row has no unique outer owner")
+            active["cases"][case[1]] = case[2]
+    if active or child_owner is not None or pending_case is not None or len(suites) != len(targets):
+        raise ValueError("cargo test has missing or incomplete outer target reports")
+    for suite, target in zip(suites, targets):
+        suite["target"] = target
+    return suites
+
+
+def validate_cargo_test_evidence(command, evidence, required_tests=(), required_rows=()):
     """Require completed, non-vacuous Rust tests, including command-kind suites."""
     if not is_cargo_test(command):
         return
-    summaries = re.findall(
-        r"test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;",
-        evidence.get("stdout", "") + "\n" + evidence.get("stderr", ""))
-    if not summaries:
-        raise ValueError("cargo test returned no completed test-suite summary")
-    passed = sum(int(row[1]) for row in summaries)
-    failed = sum(int(row[2]) for row in summaries)
+    if evidence.get("exit_code") != 0:
+        raise ValueError("cargo test command did not exit successfully")
+    if evidence.get("output_truncated"):
+        raise ValueError("cargo test output was truncated; behavioral evidence is incomplete")
+    suites = cargo_outer_suites(command, evidence)
+    evidence["outer_suites"] = suites
+    passed = sum(row["passed"] for row in suites)
+    failed = sum(row["failed"] for row in suites)
     evidence["test_counts"] = {"passed": passed, "failed": failed,
-                               "ignored": sum(int(row[3]) for row in summaries),
-                               "suites": len(summaries)}
-    passing_tests = sorted(set(re.findall(
-        r"^test (\S+) \.\.\. ok$",
-        evidence.get("stdout", "") + "\n" + evidence.get("stderr", ""), re.MULTILINE)))
+                               "ignored": sum(row["ignored"] for row in suites),
+                               "suites": len(suites)}
+    passing_tests = sorted({name for suite in suites for name, status in suite["cases"].items() if status == "ok"})
     evidence["passing_tests"] = passing_tests
-    if failed or any(row[0] != "ok" for row in summaries):
-        raise ValueError("cargo test reported failing tests")
+    if failed or any(row["outcome"] != "ok" for row in suites):
+        raise ValueError("cargo test reported failing outer tests")
     if passed == 0:
         raise ValueError("cargo test executed zero passing tests; check the selection")
     missing = set(required_tests) - set(passing_tests)
     if missing:
         raise ValueError(f"cargo test did not pass the required behavioral cases: {sorted(missing)}")
+    completed_rows = sorted(set(re.findall(
+        r"^qa-scenario-pass: (\S+)$",
+        evidence.get("stdout", "") + "\n" + evidence.get("stderr", ""), re.MULTILINE)))
+    evidence["passing_rows"] = completed_rows
+    missing_rows = set(required_rows) - set(completed_rows)
+    if missing_rows:
+        raise ValueError(f"cargo test did not complete required behavioral rows: {sorted(missing_rows)}")
 
 
 def scenario_decision(inventory, results, candidate_id):
+    verify_retained_evidence(results)
     failures = []
     for scenario in inventory["scenarios"]:
         if not scenario["required"]:
@@ -487,7 +836,15 @@ def scenario_decision(inventory, results, candidate_id):
         if scenario.get("kind") == "coverage-gap":
             failures.append(f"{scenario['id']}: required coverage gap: {scenario.get('coverage_gap')}")
             continue
+        if scenario.get("coverage_gaps"):
+            failures.append(f"{scenario['id']}: required boundary coverage gaps: {scenario['coverage_gaps']}")
+            continue
         rows = [row for row in results if row["scenario"] == scenario["id"]]
+        if scenario.get("capability") == "browser":
+            for row in rows:
+                if row["outcome"] == "PASS" and not row.get("retained_evidence"):
+                    row.update(outcome="FAIL", assertions=[],
+                               retained_evidence_error="browser execution has no retained evidence manifest")
         observed = {item for row in rows for item in row.get("assertions", [])}
         required = set(scenario["assertions"])
         if not rows or any(row["outcome"] != "PASS" for row in rows):
@@ -496,6 +853,12 @@ def scenario_decision(inventory, results, candidate_id):
             failures.append(f"{scenario['id']}: assertions missing={sorted(required-observed)} unexpected={sorted(observed-required)}")
         elif any(row.get("candidate_id") != candidate_id for row in rows):
             failures.append(f"{scenario['id']}: mixed or stale candidate evidence")
+        else:
+            for case in scenario.get("retired_cases") or []:
+                command = case.get("command") if isinstance(case, dict) else None
+                if command and not any(row.get("command") == command for row in rows):
+                    failures.append(
+                        f"{scenario['id']}: retired case {case.get('retired')} has no executed command")
     for surface, reason in inventory.get("required_capability_gaps", {}).items():
         failures.append(f"{surface}: required capability gap: {reason}")
     return not failures, failures
@@ -844,61 +1207,6 @@ updated_at: 2026-01-01T00:00:00Z
              "orbit.qa.absent", "--path", str(log_path), "--format", "ndjson"], work,
             ["nonmatching-and-malformed-records-are-excluded"], empty_log_selection)
 
-    fixture_job = temp / "qa-legacy-logs.yaml"
-    fixture_job.write_text("""schemaVersion: 2
-kind: Job
-metadata:
-  name: qa_legacy_logs_fixture
-spec:
-  state: enabled
-  kind: workflow
-  max_active_runs: 1
-  steps:
-    - id: exact_step
-      default_input:
-        seconds: 0
-      spec:
-        type: deterministic
-        action: sleep
-        config: {}
-""")
-
-    def completed_fixture_run(evidence):
-        body = parse_json(evidence, "fixture job run")
-        # Canonical vocabulary is JobRunState::Success.to_string() == "success"
-        # (crates/orbit-types/src/workflow/job.rs), not the legacy "succeeded" literal.
-        if body.get("state") != "success" or not body.get("run_id"):
-            raise ValueError("deterministic fixture job did not succeed")
-
-    fixture_run = checked("legacy-logs-compatibility",
-                          [orbit_bin, "--root", str(root), "--workspace", str(work), "run", "job",
-                           str(fixture_job), "--input", "crew=sol", "--wait", "--format", "json"],
-                          work, ["supported-run-fixture-completes"], completed_fixture_run)
-    fixture_run_id = json.loads(fixture_run["stdout"])["run_id"] if fixture_run else "missing-run"
-
-    def legacy_logs_output(evidence):
-        body = parse_json(evidence, "legacy logs")
-        # The fixture's single deterministic step is recorded on the run, so the
-        # legacy view renders exactly one legacy_step_to_json entry for it; only
-        # the timing fields are left unchecked.
-        expected = {"step_index": 0, "target_id": "exact_step", "target_type": "activity",
-                    "state": "success", "exit_code": None, "error_code": None,
-                    "error_message": None}
-        observed = {key: body[0].get(key) for key in expected} if isinstance(body, list) and len(body) == 1 else None
-        if observed != expected:
-            raise ValueError(f"legacy logs changed its exact detached-run compatibility output: {body!r}")
-        if "[deprecated]" not in evidence.get("stderr", ""):
-            raise ValueError("legacy logs omitted its compatibility deprecation notice")
-
-    checked("legacy-logs-compatibility",
-            [orbit_bin, "--root", str(root), "--workspace", str(work), "logs", fixture_run_id,
-             "--format", "json"], work,
-            ["exact-legacy-compatibility-output-and-deprecation"], legacy_logs_output)
-    checked("legacy-logs-compatibility",
-            [orbit_bin, "--root", str(root), "--workspace", str(work), "logs", fixture_run_id,
-             "--step", "absent-step", "--format", "json"], work,
-            ["unknown-legacy-step-is-refused"], refused, accept_nonzero=True)
-
     migration_root = temp / "migration-root"
     migration_init = checked(
         "migration-lifecycle",
@@ -1232,6 +1540,76 @@ def validate_hosted_macos_evidence(body, scenario, candidate, repo):
     }
     if body.get("source_identity") != expected_identity:
         raise ValueError("hosted evidence source identity does not match the checkout")
+    validate_native_execution(body.get("execution", []), repo, candidate["head"])
+
+
+def native_required_commands(repo):
+    commands = []
+    for line in (repo / ".github/workflows/ci-macos.yml").read_text().splitlines():
+        if line.lstrip().startswith("#") or "--record-native-command " not in line:
+            continue
+        tokens = shlex.split(line.split("# check-ci-macos:")[0])
+        commands.append(tokens[tokens.index("--record-native-command") + 1:])
+    if not commands:
+        raise ValueError("macOS workflow has no recorded execution commands")
+    return commands
+
+
+def validate_native_execution(records, repo, head):
+    expected = native_required_commands(repo)
+    if sorted(json.dumps(row.get("command")) for row in records) != sorted(json.dumps(cmd) for cmd in expected):
+        raise ValueError("macOS evidence does not record every exact required execution command")
+    for row in records:
+        if row.get("source_revision") != head or row.get("exit_code") != 0:
+            raise ValueError("macOS execution failed or names a different revision")
+        if row.get("source_status") != [] or row.get("source_stable") is not True:
+            raise ValueError("macOS execution requires a clean source candidate stable through each command")
+        if execution_notices(row):
+            raise ValueError("macOS execution self-skipped: " + "; ".join(execution_notices(row)))
+        command = row["command"]
+        if row.get("executed_command") != native_execution_command(command):
+            raise ValueError("macOS evidence does not retain the actual execution arguments")
+        validate_cargo_test_evidence(command[command.index("cargo"):], row)
+
+
+def native_execution_command(command):
+    # Wrapper options and delimiters belong to the prefix, not to Cargo or
+    # libtest. Normalize only the arguments following the cargo test boundary.
+    cargo_args = command.index("cargo") + 2
+    prefix = list(command[:cargo_args])
+    executed = list(command[cargo_args:])
+    if "--list" in executed or "--no-run" in executed:
+        raise ValueError("native execution cannot use a listing or compile-only command")
+    if "--" not in executed:
+        executed.append("--")
+    # Interleaved child output has no trustworthy suite ownership. Libtest
+    # still retains every success/failure diagnostic with --show-output.
+    separator = executed.index("--")
+    executed = executed[:separator + 1] + [flag for flag in executed[separator + 1:] if flag != "--nocapture"]
+    if "--show-output" not in executed:
+        executed.append("--show-output")
+    return prefix + executed
+
+
+def record_native_execution(command, repo, directory):
+    """Run one workflow command and retain its actual output for the emitter."""
+    if not directory or "cargo" not in command or command[command.index("cargo") + 1] != "test":
+        raise ValueError("native execution requires an evidence directory and cargo test command")
+    executed = native_execution_command(command)
+    source = candidate_source(repo)
+    evidence = run(executed, cwd=repo, env=dict(os.environ), timeout=1800)
+    evidence["executed_command"] = executed
+    evidence["command"] = command
+    evidence["source_revision"] = source["head"]
+    evidence["source_status"] = source["status"]
+    evidence["source_stable"] = candidate_source(repo)["candidate_id"] == source["candidate_id"]
+    directory.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(json.dumps(command).encode()).hexdigest()
+    with (directory / f"{digest}.json").open("x") as stream:
+        json.dump(evidence, stream, indent=2)
+    print(evidence.get("stdout", ""), end="")
+    print(evidence.get("stderr", ""), end="", file=sys.stderr)
+    return evidence["exit_code"]
 
 
 def process_self_test():
@@ -1473,7 +1851,108 @@ def npm_package_self_test():
             raise AssertionError("exit-zero predicate output substituted for candidate evidence")
 
 
+def retired_case_self_test():
+    """The three reconciled identities stay executable dispositions, and a bad one cannot validate."""
+    repo = Path(__file__).resolve().parents[1]
+    inventory_path = repo / "scripts/qa-full-sweep-inventory.json"
+    if not inventory_path.is_file():
+        raise AssertionError("retired-case self-test requires the workspace inventory")
+    inventory = json.loads(inventory_path.read_text())
+    errors, _surfaces = validate_inventory(repo, inventory)
+    if errors:
+        raise AssertionError("current inventory failed validation: " + "; ".join(errors))
+    expected = {
+        "mcp_roundtrip::mcp_task_eligible_is_advertised_read_only_and_answers_over_stdio":
+            "verified-equivalent",
+        "mcp_roundtrip::upgrade::a_pending_breaking_switch_waits_for_live_processes_to_yield_at_safe_points":
+            "verified-equivalent",
+        "application::task::tests::final_recovery::shipped_final_recovery_activity_offers_exactly_the_typed_decisions":
+            "standards-excluded",
+    }
+    found = {}
+    for scenario in inventory["scenarios"]:
+        gaps = scenario.get("coverage_gaps") or {}
+        for name in expected:
+            if name in gaps:
+                raise AssertionError(f"{name} is still an unresolved coverage gap")
+        for case in scenario.get("retired_cases") or []:
+            found[case["retired"]] = case["disposition"]
+            if case["disposition"] == "standards-excluded" and "AGENTS.md" not in case["reason"]:
+                raise AssertionError(f"{case['retired']} standards exclusion does not cite AGENTS.md")
+            if not case.get("guarantee", "").strip():
+                raise AssertionError(f"{case['retired']} has no observable guarantee")
+    missing = [name for name, disposition in expected.items() if found.get(name) != disposition]
+    if missing:
+        raise AssertionError(f"retired identities are not disposed as required: {missing}")
+
+    def mutate(edit):
+        broken = json.loads(json.dumps(inventory))
+        edit(broken)
+        observed, _surfaces = validate_inventory(repo, broken)
+        return observed
+
+    def scenario(broken, identifier):
+        return next(item for item in broken["scenarios"] if item["id"] == identifier)
+
+    def retired(broken, identifier, name):
+        return next(case for case in scenario(broken, identifier)["retired_cases"] if case["retired"] == name)
+
+    def expect(errors, phrase):
+        if not any(phrase in error for error in errors):
+            raise AssertionError(f"expected {phrase!r} in {errors}")
+
+    eligible = "mcp_roundtrip::mcp_task_eligible_is_advertised_read_only_and_answers_over_stdio"
+    switch = "mcp_roundtrip::upgrade::a_pending_breaking_switch_waits_for_live_processes_to_yield_at_safe_points"
+    activity = "application::task::tests::final_recovery::shipped_final_recovery_activity_offers_exactly_the_typed_decisions"
+
+    expect(mutate(lambda body: retired(body, "mcp-process-boundary", eligible).update(disposition="wontfix")),
+           "invalid disposition")
+
+    def overlap(body):
+        case = retired(body, "mcp-process-boundary", eligible)
+        scenario(body, "mcp-process-boundary")["coverage_gaps"] = {case["retired"]: "still required"}
+
+    expect(mutate(overlap), "unresolved coverage gap")
+
+    def reselect(body):
+        case = retired(body, "mcp-process-boundary", switch)
+        case["command"] = [*case["command"], case["retired"]]
+
+    expect(mutate(reselect), "reselects the retired identity")
+    expect(mutate(lambda body: retired(body, "final-recovery-decision-applier", activity).update(
+        reason="the pin was removed")), "must cite AGENTS.md")
+
+    def strip(body):
+        case = retired(body, "final-recovery-decision-applier", activity)
+        for key in ("required_tests", "required_rows", "command", "command_tests", "command_rows"):
+            case.pop(key, None)
+
+    expect(mutate(strip), "names no surviving executable selection")
+
+    def orphan_command_tests(body):
+        case = retired(body, "final-recovery-decision-applier", activity)
+        case.pop("command", None)
+
+    expect(mutate(orphan_command_tests), "command_tests or command_rows require an executable command")
+
+    def null_command(body):
+        case = retired(body, "final-recovery-decision-applier", activity)
+        case["command"] = None
+
+    expect(mutate(null_command), "command_tests or command_rows require an executable command")
+
+    def orphan_command_rows(body):
+        case = retired(body, "final-recovery-decision-applier", activity)
+        case.pop("command", None)
+        case.pop("command_tests", None)
+
+    expect(mutate(orphan_command_rows), "command_tests or command_rows require an executable command")
+    expect(mutate(lambda body: retired(body, "mcp-process-boundary", eligible).update(notes="extra")),
+           "unknown keys")
+
+
 def self_test():
+    runpy.run_path(str(Path(__file__).with_name("qa_full_sweep_regression.py")))["self_test"]()
     process_self_test()
     builtin_init_self_test()
     npm_package_self_test()
@@ -1490,29 +1969,28 @@ def self_test():
         raise AssertionError("leaf CLI arguments were mistaken for commands")
     command = ["cargo", "test", "--lib", "renamed_filter"]
     for output in ("", "running 0 tests\n",
-                   "test result: ok. 0 passed; 0 failed; 2 ignored; 9 filtered out;",
-                   "test result: FAILED. 0 passed; 1 failed; 0 ignored;"):
+                   "test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s 9 filtered out;",
+                   "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"):
         try:
-            validate_cargo_test_evidence(command, {"stdout": output, "stderr": ""})
+            validate_cargo_test_evidence(command, {"stdout": output, "stderr": "", "exit_code": 0})
         except ValueError:
             continue
         raise AssertionError(f"vacuous or failed cargo evidence passed: {output!r}")
-    completed_tests = {"stdout": "test result: ok. 0 passed; 0 failed; 0 ignored;\n"
-                                "test result: ok. 3 passed; 0 failed; 1 ignored;",
-                       "stderr": ""}
+    completed_tests = {"stdout": "running 4 tests\ntest first ... ok\ntest second ... ok\ntest third ... ok\ntest fourth ... ignored\ntest result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+                       "stderr": "     Running unittests src/lib.rs (target/debug/deps/fixture)\n", "exit_code": 0}
     validate_cargo_test_evidence(command, completed_tests)
-    if completed_tests["test_counts"] != {"passed": 3, "failed": 0, "ignored": 1, "suites": 2}:
+    if completed_tests["test_counts"] != {"passed": 3, "failed": 0, "ignored": 1, "suites": 1}:
         raise AssertionError("completed Rust test counts were not retained")
-    unrelated = {"stdout": "test unrelated ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;",
-                 "stderr": ""}
+    unrelated = {"stdout": "running 1 test\ntest unrelated ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+                 "stderr": "     Running unittests src/lib.rs (target/debug/deps/fixture)\n", "exit_code": 0}
     try:
         validate_cargo_test_evidence(command, unrelated, ["required_behavior"])
     except ValueError:
         pass
     else:
         raise AssertionError("an unrelated passing test earned the scenario's assertions")
-    named = {"stdout": "test required_behavior ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;",
-             "stderr": ""}
+    named = {"stdout": "running 1 test\ntest required_behavior ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+             "stderr": "     Running unittests src/lib.rs (target/debug/deps/fixture)\n", "exit_code": 0}
     validate_cargo_test_evidence(command, named, ["required_behavior"])
     if named["passing_tests"] != ["required_behavior"]:
         raise AssertionError("named behavioral evidence was not retained")
@@ -1567,6 +2045,29 @@ def self_test():
                                    "coverage_gap": "retired case has no boundary replacement"}]}
     if scenario_decision(coverage_gap, valid, candidate)[0]:
         raise AssertionError("unrelated PASS evidence concealed a required behavioral gap")
+    unresolved = {"scenarios": [{**inventory["scenarios"][0],
+                                 "coverage_gaps": {"old::case": "still required"}}],
+                  "required_capability_gaps": {}}
+    if scenario_decision(unresolved, valid, candidate)[0]:
+        raise AssertionError("unresolved coverage_gaps passed on unrelated evidence")
+    disposed = {"scenarios": [{**inventory["scenarios"][0], "retired_cases": [
+        {"retired": "old::case", "disposition": "verified-equivalent"}]}],
+                "required_capability_gaps": {}}
+    if not scenario_decision(disposed, valid, candidate)[0]:
+        raise AssertionError("a verified retired-case disposition blocked passing evidence")
+    retired_command = ["cargo", "test", "-p", "fixture", "--test", "boundary", "kept"]
+    commanded = {"scenarios": [{**inventory["scenarios"][0], "retired_cases": [
+        {"retired": "old::case", "command": retired_command}]}],
+                 "required_capability_gaps": {}}
+    if scenario_decision(commanded, valid, candidate)[0]:
+        raise AssertionError("a retired command with no execution passed")
+    executed = [valid[0], {**valid[0], "assertions": [], "command": retired_command}]
+    if not scenario_decision(commanded, executed, candidate)[0]:
+        raise AssertionError("an executed retired command did not pass")
+    deferred = [valid[0], {**valid[0], "assertions": [], "command": retired_command, "outcome": "NOT_RUN"}]
+    if scenario_decision(commanded, deferred, candidate)[0]:
+        raise AssertionError("a deferred retired command passed")
+    retired_case_self_test()
     if scenario_decision(inventory, [], candidate)[0]:
         raise AssertionError("missing required scenario passed")
     before = {"workspace":"qa-primary", "artifacts":[]}
@@ -1703,6 +2204,7 @@ def self_test():
             path = repo / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(relative + "\n")
+        (repo / ".github/workflows/ci-macos.yml").write_text("python3 scripts/test-qa-full-sweep.py --record-native-command cargo test -p native --lib\n")
         scenario = {
             "command": ["./scripts/check-ci-macos.sh"],
             "assertions": ["workflow-current", "matching-revision"],
@@ -1715,6 +2217,10 @@ def self_test():
                          "run_id": "123", "run_attempt": "1",
                          "workflow_ref": "owner/orbit/.github/workflows/ci-macos.yml@refs/heads/main",
                          "workflow_sha": "b" * 40},
+            "execution": [{"command": ["cargo", "test", "-p", "native", "--lib"],
+                           "executed_command": ["cargo", "test", "-p", "native", "--lib", "--", "--show-output"],
+                           "source_revision": "a" * 40, "source_status": [], "source_stable": True, "exit_code": 0,
+                           "stdout": "running 1 test\ntest native_boundary ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s", "stderr": "     Running unittests src/lib.rs (target/debug/deps/native)\n"}],
             "source_identity": {
                 path: hashlib.sha256((repo / path).read_bytes()).hexdigest()
                 for path in identity_paths
@@ -1730,6 +2236,9 @@ def self_test():
             {**hosted, "assertions": ["workflow-current"]},
             {**hosted, "producer": {**hosted["producer"], "run_id": ""}},
             {**hosted, "source_identity": {}},
+            {**hosted, "execution": []},
+            {**hosted, "execution": [{**hosted["execution"][0], "stdout": "native_boundary: test\n1 test, 0 benchmarks"}]},
+            {**hosted, "execution": [{**hosted["execution"][0], "stderr": "SKIP: sandbox-exec cannot apply a profile: Operation not permitted"}]},
         ]
         for mutation in mutations:
             try:
@@ -1764,6 +2273,7 @@ def import_platform_evidence(paths, inventory, candidate, repo):
                 "stderr": "", "outcome": "PASS", "assertions": body["assertions"],
                 "candidate_id": candidate_id, "imported_from": str(path),
                 "evidence_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "native_evidence": body,
             })
             continue
         if body.get("schema_version") != 2 or body.get("candidate", {}).get("id") != candidate_id:
@@ -1778,6 +2288,15 @@ def import_platform_evidence(paths, inventory, candidate, repo):
                 raise ValueError(f"{path}: imported command does not match the required check")
             if result.get("candidate_id") != candidate_id:
                 raise ValueError(f"{path}: result candidate does not match report candidate")
+            if set(result.get("assertions", [])) != set(scenario["assertions"]):
+                raise ValueError(f"{path}: imported assertions do not match the required guarantees")
+            if scenario.get("capability") == "macos":
+                validate_hosted_macos_evidence(result.get("native_evidence", {}), scenario, candidate, repo)
+            if scenario.get("capability") == "linux" and body.get("environment", {}).get("os") != "Linux":
+                raise ValueError(f"{path}: Linux cases require Linux execution evidence")
+            validate_cargo_test_evidence(result["command"], result, scenario.get("required_tests", []),
+                                         scenario.get("required_rows", []))
+            result = finalize_result(dict(result), result["assertions"], candidate_id)
             imported.append({**result, "imported_from":str(path),
                              "evidence_sha256":hashlib.sha256(path.read_bytes()).hexdigest()})
     return imported
@@ -1790,6 +2309,8 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--run-commands", action="store_true")
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--static", action="store_true",
+                        help="with --check, validate inventory using offline metadata only; no fixture self-tests")
     parser.add_argument("--check-cargo-selections", action="store_true",
                         help="with --check, compile and list each exact Cargo selection without executing it")
     parser.add_argument("--playwright-module", type=Path)
@@ -1804,8 +2325,23 @@ def main():
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--list-cli-paths", action="store_true",
                         help="discover executable help paths without claiming behavioral coverage")
-    args = parser.parse_args()
+    parser.add_argument("--native-execution-dir", type=Path)
+    parser.add_argument("--record-native-command", nargs=argparse.REMAINDER)
+    argv = sys.argv[1:]
+    if "--record-native-command" in argv:
+        index = argv.index("--record-native-command")
+        args = parser.parse_args(argv[:index])
+        args.record_native_command = argv[index + 1:]
+        if not args.record_native_command:
+            parser.error("--record-native-command requires a command")
+    else:
+        args = parser.parse_args(argv)
+    if args.static and (not args.check or args.check_cargo_selections or args.run_commands
+                        or args.self_test or args.list_cli_paths or args.record_native_command):
+        parser.error("--static requires --check without execution or case listing")
     repo = args.repo_root.resolve()
+    if args.record_native_command:
+        raise SystemExit(record_native_execution(args.record_native_command, repo, args.native_execution_dir))
     inventory_path = repo / "scripts/qa-full-sweep-inventory.json"
     inventory = json.loads(inventory_path.read_text())
     errors, surfaces = validate_inventory(repo, inventory)
@@ -1825,12 +2361,15 @@ def main():
         return
     if args.check_cargo_selections and not args.check:
         parser.error("--check-cargo-selections requires --check")
-    errors.extend(cargo_inventory_errors(repo, inventory, list_cases=args.check_cargo_selections))
+    errors.extend(cargo_inventory_errors(repo, inventory,
+                                         list_cases=args.check_cargo_selections or args.run_commands,
+                                         offline=args.static))
     if args.check:
         if errors:
             print("\n".join(errors))
             raise SystemExit(1)
-        self_test()
+        if not args.static:
+            self_test()
         print("qa-full-sweep inventory: ok")
         return
     output = (args.output or repo / "qa-full-sweep-report.json").resolve()
@@ -1861,7 +2400,8 @@ def main():
     capabilities = {"local": bool(binary) or args.build_candidate,
                     "browser": browser_inputs_valid,
                     "website-build": args.website_build,
-                    "macos": platform.system() == "Darwin"}
+                    "macos": platform.system() == "Darwin",
+                    "linux": platform.system() == "Linux"}
     binary_record = {"path":str(binary) if binary else None, "version":None,
                      "sha256":hashlib.sha256(binary.read_bytes()).hexdigest() if binary else None}
     browser_record = {
@@ -1912,6 +2452,10 @@ def main():
                              "sha256":hashlib.sha256(binary.read_bytes()).hexdigest()}
             builtin_results, builtin_halt = run_builtins(repo, str(binary), temp, env, candidate_id)
             results.extend(builtin_results)
+        browser_run_dir = None
+        if args.run_commands and capabilities["browser"]:
+            browser_evidence_dir.mkdir(parents=True, exist_ok=True)
+            browser_run_dir = Path(tempfile.mkdtemp(prefix=f"{candidate_id[:12]}-", dir=browser_evidence_dir))
         for scenario in inventory["scenarios"]:
             if scenario["kind"] == "builtin" or scenario["id"] == "source-binary-provenance":
                 continue
@@ -1921,8 +2465,9 @@ def main():
                                 "outcome": "BLOCKED", "assertions": [], "candidate_id": candidate_id})
                 continue
             if args.run_commands and capabilities.get(scenario["capability"], False):
+                scenario_evidence_dir = browser_run_dir / scenario["id"] if browser_run_dir else browser_evidence_dir
                 command = [part.replace("{playwright_module}", str(args.playwright_module))
-                           .replace("{evidence_dir}", str(browser_evidence_dir))
+                           .replace("{evidence_dir}", str(scenario_evidence_dir))
                            for part in scenario["command"]]
                 scenario_env = browser_env if scenario["capability"] == "browser" else env
                 if scenario["id"] == "website-build":
@@ -1930,16 +2475,18 @@ def main():
                 else:
                     evidence = run(command, cwd=repo, env=scenario_env, timeout=1800)
                 if scenario["capability"] == "browser":
-                    browser_evidence_dir.mkdir(parents=True, exist_ok=True)
-                    (browser_evidence_dir / "harness-result.json").write_text(
+                    scenario_evidence_dir.mkdir(parents=True, exist_ok=True)
+                    (scenario_evidence_dir / "harness-result.json").write_text(
                         json.dumps({"command": command, "exit_code": evidence["exit_code"],
                                     "stdout": evidence["stdout"], "stderr": evidence["stderr"],
-                                    "browser_version": browser_record["version"]}, indent=2) + "\n")
+                                    "browser_version": browser_record["version"],
+                                    "candidate_id": candidate_id, "scenario": scenario["id"]}, indent=2) + "\n")
                 unchanged = candidate_source(repo, excluded_paths)["candidate_id"] == candidate_id
                 failure = None if unchanged else "source candidate changed while the scenario ran"
                 assertions = scenario["assertions"]
                 try:
-                    validate_cargo_test_evidence(command, evidence, scenario.get("required_tests", []))
+                    validate_cargo_test_evidence(command, evidence, scenario.get("required_tests", []),
+                                                 scenario.get("required_rows", []))
                     if scenario["id"] == "npm-package":
                         assertions = []
                         assertions = validate_npm_result(repo, command, evidence)
@@ -1949,16 +2496,26 @@ def main():
                     assertions = []
                 result = {"scenario":scenario["id"],
                           **finalize_result(evidence, assertions, candidate_id, failure)}
+                if scenario["capability"] == "macos" and result["outcome"] == "PASS":
+                    result.update(outcome="NOT_RUN", assertions=[], evidence_type="inventory-listing",
+                                  inventory_assertions=["macos-required-workflow-is-current"],
+                                  missing_capabilities=["actual matching-candidate macOS execution evidence"])
+                if scenario.get("coverage_gaps"):
+                    result.update(outcome="BLOCKED", assertions=[], coverage_gaps=scenario["coverage_gaps"])
                 if scenario["capability"] == "browser":
                     artifacts = []
-                    if browser_evidence_dir.is_dir():
-                        for path in sorted(browser_evidence_dir.rglob("*")):
+                    if scenario_evidence_dir.is_dir():
+                        for path in sorted(scenario_evidence_dir.rglob("*")):
                             if path.is_file():
-                                artifacts.append({"path": str(path.relative_to(browser_evidence_dir)),
+                                artifacts.append({"path": str(path.relative_to(scenario_evidence_dir)),
                                                   "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
-                    result["retained_evidence"] = {"directory": str(browser_evidence_dir),
+                    result["retained_evidence"] = {"directory": str(scenario_evidence_dir),
                                                    "files": artifacts}
                 results.append(result)
+                if not scenario.get("coverage_gaps"):
+                    results.extend(execute_retired_case_commands(
+                        scenario, repo=repo, env=scenario_env, candidate_id=candidate_id,
+                        excluded_paths=excluded_paths))
             else:
                 results.append({"scenario":scenario["id"], "command":scenario.get("command", []),
                                 "exit_code":None, "stdout":"", "stderr":f"capability or execution not enabled: {scenario['capability']}",

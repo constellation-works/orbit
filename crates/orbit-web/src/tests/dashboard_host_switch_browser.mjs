@@ -281,13 +281,13 @@ try {
   assert(await page.locator('#host-announcer').getAttribute('aria-live') === 'polite', 'announcements are polite');
   await until('the log stream on hostb', () => logged(/^GET \/api\/on\/hostb\/log\/stream\?/));
   await until('host resources on hostb', () => logged(/^GET \/api\/on\/hostb\/host\/resources$/));
-  await page.locator('#tasks-body [data-key="task-hostb-ART"] > .title').click();
-  await page.locator('.field-block.collapsible h4', { hasText: 'artifacts' }).click();
+  await page.locator('#tasks-body [data-key="task-hostb-ART"] .title').click();
+  await page.locator('#task-detail-body').getByRole('tab', { name: /^Artifacts/ }).click();
   await page.locator('.artifact-row').first().click();
   await page.locator('.artifact-preview', { hasText: 'hello from hostb' }).waitFor({ state: 'visible' });
-  await page.locator('.task-quick.approve').first().click();
+  await taskRow('hostb-NEW').locator('.task-quick.approve').click();
   await until('the approve action on hostb', () => logged(/^POST \/api\/on\/hostb\/tasks\/hostb-NEW\/approve\?workspace=ws_orbit$/));
-  for (const route of ['diagnostics/runs', 'runs/jrun-remote-1', 'operations/routines', 'diagnostics/incidents', 'config/effective', 'config/hosts']) {
+  for (const route of ['jobs/history', 'runs/jrun-remote-1', 'operations/routines', 'diagnostics/incidents', 'config/effective', 'config/hosts']) {
     await page.evaluate((route) => { window.location.hash = route; }, route);
     await page.waitForTimeout(400);
   }
@@ -320,6 +320,16 @@ try {
   await page.goto(`${origin}/`);
   await taskRow('hostb-RUN').waitFor({ state: 'visible' });
   assert(await selectedHost() === 'hostb', 'a bare URL restores the remembered host and writes it to the URL');
+  // A native tray or notification link explicitly selects the serving host,
+  // even when this webview last visited a registered remote.
+  routeLog = [];
+  await page.goto(`${origin}/?host=&workspace=ws_orbit#tasks?open=alpha-ART`);
+  await page.locator('#task-detail-body', { hasText: 'alpha artifact task' }).waitFor({ state: 'visible' });
+  assert(await selectedHost() === null, 'an explicit serving-host link overrides the remembered remote host');
+  assert(logged(/^GET \/api\/distributed\/claims\?task=alpha-ART&/), 'the local tray task detail reads on the serving host');
+  await page.goto(`${origin}/?host=&workspace=ws_orbit#runs?run_id=jrun-remote-1`);
+  await until('the local tray run link', () => logged(/^GET \/api\/runs\/jrun-remote-1\?workspace=ws_orbit$/));
+  assert(await selectedHost() === null, 'an explicit serving-host run link overrides the remembered remote host');
   await page.goto(`${origin}/?host=skewhost`);
   await taskRow('skewhost-RUN').waitFor({ state: 'visible' });
   assert(await page.locator('#host-select').inputValue() === 'skewhost', 'the URL wins over the remembered host');
@@ -348,10 +358,11 @@ try {
   await page.locator('#workspace-select').selectOption('ws_orbit');
   await switchHost('');
   await until('ws_orbit kept on the serving host', async () => (await page.evaluate(() => new URL(location.href).searchParams.get('workspace'))) === 'ws_orbit');
+  await taskRow('alpha-RUN').waitFor({ state: 'visible' });
   assert(await page.locator('#workspace-select').inputValue() === 'ws_orbit', 'a workspace id both hosts list stays selected');
-  routeLog = [];
   await switchHost('hostb');
   await taskRow('hostb-RUN').waitFor({ state: 'visible' });
+  routeLog = [];
   await page.locator('#workspace-select').selectOption('');
   await until('hostb aggregate', () => logged(/^GET \/api\/on\/hostb\/tasks\/all/));
   assert(!routeLog.some((entry) => entry.path.startsWith('/api/tasks')), 'All workspaces aggregates the selected host only');
@@ -416,7 +427,7 @@ try {
   try {
     await linkedTab.goto(new URL(await remoteLink.getAttribute('href'), page.url()).href);
     await linkedTab.waitForFunction(async () => {
-      const { getHost, getWorkspace, getWindow } = await import('/js/common.js');
+      const { getHost, getWorkspace, getWindow } = await import('/static/js/common.js');
       return getHost() === 'hostb' && getWorkspace() === 'ws_orbit' && getWindow() === '7d'
         && document.querySelector('.tab-pane.active')?.dataset.tab === 'run-detail';
     });
@@ -426,14 +437,17 @@ try {
   }
   assert(await taskRow('alpha-LOCAL').locator('.task-quick-cell a').count() === 0, 'an unregistered machine is not a link');
   assert((await taskRow('alpha-LOCAL').locator('.task-quick-cell .exec-origin').textContent()) === 'on laptop', 'an unregistered machine keeps its text');
-  await page.locator('#tasks-body [data-key="task-alpha-ART"] > .title').click();
-  const claimLink = page.locator('.distributed-block a.remote-run-link');
+  await page.locator('#tasks-body [data-key="task-alpha-ART"] .title').click();
+  const deliveryTab = page.locator('#task-detail-body').getByRole('tab', { name: 'Delivery' });
+  await deliveryTab.click();
+  const claimLink = page.locator('.delivery-panel a.remote-run-link');
   await claimLink.waitFor({ state: 'visible' });
   assert(await claimLink.getAttribute('href') === '?host=hostb&workspace=ws_orbit&window=7d#runs?run_id=jrun-claim-1', 'the claim panel links to the run on hostb');
-  await page.locator('#tasks-body [data-key="task-alpha-ART"] > .title').click();
-  await page.locator('#tasks-body [data-key="task-alpha-LOCAL"] > .title').click();
-  await page.locator('.distributed-block .exec-origin', { hasText: 'on laptop' }).waitFor({ state: 'visible' });
-  assert(await page.locator('.distributed-block a.remote-run-link').count() === 0, 'an unregistered claim machine stays text');
+  await page.locator('#tasks-body [data-key="task-alpha-ART"] .title').click();
+  await page.locator('#tasks-body [data-key="task-alpha-LOCAL"] .title').click();
+  await deliveryTab.click();
+  await page.locator('.delivery-panel .exec-origin', { hasText: 'on laptop' }).waitFor({ state: 'visible' });
+  assert(await page.locator('.delivery-panel a.remote-run-link').count() === 0, 'an unregistered claim machine stays text');
   routeLog = [];
   await remoteLink.click();
   await page.waitForURL((url) => url.searchParams.get('host') === 'hostb');
@@ -447,12 +461,22 @@ try {
   const readOnly = page.locator('#host-read-only');
   await readOnly.waitFor({ state: 'visible' });
   assert((await readOnly.textContent()).includes(READ_ONLY_REASON), 'the read-only note gives the refusal reason');
-  const quick = page.locator('.task-quick.approve').first();
+  const quick = taskRow('hostb-NEW').locator('.task-quick.approve');
   assert(await quick.isDisabled(), 'the quick action is disabled on a read-only host');
   assert((await quick.getAttribute('title')).includes(READ_ONLY_REASON), 'the disabled quick action says why');
-  await page.locator('#tasks-body [data-key="task-hostb-ART"] > .title').click();
-  await page.locator('.host-read-only-note').waitFor({ state: 'visible' });
-  assert(await page.locator('#tasks-body .actions > .action.approve').first().isDisabled(), 'detail actions are disabled');
+  await page.locator('#tasks-body [data-key="task-hostb-ART"] .title').click();
+  // Overview and Comments each render their own action row, and inactive
+  // panels stay in the DOM, so each note is scoped to its visible panel.
+  const overviewNote = page.locator('#task-detail-body .task-action-row.lifecycle-actions .host-read-only-note:visible');
+  await overviewNote.waitFor({ state: 'visible' });
+  assert((await overviewNote.textContent()).includes(READ_ONLY_REASON), 'the Overview note gives the refusal reason');
+  assert(await page.locator('#task-detail-body .actions > .action.approve').first().isDisabled(), 'detail actions are disabled');
+  await page.locator('#task-detail-body').getByRole('tab', { name: /^Comments/ }).click();
+  const commentNote = page.locator('#task-detail-body .task-action-row.comment-actions .host-read-only-note:visible');
+  await commentNote.waitFor({ state: 'visible' });
+  assert((await commentNote.textContent()).includes(READ_ONLY_REASON), 'the Comments note gives the refusal reason');
+  assert(await page.locator('#task-detail-body .task-action-row.comment-actions .action.comment:visible').isDisabled(), 'Comment is disabled on a read-only host');
+  await page.locator('#task-detail-body').getByRole('tab', { name: 'Delivery' }).click();
   await page.locator('.claim-action-denied', { hasText: 'Read-only on hostb' }).first().waitFor({ state: 'visible' });
   assert(!routeLog.some((entry) => entry.method !== 'GET' && entry.path.startsWith('/api/on/')), 'no write is sent to a read-only host');
   await capture('host-read-only-1440');
@@ -584,12 +608,14 @@ try {
   // host. A host switch rewrites its own entry, so the entry before it keeps
   // the earlier host.
   const scopeNow = () => page.evaluate(async () => {
-    const { getHost, getWorkspace, withHost, withWorkspace } = await import('/js/common.js');
+    const { getHost, getWorkspace, isAggregateView, isAggregateLinked, withHost, withWorkspace } = await import('/static/js/common.js');
     const query = new URL(window.location.href).searchParams;
     const workspaceSelect = document.getElementById('workspace-select');
     return {
       host: getHost(),
       workspace: getWorkspace(),
+      aggregate: isAggregateView(),
+      aggregateLinked: isAggregateLinked(),
       read: withHost('/api/tasks'),
       write: withWorkspace('/api/tasks/x/approve'),
       addressHost: query.get('host'),
@@ -608,8 +634,9 @@ try {
   // Rail clicks write each route's settled hash, so traversing back to one
   // routes it without pushing an entry that would drop the Forward history.
   const openRuns = async () => {
-    await page.click('.tab[data-tab="runs"]');
-    await page.locator('.tab-pane.active[data-tab="diagnostics"]').waitFor({ state: 'visible' });
+    await page.click('.tab[data-tab="jobs"]');
+    await page.click('#jobs-subtabs [data-subtab="history"]');
+    await page.locator('#jobs-history-main').waitFor({ state: 'visible' });
   };
   const openTasks = () => page.click('.tab[data-tab="tasks"]');
   const ALPHA_WORKSPACES = 'All workspaces,orbit,alpha-only';
@@ -644,13 +671,13 @@ try {
   await taskRow('hostb-RUN').waitFor({ state: 'visible' });
   await until('hostb connection read after Forward', () => logged(/^GET \/api\/hosts\/hostb\/connection(\?|$)/));
   // Writes follow the restored address too.
-  await page.locator('.task-quick.approve').first().click();
+  await taskRow('hostb-NEW').locator('.task-quick.approve').click();
   await until('the approve action on hostb after Forward', () => logged(/^POST \/api\/on\/hostb\/tasks\/hostb-NEW\/approve\?workspace=ws_orbit$/));
   await traverse(-1, 'Back on the serving host again', (now) => now.host === null && now.workspaces === ALPHA_WORKSPACES);
   await openTasks();
   await taskRow('alpha-RUN').waitFor({ state: 'visible' });
   routeLog = [];
-  await page.locator('.task-quick.approve').first().click();
+  await taskRow('alpha-NEW').locator('.task-quick.approve').click();
   await until('the approve action on the serving host after Back', () => logged(/^POST \/api\/tasks\/alpha-NEW\/approve\?workspace=ws_orbit$/));
   assert(!routeLog.some((entry) => entry.method !== 'GET' && entry.path.startsWith('/api/on/')), `no write leaves for hostb after Back: ${JSON.stringify(routeLog)}`);
   await page.close();
@@ -704,12 +731,86 @@ try {
   forwardWrites = { authorized: true, reason: null };
   await page.close();
 
+  // 11. Aggregate history must survive leaving a single-workspace host.
+  // Hold destination discovery to check that the URL's intent is kept before
+  // eligibility is known and no default-workspace panel request slips through.
+  const settleWorkspaces = (host) => {
+    workspaceHolds.delete(host);
+    const index = heldWorkspaces.findIndex((entry) => entry.host === host);
+    assert(index >= 0, `a held ${host} workspace list to settle`);
+    const [{ res }] = heldWorkspaces.splice(index, 1);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(WORKSPACES[host]));
+  };
+  const assertAggregate = async (label, endpoint) => {
+    const now = await scopeNow();
+    assert(now.host === 'hostb' && now.hostPicker === 'hostb' && now.addressHost === 'hostb'
+      && now.workspace === null && now.aggregate && now.aggregateLinked
+      && now.workspacePicker === '' && now.workspaces === HOSTB_WORKSPACES && now.addressWorkspace === 'all',
+    `${label} restores aggregate state, both pickers and the URL: ${JSON.stringify(now)}`);
+    await until(`${label} aggregate panel request`, () => routeLog.some((entry) => entry.method === 'GET'
+      && entry.path.startsWith(`/api/on/hostb/${endpoint}?`)));
+    assert(!logged(/^GET \/api\/on\/hostb\/(?:tasks|job-runs|crews|audit\/summary)\?/),
+      `${label} sends no concrete-workspace panel request: ${JSON.stringify(routeLog)}`);
+    return { scope: now, routes: routeLog.slice() };
+  };
+  const restoreAggregate = async (step, label, endpoint) => {
+    workspaceHolds.add('hostb');
+    routeLog = [];
+    await page.evaluate((step) => history.go(step), step);
+    await until(`${label} held destination list`, () => heldWorkspaces.some((entry) => entry.host === 'hostb'));
+    const pending = await scopeNow();
+    assert(pending.host === 'hostb' && pending.workspace === null && pending.aggregateLinked && pending.addressWorkspace === 'all',
+      `${label} retains aggregate intent during discovery: ${JSON.stringify(pending)}`);
+    assert(!logged(/^GET \/api\/on\/hostb\/(?:tasks|job-runs|crews|audit\/summary)(?:[/?]|$)/),
+      `${label} waits for destination discovery before fetching panels: ${JSON.stringify(routeLog)}`);
+    settleWorkspaces('hostb');
+    await until(`${label} aggregate picker`, async () => {
+      const now = await scopeNow();
+      return now.aggregate && now.workspacePicker === '' && now.workspaces === HOSTB_WORKSPACES;
+    });
+    return assertAggregate(label, endpoint);
+  };
+  await openPage('/?host=hostb&workspace=all#tasks', { fresh: true });
+  await until('initial hostb aggregate picker', async () => (await scopeNow()).aggregate);
+  await openRuns();
+  await openTasks();
+  await switchHost('skewhost');
+  await taskRow('skewhost-RUN').waitFor({ state: 'visible' });
+  scope = await scopeNow();
+  assert(scope.workspace === 'ws_skew' && !scope.aggregate && scope.workspacePicker === null && scope.addressWorkspace === 'ws_skew',
+    `the single-workspace destination resolves aggregate intent to its only workspace: ${JSON.stringify(scope)}`);
+  evidenceLog.historyAggregateBack = await restoreAggregate(-1, 'Back from a single-workspace host', 'job-runs/all');
+  await traverse(1, 'Forward to the single-workspace host', (now) => now.host === 'skewhost' && now.workspace === 'ws_skew' && !now.aggregate);
+  await taskRow('skewhost-RUN').waitFor({ state: 'visible' });
+  await page.close();
+
+  // Reverse the history order so Forward also enters an aggregate host from
+  // a single-workspace host, instead of merely reusing the Back case.
+  await openPage('/?host=skewhost&workspace=all#tasks', { fresh: true });
+  await taskRow('skewhost-RUN').waitFor({ state: 'visible' });
+  scope = await scopeNow();
+  assert(scope.workspace === 'ws_skew' && !scope.aggregateLinked && scope.addressWorkspace === 'ws_skew',
+    `an explicit aggregate link on a single-workspace host repairs its URL: ${JSON.stringify(scope)}`);
+  await openRuns();
+  await openTasks();
+  await switchHost('hostb');
+  await until('hostb default picker before choosing aggregate', async () => (await scopeNow()).workspacePicker === 'ws_b');
+  await page.locator('#workspace-select').selectOption('');
+  await until('hostb aggregate before Back', async () => (await scopeNow()).aggregate);
+  routeLog = [];
+  await traverse(-1, 'Back to the single-workspace host', (now) => now.host === 'skewhost' && now.workspace === 'ws_skew' && !now.aggregate);
+  await until('the single-workspace Runs request after Back', () => logged(/^GET \/api\/on\/skewhost\/job-runs\?.*workspace=ws_skew/));
+  evidenceLog.historyAggregateForward = await restoreAggregate(1, 'Forward from a single-workspace host', 'tasks/all');
+  await page.close();
+
   if (pageErrors.length) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   fs.writeFileSync(path.join(evidence, 'host-switch-assertions.json'), `${JSON.stringify({
     assertions: [
       'browser-host-picker-lists-serving-host-first',
       'browser-every-request-follows-the-selected-host',
       'browser-host-url-and-memory-precedence',
+      'browser-native-serving-host-task-and-run-links-override-remembered-remote',
       'browser-workspaces-rebuild-per-host',
       'browser-host-level-failure-and-way-back',
       'browser-host-skew-banner',
@@ -718,6 +819,7 @@ try {
       'browser-host-picker-keyboard-and-focus',
       'browser-log-tail-retires-the-old-host-at-the-switch',
       'browser-history-restores-the-host-each-entry-names',
+      'browser-history-restores-aggregate-after-a-single-workspace-host',
     ],
     viewports: ['1440', '768'],
     ...evidenceLog,

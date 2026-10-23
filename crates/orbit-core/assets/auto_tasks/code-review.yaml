@@ -32,7 +32,7 @@ template:
       and list open review work with
       `orbit tool run orbit.task.list --input '{"status":["backlog","in-progress","proposed","blocked"],"tag":"code-review","model":"<agent-family>"}'`.
       File a finding with
-      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"},{"type":"regression_from","target":"<culprit task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"},{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
       Omit the `regression_from` relation only when no task in the window can be
       held responsible. Derive canonical `file:` selectors from every evidenced
       source path, removing the line suffix, and add the matching
@@ -85,6 +85,25 @@ template:
     the task identified above. The finding's description names the culprit task
     and the commit that introduced the defect.
 
+    Classify every `regression_from` relation you file by adding
+    `"regression":{"nature":"<nature>","escape":"<escape>"}` to it.
+    Choose `unclassified` rather than guess. `nature` is what kind of regression
+    the link records:
+    - `broke_existing`: the culprit broke behavior that worked before it landed.
+    - `defect_in_new`: the defect is in code the culprit itself introduced.
+    - `incomplete`: the culprit shipped without part of what its task required.
+    - `merge_reintroduced`: a merge restored code or assets an earlier change had removed.
+    - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
+    - `unclassified`: the evidence does not settle the nature.
+    `escape` is why the delivery gates missed it:
+    - `no_test`: no test covered the broken behavior.
+    - `test_not_selected`: a covering test existed but the delivery's gates did not run it.
+    - `platform_only`: it shows only on a platform or host the gates did not exercise.
+    - `review_missed`: it was visible in the diff and review did not flag it.
+    - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
+    - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
+    - `unclassified`: the evidence does not settle the escape.
+
     ## Findings that narrow a shared invariant
 
     When a finding is a repair that narrows a shared invariant — what the host
@@ -117,7 +136,7 @@ template:
   acceptance_criteria:
   - The review window was derived from the previous sweep's recorded cursor, or the current HEAD was seeded as the baseline on the first run.
   - Every filed finding was verified against live code, is non-duplicate, and carries file:line evidence with a severity-appropriate priority and the `code-review` tag.
-  - Every filed finding carries a `regression_from` relation targeting the task whose landed commit introduced the defect, or its description states why no task in the window can be held responsible.
+  - Every filed finding carries a `regression_from` relation targeting the task whose landed commit introduced the defect, classified with a `regression` nature and escape (`unclassified` when the evidence does not settle one), or its description states why no task in the window can be held responsible.
   - The reviewed range and the new last-reviewed commit are recorded in the persisted execution summary.
   - The new last-reviewed commit is attached as this task's `sweep-cursor.json` artifact (`schema_version` 1, the integration branch, and the full commit SHA).
   - A window with no confirmed findings succeeds as a no-op.

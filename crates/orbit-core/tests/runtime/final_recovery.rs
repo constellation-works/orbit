@@ -22,6 +22,7 @@ use orbit_types::workflow::{FinalRecoveryDecision, JobRunState, PipelineState};
 use serde_json::json;
 use tempfile::TempDir;
 
+mod recorded_decision;
 mod repair_commit;
 mod revision;
 mod terminalization;
@@ -35,7 +36,7 @@ struct Fixture {
 }
 
 fn fixture(pool: &str) -> Fixture {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&global).unwrap();
@@ -177,10 +178,12 @@ impl Fixture {
                 failed_step_id: "implement".to_string(),
                 decision,
                 resume_step_index,
+                preserved_steps: Vec::new(),
                 repair_commit: None,
                 resume_context: None,
                 workspace_path: self.repo.clone(),
                 completion_done: false,
+                infrastructure: None,
             },
         )
         .unwrap()
@@ -280,13 +283,7 @@ fn archive() -> FinalRecoveryDecision {
     }
 }
 
-#[test]
 fn an_empty_crew_pool_skips_final_recovery_and_records_nothing() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::an_empty_crew_pool_skips_final_recovery_and_records_nothing",
-    ) {
-        return;
-    }
     let fixture = fixture("[]");
     let task = fixture.task();
     let run = fixture.running_run(&task);
@@ -298,93 +295,116 @@ fn an_empty_crew_pool_skips_final_recovery_and_records_nothing() {
     assert_eq!(fixture.state(&run).final_recovery, None);
 }
 
-#[test]
 fn final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints",
-    ) {
-        return;
-    }
-    let fixture = fixture("[\"sol\"]");
-    let task = fixture.task();
-    let run = fixture.running_run(&task);
-    let started = fixture.status(&task);
+    for preserve_history in [false, true] {
+        let fixture = fixture("[\"sol\"]");
+        let task = fixture.task();
+        let run = fixture.running_run(&task);
+        let started = fixture.status(&task);
 
-    assert_eq!(fixture.admit(&run, &task), FinalRecoveryAdmission::Admitted);
-    let checkpoint = fixture
-        .state(&run)
-        .final_recovery
-        .expect("admission recorded");
-    assert_eq!(checkpoint.task_id, task);
-    assert_eq!(checkpoint.failed_step_id, "implement");
-    assert_eq!(checkpoint.base_ref.as_deref(), Some("main"));
-    assert!(
-        checkpoint.observed.is_some(),
-        "a local task's revision is observed"
-    );
-    assert!(
-        matches!(
+        assert_eq!(fixture.admit(&run, &task), FinalRecoveryAdmission::Admitted);
+        let checkpoint = fixture
+            .state(&run)
+            .final_recovery
+            .expect("admission recorded");
+        assert_eq!(checkpoint.task_id, task);
+        assert_eq!(checkpoint.failed_step_id, "implement");
+        assert_eq!(checkpoint.base_ref.as_deref(), Some("main"));
+        assert!(
+            checkpoint.observed.is_some(),
+            "a local task's revision is observed"
+        );
+        assert!(
+            matches!(
+                fixture.admit(&run, &task),
+                FinalRecoveryAdmission::Skipped { .. }
+            ),
+            "a second admission for the same run is refused"
+        );
+
+        if preserve_history {
+            // Host history remains provenance while validation and compound
+            // outputs from the replayed phase must be regenerated.
+            let mut state = fixture.state(&run);
+            state.record_step(
+                3,
+                JobRunState::Success,
+                Some(json!({"validation": "old"})),
+                None,
+            );
+            state.record_compound_outputs(
+                1,
+                std::collections::BTreeMap::from([("nested".into(), json!({"old": true}))]),
+            );
+            fixture.jobs.write_run_state(&run, &state).unwrap();
+        }
+        let resume = FinalRecoveryDecision::Resume {
+            step_id: "implement".to_string(),
+            rationale: "finished the implementation".to_string(),
+        };
+        let context = orbit_types::workflow::FinalRecoveryResume {
+            step_id: "implement".to_string(),
+            failed_step_id: "implement".to_string(),
+            rationale: "finished the implementation".to_string(),
+            refusal: "missing probe.command".to_string(),
+            refused_output: json!({"deferred_sandbox_validation": {"probe": {}}}),
+        };
+        assert_eq!(
+            RuntimeHost::apply_final_recovery(
+                &fixture.runtime,
+                &run,
+                &FinalRecoveryApplication {
+                    task_id: task.clone(),
+                    failed_step_id: "implement".to_string(),
+                    decision: resume.clone(),
+                    resume_step_index: Some(1),
+                    preserved_steps: if preserve_history { vec![2] } else { vec![] },
+                    repair_commit: None,
+                    resume_context: Some(context.clone()),
+                    workspace_path: fixture.repo.clone(),
+                    completion_done: false,
+                    infrastructure: None,
+                }
+            )
+            .unwrap(),
+            FinalRecoveryApplied::Resume
+        );
+        let state = fixture.state(&run);
+        assert_eq!(
+            state.step_states.keys().copied().collect::<Vec<_>>(),
+            if preserve_history {
+                vec![0, 2]
+            } else {
+                vec![0]
+            },
+            "only host-selected history survives the resume point"
+        );
+        assert_eq!(
+            state.step_outputs.keys().copied().collect::<Vec<_>>(),
+            if preserve_history {
+                vec![0, 2]
+            } else {
+                vec![0]
+            }
+        );
+        assert!(
+            state.compound_outputs.is_empty(),
+            "nested and validation evidence must be regenerated"
+        );
+        let recorded = state.final_recovery.expect("decision recorded");
+        assert_eq!(recorded.decision, Some(resume));
+        assert_eq!(recorded.resume_context, Some(context));
+        assert_eq!(fixture.status(&task), started, "resume writes no task");
+
+        // A run resumed from this state inherits the record, so it is refused.
+        assert!(matches!(
             fixture.admit(&run, &task),
             FinalRecoveryAdmission::Skipped { .. }
-        ),
-        "a second admission for the same run is refused"
-    );
-
-    let resume = FinalRecoveryDecision::Resume {
-        step_id: "implement".to_string(),
-        rationale: "finished the implementation".to_string(),
-    };
-    let context = orbit_types::workflow::FinalRecoveryResume {
-        step_id: "implement".to_string(),
-        failed_step_id: "implement".to_string(),
-        rationale: "finished the implementation".to_string(),
-        refusal: "missing probe.command".to_string(),
-        refused_output: json!({"deferred_sandbox_validation": {"probe": {}}}),
-    };
-    assert_eq!(
-        RuntimeHost::apply_final_recovery(
-            &fixture.runtime,
-            &run,
-            &FinalRecoveryApplication {
-                task_id: task.clone(),
-                failed_step_id: "implement".to_string(),
-                decision: resume.clone(),
-                resume_step_index: Some(1),
-                repair_commit: None,
-                resume_context: Some(context.clone()),
-                workspace_path: fixture.repo.clone(),
-                completion_done: false,
-            }
-        )
-        .unwrap(),
-        FinalRecoveryApplied::Resume
-    );
-    let state = fixture.state(&run);
-    assert_eq!(
-        state.step_states.keys().copied().collect::<Vec<_>>(),
-        [0],
-        "steps from the resume point lose their checkpoints"
-    );
-    assert_eq!(state.step_outputs.keys().copied().collect::<Vec<_>>(), [0]);
-    let recorded = state.final_recovery.expect("decision recorded");
-    assert_eq!(recorded.decision, Some(resume));
-    assert_eq!(recorded.resume_context, Some(context));
-    assert_eq!(fixture.status(&task), started, "resume writes no task");
-
-    // A run resumed from this state inherits the record, so it is refused.
-    assert!(matches!(
-        fixture.admit(&run, &task),
-        FinalRecoveryAdmission::Skipped { .. }
-    ));
+        ));
+    }
 }
 
-#[test]
 fn a_local_decision_is_applied_to_the_task_through_the_applier() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::a_local_decision_is_applied_to_the_task_through_the_applier",
-    ) {
-        return;
-    }
     let fixture = fixture("[\"sol\"]");
     let task = fixture.task();
     let run = fixture.running_run(&task);
@@ -413,13 +433,7 @@ fn a_local_decision_is_applied_to_the_task_through_the_applier() {
     );
 }
 
-#[test]
 fn an_escalation_blocks_the_task_and_continues_into_the_failure_path() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::an_escalation_blocks_the_task_and_continues_into_the_failure_path",
-    ) {
-        return;
-    }
     let fixture = fixture("[\"sol\"]");
     let task = fixture.task();
     let run = fixture.running_run(&task);
@@ -442,13 +456,7 @@ fn an_escalation_blocks_the_task_and_continues_into_the_failure_path() {
     assert_eq!(fixture.status(&task), "blocked");
 }
 
-#[test]
 fn a_settled_task_stands_when_recording_its_outcome_fails() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::a_settled_task_stands_when_recording_its_outcome_fails",
-    ) {
-        return;
-    }
     // Decided by the on-call ORB-13886 review of ORB-13907: a task mutation
     // must not be followed by failure_activity because the run-state write
     // after it failed.
@@ -479,13 +487,7 @@ fn a_settled_task_stands_when_recording_its_outcome_fails() {
     );
 }
 
-#[test]
 fn a_run_resumed_after_a_crash_mid_settlement_converges_on_one_outcome() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::a_run_resumed_after_a_crash_mid_settlement_converges_on_one_outcome",
-    ) {
-        return;
-    }
     let fixture = fixture("[\"sol\"]");
 
     // Crash after the task write: the resumed run's replay finds the decision
@@ -544,13 +546,7 @@ fn a_run_resumed_after_a_crash_mid_settlement_converges_on_one_outcome() {
     assert_eq!(fixture.decision_comments(&task), 1);
 }
 
-#[test]
 fn final_recovery_log_tail_reads_only_the_requested_runs_bounded_log() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::final_recovery_log_tail_reads_only_the_requested_runs_bounded_log",
-    ) {
-        return;
-    }
     let fixture = fixture("[]");
     let logs = &fixture.runtime.paths().logs_dir;
     std::fs::create_dir_all(logs).unwrap();
@@ -580,13 +576,7 @@ fn final_recovery_log_tail_reads_only_the_requested_runs_bounded_log() {
     );
 }
 
-#[test]
 fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::final_recovery_keeps_run_observers_and_every_declared_tool_write_denied",
-    ) {
-        return;
-    }
     use orbit_common::OrbitError;
     use orbit_common::security::child_env::{
         ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
@@ -675,13 +665,7 @@ fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
 /// [ORB-15162] A task that requires `orbit.task.add` still gets a final-recovery
 /// invocation. The tool stays out of the callable set, and the same requirement
 /// under a covering deny list still fails the implementing activity.
-#[test]
 fn final_recovery_drops_a_required_tool_its_disallow_list_covers() {
-    if !super::dispatch_admission::isolated(
-        "final_recovery::final_recovery_drops_a_required_tool_its_disallow_list_covers",
-    ) {
-        return;
-    }
     let fixture = fixture("[]");
     let task_id = fixture.task_requiring(&["orbit.task.add", "orbit.task.show"]);
     let tasks = std::slice::from_ref(&task_id);
@@ -797,3 +781,17 @@ fn shipped_disallow_list(activity: &str) -> Vec<String> {
     };
     spec.tool_disallow_list.expect("deny-mode activity")
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    an_empty_crew_pool_skips_final_recovery_and_records_nothing_scenarios,
+    an_empty_crew_pool_skips_final_recovery_and_records_nothing,
+    final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints,
+    a_local_decision_is_applied_to_the_task_through_the_applier,
+    an_escalation_blocks_the_task_and_continues_into_the_failure_path,
+    a_settled_task_stands_when_recording_its_outcome_fails,
+    a_run_resumed_after_a_crash_mid_settlement_converges_on_one_outcome,
+    final_recovery_log_tail_reads_only_the_requested_runs_bounded_log,
+    final_recovery_keeps_run_observers_and_every_declared_tool_write_denied,
+    final_recovery_drops_a_required_tool_its_disallow_list_covers
+);

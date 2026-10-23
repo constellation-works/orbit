@@ -15,7 +15,7 @@
 //! exposed to command handlers; `plugin` and `workspace` own host plugins and
 //! the workspace binding, catalog, and claim; `host_signal` probes host
 //! lifecycle signals, such as a scheduled reboot, that hold new admissions;
-//! `task_pr_forge` is the forge a task's terminal decision closes its
+//! `task::pr_forge` is the forge a task's terminal decision closes its
 //! Orbit-authored PRs through.
 
 mod activity_catalog;
@@ -41,22 +41,34 @@ pub(crate) mod recovery_decision;
 mod resolve;
 pub(crate) mod run_input;
 pub(crate) mod task;
-pub mod task_pr_forge;
+// Preserve the public forge path without exposing task runtime internals.
+pub use task::pr_forge as task_pr_forge;
 pub use task::{InfraBlockedTask, StaleTaskReservation};
 pub(crate) mod tool_exec;
 pub(crate) mod upgrade_handover;
 mod worker_coordination;
+#[cfg(feature = "test-support")]
+pub(crate) use worker_coordination::{
+    host_load_sampling_wait_override, pipeline_poll_wait_override,
+};
+#[cfg(feature = "test-support")]
+pub use worker_coordination::{
+    with_host_load_sampling_wait, with_owner_read_retry_wait, with_pipeline_poll_wait,
+};
 pub mod workspace;
 
 #[cfg(test)]
 mod tests;
 
 pub(crate) use config_path::{CONFIG_TOML_FILE, existing_config_file_path};
+pub(crate) use orbit_runtime::RuntimeConfigLoader;
 pub use orbit_runtime::{HostLifetime, OrbitRuntime, OrbitRuntimeRoots};
 pub use workspace::binding::{WorkspaceRuntimeBinding, workspace_runtime_binding};
 
 pub(crate) use resolve::{resolve_bootstrap_roots, resolve_initialize_roots};
-pub(crate) use worker_coordination::{check_worker_host_input, is_coordination_tool};
+pub(crate) use worker_coordination::{
+    check_worker_host_input, check_worker_search_scope, is_coordination_tool,
+};
 // `pub` for the runtime-less `orbit migrate --dry-run` inspection that moved
 // to `orbit-cmd` [ORB-10016].
 pub use resolve::{

@@ -6,9 +6,11 @@ spec:
   type: deterministic
   description: >
     Select task-pilot candidates in the active workspace and partition them
-    into bounded groups. With explicit task_ids it audits those workspace
-    tasks, including tasks with non-empty context_files. Tasks held by active
-    pilots are skipped as `already_preparing` exclusions with
+    into bounded groups. With explicit task_ids it audits proposed/backlog
+    workspace tasks, including tasks with non-empty context_files. Any other
+    current status refuses the whole explicit selection before assessment or
+    task reservation, naming the unsupported tasks and allowed states. Tasks
+    held by active pilots are skipped as `already_preparing` exclusions with
     `prepared_by_run_ids`; free tasks are prepared, and an all-held selection
     succeeds without agent work. The final selection is reserved for this run
     in the commit boundary, so two runs preparing one task at once cannot both
@@ -100,5 +102,12 @@ spec:
         oneOf:
           - type: string
           - type: "null"
+      implementation_lane:
+        description: >
+          Callable tools of the implement activity and both artifact-attachment
+          paths. Null when that activity could not be read.
+        oneOf:
+          - type: "null"
+          - type: object
   action: prepare_task_pilot
   config: {}

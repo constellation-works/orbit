@@ -13,11 +13,12 @@ use orbit_types::task::{
 };
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
-    FindingDisposition, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT,
-    REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewEvidenceCarried, ReviewEvidenceHold,
-    ReviewEvidenceKind, ReviewEvidenceRequirement, ReviewEvidenceRerequestReason,
-    ReviewExternalEvidence, ReviewValidation, ValidationOutcome, ValidationRole,
-    is_reserved_review_artifact,
+    BUBBLEWRAP_DEFERRAL_PREFIX, FindingDisposition, HostSandboxCommand, PS_DENIED_DEFERRAL_PREFIX,
+    REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT, REVIEW_GATE_ARTIFACT,
+    ReviewCertificate, ReviewEvidenceCarried, ReviewEvidenceHold, ReviewEvidenceKind,
+    ReviewEvidenceRequirement, ReviewEvidenceRerequestReason, ReviewExternalEvidence,
+    ReviewGateHistoryNote, ReviewValidation, SEATBELT_DEFERRAL_PREFIX, ValidationOutcome,
+    ValidationRole, is_reserved_review_artifact,
 };
 use serde_json::{Value, json};
 
@@ -62,12 +63,18 @@ pub(super) fn evidence_only(
 /// or treating an unnamed missing check as an external requirement. A
 /// required record whose pass deferred its confined path ran nothing there,
 /// so external evidence may stand in for it like a `not_run` one [ORB-14334].
+/// [ORB-17043] A broader required run that passed only by deferring tests a
+/// `host_sandbox_test` requirement each runs on its own ([`covers_deferral`])
+/// counts as passed once those are received; one uncovered deferral leaves it
+/// `not_run`. Each requirement still needs its own required record, which
+/// the owner's handoff check binds to the host's result.
 pub(super) fn with_external_checks_passed(
     records: &[ReviewValidation],
     requirements: &[ReviewEvidenceRequirement],
 ) -> Option<Vec<ReviewValidation>> {
+    let requirements = canonical_requirements(requirements)?;
     let mut validation = records.to_vec();
-    for required in canonical_requirements(requirements)? {
+    for required in &requirements {
         let mut matched = false;
         for record in &mut validation {
             if record.command == required.command && record.role == ValidationRole::Required {
@@ -86,7 +93,106 @@ pub(super) fn with_external_checks_passed(
             return None;
         }
     }
+    for record in &mut validation {
+        let covered = record.deferral().is_some()
+            && record.deferred.iter().all(|notice| {
+                notice.trim().is_empty()
+                    || requirements
+                        .iter()
+                        .any(|required| covers_deferral(required, record, notice))
+            });
+        if covered {
+            record.deferred.clear();
+        }
+    }
     Some(validation)
+}
+
+/// [ORB-17043] Whether `required`, a `host_sandbox_test`, runs exactly the
+/// test that the deferral `notice` of `record` names, so a passing host run
+/// of it executed that deferred path. `record` must be a required `cargo
+/// test` run naming one package (`-p`) and one target (`--test`) that passed
+/// only by deferring; `notice` must be a Bubblewrap, Seatbelt or ps-denied
+/// deferral, `<prefix> <test>: <detail>`; and `required` must be admitted as
+/// `cargo test` of that package and target, filtered to exactly `<test>`.
+/// Anything else covers nothing: a requirement without a filter, a filter
+/// naming only the test's module, an unadmitted command, a failed record.
+pub(super) fn covers_deferral(
+    required: &ReviewEvidenceRequirement,
+    record: &ReviewValidation,
+    notice: &str,
+) -> bool {
+    if required.kind != ReviewEvidenceKind::HostSandboxTest
+        || record.role != ValidationRole::Required
+        || record.outcome != ValidationOutcome::Passed
+    {
+        return false;
+    }
+    let (Some(test), Some((package, target))) =
+        (deferred_test(notice), cargo_test_scope(&record.command))
+    else {
+        return false;
+    };
+    matches!(
+        HostSandboxCommand::admit(&required.command, &[]),
+        Ok(HostSandboxCommand::CargoTest {
+            package: covered_package,
+            target: covered_target,
+            filter: Some(filter),
+        }) if covered_package == package && covered_target == target && filter == test
+    )
+}
+
+/// The test a sandbox deferral notice names: `<prefix> <test>: <detail>`.
+fn deferred_test(notice: &str) -> Option<&str> {
+    let notice = notice.trim();
+    let rest = [
+        BUBBLEWRAP_DEFERRAL_PREFIX,
+        SEATBELT_DEFERRAL_PREFIX,
+        PS_DENIED_DEFERRAL_PREFIX,
+    ]
+    .into_iter()
+    .find_map(|prefix| notice.strip_prefix(prefix))?
+    .trim_start();
+    let test = rest.split_once(": ").map_or(rest, |(test, _)| test).trim();
+    (!test.is_empty() && !test.contains(char::is_whitespace)).then_some(test)
+}
+
+/// The one package and one integration test target a `cargo test` command
+/// names before `--`, or `None` when it names either none or several. Flags
+/// that neither select a target nor change the build (`--locked`,
+/// `--no-fail-fast`, ...) are skipped. Every other option fails closed:
+/// target selectors may add targets, and `--release`, `--features`,
+/// `--profile` and `--target` change the build that a host replay does not
+/// reproduce, so they stay refused.
+fn cargo_test_scope(command: &str) -> Option<(&str, &str)> {
+    let mut words = command.split_whitespace();
+    if words.next()? != "cargo" || words.next()? != "test" {
+        return None;
+    }
+    let (mut package, mut target, mut filters) = (Vec::new(), Vec::new(), Vec::new());
+    while let Some(word) = words.next() {
+        let (slot, inline) = match word {
+            "--" => break,
+            "--locked" | "--frozen" | "--offline" | "--no-fail-fast" | "-q" | "--quiet" => continue,
+            "-p" | "--package" => (&mut package, None),
+            "--test" => (&mut target, None),
+            _ => match word.split_once('=') {
+                Some(("--package", value)) => (&mut package, Some(value)),
+                Some(("--test", value)) => (&mut target, Some(value)),
+                _ if word.starts_with('-') => return None,
+                _ => {
+                    filters.push(word);
+                    continue;
+                }
+            },
+        };
+        slot.push(inline.or_else(|| words.next())?);
+    }
+    match (package.as_slice(), target.as_slice(), filters.as_slice()) {
+        ([package], [target], []) | ([package], [target], [_]) => Some((package, target)),
+        _ => None,
+    }
 }
 
 /// Use the store's key for every evidence locator guard. Keep the review
@@ -376,10 +482,10 @@ pub(super) fn carried_external_evidence(
 }
 
 /// Whether `hold` is still the in-progress task's latest delivery decision:
-/// the task is linked to the held run, its meaning is unchanged, and no later
-/// status decision or review superseded the hold. A stale artifact left
-/// behind after an operator changed the task or a later review failed is
-/// never current.
+/// the task is linked to the held run or its checkpoint owner, its meaning
+/// is unchanged, and no later status decision or review superseded the hold.
+/// A stale artifact left behind after an operator changed the task or a
+/// later review failed is never current.
 pub(crate) fn hold_is_current(
     runtime: &OrbitRuntime,
     task: &Task,
@@ -387,13 +493,24 @@ pub(crate) fn hold_is_current(
 ) -> Result<bool, OrbitError> {
     if task.status != TaskStatus::InProgress
         || hold.schema_version != 1
-        || task.job_run_id.as_deref() != Some(&hold.run_id)
         || combined_task_meaning_digest(&[(
             task.id.to_string(),
             task_meaning_digest(task).map_err(super::automation_error)?,
         )])
         .map_err(super::automation_error)?
             != hold.task_meaning_digest
+    {
+        return Ok(false);
+    }
+    let Some(owner) = task.job_run_id.as_deref() else {
+        return Ok(false);
+    };
+    // A follower's held leaf is linked by its own run ID. Only a local binding
+    // may walk the held run's chain in this store; a foreign binding must match
+    // the held run exactly, so a same-ID local run never stands in for it.
+    if owner != hold.run_id
+        && (!runtime.task_run_is_local(task)
+            || !super::resumes_owner(runtime, &hold.run_id, owner)?)
     {
         return Ok(false);
     }
@@ -468,9 +585,9 @@ pub(crate) fn resume_evidence_hold(
                 status: Some(TaskStatus::Backlog),
                 expected_status: Some(vec![TaskStatus::InProgress]),
                 status_event: Some(REVIEW_EVIDENCE_RECEIVED_EVENT.into()),
-                status_note: Some(format!(
-                    "run={}; all named external checks arrived for the held candidate; {next}.",
-                    hold.run_id
+                status_note: Some(ReviewGateHistoryNote::evidence_received_text(
+                    &hold.run_id,
+                    next,
                 )),
                 ..Default::default()
             },

@@ -3,11 +3,10 @@
 //!
 //! The command runs in a fresh detached worktree of the candidate commit, so
 //! nothing the checkout holds beyond that commit can reach it and nothing the
-//! run writes reaches the checkout. Its Cargo target directory is the one the
-//! caller names unless the validation environment names one: a claimed leaf
-//! shares its checkout's, so a single test target does not rebuild every
-//! dependency; a Linux owner fulfilling a hold [ORB-14334] uses one of its
-//! own, never the operator checkout's. On macOS
+//! run writes reaches the checkout. Workspace-selected output bindings use
+//! the same host-owned source namespace as required validation, under a
+//! scratch lease that lets GC reclaim output after the checkout is removed.
+//! On macOS
 //! `ORBIT_REQUIRE_SANDBOX_EXEC=1` turns a Seatbelt test's visible skip into a
 //! failure, which the judgement then names as the host's condition.
 //!
@@ -29,7 +28,9 @@ use serde_json::Value;
 use crate::context::RuntimeHost;
 
 use super::baseline::in_detached_worktree;
-use super::required_command::{VALIDATION_TIMEOUT_MS, capture, environment_record, missing_tool};
+use super::build_output::bind_host_output;
+use super::required::command::{VALIDATION_TIMEOUT_MS, capture, environment_record, missing_tool};
+use super::scratch_target::{ScratchHostTarget, lease_scratch_host_target};
 use super::worktree::scratch_checkout_path;
 
 /// Name prefix of a host-evidence checkout under the managed worktree root.
@@ -67,7 +68,7 @@ impl HostEvidenceRun {
 }
 
 /// Run `command` at `candidate`, in a worktree of `workspace_path`'s
-/// repository building into `target_dir`, and judge it. Only call this with a
+/// repository, and judge it using the resolved workspace output contract. Only call this with a
 /// command [`HostSandboxCommand::admit`] admitted: it runs on the host,
 /// outside any agent sandbox.
 pub fn run_host_sandbox_test<H: RuntimeHost + ?Sized>(
@@ -76,7 +77,6 @@ pub fn run_host_sandbox_test<H: RuntimeHost + ?Sized>(
     candidate: &SourceRevision,
     command: &HostSandboxCommand,
     run_id: &str,
-    target_dir: &Path,
 ) -> Result<HostEvidenceRun, OrbitError> {
     match super::review_gate::revision(workspace_path, &candidate.commit) {
         Ok(found) if found == *candidate => {}
@@ -101,7 +101,7 @@ pub fn run_host_sandbox_test<H: RuntimeHost + ?Sized>(
     let worktree =
         scratch_checkout_path(workspace_path, &format!("{WORKTREE_DIR}-{}", &key[..16]))?;
     let ran = in_detached_worktree(workspace_path, &worktree, &candidate.commit, |checkout| {
-        execute(host, checkout, target_dir, command, &host_command)
+        execute(host, checkout, command, &host_command)
     });
     Ok(match ran {
         Ok(run) => run,
@@ -115,20 +115,25 @@ pub fn run_host_sandbox_test<H: RuntimeHost + ?Sized>(
 fn execute<H: RuntimeHost + ?Sized>(
     host: &H,
     checkout: &Path,
-    shared_target: &Path,
     command: &HostSandboxCommand,
     host_command: &str,
 ) -> HostEvidenceRun {
     let mut environment = host.validation_subprocess_environment();
-    if !environment
-        .env
-        .iter()
-        .any(|(name, value)| name == "CARGO_TARGET_DIR" && !value.is_empty())
-    {
-        environment.env.push((
-            "CARGO_TARGET_DIR".to_string(),
-            shared_target.to_string_lossy().into_owned(),
-        ));
+    // Held until the run ends, so worktree GC cannot reclaim the target
+    // underneath it; once the checkout is gone the lease's record is what
+    // lets GC reclaim the target at all.
+    let _lease = if environment.build_output_env.is_empty() {
+        None
+    } else {
+        match lease_scratch_host_target(checkout, ScratchHostTarget::HostEvidence) {
+            Ok(lease) => Some(lease),
+            Err(error) => {
+                return HostEvidenceRun::refused(HostEvidenceReason::RunFailed, error.to_string());
+            }
+        }
+    };
+    if let Err(error) = bind_host_output(&mut environment, checkout) {
+        return HostEvidenceRun::refused(HostEvidenceReason::RunFailed, error.to_string());
     }
     if cfg!(target_os = "macos") {
         environment

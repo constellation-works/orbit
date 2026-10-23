@@ -16,6 +16,8 @@ fn facts(pass: &[&str], clock: ClockCredentials) -> WorkerTokenFacts {
     WorkerTokenFacts {
         macos: true,
         claude_routed: true,
+        crew_credentialed: false,
+        crew_sources_missing_from_clock: Vec::new(),
         pass: names(pass),
         clock,
         pass_home: PassHome::Global(PathBuf::from("/home/u/.orbit/config.toml")),
@@ -58,22 +60,16 @@ fn warns_for_each_place_the_worker_token_can_be_lost_and_is_ok_when_none_is() {
         let ok = worker_token_row(&facts(&["CLAUDE_CODE_OAUTH_TOKEN"], clock));
         assert_eq!(ok.status, WorkspaceDoctorStatus::Ok, "{ok:?}");
     }
-}
 
-#[test]
-fn skips_off_macos_and_when_no_routed_crew_uses_claude() {
+    // Off macOS, or with no routed crew using Claude, there is no token to lose.
     let mut off_macos = facts(&[], ClockCredentials::Missing);
     off_macos.macos = false;
-    assert_eq!(
-        worker_token_row(&off_macos).status,
-        WorkspaceDoctorStatus::Skipped
-    );
     let mut no_claude = facts(&[], ClockCredentials::Missing);
     no_claude.claude_routed = false;
-    assert_eq!(
-        worker_token_row(&no_claude).status,
-        WorkspaceDoctorStatus::Skipped
-    );
+    for skipped in [off_macos, no_claude] {
+        let row = worker_token_row(&skipped);
+        assert_eq!(row.status, WorkspaceDoctorStatus::Skipped, "{row:?}");
+    }
 }
 
 #[test]

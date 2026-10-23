@@ -34,6 +34,9 @@ SCOPES = {
     "build-dependencies": ("build.rs",),
 }
 TEST_SCOPE = ("tests", "benches", "examples")
+REFERENCE_PATTERNS = tuple(re.compile(pattern) for pattern in (
+    r"(?<!\w)(\w+)::", r"\buse\s+(\w+)\b", r"\bextern\s+crate\s+(\w+)\b",
+))
 
 
 def rust_sources(crate_dir, scope):
@@ -45,10 +48,10 @@ def rust_sources(crate_dir, scope):
             yield from path.rglob("*.rs")
 
 
-def is_referenced(crate_dir, scope, dependency):
-    name = re.escape(dependency.replace("-", "_"))
-    pattern = re.compile(rf"(?<!\w){name}::|\buse\s+{name}\b|\bextern\s+crate\s+{name}\b")
-    return any(pattern.search(source.read_text()) for source in rust_sources(crate_dir, scope))
+def referenced_names(source):
+    # Separate scans preserve overlapping matches (including comment prose),
+    # just as each declaration's original alternation did.
+    return {match[1] for pattern in REFERENCE_PATTERNS for match in pattern.finditer(source)}
 
 
 def declarations(manifest):
@@ -64,21 +67,37 @@ def declarations(manifest):
 def check_crate(crate_dir, problems, used_feature_only, declared_names):
     crate = crate_dir.name
     manifest = crate_dir / "Cargo.toml"
+    # A file can belong to both normal and dev scopes, and many declarations
+    # search it. Read it once within this check; later invocations read afresh.
+    source_names = {}
+    scope_names = {}
+
+    def references_for(scope):
+        if scope not in scope_names:
+            references = set()
+            for path in rust_sources(crate_dir, scope):
+                if path not in source_names:
+                    source_names[path] = referenced_names(path.read_text())
+                references.update(source_names[path])
+            scope_names[scope] = references
+        return scope_names[scope]
+
     for label, section, table in declarations(manifest):
         for dependency in table:
             declared_names.add((crate, dependency))
             scope = SCOPES[section]
             key = (crate, dependency)
+            name = dependency.replace("-", "_")
             if key in FEATURE_ONLY:
                 used_feature_only.add(key)
-                if is_referenced(crate_dir, scope, dependency):
+                if name in references_for(scope):
                     problems.append(
                         f"{manifest}: {label}.{dependency} is referenced now; remove its FEATURE_ONLY entry"
                     )
                 continue
-            if is_referenced(crate_dir, scope, dependency):
+            if name in references_for(scope):
                 continue
-            if section == "dependencies" and is_referenced(crate_dir, TEST_SCOPE, dependency):
+            if section == "dependencies" and name in references_for(TEST_SCOPE):
                 problems.append(
                     f"{manifest}: {label}.{dependency} is used only by test targets; "
                     "move it to [dev-dependencies]"

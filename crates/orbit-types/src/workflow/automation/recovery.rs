@@ -139,6 +139,65 @@ pub struct AutomationStall {
     /// Divergence facts, present only for `history_diverged`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub divergence: Option<HistoryDivergence>,
+    /// The crews the held action could not be minted with, present only for
+    /// `crew_os_ineligible`. That stall clears itself: the first evaluation
+    /// whose configuration admits a crew resumes the consumer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_hold: Option<CrewOsHold>,
+}
+
+/// Why a claimed batch's action cannot be minted under the current
+/// configuration: every crew of the pool its task would carry has an
+/// executor whose declared `host_os` shares no OS with the task's `os:` tags,
+/// so no host could run the task.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CrewOsHold {
+    /// The definition whose action is held.
+    pub definition: String,
+    /// The configuration key that names the crew pool.
+    pub pool_key: String,
+    /// The `os:` tags the minted task carries.
+    pub os_tags: Vec<String>,
+    /// Every pool member the OS requirement excluded.
+    pub excluded: Vec<OsExcludedCrew>,
+}
+
+/// One crew an OS requirement excluded, with the limit its executor declares.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OsExcludedCrew {
+    pub crew: String,
+    pub executor: String,
+    /// The executor's declared `host_os`.
+    pub host_os: Vec<String>,
+}
+
+impl CrewOsHold {
+    /// One operator-facing sentence: the pool, each excluded crew with its
+    /// executor OS, and the task's tags.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let excluded = self
+            .excluded
+            .iter()
+            .map(|crew| {
+                format!(
+                    "`{}` (executor `{}`, host_os: {})",
+                    crew.crew,
+                    crew.executor,
+                    crew.host_os.join(", ")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "no crew of {} can run `{}` review tasks tagged {}: {excluded}",
+            self.pool_key,
+            self.definition,
+            self.os_tags.join(", ")
+        )
+    }
 }
 
 /// The unprovable history rewrite behind a `history_diverged` stall.

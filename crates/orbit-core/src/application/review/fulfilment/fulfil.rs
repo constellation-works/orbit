@@ -191,7 +191,6 @@ impl OrbitRuntime {
         } else {
             None
         };
-        let target_id = format!("{run_id}-evidence-target");
         let runs = hold
             .requirements
             .iter()
@@ -206,21 +205,18 @@ impl OrbitRuntime {
                     "no evidence checkout was prepared".to_string(),
                 ),
                 (AdmittedCommand::HostSandboxTest(command), _) => {
-                    self.run_host_test(hold, run_id, &target_id, requirement, &command)
+                    self.run_host_test(hold, run_id, requirement, &command)
                 }
             })
             .collect::<Vec<_>>();
-        // The checkout and test target are this run's own scratch, database
-        // and build included; remove them whatever happened so a held host
-        // never accumulates them.
-        for scratch in [&checkout_id, &target_id] {
-            if let Err(error) = self.remove_evidence_checkout(scratch) {
-                tracing::warn!(
-                    target: "orbit.core.review",
-                    task_id = %task.id,
-                    "failed to remove the evidence scratch {scratch}: {error}"
-                );
-            }
+        // CodeQL's checkout is this run's own scratch. Host test output is
+        // retained under the shared source/lease contract for managed GC.
+        if let Err(error) = self.remove_evidence_checkout(&checkout_id) {
+            tracing::warn!(
+                target: "orbit.core.review",
+                task_id = %task.id,
+                "failed to remove the evidence scratch {checkout_id}: {error}"
+            );
         }
         Ok(runs)
     }
@@ -245,27 +241,15 @@ impl OrbitRuntime {
         &self,
         hold: &ReviewEvidenceHold,
         run_id: &str,
-        target_id: &str,
         requirement: &ReviewEvidenceRequirement,
         command: &HostSandboxCommand,
     ) -> EvidenceRun {
-        let target = match recovery_checkout_path(&self.paths().state_dir, target_id) {
-            Ok(target) => target,
-            Err(error) => {
-                return EvidenceRun::refused(
-                    requirement,
-                    FulfilmentRefusal::CommandFailed,
-                    error.to_string(),
-                );
-            }
-        };
         let ran = run_host_sandbox_test(
             self,
             &self.paths().repo_root,
             &hold.candidate,
             command,
             run_id,
-            &target,
         );
         let ran = match ran {
             Ok(ran) => ran,

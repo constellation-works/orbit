@@ -1,7 +1,160 @@
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
     JobRunState, JobRunTrigger, JobRunTriggerKind, PipelineState, run_id_role,
 };
 use serde::Serialize;
+use serde_json::Value;
+
+/// One text vocabulary for readiness payloads and recorded drain waits.
+/// Persisted reason codes and JSON projections remain unchanged.
+pub(crate) fn waiting_reason(reason: &str) -> &str {
+    match reason {
+        "dependency_not_done" => "unmet_dependency",
+        other => other,
+    }
+}
+
+/// Text-only blocker details. Statuses are read once per command; older
+/// checkpoints and unavailable tasks still render the IDs they recorded.
+pub(crate) struct WaitingTaskFormatter {
+    statuses: std::collections::BTreeMap<String, orbit_types::task::TaskStatus>,
+    /// Registered hosts of the OS each host-OS wait needs, and whether each
+    /// is pulling, by task ID. Only a local drain's waits are this
+    /// workspace's own to look up.
+    host_fleet: std::collections::BTreeMap<String, String>,
+}
+
+impl WaitingTaskFormatter {
+    pub(crate) fn new(runtime: &orbit_core::OrbitRuntime) -> Self {
+        Self {
+            statuses: runtime.task_status_index().unwrap_or_else(|error| {
+                tracing::warn!(%error, "waiting task statuses unavailable");
+                Default::default()
+            }),
+            host_fleet: Default::default(),
+        }
+    }
+
+    /// Name the matching hosts beside each of `task_ids`' host-OS waits.
+    pub(crate) fn with_host_fleet<'a>(
+        mut self,
+        runtime: &orbit_core::OrbitRuntime,
+        task_ids: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        for id in task_ids {
+            let note = runtime
+                .get_task(id)
+                .ok()
+                .and_then(|task| runtime.task_host_fleet_note(&task));
+            if let Some(note) = note {
+                self.host_fleet.insert(id.to_string(), note);
+            }
+        }
+        self
+    }
+
+    pub(crate) fn host_fleet(&self, task_id: &str) -> Option<&str> {
+        self.host_fleet.get(task_id).map(String::as_str)
+    }
+
+    /// `id` plus its current status, when the status index has the task.
+    pub(crate) fn task_with_status(&self, id: &str) -> String {
+        self.task_label(id, None)
+    }
+
+    /// Whether a failed leaf's retry line still applies to this task.
+    ///
+    /// A failed run leaves its task `blocked`. Readmission and completion move
+    /// it on, so the drain must not keep offering `orbit job resume`. An
+    /// unreadable task keeps the advice: missing status is not evidence the
+    /// task has moved on.
+    pub(crate) fn retry_still_applies(&self, id: &str) -> bool {
+        match self.statuses.get(id) {
+            Some(TaskStatus::Blocked) | None => true,
+            Some(_) => false,
+        }
+    }
+
+    fn task_label(&self, id: &str, status: Option<&str>) -> String {
+        let status = status
+            .map(str::to_string)
+            .or_else(|| self.statuses.get(id).map(ToString::to_string));
+        match status {
+            Some(status) => format!("{id} ({status})"),
+            None => id.to_string(),
+        }
+    }
+
+    /// Readiness has conflicts and dependencies; drain checkpoints have only
+    /// `blocked_by`. Prefer the richer snapshot without repeating its IDs.
+    pub(crate) fn blockers(&self, task: &Value) -> String {
+        let reason = waiting_reason(task["reason"].as_str().unwrap_or("unknown"));
+        let dependencies = task["dependencies"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|dependency| {
+                let id = dependency["task_id"].as_str()?;
+                Some(self.task_label(id, dependency["status"].as_str()))
+            })
+            .collect::<Vec<_>>();
+        if !dependencies.is_empty() {
+            return format!(" waits-on {}", dependencies.join(", "));
+        }
+
+        // Preserve payload order, group files by holder, and count additional
+        // distinct files per holder rather than hiding other blocking tasks.
+        let mut holders: Vec<(&str, Vec<&str>)> = Vec::new();
+        for conflict in task["conflicts"].as_array().into_iter().flatten() {
+            let Some(id) = conflict["locking_task_id"].as_str() else {
+                continue;
+            };
+            let index = match holders.iter().position(|(holder, _)| *holder == id) {
+                Some(index) => index,
+                None => {
+                    holders.push((id, Vec::new()));
+                    holders.len() - 1
+                }
+            };
+            if let Some(file) = conflict["requested_file"].as_str()
+                && !holders[index].1.contains(&file)
+            {
+                holders[index].1.push(file);
+            }
+        }
+        let mut labels = holders
+            .iter()
+            .map(|(id, files)| {
+                let mut label = self.task_label(id, None);
+                if let Some(first) = files.first() {
+                    label.push_str(&format!(" on {first}"));
+                    if files.len() > 1 {
+                        label.push_str(&format!(" +{} more", files.len() - 1));
+                    }
+                }
+                label
+            })
+            .collect::<Vec<_>>();
+        for id in task["blocking_task_ids"]
+            .as_array()
+            .or_else(|| task["blocked_by"].as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            if !holders.iter().any(|(holder, _)| *holder == id) {
+                labels.push(self.task_label(id, None));
+            }
+        }
+        if labels.is_empty() {
+            String::new()
+        } else if reason == "unmet_dependency" {
+            format!(" waits-on {}", labels.join(", "))
+        } else {
+            format!(" blocked-by={}", labels.join(", "))
+        }
+    }
+}
 
 /// A failed run with no failed descendant, in child-dispatch traversal order.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -21,12 +174,17 @@ pub(crate) fn format_root_cause_lines(causes: &[RunRootCause]) -> Vec<String> {
             } else {
                 "Additional root cause:"
             };
-            format!(
+            let mut lines = format!(
                 "{label} run={} step={} error={}",
                 cause.run_id,
                 cause.step.as_deref().unwrap_or("-"),
                 cause.message.as_deref().unwrap_or("-"),
-            )
+            );
+            lines.push_str(&format!("\nLogs: orbit run logs {}", cause.run_id));
+            if let Some(step) = cause.step.as_deref() {
+                lines.push_str(&format!(" -s {step}"));
+            }
+            lines
         })
         .collect()
 }
@@ -163,7 +321,7 @@ pub(crate) fn format_waiting_line_with_holders(
 /// admitting under the `max_active_leaf_runs` its input already shows, so a
 /// line restating it would be noise.
 pub(crate) fn format_worker_limit_line(state: Option<&PipelineState>) -> Option<String> {
-    let limit = state?.drain_worker_limit.as_ref()?;
+    let limit = state?.pull_drain.drain_worker_limit.as_ref()?;
     let mut line = format!(
         "Workers: {} (was {}, revision {}, set by {})",
         limit.max_active_leaf_runs,
@@ -182,7 +340,7 @@ pub(crate) fn format_worker_limit_line(state: Option<&PipelineState>) -> Option<
 /// Printed only once an extension moved the deadline: an unextended drain
 /// still runs to the deadline its own window step stamped.
 pub(crate) fn format_window_extension_line(state: Option<&PipelineState>) -> Option<String> {
-    let extension = state?.drain_window_extension.as_ref()?;
+    let extension = state?.pull_drain.drain_window_extension.as_ref()?;
     let mut line = format!(
         "Window: extended to {} (was {}, revision {}, by {})",
         extension.deadline.format("%Y-%m-%dT%H:%M:%SZ"),
@@ -202,7 +360,7 @@ pub(crate) fn format_window_extension_line(state: Option<&PipelineState>) -> Opt
 /// is how an operator distinguishes a drain that wound down after `--stop`
 /// from one that was cancelled.
 pub(crate) fn format_admissions_stop_line(state: Option<&PipelineState>) -> Option<String> {
-    let stop = state?.drain_admissions_stop.as_ref()?;
+    let stop = state?.pull_drain.drain_admissions_stop.as_ref()?;
     let mut line = format!(
         "Admissions: stopped by {} at {}",
         stop.actor,

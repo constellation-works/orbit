@@ -148,11 +148,12 @@ pub fn evaluate(
     // still does not fit waits for a later pass, while the scan and the
     // retained members keep moving.
     let batch_size = trigger.effective_batch_size();
-    if absorb(host, &mut members.clone(), &page) > 0 || members.failed.len() + batch_size > CAPACITY
+    if absorb(host, &mut members.clone(), &page)?.deferred > 0
+        || members.failed.len() + batch_size > CAPACITY
     {
         retire_unobserved(host, members, observed(&page))?;
     }
-    let deferred = absorb(host, members, &page);
+    let absorbed = absorb(host, members, &page)?;
     retire_superseded(members, &BTreeSet::new());
     compact_failed(members);
     members.scan_after = page.next;
@@ -204,7 +205,7 @@ pub fn evaluate(
     candidates.sort_by(|(a, _), (b, _)| a.first_seen.cmp(&b.first_seen).then(a.key.cmp(&b.key)));
 
     if candidates.is_empty() {
-        let reason = if deferred > 0 {
+        let reason = if absorbed.deferred > 0 {
             "source_backpressure"
         } else if members.failed.iter().any(|(key, failed)| {
             members.pending.get(key).is_some_and(|pending| {
@@ -218,7 +219,9 @@ pub fn evaluate(
             "debouncing"
         } else if !members.withheld.is_empty() {
             "work_withheld"
-        } else if members.assessed.values().any(|assessed| !assessed.ready) {
+        } else if absorbed.fresh_unready
+            || members.assessed.values().any(|assessed| !assessed.ready)
+        {
             "fresh_unready"
         } else {
             "fresh"
@@ -229,13 +232,15 @@ pub fn evaluate(
     // Batch the due members Core will admit, oldest first, up to the batch
     // size and `max_items` admission checks [ORB-12746]. Temporary refusals
     // remain visible, while obsolete source identities are retired from
-    // durable state. One attempt pins one source and one crew identity, so a
-    // member observed at another head — or carrying a different stored
-    // `task.crew` — waits for the next admission rather than mixing the
-    // bundle the one-bundle-one-crew dispatch rule would reject [ORB-12761].
-    // An attempt may fail every member it carries, so a member without a
-    // failed record joins only while the store has room to record its
-    // failure; otherwise retiring the attempt could never commit.
+    // durable state. One attempt pins one source. Finding verification also
+    // pins one stored `task.crew`, so a different crew waits for the next
+    // admission rather than mixing a bundle dispatch would reject
+    // [ORB-12761]. Task-pilot preparation admits every due crew in the batch:
+    // prepare partitions that one run by live `task.crew`, so siblings drawn
+    // onto different crews are assessed in the same pass [ORB-16839]. An
+    // attempt may fail every member it carries, so a member without a failed
+    // record joins only while the store has room to record its failure;
+    // otherwise retiring the attempt could never commit.
     let mut room = CAPACITY.saturating_sub(members.failed.len());
     let mut admitted = Vec::new();
     let mut batch = Vec::new();
@@ -246,7 +251,9 @@ pub fn evaluate(
             break;
         }
         if admitted.first().is_some_and(|first: &StateMember| {
-            first.source != member.source || first.crew != member.crew
+            first.source != member.source
+                || (trigger.kind != StateTriggerKind::PreparationEligible
+                    && first.crew != member.crew)
         }) {
             continue;
         }

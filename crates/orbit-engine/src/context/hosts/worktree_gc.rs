@@ -1,5 +1,6 @@
 //! Owner task lookup results used by worktree garbage collection.
 
+use chrono::{DateTime, Utc};
 use orbit_types::task::TaskStatus;
 
 /// What worktree GC learned about one task from the store that owns it.
@@ -9,6 +10,10 @@ pub enum WorktreeGcTaskLookup {
     Found {
         status: TaskStatus,
         pr_status: Option<String>,
+        /// When the task entered `status`, read only for a status GC ages
+        /// (`someday`). `None` elsewhere, or when the store cannot say; a
+        /// parked task without it keeps its worktree.
+        status_since: Option<DateTime<Utc>>,
     },
     /// The owning store answered but did not produce the task.
     Unresolved,

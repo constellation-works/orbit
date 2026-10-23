@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Design
 owner: codex
-last_updated: 2026-09-27
-last_validated: 2026-10-09
+last_updated: 2026-10-20
+last_validated: 2026-10-20
 status: Draft
 feature: mcp-bridge
 doc_role: design
@@ -21,9 +21,13 @@ The v1 design rests on six invariants:
 
 1. The accepting machine is authoritative for registry and runtime state.
 2. A remote session is one direct SSH hop; no Orbit process relays it onward.
-3. The client-side proxy is byte-transparent and policy-free.
-4. Every tools/call enters Core's dispatch and audit boundary exactly once,
-   including global discovery, unknown raw names, and setup failures.
+3. The client-side proxy is byte-transparent and does not inspect or filter
+   MCP calls; its startup argv selects destination authority, as described in §4.
+4. Each host-dispatched direct tool call enters Core's dispatch and audit
+   boundary exactly once, including global discovery, unknown raw names, and
+   server-resolution failures. Adapter-owned UI presentation calls may return
+   open/empty-state or input-validation results locally; selected task and run
+   reads delegate to the backing read tool through Core.
 5. The destination serves the authority its argv requests. A forwarded caller
    label is self-asserted audit metadata and does not grant or restrict authority.
 6. Direct local, remote, and socket calls use the same server implementation;
@@ -111,6 +115,35 @@ ssh -T <ssh-host> orbit mcp serve --remote-caller-machine-id <audit-label>
 so the local proxy never sees or rewrites an MCP message. SSH handles transport,
 host verification, encryption, and access to the remote shell.
 
+The direct proxy and federated destination sessions share OpenSSH connections.
+Orbit supplies a generated `-F` config under `~/.orbit/ssh/` that includes
+`~/.ssh/config` and `/etc/ssh/ssh_config` before setting `ControlMaster auto`,
+`ControlPersist 60`, and a `ControlPath` based on OpenSSH's `%C` connection hash.
+Explicit SSH settings take precedence. Set `ControlMaster no` and
+`ControlPath none` to opt out of both creating and attaching to a master.
+The user file is included by that tilde path rather than by its absolute path
+with percent signs doubled. `ControlPath` has always expanded `%` tokens, so a
+home directory containing `%` must be escaped there, but OpenSSH did not expand
+those tokens in `Include` until 9.9. On Ubuntu 24.04's OpenSSH 9.6 an escaped
+absolute include names a different path; the missing file is skipped and these
+defaults, including the relative `%C` fallback, override an explicit opt-out.
+`~` has expanded from `HOME` for as long as `Include` has existed.
+The socket directory is owner-only (`0700`), and an idle master expires after
+60 seconds. Each call still starts its own remote MCP process and handshakes;
+only the authenticated SSH connection is shared.
+
+Orbit's default socket pathname is at most 86 bytes, leaving room for OpenSSH's
+[17-byte temporary socket suffix](https://github.com/openssh/openssh-portable/blob/master/mux.c)
+and terminating NUL within the portable 104-byte limit. For longer home
+paths, SSH starts in the socket directory and uses a relative `%C` pathname.
+In that case, relative paths in user SSH settings or local `Match exec` commands
+resolve from that directory. Use absolute paths or `~` in those settings.
+SSH config evaluation remains OpenSSH's, including `Host`, `Match`, and
+`Include`; Orbit does not parse or cache the user's config. The web UI's
+forwarding tunnels keep their own connection lifecycle.
+Use absolute `Include` paths in the system config: the generated wrapper is
+read as a user config, so relative includes are rooted in `~/.ssh`.
+
 The remote `orbit mcp serve` process then follows the local request flow. It also
 marks the session as `ssh-mcp` and reads the first field of `SSH_CONNECTION` as a
 best-effort caller IP. The supplied machine label and the observed IP are audit
@@ -149,20 +182,22 @@ clients into one audit identity.
 
 Past that framing check the session follows the direct local request flow: the
 same host, the same workspace resolution, and the same single Core dispatch and
-audit boundary. The listener adds no broker, checkout preflight, placement
-decision, capability filter, or authorization step of its own; it is hardcoded
-to agent authority because it authenticates no client.
+audit boundary. The listener adds no broker, checkout preflight, or placement
+decision and makes no separate client-side capability or authorization check; it
+serves agent authority because it authenticates no client.
 
-## 5. Workspace authority
+## 5. Direct v1 workspace authority
 
-The client selects only an SSH destination. It does not inspect a checkout or a
-registry to decide where an operation belongs.
+The direct v1 client selects only an SSH destination. It does not inspect a
+checkout or a registry to decide where an operation belongs.
 
 On the accepting server:
 
 - `orbit.workspace.list` reads the machine-local registry and returns active
   logical workspaces with a checkout registered on that machine, including
-  locally registered replicas;
+  locally registered replicas. Discovery validates checkout roots against the
+  filesystem in memory: a removed checkout is excluded immediately, without
+  persisting its status to the registry;
 - workspace-scoped tools accept a stable workspace selector from the call or
   initialization metadata;
 - the selector is resolved to a server-local checkout;
@@ -175,10 +210,11 @@ server authority.
 
 ## 6. Tool discovery and dispatch
 
-The canonical surface is assembled in `orbit-mcp` from builtin definitions in
-`orbit-tools` and MCP-owned discovery definitions. Definitions are sorted and
-validated before advertisement. One source therefore drives both advertised
-schemas and dispatch lookup.
+`ServerMcpHost` combines the canonical definitions from `orbit-mcp`—builtin
+definitions from `orbit-tools` and MCP-owned discovery definitions—with the
+resolved plugin definitions. The combined list is sorted and validated before
+advertisement. The same definitions drive advertised schemas and dispatch
+lookup.
 
 Each definition contains a schema and an `McpToolScope`. Scope controls only
 whether the server injects and resolves a workspace selector. It does not encode
@@ -187,8 +223,11 @@ caller capability, placement, or authorization.
 The concrete server classifies known tools before opening a runtime. Known global
 tools use Core's global in-process seam; known workspace tools use the resolved
 runtime seam. Unknown and unadvertised raw names use the global seam and return
-`tool_not_found`. All three paths cross Core exactly once, so audit coverage does
-not depend on recognition or outcome.
+`tool_not_found`. Known tools and the unknown-name path cross Core exactly once,
+so audit coverage does not depend on recognition or outcome. The adapter-owned UI
+presentation entrypoints are a separate wrapper: opening the control center or
+returning its no-selection state is handled locally, while a selected task or run
+is read through the same Core-backed tool path.
 
 ## 7. Audit envelope
 
@@ -198,7 +237,7 @@ not depend on recognition or outcome.
 | `caller_machine_id` | Local server identity, or the SSH proxy's forwarded label | Audit correlation only |
 | `caller_ip` | First field of `SSH_CONNECTION`, or the accepted peer address | Best-effort network observation |
 | `process_machine_id` | Accepting machine registry | Machine executing the call |
-| `process_host_id` | Accepting machine registry | Host executing the call |
+| `process_machine_name` | Accepting machine registry | Executing host name; `process_host_id` is a legacy input alias |
 | `transport` | Accepting server mode | `local` or `ssh-mcp`; a listener session is `local` |
 | `effective_capabilities` | The accepting server's `--operator` argv, resolved once at start | Capabilities Core may enforce for this call |
 

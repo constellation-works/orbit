@@ -15,7 +15,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use orbit_common::{OrbitError, process::run_bounded_capped, test_env};
-use orbit_engine::{RuntimeHost, execute_deterministic_action};
+use orbit_engine::execute_deterministic_action;
 use serde_json::json;
 
 const CHILD_ENV: &str = "ORBIT_DEPENDABOT_COLLECT_CHILD";
@@ -69,7 +69,7 @@ struct RootHost {
     root: String,
 }
 
-impl RuntimeHost for RootHost {
+impl orbit_engine::test_support::NullRuntimeHost for RootHost {
     fn repo_root(&self) -> Result<String, OrbitError> {
         Ok(self.root.clone())
     }

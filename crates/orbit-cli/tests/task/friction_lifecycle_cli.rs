@@ -8,7 +8,6 @@ use serde_json::json;
 use crate::{git_repo, isolated_cli_fixture};
 use isolated_cli_fixture::Fixture;
 
-#[test]
 fn friction_update_empty_title_restores_derivation_like_the_tool() {
     let fixture = Fixture::new();
     let created = fixture.json(&[
@@ -45,7 +44,6 @@ fn friction_update_empty_title_restores_derivation_like_the_tool() {
     }
 }
 
-#[test]
 fn friction_update_empty_rehome_to_clears_alone_and_with_other_edits() {
     let fixture = Fixture::new();
     let created = fixture.json(&[
@@ -85,7 +83,6 @@ fn friction_update_empty_rehome_to_clears_alone_and_with_other_edits() {
     }
 }
 
-#[test]
 fn friction_optional_blank_strings_without_clear_semantics_remain_omitted() {
     let fixture = Fixture::new();
     let created = fixture.json(&[
@@ -122,7 +119,6 @@ fn friction_optional_blank_strings_without_clear_semantics_remain_omitted() {
     assert!(listed.as_array().unwrap().iter().any(|row| row["id"] == id));
 }
 
-#[test]
 fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
     let mut fixture = Fixture::new();
     fixture.root = PathBuf::new();
@@ -168,7 +164,7 @@ fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
     fixture.json(&[
         "friction", "update", &ids[1], "--status", "triaged", "--json",
     ]);
-    let before = fixture.json(&["friction", "list", "--json"]);
+    let before = fixture.json(&["friction", "list", "--status", "all", "--json"]);
 
     // Monthly IDs may collide with unrelated records on the owner. All writes
     // must stay in the replica's local partition, including a missing-local ID.
@@ -195,7 +191,15 @@ fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
         ]);
         owner_only_id = created["id"].as_str().unwrap().to_string();
     }
-    let owner_before = fixture.json(&["--workspace", owner, "friction", "list", "--json"]);
+    let owner_before = fixture.json(&[
+        "--workspace",
+        owner,
+        "friction",
+        "list",
+        "--status",
+        "all",
+        "--json",
+    ]);
     assert!(
         owner_before
             .as_array()
@@ -224,7 +228,10 @@ fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
         ])
         .assert()
         .success();
-    assert_eq!(fixture.json(&["friction", "list", "--json"]), before);
+    assert_eq!(
+        fixture.json(&["friction", "list", "--status", "all", "--json"]),
+        before
+    );
 
     for args in [
         vec![
@@ -277,7 +284,10 @@ fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
             .env("ORBIT_OPERATOR", "1")
             .assert()
             .failure();
-        assert_eq!(fixture.json(&["friction", "list", "--json"]), before);
+        assert_eq!(
+            fixture.json(&["friction", "list", "--status", "all", "--json"]),
+            before
+        );
     }
     let refused_move = json!({
         "id": ids[0], "status": "resolved", "body": "Must remain unchanged",
@@ -298,7 +308,10 @@ fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
         .command(&["friction", "resolve", &owner_only_id, "--json"])
         .assert()
         .failure();
-    assert_eq!(fixture.json(&["friction", "list", "--json"]), before);
+    assert_eq!(
+        fixture.json(&["friction", "list", "--status", "all", "--json"]),
+        before
+    );
     let prior_audit = fixture.json(&["audit", "list", "--json"]);
     let prior_audit_id = prior_audit
         .as_array()
@@ -336,16 +349,27 @@ fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
         fixture.json(&["friction", "stats", "--json"])["resolved"],
         2
     );
-    let after = fixture.json(&["friction", "list", "--json"]);
+    let after = fixture.json(&["friction", "list", "--status", "all", "--json"]);
     for status in ["open", "triaged"] {
         fixture
             .command(&["friction", "update", &ids[0], "--status", status, "--json"])
             .assert()
             .failure();
-        assert_eq!(fixture.json(&["friction", "list", "--json"]), after);
+        assert_eq!(
+            fixture.json(&["friction", "list", "--status", "all", "--json"]),
+            after
+        );
     }
     assert_eq!(
-        fixture.json(&["--workspace", owner, "friction", "list", "--json"]),
+        fixture.json(&[
+            "--workspace",
+            owner,
+            "friction",
+            "list",
+            "--status",
+            "all",
+            "--json"
+        ]),
         owner_before
     );
 
@@ -369,7 +393,6 @@ fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
     );
 }
 
-#[test]
 fn friction_cli_triage_stats_and_rehome_preserve_workspace_ownership() {
     let mut fixture = Fixture::new();
     // Cross-workspace fixtures use the shared HOME registry and distinct checkout data.
@@ -551,7 +574,6 @@ fn friction_cli_triage_stats_and_rehome_preserve_workspace_ownership() {
     );
 }
 
-#[test]
 fn friction_title_is_redacted_on_add_and_update_before_persistence() {
     let fixture = Fixture::new();
     let add_token = format!("ghp_{}", "a".repeat(36));
@@ -721,5 +743,338 @@ fn friction_title_is_redacted_on_add_and_update_before_persistence() {
     // YAML, audit) and HOME (tracing logs); the checkout holds neither.
     for dir in [&fixture.repo, &fixture.root, &fixture.home] {
         assert_no_token_in_dir(dir, &leaked_tokens);
+    }
+}
+
+fn friction_add_description_alias_is_redacted_like_body() {
+    let fixture = Fixture::new();
+    let token = format!("ghp_{}", "f".repeat(36));
+    let input = json!({
+        "description": format!("Build exported GITHUB_TOKEN={token} into the log"),
+        "model": "codex",
+    })
+    .to_string();
+
+    let created = fixture.json(&["tool", "run", "orbit.friction.add", "--input", &input]);
+    assert_eq!(
+        created["body"], "Build exported GITHUB_TOKEN=[REDACTED_SECRET] into the log",
+        "the `description` alias for `body` must be redacted before persistence"
+    );
+    assert_eq!(created["redactions_applied"], true);
+    let redactions = created["redactions"].as_array().expect("redactions array");
+    // The tool entry renames the alias before redaction, so the report names
+    // the canonical field.
+    assert!(
+        redactions.iter().any(|r| r["field_path"] == "body"),
+        "expected body in redactions report: {redactions:?}"
+    );
+
+    let id = created["id"].as_str().expect("friction id");
+    let shown = fixture.json(&["friction", "show", id, "--json"]);
+    assert!(!shown.to_string().contains(&token));
+}
+
+fn friction_aliases_behave_as_their_parameters_and_conflicts_are_refused() {
+    let fixture = Fixture::new();
+    let task = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Alias fixture task",
+        "--complexity",
+        "low",
+        "--json",
+    ]);
+    let task_id = task["id"].as_str().unwrap();
+
+    let input = json!({
+        "description": "Alias fixture body",
+        "task_id": task_id,
+        "tag": "tooling",
+        "model": "codex",
+    })
+    .to_string();
+    let created = fixture.json(&["tool", "run", "orbit.friction.add", "--input", &input]);
+    assert_eq!(created["body"], "Alias fixture body");
+    assert_eq!(created["during_task"], task_id);
+    assert_eq!(created["tags"], json!(["tooling"]));
+    let id = created["id"].as_str().unwrap();
+
+    let input = json!({"id": id, "tag": ["docs"], "model": "codex"}).to_string();
+    let updated = fixture.json(&["tool", "run", "orbit.friction.update", "--input", &input]);
+    assert_eq!(updated["tags"], json!(["docs"]));
+
+    for (input, alias, field) in [
+        (
+            json!({"body": "b", "description": "d", "model": "codex"}),
+            "description",
+            "body",
+        ),
+        (
+            json!({"body": "b", "tags": "docs", "tag": "build", "model": "codex"}),
+            "tag",
+            "tags",
+        ),
+        (
+            json!({"body": "b", "during_task": task_id, "task_id": task_id, "model": "codex"}),
+            "task_id",
+            "during_task",
+        ),
+    ] {
+        let output = fixture
+            .command(&[
+                "tool",
+                "run",
+                "orbit.friction.add",
+                "--input",
+                &input.to_string(),
+            ])
+            .assert()
+            .failure();
+        let stderr = String::from_utf8_lossy(&output.get_output().stderr).into_owned();
+        assert!(
+            stderr.contains(&format!("`{alias}`")) && stderr.contains(&format!("`{field}`")),
+            "a refusal of both `{alias}` and `{field}` names both: {stderr}"
+        );
+    }
+
+    let input = json!({"body": "b", "model": "codex", "agent": "codex"}).to_string();
+    fixture
+        .command(&["tool", "run", "orbit.friction.add", "--input", &input])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "orbit.friction.add no longer accepts `agent`; use `model` with the agent family for attribution",
+        ));
+}
+
+fn friction_unknown_tool_fields_warn_and_audit_without_refusing() {
+    let fixture = Fixture::new();
+    let input = json!({"body": "Unknown field fixture", "model": "codex", "severity": "high"});
+    let output = fixture
+        .command(&[
+            "tool",
+            "run",
+            "orbit.friction.add",
+            "--input",
+            &input.to_string(),
+        ])
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("orbit.friction.add ignored unknown input field `severity`"),
+        "the call warns about the unknown field: {stderr}"
+    );
+    let created: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(created["body"], "Unknown field fixture");
+
+    let audit = fixture.json(&["audit", "list", "--json"]);
+    let rows = audit
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["command"] == "tool_input")
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 1, "one audit row per unknown field: {audit}");
+    assert_eq!(rows[0]["tool_name"], "orbit.friction.add");
+    let arguments: serde_json::Value =
+        serde_json::from_str(rows[0]["arguments_json"].as_str().unwrap()).unwrap();
+    assert_eq!(arguments["field"], "severity");
+    assert_eq!(arguments["tool_name"], "orbit.friction.add");
+}
+
+fn friction_update_without_edits_names_flags_on_the_cli_and_fields_over_the_tool() {
+    let fixture = Fixture::new();
+    let created = fixture.json(&[
+        "friction",
+        "add",
+        "--body",
+        "No-edit fixture",
+        "--model",
+        "codex",
+        "--json",
+    ]);
+    let id = created["id"].as_str().unwrap();
+    fixture
+        .command(&["friction", "update", id])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "nothing to update; pass at least one of `--status`, `--tag`, `--body`, `--title`, or `--rehome-to`",
+        ));
+    let input = json!({"id": id, "model": "codex"}).to_string();
+    fixture
+        .command(&["tool", "run", "orbit.friction.update", "--input", &input])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "orbit.friction.update requires `status`, `tags`, `body`, `title`, or `rehome_to`",
+        ));
+}
+
+fn friction_list_defaults_to_unresolved_newest_first_and_labels_plain_columns_on_request() {
+    let fixture = Fixture::new();
+    let add = |body: &str| {
+        fixture.json(&[
+            "friction", "add", "--body", body, "--model", "codex", "--json",
+        ])["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let oldest = add("Oldest open friction");
+    let triaged = add("Triaged friction");
+    let resolved = add("Resolved friction");
+    let newest = add("Newest open friction");
+    fixture.json(&[
+        "friction", "update", &triaged, "--status", "triaged", "--json",
+    ]);
+    fixture.json(&[
+        "friction", "update", &resolved, "--status", "resolved", "--json",
+    ]);
+    let ids = |listed: serde_json::Value| -> Vec<String> {
+        listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let plain = |args: &[&str]| -> String {
+        let output = fixture
+            .command(args)
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        String::from_utf8(output.stdout).unwrap()
+    };
+
+    assert_eq!(
+        ids(fixture.json(&["friction", "list", "--json"])),
+        [newest.as_str(), triaged.as_str(), oldest.as_str()],
+        "the default lists open and triaged records, newest first"
+    );
+    assert_eq!(
+        ids(fixture.json(&["friction", "list", "--status", "all", "--json"])),
+        [
+            newest.as_str(),
+            resolved.as_str(),
+            triaged.as_str(),
+            oldest.as_str()
+        ],
+        "`--status all` lists every status"
+    );
+    assert_eq!(
+        ids(fixture.json(&[
+            "friction", "list", "--status", "all", "--order", "oldest", "--json",
+        ])),
+        [
+            oldest.as_str(),
+            triaged.as_str(),
+            resolved.as_str(),
+            newest.as_str()
+        ],
+        "`--order oldest` restores creation order"
+    );
+    assert_eq!(
+        ids(fixture.json(&["friction", "list", "--status", "resolved,triaged", "--json",])),
+        [resolved.as_str(), triaged.as_str()],
+        "a comma-separated status filter admits each named status"
+    );
+    fixture
+        .command(&["friction", "list", "--status", "closed", "--json"])
+        .assert()
+        .failure();
+
+    let bare = plain(&["friction", "list", "--format", "plain"]);
+    let first_fields = bare
+        .lines()
+        .map(|line| line.split('\t').next().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        first_fields,
+        [newest.as_str(), triaged.as_str(), oldest.as_str()],
+        "plain output without --header is records only: {bare}"
+    );
+    let headed = plain(&["friction", "list", "--format", "plain", "--header"]);
+    let (header, rows) = headed.split_once('\n').unwrap();
+    assert_eq!(header, "ID\tSTATUS\tMODEL\tTAGS\tTASK\tTITLE");
+    assert_eq!(rows, bare, "--header only prepends the header row");
+}
+
+#[test]
+fn friction_tool_input_is_checked_against_the_spec() {
+    for (name, check) in [
+        (
+            "friction_aliases_behave_as_their_parameters_and_conflicts_are_refused",
+            friction_aliases_behave_as_their_parameters_and_conflicts_are_refused as fn(),
+        ),
+        (
+            "friction_unknown_tool_fields_warn_and_audit_without_refusing",
+            friction_unknown_tool_fields_warn_and_audit_without_refusing as fn(),
+        ),
+        (
+            "friction_update_without_edits_names_flags_on_the_cli_and_fields_over_the_tool",
+            friction_update_without_edits_names_flags_on_the_cli_and_fields_over_the_tool as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
+}
+
+#[test]
+fn friction_clear_semantics_and_replica_admission() {
+    for (name, check) in [
+        (
+            "friction_update_empty_title_restores_derivation_like_the_tool",
+            friction_update_empty_title_restores_derivation_like_the_tool as fn(),
+        ),
+        (
+            "friction_update_empty_rehome_to_clears_alone_and_with_other_edits",
+            friction_update_empty_rehome_to_clears_alone_and_with_other_edits as fn(),
+        ),
+        (
+            "friction_optional_blank_strings_without_clear_semantics_remain_omitted",
+            friction_optional_blank_strings_without_clear_semantics_remain_omitted as fn(),
+        ),
+        (
+            "replica_closes_legacy_local_frictions_with_audit_without_owner_mutations",
+            replica_closes_legacy_local_frictions_with_audit_without_owner_mutations as fn(),
+        ),
+        (
+            "friction_list_defaults_to_unresolved_newest_first_and_labels_plain_columns_on_request",
+            friction_list_defaults_to_unresolved_newest_first_and_labels_plain_columns_on_request
+                as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
+}
+
+#[test]
+fn friction_ownership_and_redaction() {
+    for (name, check) in [
+        (
+            "friction_cli_triage_stats_and_rehome_preserve_workspace_ownership",
+            friction_cli_triage_stats_and_rehome_preserve_workspace_ownership as fn(),
+        ),
+        (
+            "friction_title_is_redacted_on_add_and_update_before_persistence",
+            friction_title_is_redacted_on_add_and_update_before_persistence as fn(),
+        ),
+        (
+            "friction_add_description_alias_is_redacted_like_body",
+            friction_add_description_alias_is_redacted_like_body as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }

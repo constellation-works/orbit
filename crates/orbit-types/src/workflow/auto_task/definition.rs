@@ -35,6 +35,18 @@ pub fn auto_task_tag(name: &str) -> String {
     format!("{AUTO_TASK_TAG_PREFIX}{name}")
 }
 
+/// Auto-task templates whose brief builds or runs the product [ORB-15766].
+/// Their tasks carry `no-diff-expected` because they commit nothing, but the
+/// work compiles and runs the software, so it is not CPU-light and its
+/// build-like load is not a defect.
+const BUILDS_BY_DESIGN_AUTO_TASKS: [&str; 2] = ["qa-sweep", "qa-full-sweep"];
+
+/// Whether the auto-task template `name` builds or runs the product by design.
+/// This list is the declaration; no template name is matched by pattern.
+pub fn auto_task_builds_by_design(name: &str) -> bool {
+    BUILDS_BY_DESIGN_AUTO_TASKS.contains(&name)
+}
+
 /// The shipped review auto-tasks whose template files each confirmed finding
 /// with a `regression_from` relation to the task that introduced it.
 const REGRESSION_FINDING_AUTO_TASKS: [&str; 2] = ["delivery-code-review", "code-review"];
@@ -66,7 +78,7 @@ pub struct SweepCursorRecord {
     /// Branch the cursor commit belongs to.
     #[serde(rename = "ref")]
     pub reference: String,
-    /// Commit the sweep examined through (full 40-character SHA).
+    /// Commit the sweep examined through (a full 40- or 64-character object id).
     pub cursor: String,
 }
 
@@ -79,9 +91,11 @@ impl SweepCursorRecord {
                 self.schema_version
             )));
         }
-        if self.cursor.trim().is_empty() {
+        if !matches!(self.cursor.len(), 40 | 64)
+            || !self.cursor.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
             return Err(WorkflowError::Invalid(
-                "sweep cursor must name a commit".to_string(),
+                "sweep cursor must be a full 40- or 64-character hexadecimal commit id".to_string(),
             ));
         }
         Ok(())
@@ -162,6 +176,11 @@ pub struct AutoTaskDefinition {
     /// not advanced past the last completed sweep's recorded cursor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skip_if_unchanged: Option<SkipIfUnchanged>,
+    /// Opt-in mint-time precondition: skip while no blocked task has a block
+    /// episode awaiting blocked-task triage. Which episodes qualify is the
+    /// host's rule; this only switches the check on.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub skip_unless_blocked_candidates: bool,
     /// Actor that created the definition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<String>,
@@ -324,6 +343,10 @@ impl std::fmt::Display for DedupePolicy {
 
 const fn default_true() -> bool {
     true
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 const fn default_task_type() -> TaskType {

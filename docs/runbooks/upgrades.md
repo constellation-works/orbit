@@ -5,7 +5,7 @@ tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320]
-last_validated: 2026-10-12
+last_validated: 2026-10-19
 ---
 
 # Upgrade Orbit Safely
@@ -114,15 +114,15 @@ Admission follows `compatibility-generation-v2`: it asks whether the binaries'
 Each binary is compiled with a **compatibility identity**, which `orbit update
 --contract` reports:
 
-- the store schema and the workspace layout ledgers, each as the newest version the
-  binary migrates to plus two floors — the newest migration an older binary cannot
+- the store schema, task registry and workspace layout ledgers, each as the newest
+  version the binary migrates to plus two floors — the newest migration an older binary cannot
   keep **writing** through, and the newest one it cannot **read** (see
   [Run an older binary against a newer workspace](#run-an-older-binary-against-a-newer-workspace)
   for how migrations are classified);
-- every feature schema (automation, review, local pull) at the version the binary
-  migrates it to, plus its newest **breaking** migration. A feature migration is
-  declared additive, data-only (a one-time rewrite of existing rows into a shape older
-  binaries already read and write, with no table or column change) or breaking; see
+- every feature schema (automation, review, local pull) at its frozen final version,
+  plus its newest **breaking** migration. A feature migration is declared additive,
+  data-only (a one-time rewrite of existing rows into a shape older binaries already
+  read and write, with no table or column change) or breaking; see
   [Feature schemas](#feature-schemas).
 
 The authority records the envelope of every identity admitted since it last had no
@@ -263,6 +263,8 @@ the installed binary for its `update --contract` and, when it speaks
 - `orbit mcp serve` hands over once no request is in flight. The pid, stdio pipes and
   MCP session survive — the client does not re-initialize — because the new image
   receives the initialize parameters and any unread input (`mcp-stdio-v1`).
+  A request that arrives while the server stops reading is answered first, and the
+  session is then handed over rather than closed.
   Only requests accepted by the MCP transport count as in flight; malformed or
   dropped messages cannot prevent handover when their errors omit the request id.
   A buffered partial line larger than 32 KiB defers handover: the current image
@@ -287,7 +289,7 @@ are not handed over; they finish on the image they started with.
 `orbit update --contract --json` reports protocol support without opening state:
 
 ```json
-{"schema_version":1,"contract":"executable-generation-v1","contracts":["executable-generation-v1","compatibility-generation-v2"],"admission_contract":"compatibility-generation-v2","compatibility":{"store_schema":{"version":43,"writer_floor":38,"reader_floor":38},"workspace_layout":{"version":3,"writer_floor":3,"reader_floor":3},"features":{"automation":5,"local_pull":1,"review":4},"feature_floors":{"automation":{"version":4,"name":"release_stale_source_failures"},"local_pull":{"version":1,"name":"pending_requests_and_unique_leaves"},"review":{"version":4,"name":"reconciliation_landed_delivery_binding"}}},"resume":["mcp-stdio-v1","drain-adopt-v1"]}
+{"schema_version":1,"contract":"executable-generation-v1","contracts":["executable-generation-v1","compatibility-generation-v2"],"admission_contract":"compatibility-generation-v2","compatibility":{"store_schema":{"version":53,"writer_floor":38,"reader_floor":38},"task_registry":{"version":1,"writer_floor":0,"reader_floor":0},"workspace_layout":{"version":3,"writer_floor":3,"reader_floor":3},"features":{"automation":5,"local_pull":1,"review":4},"feature_floors":{"automation":{"version":4,"name":"release_stale_source_failures"},"local_pull":{"version":1,"name":"pending_requests_and_unique_leaves"},"review":{"version":4,"name":"reconciliation_landed_delivery_binding"}}},"resume":["mcp-stdio-v1","drain-adopt-v1"]}
 ```
 
 `contract` stays `executable-generation-v1` because every v2 binary still honours it
@@ -446,7 +448,8 @@ image's device, inode, size, mtime and ctime. Any rewrite or replacement changes
 key and is re-hashed; an image modified within the last two seconds is never
 recorded, so a same-tick rewrite cannot alias an earlier entry. A read-only
 participant reads the cache but never writes it, so a read-only join leaves the
-root byte-identical.
+root byte-identical. A writer whose join creates the root records its digest once
+that join is admitted, so commands after the first `workspace init` reuse it.
 OS locks release on exit or crash (and on exec, which is how a handover leaves);
 never unlink `.generation.lock`, `.generation-admission.lock`,
 `.generation-compat.json`, `.generation-pending.json`, `.generation-participants/`
@@ -514,6 +517,8 @@ must open is newer only by additive migrations — it keeps reading and writing 
 read-compatible ones — it serves reads and refuses writes — and refused when a breaking
 migration separates the two. See
 [Run an older binary against a newer workspace](#run-an-older-binary-against-a-newer-workspace).
+`orbit gc deployments` never removes it; see
+[Reclaim old deployments and backups](#reclaim-old-deployments-and-backups).
 
 Without a root override, `orbit update` converges **the workspace you run it from**. `ORBIT_ROOT`
 selects an environment-only override, while an explicit `--root` takes precedence over it. Run
@@ -550,9 +555,9 @@ even if `not_after` is still in the future. `orbit update` does not honor
 is an error. Without the acknowledged file, only the compiled keys verify.
 
 Both HTTP releases and local mirrors limit each input before buffering it: latest-release
-metadata and `latest-version.txt` to 64 KiB, the checksum manifest to 1 MiB, its detached
-signature to 16 KiB, and the compressed archive to 256 MiB. An input over its limit fails
-before the installed executable is replaced, including when an HTTP server omits
+metadata to 256 KiB, mirror `latest-version.txt` to 64 KiB, the checksum manifest to 1 MiB,
+its detached signature to 16 KiB, and the compressed archive to 256 MiB. An input over its
+limit fails before the installed executable is replaced, including when an HTTP server omits
 `Content-Length`. The extracted executable has a separate 256 MiB limit.
 
 ### Deploy a locally built candidate pinned to a source commit
@@ -670,36 +675,65 @@ it may still read it; see
 [Run an older binary against a newer workspace](#run-an-older-binary-against-a-newer-workspace).
 Both files are Orbit-owned state: read them for diagnosis, never edit them.
 
-The host task registry has a separate reader-compatibility marker:
-`PRAGMA user_version` in `~/.orbit/tasks/index.sqlite` (or the configured global
-root). Its v5 task/allocator format also supports the additive `task_action_keys`
-table. The repaired executable ensures that table when opening a writable v5
-registry, without raising the reader-compatibility floor. A complete v5 registry
-can still open read-only; missing additive storage requires a writable open.
+### The task registry ledger
 
-A v5 registry may also carry `task_envelope_stamps`, a derived cache created the
-first time a task listing records which `task.yaml` files it has already checked
-against the index. It does not change the registry version; an older binary
-ignores it, and a reader trusts a stamp only while the file and its index row
-still match, so a stale or missing stamp costs one re-parse. `orbit task reindex`
-rebuilds the index rows and leaves stamps to be re-recorded on the next listing.
+The host task registry, `~/.orbit/tasks/index.sqlite` (or the configured global
+root), is a separate SQLite file with a ledger of its own, run by the same engine
+as the store schema: its own `schema_meta` ledger rows and `migration.compat`
+record, and an append-only registry (`ledger.rs`) in
+`crates/orbit-store/src/driver/sqlite/task_registry/`. A writable open
+applies pending registry migrations; a newer registry is decided from its record
+exactly like the store — additive-newer stays writable, read-compatible-newer opens
+read-only (the writer connection is held `query_only`), and breaking-newer is
+refused, naming the migration this binary lacks.
+
+Registry v1, `registry_baseline`, is the pre-ledger v5 format together with the
+`task_action_keys` table and the `task_envelope_stamps` cache (which records which
+`task.yaml` files already match the index; a stale or missing stamp costs one
+re-parse, and `orbit task reindex` leaves stamps to the next listing). Before the
+ledger, the registry was versioned only by `PRAGMA user_version` 5 plus additive
+setup on every writable open, and envelope stamps were created the first time a
+listing recorded one. A registry at `user_version` 5 or below, or a recognized v6
+(see below), **adopts** the ledger on its first writable open: v1 is idempotent over
+every shipped shape, keeps every row, and is recorded in the same transaction. A
+registry still without a ledger stays readable read-only when it is at version 5
+with action keys; missing action keys need one writable open first.
+
+`user_version` stays as a fence for binaries from before the ledger, which read
+nothing else (they accept version 5 with the action-keys column):
+
+- it stays **5** while every registry migration is additive, so those binaries keep
+  reading and writing an adopted registry;
+- the first registry migration that is not additive sets it to **7**, so those
+  binaries refuse the registry outright — they cannot read the record, so even a
+  read-compatible change locks them out rather than holding them read-only. It is
+  never set to 6, which they may recover.
+
+Ledger-aware binaries ignore `user_version` once a registry has a ledger. Upgrade
+admission compares the registry ledger like the store schema (`task_registry` in
+`orbit update --contract`); a process recorded by a binary from before the ledger
+counts as knowing no registry migration, so a newcomer that carries a non-additive
+registry migration is refused beside it. `orbit migrate` reports workspace layout and
+store-schema migrations only, not the task registry.
 
 ### Recover a task registry marked version 6
 
-A previous build marked this additive table as registry v6, causing v5 readers
-to fail even on ordinary workspace/task access. A build containing the repair
+A previous build marked the additive action-keys table as registry v6, causing v5
+readers to fail even on ordinary workspace/task access. A build containing the repair
 recognizes the shipped compatible v6 columns, keys, indexes, and allocation
-constraints, then restores the v5 marker in a transaction. Existing task data,
-allocator state, and permanent action reservations remain intact. Repeated or
-concurrent recovery is safe. Unknown schema versions or unrecognized v6 shapes
-remain refused; recovery never means discarding tables or task data.
+constraints, then restores the v5 marker in a transaction. In a ledger-aware build
+this recovery is part of adoption: the recognized v6 adopts the ledger through
+registry v1, which sets the marker back to 5. Existing task data, allocator state,
+and permanent action reservations remain intact. Repeated or concurrent recovery is
+safe. Unknown schema versions or unrecognized v6 shapes remain refused; recovery
+never means discarding tables or task data.
 
 Executable upgrade and database recovery are separate steps. An already-installed
 old executable does not learn a future migration. Install a build containing this
 repair through its owning install channel, then invoke **that exact executable**
 to open the registry. No manual SQL or registry reset is needed. `orbit migrate`
 reports workspace layout and store-schema migrations; its dry-run report is not
-an inventory of task-registry additive setup.
+an inventory of task-registry migrations.
 
 For mixed macOS installations, inspect the paths before rollout:
 
@@ -753,6 +787,52 @@ sqlite3 ~/.orbit/orbit.db "VACUUM INTO '/backups/orbit.db'"
 
 See [Inventory and protect Orbit state](./state-and-backup.md) for WAL-safe alternatives and
 the complete authoritative-state inventory.
+
+## Reclaim old deployments and backups
+
+Deploys leave copies behind in the Orbit home that no other GC class removes: build
+directories under `~/.orbit/deployments/` (sources, `target/`, candidates, logs), copies
+of replaced executables in `~/.orbit/bin/`, and store copies such as
+`~/.orbit/orbit.db.bak-<date>`. After an upgrade is verified, apply the retention with
+`orbit gc deployments`. It only reports until you pass `--confirm`:
+
+```sh
+orbit gc deployments                    # every entry, its bytes, and whether it is kept or would be removed
+orbit gc deployments --keep 1           # report with a tighter retention
+orbit gc deployments --confirm          # remove what the report lists as would_remove
+orbit gc deployments --confirm --json   # the same, with removed paths and bytes as JSON
+```
+
+The retention is:
+
+- **Three classes, each counted separately.** A deployment is any top-level entry of
+  `~/.orbit/deployments/`. An executable backup is a regular file in `~/.orbit/bin/`
+  whose name carries a `.bak`, `.before-`, `.pre-`, `.stale` or `-stale-` marker, such as
+  `orbit.bak-<date>` or `orbit-graph.stale-<date>`. A store backup is any
+  `~/.orbit/orbit.db.bak*` entry together with its appended `-wal` and `-shm`
+  sidecars. These files count as one backup and share a retention decision,
+  including when only the sidecars remain. Each path and its bytes are still
+  reported separately. The installed executables, other tools in `bin/`,
+  and the live `orbit.db` with its `-wal` and `-shm` files are never candidates.
+- **Keep the newest N of each class**, `--keep` (default 2, at least 1), ordered by the
+  newest modification time of anything inside the entry or store-backup set.
+- **Always keep the rollback target.** Every `<executable>.previous`, which `orbit update`
+  writes as the outgoing executable (see [Recovery and resumption](#recovery-and-resumption)),
+  is reported as `rollback_target`. A deployment directory whose `orbit-local-candidate`
+  manifest (see [Deploy a locally built candidate](#deploy-a-locally-built-candidate-pinned-to-a-source-commit))
+  names the SHA-256 of the installed `orbit` is kept as `installed_candidate`, and one
+  naming `orbit.previous` as `rollback_candidate`. Pinned entries do not count toward
+  `--keep`.
+
+Each entry reports its class, path, action (`kept`, `would_remove` or `removed`), reason
+and bytes; the summary totals reclaimable, reclaimed and kept bytes. Measurement finishes
+before anything is removed. Removal goes through descriptors pinned to each directory and
+never follows a link: a symbolic link is unlinked, never its target, and a symlinked
+`deployments/` or `bin/` is refused. `--confirm` needs operator authority, like the other
+GC classes.
+
+Leave a store backup you still need for recovery outside `~/.orbit`, for example under the
+`/backups` path above, or raise `--keep` until that recovery is over.
 
 ## Review and apply migrations
 
@@ -856,7 +936,10 @@ MCP `tools/call` is **not** an unaudited read: even `orbit.workspace.list` must 
 its durable audit event. An old process with a read-only newer store is therefore not a
 usable MCP authority, even when `orbit task show` works at the CLI. Audit events are
 writes, so a read-only command records no audit row and prints a `failed to write audit
-event` warning.
+event` warning. This differs from a compatible foreign executable generation
+whose store schema exactly matches the reader: native CLI and tool-dispatch
+audit events can append to that existing database through a separate,
+migration-free connection while operational state handles remain read-only.
 
 The workspace layout has no single write choke point, so it cannot be held read-only:
 a read-compatible layout migration the binary lacks refuses the workspace like a breaking
@@ -866,12 +949,19 @@ layout for writes, exactly as it did before.
 
 ### Feature schemas
 
-Feature crates (automation, review, local pull) keep their own ledgers in the
-`feature_schema_meta` table. Each feature migration is declared additive, data-only or
-breaking, and the binary that applies one records the classification in a
-`feature.compat.<feature>` row of `schema_meta`. A binary older than a feature schema
-keeps opening it, for reads and writes, when every newer migration is additive or
-data-only; otherwise it refuses, naming the first breaking migration it lacks:
+Automation, review and local pull once kept their own ledgers in the
+`feature_schema_meta` table, applied the first time each feature store opened. Store
+migration v49 (`absorb_feature_ledgers`) runs each of them to its final version
+(automation v5, review v4, local pull v1) when the store opens, and they are frozen
+there: a later change to one of those tables is an ordinary store migration. v49 is
+additive, so a binary from before it keeps opening the store for reads and writes.
+
+The feature rows stay, and so does the `feature.compat.<feature>` row of `schema_meta`
+that records each feature migration's class (additive, data-only or breaking), because
+binaries from before v49 still run their own feature open. That open applies nothing
+to a feature already at the version the binary supports. A binary older than a feature
+schema keeps opening it when every newer migration is additive or data-only; otherwise
+it refuses, naming the first breaking migration it lacks:
 
 ```text
 error: feature schema 'automation' version 6 is newer than the newest version this binary
@@ -937,7 +1027,9 @@ task records or the lexical index. No automatic deletion of that global
 directory is performed.
 
 Legacy `[semantic]` configuration and `search.model` are ignored with a warning
-for the removal release; delete them from config.toml. Config get/set reject
+for the removal release; delete them from config.toml. `orbit doctor` names
+the file, and `orbit doctor --fix-retired-config-keys` backs it up and removes
+the key. Config get/set reject
 these retired keys with migration guidance. The runtime no longer honors
 `ORBIT_SEARCH_COMPANION*` environment overrides.
 

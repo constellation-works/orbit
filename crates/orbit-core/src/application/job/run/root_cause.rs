@@ -82,8 +82,11 @@ fn failure_code(error_code: Option<&str>, state: JobRunState) -> Option<String> 
 impl OrbitRuntime {
     /// The leaf failure a child run's outcome stands for: the root cause it
     /// recorded when it only echoed its own child, else the run itself.
-    /// `None` when the run does not exist.
-    pub(crate) fn run_root_cause(&self, run_id: &str) -> Result<Option<RunRootCause>, OrbitError> {
+    /// Resolves the failed step from its failure checkpoint, audit trail, or
+    /// stored activity steps, excluding synthetic job-level diagnostics.
+    /// Observes stored records without reconciliation; `None` when the run
+    /// does not exist.
+    pub fn run_root_cause(&self, run_id: &str) -> Result<Option<RunRootCause>, OrbitError> {
         let Some(run) = self.get_job_run_backend(run_id)? else {
             return Ok(None);
         };
@@ -102,13 +105,15 @@ impl OrbitRuntime {
                 .into_iter()
                 .rev()
                 .find(|step| {
-                    step.error_message
-                        .as_deref()
-                        .is_some_and(|message| !message.is_empty())
-                        || matches!(
-                            step.state.as_deref(),
-                            Some("error" | "failed" | "timeout" | "interrupted")
-                        )
+                    step.state.as_deref() != Some("skipped")
+                        && (step
+                            .error_message
+                            .as_deref()
+                            .is_some_and(|message| !message.is_empty())
+                            || matches!(
+                                step.state.as_deref(),
+                                Some("error" | "failed" | "timeout" | "interrupted")
+                            ))
                 })
                 .map(|step| step.step_id)
         };

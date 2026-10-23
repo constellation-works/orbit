@@ -134,6 +134,7 @@ pub(crate) fn workspace_auto_run_input(
     completion: crate::application::workflow::CompletionPolicy,
     allowed_crews: &[String],
     approve_proposed: bool,
+    auto_fix: bool,
 ) -> Result<Value, OrbitError> {
     if max_active_leaf_runs == Some(0) {
         return Err(OrbitError::InvalidInput(
@@ -170,6 +171,11 @@ pub(crate) fn workspace_auto_run_input(
     // work; the task-pilot apply step verifies it before approving anything.
     if approve_proposed {
         input.insert("approve_proposed".to_string(), json!(true));
+    }
+    // Repair authority over the PRs the drain opens, forwarded to every leaf
+    // like completion; it never authorizes a merge.
+    if auto_fix {
+        input.insert("auto_fix".to_string(), json!(true));
     }
     Ok(Value::Object(input))
 }
@@ -403,13 +409,21 @@ impl WorkerCommandConfig {
         )
     }
 
-    /// Admitted runtime credentials and the strict-containment flag.
+    /// Admitted runtime credentials (`pass` names and crew `env` sources) and
+    /// the strict-containment flag.
     ///
     /// An edit already on `command`, including a removal, keeps precedence over
     /// the policy snapshot.
     fn apply_launch_environment(&self, command: &mut Command) {
         if let Some(policy) = &self.environment {
-            for (name, value) in policy.agent_subprocess_env(&[]) {
+            // Crew `env` sources ride along under their own names: the worker
+            // composes each crew's agent environment from its own process
+            // environment, and a scope admits them name-only.
+            for (name, value) in policy
+                .agent_subprocess_env(&[])
+                .into_iter()
+                .chain(policy.crew_source_env())
+            {
                 if !command
                     .get_envs()
                     .any(|(held, _)| held == OsStr::new(&name))

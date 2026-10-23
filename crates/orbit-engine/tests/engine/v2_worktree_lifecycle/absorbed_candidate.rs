@@ -13,7 +13,7 @@
 //! with its typed refusal instead of settling.
 
 use orbit_engine::{JobOutcome, V2SqliteSink, execute_job_with_resume};
-use orbit_types::workflow::activity_job::{ActivityV2, JobV2, V2AuditEventKind};
+use orbit_types::workflow::activity_job::{JobV2, V2AuditEventKind};
 
 use super::*;
 
@@ -63,7 +63,255 @@ impl AbsorbedRun {
     }
 }
 
-#[test]
+fn an_identical_landed_patch_settles_before_candidate_validation() {
+    isolated_in(
+        module_path!(),
+        "an_identical_landed_patch_settles_before_candidate_validation",
+        || {
+            let prepared = PreparedRebase::with_commits(
+                "jrun-empty-rebase",
+                &[("README.md", "target\n")],
+                &[
+                    ("base-only.md", "base advance\n"),
+                    ("README.md", "target\n"),
+                ],
+            );
+            let host = &prepared.host;
+            stub_pipeline_steps(host, &prepared);
+            assert_ne!(prepared.candidate, prepared.target);
+            assert_eq!(prepared.prepared["commits_ahead"], 1);
+
+            let run = execute(host, &prepared, &pipeline(git_rebase_step()));
+
+            assert!(run.result.is_err(), "absorption settles the failed step");
+            assert_eq!(prepared.head(), prepared.target);
+            assert_eq!(git(&prepared.checkout.path, &["status", "--porcelain"]), "");
+            assert_eq!(run.recovery_attempts(), Vec::<bool>::new());
+            assert!(!run.events.iter().any(|event| matches!(
+                event,
+                V2AuditEventKind::StepStarted { step_id } if step_id == "candidate_validate"
+            )));
+            assert_eq!(host.stub_calls_of("deliver"), Vec::<Value>::new());
+            assert_eq!(host.stub_calls_of("decide"), Vec::<Value>::new());
+            assert_eq!(host.stub_calls_of("handoff"), Vec::<Value>::new());
+            assert_eq!(
+                run.final_recovery(),
+                vec![("settled".to_string(), Some("complete_no_diff".to_string()))]
+            );
+            let checkpoint = certified(host);
+            assert_eq!(checkpoint["head_sha_before"], prepared.candidate);
+            assert_eq!(checkpoint["absorbed"]["covering_commit"], prepared.target);
+            let applications = host.final_recovery_applications.lock().unwrap();
+            let [application] = applications.as_slice() else {
+                panic!("expected one no-diff settlement, got {applications:#?}");
+            };
+            assert!(matches!(
+                &application.decision,
+                FinalRecoveryDecision::CompleteNoDiff { evidence_commit, .. }
+                    if evidence_commit == &prepared.target
+            ));
+            // A retry reuses and verifies the certificate, rather than
+            // reclassifying the empty branch or proceeding to validation.
+            let mut input = prepared.common.clone();
+            for (key, value) in prepared.prepared.as_object().unwrap() {
+                input[key] = value.clone();
+            }
+            input["step_id"] = json!("sync_base");
+            let retry = action(host, "git_rebase", &input).unwrap_err().to_string();
+            assert!(retry.contains("[candidate_absorbed]"), "{retry}");
+            assert_eq!(host.checkpoints().len(), 1);
+        },
+    );
+}
+
+#[allow(clippy::print_stderr)]
+fn a_rebase_retaining_candidate_commits_still_runs_validation() {
+    isolated_in(
+        module_path!(),
+        "a_rebase_retaining_candidate_commits_still_runs_validation",
+        || {
+            use orbit_types::workflow::ValidationGateSource::{
+                LocalConfig, OwnerContract, ReplicaConfig,
+            };
+            // Prepare each immutable history through the real setup/prepare
+            // actions once. Rows copy it before any recovery, preserving fresh
+            // Git files, host stores, provider process and gate artifacts.
+            let seeds_started = Instant::now();
+            let absorbed_seed = absorbed_rebase("jrun-validation-absorbed");
+            let retained_seed = PreparedRebase::with_commits(
+                "jrun-validation-retained",
+                &[
+                    ("README.md", "draft\n"),
+                    ("README.md", "target\n"),
+                    ("candidate-only.md", "new change\n"),
+                ],
+                &[("README.md", "target\n")],
+            );
+            eprintln!("validation seeds: prepared {:?}", seeds_started.elapsed());
+            // Four distinct cheap commands stand in for the captured full
+            // gates. They record their exact head after the real conflict
+            // continuation, without generating load or measuring production.
+            for (case, retained, owned, source, claimed, empty) in [
+                ("retained-owner", true, true, LocalConfig, false, false),
+                ("retained-claim", true, true, OwnerContract, true, false),
+                ("absorbed-owner", false, true, LocalConfig, false, false),
+                ("absorbed-claim", false, true, OwnerContract, true, false),
+                ("failing-absorbed", false, true, LocalConfig, false, false),
+                ("no-diff-expected", false, true, LocalConfig, false, false),
+                ("standalone", false, false, LocalConfig, false, false),
+                ("uncaptured-claim", false, true, ReplicaConfig, true, false),
+                ("empty-capture", false, true, LocalConfig, false, true),
+            ] {
+                eprintln!("validation row: {case}: setup");
+                let row_started = Instant::now();
+                let prepared = if retained {
+                    &retained_seed
+                } else {
+                    &absorbed_seed
+                }
+                .fresh_copy();
+                let mut host = resolving_host(&prepared, "printf 'target\\n' > README.md");
+                host.gate_source = Some(source);
+                if claimed {
+                    host.worker = Some(orbit_types::tool::WorkerInvocation {
+                        owner_machine_id: "owner".into(),
+                        owner_workspace_id: "workspace".into(),
+                        owner_destination: "owner".into(),
+                        task_id: "T-REBASE".into(),
+                        claim_id: "claim-recovery".into(),
+                        execution: orbit_types::task::ExecutionLocation {
+                            machine_id: "follower".into(),
+                            machine_name: None,
+                        },
+                        bound_run_id: prepared.run_id.clone(),
+                    });
+                }
+                stub_pipeline_steps(&host, &prepared);
+                if case == "no-diff-expected" {
+                    host.tasks
+                        .lock()
+                        .unwrap()
+                        .get_mut("T-REBASE")
+                        .unwrap()
+                        .tags
+                        .push("no-diff-expected".into());
+                }
+                let runs = prepared.fixture.root.path().join("required-command-runs");
+                let mut commands = (0..4).map(|index| format!(
+                    "test ! -d \"$(git rev-parse --git-path rebase-merge)\" && printf 'check{index} %s\\n' \"$(git rev-parse HEAD)\" >> '{}'",
+                    runs.display(),
+                )).collect::<Vec<_>>();
+                if case == "failing-absorbed" {
+                    commands[3].push_str("; orbit_required_gate_fixture_missing_command");
+                }
+                if !empty {
+                    *host.required_commands.lock().unwrap() = commands.clone();
+                }
+                let mut sync = git_rebase_step();
+                if owned {
+                    sync["default_input"]["final_validation"] = json!(true);
+                }
+                eprintln!(
+                    "validation row: {case}: setup {:?}; executor",
+                    row_started.elapsed()
+                );
+                let execution_started = Instant::now();
+                let run = execute(&host, &prepared, &pipeline(sync));
+                eprintln!(
+                    "validation row: {case}: executor {:?}; assertions",
+                    execution_started.elapsed()
+                );
+                let final_head = prepared.head();
+                let should_validate = retained
+                    || (owned && source != ReplicaConfig && !empty && case != "no-diff-expected");
+                if should_validate {
+                    assert!(
+                        runs.exists(),
+                        "{case}: commands were not reached: {:?}; events: {:?}",
+                        run.result,
+                        run.events
+                    );
+                    assert_eq!(
+                        fs::read_to_string(&runs).unwrap(),
+                        (0..4)
+                            .map(|index| format!("check{index} {final_head}\n"))
+                            .collect::<String>(),
+                        "{case}: every captured command runs once on the final head",
+                    );
+                    let logs = host.get_task_artifacts("T-REBASE").unwrap();
+                    assert_eq!(logs.len(), 4, "{case}: every command retains evidence");
+                    for (index, artifact) in logs.iter().enumerate() {
+                        let log: Value = serde_json::from_slice(&artifact.content).unwrap();
+                        assert_eq!(log["command"], commands[index], "{case}");
+                        assert_eq!(log["tested_head"], final_head, "{case}");
+                        if case == "failing-absorbed" && index == 3 {
+                            assert_ne!(
+                                log["exit_code"], 0,
+                                "a failed required command is retained"
+                            );
+                        } else {
+                            assert_eq!(log["exit_code"], 0, "{case}");
+                        }
+                    }
+                } else {
+                    assert!(
+                        !runs.exists(),
+                        "{case}: no captured host handoff; recovery keeps its checks"
+                    );
+                }
+                if retained {
+                    assert!(run.result.as_ref().unwrap().success, "{case}");
+                    assert_ne!(final_head, prepared.target);
+                    assert_eq!(host.stub_calls_of("deliver").len(), 1, "{case}");
+                    assert!(run.final_recovery().is_empty(), "{case}");
+                } else if case == "failing-absorbed" {
+                    assert!(run.result.is_err());
+                    assert_eq!(run.final_recovery(), vec![("skipped".into(), None)]);
+                    assert!(
+                        host.final_recovery_applications.lock().unwrap().iter().all(
+                            |application| {
+                                !matches!(
+                                    application.decision,
+                                    FinalRecoveryDecision::CompleteNoDiff { .. }
+                                )
+                            }
+                        ),
+                        "required-command failure cannot settle the absorbed candidate"
+                    );
+                } else {
+                    assert!(
+                        run.result.is_err(),
+                        "{case}: absorption settles the failed step"
+                    );
+                    assert_eq!(final_head, prepared.target, "{case}");
+                    assert_eq!(
+                        run.final_recovery(),
+                        vec![("settled".into(), Some("complete_no_diff".into()))],
+                        "{case}"
+                    );
+                    assert!(host.stub_calls_of("deliver").is_empty(), "{case}");
+                }
+                assert_eq!(run.recovery_attempts(), vec![true], "{case}");
+                assert_eq!(
+                    git(&prepared.checkout.path, &["status", "--porcelain"]),
+                    "",
+                    "{case}"
+                );
+                eprintln!(
+                    "validation row: {case}: complete {:?}",
+                    row_started.elapsed()
+                );
+            }
+            for seed in [&absorbed_seed, &retained_seed] {
+                assert_eq!(seed.head(), seed.candidate, "rows cannot mutate their seed");
+                assert_eq!(git(&seed.checkout.path, &["status", "--porcelain"]), "");
+                assert!(seed.host.checkpoints().is_empty());
+                assert!(seed.host.get_task_artifacts("T-REBASE").unwrap().is_empty());
+            }
+        },
+    );
+}
+
 fn an_absorbed_candidate_settles_as_verified_no_diff_without_an_agent() {
     isolated_in(
         module_path!(),
@@ -101,7 +349,44 @@ fn an_absorbed_candidate_settles_as_verified_no_diff_without_an_agent() {
                 panic!("expected one post-recovery attempt, got {post:#?}");
             };
             assert_eq!(outcome, "absorbed", "{message}");
-            assert!(message.contains("[candidate_absorbed]"), "{message}");
+            let legacy = legacy_absorbed_message(&prepared, &prepared.target);
+            assert_eq!(
+                message, &legacy,
+                "the persisted post-recovery diagnostic stays byte-identical"
+            );
+            let error = run.result.as_ref().unwrap_err();
+            let DispatchError::CandidateAbsorbed { candidate, .. } = error else {
+                panic!("post-recovery wrapping must retain absorption: {error:?}");
+            };
+            assert_eq!(candidate.head, prepared.checkout.branch);
+            assert_eq!(candidate.base_sha, prepared.target);
+            assert_eq!(candidate.covering_commit, prepared.target);
+            assert_eq!(
+                candidate.base_ref,
+                prepared.prepared["base_ref"].as_str().unwrap()
+            );
+            assert_eq!(error.failure_code(), "pipeline_step_failed");
+            let initial = format!(
+                "recoverable VCS conflict during 'git_rebase': original base '{}', target base '{}'; rebase of '{}' onto checkpoint '{}' stopped with conflicts; conflicting paths: README.md",
+                prepared.base_sha, prepared.target, prepared.checkout.branch, prepared.target
+            );
+            let expected = format!(
+                "job executor: post-recovery attempt absorbed: {legacy}; original error before recovery: {initial}"
+            );
+            assert_eq!(error.to_string(), expected);
+            let persisted = run
+                .events
+                .iter()
+                .find_map(|event| match event {
+                    V2AuditEventKind::StepFinished {
+                        step_id,
+                        error_message,
+                        ..
+                    } if step_id == "sync_base" => error_message.as_deref(),
+                    _ => None,
+                })
+                .expect("persisted step diagnostic");
+            assert_eq!(persisted, expected);
 
             // Final recovery settles through the host applier without
             // dispatching its agent or the failure handoff.
@@ -148,7 +433,6 @@ fn an_absorbed_candidate_settles_as_verified_no_diff_without_an_agent() {
 /// candidate's path, but the base does not hold the candidate's change. The
 /// continuation is refused with its typed reason and the final-recovery agent
 /// decides, rather than the task settling as delivered by that commit.
-#[test]
 fn a_discarded_candidate_reaches_the_final_recovery_agent() {
     isolated_in(
         module_path!(),
@@ -212,7 +496,6 @@ fn a_discarded_candidate_reaches_the_final_recovery_agent() {
 /// The resolution keeps the candidate's commit on the pin, but the base
 /// advanced with that same content meanwhile: following the tip drops the
 /// pick, and the candidate is certified absorbed by the advanced commit.
-#[test]
 fn a_candidate_the_advanced_base_absorbed_is_certified_on_that_tip() {
     isolated_in(
         module_path!(),
@@ -239,16 +522,24 @@ fn a_candidate_the_advanced_base_absorbed_is_certified_on_that_tip() {
             assert_eq!(checkpoint["absorbed"]["covering_commit"], advanced);
             let retried = prepared
                 .rebase_on(&host, &prepared.prepared)
-                .expect_err("an absorbed candidate fails its step")
-                .to_string();
-            assert!(retried.contains("[candidate_absorbed]"), "{retried}");
+                .expect_err("an absorbed candidate fails its step");
+            let OrbitError::CandidateAbsorbed(candidate) = &retried else {
+                panic!("expected typed absorption, got {retried:?}");
+            };
+            assert_eq!(candidate.base_sha, advanced);
+            assert_eq!(candidate.covering_commit, advanced);
+            assert_eq!(
+                retried.to_string(),
+                legacy_absorbed_message(&prepared, &advanced)
+                    .strip_prefix("deterministic action `git_rebase` failed: ")
+                    .unwrap()
+            );
         },
     );
 }
 
 /// The resolution also reverted a path no base commit touched: the candidate
 /// was dropped, not absorbed, and the continuation is refused as before.
-#[test]
 fn a_dropped_candidate_is_refused_at_the_continuation() {
     isolated_in(
         module_path!(),
@@ -288,7 +579,6 @@ fn a_dropped_candidate_is_refused_at_the_continuation() {
 /// Each neighbour of an absorbed candidate keeps the certified checkpoint but
 /// changes what final recovery re-observes. None settles: the agent runs and
 /// reads the typed reason.
-#[test]
 fn absorbed_neighbours_fail_closed_with_a_typed_reason() {
     isolated_in(
         module_path!(),
@@ -390,29 +680,61 @@ fn absorbed_neighbours_fail_closed_with_a_typed_reason() {
                     "task_scope_changed",
                 ),
             ];
+            // Generate this common precondition through real conflict recovery
+            // once. Every neighbour below receives independent host stores and
+            // re-observes the same certified checkout after exactly one change.
+            let prepared = absorbed_rebase("jrun-neighbour");
+            let seed = resolving_host(&prepared, "printf 'target\\n' > README.md");
+            let conflict = stopped_conflict(&prepared);
+            let outcome = recover(
+                &seed,
+                &prepared.run_id,
+                recovery_input_for(&prepared, &prepared.prepared, &conflict),
+            )
+            .expect("the absorbed continuation is certified");
+            assert!(outcome.success, "{:?}", outcome.message);
+            let error = prepared
+                .rebase_on(&seed, &prepared.prepared)
+                .expect_err("an absorbed candidate fails its step");
+            let message = format!("deterministic action `sync_base_absorbed` failed: {error}");
+            let OrbitError::CandidateAbsorbed(candidate) = error else {
+                panic!("expected typed absorption, got {error:?}");
+            };
             for (case, change, reason) in cases {
-                let prepared = absorbed_rebase("jrun-neighbour");
-                let host = resolving_host(&prepared, "printf 'target\\n' > README.md");
-                let conflict = stopped_conflict(&prepared);
-                let outcome = recover(
-                    &host,
-                    &prepared.run_id,
-                    recovery_input_for(&prepared, &prepared.prepared, &conflict),
-                )
-                .expect("the absorbed continuation is certified");
-                assert!(outcome.success, "{case}: {:?}", outcome.message);
-                // The retry's settlement claim, as git_rebase made it before
-                // the change.
-                let absorbed = prepared
-                    .rebase_on(&host, &prepared.prepared)
-                    .expect_err("an absorbed candidate fails its step")
-                    .to_string();
-                assert!(
-                    absorbed.contains("[candidate_absorbed]"),
-                    "{case}: {absorbed}"
+                // Restore only the fixture-owned mutations from the previous
+                // row, including its branch and the primary's covering ref.
+                let rebase = git_path(&prepared.checkout.path, "rebase-merge");
+                if rebase.exists() {
+                    fs::remove_dir(&rebase).expect("the neighbour created an empty rebase dir");
+                }
+                let stray = prepared.checkout.path.join("stray.txt");
+                if stray.exists() {
+                    fs::remove_file(stray).unwrap();
+                }
+                git(
+                    &prepared.checkout.path,
+                    &["checkout", "--force", &prepared.checkout.branch],
                 );
+                git(
+                    &prepared.checkout.path,
+                    &["reset", "--hard", &prepared.target],
+                );
+                git(
+                    &prepared.fixture.repo,
+                    &["reset", "--hard", &prepared.target],
+                );
+                let host = seed.with_provider(seed.provider.as_deref().unwrap());
+                *host.checkpoints.lock().unwrap() = seed.checkpoints();
+                *host.recovery_attempts.lock().unwrap() = seed.recovery_attempts();
+                *host.run_states.lock().unwrap() = seed.run_states.lock().unwrap().clone();
                 stub_pipeline_steps(&host, &prepared);
-                host.stub("sync_base_absorbed", Err(absorbed));
+                host.stubs.lock().unwrap().insert(
+                    "sync_base_absorbed".into(),
+                    Err(DispatchError::CandidateAbsorbed {
+                        candidate: candidate.clone(),
+                        message: message.clone(),
+                    }),
+                );
                 host.stub(
                     "decide",
                     Ok(json!({
@@ -473,6 +795,59 @@ fn absorbed_rebase(run_id: &str) -> PreparedRebase {
     )
 }
 
+impl PreparedRebase {
+    /// Copy only an unrecovered preparation. Each row owns all mutable Git
+    /// metadata and host stores; no refs, indexes, objects or certificates are
+    /// shared with the immutable seed. The public executor still performs the
+    /// real conflict, provider invocation, continuation and validation per row.
+    fn fresh_copy(&self) -> Self {
+        let root = TempDir::new().unwrap();
+        crate::git_fixture::copy_template(self.fixture.root.path(), root.path());
+        let old_root = canonical(self.fixture.root.path());
+        let new_root = canonical(root.path());
+        let relocate = |path: &Path| new_root.join(path.strip_prefix(&old_root).unwrap());
+        let repo = relocate(&self.fixture.repo);
+        let checkout = Checkout {
+            path: relocate(&self.checkout.path),
+            branch: self.checkout.branch.clone(),
+        };
+        // copy_template relocates origin's config. A linked worktree also
+        // has two absolute links; relocate both without consulting/mutating
+        // the seed. commondir and index entries are already relative.
+        let link = fs::read_to_string(checkout.path.join(".git")).unwrap();
+        let git_dir = relocate(Path::new(link.trim().strip_prefix("gitdir: ").unwrap()));
+        assert!(git_dir.starts_with(repo.join(".git/worktrees")));
+        fs::write(
+            checkout.path.join(".git"),
+            format!("gitdir: {}\n", git_dir.display()),
+        )
+        .unwrap();
+        fs::write(
+            git_dir.join("gitdir"),
+            format!("{}\n", checkout.path.join(".git").display()),
+        )
+        .unwrap();
+        let host = LifecycleHost {
+            tasks: Mutex::new(self.host.tasks.lock().unwrap().clone()),
+            runs: Mutex::new(self.host.runs.lock().unwrap().clone()),
+            ..LifecycleHost::new(&repo)
+        };
+        let mut common = self.common.clone();
+        common["workspace_path"] = json!(checkout.path);
+        Self {
+            fixture: Fixture { root, repo },
+            host,
+            run_id: self.run_id.clone(),
+            checkout,
+            base_sha: self.base_sha.clone(),
+            candidate: self.candidate.clone(),
+            target: self.target.clone(),
+            common,
+            prepared: self.prepared.clone(),
+        }
+    }
+}
+
 /// `prepared`'s host, with a conflict-recovery provider that runs `body`.
 fn resolving_host(prepared: &PreparedRebase, body: &str) -> LifecycleHost {
     let provider = prepared.fixture.root.path().join("codex");
@@ -498,11 +873,21 @@ fn stub_pipeline_steps(host: &LifecycleHost, prepared: &PreparedRebase) {
     }
 }
 
-/// `worktree → prepare_branch → sync_base → deliver`, with `sync_base`
+/// `worktree → prepare_branch → sync_base → candidate_validate → deliver`, with `sync_base`
 /// recovered by `pr_conflict_recovery`, `decide` as final recovery and
 /// `handoff` as the failure activity.
 fn pipeline(sync_base: Value) -> JobV2 {
     let stub = |id: &str| json!({ "id": id, "spec": { "type": "deterministic", "action": id, "config": {} } });
+    let validate = json!({
+        "id": "candidate_validate",
+        "spec": { "type": "deterministic", "action": "candidate_validate", "config": {} },
+        "default_input": {
+            "job_run_id": "{{ steps.worktree.output.job_run_id }}",
+            "completed_task_ids": "{{ input.task_ids }}",
+            "workspace_path": "{{ steps.worktree.output.workspace_path }}",
+            "base_sha": "{{ steps.sync_base.output.base_sha }}",
+        },
+    });
     let asset = json!({
         "schemaVersion": 2,
         "kind": "Job",
@@ -510,7 +895,7 @@ fn pipeline(sync_base: Value) -> JobV2 {
         "spec": {
             "state": "enabled",
             "kind": "workflow",
-            "steps": [stub("worktree"), stub("prepare_branch"), sync_base, stub("deliver")],
+            "steps": [stub("worktree"), stub("prepare_branch"), sync_base, validate, stub("deliver")],
         },
     });
     let mut job = orbit_engine::activity_job::load_job_asset(&asset.to_string())
@@ -532,6 +917,7 @@ fn git_rebase_step() -> Value {
         "id": "sync_base",
         "spec": { "type": "deterministic", "action": "git_rebase", "config": {} },
         "default_input": {
+            "step_id": "sync_base",
             "job_run_id": "{{ steps.worktree.output.job_run_id }}",
             "completed_task_ids": "{{ input.task_ids }}",
             "workspace_path": "{{ steps.worktree.output.workspace_path }}",
@@ -555,39 +941,6 @@ fn absorbed_step() -> Value {
         "id": "sync_base",
         "spec": { "type": "deterministic", "action": "sync_base_absorbed", "config": {} },
     })
-}
-
-fn conflict_recovery_activity() -> ActivityV2 {
-    let asset = json!({
-        "schemaVersion": 2,
-        "kind": "Activity",
-        "metadata": { "name": "pr_conflict_recovery" },
-        "spec": {
-            "type": "agent_loop",
-            "description": "Resolve the stopped rebase.",
-            "instruction": "Resolve the stopped rebase.",
-            "provider": "codex",
-            "max_iterations": 1,
-            "wall_clock_timeout_seconds": 30,
-            "require_completion_envelope": true,
-            "on_denial": "terminate",
-        },
-    });
-    orbit_engine::activity_job::load_activity_asset(&asset.to_string())
-        .expect("conflict recovery fixture loads")
-        .spec
-}
-
-fn deterministic_activity(name: &str) -> ActivityV2 {
-    let asset = json!({
-        "schemaVersion": 2,
-        "kind": "Activity",
-        "metadata": { "name": name },
-        "spec": { "type": "deterministic", "description": name, "action": name, "config": {} },
-    });
-    orbit_engine::activity_job::load_activity_asset(&asset.to_string())
-        .expect("fixture activity loads")
-        .spec
 }
 
 /// Run `job` as `prepared`'s run, keeping its audit events.
@@ -629,18 +982,106 @@ fn execute(host: &LifecycleHost, prepared: &PreparedRebase, job: &JobV2) -> Abso
     }
 }
 
-impl LifecycleHost {
-    fn stub(&self, action: &str, reply: Result<Value, String>) {
-        self.stubs.lock().unwrap().insert(action.to_string(), reply);
-    }
+/// The pre-typing diagnostic is a persisted compatibility contract.
+fn legacy_absorbed_message(prepared: &PreparedRebase, base_sha: &str) -> String {
+    format!(
+        "deterministic action `git_rebase` failed: execution failed: [candidate_absorbed] git_rebase: conflict recovery left '{}' on base '{}' with no candidate commit; covering commit {} on '{}' already carries the candidate's change, so verified no-diff settlement completes the task",
+        prepared.checkout.branch,
+        base_sha,
+        base_sha,
+        prepared.prepared["base_ref"].as_str().unwrap()
+    )
+}
 
-    fn stub_calls_of(&self, action: &str) -> Vec<Value> {
-        self.stub_calls
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(name, _)| name == action)
-            .map(|(_, input)| input.clone())
-            .collect()
-    }
+fn a_quoted_absorption_marker_never_settles_a_certified_candidate() {
+    isolated_in(
+        module_path!(),
+        "a_quoted_absorption_marker_never_settles_a_certified_candidate",
+        || {
+            let prepared = absorbed_rebase("jrun-quoted-absorbed");
+            let host = resolving_host(&prepared, "printf 'target\\n' > README.md");
+            let conflict = stopped_conflict(&prepared);
+            recover(
+                &host,
+                &prepared.run_id,
+                recovery_input_for(&prepared, &prepared.prepared, &conflict),
+            )
+            .unwrap();
+            assert!(!host.checkpoints().is_empty());
+            stub_pipeline_steps(&host, &prepared);
+            host.stub(
+                "sync_base_absorbed",
+                Err("tool quoted [candidate_absorbed]".into()),
+            );
+            host.stub("decide", Ok(json!({"decision":"escalate", "diagnosis":"ordinary tool failure", "human_action":"inspect tool"})));
+            let mut job = pipeline(absorbed_step());
+            job.steps[2].recovery_activity = None;
+            job.steps[2].resolved_recovery_activity = None;
+            let run = execute(&host, &prepared, &job);
+            assert!(run.result.is_err());
+            let calls = host.stub_calls_of("decide");
+            let [input] = calls.as_slice() else {
+                panic!("the final recovery agent must run: {calls:?}");
+            };
+            assert!(
+                input.get("absorbed_refusal").is_none(),
+                "quoted text must not trigger absorption verification"
+            );
+            assert_eq!(
+                run.final_recovery(),
+                vec![("escalated".into(), Some("escalate".into()))]
+            );
+            assert_eq!(host.stub_calls_of("handoff").len(), 1);
+        },
+    );
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn absorption_contracts_1() {
+    isolated_in(module_path!(), "absorption_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "an_identical_landed_patch_settles_before_candidate_validation",
+                an_identical_landed_patch_settles_before_candidate_validation,
+            ),
+            (
+                "a_rebase_retaining_candidate_commits_still_runs_validation",
+                a_rebase_retaining_candidate_commits_still_runs_validation,
+            ),
+            (
+                "an_absorbed_candidate_settles_as_verified_no_diff_without_an_agent",
+                an_absorbed_candidate_settles_as_verified_no_diff_without_an_agent,
+            ),
+            (
+                "a_discarded_candidate_reaches_the_final_recovery_agent",
+                a_discarded_candidate_reaches_the_final_recovery_agent,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn absorption_contracts_2() {
+    isolated_in(module_path!(), "absorption_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_candidate_the_advanced_base_absorbed_is_certified_on_that_tip",
+                a_candidate_the_advanced_base_absorbed_is_certified_on_that_tip,
+            ),
+            (
+                "a_dropped_candidate_is_refused_at_the_continuation",
+                a_dropped_candidate_is_refused_at_the_continuation,
+            ),
+            (
+                "absorbed_neighbours_fail_closed_with_a_typed_reason",
+                absorbed_neighbours_fail_closed_with_a_typed_reason,
+            ),
+            (
+                "a_quoted_absorption_marker_never_settles_a_certified_candidate",
+                a_quoted_absorption_marker_never_settles_a_certified_candidate,
+            ),
+        ]);
+    });
 }

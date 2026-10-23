@@ -11,11 +11,28 @@ use crate::{
     application::{
         job::JobCatalogFilter,
         routines::{
-            RoutineToggleOutcome,
+            FireField, RoutineField, RoutineToggleOutcome,
             status::{checkout_routine_statuses, toggle_checkout_routine},
         },
     },
 };
+
+/// A routine list item's status columns; `description` is bounded on render.
+const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
+    ("name", RoutineField::Name),
+    ("description", RoutineField::Description),
+    ("enabled", RoutineField::Enabled),
+    ("effective", RoutineField::Effective),
+    ("target", RoutineField::Target),
+    ("schedule", RoutineField::Trigger),
+    ("state", RoutineField::State),
+    ("next_due", RoutineField::NextDue),
+    ("paused_at", RoutineField::PausedAt),
+    (
+        "last_fire",
+        RoutineField::LastFire(&[("state", FireField::State), ("at", FireField::UpdatedAt)]),
+    ),
+];
 
 fn text(value: &str) -> String {
     let (value, truncated) = bounded_text(value, 4096);
@@ -33,6 +50,8 @@ pub(super) fn read(
     limit: usize,
 ) -> Result<Value, OrbitError> {
     let mut notes = Vec::new();
+    // Only the auto-task scope reads the host cursor state.
+    let mut cursor_state_error: Option<Option<String>> = None;
     // Auto-task and job controls keep the general coordination guard, so a
     // replica projects them unavailable with the owner named.
     let coordination_refusal = runtime
@@ -45,11 +64,11 @@ pub(super) fn read(
             notes.extend(report.load_errors.iter().map(|e|text(&e.message)));
             notes.extend(report.listed_retired(true).map(|r|text(&format!("{}: {}",r.name,r.reason))));
             let mut rows=report.statuses.iter().map(|s|{
-                let d=&s.routine.definition;
-                json!({"name":d.name,"description":text(&d.description),"enabled":d.enabled,"effective":s.effective(),
-                    "target":d.target.as_ref_string(),"schedule":d.trigger,"state":s.schedule_display_state().as_str(),
-                    "next_due":s.next_due,"paused_at":s.paused_at,"last_fire":s.last_fire.as_ref().map(|f|json!({"state":f.state,"at":f.updated_at})),
-                    "toggle_available":true,"toggle_reason":null})
+                let mut row=s.project(ROUTINE_COLUMNS);
+                row.insert("description".into(),json!(text(&s.routine.definition.description)));
+                row.insert("toggle_available".into(),json!(true));
+                row.insert("toggle_reason".into(),Value::Null);
+                Value::Object(row)
             }).collect::<Vec<_>>();
             // A replica lists what its owner schedules so the refusal is
             // visible before an operator tries to toggle it.
@@ -62,7 +81,11 @@ pub(super) fn read(
             }));
             rows
         }
-        "auto_tasks"=>auto_task_rows(runtime, coordination_refusal.as_deref())?,
+        "auto_tasks"=>{
+            let (rows,error)=auto_task_rows(runtime, coordination_refusal.as_deref())?;
+            cursor_state_error=Some(error);
+            rows
+        }
         "jobs"=>runtime.list_job_catalog_with_last_run(true,JobCatalogFilter::All)?.iter().map(|(j,last)|{
             let runnable=j.supports_no_input_submission();
             let run_reason=match (&coordination_refusal,runnable) {
@@ -85,38 +108,38 @@ pub(super) fn read(
         .take(limit)
         .collect::<Vec<_>>();
     let next = offset.saturating_add(page.len());
-    Ok(
-        json!({"items":page,"total":total,"controls_authorized":true,
+    let mut result = json!({"items":page,"total":total,"controls_authorized":true,
         "pagination":{"offset":offset,"limit":limit,"next_offset":if next<total{Some(next)}else{None}},
         "notes":notes.into_iter().take(20).collect::<Vec<_>>(),
-        "observation":"Workspace definitions only. The host clock is independent; enabled does not guarantee a running scheduler."}),
-    )
+        "observation":"Workspace definitions only. The host clock is independent; enabled does not guarantee a running scheduler."});
+    if let Some(error) = cursor_state_error {
+        result["cursor_state_error"] = json!(error);
+    }
+    Ok(result)
 }
+/// The shared listing's rows, plus why the host cursor state was unreadable.
 fn auto_task_rows(
     runtime: &OrbitRuntime,
     coordination_refusal: Option<&str>,
-) -> Result<Vec<Value>, OrbitError> {
-    use crate::application::auto_tasks::{
-        cursor_state_path, load_cursor_state, schedule::next_scheduled_slot,
-    };
-    use orbit_types::workflow::AutoTaskSchedule;
-    let cursors = load_cursor_state(&cursor_state_path(&runtime.paths().state_dir))?;
-    runtime.auto_task_listing(true)?.iter().map(|s|{
-        let d=&s.definition;
-        let effective_enabled=runtime.auto_task_enabled(d);
-        let cursor=cursors.definitions.get(&d.name);
-        let baseline=cursor.and_then(|c|chrono::DateTime::parse_from_rfc3339(&c.baseline_at).ok()).map(|d|d.with_timezone(&Utc));
-        let next=next_scheduled_slot(&d.schedule,baseline,Utc::now())?;
-        let state=if s.inactive_plugin.is_some(){"plugin_inactive"}else if !effective_enabled{"disabled"}else if matches!(d.schedule,AutoTaskSchedule::Deliveries{..}){"waiting"}else if cursor.is_none(){"never_observed"}else if next.is_some(){"scheduled"}else{"unavailable"};
-        Ok(json!({"name":d.name,"description":text(&d.description),"enabled":d.enabled,"schedule":d.schedule,
-            "state":state,"next_due":if state=="scheduled"{next}else{None},
-            "target":text(&d.template.title),"dedupe":d.dedupe,"skip_reason":s.skipped_reason,
-            "effective_enabled":effective_enabled,
-            "toggle_available":s.inactive_plugin.is_none() && coordination_refusal.is_none(),
-            "mint_available":s.inactive_plugin.is_none() && coordination_refusal.is_none(),
+) -> Result<(Vec<Value>, Option<String>), OrbitError> {
+    use crate::application::auto_tasks::AutoTaskSkip;
+    use crate::application::routines::ScheduleDisplayState;
+    let listing = runtime.auto_task_listing_state(true, Utc::now())?;
+    let rows = listing.rows.iter().map(|row|{
+        let d=&row.listed.definition;
+        let plugin_inactive=row.skip==Some(AutoTaskSkip::PluginInactive);
+        let state=if plugin_inactive{"plugin_inactive"}else{row.schedule_state.as_str()};
+        let next_due=(!plugin_inactive && row.schedule_state==ScheduleDisplayState::Scheduled).then_some(row.next_slot).flatten();
+        json!({"name":d.name,"description":text(&d.description),"enabled":d.enabled,"schedule":d.schedule,
+            "state":state,"next_due":next_due,
+            "target":text(&d.template.title),"dedupe":d.dedupe,"skip_reason":row.skipped_reason,
+            "effective_enabled":row.effective_enabled,
+            "toggle_available":!plugin_inactive && coordination_refusal.is_none(),
+            "mint_available":!plugin_inactive && coordination_refusal.is_none(),
             "control_reason":coordination_refusal,
-            "updated_at":d.updated_at}))
-    }).collect()
+            "updated_at":d.updated_at})
+    }).collect();
+    Ok((rows, listing.cursor_state_error.map(|error| text(&error))))
 }
 
 fn invalid(message: &str) -> OrbitError {

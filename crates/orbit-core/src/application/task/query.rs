@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     ArtifactManifestFileV2, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
+    TaskStatus,
 };
 
 use orbit_store::RegisteredTaskResolution;
@@ -52,7 +53,7 @@ impl OrbitRuntime {
     /// `false` covers both an id the registered owners do not hold and one
     /// whose prefix belongs to another host; neither is an error, since a
     /// dependency may be recorded before its target exists here.
-    pub fn dependency_task_is_readable(&self, id: &str) -> Result<bool, OrbitError> {
+    pub(crate) fn dependency_task_is_readable(&self, id: &str) -> Result<bool, OrbitError> {
         Ok(matches!(
             self.resolve_dependency_task(id)?,
             RegisteredTaskResolution::Resolved(_)
@@ -88,13 +89,29 @@ impl OrbitRuntime {
         path: &str,
     ) -> Result<Option<TaskArtifact>, OrbitError> {
         if self.worker_invocation().is_some() {
-            return Ok(self
-                .get_task_artifacts(id)?
-                .into_iter()
-                .find(|artifact| artifact.path == path));
+            return self.read_owner_tool_request(
+                "orbit.task.artifact.get",
+                serde_json::json!({"id": id, "path": path, "_worker_read": "artifact"}),
+            );
         }
 
         self.stores().task_artifacts().get_task_artifact(id, path)
+    }
+
+    /// Read one exact artifact through the same task/path authority and inline
+    /// bound as the public artifact tool. Missing evidence remains distinguishable.
+    pub(crate) fn get_task_artifact_inline(
+        &self,
+        id: &str,
+        path: &str,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        orbit_types::task::validate_relative_artifact_path(path)?;
+        let task = self.get_task(id)?;
+        let artifact = self.get_task_artifact(&task.id, path)?;
+        if let Some(artifact) = &artifact {
+            artifact.validate_inline_size(&task.id)?;
+        }
+        Ok(artifact)
     }
 
     pub fn get_task_comments(&self, id: &str) -> Result<Vec<TaskComment>, OrbitError> {
@@ -115,6 +132,22 @@ impl OrbitRuntime {
             .task_history()
             .get_task_history(id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))
+    }
+
+    /// Evidence that a task's history and comments are unchanged since an
+    /// earlier stamp, taken without reading them; `None` when nothing can
+    /// vouch for them. A worker reads through its owner, so it has none.
+    pub(crate) fn task_history_stamp(&self, id: &str) -> Option<String> {
+        if self.worker_invocation().is_some() {
+            return None;
+        }
+        self.stores()
+            .task_history()
+            .task_history_stamp(id)
+            .unwrap_or_else(|error| {
+                tracing::debug!(task_id = %id, %error, "task history stamp unavailable");
+                None
+            })
     }
 
     pub fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
@@ -176,23 +209,26 @@ impl OrbitRuntime {
             .collect())
     }
 
-    /// Each backlog task whose `os:` tags this host's OS does not satisfy,
-    /// with the wait: `ORB-12 waits for a macos host (os:macos)`.
+    /// Each backlog task whose effective OS requirement this host does not
+    /// satisfy, with the wait: `ORB-12 waits for a macos host (os:macos)`.
     ///
-    /// A drain start reports these, so a drain that starts nothing on this
-    /// host does not read as an empty backlog.
+    /// The requirement includes the assigned crew's executor `host_os`, or
+    /// the default when no supported pool can run it. A drain reports these,
+    /// so one that starts nothing does not read as an empty backlog.
     pub fn host_os_backlog_waits(&self) -> Result<Vec<String>, OrbitError> {
-        let host = self.host_os();
-        Ok(self
-            .list_task_metadata()?
-            .into_iter()
-            .filter(|task| task.status == orbit_types::task::TaskStatus::Backlog)
-            .filter_map(|task| {
-                orbit_types::task::TaskOsRequirement::from_tags(&task.tags)
-                    .unsatisfied_reason(host)
-                    .map(|wait| format!("{} {wait}", task.id))
-            })
-            .collect())
+        let limits = self.executor_host_os_limits()?;
+        let pools = self.auto_crew_pools_for_input(&serde_json::Value::Null)?;
+        let mut waits = Vec::new();
+        for task in self.list_task_metadata()? {
+            if task.status != orbit_types::task::TaskStatus::Backlog {
+                continue;
+            }
+            let wait = self.task_host_os_wait(&task, &pools, &limits);
+            if let Some(wait) = wait {
+                waits.push(format!("{} {wait}", task.id));
+            }
+        }
+        Ok(waits)
     }
 
     /// [`Self::host_os_backlog_waits`] as one drain-start warning, or `None`
@@ -210,6 +246,35 @@ impl OrbitRuntime {
                 waits.join("; ")
             )
         })
+    }
+
+    /// Each backlog task tagged `ui` that waits only for this host's browser
+    /// kit: this host satisfies its OS requirement, and its kit is not
+    /// verified. Empty once the kit is verified. `orbit doctor` warns with
+    /// these, so a host without a kit never leaves its UI work waiting
+    /// unexplained.
+    pub fn browser_kit_backlog_waits(&self) -> Result<Vec<String>, OrbitError> {
+        if self.browser_kit_verified() {
+            return Ok(Vec::new());
+        }
+        let candidates = self
+            .list_task_metadata()?
+            .into_iter()
+            .filter(|task| {
+                task.status == orbit_types::task::TaskStatus::Backlog
+                    && orbit_types::task::requires_browser_kit(&task.tags)
+            })
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+        let limits = self.executor_host_os_limits()?;
+        let pools = self.auto_crew_pools_for_input(&serde_json::Value::Null)?;
+        Ok(candidates
+            .into_iter()
+            .filter(|task| self.task_host_os_wait(task, &pools, &limits).is_none())
+            .map(|task| task.id)
+            .collect())
     }
 
     /// Returns the coordination registry's global status projection for
@@ -333,6 +398,24 @@ impl OrbitRuntime {
         self.stores().tasks().task_terminal_transitions(since)
     }
 
+    /// `bug` tasks the generated index dates (by `created_at`) at or after
+    /// `since` (all of them for `None`), oldest first; see
+    /// [`orbit_store::TaskDefectFiling`].
+    pub fn task_defect_filings(
+        &self,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Vec<orbit_store::TaskDefectFiling>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self.read_owner_request(
+                serde_json::json!({"_worker_read": "defect_filings", "since": since}),
+            );
+        }
+        if !self.coordination_task_reads_visible() {
+            return Ok(Vec::new());
+        }
+        self.stores().tasks().task_defect_filings(since)
+    }
+
     pub fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
         if self.worker_invocation().is_some() {
             return self
@@ -409,23 +492,29 @@ impl OrbitRuntime {
     }
 
     /// Stream tasks matching `query` to `visit` in listing order until it
-    /// returns `false`, as [`Self::search_tasks_filtered`] followed by `admit`
-    /// would yield them.
+    /// returns `false`, as [`Self::search_tasks_filtered`] followed by the
+    /// `statuses` filter and `admit` would yield them.
     ///
-    /// `admit` judges a task from its envelope alone, so the store skips the
-    /// body read for every task it rejects, and stopping early skips the rest.
-    /// A worker invocation reads through its owner, which answers whole
-    /// searches only, so it filters that answer instead.
+    /// The store selects `statuses` from its index, so a task in another
+    /// status costs no read. `admit` judges a task from its envelope alone,
+    /// so the store skips the body read for every task it rejects, and
+    /// stopping early skips the rest. A worker invocation reads through its
+    /// owner, which answers whole searches only, so it filters that answer
+    /// instead.
     pub(crate) fn search_tasks_visit(
         &self,
         query: &str,
         tags: &[String],
+        statuses: Option<&[TaskStatus]>,
         admit: &dyn Fn(&Task) -> bool,
         visit: &mut dyn FnMut(Task) -> bool,
     ) -> Result<(), OrbitError> {
         if self.worker_invocation().is_some() {
             for task in self.search_tasks_filtered(query, tags)? {
-                if admit(&task) && !visit(task) {
+                if statuses.is_none_or(|statuses| statuses.contains(&task.status))
+                    && admit(&task)
+                    && !visit(task)
+                {
                     break;
                 }
             }
@@ -436,7 +525,33 @@ impl OrbitRuntime {
         }
         self.stores()
             .tasks()
-            .search_tasks_visit(query, tags, admit, visit)
+            .search_tasks_visit(query, tags, statuses, admit, visit)
+    }
+
+    /// Run `op` as one read section of this workspace's task store: the task
+    /// reads it makes on this thread share one acquisition of the commit
+    /// boundary instead of each taking it
+    /// ([`orbit_store::TaskStoreBackend::in_read_section`]). For a read-only
+    /// surface whose reads are many and short; `op` must not admit work or
+    /// wait on another thread's task reads. A worker reads through its owner
+    /// and a replica checkout reads no local tasks, so both run `op` directly.
+    pub(crate) fn in_task_read_section<T>(
+        &self,
+        op: impl FnOnce() -> Result<T, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        if self.worker_invocation().is_some() || !self.coordination_task_reads_visible() {
+            return op();
+        }
+        let mut op = Some(op);
+        let mut output = None;
+        self.stores().tasks().in_read_section(&mut || {
+            if let Some(op) = op.take() {
+                output = Some(op()?);
+            }
+            Ok(())
+        })?;
+        output
+            .ok_or_else(|| OrbitError::Store("task read section did not run its operation".into()))
     }
 
     pub fn search_tasks_filtered(

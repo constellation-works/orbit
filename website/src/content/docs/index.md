@@ -1,6 +1,6 @@
 ---
 title: What Orbit Is
-description: "Orbit is a local-first runtime for coding agents. Your agent files a task over MCP, Orbit ships it in an isolated worktree and lands it, with review after landing."
+description: "Orbit is a local-first runtime for coding agents. Your agent files a task over MCP, Orbit ships it in an isolated worktree and lands it, with optional review after landing."
 template: splash
 prev: false
 next: false
@@ -12,7 +12,7 @@ next: false
   <div class="orbit-hero-copy">
     <a class="orbit-hero-release" href="/changelog/"><span class="orbit-hero-release-tag">Early access</span><span>What shipped in the latest release</span><span aria-hidden="true">→</span></a>
     <h1 id="_top" class="orbit-hero-headline">Agents write. Orbit delivers.</h1>
-    <p class="orbit-hero-lede">Orbit is a local-first runtime for coding agents. Ask the agent you already use for a change: it files a scoped task, Orbit runs it in an isolated worktree and lands it, and review runs after landing so the queue keeps moving. Every step is on the record.</p>
+    <p class="orbit-hero-lede">Orbit is a local-first runtime for coding agents. Ask the agent you already use for a change: it files a scoped task, Orbit runs it in an isolated worktree and lands it. Enable review after landing to check the results while the queue keeps moving. Every step is on the record.</p>
     <div class="orbit-hero-actions">
       <a class="orbit-button primary" href="/getting-started/">Get started →</a>
       <a class="orbit-button" href="/how-to/mcp-integration/">Connect your agent</a>
@@ -44,8 +44,8 @@ next: false
 
   <div class="orbit-hero-side">
     <figure class="orbit-demo">
-      <video class="orbit-demo-video" src="/media/orbit-dashboard-tour-v2.mp4" poster="/media/orbit-dashboard-tour-v2-poster.jpg" width="1320" height="1100" autoplay controls muted loop playsinline preload="auto" aria-label="A 42-second tour of the real Orbit dashboard while Orbit's agents work on Orbit itself. Sweeps and code reviews propose tasks, each with a crew, that wait for your approval. One auto-drain runs 12 tasks across a Linux box and a Mac, with 83 files locked so overlapping work waits its turn; 10 of 15 slots are in use, and new admissions pause while the host runs hot. A task's durable record shows the outcome it must reach, its evidence, its complexity and the 12 files it may touch. The run list shows 1,003 runs in 24 hours, and a red-CI fix steps from an isolated worktree through implement, commit, validate, review gate and push to an open pull request: 21 steps in 20 minutes 35 seconds. Routines on a host clock turn red CI and Dependabot alerts into tasks. The audit log counts 19,355 events in 24 hours, 115 of 15,300 tool calls failed, and groups failures into incidents. A scoreboard compares Codex, Claude, Grok and Gemini, and agents report what slowed them down: 245 frictions resolved this month, 12 open."></video>
-      <figcaption class="orbit-demo-caption">Captured from the real dashboard on a live workspace, 2026-10-10. Counts are from that day.</figcaption>
+      <video class="orbit-demo-video" src="/media/orbit-dashboard-tour-v3.mp4" poster="/media/orbit-dashboard-tour-v3-poster.jpg" width="1320" height="1100" autoplay controls muted loop playsinline preload="auto" aria-label="A 40-second tour of the real Orbit dashboard while Orbit's agents work on Orbit itself. Agents propose tasks that wait for your approval, and 16 tasks run at once across two hosts, with 100 files locked so overlapping work waits its turn. The auto-drain has 12 running and 19 admitted, fills all 12 slots, and pauses new starts while the host runs above 0.95 times its cores; running tasks carry on. Auto-concurrency forecasts CPU and memory for each admission and enforces the fit. A Codex pull-request pipeline run steps from an isolated worktree through implement, commit, validate, review gate and push to an open pull request: 21 steps in 24 minutes 15 seconds. Routines on a host clock turn red CI and Dependabot alerts into tasks, and 22 auto-task definitions, 14 enabled, file sweeps and reviews on a schedule or after each delivery. Analytics shows 3,277 tasks done in 30 days, 167% more than the 30 days before, and each model's runs and implementation times. The codebase view ranks the paths agents struggle with across 6,002 tasks; 10 of 63 ranked paths turn up in several rankings."></video>
+      <figcaption class="orbit-demo-caption">Captured from the real dashboard on a live workspace, 2026-10-17. Counts are from that day.</figcaption>
     </figure>
     <script>
       {
@@ -99,7 +99,7 @@ next: false
   </div>
   <div class="orbit-guarantee">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7"/><path d="M8.5 6H12a3.5 3.5 0 0 1 3.5 3.5"/></svg></div>
-    <div><h2>Nothing merges unless you ask</h2><p>By default a run stops at <code>review</code> with the pull request open. Authorize completion with <code>--complete</code>, or set <span class="orbit-wrap-code"><code>workflow.distributed_completion = "done"</code></span> on the owner for distributed handoffs. Merging still waits for your branch protection.</p></div>
+    <div><h2>Code lands fast, with optional review</h2><p>Changes land on <code>agent-main</code> without a review gate. CI is a signal, not a blocker. Enable <code>delivery-code-review</code> to review batches after landing and file findings as tasks; it is off by default. Review before landing is optional: set <code>review.timing</code> to <code>before_pr</code> or <code>before_landing</code> if you want a gate. Protected branches still enforce their required checks and approvals.</p></div>
   </div>
   <div class="orbit-guarantee">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11"/><path d="M4 12h11"/><path d="M4 19h7"/><path d="m16 18 2 2 4-4"/></svg></div>
@@ -147,7 +147,7 @@ next: false
     </a>
   </div>
 
-  <p class="orbit-walk-next">Choose a second-agent review point: before PR with <code>review.before_pr</code>, before landing with <code>review.before_landing</code>, or after landing with <code>orbit auto-task toggle delivery-code-review on</code>. See <a href="concepts/tasks/#review-layers">Review layers</a> for when each runs and what it blocks. To merge yourself, leave off <code>--complete</code>: every run then stops at <code>review</code> with the pull request open. Or <a href="getting-started/first-task/">ship your first task by hand</a>.</p>
+  <p class="orbit-walk-next">Choose a second-agent review point: before PR with <code>review.timing = "before_pr"</code>, before landing with <code>review.timing = "before_landing"</code>, or after landing with <code>orbit auto-task toggle delivery-code-review on</code>. See <a href="concepts/tasks/#review-layers">Review layers</a> for when each runs and what it blocks. To merge yourself, leave off <code>--complete</code>: every run then stops at <code>review</code> with the pull request open. Or <a href="getting-started/first-task/">ship your first task by hand</a>.</p>
 </section>
 
 <section class="orbit-section">

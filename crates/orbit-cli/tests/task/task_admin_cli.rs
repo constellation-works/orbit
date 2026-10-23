@@ -7,7 +7,6 @@ use std::fs;
 use crate::isolated_cli_fixture;
 use isolated_cli_fixture::Fixture;
 
-#[test]
 fn task_updates_and_approval_redact_prose_before_persistence() {
     let fixture = Fixture::new();
     let token = format!("ghp_{}", "a".repeat(36));
@@ -116,7 +115,6 @@ fn task_updates_and_approval_redact_prose_before_persistence() {
     );
 }
 
-#[test]
 fn reservation_cli_conflicts_and_confirmation_preserve_claims() {
     let fixture = Fixture::new();
     fs::write(fixture.repo.join("README.md"), "fixture\n").unwrap();
@@ -199,7 +197,6 @@ fn reservation_cli_conflicts_and_confirmation_preserve_claims() {
     assert_eq!(reserve()["reserved"], true);
 }
 
-#[test]
 fn portable_archive_cli_round_trip_and_corrupt_input_preserve_tasks() {
     let fixture = Fixture::new();
     let archive = fixture.repo.join("tasks.tar.zst");
@@ -255,7 +252,6 @@ fn portable_archive_cli_round_trip_and_corrupt_input_preserve_tasks() {
     assert_eq!(fixture.json(&["task", "show", id, "--json"]), local);
 }
 
-#[test]
 fn lock_contention_cli_reports_shared_backlog_surface_without_reserving() {
     let fixture = Fixture::new();
     fs::write(fixture.repo.join("README.md"), "contention fixture\n").unwrap();
@@ -299,4 +295,30 @@ fn lock_contention_cli_reports_shared_backlog_surface_without_reserving() {
         before,
         "contention is a diagnostic, not a reservation"
     );
+}
+
+#[test]
+fn task_admin_persistence_and_conflicts() {
+    for (name, check) in [
+        (
+            "task_updates_and_approval_redact_prose_before_persistence",
+            task_updates_and_approval_redact_prose_before_persistence as fn(),
+        ),
+        (
+            "reservation_cli_conflicts_and_confirmation_preserve_claims",
+            reservation_cli_conflicts_and_confirmation_preserve_claims as fn(),
+        ),
+        (
+            "portable_archive_cli_round_trip_and_corrupt_input_preserve_tasks",
+            portable_archive_cli_round_trip_and_corrupt_input_preserve_tasks as fn(),
+        ),
+        (
+            "lock_contention_cli_reports_shared_backlog_surface_without_reserving",
+            lock_contention_cli_reports_shared_backlog_surface_without_reserving as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
 }

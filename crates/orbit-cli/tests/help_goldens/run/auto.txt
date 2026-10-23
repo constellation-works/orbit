@@ -1,0 +1,103 @@
+Drain the workspace backlog for a window
+
+Usage: orbit run auto [OPTIONS]
+
+Options:
+      --for <DURATION>
+          How long to keep admitting work, e.g. `30m`, `2h` (default: one pass)
+
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --concurrency <N>
+          Maximum tasks in flight (default 5)
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --auto-concurrency <MODE>
+          Forecast admission mode (default: `machine.auto_concurrency.mode`)
+          
+          [possible values: off, shadow, enforce]
+
+      --complete
+          Land shipped tasks and mark them `done` instead of leaving them in `review`
+
+      --approve-proposed
+          Approve `proposed` tasks that pass task-pilot verification
+
+      --auto-fix
+          Repair failing checks and conflicts on the pull requests this drain opens
+
+      --review <LAYER>
+          Add a review layer before landing when workspace policy has none
+
+          Possible values:
+          - before-pr:      Hold PR creation for a reviewer, as `review.timing = before_pr` does
+          - before-landing: Review the open PR before it lands, as `review.timing = before_landing` does
+
+      --allow-crew <CREW>
+          Start only tasks on these crews (repeatable, comma-separated)
+
+      --strict-worker-containment
+          Require a systemd user scope for the coordinator and every worker
+
+      --low-complexity-crews [<CREW>...]
+          Crew pool for unassigned low-complexity tasks (`crew` or `crew:weight`)
+
+      --medium-complexity-crews [<CREW>...]
+          Crew pool for unassigned medium-complexity tasks (`crew` or `crew:weight`)
+
+      --hard-complexity-crews [<CREW>...]
+          Crew pool for unassigned hard-complexity tasks (`crew` or `crew:weight`)
+
+      --xhard-complexity-crews [<CREW>...]
+          Crew pool for unassigned xhard-complexity tasks (`crew` or `crew:weight`)
+
+      --pull <SELECTOR>
+          Claim work from this owner's backlog and hand results back as pull requests
+
+      --host <HOST>
+          Owner host for `--pull <workspace>` (name or `machine_id`)
+
+      --claim-token <CLAIM_TOKEN>
+          Workspace claim token (default: `ORBIT_WORKSPACE_CLAIM_TOKEN`)
+
+      --stop
+          Stop admitting new work; running tasks continue
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  orbit run auto
+  orbit run auto --medium-complexity-crews grok,sol
+  orbit run auto --for 4h
+  orbit run auto --for 4h --concurrency 8
+  orbit run auto --for 4h --complete
+  orbit run auto --for 4h --auto-fix
+  orbit run auto --for 4h --approve-proposed
+  orbit run auto --for 2h --review before-landing
+  orbit run auto --stop
+  orbit run auto --pull hm_owner/ws_orbit --for 8h --concurrency 3
+  orbit run auto --pull hm_owner/ws_orbit --for 8h --allow-crew sol,luna
+
+Prints the run ID and returns; follow it with `orbit run show <RUN_ID>`.
+Run-wide flags cover every task the window admits, even ones filed later.
+Details: the orbit-orchestrate skill, references/orchestration.md.

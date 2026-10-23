@@ -35,7 +35,7 @@ fn worker_containment_row_for(
         ),
         Ok(settings) if !settings.enabled => (
             WorkspaceDoctorStatus::Info,
-            "machine.worker_containment is false: workers share the launcher's cgroup, with no \
+            "machine.worker_containment is off: workers share the launcher's cgroup, with no \
              memory, task or CPU limit"
                 .to_string(),
             None,

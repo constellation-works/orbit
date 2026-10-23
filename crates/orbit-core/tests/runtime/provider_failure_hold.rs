@@ -103,13 +103,33 @@ pub(super) struct Fixture {
 }
 
 pub(super) fn fixture(config: &str) -> Fixture {
-    let root = TempDir::new().unwrap();
+    fixture_on(config, None)
+}
+
+/// [`fixture`] on a host registered as `machine`, when one is given.
+fn fixture_on(config: &str, machine: Option<&str>) -> Fixture {
+    fixture_in(None, config, machine)
+}
+
+/// [`fixture`] with `global` as the host's global `config.toml`, where a
+/// crew's `env` is set [ORB-17288].
+pub(super) fn fixture_with_global(global: &str, config: &str) -> Fixture {
+    fixture_in(Some(global), config, None)
+}
+
+fn fixture_in(global_config: Option<&str>, config: &str, machine: Option<&str>) -> Fixture {
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+    if let Some(global_config) = global_config {
+        std::fs::write(global.join("config.toml"), global_config).unwrap();
+    }
     std::fs::write(repo.join(".orbit/config.toml"), config).unwrap();
-    let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
+        .unwrap()
+        .with_automation_machine_identity(machine.map(ToOwned::to_owned));
     let jobs = orbit_store::compose::workspace_job_run_store(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
@@ -126,6 +146,26 @@ impl Fixture {
     /// An admissible backlog task that runs as `crew`.
     pub(super) fn task(&self, crew: &str) -> String {
         self.task_with_crew(Some(crew))
+    }
+
+    /// An admissible backlog task carrying `tags`, pinned to `crew` when one is given.
+    pub(super) fn tagged_task(&self, tags: &[&str], crew: Option<&str>) -> orbit_core::Task {
+        std::fs::write(self.repo.join("feature.txt"), "feature\n").unwrap();
+        self.runtime
+            .add_task(TaskAddParams {
+                title: "Provider failure fixture".to_string(),
+                description: "A task whose run fails on its provider.".to_string(),
+                acceptance_criteria: vec!["Delivered.".to_string()],
+                plan: "1. Deliver it.".to_string(),
+                context_files: vec!["file:feature.txt".to_string()],
+                complexity: TaskComplexity::Medium,
+                task_type: Some(TaskType::Bug),
+                status: Some(TaskStatus::Backlog),
+                tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+                crew: crew.map(ToOwned::to_owned),
+                ..Default::default()
+            })
+            .unwrap()
     }
 
     /// An admissible backlog task, pinned to `crew` when one is given.
@@ -195,6 +235,7 @@ impl Fixture {
             .complete_job_run_step(
                 run,
                 &JobRunStepParams {
+                    lock_wait_ms: None,
                     step_index: 1,
                     target_type: JobTargetType::Activity,
                     target_id: "implement_one".to_string(),
@@ -275,13 +316,7 @@ fn providerless_failure(class: ProviderFailureClass, detail: &str) -> String {
 /// run's crew excluded until a backoff passes; another pool member takes it
 /// meanwhile, and a second failure narrows the draw further. Any other
 /// failure still blocks.
-#[test]
 fn capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded() {
-    if !isolated(
-        "provider_failure_hold::capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded",
-    ) {
-        return;
-    }
     for (class, detail) in [
         (
             ProviderFailureClass::Capacity,
@@ -361,13 +396,7 @@ fn capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded() {
 
 /// When the hold excludes every crew the task could run as, the drain defers
 /// it with the reason and time; once not-before passes it is admitted again.
-#[test]
 fn a_hold_that_excludes_every_crew_defers_the_task_until_not_before() {
-    if !isolated(
-        "provider_failure_hold::a_hold_that_excludes_every_crew_defers_the_task_until_not_before",
-    ) {
-        return;
-    }
     let fx = fixture(CODEX_ONLY);
     let task = fx.task("sol");
     let run = fx.admit(&task, "sol");
@@ -423,13 +452,7 @@ fn a_hold_that_excludes_every_crew_defers_the_task_until_not_before() {
 /// A capacity failure that names no provider, on a run that resolved no crew,
 /// excludes nothing but still holds the task: admission defers it until
 /// not-before, then draws it again.
-#[test]
 fn a_providerless_failure_with_no_crew_to_exclude_defers_until_not_before() {
-    if !isolated(
-        "provider_failure_hold::a_providerless_failure_with_no_crew_to_exclude_defers_until_not_before",
-    ) {
-        return;
-    }
     let fx = fixture(NO_CREWS);
     let task = fx.task_with_crew(None);
     let run = fx.admit_with_input(&task, json!({ "task_ids": [task] }));
@@ -485,6 +508,73 @@ fn a_providerless_failure_with_no_crew_to_exclude_defers_until_not_before() {
             .unwrap();
     }
     assert!(fx.admitted(&task, &[]), "the hold has lapsed");
+}
+
+/// [ORB-16379] The 2026-10-17 incident: this host's login expired, and each
+/// queued task of the crew failed on it in turn before it was held. One
+/// unavailable failure now records the crew's outage on this host, so the
+/// drain's next admission draws every task, not only the held one, onto
+/// another pool crew, even once the held task has left the backlog. When the
+/// pool has no other crew left, the task waits out the backoff.
+fn an_unavailable_login_keeps_this_host_off_the_crew_for_every_task() {
+    let fx = fixture_on(CODEX_ONLY, Some("hm_this_host"));
+    let held = fx.task("sol");
+    let queued = fx.task("sol");
+    let run = fx.admit(&held, "sol");
+    fx.fail(
+        &run,
+        &step_failure(
+            ProviderFailureClass::Unavailable,
+            "codex provider authentication failure (HTTP 401): OAuth session expired",
+        ),
+    );
+    let hold = fx.last_hold(&held);
+    assert_eq!(hold.excluded_crews, ["sol"], "{hold:?}");
+    assert_eq!(
+        hold.machine.as_deref(),
+        Some("hm_this_host"),
+        "the hold names the host whose login failed: {hold:?}"
+    );
+
+    // The queued task, which never ran, is drawn onto the pool's other crew.
+    assert_eq!(fx.exclusion(&queued, &["sol"])["crew"], "luna");
+    assert!(fx.admitted(&queued, &["luna"]));
+
+    // The held task leaves the backlog; a later task still avoids the crew.
+    fx.runtime
+        .apply_task_automation_update(
+            &held,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let later = fx.task("sol");
+    assert_eq!(
+        fx.exclusion(&later, &["sol"])["crew"],
+        "luna",
+        "the outage outlives the held task's status"
+    );
+
+    // The pool's other crew fails the same way: nothing is left to draw.
+    let second = fx.admit(&queued, "luna");
+    fx.fail(
+        &second,
+        &step_failure(
+            ProviderFailureClass::Unavailable,
+            "codex provider authentication failure (HTTP 401): OAuth session expired",
+        ),
+    );
+    assert!(!fx.admitted(&later, &[]), "the task waits out the backoff");
+    let deferred = fx.exclusion(&later, &[]);
+    assert_eq!(deferred["reason"], "provider_backoff", "{deferred}");
+    assert!(
+        deferred["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("provider_unavailable")),
+        "{deferred}"
+    );
 }
 
 /// The incident end to end: a fake Codex emits its content-filter frames, the
@@ -612,7 +702,7 @@ impl<'a> Pipeline<'a> {
 }
 
 #[cfg(unix)]
-impl RuntimeHost for Pipeline<'_> {
+impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
     fn run_deterministic(
         &self,
         action: &str,
@@ -686,6 +776,9 @@ pub(super) fn implementation_job(provider: Provider) -> JobV2 {
     let spec = AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "implement the task".to_string(),
+        steering_instruction: None,
+        regression_risk_instruction: None,
+        explore_instruction: None,
         tools: vec![],
         on_denial: OnDenial::Terminate,
         model: None,
@@ -699,6 +792,8 @@ pub(super) fn implementation_job(provider: Provider) -> JobV2 {
         proc_allowed_programs: None,
         proc_disallowed_programs: None,
         trusted_host_execution: false,
+        crew_env: Vec::new(),
+        crew_account: None,
     };
     let asset = json!({
         "schemaVersion": 2,
@@ -722,3 +817,12 @@ pub(super) fn implementation_job(provider: Provider) -> JobV2 {
     job.resolved_final_recovery_activity = Some(deterministic_activity("decide"));
     job
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded_scenarios,
+    capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded,
+    a_hold_that_excludes_every_crew_defers_the_task_until_not_before,
+    a_providerless_failure_with_no_crew_to_exclude_defers_until_not_before,
+    an_unavailable_login_keeps_this_host_off_the_crew_for_every_task
+);

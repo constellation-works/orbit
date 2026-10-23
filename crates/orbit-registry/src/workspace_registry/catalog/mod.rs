@@ -6,8 +6,8 @@ mod mutations;
 mod validation;
 
 pub use lookup::{
-    find_checkout, find_checkout_by_id, find_checkout_by_path, find_workspace,
-    find_workspace_by_id, find_workspace_by_path, local_workspaces, resolve_logical_workspace,
+    find_checkout_by_id, find_checkout_by_path, find_workspace, find_workspace_by_id,
+    find_workspace_by_path, local_workspaces, resolve_logical_workspace,
 };
 pub use mutations::{
     WorkspaceShipModeRebind, WorkspaceSourceRemoteRebind, assign_checkout_role,

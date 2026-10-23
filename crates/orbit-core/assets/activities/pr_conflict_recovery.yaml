@@ -6,8 +6,9 @@ spec:
   type: agent_loop
   description: >
     Leaf recovery for a typed task-PR rebase conflict, including one discovered
-    after PR publication during authorized completion. It uses a crew drawn
-    from the medium complexity pool to resolve the live conflict files, with any companion edit
+    after PR publication during authorized completion or an `--auto-fix`
+    watch. It uses a crew drawn from the medium complexity pool (the low pool
+    under `--auto-fix`) to resolve the live conflict files, with any companion edit
     the resolution needs. The host executor then validates, stages, continues
     the stopped rebase, and carries the candidate onto the current base tip
     before one retry.
@@ -41,14 +42,26 @@ spec:
         type: string
       failed_step_input:
         type: object
+      # Only managed sync_base recovery carries the existing final-validation
+      # handoff. The envelope lists usable captured commands on the task.
+      final_validation:
+        type: boolean
       step_recovery_attempts:
         type: array
         items:
           type: object
       log_tail:
         type: string
+      # Injected by the recovery dispatcher only: the failure-recovery purpose
+      # pool, or the auto-fix one for an `--auto-fix` run's completion step.
+      # Each falls back to its complexity pool (medium, low) while unset. The
+      # complexity keys remain for inputs recorded before purposes existed.
       crew_config_key:
-        const: workflow.medium_complexity_crews
+        enum:
+          - workflow.purpose_crews.failure_recovery
+          - workflow.purpose_crews.auto_fix
+          - workflow.medium_complexity_crews
+          - workflow.low_complexity_crews
       failed_step_id:
         type: string
       activity_name:
@@ -74,6 +87,28 @@ spec:
         minItems: 1
         items:
           type: string
+      conflicting_files:
+        type: array
+        items:
+          type: object
+          required: [path, deterministically_resolvable]
+          additionalProperties: false
+          properties:
+            path:
+              type: string
+            deterministically_resolvable:
+              type: boolean
+      regenerated_paths:
+        type: array
+        items:
+          type: object
+          required: [path, command]
+          additionalProperties: false
+          properties:
+            path:
+              type: string
+            command:
+              type: string
       diagnostic:
         type: string
   # Advisory only. Neither this result nor any agent-returned flag authorizes
@@ -111,7 +146,8 @@ spec:
     The executor has already proved that its existing `git_rebase` boundary
     stopped on actual unmerged index entries. The failed step is either
     `git_rebase` itself or `pr_complete`, which invokes that same boundary for a
-    published PR only under retained `completion: done` authorization. It
+    published PR only under retained `completion: done` or `auto_fix: true`
+    authorization. It
     retries that same failed deterministic step after you return success. A
     candidate with several commits can stop again on a later commit of the
     same rebase; the retry then reports that stop and you are invoked again
@@ -152,8 +188,8 @@ spec:
        - the checked-out branch is not `failed_step_input.head`, or the
          stopped rebase's pre-rewrite HEAD (`git rev-parse ORIG_HEAD`) is not
          `failed_step_input.head_sha` / `published_head_sha`;
-       - for `pr_complete`, the retained `completion: done` authorization or
-         `pr_number` is missing.
+       - for `pr_complete`, both the retained `completion: done` and
+         `auto_fix: true` authorizations, or `pr_number`, are missing.
        `target_base_sha` no longer being the tip of `origin/<base>` is NOT a
        stop condition. The stopped rebase is pinned to `target_base_sha`; the
        host continues it there and then carries the candidate onto the current
@@ -188,6 +224,12 @@ spec:
        earlier final recovery already repaired needs no further edit: when it
        is correct, leave it as it is, and the host adopts it together with
        that recovery's unstaged edits to tracked files.
+       Do not hand-merge a path listed in `regenerated_paths`: it is a
+       generated file (`workflow.generated_paths`). Leave its conflict as it
+       is. After you return, the host takes one side of it, runs its
+       `command` once your other resolutions are in place, and stages the
+       output. A command that fails or leaves conflict markers fails the
+       repair, so resolve the sources it is generated from.
     3. Do not stage, commit, continue, abort, or restart the rebase, and do not
        write any Git metadata. The managed sandbox intentionally keeps the
        linked-worktree Git directory read-only. After your successful terminal
@@ -200,9 +242,17 @@ spec:
        the continued candidate onto the current tip. Orbit widens
        the task's selectors to cover the companion paths. Write scratch only
        under `.orbit/tmp/`; it is never staged.
-    4. Confirm every supplied conflict file is fully repaired (no conflict
-       markers). Run focused tests for the
-       crates or modules that own the resolved paths. Then run the
+    4. Confirm every supplied conflict file outside `regenerated_paths` is
+       fully repaired (no conflict markers). Run focused tests for the
+       crates or modules that own the resolved paths. When the envelope's
+       `task.final_validation_commands` is present, leave only those full
+       commands to Orbit's host-owned final candidate validation after it
+       continues the rebase and follows the current base. If the base absorbs
+       the candidate, the host runs them before no-diff settlement instead.
+       Record those commands as `not_run` (host final validation) in `gates`;
+       focused resolution checks and any required command omitted from that
+       captured list remain yours. Without that list (including an empty
+       capture, a standalone/unknown route, or later completion recovery), run the
        workspace's required validation commands (`required_validation_commands`
        in a supplied manifest or `workflow.required_validation_commands`),
        following the workspace's own AGENTS.md, as advisory checks:
@@ -214,7 +264,8 @@ spec:
        For a completion conflict, do not push or merge; the retried completion
        step verifies the host-owned rewrite, uses the existing remote lease,
        and reuses the same PR.
-    5. Return success once every supplied conflict path is resolved. Return
+    5. Return success once every supplied conflict path outside
+       `regenerated_paths` is resolved. Return
        failed only on a step 1 stop condition, when the conflict is genuinely
        ambiguous, or when the resolution is exhausted; then preserve the
        current evidence and say which. The conflict is genuinely ambiguous only

@@ -1,11 +1,11 @@
 ---
 type: runbook
-summary: Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees, and validate before/after builds with it off.
+summary: Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees, validate before/after builds with it off, and see why hosted CI caches only dependencies.
 tags: [operations, rust, cache, worktrees, sandbox, linux]
 paths: ["scripts/rustc-compiler-cache.sh", "scripts/compiler-cache.sh", "scripts/test-compiler-cache.sh", "scripts/test-compiler-cache-namespaces.sh", "scripts/bench-compiler-cache.sh", "scripts/cross-revision-check.sh", "scripts/test-cross-revision-check.sh", ".cargo/config.toml"]
 related_features: [policy-sandbox, executors]
 related_artifacts: [ORB-11259, ORB-11755, ORB-11981]
-last_validated: 2026-10-11
+last_validated: 2026-10-19
 ---
 
 # Share Rust dependency compilation across worker worktrees
@@ -36,6 +36,104 @@ a host that can create Linux mount namespaces.
   the first namespace's mounts and the second fails with a missing rlib.
   The wrapper defaults prevent this (see [Daemon ownership](#daemon-ownership)).
 
+## Ordinary Linux CI
+
+Hosted CI keeps no compiler-object cache. The Rust build caches in
+`.github/workflows/ci.yml` are the `Swatinem/rust-cache` dependency archives:
+`rust-1.98.1` for **Test build**, `rust-1.98.1-checks` for **Check / Clippy /
+Test**, and the MSRV job's entry for its own toolchain. rust-cache keys each on
+the toolchain, `Cargo.lock`, the manifests and the `CARGO*`/`RUST*`
+environment, and prunes `target/` to dependency artifacts before it saves.
+Workspace members are never cached: each run compiles them from the checkout,
+and Cargo's own fingerprints decide freshness. No source mtimes are rewritten.
+
+- **Who writes.** Every rust-cache step has
+  `save-if: ${{ github.event_name == 'push' }}`. Only a push to `main` or
+  `agent-main` saves, after the job's work, on failure too
+  (`cache-on-failure`), and only when it missed the exact key. A PR run
+  restores and never writes, so no PR-built entry exists for another PR or an
+  `agent-main` run to restore. A PR can restore the base branch's entries
+  ([GitHub cache scope](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)).
+  `python3 scripts/test-pr-state-workflows.py` evaluates every cache writer's
+  condition for each event and fails on an `actions/cache` step, whose
+  implicit post-job save runs on every event.
+- **Misses and failures.** A missed key restores the newest entry that shares
+  its toolchain and environment prefix, or nothing, and Cargo rebuilds every
+  dependency the restored `target/` lacks or holds stale. A restore error is
+  logged and the job continues uncached. Either way the result is an ordinary
+  cold build.
+- **Test build** sets `ORBIT_COMPILER_CACHE=0`. The repository wrapper
+  (`.cargo/config.toml`) then execs `rustc` directly, and no sccache is
+  installed.
+- **Check / Clippy / Test** installs the pinned sccache only because the
+  guardrails' live enabled-cache namespace regression
+  (`scripts/test-compiler-cache-namespaces.sh` with
+  `ORBIT_COMPILER_CACHE_REQUIRE_NS=1`) needs a real binary. While it is
+  installed, the wrapper is enabled for that job's compiles too, through a
+  fresh `$HOME/.orbit/cache/compiler` that nothing restores or saves.
+  `SCCACHE_IGNORE_SERVER_IO_ERROR=1` compiles locally if the sccache server
+  fails. If the installation fails, the job exports `ORBIT_COMPILER_CACHE=0`
+  and the regression reports itself not applicable.
+
+The workspace test build (`scripts/check-ci-macos.sh --workspace-build`)
+compiles `--lib --bins --tests --examples` with
+`RUSTC_WORKSPACE_WRAPPER=clippy-driver` and the all-targets lint flags
+(`-D warnings`, allowing `clippy::disallowed_methods`). `clippy-driver` splits
+`CLIPPY_ARGS` on `__CLIPPY_HACKERY__`, which is how `cargo clippy` joins those
+arguments, so a space-separated value is one rustc argument and does not apply
+the flags. `scripts/with-test-build-lint.sh` holds that environment. The
+nextest listing and archive, the doctests and the Linux sandbox gate run
+through it too: Cargo fingerprints `RUSTC_WORKSPACE_WRAPPER` and the
+`CLIPPY_ARGS` value `clippy-driver` tracks, so under any other environment
+each would recompile every workspace member. `make ci-lint` still runs
+production Clippy and `cargo clippy --all-targets`. Keep the four native
+delivery gates (`make ci-fast`, `make ci-lint`, `make goldens`,
+`make ci-test-affected`) and the ordinary hosted required checks.
+
+### Why CI caches only dependencies
+
+Measured on 2026-10-19 over the 100 successful `ci.yml` runs created from
+2026-10-18 17:13 to 2026-10-19 05:03 UTC (78 PR and 22 push runs):
+
+- **Where Test build time goes.** In full-mode PR runs the
+  `Build and archive workspace tests` step took median 186 s (p90 213 s, 62
+  runs), and 142 s (p90 174 s, 16 runs) in `affected:` runs. Almost all of it is the
+  `workflow-test-list-build` phase: the workspace compile (median 175 s in
+  full mode), against 7 s for `workspace-test-archive`. The partition guard
+  (median 27 s) runs after the upload, beside the shards. rust-cache hit fully
+  in every run. A local `cargo --timings` of the same build at `-j4`, with
+  dependencies fresh and every workspace source touched, compiled 68
+  workspace units for 288 CPU-seconds in 85 s of wall time. `orbit-core`
+  alone took 86 CPU-seconds: 25 s for its library and 34 s for its library
+  test, which waits for the library because of the crate's
+  `test-support` self dev-dependency. The critical path runs
+  `orbit-types` → `orbit-common` → `orbit-store` → `orbit-engine` →
+  `orbit-core` → the `orbit-core` library test. The build is CPU-bound at
+  four jobs. Without the folded Clippy lint it took 81 s instead of 85 s.
+- **Why sccache did nothing.** The removed `orbit-ci-compiler-v1` archive held
+  4 KiB, and every sampled run reported 0 compile requests. A full Test build
+  made 72 non-cacheable calls (68 `multiple input files`), an `affected:` one
+  40–72, and the Check job 40. rust-cache already restores every dependency,
+  so Cargo runs the compiler only for workspace members. For those it runs
+  `<RUSTC_WRAPPER> <RUSTC_WORKSPACE_WRAPPER> rustc <args>`, so sccache
+  receives `clippy-driver rustc … src/lib.rs` and reads `rustc` as a second
+  input file. The rest are Cargo's target-information probes:
+  `rustc - --print …` (`-`) and `rustc -vV` (`missing input`,
+  `missing output_dir`). The heaviest units are test executables, which
+  sccache never caches (see [When sccache is ineffective or slower](#when-sccache-is-ineffective-or-slower)).
+- **Why there is no workspace-member cache.** Caching the workspace's own
+  artifacts per `agent-main` tip would take about 0.5 GiB (zstd) of cache
+  quota per push. A PR would restore it and reset the mtimes of files
+  unchanged since that tip, so that Cargo keeps those units fresh. Simulated
+  locally, a PR that changes only `orbit-cli` rebuilt in 22 s, `orbit-web` in
+  31 s, `orbit-engine` or `orbit-core` in 77 s and `orbit-store` in about
+  100 s, against 85–118 s from scratch. For the 39 sampled PRs, the newest
+  layer an `agent-main` push had saved before each PR built differed from
+  the PR head in `orbit-types`, `orbit-common` or `orbit-store` for the median
+  PR, which then rebuilds everything (mean −14%). Even a layer at each PR's
+  own merge base saves a median 23%, short of 30%, because most PRs change
+  `orbit-core` or a crate below it.
+
 ## Ownership and location
 
 | Object | Owner | Path |
@@ -46,6 +144,7 @@ a host that can create Linux mount namespaces.
 | rustc wrapper | Repository | `scripts/rustc-compiler-cache.sh` |
 | Cargo hook | Repository | `.cargo/config.toml` (`build.rustc-wrapper`); native Windows [overrides it off](#windows) |
 | Per-worktree build output | Each managed worktree | `$CARGO_TARGET_DIR` or `<worktree>/target/` |
+| Configured host validation output | Primary repository, keyed by canonical source checkout | `.orbit/state/host-validation-targets/<source-path-sha256>/` |
 
 Linux implementer sandboxes grant `$HOME/.orbit/cache` as a narrow extra write
 root. Managed worktrees whose activity cwd lies within a writable policy root
@@ -80,8 +179,8 @@ uncached.
 
 `.cargo/config.toml` sets `build.rustc-wrapper` to `scripts/rustc-compiler-cache.sh`,
 a bash script that cargo cannot execute on `x86_64-pc-windows-msvc`. Cargo
-config has no per-OS wrapper setting, so native Windows builds, including the
-compile-only Windows CI job, disable the wrapper with an empty override:
+config has no per-OS wrapper setting, so a native Windows build (not supported
+or checked in CI) disables the wrapper with an empty override:
 
 ```powershell
 $env:CARGO_BUILD_RUSTC_WRAPPER = ""
@@ -151,6 +250,17 @@ inside an existing Bubblewrap sandbox):
 scripts/test-compiler-cache.sh
 ORBIT_COMPILER_CACHE_REQUIRE_NS=1 scripts/test-compiler-cache-namespaces.sh
 ```
+
+On a control failure, the namespace script prints the stage, participant names
+(C/D, or E for warm reuse), exact exit statuses, and each participant's stdout
+and stderr before removing its temporary files. Each stream is limited to
+4096 payload bytes: oversized logs retain the first and last 2048 bytes, with
+an explicit omitted-byte count. The labels include original byte counts;
+successful peers retain their output and cache statistics too. Diagnostics
+add no compilation or waits to a successful live run. The companion
+`scripts/test-compiler-cache.sh` drives deterministic failures through the namespace
+entrypoint with transport fixtures; those checks cover diagnostic bounds and
+cleanup, while the live namespace run remains required for cache isolation.
 
 When the cache is disabled, that namespace script prints one line,
 `test-compiler-cache-namespaces: not applicable: host compiler cache is disabled (...)`,
@@ -271,6 +381,98 @@ shared `SCCACHE_SERVER_PORT`, which is how
 `scripts/test-compiler-cache-namespaces.sh` regresses the missing-artifact
 failure. Do not use that combination on workers.
 
+## Host validation builds apart
+
+Output compiled through the stable mounts is valid only inside the sandbox.
+When `<worktree>/target` is aliased at `/tmp/orbit-build`, the wrapper also
+rewrites rustc's environment, so an integration test's
+`env!("CARGO_BIN_EXE_<bin>")` (and `CARGO_MANIFEST_DIR`) embeds a
+`/tmp/orbit-*` path. Cargo's freshness check never sees the rewrite: to it
+the same `target/` built the same sources. A later host build in that
+`target/` reused those test binaries, and every test that spawns the crate's
+binary failed with `No such file or directory` for
+`/tmp/orbit-build/debug/<bin>`. Step recovery, then the host's
+post-recovery validation, hit this; any sandboxed build followed by host
+validation with no source change in between can. [ORB-15870]
+
+Recovery can also build into `<worktree>/target/orbit-host-validation`.
+That target is still under its writable checkout, and the wrapper normalizes
+`CARGO_MANIFEST_DIR` even when the target itself is not aliased. Host Cargo
+then treats the output as fresh but the compiled manifest path points into the
+expired sandbox source mount. A directory name alone did not isolate it.
+
+With this repository's explicit `workflow.validation_env.build_output_env = ["CARGO_TARGET_DIR"]`
+binding ([configuration example](../../config/orbit-workspace.toml)), required validation
+and host-evidence execution on every platform replace inherited `CARGO_TARGET_DIR` with
+`<primary-repository>/.orbit/state/host-validation-targets/<sha256(canonical-source-checkout)>`.
+The primary repository comes from the Git common directory. The directory is
+host-owned state, outside the managed worktree and the sandbox's writable
+compiler/download cache grants. The runner refuses symlink components rather
+than following a redirect into recovery's writable paths. It leaves all old
+targets and logs intact; worktree GC reclaims a terminal run's target once its
+checkout is gone, and a scratch checkout's target under its base-cache lock or
+lease ([host validation output](worktree-reclaim.md#host-validation-output)). The hash binds build reuse to the exact canonical
+source path: a host-evidence detached checkout and a candidate checkout cannot
+reuse each other's embedded fixture paths. Repeated required validation in the
+same checkout reuses its host target. A detached evidence checkout is recreated
+for each run, so Cargo may rebuild its timestamp-changed workspace sources.
+
+The effective target appears in `validation_env.build_output.directory`, with the
+configured variables, canonical source and host execution context beside it. Commands,
+build-budget admission and candidate/base/tree evidence bindings are unchanged.
+Because each target is built once per candidate checkout,
+its incremental cache would be write-only. When a binding is configured, Orbit
+sets `CARGO_INCREMENTAL=0` on the validation child — required validation, host
+evidence, baseline reruns and recovery alike — replacing any inherited value.
+That is applied where the command is spawned
+([`workflow.validation_env.cargo_incremental`](../CONFIG.md#incremental-compilation)),
+not by this repository's Makefile. The default `false` keeps incremental off so
+sccache can cache the rustc invocations this checkout's wrapper forwards.
+`cargo_incremental = true` leaves `CARGO_INCREMENTAL` untouched; pinned sccache
+`0.17.0` then rejects those invocations, so turn the compiler cache off
+(`ORBIT_COMPILER_CACHE=0`) before opting in. An incremental directory already
+in a target is not deleted. Baseline results are keyed by schema version,
+currently 10. Schema 9 added the workspace output bindings to the versioned
+cache key so earlier results cannot certify the new execution contract; old
+records are retained at their earlier keys. These targets are rebuildable host state;
+configuration does not delete old output or shared caches. Native Linux and macOS
+collectors preserve run attribution, base-cache locks and scratch leases. macOS
+uses readable no-follow directory descriptors and descriptor-bound permission
+restoration; unreadable or unprovable targets are refused. Other platforms retain
+output for operator maintenance. The first validation
+in each source namespace pays for a fresh build; dependencies still use the
+compiler cache. Sandboxed builds continue using their own warm targets.
+
+The existing engine validation boundary matrix uses real Cargo/rustc and
+short-lived source/build symlinks to reproduce the compiled-path mismatch
+without nested namespaces. It checks both required-validation routes, detached
+host evidence, preservation of the poisoned target and ordinary host reuse.
+For a native mount-namespace replay, use the existing compiler-cache namespace
+check on a Linux host that can create Bubblewrap namespaces; a sandbox refusal
+is not passing evidence.
+
+### Replay a retained candidate after deploying the repair
+
+Deploy the repaired runtime through the supported upgrade procedure and
+confirm the owning worker uses that generation. Keep the original failed
+logs, target directories, candidate commit and exact original base. On the
+owning Linux host outside the agent sandbox, replay the regression selector:
+
+```bash
+cargo test -p orbit-engine --test engine pr_landing::stable_build_mount -- --nocapture
+```
+
+Then validate the retained candidate's unchanged required-command list on its
+exact base/candidate binding using the repaired runner. Check the new logs'
+head, base, tree, effective host target, executed test counts and absence of
+deferrals. An agent-sandbox pass does not replace host evidence. Only once the
+host evidence passes, requeue the task and submit a new delivery against the
+integration branch. A terminal previous run cannot resume its checkpoints.
+The preserved-candidate route reapplies the patch onto the current base and
+validates it again; a moved base needs fresh evidence. Confirm its
+`resume_candidate` decision names the retained candidate rather than a fresh
+implementation. Deployment and submission remain operator actions.
+
 ## Custom `CARGO_TARGET_DIR`
 
 Jobs may set a private target directory that is **not** `<worktree>/target`, so
@@ -299,7 +501,7 @@ remap the provider agent cwd.
 
 | Workload | What sccache 0.17.0 does | What to do |
 | --- | --- | --- |
-| `cargo clippy` analysis (`clippy-driver`) | Tiny-fixture smoke: 0 cacheable compile requests; reasons include `missing output_dir` and `multiple input files`. That is the clippy-driver invocation, not every rustc the phase may spawn. | Do not advertise `cargo check` hits as caching clippy-driver itself. rustc dependency compilations on a representative graph may still reuse the disk cache during a Clippy run. Keep bounded `CARGO_BUILD_JOBS`. Opt out with `ORBIT_COMPILER_CACHE=0` if wrapper overhead is noise. |
+| `cargo clippy` analysis (`clippy-driver`) | Tiny-fixture smoke: 0 cacheable compile requests; reasons include `missing output_dir` and `multiple input files`. That is the clippy-driver invocation, not every rustc the phase may spawn. Cargo chains this wrapper in front of `clippy-driver` the same way for the folded workspace test build, so its workspace members never hit ([Ordinary Linux CI](#why-ci-caches-only-dependencies)). | Do not advertise `cargo check` hits as caching clippy-driver itself. rustc dependency compilations on a representative graph may still reuse the disk cache during a Clippy run or the folded test build. Keep bounded `CARGO_BUILD_JOBS`. Opt out with `ORBIT_COMPILER_CACHE=0` if wrapper overhead is noise. |
 | Incremental (`CARGO_INCREMENTAL=1` / `-C incremental`) | Pinned sccache `0.17.0` **rejects** the invocation (`incremental compilation is prohibited: Unset CARGO_INCREMENTAL to continue`) instead of compiling uncached. | Keep `CARGO_INCREMENTAL=0` on workers. To run incremental rustc, set `ORBIT_COMPILER_CACHE=0`. |
 | Cache cold fill | Extra wrapper/daemon/hash work; measured slower than uncached `ORBIT_COMPILER_CACHE=0` on the same crate | Expected. Judge effectiveness on a *warm* second worktree vs uncached, not vs cold fill. |
 | Tiny crates | Daemon startup can dominate wall time | Hits without a wall-clock drop are not a win. |

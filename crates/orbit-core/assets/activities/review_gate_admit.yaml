@@ -6,9 +6,9 @@ spec:
   type: deterministic
   description: >
     Admit a fresh reviewer for the committed, base-synchronized candidate:
-    before the PR when the run captured `review.before_pr` on, or, with
+    before the PR when the run captured `review.timing = before_pr`, or, with
     `before_landing`, for the published PR head when it captured
-    `review.before_landing` on. Reserves the
+    `review.timing = before_landing`. Reserves the
     candidate's one review against its lineage ledger, pins base and head
     commits and trees, resolves the separately configured review crew inside
     the run's persisted crew allowlist, and writes the immutable reviewer manifest as a
@@ -48,7 +48,7 @@ spec:
         type: boolean
         description: >
           This step reviews the published PR head: it applies only when the
-          run captured `review.before_landing` on.
+          run captured `review.timing = before_landing`.
       host_validation_step:
         type: string
         description: >

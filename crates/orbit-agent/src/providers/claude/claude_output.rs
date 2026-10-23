@@ -84,6 +84,7 @@ pub(crate) fn claude_usage_windows(
         let used_percent = percent(fields.get("utilization")?.as_f64()? * 100.0);
         Some(ProviderLimitObservation {
             provider: "claude".to_string(),
+            account: None,
             model: window_model(window),
             window: Some(window.to_string()),
             exhausted: status == Some("rejected") && limiting == Some(window),

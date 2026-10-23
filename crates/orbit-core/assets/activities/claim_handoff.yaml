@@ -42,7 +42,9 @@ spec:
         type: string
       # The claimed-mode implement step's output. Its `execution_summary`
       # (else `summary`), `comment` and `context_files_added` compose the
-      # handoff's summary, which acceptance writes as the owner's.
+      # handoff's summary, which acceptance writes as the owner's. Its
+      # `regression_from` culprits travel as the handoff's own field, which
+      # the owner checks and records as relations when it accepts.
       implementation:
         type: [object, "null"]
       # The before-PR review the leaf ran on this candidate: verdict,
@@ -53,7 +55,7 @@ spec:
         type: [object, "null"]
       # The settled before-landing verdict on the published head,
       # in the same shape. Absent unless the claim captured
-      # `review.before_landing`; never set together with `review_evidence`.
+      # `review.timing = before_landing`; never set together with `review_evidence`.
       landing_review_evidence:
         type: [object, "null"]
   output_schema_json:

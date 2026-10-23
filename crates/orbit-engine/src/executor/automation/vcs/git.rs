@@ -97,8 +97,41 @@ impl GitTimeoutBudget {
 }
 
 thread_local! {
+    static GIT_DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
     static GIT_TIMEOUT_BUDGET: Cell<GitTimeoutBudget> =
         const { Cell::new(GitTimeoutBudget::DEFAULT) };
+}
+
+/// Shared deadline for the read/fetch phase of a fresh preparation. Rewrites
+/// retain their ordinary timeout and owned-rebase cleanup budget.
+pub(crate) struct GitDeadlineGuard(Option<Instant>);
+
+impl GitDeadlineGuard {
+    pub(crate) fn install(remaining: Duration) -> Self {
+        Self(GIT_DEADLINE.with(|slot| slot.replace(Some(Instant::now() + remaining))))
+    }
+}
+
+impl Drop for GitDeadlineGuard {
+    fn drop(&mut self) {
+        GIT_DEADLINE.with(|slot| slot.set(self.0));
+    }
+}
+
+fn command_timeout(args: &[&str]) -> Result<u64, OrbitError> {
+    let timeout = GitTimeoutBudget::current().timeout_for(args);
+    GIT_DEADLINE.with(|slot| match slot.get() {
+        Some(deadline) => deadline
+            .checked_duration_since(Instant::now())
+            .map(|remaining| timeout.min(remaining.as_millis().max(1) as u64))
+            .ok_or_else(|| {
+                OrbitError::Execution(
+                    "prepared_base_refresh_refused: fresh preparation deadline exhausted"
+                        .to_string(),
+                )
+            }),
+        None => Ok(timeout),
+    })
 }
 
 /// Restores the previous Git timeout budget when the scope exits.
@@ -211,7 +244,7 @@ pub(crate) fn git_failure_error(
 /// That flag is the supervisor's deadline verdict, not a match against
 /// captured stderr.
 pub(crate) fn git_run(current_dir: &Path, args: &[&str]) -> Result<GitOutcome, OrbitError> {
-    let timeout_ms = GitTimeoutBudget::current().timeout_for(args);
+    let timeout_ms = command_timeout(args)?;
     let result = run_process(&git_request(current_dir, args, timeout_ms), &NoSandbox)?;
     Ok(GitOutcome {
         stdout: result.stdout,
@@ -230,7 +263,7 @@ pub(crate) fn git_run_bytes(
     args: &[&str],
     stdin: Option<&[u8]>,
 ) -> Result<GitBytesOutcome, OrbitError> {
-    let timeout_ms = GitTimeoutBudget::current().timeout_for(args);
+    let timeout_ms = command_timeout(args)?;
     let mut request = git_request(current_dir, args, timeout_ms);
     if let Some(bytes) = stdin {
         request.stdin_mode = StdinMode::Bytes(bytes.to_vec());
@@ -316,28 +349,53 @@ pub(crate) fn git_request(current_dir: &Path, args: &[&str], timeout_ms: u64) ->
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::executor::automation) enum BaseSyncMode {
+/// How a run resolves its configured base branch.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum BaseSyncMode {
+    /// Read the checkout's local branch.
     Local,
+    /// Fetch and read the remote-tracking branch.
+    #[default]
     Remote,
+}
+
+impl std::str::FromStr for BaseSyncMode {
+    type Err = OrbitError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim() {
+            "" | "remote" => Ok(Self::Remote),
+            "local" => Ok(Self::Local),
+            other => Err(OrbitError::InvalidInput(format!(
+                "input.base_sync must be 'local' or 'remote', got '{other}'"
+            ))),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BaseSyncMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+        value.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+impl BaseSyncMode {
+    /// Parse the job input's base sync mode. Missing, non-string and empty
+    /// values use remote sync, matching the delivery input contract.
+    pub fn from_input(input: &Value) -> Result<Self, OrbitError> {
+        input
+            .get("base_sync")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .parse()
+    }
 }
 
 pub(in crate::executor::automation) fn base_sync_mode_from_input(
     input: &Value,
 ) -> Result<BaseSyncMode, OrbitError> {
-    match input
-        .as_object()
-        .and_then(|map| map.get("base_sync"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        None | Some("remote") => Ok(BaseSyncMode::Remote),
-        Some("local") => Ok(BaseSyncMode::Local),
-        Some(other) => Err(OrbitError::InvalidInput(format!(
-            "input.base_sync must be 'local' or 'remote', got '{other}'"
-        ))),
-    }
+    BaseSyncMode::from_input(input)
 }
 
 pub(crate) fn git_output_paths(
@@ -393,7 +451,7 @@ pub(crate) fn git_output_with_env(
     args: &[&str],
     env: &[(&str, &str)],
 ) -> Result<String, OrbitError> {
-    let timeout_ms = GitTimeoutBudget::current().timeout_for(args);
+    let timeout_ms = command_timeout(args)?;
     let mut request = git_request(current_dir, args, timeout_ms);
     if let EnvironmentMode::ClearAndSet(environment) = &mut request.environment_mode {
         environment.extend(
@@ -455,6 +513,32 @@ pub(crate) fn fetch_remote_base_within(
     hold_limit: Duration,
 ) -> Result<(), OrbitError> {
     let branch = normalize_base_branch(base)?;
+    if let Some(deadline) = GIT_DEADLINE.with(Cell::get) {
+        let common = git_output(
+            repo_root,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )?;
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or_else(|| {
+                OrbitError::Execution(
+                    "prepared_base_refresh_refused: fresh preparation deadline exhausted"
+                        .to_string(),
+                )
+            })?;
+        let options = orbit_common::fs::file_lock::FileLockOptions::default();
+        // Use the very same shared fetch lock, with its acquisition also
+        // capped by the preparation's remaining deadline.
+        return orbit_common::fs::io::with_exclusive_file_lock_options(
+            &orbit_common::fs::git::git_fetch_lock_target(Path::new(&common)),
+            "git fetch",
+            orbit_common::fs::file_lock::FileLockOptions {
+                timeout: remaining.min(options.timeout),
+                ..options
+            },
+            || fetch_remote_base_locked(repo_root, &branch, hold_limit.min(remaining)),
+        );
+    }
     with_git_fetch_lock(repo_root, || {
         fetch_remote_base_locked(repo_root, &branch, hold_limit)
     })
@@ -537,7 +621,9 @@ fn fetch_remote_base_locked(
             tracing::warn!(attempt, branch, %error, "retrying remote base fetch after transport failure");
             last_transport_error = Some(error);
             let backoff = Duration::from_millis(250 * (1 << attempt));
-            std::thread::sleep(backoff.min(hold_limit.saturating_sub(held_since.elapsed())));
+            super::remote_probe::fixed_wait(
+                backoff.min(hold_limit.saturating_sub(held_since.elapsed())),
+            );
             continue;
         }
         last_stderr = outcome.stderr.trim().to_string();
@@ -548,7 +634,7 @@ fn fetch_remote_base_locked(
                 branch,
                 "retrying origin fetch after git ref update contention"
             );
-            std::thread::sleep(git_fetch_cas_retry_delay());
+            super::remote_probe::fixed_wait(git_fetch_cas_retry_delay());
             continue;
         }
         break;

@@ -1,10 +1,11 @@
-//! `review.before_pr` (and `review.before_landing`) on a local-only route is
-//! held before dispatch [ORB-14168] [ORB-14849].
+//! `review.timing = before_pr` (and `before_landing`) on a local-only route
+//! is held before dispatch [ORB-14168] [ORB-14849].
 //!
 //! Readiness, the drain's wave and `orbit doctor`'s review switches share the
 //! ship mode automatic delivery uses. Submitting `task_local_pipeline` still
 //! fails closed with the same refusal, on a local workspace and on a PR one.
 
+use orbit_core::application::plugin::{PluginAddOptions, install_plugin};
 use orbit_core::application::review::review_switches;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{
@@ -16,12 +17,10 @@ use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::dispatch_admission::isolated;
-
 const REFUSAL_MARK: &str = "no meaning on the local-only delivery route";
 
 fn open(ship_mode: ShipMode, global: &str, workspace: &str) -> (TempDir, OrbitRuntime) {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global_root = root.path().join("home/.orbit");
     let repo = root.path().join("repo");
     let workspace_root = repo.join(".orbit");
@@ -49,12 +48,17 @@ fn open(ship_mode: ShipMode, global: &str, workspace: &str) -> (TempDir, OrbitRu
 }
 
 fn seed(runtime: &OrbitRuntime, title: &str) -> String {
+    seed_with_tags(runtime, title, &[])
+}
+
+fn seed_with_tags(runtime: &OrbitRuntime, title: &str, tags: &[&str]) -> String {
     runtime
         .add_task(TaskAddParams {
             title: title.to_string(),
             description: format!("Fixture task: {title}"),
             acceptance_criteria: vec!["The task is observable.".to_string()],
             plan: "Fixture plan.".to_string(),
+            tags: tags.iter().map(ToString::to_string).collect(),
             complexity: TaskComplexity::Medium,
             context_files: vec!["dir:.".into()],
             task_type: Some(orbit_core::TaskType::Chore),
@@ -64,6 +68,66 @@ fn seed(runtime: &OrbitRuntime, title: &str) -> String {
         .expect("seed task")
         .id
         .to_string()
+}
+
+fn install_local_delivery_plugin(runtime: &OrbitRuntime) -> OrbitRuntime {
+    let source = runtime
+        .global_root()
+        .parent()
+        .expect("fixture global root parent")
+        .join("routeproof-plugin-source");
+    let plugin = orbit_types::plugin::plugin_root_in(&source);
+    let jobs = plugin.join("definitions/jobs");
+    let activities = plugin.join("definitions/activities");
+    let backend_dir = plugin.join("bin");
+    std::fs::create_dir_all(&jobs).unwrap();
+    std::fs::create_dir_all(&activities).unwrap();
+    std::fs::create_dir_all(&backend_dir).unwrap();
+    std::fs::write(
+        plugin.join("plugin.yaml"),
+        "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: routeproof\n  version: 1.0.0\n  description: Local route regression fixture.\nspec:\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: hello\n      description: Say hello.\n      execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        type: object\n        properties:\n          subject: { type: string, description: Who to greet. }\n  definitions:\n    activities: [definitions/activities/*.yaml]\n    jobs: [definitions/jobs/*.yaml]\n",
+    )
+    .unwrap();
+    let backend = backend_dir.join("backend.sh");
+    std::fs::write(
+        &backend,
+        "#!/bin/sh\ncat >/dev/null\nprintf '{\"ok\":true,\"output\":{}}\\n'\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::fs::write(
+        activities.join("delivery.yaml"),
+        "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: routeproof_delivery_activity\nspec:\n  type: deterministic\n  description: Plugin route regression fixture.\n  input_schema_json:\n    type: object\n  action: plugin.tool_call\n  config:\n    tool: routeproof.hello\n    input: {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        jobs.join("delivery.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: routeproof_delivery\nspec:\n  state: enabled\n  task_delivery:\n    modes: [local]\n  kind: workflow\n  steps:\n    - id: deliver\n      target: activity:routeproof_delivery_activity\n",
+    )
+    .unwrap();
+    install_plugin(
+        runtime,
+        source.to_str().expect("fixture plugin source path"),
+        &PluginAddOptions {
+            enable: true,
+            ..Default::default()
+        },
+    )
+    .expect("install local delivery plugin");
+    OrbitRuntime::from_roots_with_binding(
+        &runtime.global_root(),
+        &runtime.paths().orbit_dir,
+        runtime
+            .workspace_runtime_binding()
+            .expect("bound fixture workspace")
+            .clone(),
+    )
+    .unwrap()
+    .with_host_resource_probe(super::dispatch_admission::PressureProbe::calm())
 }
 
 fn backlog(runtime: &OrbitRuntime, input: Value) -> Value {
@@ -136,9 +200,10 @@ fn running_drain(runtime: &OrbitRuntime) -> String {
 /// The detail readiness and the drain's last pass show for this layer.
 fn conflict(source: &str) -> String {
     format!(
-        "review.before_pr ({source}) holds PR creation for a reviewer and has no meaning on the \
-         local-only delivery route; ship through the PR route or turn review.before_pr off for \
-         local delivery (after-landing review is the delivery-code-review auto-task)"
+        "review.timing = before_pr ({source}) holds PR creation for a reviewer and has no \
+         meaning on the local-only delivery route; ship through the PR route or set \
+         review.timing = off for local delivery (after-landing review is the \
+         delivery-code-review auto-task)"
     )
 }
 
@@ -171,6 +236,7 @@ fn assert_held(runtime: &OrbitRuntime, task: &str, source: &str) {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .drain_last_pass
         .expect("last pass");
     let waiting = pass
@@ -234,20 +300,13 @@ fn local_pipeline_error(runtime: &OrbitRuntime, task: &str) -> OrbitError {
         .expect_err("this fixture does not complete a local delivery")
 }
 
-/// A local workspace holds backlog work while effective `review.before_pr` is
-/// on, whether that value is inherited from global config or set on the
-/// workspace. A workspace `false` overrides a global `true`. A PR workspace
+/// A local workspace holds backlog work while effective `review.timing` is
+/// `before_pr`, whether that value is inherited from global config or set on
+/// the workspace. A workspace `off` overrides a global `before_pr`. A PR workspace
 /// stays eligible. `task_local_pipeline` still refuses the combination on
 /// both routes.
-#[test]
 fn local_route_holds_before_pr_and_the_pr_route_stays_eligible() {
-    if !isolated(
-        "local_route_before_pr::local_route_holds_before_pr_and_the_pr_route_stays_eligible",
-    ) {
-        return;
-    }
-
-    let (_root, local_global) = open(ShipMode::Local, "[review]\nbefore_pr = true\n", "");
+    let (_root, local_global) = open(ShipMode::Local, "[review]\ntiming = \"before_pr\"\n", "");
     let inherited = seed(&local_global, "inherited");
     assert_eq!(
         local_global
@@ -263,17 +322,17 @@ fn local_route_holds_before_pr_and_the_pr_route_stays_eligible() {
         panic!("local-route admission must refuse before the job loads, got {refused}");
     };
     assert!(message.contains(REFUSAL_MARK), "{message}");
-    assert!(message.contains("turn review.before_pr off"), "{message}");
+    assert!(message.contains("set review.timing = off"), "{message}");
 
     let (_root, overridden) = open(
         ShipMode::Local,
-        "[review]\nbefore_pr = true\n",
-        "[review]\nbefore_pr = false\n",
+        "[review]\ntiming = \"before_pr\"\n",
+        "[review]\ntiming = \"off\"\n",
     );
     let cleared = seed(&overridden, "workspace off");
     assert!(
         !overridden.operation_policy().review_before_pr.value,
-        "workspace false overrides global true"
+        "workspace off overrides global before_pr"
     );
     assert_ready(&overridden, &cleared);
     let cleared_submit = local_pipeline_error(&overridden, &cleared);
@@ -282,7 +341,7 @@ fn local_route_holds_before_pr_and_the_pr_route_stays_eligible() {
         "turning the switch off must leave the local-route guard idle, got {cleared_submit}"
     );
 
-    let (_root, local_workspace) = open(ShipMode::Local, "", "[review]\nbefore_pr = true\n");
+    let (_root, local_workspace) = open(ShipMode::Local, "", "[review]\ntiming = \"before_pr\"\n");
     let workspace_set = seed(&local_workspace, "workspace on");
     assert_eq!(
         local_workspace
@@ -299,7 +358,7 @@ fn local_route_holds_before_pr_and_the_pr_route_stays_eligible() {
         "{workspace_refused}"
     );
 
-    let (_root, pr) = open(ShipMode::Pr, "", "[review]\nbefore_pr = true\n");
+    let (_root, pr) = open(ShipMode::Pr, "", "[review]\ntiming = \"before_pr\"\n");
     let pr_task = seed(&pr, "pr route");
     assert_ready(&pr, &pr_task);
     // The job-name guard does not follow the workspace ship mode: a local
@@ -317,15 +376,15 @@ fn local_route_holds_before_pr_and_the_pr_route_stays_eligible() {
     );
 }
 
-/// [ORB-14849] `review.before_landing` on a local-only route opens no pull
-/// request to review, so it is held before dispatch and refused at
-/// submission exactly like `review.before_pr`, under a code of its own.
-#[test]
+/// [ORB-14849] `review.timing = before_landing` on a local-only route opens
+/// no pull request to review, so it is held before dispatch and refused at
+/// submission exactly like `before_pr`, under a code of its own.
 fn local_route_holds_before_landing_under_its_own_code() {
-    if !isolated("local_route_before_pr::local_route_holds_before_landing_under_its_own_code") {
-        return;
-    }
-    let (_root, local) = open(ShipMode::Local, "", "[review]\nbefore_landing = true\n");
+    let (_root, local) = open(
+        ShipMode::Local,
+        "",
+        "[review]\ntiming = \"before_landing\"\n",
+    );
     let task = seed(&local, "before landing");
 
     let discovered = backlog(&local, json!({}));
@@ -337,8 +396,8 @@ fn local_route_holds_before_landing_under_its_own_code() {
     );
     let detail = skipped["detail"].as_str().unwrap().to_string();
     assert!(
-        detail.starts_with("review.before_landing (workspace) ")
-            && detail.contains("turn review.before_landing off"),
+        detail.starts_with("review.timing = before_landing (workspace) ")
+            && detail.contains("set review.timing = off"),
         "{detail}"
     );
 
@@ -361,8 +420,66 @@ fn local_route_holds_before_landing_under_its_own_code() {
     let OrbitError::InvalidInput(message) = &refused else {
         panic!("local-route admission must refuse before the job loads, got {refused}");
     };
-    assert!(
-        message.contains("turn review.before_landing off"),
-        "{message}"
+    assert!(message.contains("set review.timing = off"), "{message}");
+}
+
+/// [ORB-17432] Review timing only holds local delivery, including when the
+/// workspace's automatic ship mode is local and a task selects a plugin job.
+fn local_ship_review_holds_local_delivery_but_allows_plugin_route() {
+    let (_root, local_before_plugin) =
+        open(ShipMode::Local, "", "[review]\ntiming = \"before_pr\"\n");
+    let local = install_local_delivery_plugin(&local_before_plugin);
+    let plugin_task = seed_with_tags(&local, "plugin delivery", &["delivery:routeproof_delivery"]);
+    let local_task = seed(&local, "default local delivery");
+
+    let route = local
+        .run_deterministic(
+            "resolve_delivery_job",
+            &json!({}),
+            &json!({"task_ids": [plugin_task], "mode": "local"}),
+            ToolContext::default(),
+        )
+        .expect("resolve plugin delivery route");
+    assert_eq!(route["job_name"], "routeproof_delivery", "{route}");
+    let local_route = local
+        .run_deterministic(
+            "resolve_delivery_job",
+            &json!({}),
+            &json!({"task_ids": [local_task], "mode": "local"}),
+            ToolContext::default(),
+        )
+        .expect("resolve default local delivery route");
+    assert_eq!(
+        local_route["job_name"], "task_local_pipeline",
+        "{local_route}"
+    );
+
+    let discovered = backlog(&local, json!({}));
+    assert_eq!(
+        admitted(&discovered),
+        vec![plugin_task.clone()],
+        "{discovered}"
+    );
+    assert!(excluded_absent(&discovered, &plugin_task), "{discovered}");
+    assert_eq!(
+        excluded(&discovered, &local_task)["reason"],
+        "local_route_before_pr",
+        "{discovered}"
+    );
+    let plugin_readiness = readiness_entry(&local, &plugin_task);
+    assert_eq!(plugin_readiness["eligible"], true, "{plugin_readiness}");
+    let local_readiness = readiness_entry(&local, &local_task);
+    assert_eq!(local_readiness["eligible"], false, "{local_readiness}");
+    assert_eq!(
+        local_readiness["reason"], "local_route_before_pr",
+        "{local_readiness}"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    local_route_holds_before_pr_and_the_pr_route_stays_eligible_scenarios,
+    local_route_holds_before_pr_and_the_pr_route_stays_eligible,
+    local_route_holds_before_landing_under_its_own_code,
+    local_ship_review_holds_local_delivery_but_allows_plugin_route
+);

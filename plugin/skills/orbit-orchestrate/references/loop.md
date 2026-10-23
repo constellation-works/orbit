@@ -19,6 +19,15 @@ orbit run history --limit 20 --json
 orbit run show <run-id> --json
 ```
 
+CLI `orbit run readiness`, MCP `orbit_workflow_auto` with `action: "status"`,
+and HTTP `GET /api/workflows/auto/readiness` render the same readiness snapshot.
+For MCP status, `task` accepts one task id or a list, `concurrency` previews a
+ceiling, `limit` defaults to 50 (1–500), and `allow_crew` selects configured
+crews. HTTP accepts comma-separated `task` and `allow_crew` query values plus
+`concurrency` and `limit`. Omitted crews use the live drain's restriction when
+present. All three JSON responses include `replica` and
+`validation_env_warning` (null when absent); CLI text prints a warning when set.
+
 Readiness is a snapshot, not a reservation or promise of dispatch. Request
 bounded lists and project the needed fields; full run bundles can contain
 large provider logs. Keep those logs for targeted failure diagnosis.
@@ -63,12 +72,18 @@ attribution and does not correct a stale execution crew.
 
 Task crew and system-activity crew are different. Inspect the effective job
 and resolved provider/model, not just its crew label. The shipped
-`task_pilot_pipeline` draws its pilot crew from `workflow.low_complexity_crews`
-(`crew_config_key` on the pilot step) and has no per-run crew input: passing
+`task_pilot_pipeline` draws its pilot crew from `workflow.purpose_crews.task_pilot`,
+else `workflow.low_complexity_crews` (`crew_config_key` on the pilot step) and has no per-run crew input: passing
 `--input crew=...` does not override that step. Step-failure and PR conflict
-recovery draw from `workflow.medium_complexity_crews`. Each run draws once per
+recovery draw from `workflow.purpose_crews.failure_recovery`, else
+`workflow.medium_complexity_crews`. Each run draws once per
 pool and records it in its state; an empty pool falls back to
-`workflow.default_crew`. Inspect those pools in the active config; change
+`workflow.default_crew`. A host `provider_unavailable` or `provider_capacity`
+hold withholds the task-pilot routine while it covers every crew that draw
+would use, and the draw skips a held crew while another remains. A success
+that started after the failure, or the end of the backoff, resumes the routine;
+a recovered auth probe clears unavailability.
+Inspect those pools in the active config; change
 persistent configuration only within the user's authorization.
 
 ## Record who orchestrated the work
@@ -91,7 +106,9 @@ value, a call that omits it inherits the session's, and a session started
 without the flag attributes nothing at all. The name is resolved against the
 crews of whichever workspace the call lands in, so an unconfigured crew fails
 that call rather than being replaced by another one. The default applies only to
-tasks the session creates: existing tasks are never rewritten.
+tasks the session creates: existing tasks are never rewritten. Creation also
+records the crew's configured model as the task's `orchestrator_model`; pass
+`orchestrator_model` on the call only when your session runs a different model.
 
 ```bash
 orbit tool run orbit.task.add --input '{"workspace":"<selector>","title":"<title>","description":"<description>","complexity":"medium","orchestrator":"<crew>","model":"<agent-family>"}'

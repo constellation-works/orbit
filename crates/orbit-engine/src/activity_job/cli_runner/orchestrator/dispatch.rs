@@ -12,8 +12,8 @@ use orbit_common::process::stopped_descendants::{StoppedDescendant, stopped_desc
 use orbit_common::security::child_env::{MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV};
 use orbit_common::security::redaction::argv_redactor;
 use orbit_tools::plugin::BrokeredCaller;
-use orbit_types::workflow::activity_job::{AgentLoopSpec, V2AuditEventKind};
-use orbit_types::workflow::{ActivityToolDenyPolicy, ExecutorSandboxKind};
+use orbit_types::workflow::activity_job::{AgentLoopSpec, EXPLORE_ACTIVITY, V2AuditEventKind};
+use orbit_types::workflow::{ActivityToolDenyPolicy, ExecutorSandboxKind, render_tag_instructions};
 use serde_json::Value;
 
 use crate::context::{PluginBrokerRun, ProvenanceEnv, provenance_env};
@@ -24,18 +24,19 @@ use super::super::super::dispatcher::{DispatchError, DispatchOutcome};
 use super::super::super::workspace::{WorktreeBoundaryGuard, validate_declared_worktree_pair};
 use super::super::argv::{
     apply_provider_runtime_arg_fixups, apply_provider_static_arg_fixups,
-    apply_trusted_host_provider_sandbox, codex_mcp_server_launch_args, neutralize_inner_sandbox,
-    try_audit_argv_for_dispatch,
+    apply_read_only_provider_sandbox, apply_trusted_host_provider_sandbox,
+    codex_mcp_server_launch_args, neutralize_inner_sandbox, try_audit_argv_for_dispatch,
 };
 use super::super::envelope::{cli_agent_envelope_json, task_id_from_input, task_ids_from_input};
 use super::super::inspection_tools::prepare_inspection_tools;
 use super::super::launcher::{orbit_tool_env, resolve_provider_launcher};
 use super::super::plugin_broker::RunPluginBroker;
+use super::super::prompt_file::PromptFile;
 use super::super::spawn::SpawnError;
 use super::super::stdout_preview::{PROGRESS_MESSAGE_LIMIT_BYTES, bounded_assistant_message};
 use super::super::supervisor::{
     OutputProgress, ProgressReporter, SpawnTraceContext, SpawnWithTimeoutRequest,
-    StoppedDescendantReporter, kill_child_process_tree, spawn_for_supervision, spawn_with_timeout,
+    StoppedDescendantReporter, spawn_for_supervision, spawn_with_timeout,
 };
 use super::completion::{ProviderExit, project_completion};
 use super::policy::{
@@ -49,7 +50,8 @@ use super::prepare::{
 use crate::context::RuntimeHost;
 
 use super::environment::{
-    activity_deadline_env, codex_home, provider_child_environment, require_claude_worker_credential,
+    activity_deadline_env, add_browser_kit_env, codex_home, provider_child_environment,
+    require_claude_worker_credential, require_crew_env,
 };
 use super::evidence::{
     emit_build_waits, record_scratch_removals, step_error_after_provider_evidence,
@@ -58,6 +60,29 @@ use super::evidence::{
 /// How often a running provider's stdout is sampled for progress. Bounds the
 /// staleness of `last_activity_at` and the progress rows one invocation writes.
 const PROVIDER_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Add the host's `regression_risk` marks to the task snapshot of an
+/// activity that declares how to act on them, and return that instruction
+/// when it did. An activity without one, a prompt with no task snapshot, or
+/// a task with nothing marked leaves the snapshot and instruction as they
+/// are.
+fn attach_regression_risk<'a>(
+    host: &dyn RuntimeHost,
+    spec: &'a AgentLoopSpec,
+    run_id: &str,
+    activity_name: &str,
+    input: &Value,
+    task_ctx: Option<&mut Value>,
+) -> Option<&'a str> {
+    let instruction = spec
+        .regression_risk_instruction
+        .as_deref()
+        .filter(|instruction| !instruction.trim().is_empty())?;
+    let context = task_ctx?.as_object_mut()?;
+    let marks = host.regression_risk_for_agent_input(run_id, activity_name, input)?;
+    context.insert("regression_risk".to_string(), marks);
+    Some(instruction)
+}
 
 /// Run a catalog activity on behalf of a pipeline step whose id differs from
 /// the activity name. Policy and broker authorization use `activity_name`;
@@ -76,6 +101,11 @@ pub(crate) fn run_cli_backend_for_step(
     let budget = GitTimeoutBudget::from_input(input)
         .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
     let _git_timeout_budget = GitTimeoutBudgetGuard::install(budget);
+    // A read-only reviewer edits nothing; any other agent may, so it first
+    // holds the context locks its run's admission deferred.
+    if fs_profile != Some("reviewer") {
+        host.acquire_deferred_footprint(run_id, activity_name)?;
+    }
     let provider = spec.provider.as_str().to_string();
     let trusted_host = trusted_host_admission(spec, activity_name, input)?;
     // Reject an unsupported inspection provider before executor lookup can
@@ -84,8 +114,10 @@ pub(crate) fn run_cli_backend_for_step(
     let mut cli_executor = host.resolve_cli_executor(&provider)?;
     let inspection_tools =
         prepare_inspection_tools(&provider, input, fs_profile, &cli_executor.args)?;
-    let timeout_seconds = invocation_timeout_seconds(spec, trusted_host.as_ref(), input);
+    let timeout_seconds =
+        invocation_timeout_seconds(spec, activity_name, trusted_host.as_ref(), input);
     let wall_clock_timeout = Duration::from_secs(timeout_seconds);
+    let stall_window = host.agent_stall_window();
 
     let task_ids = task_ids_from_input(input);
     let task_id = task_id_from_input(input);
@@ -110,7 +142,9 @@ pub(crate) fn run_cli_backend_for_step(
         omitted_requirement_notes: activity_tools.omitted_requirement_notes.clone(),
     });
 
-    let task_ctx = host.task_context_for_agent_input(input)?;
+    let mut task_ctx = host.task_context_for_agent_input(run_id, step_id, input)?;
+    let regression_risk_instruction =
+        attach_regression_risk(host, spec, run_id, activity_name, input, task_ctx.as_mut());
     let tool_ctx = activity_tool_context(host, spec, run_id, fs_profile, &provider);
     // A shipment pipeline renders the assigned checkout twice: once as the
     // child cwd and once inside the agent contract. Validate that pair against
@@ -147,9 +181,43 @@ pub(crate) fn run_cli_backend_for_step(
     let sandbox = prepared_sandbox.effective;
 
     let mut envelope_spec = spec.clone();
+    envelope_spec.instruction = envelope_spec
+        .envelope_instruction(host.mid_run_steering_enabled())
+        .into_owned();
     if let Some(tools) = &inspection_tools {
         envelope_spec.instruction.push_str("\n\n");
         envelope_spec.instruction.push_str(tools.instruction);
+    }
+    if let Some(instruction) = regression_risk_instruction {
+        envelope_spec.instruction.push_str("\n\n");
+        envelope_spec.instruction.push_str(instruction);
+    }
+    if let Some(instruction) = spec
+        .explore_instruction
+        .as_deref()
+        .filter(|instruction| !instruction.trim().is_empty())
+        .filter(|_| host.explore_delegation_available())
+    {
+        envelope_spec.instruction.push_str("\n\n");
+        envelope_spec.instruction.push_str(instruction);
+    }
+    // Trusted per-tag guidance goes last, after every built-in rule it may
+    // not override. The audit row names what the prompt carried.
+    let tag_instructions = host.tag_instructions_for_activity(run_id, activity_name, input)?;
+    if !tag_instructions.is_empty() {
+        envelope_spec.instruction.push_str("\n\n");
+        envelope_spec
+            .instruction
+            .push_str(&render_tag_instructions(&tag_instructions));
+        audit.emit_lossy(V2AuditEventKind::TagInstructionsApplied {
+            step_id: step_id.to_string(),
+            activity_name: activity_name.to_string(),
+            task_id: task_id.unwrap_or_default().to_string(),
+            instructions: tag_instructions
+                .iter()
+                .map(|instruction| instruction.record())
+                .collect(),
+        });
     }
     let envelope_json = cli_agent_envelope_json(
         &envelope_spec,
@@ -180,12 +248,29 @@ pub(crate) fn run_cli_backend_for_step(
     //     transparently inside our outer sandbox.
     //   - gemini: drop `-s` / `--sandbox` from the executor's static args.
     //   - claude: nothing to do; claude has no OS-level sandbox flag.
+    //   - muse: append `--disable-sandbox` (see `neutralize_inner_sandbox`).
     // An explicit executor opt-out must not silently restore the provider's
     // inner sandbox when preparation selects a bare process.
     let explicitly_off = resolved_sandbox
         .as_ref()
         .is_some_and(|sandbox| sandbox.kind == ExecutorSandboxKind::Off);
-    if sandbox.is_some() || explicitly_off {
+    // [ORB-16814] An explorer is read-only by contract. Wrapped by Orbit's
+    // sandbox, its reviewer profile already denies every worktree write and a
+    // second inner sandbox cannot nest (Seatbelt refuses it). Unwrapped,
+    // including an explicit executor opt-out and a bare fallback, the
+    // provider's own read-only sandbox is the boundary instead of being
+    // neutralized. A provider with no such mode must not start: the profile
+    // is not an OS boundary, and its native tools could write the caller's
+    // worktree.
+    if activity_name == EXPLORE_ACTIVITY && sandbox.is_none() {
+        if !apply_read_only_provider_sandbox(&provider, &mut provider_config) {
+            return Err(DispatchError::CliInvocationPermanent(format!(
+                "refusing explorer provider `{provider}`: no enforced read-only sandbox \
+                 (the outer executor sandbox is not enforced, and this provider has no \
+                 read-only mode)"
+            )));
+        }
+    } else if sandbox.is_some() || explicitly_off {
         neutralize_inner_sandbox(&provider, &mut provider_config, &mut cli_executor.args);
     }
 
@@ -227,14 +312,44 @@ pub(crate) fn run_cli_backend_for_step(
     // this run's identity and tool pinning override any same-named value the
     // allowlist forwarded from an outer process. [ORB-10917] Tool pinning keeps
     // this environment's PATH, `workflow.validation_env.path` first. [ORB-15204]
-    let mut child_env =
-        provider_child_environment(host, &provider, sandbox, invocation.required_env_vars);
+    let mut child_env = provider_child_environment(
+        host,
+        &provider,
+        sandbox,
+        &spec.crew_env,
+        invocation.required_env_vars,
+    );
     let orbit_env = orbit_tool_env(&child_env)
         .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
+
+    let scratch_root = subprocess_cwd
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or_else(|| {
+            DispatchError::CliInvocationPermanent("cannot locate invocation scratch root".into())
+        })?;
+    let scratch = orbit_common::fs::path::ensure_orbit_scratch_dir(&scratch_root)
+        .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+    // [ORB-16577] A CLI that cannot read stdin gets its prompt through a
+    // private file in this run's scratch directory instead, so the envelope
+    // still never reaches argv. The file is deleted when dispatch returns.
+    let prompt_file = invocation
+        .prompt_file_flag
+        .map(|flag| PromptFile::write(&scratch, &invocation.stdin).map(|file| (flag, file)))
+        .transpose()?;
+    let stdin_bytes: &[u8] = if prompt_file.is_some() {
+        &[]
+    } else {
+        &invocation.stdin
+    };
 
     let mut subprocess_args = Vec::with_capacity(cli_executor.args.len() + invocation.args.len());
     subprocess_args.extend(cli_executor.args.iter().cloned());
     subprocess_args.extend(invocation.args.iter().cloned());
+    if let Some((flag, file)) = &prompt_file {
+        subprocess_args.push((*flag).to_string());
+        subprocess_args.push(file.argument().to_string());
+    }
     if provider == "codex" {
         let orbit_bin = orbit_env
             .iter()
@@ -269,7 +384,7 @@ pub(crate) fn run_cli_backend_for_step(
     }
 
     // The audit argv reflects what actually runs. Under sandbox-exec the
-    // parent is `<trusted sandbox-exec> -f <profile.sb> <program> <args...>`;
+    // parent is `<trusted sandbox-exec> -p <profile> <program> <args...>`;
     // under bare exec it's `<program> <args...>`. The redactor still scrubs
     // the child's program name + args so secrets in argv stay redacted.
     let redaction = argv_redactor();
@@ -282,6 +397,7 @@ pub(crate) fn run_cli_backend_for_step(
     .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
     let argv_redacted: Vec<String> = audit_argv.iter().map(|a| redaction.apply_str(a)).collect();
 
+    // The prompt the provider receives, whether on stdin or in its file.
     let stdin_blob_ref = audit.write_blob(&invocation.stdin);
 
     // L-0095: Provider cwd is advisory; enforce the linked-worktree postcondition.
@@ -386,14 +502,6 @@ pub(crate) fn run_cli_backend_for_step(
         orbit_common::security::child_env::ACTIVITY_TIMEOUT_ENV.to_string(),
         timeout_seconds.saturating_mul(1000).to_string(),
     ));
-    let scratch_root = subprocess_cwd
-        .clone()
-        .or_else(|| std::env::current_dir().ok())
-        .ok_or_else(|| {
-            DispatchError::CliInvocationPermanent("cannot locate invocation scratch root".into())
-        })?;
-    let scratch = orbit_common::fs::path::ensure_orbit_scratch_dir(&scratch_root)
-        .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
     let build_wait_directory = tempfile::Builder::new()
         .prefix("build-waits-")
         .tempdir_in(&scratch)
@@ -459,6 +567,7 @@ pub(crate) fn run_cli_backend_for_step(
         }
         None => None,
     };
+    require_crew_env(&spec.crew_env, &child_env)?;
     require_claude_worker_credential(host, &provider, &child_env)?;
     if inspection.is_some() {
         // This invocation has no job-run authority. An outer managed process
@@ -491,6 +600,7 @@ pub(crate) fn run_cli_backend_for_step(
             .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
     );
     child_env.extend(dispatch_env);
+    add_browser_kit_env(&mut child_env);
     if host.worker_invocation().is_some() {
         child_env.push(("ORBIT_WORKER_CONTEXT_REQUIRED".into(), "1".into()));
     }
@@ -619,26 +729,25 @@ pub(crate) fn run_cli_backend_for_step(
     )
     .and_then(|mut spawned| {
         let registered = host
-            .register_worker_process(spawned.child.id())
+            .register_worker_process(spawned.child.pid())
             .and_then(|()| {
                 if sandbox.is_some_and(|sandbox| {
                     sandbox.kind == orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap
                 }) {
-                    host.register_worker_pid_namespace(spawned.child.id())
+                    host.register_worker_pid_namespace(spawned.child.pid())
                 } else {
                     Ok(())
                 }
             });
         if let Err(error) = registered {
-            kill_child_process_tree(&mut spawned.child);
             return Err(SpawnError::permanent(error.to_string()));
         }
-        plugin_broker.bind_sandbox(spawned.child.id());
+        plugin_broker.bind_sandbox(spawned.child.pid());
         linux_post_run_guard = spawned.take_linux_post_run_guard();
         spawn_with_timeout(SpawnWithTimeoutRequest {
             program: &resolved_program,
             args: &subprocess_args,
-            stdin_bytes: &invocation.stdin,
+            stdin_bytes,
             env: &child_env,
             cwd: subprocess_cwd.as_deref(),
             timeout: wall_clock_timeout,
@@ -659,18 +768,15 @@ pub(crate) fn run_cli_backend_for_step(
                 threshold: stopped_descendant_threshold(),
                 report: &report_stopped,
             }),
-            wait: None,
-            live_readers: None,
             spawned_child: Some(spawned),
-            #[cfg(unix)]
-            cancel_pair: None,
+            stall_window,
         })
     });
     // The provider has exited, timed out, or failed to start: nothing in its
     // sandbox may reach the broker any longer.
     drop(plugin_broker);
 
-    let (stdout, stderr, exit_code, duration, timed_out) = match spawn_result {
+    let (stdout, stderr, exit_code, duration, timed_out, stalled) = match spawn_result {
         Ok(result) => result,
         Err(err) => {
             if let Some(boundary) = worktree_boundary.take() {
@@ -764,6 +870,8 @@ pub(crate) fn run_cli_backend_for_step(
         exit_code,
         duration,
         timed_out,
+        stalled,
+        stall_window: stall_window.unwrap_or_default(),
         print_timeout,
         codex_home,
         build_budget_waits,

@@ -17,6 +17,11 @@ then use its registered workspace in tool calls. MCP setup is not a prerequisite
 for local task tracking. Inspect host, workspace, ownership, availability and
 capabilities where returned.
 
+Workspace discovery checks checkout roots against the destination's filesystem
+on each call without saving status changes. A removed checkout disappears from
+a direct server's list. Federated discovery keeps its descriptor with
+`checkout_health: invalid`; restore or re-register the checkout before using it.
+
 - Direct server: pass the returned logical workspace ID as `workspace`.
   The server can also resolve registered names and paths, but IDs avoid
   ambiguity. An explicit selector overrides its session binding.
@@ -49,8 +54,8 @@ orbit tool run orbit.task.update --input '{"id":"<task-id>","comment":"<progress
 ```
 
 The ID-routed tools are `orbit.task.show`, `update`, `reject`, `delete`,
-`artifact.get`, `artifact.put`, `review_reset` and `reconcile_review` (each
-under `orbit.task.`). Routing applies only where that tool is advertised and
+`artifact.get`, `artifact.put`, `review_reset`, `reconcile_review` and
+`requeue` (each under `orbit.task.`). Routing applies only where that tool is advertised and
 authorized. `orbit.task.add`, `list`, `eligible`, `lint`, `pull` and `locks*`
 keep workspace selection; search, friction and workflow-run tools do not route
 by task prefix. There is no fan-out search across hosts. Direct local/remote
@@ -116,18 +121,35 @@ migration are in [remote-access.md](../../orbit-setup/references/remote-access.m
 | Pick up work without collisions | `orbit_task_eligible` (read only; `explain: true` names each blocking selector and holder) | `orbit task eligible`: backlog/proposed tasks whose lock surface overlaps no in-progress or review task. Lock overlap is the only test; check dependencies yourself |
 | Task attachments | `orbit_task_artifact_put`, `orbit_task_artifact_get` | Task artifact commands; source path is on the executing host and must resolve inside the workspace checkout |
 | Retrieval | `orbit_search` | `orbit search`; `orbit search reindex` rebuilds the index |
+| Agent scorecards | `orbit_agents_scorecard` and `orbit_agents_show` (`role`: `orchestrators`, `implementers`, `reviewers`, or `pilots`) | `orbit agents scorecard --role <role>` and `orbit agents show --role <role> --crew <crew>`. `orbit.orchestrator.scorecard` and `orbit.orchestrator.show` stay advertised as deprecated aliases of the orchestrators role and are removed in the next release |
+| Codebase risk | `orbit_codebase_analytics`, `orbit_codebase_show`, and `orbit_codebase_related` | `orbit codebase analytics`, `orbit codebase show <path>`, and `orbit codebase related <path>`. Rankings count declared footprints; related paths are landed co-change |
 | Friction | `orbit_friction_add/update`; list with `orbit_search` `kind: "friction"` and no `query`; move to the owning workspace with `update` `rehome_to` | `orbit friction list`, `rehome`, and additional show/stats/tags/resolve commands |
-| Submit explicit tasks | `orbit_workflow_ship` (review-only; no completion input) | `orbit run ship`, `run auto` |
+| Submit explicit tasks | `orbit_workflow_ship` (review-only; no completion input) | `orbit run ship`, `run auto` (`--auto-fix` also has an operator-only dashboard checkbox; no MCP auto-fix start input) |
+| Forecast mode for a local drain | `orbit_workflow_auto` `action: "start"` accepts `auto_concurrency: "off"`, `"shadow"` or `"enforce"`; omission follows the configured host mode each admission pass. Pull drains refuse this override and use the executor host mode. | `orbit run auto --auto-concurrency <MODE>`; omission has the same live host default. Explicit overrides and inheritance source (`explicit` or `configured`) survive restart/resume without writing config; host thresholds and provider-limit policy refresh next pass, caching unchanged config by mtime and retaining the previous policies with a warning on invalid config; run show and readiness expose `mode`, `source` and the current `configured_mode`. This selects forecast policy only: normal operator authority, worker ceiling and host thresholds still apply. |
 | Submit a catalog job | `orbit_pipeline_invoke` (`job_name` plus `input`, or operator-only `default_input: true` with `workspace`). Returns a run ID; a managed run needs a host-authorized child admission. No MCP wait — poll `orbit_workflow_run_show` | `orbit run job <id>` (`--wait` blocks). `orbit.pipeline.wait` is CLI-only |
 | Observe/resume workflows | `orbit_workflow_run_show/list/resume`; resize a live auto drain with operator-only `orbit_workflow_auto` `action: "resize"`; its `start` takes `approve_proposed: true` for the same per-pass approval as `run auto --approve-proposed`, which never approves a task tagged `no-auto-approve` | `orbit run show/history/events/trace/logs/cancel`; `orbit run concurrency`; `orbit run extend`; job replay/resume |
-| Delivery evidence | `orbit_task_show` with `field: "delivery"` alone and optional `run_id` (read only; needs no operator authority) | What one delivery run committed and landed for one task of this workspace, read only from the host's commit and merge step records: typed status, base/head and landed SHAs, PR number, timestamps and provenance. Missing, inconsistent or foreign evidence is `unavailable` with a reason, never inferred; a local fast-forward records no landed SHA. Without `run_id` it reads the newest task-delivery run submitted with the task. Full run details stay on operator-only `orbit_workflow_run_show` |
-| Auto-tasks | `orbit_auto_task_add/list/update/mint`; `update` `enabled` enables or disables a definition | Those four are also CLI commands. `toggle`, `delete`, `show`, `restore`, `recover`, and `reset` are CLI-only (`orbit auto-task`) |
+| Delivery evidence | `orbit_task_show` with `field: "delivery"` alone and optional `run_id` (read only; needs no operator authority) | What one delivery run committed and landed for one task of this workspace, read only from the host's commit and merge step records: typed status, base/head and landed SHAs, PR number, timestamps and provenance. Missing, inconsistent or foreign evidence is `unavailable` with a reason, never inferred; a local fast-forward records no landed SHA. Without `run_id` it reads the newest task-delivery run submitted with the task. Inherited commits require a bounded (64-parent), same-workspace/job/submitted-task retry chain and matching deterministic producer checkpoints/definitions; `provenance.source_run_id` and the source timestamp retain the original commit, while a resumed landing requires its own current host evidence. Execution identity/time can come from bounded (256-event) host step lifecycle audit metadata when the run record has no activity steps; audit metadata never supplies commit/landing bytes. Refreshed candidate heads never replace `commit.head_sha`. Full run details stay on operator-only `orbit_workflow_run_show` |
+| Auto-tasks | `orbit_auto_task_add/list/update/mint`; `update` `enabled` enables or disables a definition | Those four are also CLI commands. `toggle`, `delete`, `show`, `restore`, `recover`, and `reset` are not on MCP (`orbit auto-task`, or `orbit tool run`); `delete` and `reset` need operator authority |
 | Routine enablement | `orbit_routine_control` with `action: "list"` or `"toggle"`; operator authority and explicit `workspace` required | `orbit routine list/show` reads definitions and state. MCP toggle needs the observed `expected_enabled` and `target` plus desired `enabled`; after a lost reply, observe state before retrying. `orbit routine pause/resume` controls the separate host-local pause. |
 | Review recovery | `orbit_task_reconcile_review` (`inspect`, `submit`, `status`, `accept_baseline`) and `orbit_task_review_reset`; operator-only and unavailable to managed runs | `orbit task reconcile-review` and `orbit task review-reset`. Reconciliation judges a recovered delivery's changed merged head; reset closes an open attempt and renews one selected lineage budget with a reason, preserving history. Inspect authoritative state after a lost reply. |
+| Blocked-task requeue | `orbit_task_requeue` (`id`, `reason`, optional `discard_candidate`); operator-only and unavailable to managed runs | `orbit task requeue <id> --reason <why> [--discard-candidate]`. Returns a blocked task whose run has stopped to the backlog so its next run resumes the candidate and pull request its failure handoff published, after re-authenticating that publication, or the latest candidate a claim of the task kept, which a later claim that ended without one does not replace (`resumes.source: claim`); a live run or unsettled claim is refused. A changed task specification is refused; `discard_candidate` closes the task's undelivered Orbit pull requests (as `orbit task update --status backlog --discard-candidate` does) and reruns fresh. Nothing is written on a refusal. |
 | Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and an absolute working directory inside the selected workspace checkout (or a linked worktree under `.orbit/state/worktrees/`); never a shell string |
 | Host agent invocation | `orbit_agent_invoke` when advertised and authorized | `orbit run agent <prompt>`; returns a run ID, or the answer with `--wait` |
 | Distributed drain | Internal runtime protocol; no ordinary MCP tools | `orbit run auto --pull` uses a launch-selected owner route for probe, receipt lookup, task admission, bind and settle. These five operations have no public schemas, and public calls refuse both canonical and formerly advertised names; client names or initialize metadata cannot enable the route. Matching internal protocol support is required on both endpoints, with no public fallback. Use owner-side `orbit tool run orbit.drain.probe`, `orbit.drain.receipt.lookup` and `orbit.drain.claims` for supported diagnostics under the required identified/operator authority. Do not call pull, bind or settle by hand: admission and claim mutations retain machine/run fences. Handoff approval, revocation and recovery remain owner-dashboard actions. See [distributed-drain.md](setup/distributed-drain.md). |
 | Setup and maintenance | Discover any server extensions; do not guess | config, doctor, search reindex, audit, GC, filesystem profiles, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
+
+`orbit_workflow_run_show` and each `orbit_workflow_run_list` item carry the
+same run projection as `.run` in `orbit run show --json` and the dashboard:
+state and timing, `error_code`/`error_message` from the step that explains the
+outcome, `root_cause` for a run that failed only because a child did,
+`run_role`, crew, `trigger`, `child_dispatches` and drain controls. They add
+the submitted `input`, the worker's `pid`/`pid_start_time`, `drain_last_pass`,
+`drain_approvals` and `recovery_attempts`; `show` also adds
+`activity_provenance` and `execution_progress`. `steps` are the steps every
+run view displays, and `steps_source` says whether they came from the run
+record or, when the record is empty or holds only a run-level step, its audit
+trail. A step still open when its run ended reads as the run's terminal state
+with `outcome: "interrupted"`, never `running`.
 
 Provider/gateway prefixes are transport wrappers around these names. A connected
 server may expose additional tools; use its advertised schema rather than
@@ -158,7 +180,7 @@ What it is not:
 
 - It is **not** a task, and it performs no task transition. It does not commit,
   push, open or merge a pull request, or dispatch further work.
-- It is **not** available to a managed run. Any operator session may admit one,
+- It is **not** a trusted-host invocation for a managed run. Any operator session may admit one,
   local or arriving over SSH: a remote caller reached this machine through an
   SSH login that already lets it start any process it likes, so `operator` is
   the whole test. Start the calling federated or remote-proxy server with
@@ -166,6 +188,21 @@ What it is not:
   refused. Each admission covers one invocation only.
 - It is **not** resumable. A resumed run would carry an admission nobody granted
   now; submit a new invocation instead.
+
+**Read-only explorers.** A managed `agent_implement` or `agent_review_repair`
+run may call the same tool when `workflow.explore.enabled` is on and
+`workflow.purpose_crews.explorer` has an eligible member. That call gets a
+different, narrower run: an `agent_explore_pipeline` explorer drawn from the
+explorer pool and sandboxed with no writes, starting in a `cwd` inside the
+caller's own worktree, with every task, lifecycle, dispatch, commit and
+invocation tool denied. Codex uses its read-only inner sandbox when Orbit's
+executor wrapper is off; a provider with no read-only mode is refused before
+it starts unless that wrapper is on. It never gets a
+trusted-host admission. The answer adds `paths_read`. Per-run call and
+concurrency budgets, a timeout ceiling and an answer-size cap apply; each
+refusal names its reason and setting, and the caller continues without
+delegating. Every other managed run is refused. See
+[CONFIG.md](https://github.com/constellation-works/orbit/blob/main/docs/CONFIG.md#workflowexplore--read-only-exploration-for-implementing-agents).
 
 Required arguments are the `prompt` and an absolute `cwd` inside the workspace's
 checkout or a linked worktree under `.orbit/state/worktrees/`. `crew` selects the provider/model, `timeout_seconds` bounds the run
@@ -271,6 +308,13 @@ host, use `orbit run ship <task-id> --complete` there for a one-run completion
 authorization; do not use a local shadow store as a substitute. Otherwise
 report the MCP completion capability gap rather than inventing a `completion`
 argument.
+A ship receipt, like an `orbit_workflow_auto` start, carries the notices the
+CLI and the dashboard report for the same submission: `warning` (one line per
+notice: an explicit ship's host resource throttle, a validation environment
+that may not find the toolchain, unset `execution.env.pass` names) and
+`validation_env_warning`. A drain start also carries `resource_throttle`, a
+`warning` line naming backlog tagged for another OS, and a `note` when no
+required validation is configured. None of them refuses the submission.
 Read the returned run with `orbit_workflow_run_show` using `id` and `workspace`.
 List bounded history with `limit`, `job_id`, `state` (including `terminal`), and
 RFC3339 `since`. Submission success means a durable run exists, not that the

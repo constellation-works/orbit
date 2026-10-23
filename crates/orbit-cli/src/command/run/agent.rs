@@ -32,7 +32,7 @@ and read the invocation with the ordinary run surfaces, or pass --wait to
 block until terminal and print the answer (nonzero exit on failure):
   orbit run show <RUN_ID>      outcome, the agent's answer, and live progress
   orbit run logs <RUN_ID> --follow  stream output until terminal
-  orbit run cancel <RUN_ID>    stop it and terminate its process tree
+  orbit run cancel <RUN_ID> --confirm  stop it and terminate its process tree
 
 Examples:
   orbit run agent 'why does the sweep clock keep restarting?'
@@ -179,7 +179,7 @@ impl Execute for RunAgentArgs {
                 .into());
         }
         lines.push(format!(
-            "track it: orbit run show {run_id}  |  orbit run logs {run_id}  |  orbit run cancel {run_id}",
+            "track it: orbit run show {run_id}  |  orbit run logs {run_id}  |  orbit run cancel {run_id} --confirm",
             run_id = submission.run_id
         ));
         Ok(Payload::detail(doc, lines.join("\n")).into())

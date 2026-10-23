@@ -1,15 +1,15 @@
 ---
 title: Automation Triggers — Design
 owner: codex
-last_updated: 2026-09-25
-last_validated: 2026-10-09
+last_updated: 2026-10-18
+last_validated: 2026-10-20
 status: Draft
 feature: automation-triggers
 doc_role: design
 type: design
 summary: Proposed trigger contract for immutable delivery batches, separate coverage checkpoints, preparation freshness, and correlated failure triage.
 tags: [automation-triggers, scheduling, coverage, pilot, triage]
-paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-store/src/contracts/**", "crates/orbit-types/src/workflow/**", "crates/orbit-core/src/adapter/engine_host/v2_host/**"]
+paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-store/src/contracts/**", "crates/orbit-types/src/workflow/**", "crates/orbit-core/src/adapter/engine_host/actions/**"]
 related_features: [routines, auto-tasks, review-gate, activity-job]
 related_artifacts: [ORB-11315, ORB-11314, ORB-11316]
 ---
@@ -64,9 +64,9 @@ A definition has one typed trigger and one action. Supported candidate variants:
 
 The last three are the state-transition/eligibility vocabulary. They are not
 arbitrary `on status = ...` subscriptions: a human block or routine metadata
-change must not invoke a model. Evaluation returns `not_due`, `pending`, `due`,
-`deferred`, or `invalid`, with stable reason codes and source evidence. It cannot
-promote, complete, or diagnose tasks itself.
+change must not invoke a model. Evaluation returns a stable reason code, such as
+`not_due`, `threshold_reached`, `debouncing` or `fresh_unready`, with source
+evidence. It cannot promote, complete, or diagnose tasks itself.
 
 The internal `orbit-automation` crate owns shared evaluation, discovery and
 scheduling policy [ORB-11330]. Core composes explicit source descriptions,
@@ -89,9 +89,10 @@ reject ambiguous multi-host placement rather than imply distributed exactly-once
 Existing multi-pin time routines continue their independent per-host behavior.
 
 Each pass captures `now`, effective definition revision, source head and scan
-ceiling. Proposed initial limits: 200 source records per workspace/pass, 20 remote
+ceiling. Proposed initial limits: 200 source records per workspace/pass, 10 remote
 evidence lookups, 50 batch members, one active batch per consumer, and a 30-second
-evaluation deadline. A manifest is also capped at 1 MiB and 5,000 commit IDs;
+evaluation deadline. A batch is also capped at 1 MiB, and the pending commit set at
+5,000 IDs;
 oversized indivisible deliveries defer with an explicit reason until an operator
 selects a supported larger-work path. Limits never silently shorten coverage.
 Persist continuations and rotate consumers/sources for
@@ -117,7 +118,8 @@ nonempty resulting content change. For PR delivery the canonical key is
 commits, trees, landed time, evidence source and all included task IDs as evidence.
 Provider identity must include the repository, not only a numeric PR number.
 For an authorized direct landing, the delivery owner records a stable receipt
-with before/after revisions and member commits/tasks. Its receipt ID is the key.
+with before/after revisions and member commits/tasks. Its key is
+`direct:<repository>:<branch>:<handoff or run ID>`.
 Do not synthesize direct deliveries from every task-marked commit.
 
 | Case | Threshold treatment |
@@ -179,8 +181,9 @@ ref. The fetch does not touch the worktree, index, or local branch, so a pull
 request merged on the remote is observed even when nobody has fast-forwarded
 the checkout. A failed fetch defers as `source_fetch_failed` and does not fall
 back to `refs/heads/<branch>`. That reason retries rather than stalling the
-consumer; `orbit doctor` reports when the observed cursor trails, or has
-diverged from, the remote-tracking head. A repository with no remote still
+consumer; `orbit doctor` reports when the observed cursor has diverged from the
+remote-tracking head, or trails it for longer than `max_wait_minutes`. A
+repository with no remote still
 resolves `refs/heads/<branch>`. The ancestry check runs against the same head
 the pass just resolved, so a force-push still defers as `history_diverged`.
 
@@ -277,7 +280,7 @@ Proposed durable records, host-local and store-owned:
 | --- | --- |
 | Consumer cursor | Identity, epoch/config digest, baseline, source continuations, accepted range boundary, revision, debounce/next retry timestamps. |
 | Work membership | Source key/revision, pending/claimed/covered/waived state, evidence reference, first-seen time, exclusion/rejection reason. |
-| Batch/attempt | Immutable input digest/manifest, member keys, action key, task/run linkage, attempt counter, claim generation, outcome and retry budget. |
+| Batch/attempt | Immutable input digest/manifest, member keys, action key, task/run linkage, attempt counter, consumer generation, outcome and retry budget. |
 | Accepted receipt | Batch/member identity, input/contract digest, accepted evidence, accepting actor/time; per-task fingerprint or incident disposition where applicable. |
 
 Extend the existing host SQLite scheduler store with namespaced records rather
@@ -286,8 +289,8 @@ input/results and a stable creation key; scheduler records hold coordination and
 references. Forward-only store migrations and a recoverable cross-store protocol
 are required: task bundles and scheduler SQLite are not one current transaction.
 
-The Automation boundary claims pending members through Store and writes batch intent with compare-
-and-swap plus unique keys. It releases database locks before external I/O. Routine job submission
+The Automation boundary claims pending members through Store and writes batch intent with compare-and-swap
+plus unique keys. It releases database locks before external I/O. Routine job submission
 and common task creation now use durable action keys: the job store maps a key and input to one run
 identity, while the task registry reserves a key, input digest and task ID before bundle I/O.
 Replaying the same input returns the existing identity; changing input under the same key is
@@ -313,7 +316,7 @@ store transaction and can replay safely.
 | Intent saved, action not created | Recover/resubmit the same action key. |
 | Action created, acknowledgement lost | Resolve key to original task/run; never mint or launch a second one. |
 | Outcome persisted, coverage not accepted | Revalidate and accept the same receipt once. |
-| Evaluator dies or two evaluators race | Store claim generation fences stale writers; uniqueness and action-key admission fence side effects. The sweep lock is an optimization, not the only guarantee. |
+| Evaluator dies or two evaluators race | Store consumer generation fences stale writers; uniqueness and action-key admission fence side effects. The sweep lock is an optimization, not the only guarantee. |
 | Lease expires / worker liveness unknown | Reconcile identity and owner. A lease timeout alone cannot authorize duplicate execution. Keep ambiguous work held for investigation. |
 | Pause, disable, or authorization expiry | Stop new admissions, preserve pending/input, reconcile admitted outcomes. Ordinary expiry does not cancel admitted work; explicit cancellation remains separate. |
 
@@ -359,7 +362,13 @@ critical section, and its successful preparation checkpoint holds the same
 tasks afterwards. Observation and admission withhold them as
 `already_preparing: <run id>` until that run becomes terminal. This prevents a
 routine, a drain or the CI sweep from duplicating another pilot that started
-seconds earlier, even when the task's material changes while held. Explicit
+seconds earlier, even when the task's material changes while held. The
+task-pilot routine alone also withholds preparation, as `provider_hold: ...`,
+while a host provider failure hold covers every crew its pilots could draw,
+until the backoff ends or a success on this host that started after the
+failure clears it; drains, the CI sweep and explicit selections are not
+withheld this way. An auth probe clears unavailability. A pool that still has
+another crew is admitted, and the draw uses the crews the hold leaves. Explicit
 pilot selections report held tasks as `already_preparing` exclusions with
 `prepared_by_run_ids`, settle each as superseded `piloted_elsewhere` naming its
 holder, and prepare the free tasks; an all-held selection succeeds without
@@ -380,8 +389,17 @@ prevents repeatedly edited work from starving other tasks.
 The prepare/apply domain boundary recomputes fingerprints and eligibility under
 task locks. Accepted selectors/assessment fields written by that same apply are
 part of the certified *post-apply* fingerprint, with the pre-apply fingerprint
-retained for audit. They do not invalidate their own assessment. External edits
-still do. Apply owns the prepared `context_files_before` snapshot and fills it
+retained for audit. A preparation routine also reuses the latest atomic task
+receipt when its certified post-apply fingerprint matches that consumer's
+current fingerprint, including evidence from an explicit pilot. Matching
+evidence reports `fresh` or `fresh_unready` without another provider run,
+preparation hold or a new consumer-local receipt. The fingerprint must match
+under the consumer's resolved material fields, source sensitivity and
+eligibility policy; missing markers or a different contract require normal
+preparation. Active pilots still withhold their tasks before this reuse check,
+and explicit task selections can deliberately request another assessment. Accepted writes do not invalidate their own
+assessment; external material edits still do.
+Apply owns the prepared `context_files_before` snapshot and fills it
 into the persisted assessment; an agent need only return `context_files_after`.
 Legacy before echoes are ignored, so ordering, selector spelling, or an omitted
 echo cannot invalidate a fresh assessment or change its replay receipt.
@@ -458,9 +476,10 @@ its task-pilot run's checkpoint at apply's former index 2 is not that run's
 generation advances. Those members are then observed again, and the next
 pilot certifies them.
 
-The routine passes explicit batch task IDs and expected fingerprints to the
-existing pilot job, which today only accepts IDs/source preparation inputs and
-needs a small contract extension. A trigger never bypasses domain eligibility.
+The routine passes explicit batch task IDs and the claimed attempt to the
+existing pilot job, which checks the claimed source revision, task IDs and each
+member's fingerprint before preparing. A trigger never bypasses domain
+eligibility.
 Mode-driven promotion must consume a fresh accepted readiness record and its
 separate grant; populated selectors or a successful wrapper are insufficient.
 
@@ -671,12 +690,16 @@ older binaries must not reinterpret schema v2 as time-only work.
 Implement tests at the shared domain/store boundaries using existing sibling
 test layouts and fake clocks/providers; add no generic harness. Include end-to-end
 fixtures exercising actual job/task creation and crash recovery, not only due math.
-Required repository gates are `make ci-fast`, `make ci-test-affected`,
-`make ci-lint` and `make goldens`; `make ci-fast` runs no Rust tests, while
-the affected-test gate covers changed crates and their workspace dependents
-([validation and CI](../../DEVELOPMENT.md#validation-and-ci)). Full `make ci`
-is the PR merge gate. Documentation validation checks metadata, source/relative
-links, index generation, YAML consistency and timeline invariants.
+Follow the current [workspace gate guidance](../../../CLAUDE.md#gates) for
+delivery validation: run focused behavior checks for the changed contract,
+Clippy for changed crates, and `make goldens` when CLI help, MCP text, or
+another golden surface changes. Whole-workspace commands are not blanket local
+pre-handoff gates; the delivery pipeline owns required PR checks and any
+configured final validation. Documentation validation uses
+`python3 scripts/check-doc-links.py`; when an indexed row changes, regenerate
+with `make docs-index` and verify with
+`scripts/generate-doc-indexes.sh --check`. Metadata, YAML consistency and
+timeline invariants are not yet automated.
 
 Extend existing routine/auto-task/task/run/audit projections with effective trigger
 and policy provenance, baseline, O/D/C, pending count/oldest age, threshold and

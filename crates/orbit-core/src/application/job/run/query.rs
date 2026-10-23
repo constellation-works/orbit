@@ -2,11 +2,13 @@
 //! for operators and observation-only reads for no-mutation callers.
 
 use orbit_common::{NotFoundKind, OrbitError};
+use orbit_store::InvocationQuery;
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::workflow::JobRun;
 
 use crate::OrbitRuntime;
 
+use super::projection::ActivityInvocationEvidence;
 use super::reconcile::ReconcilePass;
 use super::types::JobRunListParams;
 
@@ -50,6 +52,27 @@ impl OrbitRuntime {
         }
     }
 
+    /// The provider/model evidence each of a run's activities recorded, for
+    /// [`super::job_run_to_json_with_activity_provenance`].
+    pub fn activity_invocation_evidence(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<ActivityInvocationEvidence>, OrbitError> {
+        Ok(self
+            .invocation_records(InvocationQuery {
+                job_run_id: Some(run_id.to_string()),
+                limit: 1_000,
+                ..InvocationQuery::default()
+            })?
+            .into_iter()
+            .map(|record| ActivityInvocationEvidence {
+                activity_id: record.activity_id,
+                provider: record.agent,
+                model: record.model,
+            })
+            .collect())
+    }
+
     /// [`Self::list_job_runs`] without its stale-run reconciliation: the
     /// records exactly as stored. Reconciliation can finalize an orphaned
     /// `pending`/`running` run as `interrupted` and release its task
@@ -61,6 +84,14 @@ impl OrbitRuntime {
     ) -> Result<Vec<JobRun>, OrbitError> {
         self.ensure_listable_job(params.job_id.as_deref())?;
         self.list_job_runs_filtered_backend(&job_run_query(params))
+    }
+
+    /// [`Self::count_job_runs`] without its stale-run reconciliation, for the
+    /// same no-mutation readers as [`Self::list_job_runs_observed`].
+    pub fn count_job_runs_observed(&self, params: JobRunListParams) -> Result<u64, OrbitError> {
+        self.stores()
+            .jobs()
+            .count_job_runs_filtered(&job_run_query(params))
     }
 
     /// [`Self::show_job_run`] without its stale-run reconciliation; see
@@ -128,6 +159,7 @@ fn job_run_query(params: JobRunListParams) -> JobRunQuery {
         terminal_only: params.terminal_only,
         active_only: false,
         created_since: params.since,
+        recency_since: None,
         limit: params.limit,
         order_by: params.order_by,
         include_steps: true,

@@ -43,7 +43,7 @@ mod temp_dir;
 pub use child::{
     CHILD_TEST_CEILING, CHILD_TEST_DEADLINE, FIXTURE_CEILING, FIXTURE_STALL_DEADLINE,
     FIXTURE_STEP_DEADLINE, FixtureProgress, assert_child_test_exists, assert_child_test_passed,
-    assert_step_finished, run_child_test, run_child_test_within,
+    assert_step_finished, record_scenario_pass, run_child_test, run_child_test_within,
 };
 pub(crate) use env::scoped_env_active;
 pub use env::{
@@ -61,3 +61,10 @@ pub use process::{
 pub use process::{UnrelatedProcess, spawn_unrelated_process};
 pub use process_scrub::{SCRUBBED_MARKER_ENV, scrub_inherited_authority};
 pub use temp_dir::{bulk_write_temp_dir, canonical_temp_dir};
+
+/// Clock seam for tests of callers that use fixed supervision deadlines.
+#[cfg(feature = "test-support")]
+pub use crate::process::supervisor::seam::with_supervision_clock;
+
+/// Supervision seams for tests of a supervisor's callers in other crates.
+pub use crate::process::supervisor::seam::{SupervisorSeam, WaitHook, with_supervisor_seam};

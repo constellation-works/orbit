@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 use super::introspect::{add_column_if_missing, table_exists, table_has_column};
@@ -34,7 +35,7 @@ pub(super) fn apply_job_runs_created_index(conn: &Connection) -> Result<(), Orbi
             ON job_runs(workspace_id, created_at DESC, run_id ASC);
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v34 `job_runs_job_created_and_retry_indexes`: cover the two per-workspace
@@ -75,7 +76,7 @@ pub(super) fn apply_job_runs_job_created_and_retry_indexes(
             ON job_runs(workspace_id, retry_source_run_id, created_at ASC, run_id ASC);
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v39 `job_runs_recency_index`: cover the dashboard's run listings, which
@@ -111,7 +112,7 @@ pub(super) fn apply_job_runs_recency_index(conn: &Connection) -> Result<(), Orbi
             ON job_runs(workspace_id, state, COALESCE(finished_at, started_at, created_at) DESC, run_id ASC);
         "#,
     )
-    .map_err(store_error)
+    .map_err(sqlite_store_error)
 }
 
 pub(super) fn apply_execution_provenance(conn: &Connection) -> Result<(), OrbitError> {
@@ -140,20 +141,20 @@ pub(super) fn apply_job_run_id_allocations(conn: &Connection) -> Result<(), Orbi
             ) WITHOUT ROWID;
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))?;
+    .map_err(sqlite_store_error)?;
     if table_has_column(conn, "job_runs", "workspace_id")? {
         conn.execute_batch(
             "INSERT OR IGNORE INTO job_run_id_allocations(workspace_id, run_id)
              SELECT workspace_id, run_id FROM job_runs",
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
     if table_exists(conn, "automation_job_keys")? {
         conn.execute_batch(
             "INSERT OR IGNORE INTO job_run_id_allocations(workspace_id, run_id)
              SELECT workspace_id, run_id FROM automation_job_keys",
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
     Ok(())
 }
@@ -180,7 +181,7 @@ const JOB_RUN_STATES_BATCH: i64 = 64;
 /// partially filled side table converges on the same result.
 ///
 /// Duration: about 18 s per GB of pipeline state on an SSD host (32 s for the
-/// 1.8 GB fixture of `job_run_states_listing_bench`), so roughly 40 s for a
+/// historical 1.8 GB benchmark fixture), so roughly 40 s for a
 /// 2.3 GB `job_runs`, longer when its pages are cold. The open that applies it
 /// holds the write lock for that long, and the WAL grows by about the payload
 /// size until the next checkpoint. Because each batch reuses the pages the
@@ -207,7 +208,7 @@ pub(super) fn apply_job_run_states(conn: &Connection) -> Result<(), OrbitError> 
             );
         "#,
     )
-    .map_err(store_error)?;
+    .map_err(sqlite_store_error)?;
     if !table_has_column(conn, "job_runs", "pipeline_state_json")? {
         return Ok(());
     }
@@ -224,7 +225,7 @@ pub(super) fn apply_job_run_states(conn: &Connection) -> Result<(), OrbitError> 
                 rusqlite::params![after, JOB_RUN_STATES_BATCH],
                 |row| row.get(0),
             )
-            .map_err(store_error)?;
+            .map_err(sqlite_store_error)?;
         let Some(last) = last else {
             break;
         };
@@ -237,21 +238,21 @@ pub(super) fn apply_job_run_states(conn: &Connection) -> Result<(), OrbitError> 
                      pipeline_state_json = excluded.pipeline_state_json",
                 rusqlite::params![after, last],
             )
-            .map_err(store_error)?;
+            .map_err(sqlite_store_error)?;
         conn.execute(
             "UPDATE job_runs SET pipeline_state_json = NULL \
              WHERE rowid > ?1 AND rowid <= ?2 AND pipeline_state_json IS NOT NULL",
             rusqlite::params![after, last],
         )
-        .map_err(store_error)?;
+        .map_err(sqlite_store_error)?;
         after = last;
     }
     conn.execute_batch("ALTER TABLE job_runs DROP COLUMN pipeline_state_json")
-        .map_err(store_error)?;
+        .map_err(sqlite_store_error)?;
 
     let pragma = |name: &str| -> Result<i64, OrbitError> {
         conn.query_row(&format!("PRAGMA {name}"), [], |row| row.get(0))
-            .map_err(store_error)
+            .map_err(sqlite_store_error)
     };
     orbit_common::tracing::info!(
         target: "orbit.store.sqlite",
@@ -262,7 +263,8 @@ pub(super) fn apply_job_run_states(conn: &Connection) -> Result<(), OrbitError> 
     );
     Ok(())
 }
-
-fn store_error(error: rusqlite::Error) -> OrbitError {
-    OrbitError::Store(error.to_string())
+/// Add optional timing without inventing observations for historical steps.
+/// Idempotent: a rewound ledger replays this over a table that already has it.
+pub(super) fn apply_job_run_step_lock_wait(conn: &Connection) -> Result<(), OrbitError> {
+    add_column_if_missing(conn, "job_run_steps", "lock_wait_ms", "INTEGER")
 }

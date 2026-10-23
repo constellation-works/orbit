@@ -23,8 +23,22 @@ work. An owner drain stops admitting once its window closes and is refused then.
 drain whose admissions were stopped with `orbit run auto --stop` or that is being cancelled, \
 since an extension never reopens one, and a drain started without `--for`, which makes a single \
 admission pass and has no window to extend. A pull drain is refused too once a pass has \
-closed its window with nothing left to settle: that drain is ending.\n\n`--concurrency` also changes how many tasks the \
-drain keeps in flight, exactly as `orbit run concurrency --set` does.\n\nExamples:\n  \
+closed its window with nothing left to settle: that drain is ending.\n\n`--concurrency` changes the ceiling as `orbit run concurrency --set` does.\n\
+Owner/local drains count every in-flight child against N.\n\
+A pull drain applies bounded before-landing review credit. Before each claim,\n\
+it counts\n\
+`occupied - min(reviewing, N)` against N.\n\
+Reviewing begins after the owner's persisted before-landing admission has\n\
+`applies=true`. Validation and publishing before that boundary count as\n\
+implementing; later review revalidation and handoff remain reviewing.\n\
+The credit is capped at N, but reviewing leaves can exceed N as\n\
+replacements reach review.\n\
+With an unchanged N and no pre-existing excess, occupied pull leaves stay\n\
+at most 2N and implementing leaves at most N.\n\
+Lowering N preserves running leaves, so existing excess can remain\n\
+temporarily.\n\
+See `orbit run show` for stage counts. Review rebuilds still compete for\n\
+repository build-budget slots.\n\nExamples:\n  \
 orbit run extend jrun-20260905-0546 --for 4h\n  orbit run extend jrun-20260905-0546 --for 2h \
 --concurrency 5 --reason 'overnight backlog'"
 )]
@@ -36,7 +50,7 @@ pub struct RunExtendArgs {
     #[arg(long = "for", value_name = "DURATION")]
     pub for_duration: String,
 
-    /// Also set how many tasks the drain may keep in flight
+    /// Also set the admission ceiling; pull drains apply bounded review credit
     #[arg(long, value_name = "N")]
     pub concurrency: Option<u32>,
 

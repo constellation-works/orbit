@@ -5,13 +5,7 @@ use orbit_types::task::HostOs;
 
 use super::*;
 
-#[test]
 fn replay_does_not_certify_operator_edits_as_pilot_output() {
-    if !super::super::dispatch_admission::isolated(
-        "drain_approval::pilot_mutations::replay_does_not_certify_operator_edits_as_pilot_output",
-    ) {
-        return;
-    }
     for (edit, reason) in [
         (
             TaskUpdateParams {
@@ -105,13 +99,7 @@ fn replay_does_not_certify_operator_edits_as_pilot_output() {
     }
 }
 
-#[test]
 fn pilot_routing_and_crew_redraw_are_approved_once_and_preserve_host_holds() {
-    if !super::super::dispatch_admission::isolated(
-        "drain_approval::pilot_mutations::pilot_routing_and_crew_redraw_are_approved_once_and_preserve_host_holds",
-    ) {
-        return;
-    }
     for (redraw, resume_write) in [(false, false), (true, false), (true, true)] {
         let mut workspace = Workspace::with_config(
             "medium_complexity_crews = [\"sol\"]\n\
@@ -244,3 +232,10 @@ fn pilot_routing_and_crew_redraw_are_approved_once_and_preserve_host_holds() {
         assert_eq!(exclusion(&workspace).as_deref(), Some("native_os_required"));
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    replay_does_not_certify_operator_edits_as_pilot_output_scenarios,
+    replay_does_not_certify_operator_edits_as_pilot_output,
+    pilot_routing_and_crew_redraw_are_approved_once_and_preserve_host_holds
+);

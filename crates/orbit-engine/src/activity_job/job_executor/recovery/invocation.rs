@@ -2,6 +2,7 @@
 use super::input::{bind_recovery_context, validate_bound_recovery_context};
 use super::observation::{RecoveryObservation, recovery_base_ref};
 use super::*;
+use crate::activity_job::workspace::generated_paths::conflicted_generated_paths;
 use crate::context::{
     STEP_RECOVERY_DECISION_SCHEMA_VERSION, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
 };
@@ -12,6 +13,9 @@ pub(super) struct RecoveryDispatch {
     pub(super) dispatch: crate::activity_job::dispatcher::DispatchOutcome,
     pub(super) slot: Option<StepRecoveryDecisionSlot>,
     pub(super) observation: Option<RecoveryObservation>,
+    /// The dispatched spec's resolved model: the agent that made the repair,
+    /// which authors the host's repair commit [ORB-16768].
+    pub(super) recovery_model: Option<String>,
 }
 
 /// Ask the host for this invocation's decision slot and name it in the
@@ -73,15 +77,17 @@ pub(super) fn dispatch_recovery(
         "attempt": attempt,
         "max_attempts": max_attempts,
     });
-    if let StepFailure::Error(DispatchError::RecoverableVcsConflict {
-        operation,
-        original_base_sha,
-        target_base_sha,
-        conflicting_paths,
-        diagnostic,
-    }) = failure
+    if let StepFailure::Error(DispatchError::RecoverableVcsConflict(conflict)) = failure
         && let Some(object) = input.as_object_mut()
     {
+        let orbit_common::RecoverableVcsConflict {
+            operation,
+            original_base_sha,
+            target_base_sha,
+            conflicting_paths,
+            conflicting_files,
+            diagnostic,
+        } = conflict.as_ref();
         object.insert(
             "recovery_kind".to_string(),
             Value::String("vcs_conflict".to_string()),
@@ -105,7 +111,27 @@ pub(super) fn dispatch_recovery(
                     .collect(),
             ),
         );
+        object.insert(
+            "conflicting_files".to_string(),
+            serde_json::json!(conflicting_files),
+        );
         object.insert("diagnostic".to_string(), Value::String(diagnostic.clone()));
+        // The host regenerates these after the leaf returns; the leaf leaves
+        // them alone [ORB-16784].
+        if recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY {
+            object.insert(
+                "regenerated_paths".to_string(),
+                serde_json::json!(
+                    conflicted_generated_paths(ctx.host, conflicting_paths)
+                        .into_iter()
+                        .map(|generated| serde_json::json!({
+                            "path": generated.path,
+                            "command": generated.command,
+                        }))
+                        .collect::<Vec<_>>()
+                ),
+            );
+        }
     }
     if matches!(
         recovery.name.as_str(),
@@ -118,7 +144,30 @@ pub(super) fn dispatch_recovery(
                 .map_err(|error| ("input", error.to_string()))?;
         }
         inject_recovery_evidence(ctx, &mut input).map_err(|error| ("input", error))?;
-        input["crew_config_key"] = Value::String(RECOVERY_CREWS_KEY.to_string());
+        // An `--auto-fix` run repairs its pull request, check or conflict,
+        // with the crew drawn from the auto-fix purpose pool (the low pool
+        // while it is unset), the draw its admission recorded.
+        let auto_fix = input
+            .pointer("/failed_step_input/auto_fix")
+            .and_then(Value::as_bool)
+            == Some(true);
+        let crews_key = if auto_fix {
+            orbit_types::workflow::PR_AUTO_FIX_CREWS_KEY
+        } else {
+            RECOVERY_CREWS_KEY
+        };
+        input["crew_config_key"] = Value::String(crews_key.to_string());
+    }
+    if orbit_types::workflow::is_pr_auto_fix_check_repair(&failure.diagnostic()) {
+        let instruction =
+            super::check_scope::instruction(&ctx.run_id, &step.id, &failure.diagnostic());
+        if let Some(error) = input
+            .get("error_message")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        {
+            input["error_message"] = Value::String(format!("{error}\n{instruction}"));
+        }
     }
     let slot = allocate_recovery_decision(step, ctx, recovery, attempt, &mut input)
         .map_err(|error| ("decision", error.to_string()))?;
@@ -134,6 +183,10 @@ pub(super) fn dispatch_recovery(
     let crew_overridden_spec = crew_overridden_recovery_spec(recovery, ctx, &input)
         .map_err(|error| ("crew", error.to_string()))?;
     let spec = crew_overridden_spec.as_ref().unwrap_or(&recovery.spec);
+    let recovery_model = match spec {
+        ActivityV2Spec::AgentLoop(agent) => agent.model.clone(),
+        ActivityV2Spec::Deterministic(_) => None,
+    };
     let dispatch = dispatch_v2_activity_without_run_id_injection(V2DispatchInput {
         activity_name: &recovery.name,
         spec,
@@ -151,6 +204,7 @@ pub(super) fn dispatch_recovery(
                 dispatch,
                 slot,
                 observation,
+                recovery_model,
             })
         }
         Err(error) => Err(("dispatch", error.to_string())),

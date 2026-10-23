@@ -1,0 +1,2 @@
+00cbbd0ddbda2762798f7009838ed34ca1f12b93965813c7df22943bc62166d1  orbit-desktop-universal-apple-darwin.dmg
+a68641c6aacd345c4931a6217331d2bf43398c7bc134666a2f756953eab407aa  orbit-desktop-version.txt

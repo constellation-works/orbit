@@ -1,6 +1,7 @@
 //! Permanent action-key mapping at the task allocation authority.
 use super::TaskRegistryStore;
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, params};
 impl TaskRegistryStore {
     pub(crate) fn task_action_id(
@@ -15,7 +16,7 @@ impl TaskRegistryStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| OrbitError::Store(error.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     pub(crate) fn reserve_task_action(
@@ -33,15 +34,13 @@ impl TaskRegistryStore {
             return Ok(id);
         }
         let candidate = self.allocate_task_id(workspace)?;
-        let conn = self
-            .conn
-            .lock()
+        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         conn.execute(
             "INSERT OR IGNORE INTO task_action_keys VALUES (?1,?2,?3,?4)",
             params![workspace, key, candidate, digest],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
         drop(conn);
         self.task_action(workspace, key, digest)?
             .ok_or_else(|| OrbitError::Store("task action reservation disappeared".into()))
@@ -53,7 +52,7 @@ impl TaskRegistryStore {
         digest: &str,
     ) -> Result<Option<String>, OrbitError> {
         let conn = self.read()?;
-        let row:Option<(String,String)>=conn.query_row("SELECT task_id,input_digest FROM task_action_keys WHERE workspace_id=?1 AND action_key=?2",params![workspace,key],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|e|OrbitError::Store(e.to_string()))?;
+        let row:Option<(String,String)>=conn.query_row("SELECT task_id,input_digest FROM task_action_keys WHERE workspace_id=?1 AND action_key=?2",params![workspace,key],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(sqlite_store_error)?;
         row.map(|(id, stored)| {
             if stored == digest {
                 Ok(id)

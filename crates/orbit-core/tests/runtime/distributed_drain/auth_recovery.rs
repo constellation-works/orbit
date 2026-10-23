@@ -66,7 +66,7 @@ fi
 }
 
 fn run_leaf(pair: &Pair, leaf: &str) -> Result<DispatchOutcome, orbit_engine::DispatchError> {
-    let audit_dir = TempDir::new().unwrap();
+    let audit_dir = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let audit = V2AuditWriter::with_disk_sinks(
         audit_dir.path(),
         Arc::new(orbit_store::Store::open_in_memory().unwrap()),
@@ -78,6 +78,9 @@ fn run_leaf(pair: &Pair, leaf: &str) -> Result<DispatchOutcome, orbit_engine::Di
     .unwrap();
     let spec = AgentLoopSpec {
         instruction: "Return a success envelope.".into(),
+        steering_instruction: None,
+        regression_risk_instruction: None,
+        explore_instruction: None,
         tools: vec![],
         tool_disallow_list: None,
         on_denial: OnDenial::Terminate,
@@ -92,6 +95,8 @@ fn run_leaf(pair: &Pair, leaf: &str) -> Result<DispatchOutcome, orbit_engine::Di
         proc_allowed_programs: None,
         proc_disallowed_programs: None,
         trusted_host_execution: false,
+        crew_env: Vec::new(),
+        crew_account: None,
     };
     orbit_engine::activity_job::cli_runner::run_cli_backend(
         &pair.follower,
@@ -106,8 +111,8 @@ fn run_leaf(pair: &Pair, leaf: &str) -> Result<DispatchOutcome, orbit_engine::Di
 
 fn due(pair: &Pair, drain: &str) {
     let mut state = pair.follower.read_run_state(drain).unwrap().unwrap();
-    assert!(!state.pull_auth_recovery.is_empty());
-    for incident in state.pull_auth_recovery.values_mut() {
+    assert!(!state.pull_drain.pull_auth_recovery.is_empty());
+    for incident in state.pull_drain.pull_auth_recovery.values_mut() {
         if incident.recovered_at.is_none() {
             incident.exclusion.next_probe_at = Some(Utc::now() - chrono::Duration::seconds(1));
         }
@@ -115,14 +120,7 @@ fn due(pair: &Pair, drain: &str) {
     pair.follower.write_run_state(drain, &state).unwrap();
 }
 
-#[test]
 fn auth_probe_backoff_recovery_and_later_leaf_run_in_the_same_drain() {
-    if !isolated(
-        module_path!(),
-        "auth_probe_backoff_recovery_and_later_leaf_run_in_the_same_drain",
-    ) {
-        return;
-    }
     let clock = std::time::Instant::now();
     orbit_core::test_support::with_cli_supervision_clock(
         move || clock,
@@ -198,6 +196,7 @@ fn auth_probe_backoff_recovery_fixture() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .pull_auth_recovery
         .into_values()
         .next()
@@ -222,6 +221,7 @@ fn auth_probe_backoff_recovery_fixture() {
         .read_run_state(&drain)
         .unwrap()
         .unwrap()
+        .pull_drain
         .pull_auth_recovery
         .into_values()
         .next()
@@ -274,7 +274,7 @@ fn auth_probe_backoff_recovery_fixture() {
         "Reply with exactly ORBIT_AUTH_OK."
     );
     let state = pair.follower.read_run_state(&drain).unwrap().unwrap();
-    let recovery = state.pull_auth_recovery.values().next().unwrap();
+    let recovery = state.pull_drain.pull_auth_recovery.values().next().unwrap();
     assert!(recovery.recovered_at.is_some());
     assert_eq!(recovery.recovery_source.as_deref(), Some("auth_probe"));
     assert!(
@@ -296,14 +296,7 @@ fn auth_probe_backoff_recovery_fixture() {
     assert!(again["crews"]["auth_exclusions"][0]["next_probe_at"].is_string());
 }
 
-#[test]
 fn only_declared_auth_exclusions_probe_and_timeout_keeps_them_excluded() {
-    if !isolated(
-        module_path!(),
-        "only_declared_auth_exclusions_probe_and_timeout_keeps_them_excluded",
-    ) {
-        return;
-    }
     let _env = orbit_common::test_env::scoped([
         ("AUTH_FIXTURE_ALLOWED", Some("permitted")),
         ("AUTH_FIXTURE_NOT_ALLOWED", Some("private")),
@@ -382,3 +375,125 @@ fn only_declared_auth_exclusions_probe_and_timeout_keeps_them_excluded() {
         }
     }
 }
+
+/// Two crews on the Claude subscription and, on the follower, one on its own
+/// API key [ORB-17288]. The owner defines the same crews without `env`,
+/// which only the executing host's global file may set.
+const ACCOUNT_CREWS: &str = r#"
+[workflow]
+default_crew = "opus"
+[crews.opus]
+provider = "claude"
+model = "claude-opus"
+[crews.sonnet]
+provider = "claude"
+model = "claude-sonnet"
+[crews.opus-credits]
+provider = "claude"
+model = "claude-opus"
+"#;
+
+/// [ORB-17288] An authentication failure of a crew that sets `env` excludes
+/// that crew alone: the subscription's crews stay runnable. Its probe runs
+/// with that crew's credential and re-admits it, and only it.
+fn a_crew_account_auth_failure_excludes_and_recovers_only_that_crew() {
+    let _env =
+        orbit_common::test_env::scoped([("CREW_ACCOUNT_FIXTURE_KEY", Some("credits-fixture-key"))]);
+    let follower_global = format!(
+        "{ACCOUNT_CREWS}env = [\"ANTHROPIC_API_KEY=CREW_ACCOUNT_FIXTURE_KEY\"]\n\
+         [execution.env]\npass = [\"HOME\", \"PATH\"]\n"
+    );
+    let pair =
+        Pair::with_follower_global_crews(ACCOUNT_CREWS, &follower_global, &[Some("opus-credits")]);
+    let bin = pair.follower_repo.join("claude");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\n\
+             [ \"$1\" = auth-recovery-probe ] || exit 1\n\
+             printf 'probe key=%s\\n' \"${ANTHROPIC_API_KEY:-none}\" >> probe-calls\n\
+             [ -f auth-ok ] || exit 1\n\
+             printf 'ORBIT_AUTH_OK\\n'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    pair.follower_cli("claude", bin.to_str().unwrap());
+    let mut def = pair.follower.get_executor_def("claude").unwrap().unwrap();
+    def.auth_probe = Some(AuthProbe {
+        args: vec!["auth-recovery-probe".into()],
+        stdin: "Reply with exactly ORBIT_AUTH_OK.".into(),
+        timeout_seconds: 5,
+        success: AuthProbeSuccess::StdoutContains {
+            text: "ORBIT_AUTH_OK".into(),
+        },
+        relogin_hint: "Run `claude login`.".into(),
+    });
+    pair.follower.upsert_executor_def(&def).unwrap();
+
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), pair.tasks[0]);
+    pair.leaf_fails_with(
+        &leaf,
+        "[provider_unavailable] provider=claude account=opus-credits claude provider \
+         authentication failure (HTTP 401)",
+    );
+    let pass = pair.pass(&drain);
+    let excluded = pass["crews"]["excluded"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["crew"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(excluded, ["opus-credits"], "the credits crew alone: {pass}");
+    let runnable = pass["crews"]["runnable"].as_array().unwrap();
+    for crew in ["opus", "sonnet"] {
+        assert!(runnable.iter().any(|name| name == crew), "{crew}: {pass}");
+    }
+    let [exclusion] = pass["crews"]["auth_exclusions"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("one account excluded: {pass}");
+    };
+    assert_eq!(
+        (&exclusion["provider"], &exclusion["account"]),
+        (&json!("claude"), &json!("opus-credits"))
+    );
+
+    pair.pass(&drain);
+    std::fs::write(pair.follower_repo.join("auth-ok"), "ready").unwrap();
+    due(&pair, &drain);
+    let recovered = pair.pass(&drain);
+    assert!(
+        recovered["crews"]["auth_exclusions"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{recovered}"
+    );
+    assert!(
+        !recovered["crews"]["excluded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["crew"] == "opus-credits"),
+        "the probe re-admits the credits crew: {recovered}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(pair.follower_repo.join("probe-calls")).unwrap(),
+        "probe key=credits-fixture-key\n",
+        "one probe, on the credits crew's own credential"
+    );
+}
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    auth_probe_backoff_recovery_and_later_leaf_run_in_the_same_drain_scenarios,
+    auth_probe_backoff_recovery_and_later_leaf_run_in_the_same_drain,
+    only_declared_auth_exclusions_probe_and_timeout_keeps_them_excluded,
+    a_crew_account_auth_failure_excludes_and_recovers_only_that_crew
+);

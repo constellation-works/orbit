@@ -1,8 +1,8 @@
 ---
 title: Review Gate — Overview
 owner: codex
-last_updated: 2026-10-09
-last_validated: 2026-10-08
+last_updated: 2026-10-18
+last_validated: 2026-10-22
 status: Accepted
 feature: review-gate
 doc_role: overview
@@ -23,20 +23,32 @@ what it finds as one second commit (`review: <summary>`) under its own
 identity, and comments every finding with what changed for it [ORB-13989].
 The verdict is `accept` (no fixes), `accept_with_fixes` (owner validation
 reruns on the reviewer commit before the PR opens, and the PR body gains a
-"Review fixes" section), or `reject` (the task blocks with both commits
-preserved; there is no second review round). Passed certificates exclude exactly reproduced
-landings from redundant after-landing review while QA stays independent.
+"Review fixes" section), `reject` (the task blocks with both commits
+preserved; there is no second review round), or `incomplete` (the review
+could not finish or required evidence is unavailable). An evidence-only gap
+can hold the candidate for the owner to supply the named checks. Passed
+certificates exclude exactly reproduced landings from redundant after-landing
+review while QA stays independent.
 Neither review timing nor a reviewer verdict grants merge permission.
 
-Review runs at three timings [ORB-13992] [ORB-14849]: `review.before_pr` in
-`config.toml` holds PR creation for the reviewer; `review.before_landing`
-opens the PR first and reviews it while hosted CI runs, landing only the head
-that review settled; and the `delivery-code-review` auto-task's own `enabled`
-flag reviews landed deliveries in batches. Both config switches share
-`review.minutes`, the limit for one candidate's review, and there is one
-review layer before landing: config load fails while both are on. The reviewer crew stays `operation.review_crew`; the
-`[operation]` table once also carried operation-mode presets and grants,
-removed on 2026-09-21 (see [orbit-core decisions](../orbit-core/4_decisions.md)).
+Review runs at three timings [ORB-13992] [ORB-14849]: `review.timing =
+"before_pr"` in `config.toml` holds PR creation for the reviewer;
+`review.timing = "before_landing"` opens the PR first and reviews it while
+hosted CI runs, landing only the head that review settled; and the
+`delivery-code-review` auto-task's own `enabled` flag reviews landed
+deliveries in batches. Both config timings share `review.minutes`, the limit
+for one candidate's review, and there is one review layer before landing:
+`review.timing` names at most one. The reviewer is drawn from the single crew
+or weighted pool in `workflow.purpose_crews.pre_landing_review`, or in
+`workflow.purpose_crews.review` while that is unset; the `[operation]` table
+once also carried operation-mode presets and grants, removed on 2026-09-21
+(see [orbit-core decisions](../orbit-core/4_decisions.md)).
+
+With its own `review.timing` not `before_landing`, an owner can use
+`review.before_landing_hosts` to enable before-landing review for claimed
+deliveries from listed machines while leaving its own deliveries and unlisted
+hosts unaffected. The host selector cannot be combined with `review.timing =
+"before_pr"`; there is one review layer before landing.
 
 ## 1. Motivation
 
@@ -52,16 +64,17 @@ anything else stays an ordinary review obligation.
 
 ## 2. Core Concepts
 
-- **Before-PR switch:** `review.before_pr`, captured once per delivery run
-  or drain in its immutable input and never re-read.
-- **Before-landing switch:** `review.before_landing`, captured the same way;
-  the reviewer reviews the published PR head, a fix is pushed under a lease
-  on that head, and any outcome but an approve leaves the PR open in review.
+- **Before-PR timing:** `review.timing = "before_pr"`, captured once per
+  delivery run or drain in its immutable input and never re-read.
+- **Before-landing timing:** `review.timing = "before_landing"`, captured the
+  same way; the reviewer reviews the published PR head, a fix is pushed under
+  a lease on that head, and any outcome but an approve leaves the PR open in review.
 - **After-landing switch:** the `delivery-code-review` auto-task's `enabled`
   flag; it never affects delivery admission.
 - **Reviewer:** a fresh invocation with its own instruction, tool allowlist
-  and wall clock, resolved from `operation.review_crew`. It never becomes the
-  implementer and never merges.
+  and wall clock, resolved from `workflow.purpose_crews.pre_landing_review`
+  (else `workflow.purpose_crews.review`). It never
+  becomes the implementer and never merges.
 - **One review per candidate:** each candidate in a delivery run lineage
   (workspace, task set, base branch, and the run with its resumes) gets one
   review, bounded by `review.minutes` of reviewer wall clock.

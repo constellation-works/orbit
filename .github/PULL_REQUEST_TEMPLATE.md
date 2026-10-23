@@ -19,10 +19,10 @@ What changed and why, in 1–3 sentences. Focus on intent, not a diff dump.
 ## Test plan
 
 <!--
-Commands you actually ran, with results. The full `make ci` runs in CI.
+List focused commands you ran and their results. GitHub reports the required PR checks.
 -->
 
-- [ ] `make ci-fast` (no Rust tests), `make ci-test-affected`, `make ci-lint`, and `make goldens` pass
+- [ ] Required PR checks pass: `Check / Clippy / Test`, `Test shard 1/3`, `Test shard 2/3`, and `Test shard 3/3`
 - [ ] Additional focused checks (if needed) pass
 - [ ] Manual verification steps (if applicable):
 

@@ -7,6 +7,7 @@ use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::workflow::ResourceThrottle;
 use serde_json::Value;
 
+use super::format::{WaitingTaskFormatter, waiting_reason};
 use crate::command::{Block, CommandOut, Execute, Payload};
 
 const DEFAULT_LIMIT: usize = 50;
@@ -15,20 +16,22 @@ const DEFAULT_LIMIT: usize = 50;
 #[command(
     about = "Explain why backlog tasks can or cannot start in auto-drain",
     override_usage = "orbit run readiness [<TASK_ID>...] [OPTIONS]",
-    after_help = "Examples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --json\n  orbit run readiness --allow-crew opus,sonnet\n\nThis is a read-only snapshot. It does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks; an eligible task is not guaranteed to start.\n\n`--allow-crew` previews the same restriction `orbit run auto --allow-crew` would\napply: excluded tasks report `crew_not_allowed` with the crew they would run as,\nand the rest keep filling the free slots.\n\nWhile the host has a shutdown or reboot scheduled, every task reports\n`host_shutdown_scheduled` and the output names the scheduled time and mode.\n\nWhile sustained host resource pressure throttles admissions\n(`[workflow.resource_throttle]`), every task reports `resource_throttled` and\nthe output names the resource, its value, threshold and since-when.\nUnknown readings never throttle; `--json` lists them in\n`capacity.resource_telemetry_unknown`. On a replica the throttle is this\nhost's own and holds its pull drain; the owner's throttle never holds a pull\nclaim. When that pull drain's last pass requested no claim for another reason,\n`Pull drain requests held:` names it (`capacity.pull_drain_refusal`), for\nexample `circuit_open` once three of its claims in a row settled as failures,\nuntil its breaker half-opens to admit one probe claim.\nWhen CPU is the only held resource,\n`no-diff-expected` auto-tasks (marked `cpu-light`) still start within the\n`cpu_light_leaves` reserved slots; once those are taken they report\n`cpu_light_budget_full`, and memory or disk pressure holds them too.\n\nA `Provider limits:` line names each provider usage window at or past its\n`workflow.provider_limit_*` threshold, its reset, and the crews admission skips\nuntil then; a task whose every crew is skipped reports `provider_limit` with\nthat detail. `--json` lists every live reading in `provider_limits` (provider,\nscope, window, used_percent, exhausted, resets_at, source, observed_at,\nthreshold, gated, until and crews).\n\nA task whose frozen delivery batch is within two hours of its deadline\nsorts ahead of same-priority backlog and names that deadline.\n\nWith more than one slot, a backlog task with no context_files and no\n`no-diff-expected` tag holds no file lock: it reports `awaiting_footprint`\nwhile a task pilot on this host would still prepare it, then\n`awaiting_exclusive_slot` until no other leaf is in flight, and runs alone."
+    after_help = "Examples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --json\n  orbit run readiness --allow-crew opus,sonnet\n\nThis is a read-only snapshot. It does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks; an eligible task is not guaranteed to start.\n\nWithout `--concurrency`, the ceiling is the live local drain's, including an\n`orbit run concurrency` adjustment, otherwise a live pull drain's, otherwise 5.\n`--json` names that choice as `capacity.limit_source` (`run_input`,\n`run_control`, `pull_run_input`, `pull_run_control`, or `default`). An explicit\n`--concurrency` is `requested` and wins over both drains. When the pull drain\nsupplies the ceiling, text adds a `Leaf ceiling:` line naming it.\n\n`--allow-crew` previews the same restriction `orbit run auto --allow-crew` would\napply: excluded tasks report `crew_not_allowed` with the crew they would run as,\nand the rest keep filling the free slots. Without it, the live drain's own\n`--allow-crew` set applies; `--json` names it in `capacity.allowed_crews`.\n\nA drain started while another runs waits for it and is listed as `Queued drain:`\nwith its completion, ceiling, crews and window, the `execution.env.pass` names\nits start did not hold (`Unset env:`), and any Claude crew in its window left\nwith no worker credential (`capacity.queued_drains` in `--json`).\n\nWhile a host shutdown or reboot is within machine.host_shutdown_hold_minutes\n(default 180), every task reports `host_shutdown_scheduled` and the output says\nadmissions are held, naming the scheduled time and mode. A schedule further\naway is named the same way and admissions continue. A pull drain held for that\nshutdown reports it as `Pull drain requests held: host_shutdown_scheduled: …`.\n\nWhile sustained host resource pressure throttles admissions\n(`[workflow.resource_throttle]`), every task reports `resource_throttled` and\nthe output names the resource, its value, threshold and since-when.\nUnknown readings never throttle; `--json` lists them in\n`capacity.resource_telemetry_unknown`. On a replica the throttle is this\nhost's own and holds its pull drain; the owner's throttle never holds a pull\nclaim. When that pull drain's last pass requested no claim for another reason,\n`Pull drain requests held:` names it (`capacity.pull_drain_refusal`), for\nexample `circuit_open` once three of its claims in a row settled as failures,\nuntil its breaker half-opens to admit one probe claim.\nWhen CPU is the only held resource,\n`no-diff-expected` auto-tasks (marked `cpu-light`) still start within the\n`cpu_light_leaves` reserved slots; once those are taken they report\n`cpu_light_budget_full`, and memory, disk or I/O pressure holds them too.\nOn Linux, sustained disk I/O stall (`io full`, from `/proc/pressure/io`) is\none of the held resources; hosts without it are not gated.\n\nA `Provider limits:` line names each provider usage window at or past its\n`workflow.provider_limit_*` threshold, its reset, and the crews admission skips\nuntil then; a task whose every crew is skipped reports `provider_limit` with\nthat detail. `--json` lists every live reading in `provider_limits` (provider,\nscope, window, used_percent, exhausted, resets_at, source, observed_at,\nthreshold, gated, until and crews).\n\nA task whose frozen delivery batch is within two hours of its deadline\nsorts ahead of same-priority backlog and names that deadline.\n\nWith more than one slot, a backlog task with no context_files and no\n`no-diff-expected` tag holds no file lock: it reports `awaiting_footprint`\nwhile a task pilot on this host would still prepare it, then\n`awaiting_exclusive_slot` until no other leaf is in flight, and runs alone."
 )]
 pub struct ReadinessCommand {
     /// Optional task IDs to explain. Omit to inspect a bounded backlog snapshot.
     #[arg(value_name = "TASK_ID", num_args = 0..)]
     pub task_ids: Vec<String>,
-    /// Leaf-run concurrency to evaluate. Defaults to auto-drain's default (5).
+    /// Leaf-run concurrency to evaluate. Omit for the live local drain's
+    /// ceiling, else a live pull drain's, else 5.
     #[arg(long, value_name = "N")]
     pub concurrency: Option<u32>,
     /// Maximum tasks to explain, including an explicit selection (1-500).
     #[arg(long, default_value_t = DEFAULT_LIMIT, value_name = "N")]
     pub limit: usize,
     /// Evaluate as if the drain were restricted to these configured crews.
-    /// Repeatable and comma-separated; omitted, no crew restriction applies.
+    /// Repeatable and comma-separated; omitted, the live drain's own crew
+    /// restriction applies (none when no drain is live or it has none).
     #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
     pub allow_crew: Vec<String>,
 }
@@ -42,7 +45,7 @@ impl Execute for ReadinessCommand {
             self.limit,
             &self.allow_crew,
         )?;
-        readiness_payload(payload)
+        readiness_payload(payload, &WaitingTaskFormatter::new(runtime))
     }
 }
 
@@ -64,18 +67,21 @@ fn validate_task_ids(task_ids: &[String]) -> Result<(), OrbitError> {
     Ok(())
 }
 
-pub(crate) fn readiness_payload(payload: Value) -> CommandOut {
-    let lines = readiness_lines(&payload);
+fn readiness_payload(payload: Value, formatter: &WaitingTaskFormatter) -> CommandOut {
+    let lines = readiness_lines(&payload, formatter);
     Ok(Payload::blocks(payload, vec![Block::text(lines.join("\n"))]).into())
 }
 
 // pub(super) widened for sibling-layout tests in run/tests/readiness.rs
-fn readiness_lines(payload: &Value) -> Vec<String> {
+fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<String> {
     let capacity = &payload["capacity"];
     let mut lines = vec![format!(
         "Snapshot only — eligible does not guarantee a task will start. Active leaf runs: {}/{}; free slots: {}.",
         capacity["active_leaf_runs"], capacity["max_active_leaf_runs"], capacity["free_slots"],
     )];
+    if let Some(warning) = payload["validation_env_warning"].as_str() {
+        lines.push(format!("Validation environment warning: {warning}"));
+    }
     for warning in capacity["build_budget_warnings"]
         .as_array()
         .into_iter()
@@ -101,23 +107,32 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
             ""
         };
         lines.push(format!("Running pull drain: {run_id}{stopped}."));
+        // [ORB-16337] Name the ceiling only when this pull drain supplies it.
+        // A local drain, an explicit `--concurrency`, or the idle default
+        // keep the lines they already print.
+        if let Some(source) = capacity["limit_source"]
+            .as_str()
+            .filter(|source| source.starts_with("pull_"))
+        {
+            lines.push(format!("Leaf ceiling: {run_id} ({source})."));
+        }
         // [ORB-15637] Name why it requests nothing, or an open breaker reads
         // like an idle owner.
         if let Some(refusal) = capacity["pull_drain_refusal"].as_str() {
             lines.push(format!("Pull drain requests held: {refusal}"));
         }
     }
-    if let Some(queued) = capacity["queued_drains"].as_array() {
-        for drain in queued {
-            let run_id = drain["run_id"].as_str().unwrap_or("-");
-            let completion = drain["completion"].as_str().unwrap_or("review");
-            lines.push(format!(
-                "Queued drain: {run_id} (completion: {completion})."
-            ));
-        }
+    for drain in capacity["queued_drains"].as_array().into_iter().flatten() {
+        lines.extend(queued_drain_lines(drain, capacity));
     }
-    if let Some(hold) = host_shutdown_hold(&capacity["host_shutdown"]) {
+    if let Some(hold) = host_shutdown_line(
+        &capacity["host_shutdown"],
+        capacity["host_shutdown_holding"].as_bool(),
+    ) {
         lines.push(hold);
+    }
+    if let Some(source) = capacity["resource_cpu_source"].as_str() {
+        lines.push(format!("Resource throttle CPU source: {source}."));
     }
     // [ORB-13901] Named up front like a shutdown hold: it holds every task.
     if let Ok(throttle) =
@@ -125,6 +140,31 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
     {
         lines.push(throttle.hold_reason());
     }
+    let forecast = &capacity["admission_forecast"];
+    let last_forecast = &capacity["last_admission_forecast"];
+    // Both views carry the drain that recorded them; a finished drain's
+    // forecast is labelled as history.
+    let origin = super::admission_forecast::ForecastOrigin {
+        run_id: forecast["drain_run_id"]
+            .as_str()
+            .or_else(|| last_forecast["drain_run_id"].as_str()),
+        ended: forecast["drain_live"]
+            .as_bool()
+            .or_else(|| last_forecast["drain_live"].as_bool())
+            == Some(false),
+        none_live: capacity["drain_run_id"].is_null() && capacity["pull_drain_run_id"].is_null(),
+    };
+    lines.extend(super::admission_forecast::admission_lines(
+        forecast,
+        last_forecast,
+        &origin,
+        |id| {
+            forecast["task_titles"][id]
+                .as_str()
+                .or_else(|| last_forecast["task_titles"][id].as_str())
+                .map(str::to_string)
+        },
+    ));
     lines.extend(provider_limit_lines(&payload["provider_limits"]));
     if let Some(budget) = cpu_light_budget_line(&capacity["cpu_light_budget"]) {
         lines.push(budget);
@@ -133,25 +173,24 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
         lines.push(format!("Occupied slots: {phases}."));
     }
     lines.extend(approval_lines(&payload["approvals"]));
+    lines.extend(out_of_run_auto_fix_lines(&payload["out_of_run_auto_fix"]));
     if let Some(tasks) = payload["tasks"].as_array() {
         for task in tasks {
             let task_id = task["task_id"].as_str().unwrap_or("-");
-            let reason = task["reason"].as_str().unwrap_or("unknown");
+            let reason = waiting_reason(task["reason"].as_str().unwrap_or("unknown"));
             let eligible = task["eligible"].as_bool().unwrap_or(false);
             let crew = task["crew"]
                 .as_str()
                 .map(|crew| format!(" crew={crew}"))
                 .unwrap_or_default();
-            let blocked_by = blocking_task_ids(&task["blocking_task_ids"])
-                .map(|ids| format!(" blocked-by={ids}"))
-                .unwrap_or_default();
+            let blocked_by = formatter.blockers(task);
             // [ORB-15514] A blocker a follower's execution claim holds clears
             // when that claim settles, on the machine named here.
             let claimed = blocking_claims(&task["blocking_claims"])
                 .map(|claims| format!(" claimed-on={claims}"))
                 .unwrap_or_default();
-            // A host-OS wait names the host, and a native-OS requirement the
-            // tag to add. A local-route review hold names the remedy, and
+            // A host-OS wait names the host, a browser-kit wait the install
+            // command, and a native-OS requirement the tag to add. A local-route review hold names the remedy, and
             // a provider limit its window, reset and skipped crews. A task
             // with no footprint names its wait and fix [ORB-15191], and an
             // unverified review finding the verification job to run. Other
@@ -159,6 +198,7 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
             let host = matches!(
                 reason,
                 "host_os_mismatch"
+                    | "browser_kit_missing"
                     | "native_os_required"
                     | "unverified_review_finding"
                     | "local_route_before_pr"
@@ -171,6 +211,15 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
             .flatten()
             .map(|detail| format!(": {detail}"))
             .unwrap_or_default();
+            // A host-OS wait also names the registered hosts of that OS and
+            // whether each is pulling, and one hidden behind an unmet
+            // dependency is named beside it.
+            let host = match (task["host_os_wait"].as_str(), task["host_fleet"].as_str()) {
+                (Some(wait), Some(fleet)) => format!("{host}; then {wait}; {fleet}"),
+                (Some(wait), None) => format!("{host}; then {wait}"),
+                (None, Some(fleet)) => format!("{host}; {fleet}"),
+                (None, None) => host,
+            };
             // [ORB-14624] Which tasks a CPU-only throttle still admits, and
             // which jump the queue before their frozen batch expires.
             let light = if task["cpu_light"].as_bool() == Some(true) {
@@ -182,8 +231,35 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
                 .as_str()
                 .map(|deadline| format!(" frozen-batch-deadline={deadline}"))
                 .unwrap_or_default();
+            // A task resuming a preserved publication waits on no context
+            // lock: its next run adopts the existing pull request first.
+            let published = match &task["published_delivery"] {
+                Value::Object(delivery) => match delivery["pull_request"].as_str() {
+                    Some(number) => format!(" resuming published delivery (PR #{number})"),
+                    None => " resuming published delivery".to_string(),
+                },
+                _ => String::new(),
+            };
+            let observation = &task["admission_forecast"];
+            let profile = observation["profile_source"]
+                .as_str()
+                .map(|source| format!(" profile-source={source} (last admission pass)"))
+                .unwrap_or_default();
+            let forecast_wait = if observation["decision"] == "skipped" {
+                let shadow = if observation["mode"] == "shadow" {
+                    "shadow would wait"
+                } else {
+                    "forecast wait"
+                };
+                format!(
+                    "; {shadow}: {}",
+                    super::admission_forecast::skip_detail(observation)
+                )
+            } else {
+                String::new()
+            };
             lines.push(format!(
-                "{task_id}: {} ({reason}){light}{deadline}{crew}{blocked_by}{claimed}{host}",
+                "{task_id}: {} ({reason}){published}{light}{deadline}{crew}{blocked_by}{claimed}{host}{profile}{forecast_wait}",
                 if eligible { "eligible" } else { "waiting" }
             ));
         }
@@ -197,6 +273,48 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
         ));
     }
     lines
+}
+
+/// Live repairs and the latest drain pass's skipped repair candidates.
+fn out_of_run_auto_fix_lines(repairs: &Value) -> Vec<String> {
+    repairs
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|repair| {
+            let tasks = repair["task_ids"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            if repair["state"] == "skipped" {
+                let ended = if repair["drain_live"].as_bool() == Some(false) {
+                    "ended drain"
+                } else {
+                    "drain"
+                };
+                return format!(
+                    "Out-of-run auto-fix skipped: {tasks} PR #{} ({}): {} — {} (latest pass of {ended} {}, {}).",
+                    repair["pr_number"].as_str().unwrap_or("-"),
+                    repair["blocker"].as_str().unwrap_or("blocker unknown"),
+                    repair["reason"].as_str().unwrap_or("unknown"),
+                    repair["detail"].as_str().unwrap_or("-"),
+                    repair["drain_run_id"].as_str().unwrap_or("-"),
+                    repair["observed_at"].as_str().unwrap_or("time unknown"),
+                );
+            }
+            format!(
+                "Out-of-run auto-fix: {tasks} PR #{} ({}) in run {} ({}), resumed from {}.",
+                repair["pr_number"].as_str().unwrap_or("-"),
+                repair["blocker"].as_str().unwrap_or("-"),
+                repair["run_id"].as_str().unwrap_or("-"),
+                repair["state"].as_str().unwrap_or("-"),
+                repair["source_run_id"].as_str().unwrap_or("-"),
+            )
+        })
+        .collect()
 }
 
 /// [ORB-14117] An `--approve-proposed` drain's approvals so far, and why the
@@ -237,6 +355,18 @@ fn approval_lines(approvals: &Value) -> Vec<String> {
                 task["detail"].as_str().unwrap_or("no evidence recorded"),
             ));
         }
+        if task["reason"] == "warnings" {
+            for finding in task["findings"].as_array().into_iter().flatten() {
+                let Some(text) = finding["text"].as_str().filter(|text| !text.is_empty()) else {
+                    continue;
+                };
+                lines.push(format!(
+                    "  Task {}: {}: {text}",
+                    task["task_id"].as_str().unwrap_or("-"),
+                    finding["kind"].as_str().unwrap_or("warning"),
+                ));
+            }
+        }
     }
     lines
 }
@@ -267,13 +397,69 @@ fn cpu_light_budget_line(budget: &Value) -> Option<String> {
     ))
 }
 
-/// [ORB-12968] A pending host shutdown holds every new admission, so it is
-/// named up front with its mode and time rather than left to per-task reasons.
-fn host_shutdown_hold(shutdown: &Value) -> Option<String> {
+/// A drain waiting for the live window's slot: what its window will admit,
+/// when it starts, the `execution.env.pass` names its submission lacked, and
+/// the Claude crews in its window that will start with no worker credential.
+fn queued_drain_lines(drain: &Value, capacity: &Value) -> Vec<String> {
+    let names = |value: &Value| {
+        value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let run_id = drain["run_id"].as_str().unwrap_or("-");
+    let completion = drain["completion"].as_str().unwrap_or("review");
+    let ceiling = &drain["max_active_leaf_runs"];
+    let crews = Some(names(&drain["allowed_crews"]))
+        .filter(|crews| !crews.is_empty())
+        .unwrap_or_else(|| "all".to_string());
+    let window = match drain["for_seconds"].as_u64() {
+        Some(seconds) if seconds > 0 => {
+            super::format::format_duration(Some(seconds.saturating_mul(1000)))
+        }
+        _ => "single pass".to_string(),
+    };
+    let starts = match (
+        capacity["drain_run_id"].as_str(),
+        capacity["ends_at"].as_str(),
+    ) {
+        (Some(live), Some(ends_at)) => format!("starts when {live} ends (window closes {ends_at})"),
+        (Some(live), None) => format!("starts when {live} ends"),
+        _ => "waiting for its slot".to_string(),
+    };
+    let mut lines = vec![format!(
+        "Queued drain: {run_id} (completion: {completion}; ceiling: {ceiling}; crews: {crews}; window: {window}); {starts}."
+    )];
+    let unset = names(&drain["env_pass_unset"]);
+    if !unset.is_empty() {
+        lines.push(format!("  Unset env: {unset}."));
+    }
+    let uncredentialed = names(&drain["uncredentialed_crews"]);
+    if !uncredentialed.is_empty() {
+        lines.push(format!(
+            "  Starts without a Claude worker credential for crews: {uncredentialed}."
+        ));
+    }
+    lines
+}
+
+/// [ORB-12968] A pending host shutdown is named up front with its mode and
+/// time either way. Admissions are held only inside the horizon; a missing
+/// `host_shutdown_holding` flag is treated as holding.
+fn host_shutdown_line(shutdown: &Value, holding: Option<bool>) -> Option<String> {
     let mode = shutdown["mode"].as_str()?;
     let at = shutdown["scheduled_at"]
         .as_str()
         .unwrap_or("an unknown time");
+    if holding == Some(false) {
+        return Some(format!(
+            "Host {mode} scheduled for {at}. Admissions continue until \
+             machine.host_shutdown_hold_minutes of that time; in-flight runs are not touched."
+        ));
+    }
     Some(format!(
         "Admissions held: host {mode} scheduled for {at}. New runs start again once the \
          schedule is cancelled or the host has restarted; in-flight runs are not touched."
@@ -309,13 +495,4 @@ fn blocking_claims(claims: &Value) -> Option<String> {
         })
         .collect::<Vec<_>>();
     (!named.is_empty()).then(|| named.join(","))
-}
-
-fn blocking_task_ids(blocking: &Value) -> Option<String> {
-    let ids = blocking
-        .as_array()?
-        .iter()
-        .filter_map(Value::as_str)
-        .collect::<Vec<_>>();
-    (!ids.is_empty()).then(|| ids.join(","))
 }

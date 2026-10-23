@@ -1,57 +1,14 @@
-use clap::{ArgAction, Args, Subcommand, ValueEnum};
-use orbit_core::{
-    GlobalSearchHit, GlobalSearchKind, GlobalSearchParams, OrbitError, OrbitRuntime, WorkspaceScope,
-};
-
+//! Search query arguments derive from the operation spec; reindex remains local maintenance.
+use super::operation_args::{Invocation, augment_operation_args, input_from_matches};
 use crate::command::{CommandOut, Execute, Payload};
+use clap::{ArgMatches, Args, Command, FromArgMatches, Subcommand};
+use orbit_common::governance::{operation::OperationVerb, search::SearchVerb};
+use orbit_core::{OrbitError, OrbitRuntime};
+use serde_json::Value;
 
-#[derive(Args)]
-#[command(
-    about = "Search tasks and frictions",
-    subcommand_precedence_over_arg = true,
-    after_help = "Forms:\n  orbit search <query>\n  orbit search reindex"
-)]
 pub struct SearchCommand {
-    /// Tasks match non-adjacent terms: all terms first, then partial matches
-    /// by term count and BM25. Frictions match a case-insensitive substring.
-    #[arg(value_name = "query")]
-    pub query: Option<String>,
-
-    #[command(subcommand)]
+    pub query: Invocation<SearchVerb>,
     pub command: Option<SearchSubcommand>,
-
-    /// Restrict results to one corpus kind.
-    #[arg(long, value_enum, default_value_t = SearchKindArg::All, global = true)]
-    pub kind: SearchKindArg,
-    /// Maximum total results returned (across all kinds when --kind all;
-    /// round-robin per kind to ensure fair representation).
-    #[arg(long, default_value_t = 10, global = true)]
-    pub limit: usize,
-    /// Filter by tag (AND semantics). Applies to task and friction results.
-    #[arg(long = "tag", action = ArgAction::Append, value_delimiter = ',', global = true)]
-    pub tags: Vec<String>,
-    /// Include every status for the queried kind. Task defaults to
-    /// proposed/backlog/in-progress/review/blocked; --all adds
-    /// done/rejected/archived/someday. Friction defaults to open; --all adds
-    /// triaged/resolved.
-    #[arg(long, global = true)]
-    pub all: bool,
-    /// Explicit per-kind status override, e.g. task:open,friction:open.
-    /// task:open covers proposed/backlog/in-progress/review/blocked.
-    /// Overrides --all for the named kind.
-    #[arg(long, value_delimiter = ',', global = true)]
-    pub status: Vec<String>,
-    /// Search this registered workspace as well. Repeat or comma-separate to
-    /// federate across several; every hit is labelled with the workspace it
-    /// came from. Accepts a registered name, a `ws_*` ID, or an absolute
-    /// checkout path. Distinct from the top-level `orbit --workspace`, which
-    /// binds the whole invocation to one checkout.
-    #[arg(long, action = ArgAction::Append, value_delimiter = ',', value_name = "SELECTOR")]
-    pub workspaces: Vec<String>,
-    /// Search every active workspace registered on this machine. Overrides
-    /// `--workspaces`.
-    #[arg(long)]
-    pub all_workspaces: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
@@ -60,37 +17,53 @@ pub enum SearchSubcommand {
     Reindex,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum SearchKindArg {
-    Task,
-    Friction,
-    All,
-}
-
-impl std::fmt::Display for SearchKindArg {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Task => "task",
-            Self::Friction => "friction",
-            Self::All => "all",
-        })
+impl Args for SearchCommand {
+    fn augment_args(cmd: Command) -> Command {
+        let mut cmd =
+            augment_operation_args(cmd.next_display_order(Some(1)), SearchVerb::Query.spec())
+                .subcommand_precedence_over_arg(true)
+                .mut_arg("query", |arg| arg.value_name("query"));
+        // These flags have always been inherited by the maintenance subcommand.
+        for name in ["kind", "limit", "tag", "all", "status"] {
+            cmd = cmd.mut_arg(name, |arg| arg.global(true));
+        }
+        SearchSubcommand::augment_subcommands(cmd)
+    }
+    fn augment_args_for_update(cmd: Command) -> Command {
+        Self::augment_args(cmd)
     }
 }
 
-impl From<SearchKindArg> for GlobalSearchKind {
-    fn from(value: SearchKindArg) -> Self {
-        match value {
-            SearchKindArg::Task => Self::Task,
-            SearchKindArg::Friction => Self::Friction,
-            SearchKindArg::All => Self::All,
-        }
+impl FromArgMatches for SearchCommand {
+    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
+        let spec = SearchVerb::Query.spec();
+        let command = if matches.subcommand().is_some() {
+            Some(SearchSubcommand::from_arg_matches(matches)?)
+        } else {
+            None
+        };
+        Ok(Self {
+            query: Invocation {
+                spec,
+                input: input_from_matches(spec, matches),
+            },
+            command,
+        })
+    }
+    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
+        *self = Self::from_arg_matches(matches)?;
+        Ok(())
     }
 }
 
 impl Execute for SearchCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let Invocation { spec, input } = self.query;
         if matches!(self.command, Some(SearchSubcommand::Reindex)) {
-            if self.query.is_some() || !self.workspaces.is_empty() || self.all_workspaces {
+            if input.contains_key("query")
+                || input.contains_key("workspaces")
+                || input.contains_key("all_workspaces")
+            {
                 return Err(OrbitError::InvalidInput(
                     "search reindex only applies to the current workspace and takes no query"
                         .into(),
@@ -103,54 +76,56 @@ impl Execute for SearchCommand {
             )
             .into());
         }
-        let query = self.search_input()?;
-        let response = runtime.global_search(GlobalSearchParams {
-            query: Some(query),
-            kind: self.kind.into(),
-            limit: self.limit,
-            tags: self.tags,
-            all: self.all,
-            status: self.status,
-            path: None,
-            workspaces: WorkspaceScope::from_inputs(self.workspaces, self.all_workspaces),
-        })?;
-
-        for note in &response.notes {
-            eprintln!("note: {note}");
+        if !input
+            .get("query")
+            .and_then(Value::as_str)
+            .is_some_and(|query| !query.trim().is_empty())
+        {
+            return Err(OrbitError::InvalidInput(
+                "search requires a query. Usage: orbit search <query>".into(),
+            ));
         }
-        // The `--json` shape is the whole response object, not just the hits,
-        // and stays that way: it is the payload [ADR-0306].
-        let doc = serde_json::json!(response);
-        Ok(Payload::detail_table(doc, search_table(&response.results)).into())
+        let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
+        match spec.verb {
+            SearchVerb::Query => render(&value),
+        }
     }
 }
 
 impl SearchCommand {
     pub fn audit_subcommand(&self) -> String {
-        let mode = match &self.command {
-            Some(SearchSubcommand::Reindex) => "reindex",
-            None => "query",
+        let mode = if self.command.is_some() {
+            "reindex".to_string()
+        } else {
+            self.query.audit_subcommand()
         };
-        format!("{mode}:{}", self.kind)
-    }
-
-    fn search_input(&self) -> Result<String, OrbitError> {
-        self.query
-            .clone()
-            .filter(|query| !query.trim().is_empty())
-            .ok_or_else(|| {
-                OrbitError::InvalidInput(
-                    "search requires a query. Usage: orbit search <query>".into(),
-                )
-            })
+        let kind = self
+            .query
+            .input
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("all");
+        format!("{mode}:{kind}")
     }
 }
 
-fn search_table(results: &[GlobalSearchHit]) -> crate::output::table::Table {
+fn render(value: &Value) -> CommandOut {
+    if let Some(notes) = value["notes"].as_array() {
+        for note in notes.iter().filter_map(Value::as_str) {
+            eprintln!("note: {note}");
+        }
+    }
+    let results = value["results"]
+        .as_array()
+        .ok_or_else(|| OrbitError::Execution("search response missing results".into()))?;
+    Ok(Payload::detail_table(value.clone(), search_table(results)).into())
+}
+
+fn search_table(results: &[Value]) -> crate::output::table::Table {
     use crate::output::table::{Column, Table};
     // A federated query labels every hit; a single-workspace one labels none,
     // so the column appears exactly when it carries information [ORB-11027].
-    let federated = results.iter().any(|hit| hit.workspace.is_some());
+    let federated = results.iter().any(|hit| hit.get("workspace").is_some());
     // Each task hit names its detail command (`orbit task show`).
     let mut columns = vec![Column::new("KIND").fixed(), Column::new("SOURCE").fixed()];
     if federated {
@@ -165,21 +140,26 @@ fn search_table(results: &[GlobalSearchHit]) -> crate::output::table::Table {
     }
     let mut table = Table::new(columns).empty_message("no results matching the query");
     for hit in results {
-        let mut row = vec![hit.kind.clone(), hit.source.clone()];
+        let mut row = vec![field(hit, "kind"), field(hit, "source")];
         if federated {
             row.push(
-                hit.workspace
-                    .as_ref()
-                    .map(|workspace| workspace.name.clone())
-                    .unwrap_or_default(),
+                hit["workspace"]["name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
             );
         }
         row.extend([
-            hit.id.clone().or(hit.path.clone()).unwrap_or_default(),
-            hit.title
-                .clone()
-                .or(hit.summary.clone())
-                .unwrap_or_default(),
+            hit.get("id")
+                .or_else(|| hit.get("path"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            hit.get("title")
+                .or_else(|| hit.get("summary"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
         ]);
         if has_match {
             row.push(match_text(hit));
@@ -189,13 +169,25 @@ fn search_table(results: &[GlobalSearchHit]) -> crate::output::table::Table {
     table
 }
 
-fn match_text(hit: &GlobalSearchHit) -> String {
-    if let Some(field) = &hit.best_field {
-        let score = hit.score.map(|score| format!(" score={score:.4}"));
+fn field(hit: &Value, key: &str) -> String {
+    hit[key].as_str().unwrap_or_default().to_string()
+}
+
+fn match_text(hit: &Value) -> String {
+    if let Some(field) = hit["best_field"].as_str() {
+        let score = hit["score"]
+            .as_f64()
+            .map(|score| format!(" score={score:.4}"));
         return format!("best={field}{}", score.unwrap_or_default());
     }
-    hit.matched_by
-        .as_ref()
-        .map(|matched| matched.join(", "))
+    hit["matched_by"]
+        .as_array()
+        .map(|matched| {
+            matched
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
         .unwrap_or_default()
 }

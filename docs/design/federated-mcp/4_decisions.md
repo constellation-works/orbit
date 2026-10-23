@@ -2,7 +2,7 @@
 title: Federated MCP — Decisions
 owner: grok
 last_updated: 2026-10-07
-last_validated: 2026-10-07
+last_validated: 2026-10-12
 status: Draft
 feature: federated-mcp
 doc_role: decisions

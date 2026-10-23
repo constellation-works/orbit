@@ -3,11 +3,15 @@
 
 mod claim;
 mod config;
+#[cfg(feature = "test-support")]
+mod null_host;
 mod plugin_broker;
 mod recovery;
+mod revalidation;
 mod review;
 mod runtime_host;
 mod scratch_gc;
+mod steering;
 mod task_update;
 mod worktree_gc;
 
@@ -15,18 +19,22 @@ pub use claim::{
     ClaimExecutionContext, HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate,
 };
 pub use config::{CrewConfig, PrConfig};
+#[cfg(feature = "test-support")]
+pub use null_host::NullRuntimeHost;
 pub use plugin_broker::{PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun};
 pub use recovery::{
     FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied, RebaseRecoveryAttemptScope, STEP_RECOVERY_DECISION_SCHEMA_VERSION,
-    StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
-    StepRecoveryDecisionSlot, StepRecoveryVerdict,
+    FinalRecoveryApplied, PrAutoFixAdmission, PrAutoFixRequest, RebaseRecoveryAttemptScope,
+    STEP_RECOVERY_DECISION_SCHEMA_VERSION, StepRecoveryAdmission, StepRecoveryDecisionRead,
+    StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, StepRecoveryVerdict,
 };
+pub use revalidation::{GeneratedPath, UnlockedPathValidation, ValidatedTree};
 pub use review::{
     ReviewLandingRequest, ReviewReleaseRequest, ReviewReportCorrectionRequest,
     ReviewerInvocationRequest,
 };
 pub use runtime_host::RuntimeHost;
 pub use scratch_gc::{ScratchGcEntry, ScratchGcReport};
+pub use steering::{SteeringGateReading, SteeringRoundAdmission};
 pub use task_update::{ResolvedActivityTools, TaskActivityUpdate, TaskAutomationUpdate};
 pub use worktree_gc::WorktreeGcTaskLookup;

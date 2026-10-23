@@ -1,6 +1,6 @@
-// Orbit dashboard Health › Metrics (ORB-15746): implement_one duration and
-// task completion trends over the shared dashboard window, split by
-// complexity, with the per-actor tables beneath.
+// Orbit dashboard Analytics › Metrics (ORB-15746): implement_one duration,
+// task completion and defect trends over the shared dashboard window, with
+// the per-actor tables beneath.
 // Pure vanilla JS, split into ES modules with no build step.
 //
 // One panel request reads the three endpoints together; the view state below
@@ -11,9 +11,10 @@
 import {
   el as makeEl, syncNodes, fetchJson, getWindow, setWindow, persistScopeToUrl, syncWindowSelectors,
   notifyScopeChange, wireWindowSelector, requestPanel, panelCanRender, getWorkspaceRevision,
-  onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, formatClock,
+  onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, formatClock, getClockZone,
   bindTaskLink, DASHBOARD_WINDOWS,
 } from './common.js';
+import { linePath, sparkline as lineSparkline, svg } from './sparkline.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -25,8 +26,6 @@ function el(tag, opts = {}, children = []) {
   }
   return node;
 }
-
-const SVG_NS = "http://www.w3.org/2000/svg";
 
 // A bucket or actor with fewer runs than this is drawn hollow or dimmed: its
 // average is one or two runs, not a trend.
@@ -44,17 +43,45 @@ const SERIES = [
 const STACK = ["low", "medium", "hard", "other"];
 const COMPLEXITY_TABS = ["low", "medium", "hard", "xhard", "unset"];
 const STATS = [["avg", "Avg"], ["p50", "p50"], ["p95", "p95"]];
-const TRENDS = [["duration", "implement_one duration"], ["completed", "Tasks completed"]];
+const TRENDS = [["duration", "implement_one duration"], ["completed", "Tasks completed"], ["defects", "Defects"]];
+const DEFECT_GROUPS = [["lineage", "Lineage"], ["origin", "Origin"]];
+// Lineage: what a bug's `regression_from` relations name as its cause.
+const LINEAGE_SERIES = [
+  { key: "fix_for_fix", label: "Fix-for-a-fix", tag: "bug ← bug" },
+  { key: "regression", label: "Other regression", tag: "bug ← work" },
+  { key: "unattributed", label: "Unattributed", tag: "no cause" },
+];
+// Origin: the finder that filed the bug. The chart keeps seven named finders
+// and folds the rest into Other; the table lists every origin the API sends.
+const ORIGIN_LABELS = {
+  "code-review": "Code review",
+  "full-code-review": "Full code review",
+  "delivery-code-review": "Delivery review",
+  "qa-sweep": "QA sweep",
+  "qa-full-sweep": "Full QA sweep",
+  "security-review": "Security review",
+  "ci-failure-sweep": "CI failure sweep",
+  "scanning-sweep": "Scanning sweeps",
+  "review-reconciliation": "Review reconciliation",
+  "friction-curation": "Friction curation",
+  other: "Untagged",
+};
+const ORIGIN_CHART = ["code-review", "full-code-review", "delivery-code-review", "qa-sweep", "qa-full-sweep", "security-review", "ci-failure-sweep"];
 const MODES = [["chart", "Chart"], ["table", "Table"]];
+const OUTCOMES = [["succeeded", "Succeeded"], ["all", "All"]];
 const PROVIDERS = new Set(["claude", "codex", "gemini", "grok"]);
 
 const view = {
+  outcome: "succeeded",
   trend: "duration",
+  group: "lineage",
   stat: "avg",
   mode: "chart",
   shown: {
     duration: { all: true, low: true, medium: true, hard: true },
     completed: { all: true, low: true, medium: true, hard: true },
+    "defects-lineage": { all: true, fix_for_fix: true, regression: true, unattributed: true },
+    "defects-origin": Object.fromEntries(["all", ...ORIGIN_CHART, "other"].map((key) => [key, true])),
   },
   hover: null,
   allActors: false,
@@ -80,15 +107,18 @@ export function placeholdMetricsAggregate() {
 }
 
 export function fetchAndRenderMetrics() {
+  const hashQuery = new URLSearchParams(window.location.hash.split("?")[1] || "");
+  view.outcome = hashQuery.get("outcome") === "all" ? "all" : "succeeded";
   wireMetricsWindowSelector();
   if (isAggregateView()) {
     placeholdMetricsAggregate();
     return Promise.resolve();
   }
   const selectedWindow = getWindow();
+  const selectedOutcome = view.outcome;
   const revision = getWorkspaceRevision();
   const since = `since=${encodeURIComponent(selectedWindow)}`;
-  const scope = `/api/diagnostics/implement_one?${since}`;
+  const scope = `/api/diagnostics/implement_one?${since}&outcome=${selectedOutcome}`;
   if (metricsRequestScope !== `${revision}\0${scope}`) {
     metricsRequestScope = `${revision}\0${scope}`;
     clearMetrics();
@@ -97,13 +127,18 @@ export function fetchAndRenderMetrics() {
     fetchJson(scope),
     fetchJson(`/api/diagnostics/completions?${since}`),
     fetchJson("/api/tasks/completion-by-complexity"),
-  ]), ([durations, completions, outcome]) => {
-    if (getWorkspaceRevision() !== revision || getWindow() !== selectedWindow) return;
-    if (windowKey(durations) !== selectedWindow || windowKey(completions) !== selectedWindow) {
+    // A host running an older Orbit has no defect trend; the other trends
+    // still render and the Defects tab says why it is empty.
+    fetchJson(`/api/diagnostics/defects?${since}`).catch((error) => ({
+      unavailable: error.status === 404 ? "This host's Orbit does not report defects yet. Upgrade it to see this trend." : error.message,
+    })),
+  ]), ([durations, completions, outcome, defects]) => {
+    if (getWorkspaceRevision() !== revision || getWindow() !== selectedWindow || view.outcome !== selectedOutcome) return;
+    if (windowKey(durations) !== selectedWindow || windowKey(completions) !== selectedWindow || (!defects.unavailable && windowKey(defects) !== selectedWindow) || durations.outcome !== selectedOutcome) {
       console.error(`metrics payload window rejected under ${selectedWindow} selection`);
       return;
     }
-    lastPayload = { windowKey: selectedWindow, durations, completions, outcome: (outcome && outcome.by_complexity) || [] };
+    lastPayload = { windowKey: selectedWindow, durations, completions, defects, outcome: (outcome && outcome.by_complexity) || [] };
     renderMetrics();
   }, "metrics-count");
 }
@@ -148,7 +183,7 @@ function sectionHash(index) {
   const { hover, ...state } = view;
   const p = lastPayload;
   const parts = [
-    [state.trend, state.stat, state.mode, state.shown, p.windowKey, p.durations.buckets, p.durations.current, p.durations.previous, p.completions],
+    [state.outcome, state.trend, state.group, state.stat, state.mode, state.shown, p.windowKey, p.durations.buckets, p.durations.current, p.durations.previous, p.completions, p.defects],
     [state.allActors, p.durations.actors, p.durations.slowest],
     [state.complexity, p.durations.implement_one_by_complexity, p.outcome],
   ];
@@ -200,7 +235,8 @@ function perBucketUnit(seconds) {
 }
 
 // Buckets of 6h and wider start on UTC boundaries, so they are named by UTC
-// date; narrower ones by the browser's clock, like the rest of the dashboard.
+// date. Narrower ones follow the dashboard clock (UTC unless Local is
+// selected) and omit the zone abbreviation; the axis has no room for it.
 function utcDate(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
@@ -212,11 +248,18 @@ function tickLabel(start, seconds) {
 
 /// Which buckets carry an x-axis label: round clock times where the width
 /// allows, else every few buckets counted back from the newest.
-function isTick(start, seconds, index, count) {
+function tickParts(start) {
   const date = new Date(start);
-  if (seconds === 300) return date.getMinutes() % 10 === 0;
-  if (seconds === 3600) return date.getHours() % 4 === 0;
-  if (seconds === 21600) return date.getUTCHours() === 0;
+  return getClockZone() === "utc"
+    ? { minutes: date.getUTCMinutes(), hours: date.getUTCHours() }
+    : { minutes: date.getMinutes(), hours: date.getHours() };
+}
+
+function isTick(start, seconds, index, count) {
+  const parts = tickParts(start);
+  if (seconds === 300) return parts.minutes % 10 === 0;
+  if (seconds === 3600) return parts.hours % 4 === 0;
+  if (seconds === 21600) return new Date(start).getUTCHours() === 0;
   const every = seconds === 86400 ? 5 : Math.max(1, Math.ceil(count / 7));
   return (count - 1 - index) % every === 0;
 }
@@ -234,15 +277,17 @@ function previousLabel(windowKeyValue) {
   return windowKeyValue === "all" ? "" : `prev ${windowKeyValue}`;
 }
 
-// mode "duration": higher is worse; "count": higher is better.
+// mode "duration": higher is worse; "count": higher is better; "defects":
+// a count where higher is worse.
 function delta(current, previous, mode) {
   if (current == null) return null;
   if (previous == null || !previous) return { text: "new", cls: "flat" };
   const ratio = (current - previous) / previous * 100;
   const abs = Math.abs(ratio);
   const text = `${ratio >= 0 ? "▲" : "▼"} ${abs >= 10 ? Math.round(abs) : abs.toFixed(1)}%`;
-  const worse = mode === "duration" ? ratio > 5 : ratio < -5;
-  const better = mode === "duration" ? ratio < -5 : ratio > 5;
+  const higherIsWorse = mode === "duration" || mode === "defects";
+  const worse = higherIsWorse ? ratio > 5 : ratio < -5;
+  const better = higherIsWorse ? ratio < -5 : ratio > 5;
   const word = mode === "duration" ? (ratio >= 0 ? "slower" : "faster") : (ratio >= 0 ? "more" : "fewer");
   return { text: `${text} ${word}`, cls: worse ? "bad" : better ? "good" : "flat" };
 }
@@ -266,30 +311,6 @@ function actorCell(actor) {
     el("span", { class: "mx-actor-model", text: who.model }),
     who.provider ? el("span", { class: "mx-actor-provider", text: who.provider }) : null,
   ]);
-}
-
-function svg(tag, attrs = {}) {
-  const node = document.createElementNS(SVG_NS, tag);
-  for (const [name, value] of Object.entries(attrs)) node.setAttribute(name, String(value));
-  return node;
-}
-
-/// An SVG path through `points` (0–100 space), broken at nulls. A lone point
-/// gets a zero-length segment so its round cap still shows.
-function linePath(points) {
-  let d = "";
-  let run = 0;
-  for (const point of points) {
-    if (!point) {
-      if (run === 1) d += "l0.01 0 ";
-      run = 0;
-      continue;
-    }
-    d += `${run ? "L" : "M"}${(point.x * 10).toFixed(1)} ${(point.y * 10).toFixed(1)} `;
-    run += 1;
-  }
-  if (run === 1) d += "l0.01 0";
-  return d.trim();
 }
 
 // ---- trend section --------------------------------------------------------
@@ -332,17 +353,35 @@ function pickTrend(key) {
   rerender();
 }
 
+// The series-visibility key for the current trend; each defect grouping keeps
+// its own.
+function shownKey() {
+  return view.trend === "defects" ? `defects-${view.group}` : view.trend;
+}
+
 function trendSection() {
   const isDuration = view.trend === "duration";
-  const model = isDuration ? durationModel() : completedModel();
+  const isDefects = view.trend === "defects";
+  const model = isDuration ? durationModel() : isDefects ? defectsModel() : completedModel();
   const tools = el("div", { class: "mx-trend-tools" }, [
+    isDuration ? segGroup("Run outcome", OUTCOMES, view.outcome, (key) => {
+      if (key === view.outcome) return;
+      const query = new URLSearchParams(window.location.hash.split("?")[1] || "");
+      query.set("outcome", key);
+      view.hover = null;
+      window.location.hash = `#analytics/metrics?${query}`;
+    }) : null,
     isDuration ? segGroup("Statistic", STATS, view.stat, (key) => { view.stat = key; rerender(); }) : null,
+    isDefects ? segGroup("Group by", DEFECT_GROUPS, view.group, (key) => { view.group = key; view.hover = null; rerender(); }) : null,
     segGroup("View", MODES, view.mode, (key) => { view.mode = key; view.hover = null; rerender(); }),
   ]);
   const panel = el("div", { class: "mx-trend-view", id: "metrics-trend-view", role: "tabpanel" }, [
     el("p", { class: "mx-blurb", text: model.blurb }),
     seriesCards(model.cards),
     model.empty ? emptyTrend(model.empty) : (view.mode === "table" ? trendTable(model.table) : trendChart(model.chart)),
+    isDuration ? el("p", { class: "mx-notes", text: view.outcome === "succeeded"
+      ? "Counted: final implement_one attempts in successful runs with a committed candidate. Failed, cancelled, no-diff and unknown outcomes are excluded."
+      : "Counted: all implement_one invocations, including failed, cancelled, no-diff and unknown outcomes." }) : null,
   ]);
   return el("section", { class: "mx-card mx-trends", "aria-label": "Trends" }, [
     el("div", { class: "mx-trend-head" }, [trendTabs(), tools]),
@@ -371,24 +410,24 @@ function seriesCards(cards) {
       el("span", { class: "mx-sc-foot", text: card.foot }),
     ]);
     button.addEventListener("click", () => {
-      const shown = view.shown[view.trend];
+      const shown = view.shown[shownKey()];
       const next = { ...shown, [card.key]: !shown[card.key] };
       // The chart always keeps one series.
       if (!Object.values(next).some(Boolean)) return;
-      view.shown[view.trend] = next;
+      view.shown[shownKey()] = next;
       rerender();
     });
     return button;
   }));
 }
 
-function emptyTrend({ title, detail }) {
+function emptyTrend({ title, detail, noWiden }) {
   const box = el("div", { class: "mx-empty" }, [
     el("div", { class: "mx-empty-title", text: title }),
     detail ? el("div", { class: "mx-empty-detail", text: detail }) : null,
   ]);
   const index = DASHBOARD_WINDOWS.indexOf(lastPayload.windowKey);
-  const wider = index >= 0 ? DASHBOARD_WINDOWS[index + 1] : null;
+  const wider = index >= 0 && !noWiden ? DASHBOARD_WINDOWS[index + 1] : null;
   if (wider) {
     const widen = el("button", { class: "mx-link-btn", type: "button", text: `Widen to ${wider}` });
     widen.addEventListener("click", () => {
@@ -609,6 +648,139 @@ function completedModel() {
   };
 }
 
+// Origin counts with the unnamed finders folded into `other`, as the chart
+// draws them.
+function chartOrigins(counts) {
+  const out = { other: 0 };
+  for (const [key, n] of Object.entries(counts.origin || {})) {
+    if (ORIGIN_CHART.includes(key)) out[key] = n;
+    else out.other += n;
+  }
+  return out;
+}
+
+function defectSeries() {
+  if (view.group === "lineage") return LINEAGE_SERIES;
+  return [...ORIGIN_CHART, "other"].map((key) => ({ key, label: key === "other" ? "Other" : ORIGIN_LABELS[key] }));
+}
+
+function defectCount(counts, key) {
+  if (key === "all") return counts.total;
+  return view.group === "lineage" ? (counts.lineage[key] || 0) : (chartOrigins(counts)[key] || 0);
+}
+
+function pct(part, whole) {
+  return whole ? Math.round(part / whole * 100) : 0;
+}
+
+function defectsModel() {
+  const payload = lastPayload.defects;
+  const windowKeyValue = lastPayload.windowKey;
+  if (payload.unavailable) {
+    return { blurb: "Bug tasks filed in each bucket.", cards: [], empty: { title: "Defect trend unavailable", detail: payload.unavailable, noWiden: true } };
+  }
+  const buckets = payload.buckets || [];
+  const seconds = payload.window.bucket_seconds;
+  const shown = view.shown[shownKey()];
+  const current = payload.current;
+  const previous = payload.previous;
+  const prevText = previousLabel(windowKeyValue);
+  const unit = perBucketUnit(seconds);
+  const series = defectSeries();
+  const lineageOn = view.group === "lineage";
+  const fixForFix = current.lineage.fix_for_fix || 0;
+
+  const card = (key, label, tag, bar) => {
+    const cur = defectCount(current, key);
+    const prev = previous ? defectCount(previous, key) : null;
+    return {
+      key,
+      label,
+      tag,
+      bar,
+      on: !!shown[key],
+      value: String(cur),
+      delta: previous ? delta(cur, prev, "defects") : null,
+      sub: previous ? `vs ${prevText} ${prev}` : `window ${windowKeyValue}`,
+      foot: key === "all"
+        ? `${fixForFix} fix-for-a-fix (${pct(fixForFix, current.total)}%)`
+        : `${pct(cur, current.total)}% of defects`,
+    };
+  };
+  const cards = [card("all", "Defects (total)", "", false), ...series.map((entry) => card(entry.key, entry.label, entry.tag || "", true))];
+
+  const blurb = lineageOn
+    ? "Bug tasks filed in each bucket, by what their regression_from relation names as the cause. Fix-for-a-fix: the cause was itself a bug fix."
+    : "Bug tasks filed in each bucket, by the review or sweep that filed them.";
+  if (!current.total) {
+    return { blurb, cards, empty: { title: `No defects filed in the last ${windowKeyValue === "all" ? "recorded history" : windowKeyValue}`, detail: "" } };
+  }
+
+  const keys = series.map((entry) => entry.key);
+  const stackValue = (bucket) => keys.reduce((sum, key) => sum + (shown[key] ? defectCount(bucket, key) : 0), 0);
+  let max = 0;
+  for (const bucket of buckets) max = Math.max(max, shown.all ? bucket.total : stackValue(bucket));
+  const prevPer = previous && buckets.length ? previous.total / buckets.length : null;
+  const showPrev = shown.all && prevPer != null && previous.total > 0;
+  if (showPrev) max = Math.max(max, prevPer);
+  const scale = niceScale(Math.max(max, 1) * 1.08, COUNT_SCALES, 100);
+  const y = (n) => 100 - Math.min(n, scale.max) / scale.max * 100;
+  const yTicks = [];
+  for (let v = 0; v <= scale.max; v += scale.step) yTicks.push({ top: 100 - v / scale.max * 100, label: String(v) });
+
+  const tableKeys = lineageOn ? keys : (payload.origins || Object.keys(current.origin));
+  const tableLabel = (key) => (lineageOn ? LINEAGE_SERIES.find((entry) => entry.key === key).label : ORIGIN_LABELS[key] || key);
+  const tableCount = (bucket, key) => (lineageOn ? bucket.lineage[key] : bucket.origin[key]) || 0;
+  const attributed = current.total - (current.lineage.unattributed || 0);
+
+  return {
+    blurb,
+    cards,
+    chart: {
+      kind: "defects",
+      buckets,
+      seconds,
+      yTicks,
+      stackKeys: keys,
+      bars: buckets.map((bucket) => keys.map((key) => (shown[key] ? defectCount(bucket, key) : 0) / scale.max * 100)),
+      lines: shown.all ? [{ key: "all", points: buckets.map((bucket, i) => ({ i, y: y(bucket.total), hollow: false })) }] : [],
+      prev: showPrev ? { top: y(prevPer), label: `${prevText} · ${prevPer.toFixed(1)} per ${unit}` } : null,
+      notes: [
+        `${bucketWidthLabel(seconds)}, aligned to the clock`,
+        `bars stack ${series.map((entry) => entry.label.toLowerCase()).join(" · ")}; line = total`,
+        "time = when the bug task was filed",
+        lineageOn
+          ? `${attributed} of ${current.total} name a cause (${pct(attributed, current.total)}%)`
+          : "Other = scanning sweeps, review reconciliation, friction curation and untagged",
+      ],
+      aria: `Defects filed per ${unit}, window ${windowKeyValue}: ${current.total} total, ${fixForFix} fix-for-a-fix${previous ? `, versus ${previous.total} in the ${prevText}` : ""}. Grouped by ${view.group}: ${series.map((entry) => `${entry.label} ${defectCount(current, entry.key)}`).join(", ")}. Use the Table view for per-bucket values.`,
+      tip: (index) => {
+        const bucket = buckets[index];
+        const tip = { title: bucketTitle(bucket.start, seconds, index === buckets.length - 1), rows: [], foot: `Bug tasks filed in this ${unit}` };
+        if (!bucket.total) {
+          tip.empty = "No defects filed in this bucket.";
+          return tip;
+        }
+        tip.rows.push({ key: "all", name: "Defects (total)", value: String(bucket.total), strong: true });
+        for (const entry of series) {
+          const n = defectCount(bucket, entry.key);
+          if (n) tip.rows.push({ key: entry.key, name: entry.label, bar: true, value: String(n) });
+        }
+        if (!lineageOn && bucket.lineage.fix_for_fix) tip.extra = `fix-for-a-fix ${bucket.lineage.fix_for_fix}`;
+        return tip;
+      },
+    },
+    table: {
+      caption: `Bug tasks filed per bucket by ${view.group} · ${bucketWidthLabel(seconds)} · newest first`,
+      heads: ["Total", ...tableKeys.map(tableLabel)],
+      rows: buckets.map((bucket, i) => ({
+        title: bucketTitle(bucket.start, seconds, i === buckets.length - 1),
+        cells: [bucket.total, ...tableKeys.map((key) => tableCount(bucket, key))].map(String),
+      })).reverse(),
+    },
+  };
+}
+
 function trendTable(table) {
   const head = el("tr", {}, [
     el("th", { text: "Bucket", scope: "col" }),
@@ -644,7 +816,7 @@ function trendChart(chart) {
     plot.appendChild(grid);
   }
   if (chart.bars) {
-    plot.appendChild(el("div", { class: "mx-bars", "aria-hidden": "true" }, chart.bars.map((stack) => stackColumn(stack, "mx-bar-col"))));
+    plot.appendChild(el("div", { class: "mx-bars", "aria-hidden": "true" }, chart.bars.map((stack) => stackColumn(stack, "mx-bar-col", chart.stackKeys))));
   }
   if (chart.prev) {
     const line = el("div", { class: "mx-prev" });
@@ -751,11 +923,11 @@ function trendChart(chart) {
   ]);
 }
 
-function stackColumn(heights, className) {
+function stackColumn(heights, className, keys = STACK) {
   const column = el("div", { class: className });
   // Rendered top to bottom inside a bottom-aligned column.
   for (let i = heights.length - 1; i >= 0; i--) {
-    const segment = el("div", { class: `mx-seg-fill mx-s-${STACK[i]}` });
+    const segment = el("div", { class: `mx-seg-fill mx-s-${keys[i]}` });
     segment.style.height = `${heights[i]}%`;
     column.appendChild(segment);
   }
@@ -799,9 +971,7 @@ function emptyNote(text) {
 function sparkline(trend, max, label) {
   const values = trend || [];
   const points = values.map((v, i) => (v == null ? null : { x: (i + 0.5) / values.length * 100, y: 100 - v / (max * 1.05) * 100 }));
-  const node = svg("svg", { viewBox: "0 0 1000 1000", preserveAspectRatio: "none", class: "mx-spark", role: "img", "aria-label": label });
-  node.appendChild(svg("path", { d: linePath(points), class: "mx-spark-line", "vector-effect": "non-scaling-stroke" }));
-  return node;
+  return lineSparkline(points, { className: "mx-spark", lineClass: "mx-spark-line", label });
 }
 
 function actorsCard() {

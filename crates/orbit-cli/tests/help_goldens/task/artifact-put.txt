@@ -1,0 +1,45 @@
+Store a source file under a task's artifacts directory
+
+Usage: orbit task artifact put [OPTIONS] <ID> <SOURCE_PATH>
+
+Arguments:
+  <ID>
+          Task ID
+
+  <SOURCE_PATH>
+          Source file to store as a task artifact, up to 1 MiB. Any content is accepted; the media type comes from the file name, and unknown extensions are stored as application/octet-stream. Resolved against the current directory, not the checkout root, so a file that exists only at the checkout root is refused with the absolute path to pass. Then confined to the workspace checkout after symlink resolution: sources that escape it, including under `/tmp`, are refused, so write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`)
+
+Options:
+      --host <HOST>
+          Host that `--workspace` names, by registered host name or `machine_id` (see `orbit host list`). Orbit reads that host's live workspace list and uses the selector it lists for the workspace. Without it, a task id goes to the host its prefix names
+
+      --path <ARTIFACT_PATH>
+          Artifact path relative to the task artifacts directory. Defaults to the source file name
+
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --model <MODEL>
+          Explicit agent model to persist on the task artifact update
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')

@@ -9,6 +9,9 @@ Usage: scripts/codeql-rust-local.sh [--ram MB] [--toolchain VERSION] [--fresh] Q
 Run against this checkout using codeql and rustup already on PATH.
 Linux hosts only: elsewhere it exits 3 before preparing anything.
 Default: --ram 16384 --toolchain 1.97.0 (CodeQL 2.27.1 extractor).
+On Linux, --ram is capped at 60% of /proc/meminfo MemTotal divided by slots,
+rounded down to MiB; a known-memory allocation below 2048 MiB is refused.
+Unreadable or invalid meminfo leaves the requested RAM unchanged.
 QUERY_OR_SUITE is a CodeQL pack selector, .ql file, or .qls suite.
 Logs, database and SARIF stay in a new directory under $ORBIT_SCRATCH_DIR,
 or this checkout's .orbit/tmp when unset; a passing run then removes the
@@ -145,6 +148,68 @@ note() {
   echo "codeql-rust-local: $*" >&2
 }
 
+# Host state shared by every run: the pinned toolchain and the slot locks.
+# Lock files are opened read-only when the cache cannot be written (a reviewer
+# or Bubblewrap owner run), which is enough to hold a flock.
+cache_dir="${ORBIT_CODEQL_CACHE_DIR:-${HOME:+$HOME/.orbit/cache/codeql-rust-local}}"
+if [[ -n "$cache_dir" && "$cache_dir" != /* ]]; then
+  fail "ORBIT_CODEQL_CACHE_DIR must be an absolute path"
+fi
+
+# The old count file occupied the lock directory's path. Rename only that
+# regular file, never the directory or its live locks. Lock the file read-only
+# so concurrent migrations serialize on its inode without recreating it after
+# another run has renamed it. A failed migration must not run unbounded.
+migrate_slot_count() {
+  local legacy="$cache_dir/slots" count="$cache_dir/slot-count" migration_fd
+  [[ -n "$cache_dir" && -f "$legacy" ]] || return 0
+  if { exec {migration_fd}<"$legacy"; } 2>/dev/null; then
+    flock -x "$migration_fd" || fail "cannot lock the legacy CodeQL slot count $legacy; no extraction was run"
+    # Another migrator may already have renamed the locked inode.
+    if [[ -f "$legacy" ]]; then
+      [[ ! -e "$count" && ! -L "$count" ]] \
+        || fail "both $legacy and $count exist; reconcile the CodeQL slot counts before running; no extraction was run"
+      mv -T -- "$legacy" "$count" \
+        || fail "cannot migrate the legacy CodeQL slot count $legacy to $count; no extraction was run"
+      note "migrated the legacy CodeQL slot count to $count"
+    fi
+    exec {migration_fd}>&-
+  elif [[ -f "$legacy" || ! -f "$count" ]]; then
+    fail "cannot open the legacy CodeQL slot count $legacy for migration; no extraction was run"
+  fi
+}
+migrate_slot_count
+
+# A counted host lock bounds concurrent extraction and analysis, which saturate
+# the disk well before the CPUs. ORBIT_CODEQL_SLOTS overrides <cache>/slot-count.
+slots="${ORBIT_CODEQL_SLOTS:-}"
+if [[ -z "$slots" && -n "$cache_dir" && -f "$cache_dir/slot-count" ]]; then
+  slots="$(tr -d '[:space:]' <"$cache_dir/slot-count")" || fail "cannot read the CodeQL slot count from $cache_dir/slot-count"
+fi
+slots="${slots:-2}"
+[[ "$slots" =~ ^[1-9][0-9]*$ && "$slots" -le 128 ]] || fail "the CodeQL slot count must be from 1 through 128; got '$slots'"
+
+# Reserve 40% of host RAM for the OS and other work; full slots share the rest.
+# The behavior harness supplies a fake file so its budgets never depend on the
+# host. Missing or malformed Linux memory data preserves the requested budget.
+meminfo="${_ORBIT_CODEQL_MEMINFO_PATH:-/proc/meminfo}"
+minimum_ram=2048
+if memory_cap="$(awk -v slots="$slots" '
+  $1 == "MemTotal:" && NF == 3 && $2 ~ /^[0-9]+$/ && $2 > 0 && $3 == "kB" {
+    printf "%.0f\n", int($2 * 3 / (5 * 1024 * slots)); found = 1; exit
+  }
+  END { if (!found) exit 1 }
+' "$meminfo" 2>/dev/null)"; then
+  if [[ "$ram" -gt "$memory_cap" ]]; then
+    note "clamping --ram from $ram to $memory_cap MiB (60% of MemTotal across $slots slots)"
+    ram="$memory_cap"
+  fi
+  [[ "$ram" -ge "$minimum_ram" ]] \
+    || fail "effective --ram $ram MiB is below the minimum $minimum_ram MiB (60% of MemTotal across $slots slots); reduce the slot count or use a host with more memory; no extraction or query was run"
+else
+  note "cannot read valid MemTotal from $meminfo; keeping requested --ram $ram MiB"
+fi
+
 # The inputs of a run: every file of the checkout that extraction can read (all
 # but Git metadata, Orbit state, Cargo output and run scratch), the query, the
 # effective configuration, the toolchain and CodeQL versions, and the
@@ -207,13 +272,6 @@ export RUSTC_WRAPPER=
 export RUSTC_WORKSPACE_WRAPPER=
 mkdir -p "$CARGO_HOME" "$CARGO_TARGET_DIR" "$TMPDIR" "$XDG_CACHE_HOME" "$run_dir/codeql-logs"
 
-# Host state shared by every run: the pinned toolchain and the slot locks.
-# Lock files are opened read-only when the cache cannot be written (a reviewer
-# or Bubblewrap owner run), which is enough to hold a flock.
-cache_dir="${ORBIT_CODEQL_CACHE_DIR:-${HOME:+$HOME/.orbit/cache/codeql-rust-local}}"
-if [[ -n "$cache_dir" && "$cache_dir" != /* ]]; then
-  fail "ORBIT_CODEQL_CACHE_DIR must be an absolute path"
-fi
 
 open_lock() {
   # Sets lock_fd to a descriptor on $1, creating the file when it can.
@@ -319,39 +377,6 @@ if [[ -z "$cache_dir" ]] || ! use_cached_toolchain; then
     fail "cannot prepare required Rust $toolchain with rust-src in $RUSTUP_HOME; no query was run (see $run_dir/toolchain.log)"
   fi
 fi
-
-# The old count file occupied the lock directory's path. Rename only that
-# regular file, never the directory or its live locks. Lock the file read-only
-# so concurrent migrations serialize on its inode without recreating it after
-# another run has renamed it. A failed migration must not run unbounded.
-migrate_slot_count() {
-  local legacy="$cache_dir/slots" count="$cache_dir/slot-count" migration_fd
-  [[ -n "$cache_dir" && -f "$legacy" ]] || return 0
-  if { exec {migration_fd}<"$legacy"; } 2>/dev/null; then
-    flock -x "$migration_fd" || fail "cannot lock the legacy CodeQL slot count $legacy; no extraction was run"
-    # Another migrator may already have renamed the locked inode.
-    if [[ -f "$legacy" ]]; then
-      [[ ! -e "$count" && ! -L "$count" ]] \
-        || fail "both $legacy and $count exist; reconcile the CodeQL slot counts before running; no extraction was run"
-      mv -T -- "$legacy" "$count" \
-        || fail "cannot migrate the legacy CodeQL slot count $legacy to $count; no extraction was run"
-      note "migrated the legacy CodeQL slot count to $count"
-    fi
-    exec {migration_fd}>&-
-  elif [[ -f "$legacy" || ! -f "$count" ]]; then
-    fail "cannot open the legacy CodeQL slot count $legacy for migration; no extraction was run"
-  fi
-}
-migrate_slot_count
-
-# A counted host lock bounds concurrent extraction and analysis, which saturate
-# the disk well before the CPUs. ORBIT_CODEQL_SLOTS overrides <cache>/slot-count.
-slots="${ORBIT_CODEQL_SLOTS:-}"
-if [[ -z "$slots" && -n "$cache_dir" && -f "$cache_dir/slot-count" ]]; then
-  slots="$(tr -d '[:space:]' <"$cache_dir/slot-count")" || fail "cannot read the CodeQL slot count from $cache_dir/slot-count"
-fi
-slots="${slots:-2}"
-[[ "$slots" =~ ^[1-9][0-9]*$ && "$slots" -le 128 ]] || fail "the CodeQL slot count must be from 1 through 128; got '$slots'"
 
 # CodeQL imports and evaluates on one thread unless told otherwise, which kept
 # most of a suite run single-threaded. Each slot gets an equal share of the

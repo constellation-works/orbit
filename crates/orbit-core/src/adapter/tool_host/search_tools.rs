@@ -1,66 +1,48 @@
-use std::str::FromStr;
-
-use orbit_common::OrbitError;
-use orbit_common::protocol::tool_input::{
-    optional_csv_or_string_list_alias, optional_string_alias, optional_string_list_alias,
-    optional_u32_alias,
+use crate::{GlobalSearchKind, GlobalSearchParams, OrbitRuntime, WorkspaceScope};
+use orbit_common::protocol::tool_input::{optional_string_list_alias, optional_u32_alias};
+use orbit_common::{
+    OrbitError,
+    governance::{operation::OperationVerb, search::SearchVerb},
 };
 use serde_json::Value;
+use std::str::FromStr;
 
-use crate::{GlobalSearchKind, GlobalSearchParams, OrbitRuntime, WorkspaceScope};
-
-use super::input::optional_bool_alias;
-
-pub(super) fn search(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    for retired in [
-        "related",
-        "path",
-        "hybrid",
-        "semantic",
-        "id",
-        "task_id",
-        "taskId",
-        "field",
-        "embedding_model",
-        "embeddingModel",
-        "embedding-model",
-        "semantic_model",
-        "semanticModel",
-    ] {
-        if input.get(retired).is_some() {
-            return Err(OrbitError::InvalidInput(format!(
-                "unknown parameter `{retired}`; search supports lexical queries only"
-            )));
+pub(super) fn dispatch(
+    runtime: &OrbitRuntime,
+    verb: SearchVerb,
+    mut input: Value,
+) -> Result<Value, OrbitError> {
+    // Direct host calls use the same canonical shape as the generic tool entry.
+    orbit_common::governance::search::normalize_legacy_input(&mut input);
+    let input = verb.spec().parse_input(input)?;
+    match verb {
+        SearchVerb::Query => {
+            let kind = input
+                .optional_string("kind")?
+                .map(|kind| GlobalSearchKind::from_str(&kind).map_err(OrbitError::InvalidInput))
+                .transpose()?
+                .unwrap_or_default();
+            let workspaces = WorkspaceScope::from_inputs(
+                input
+                    .optional_string_list("workspaces")?
+                    .unwrap_or_default(),
+                input.optional_bool("all_workspaces")?.unwrap_or(false),
+            );
+            let limit = optional_u32_alias(input.as_value(), &["limit"])?
+                .map(|limit| limit as usize)
+                .unwrap_or(0);
+            let result = runtime.global_search(GlobalSearchParams {
+                query: input.optional_string("query")?,
+                kind,
+                limit,
+                tags: optional_string_list_alias(input.as_value(), &["tag"])?.unwrap_or_default(),
+                all: input.optional_bool("all")?.unwrap_or(false),
+                status: input.optional_string_list("status")?.unwrap_or_default(),
+                path: None,
+                workspaces,
+            })?;
+            serde_json::to_value(result)
+                .map_err(|error| OrbitError::Execution(format!("serialize search result: {error}")))
         }
     }
-    let kind = optional_string_alias(&input, &["kind"])?
-        .map(|kind| GlobalSearchKind::from_str(&kind).map_err(OrbitError::InvalidInput))
-        .transpose()?
-        .unwrap_or_default();
-
-    // `workspaces` is the federated *scope*; `workspace` stays the reserved
-    // routing selector that binds a call to one registered checkout, so the two
-    // never collide [ORB-11027].
-    let workspaces = WorkspaceScope::from_inputs(
-        optional_csv_or_string_list_alias(&input, &["workspaces", "workspace_scope"])?
-            .unwrap_or_default(),
-        optional_bool_alias(&input, &["all_workspaces", "allWorkspaces"])?.unwrap_or(false),
-    );
-
-    let result = runtime.global_search(GlobalSearchParams {
-        query: optional_string_alias(&input, &["query"])?,
-        kind,
-        // Zero is "unset": the runtime picks the default for the call shape.
-        limit: optional_u32_alias(&input, &["limit"])?
-            .map(|limit| limit as usize)
-            .unwrap_or(0),
-        tags: optional_string_list_alias(&input, &["tag", "tags"])?.unwrap_or_default(),
-        all: optional_bool_alias(&input, &["all"])?.unwrap_or(false),
-        status: optional_csv_or_string_list_alias(&input, &["status", "statuses"])?
-            .unwrap_or_default(),
-        path: None,
-        workspaces,
-    })?;
-    serde_json::to_value(result)
-        .map_err(|error| OrbitError::Execution(format!("serialize search result: {error}")))
 }

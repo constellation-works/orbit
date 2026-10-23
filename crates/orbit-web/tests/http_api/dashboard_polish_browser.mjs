@@ -28,19 +28,27 @@ const initializer = `
   import { initRouter, initTabs } from '/js/router.js';
   import { initConfig, getConfigSubtab, setConfigSubtab } from '/js/config.js';
   import * as audit from '/js/audit.js';
-  let tab = 'tasks', diag = 'runs', operations = 'routines', knowledge = 'frictions';
+  import * as codebase from '/js/codebase.js';
+  let tab = 'tasks', diag = 'incidents', jobs = 'live', operations = 'routines', knowledge = 'frictions';
+  let incidentsView = 'incidents', analytics = 'metrics', reliabilityView = 'pipeline', agentsRole = 'orchestrators';
   initConfig();
   initRouter({
     getTab: () => tab, setTab: value => { tab = value; },
+    getJobsSubtab: () => jobs, setJobsSubtab: value => { jobs = value; },
     getDiagSubtab: () => diag, setDiagSubtab: value => { diag = value; },
+    getIncidentsView: () => incidentsView, setIncidentsView: value => { incidentsView = value; },
+    getAnalyticsSubtab: () => analytics, setAnalyticsSubtab: value => { analytics = value; },
+    getReliabilityView: () => reliabilityView, setReliabilityView: value => { reliabilityView = value; },
+    getAgentsRole: () => agentsRole, setAgentsRole: value => { agentsRole = value; },
     getOperationsSubtab: () => operations, setOperationsSubtab: value => { operations = value; },
     getKnowledgeSubtab: () => knowledge, setKnowledgeSubtab: value => { knowledge = value; },
     getConfigSubtab, setConfigSubtab,
     getLastRuns: () => [], renderDiagnostics: () => {}, refreshDashboard: () => {},
-    getActiveAuditSubtab: audit.getActiveAuditSubtab, setAuditSubtab: audit.setAuditSubtab,
     applyAuditHashQuery: audit.applyAuditHashQuery, buildAuditHash: audit.buildAuditHash,
     syncAuditControls: audit.syncAuditControls,
+    applyCodebaseHashQuery: codebase.applyCodebaseHashQuery, buildCodebaseHash: codebase.buildCodebaseHash,
   });
+  audit.buildAuditChips({});
   initTabs();
   window.polishReady = true;
 `;
@@ -62,7 +70,7 @@ const server = http.createServer((req, res) => {
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}/?workspace=ws_fixture`;
-const measurements = { navigation: [], crews: [], audit: [] };
+const measurements = { navigation: [], observe: [], crews: [], tools: [] };
 let browser;
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
@@ -84,7 +92,11 @@ try {
   const routes = await page.evaluate(() => [
     ...['config', 'operations'].flatMap(section => [...document.querySelectorAll(`#${section}-subtabs .subtab`)].map(button => `${section}/${button.dataset.subtab}`)),
     ...[...document.querySelectorAll('#diag-subtabs .subtab')].map(button => `diagnostics/${button.dataset.subtab}`),
-    'diagnostics/runs',
+    ...[...document.querySelectorAll('#incidents-views .subtab')].filter(button => button.dataset.view !== 'incidents')
+      .map(button => `diagnostics/incidents/${button.dataset.view}`),
+    ...[...document.querySelectorAll('#analytics-subtabs .subtab')].map(button => `analytics/${button.dataset.subtab}`),
+    'analytics/reliability/tools',
+    'jobs/history',
   ]);
   const navigation = async (route, visit) => {
     const layout = await page.evaluate(() => {
@@ -118,12 +130,92 @@ try {
     await navigation(route, 'reload');
   }
   // Changing the hash on an existing page must also reveal the current view.
-  for (const route of ['config/hosts', 'diagnostics/scoreboard', 'operations/jobs']) {
+  for (const route of ['config/hosts', 'analytics/cost', 'jobs/catalogue']) {
     await page.evaluate(route => { document.getElementById('tabs').scrollLeft = 0; location.hash = route; }, route);
     await page.waitForFunction(route => location.hash.slice(1).split('?')[0] === route && document.querySelector('.tab.active').dataset.tab === route.split('/')[0], route);
     await settle();
     await navigation(route, 'hashchange');
   }
+  // Walk every Observe destination, rail view and secondary view by clicking,
+  // as an operator does. Each step shows exactly one view's <main>, marks its
+  // rail entry, rail view and secondary tab, and names it in the hash; a
+  // destination or view reopens on the view it was left on.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`${origin}#tasks`);
+  // A fresh page, so every destination starts on its default view.
+  await page.reload();
+  await settle();
+  assert.equal(await page.locator('.rail .tab[data-tab="audit"]').count(), 0, 'the rail has no Audit destination');
+  assert.deepEqual(await page.locator('.rail-group').filter({ hasText: 'Observe' }).locator('.tab, .subtab').evaluateAll(nodes =>
+    nodes.map(node => node.dataset.tab || `${node.closest('nav').id}:${node.dataset.subtab}`)),
+  ['diagnostics', 'diag-subtabs:incidents', 'diag-subtabs:doctor', 'analytics',
+    'analytics-subtabs:metrics', 'analytics-subtabs:reliability', 'analytics-subtabs:codebase', 'analytics-subtabs:resources',
+    'analytics-subtabs:cost', 'agents'],
+  'Observe holds Health (Incidents, Doctor), Analytics (Metrics, Reliability, Codebase, Resources, Cost) and Agents');
+  const mains = ['diagnostics-main', 'diagnostics-events-main', 'diagnostics-doctor-main', 'analytics-metrics-main',
+    'analytics-reliability-main', 'analytics-tools-main', 'analytics-codebase-main', 'analytics-resources-main', 'analytics-cost-main'];
+  const walk = [
+    { click: '.rail .tab[data-tab="diagnostics"]', tab: 'diagnostics', subtab: 'incidents', views: 'incidents-views', view: 'incidents', main: 'diagnostics-main', hash: /^#diagnostics\/incidents\?window=24h$/ },
+    { click: '#incidents-views [data-view="events"]', tab: 'diagnostics', subtab: 'incidents', views: 'incidents-views', view: 'events', main: 'diagnostics-events-main', hash: /^#diagnostics\/incidents\/events\?since=24h&status=non_success$/ },
+    { click: '#audit-filter .chip[data-status="denied"]', tab: 'diagnostics', subtab: 'incidents', views: 'incidents-views', view: 'events', main: 'diagnostics-events-main', hash: /^#diagnostics\/incidents\/events\?since=24h&status=denied$/ },
+    { click: '#incidents-views [data-view="errors"]', tab: 'diagnostics', subtab: 'incidents', views: 'incidents-views', view: 'errors', main: 'diagnostics-main', hash: /^#diagnostics\/incidents\/errors\?window=24h$/ },
+    { click: '#incidents-views [data-view="events"]', tab: 'diagnostics', subtab: 'incidents', views: 'incidents-views', view: 'events', main: 'diagnostics-events-main', hash: /status=denied$/, note: 'Events keeps its filter' },
+    { click: '#incidents-views [data-view="incidents"]', tab: 'diagnostics', subtab: 'incidents', views: 'incidents-views', view: 'incidents', main: 'diagnostics-main', hash: /^#diagnostics\/incidents\?window=24h$/ },
+    { click: '#diag-subtabs [data-subtab="doctor"]', tab: 'diagnostics', subtab: 'doctor', main: 'diagnostics-doctor-main', hash: /^#diagnostics\/doctor\?window=24h$/ },
+    { click: '.rail .tab[data-tab="analytics"]', tab: 'analytics', subtab: 'metrics', main: 'analytics-metrics-main', hash: /^#analytics\/metrics\?window=24h&outcome=succeeded$/ },
+    { click: '#analytics-subtabs [data-subtab="reliability"]', tab: 'analytics', subtab: 'reliability', views: 'reliability-views', view: 'pipeline', main: 'analytics-reliability-main', hash: /^#analytics\/reliability\?window=24h$/ },
+    { click: '#reliability-views [data-view="tools"]', tab: 'analytics', subtab: 'reliability', views: 'reliability-views', view: 'tools', main: 'analytics-tools-main', hash: /^#analytics\/reliability\/tools\?window=24h$/ },
+    { click: '#analytics-subtabs [data-subtab="codebase"]', tab: 'analytics', subtab: 'codebase', main: 'analytics-codebase-main', hash: /^#analytics\/codebase$/ },
+    { click: '#analytics-subtabs [data-subtab="resources"]', tab: 'analytics', subtab: 'resources', main: 'analytics-resources-main', hash: /^#analytics\/resources\?window=24h$/ },
+    { click: '#analytics-subtabs [data-subtab="cost"]', tab: 'analytics', subtab: 'cost', main: 'analytics-cost-main', hash: /^#analytics\/cost\?window=24h$/ },
+    { click: '#analytics-subtabs [data-subtab="reliability"]', tab: 'analytics', subtab: 'reliability', views: 'reliability-views', view: 'tools', main: 'analytics-tools-main', hash: /^#analytics\/reliability\/tools\?/, note: 'Reliability reopens on Tools' },
+    { click: '#reliability-views [data-view="pipeline"]', tab: 'analytics', subtab: 'reliability', views: 'reliability-views', view: 'pipeline', main: 'analytics-reliability-main', hash: /^#analytics\/reliability\?window=24h$/ },
+    { click: '.rail .tab[data-tab="diagnostics"]', tab: 'diagnostics', subtab: 'doctor', main: 'diagnostics-doctor-main', hash: /^#diagnostics\/doctor\?/, note: 'Health reopens on Doctor' },
+    { click: '.rail .tab[data-tab="analytics"]', tab: 'analytics', subtab: 'reliability', views: 'reliability-views', view: 'pipeline', main: 'analytics-reliability-main', hash: /^#analytics\/reliability\?/, note: 'Analytics reopens on Reliability' },
+  ];
+  for (const [index, step] of walk.entries()) {
+    const before = await page.evaluate(() => location.hash);
+    await page.locator(step.click).click();
+    await page.waitForFunction(before => location.hash !== before, before).catch(() => {});
+    await settle();
+    const state = await page.evaluate(mains => ({
+      hash: location.hash,
+      pane: document.querySelector('.tab-pane.active')?.dataset.tab,
+      tab: document.querySelector('.rail .tab.active')?.dataset.tab,
+      subtab: document.querySelector('.rail-subtabs:not(.dimmed) .subtab.active')?.dataset.subtab,
+      bars: Object.fromEntries(['incidents-views', 'reliability-views'].map(id => {
+        const bar = document.getElementById(id);
+        return [id, bar.checkVisibility() ? bar.querySelector('.subtab.active')?.dataset.view : null];
+      })),
+      shown: mains.filter(id => document.getElementById(id).checkVisibility()),
+      overflow: document.scrollingElement.scrollWidth > innerWidth,
+    }), mains);
+    const context = `${step.click}${step.note ? ` (${step.note})` : ''}: ${JSON.stringify(state)}`;
+    assert.match(state.hash, step.hash, context);
+    assert.equal(state.pane, step.tab, context);
+    assert.equal(state.tab, step.tab, context);
+    assert.equal(state.subtab, step.subtab, context);
+    assert.deepEqual(state.bars, { 'incidents-views': null, 'reliability-views': null, ...(step.views ? { [step.views]: step.view } : {}) }, context);
+    assert.deepEqual(state.shown, [step.main], context);
+    assert.equal(state.overflow, false, context);
+    measurements.observe.push({ step: step.click, ...state });
+    await page.screenshot({ path: path.join(evidence, `observe-${String(index + 1).padStart(2, '0')}-${state.hash.slice(1).split('?')[0].replaceAll('/', '-')}.png`) });
+  }
+  // A direct load or Back lands on the same view as the click that made it.
+  await page.goBack();
+  await page.waitForFunction(() => location.hash.startsWith('#diagnostics/doctor'));
+  assert.equal(await page.evaluate(() => document.getElementById('diagnostics-doctor-main').checkVisibility()), true, 'Back restores Health › Doctor');
+  for (const [route, main] of [['diagnostics/incidents/events?status=all', 'diagnostics-events-main'], ['analytics/reliability/tools', 'analytics-tools-main']]) {
+    await page.goto(`${origin}#${route}`);
+    await page.reload();
+    await settle();
+    assert.equal(await page.evaluate(main => document.getElementById(main).checkVisibility(), main), true, `#${route} loads its view`);
+    if (route.startsWith('diagnostics/incidents/events')) {
+      assert.equal((await page.locator('#audit-filter .chip.active').evaluateAll(nodes => nodes.map(node => node.dataset.status))).join(), 'all',
+        'status=all opens Events with every status');
+    }
+  }
+
   await page.goto(`${origin}#config/crews`);
   await settle();
   for (const width of [390, 768]) {
@@ -201,19 +293,19 @@ try {
   await page.evaluate(async tools => {
     const { setActiveTab } = await import('/js/router.js');
     const { renderAuditSummary } = await import('/js/audit.js');
-    setActiveTab('audit', { refresh: false });
+    setActiveTab('analytics/reliability/tools', { refresh: false });
     renderAuditSummary({ window: '24h', failure_rate_by_tool: tools.map(tool => ({ tool, rate: 0.2, failures: 2, successes: 8, total: 10 })) });
   }, toolNames);
   for (const width of [1440, 375]) {
     await page.setViewportSize({ width, height: 1000 });
     const names = await page.locator('.tool-name').evaluateAll(nodes => nodes.map(node => ({ text: node.textContent, title: node.title, clipped: node.scrollWidth > node.clientWidth })));
     assert.deepEqual(names.map(node => node.title), toolNames, 'shared-prefix tools retain distinct full-name tooltips');
-    measurements.audit.push({ width, names });
-    await page.screenshot({ path: path.join(evidence, `audit-${width}.png`), fullPage: true });
+    measurements.tools.push({ width, names });
+    await page.screenshot({ path: path.join(evidence, `tools-${width}.png`), fullPage: true });
   }
   assert.deepEqual(errors, [], 'the fixture reports no browser errors');
   fs.writeFileSync(path.join(evidence, 'measurements.json'), JSON.stringify(measurements, null, 2));
-  console.log(`PASS: ${routes.length} phone deep links on load/reload and three hash changes; inline crew labels and usage at 390/768; crew headers/placeholders at 1280/1440/1920; full Audit names at 1440/375.`);
+  console.log(`PASS: ${routes.length} phone deep links on load/reload and three hash changes; ${walk.length} clicks through every Observe view; inline crew labels and usage at 390/768; crew headers/placeholders at 1280/1440/1920; full Tools names at 1440/375.`);
 } finally {
   await browser?.close();
   server.close();

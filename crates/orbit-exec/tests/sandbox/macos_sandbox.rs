@@ -15,6 +15,7 @@
 #![allow(clippy::expect_used, clippy::print_stdout, clippy::unwrap_used)]
 #![cfg(target_os = "macos")]
 
+use std::path::PathBuf;
 use std::process::{Child, Stdio};
 use std::time::Duration;
 
@@ -28,6 +29,206 @@ use wait_timeout::ChildExt;
 const CHILD_DEADLINE: Duration = Duration::from_secs(30);
 
 #[test]
+fn sandbox_exec_build_budget_self_test_passes_under_worker_profile() {
+    if !macos_sandbox_test_guard("sandbox_exec_build_budget_self_test_passes_under_worker_profile")
+    {
+        return;
+    }
+    let root = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("fixture root");
+    let checkout = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("checkout root");
+    let profile = ResolvedFsProfile {
+        name: "implementer".to_string(),
+        read: vec![format!("{}/**", checkout.display())],
+        modify: vec![format!("{}/**", root.path().display())],
+    };
+    let profile_text = compile_macos_sandbox_profile(&profile, "codex").expect("compile");
+    let env = [
+        (
+            "PATH".to_string(),
+            std::env::var("PATH").expect("test PATH"),
+        ),
+        ("HOME".to_string(), root.path().display().to_string()),
+        ("TMPDIR".to_string(), root.path().display().to_string()),
+    ];
+    // Some CI runners inherit negative niceness. The self-test's relative
+    // `nice -n 15` fixture assumes a nonnegative start, so raise only this
+    // confined child to at least zero before executing the unchanged suite.
+    let start = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+    let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+        profile_text: &profile_text,
+        program: "/usr/bin/nice",
+        args: &[
+            "-n".to_string(),
+            (-start).max(0).to_string(),
+            "/bin/bash".to_string(),
+            checkout
+                .join("scripts/test-build-budget.sh")
+                .display()
+                .to_string(),
+        ],
+        env: &env,
+        cwd: Some(&checkout),
+        stdin: Stdio::null(),
+        stdout: Stdio::piped(),
+        stderr: Stdio::piped(),
+        inherited_fds: &[],
+    })
+    .expect("spawn build-budget self-test under worker profile");
+    // The script exercises bounded admission, signal and timeout cases; give
+    // the whole suite more time than an individual probe on a shared host.
+    wait_with_deadline(child, Duration::from_secs(180));
+}
+
+#[test]
+fn sandbox_exec_scheduling_changes_are_self_only_and_unprivileged() {
+    const PROBE_ENV: &str = "ORBIT_TEST_SCHEDULING_PARENT";
+    const TEST_NAME: &str =
+        "macos_sandbox::sandbox_exec_scheduling_changes_are_self_only_and_unprivileged";
+    if let Ok(parent) = std::env::var(PROBE_ENV) {
+        let parent: libc::id_t = parent.parse().expect("parent PID");
+        // Scheduling state changes stay in this re-executed, confined child.
+        assert_ne!(unsafe { libc::geteuid() }, 0, "probe must be unprivileged");
+        let start = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+        assert!(
+            (-20..=18).contains(&start),
+            "probe needs room to raise niceness twice, got {start}"
+        );
+        let raised = (start + 1).max(10);
+        assert_eq!(
+            unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, raised) },
+            0,
+            "worker must allow raising its own niceness: {}",
+            std::io::Error::last_os_error()
+        );
+        assert_eq!(unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) }, raised);
+        // An explicit self PID must have the same grant as who=0.
+        assert_eq!(
+            unsafe { libc::setpriority(libc::PRIO_PROCESS, std::process::id(), raised + 1) },
+            0
+        );
+        assert_eq!(
+            unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) },
+            raised + 1
+        );
+        assert_eq!(
+            unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, start - 1) },
+            -1,
+            "worker must not elevate its priority below its starting niceness"
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EACCES)
+        );
+        assert_eq!(
+            unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) },
+            raised + 1
+        );
+        let parent_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, parent) };
+        assert_eq!(
+            unsafe { libc::setpriority(libc::PRIO_PROCESS, parent, parent_nice + 1) },
+            -1,
+            "self-only scheduling must deny changing another same-user process"
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EPERM)
+        );
+        assert_eq!(
+            unsafe { libc::getpriority(libc::PRIO_PROCESS, parent) },
+            parent_nice
+        );
+        return;
+    }
+    if !macos_sandbox_test_guard(TEST_NAME) {
+        return;
+    }
+    let root = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("fixture root");
+    let profile = ResolvedFsProfile {
+        name: "implementer".to_string(),
+        read: vec![format!("{}/**", root.path().display())],
+        modify: vec![format!("{}/**", root.path().display())],
+    };
+    let profile_text = compile_macos_sandbox_profile(&profile, "codex").expect("compile");
+    let program = std::env::current_exe().expect("test binary");
+    let env = [(PROBE_ENV.to_string(), std::process::id().to_string())];
+    let start = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+    let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+        profile_text: &profile_text,
+        program: program.to_str().expect("test binary path"),
+        args: &[
+            "--exact".to_string(),
+            TEST_NAME.to_string(),
+            "--nocapture".to_string(),
+        ],
+        env: &env,
+        cwd: Some(root.path()),
+        stdin: Stdio::null(),
+        stdout: Stdio::piped(),
+        stderr: Stdio::piped(),
+        inherited_fds: &[],
+    })
+    .expect("spawn scheduling probe under worker profile");
+    wait_bounded(child);
+    assert_eq!(unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) }, start);
+}
+
+pub(super) fn fixture_root_outside_profile_write_grants() -> tempfile::TempDir {
+    let home = std::env::var_os("HOME").map(PathBuf::from).expect(
+        "macOS sandbox test precondition: HOME must be set for a fixture outside granted trees",
+    );
+    let fixture = tempfile::tempdir_in(&home).unwrap_or_else(|error| {
+        panic!(
+            "macOS sandbox test precondition: cannot create fixture under HOME {}: {error}",
+            home.display()
+        )
+    });
+    let root = fixture
+        .path()
+        .canonicalize()
+        .expect("canonicalize macOS sandbox fixture root");
+
+    let mut granted_roots = vec![
+        PathBuf::from("/tmp"),
+        PathBuf::from("/private/tmp"),
+        PathBuf::from("/private/var/folders"),
+        PathBuf::from("/dev"),
+        home.join("Library/Caches"),
+        home.join(".orbit/state/logs"),
+        home.join(".codex"),
+        home.join(".claude"),
+        home.join(".gemini"),
+        home.join(".grok"),
+    ];
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".cargo"));
+    granted_roots.extend([cargo_home.join("registry"), cargo_home.join("git")]);
+    for name in ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "GROK_HOME"] {
+        if let Some(path) = std::env::var_os(name).filter(|path| !path.is_empty()) {
+            granted_roots.push(PathBuf::from(path));
+        }
+    }
+
+    let granted_root = granted_roots.iter().find(|granted| {
+        root.starts_with(granted)
+            || granted
+                .canonicalize()
+                .is_ok_and(|canonical| root.starts_with(canonical))
+    });
+    if let Some(granted) = granted_root {
+        panic!(
+            "macOS sandbox test precondition: fixture root {} is under profile-granted write tree {}",
+            root.display(),
+            granted.display()
+        );
+    }
+    fixture
+}
+
+#[test]
 fn sandbox_exec_denies_masked_trees_and_allows_only_the_granted_write_root() {
     if !macos_sandbox_test_guard(
         "sandbox_exec_denies_masked_trees_and_allows_only_the_granted_write_root",
@@ -35,10 +236,9 @@ fn sandbox_exec_denies_masked_trees_and_allows_only_the_granted_write_root() {
         return;
     }
 
-    // Under the target directory, not `/tmp` or `/private/var/folders`: the
-    // compiled profile grants those scratch trees to every agent, so a fixture
-    // there could not show a write being refused.
-    let fixture = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("fixture root");
+    // Keep this outside host scratch, provider state, and Cargo cache write
+    // grants; CARGO_TARGET_DIR may itself live in a profile-granted tree.
+    let fixture = fixture_root_outside_profile_write_grants();
     let root = fixture.path().canonicalize().expect("canonical root");
     let masked = root.join("global/state/plugins");
     let secrets = root.join("global/state/plugin-secrets");
@@ -78,7 +278,7 @@ probe write-root ': > "$WRITE_ROOT/written"'
         ("SOURCE".to_string(), readable.display().to_string()),
         ("WRITE_ROOT".to_string(), write_root.display().to_string()),
     ];
-    let (child, _profile_file) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+    let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
         profile_text: &profile_text,
         program: "/bin/sh",
         args: &["-c".to_string(), script.to_string()],
@@ -124,6 +324,104 @@ probe write-root ': > "$WRITE_ROOT/written"'
         write_root.join("written").is_file(),
         "the granted write root must accept the child's write"
     );
+}
+
+/// A live SSH master is authority even without access to private keys.
+#[test]
+fn sandbox_exec_denies_listing_and_connecting_to_ssh_control_sockets() {
+    use std::os::unix::net::{UnixListener, UnixStream};
+
+    if !macos_sandbox_test_guard(
+        "sandbox_exec_denies_listing_and_connecting_to_ssh_control_sockets",
+    ) {
+        return;
+    }
+    let fixture = fixture_root_outside_profile_write_grants();
+    let root = fixture.path().canonicalize().expect("canonical fixture");
+    let sockets = root.join("global/ssh");
+    let write_root = root.join("worktree");
+    std::fs::create_dir_all(&sockets).expect("SSH socket directory");
+    std::fs::create_dir(&write_root).expect("write root");
+    let socket = sockets.join("master");
+    let listener = UnixListener::bind(&socket).expect("live host SSH master fixture");
+    listener.set_nonblocking(true).expect("bounded host accept");
+    let profile = ResolvedFsProfile {
+        name: "implementer".to_string(),
+        read: vec![format!("{}/**", root.display())],
+        modify: vec![format!("{}/**", write_root.display())],
+    };
+    let mut profile_text = compile_macos_sandbox_profile(&profile, "codex").expect("compile");
+    let binary = std::env::current_exe().expect("test binary");
+    let args = [
+        "--exact".to_string(),
+        "macos_sandbox::ssh_socket_probe_process".to_string(),
+        "--ignored".to_string(),
+        "--nocapture".to_string(),
+    ];
+    // A host connection succeeds before and after confinement. The unmasked
+    // sandbox control also connects, proving file-write denial alone does
+    // not protect a socket outside the profile's write grants.
+    for denied in [false, true] {
+        let host = UnixStream::connect(&socket).expect("host can connect to SSH master");
+        listener.accept().expect("accept host control");
+        drop(host);
+        if denied {
+            append_macos_subpath_mask(&mut profile_text, std::slice::from_ref(&sockets));
+        }
+        let env = [
+            (
+                "ORBIT_TEST_SSH_DIR".to_string(),
+                sockets.display().to_string(),
+            ),
+            ("ORBIT_TEST_SSH_DENIED".to_string(), denied.to_string()),
+        ];
+        let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+            profile_text: &profile_text,
+            program: binary.to_str().expect("UTF-8 test binary path"),
+            args: &args,
+            env: &env,
+            cwd: Some(&write_root),
+            stdin: Stdio::null(),
+            stdout: Stdio::piped(),
+            stderr: Stdio::piped(),
+            inherited_fds: &[],
+        })
+        .expect("spawn SSH socket probe under sandbox-exec");
+        wait_bounded(child);
+        if !denied {
+            listener.accept().expect("accept unmasked sandbox control");
+        }
+    }
+    let host = UnixStream::connect(&socket).expect("host still connects after sandbox denial");
+    listener.accept().expect("accept final host control");
+    drop(host);
+}
+
+#[test]
+#[ignore = "spawned under Seatbelt by the SSH socket boundary test"]
+fn ssh_socket_probe_process() {
+    use std::os::unix::net::UnixStream;
+
+    let sockets = PathBuf::from(std::env::var_os("ORBIT_TEST_SSH_DIR").expect("SSH fixture"));
+    let listing = std::fs::read_dir(&sockets);
+    let connection = UnixStream::connect(sockets.join("master"));
+    if std::env::var("ORBIT_TEST_SSH_DENIED").as_deref() == Ok("true") {
+        assert_eq!(
+            listing
+                .expect_err("sandbox must refuse listing SSH sockets")
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            connection
+                .expect_err("sandbox must refuse connecting to SSH master")
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+    } else {
+        listing.expect("unmasked sandbox can list SSH sockets");
+        connection.expect("unmasked sandbox can connect outside its write grants");
+    }
 }
 
 /// Recovery uses the prepared-root case. Seatbelt must also enforce the
@@ -177,7 +475,7 @@ deny sh -c 'printf created > "$1/created.txt"' sh "$DENIED"
             ("DENIED".to_string(), denied.display().to_string()),
             ("PREPARED".to_string(), prepared.to_string()),
         ];
-        let (child, _profile_file) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+        let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
             profile_text: &profile_text,
             program: "/bin/sh",
             args: &["-c".to_string(), script.to_string()],
@@ -269,7 +567,7 @@ probe move-unmatched 'mv "$WS/plain" "$WS/plain-moved"'
         ("WS".to_string(), workspace.display().to_string()),
         ("AWAY".to_string(), away.path().display().to_string()),
     ];
-    let (child, _profile_file) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+    let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
         profile_text: &profile_text,
         program: "/bin/sh",
         args: &["-c".to_string(), script.to_string()],
@@ -313,17 +611,122 @@ probe move-unmatched 'mv "$WS/plain" "$WS/plain-moved"'
     );
 }
 
+/// Profile delivery must leave nothing in the writable temp root for a
+/// confined process to replace before a retry. Isolate TMPDIR in a child test
+/// so other tests and concurrent runs cannot affect the no-file assertion.
+#[test]
+fn sandbox_exec_passes_profiles_inline_without_a_writable_cache() {
+    if !macos_sandbox_test_guard("sandbox_exec_passes_profiles_inline_without_a_writable_cache") {
+        return;
+    }
+    const PROBE: &str = "macos_sandbox::inline_profile_probe_process";
+    let root = tempfile::tempdir().expect("isolated probe root");
+    let cache = root.path().join("cache");
+    std::fs::create_dir(&cache).expect("isolated temp root");
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    command.args(["--exact", PROBE, "--ignored", "--nocapture"]);
+    command.env("TMPDIR", &cache);
+    let output = orbit_common::test_env::run_child_test(&mut command, PROBE, root.path());
+    orbit_common::test_env::assert_child_test_passed(
+        PROBE,
+        output.status,
+        &output.stdout,
+        &output.stderr,
+    );
+    assert_eq!(
+        std::fs::read_dir(&cache).expect("list temp root").count(),
+        0,
+        "inline profile delivery must not create a writable profile or retain cache files"
+    );
+}
+
+#[test]
+#[ignore = "spawned with isolated TMPDIR by the inline-profile boundary test"]
+fn inline_profile_probe_process() {
+    let scratch = std::env::temp_dir()
+        .canonicalize()
+        .expect("isolated TMPDIR");
+    let denied = scratch.join("denied");
+    std::fs::create_dir(&denied).expect("masked tree");
+    let witness = denied.join("witness");
+    std::fs::write(&witness, "unchanged").expect("masked witness");
+    let profile = ResolvedFsProfile {
+        name: "inline-probe".to_string(),
+        read: vec![],
+        modify: vec![],
+    };
+    let mut profile_text = compile_macos_sandbox_profile(&profile, "codex").expect("compile");
+    append_macos_subpath_mask(&mut profile_text, std::slice::from_ref(&denied));
+    let script = r#"
+set -eu
+for file in "$TMPDIR"/orbit-sandbox-*.sb; do
+    if [ -e "$file" ]; then
+        printf '(version 1)\n(allow default)\n' > "$file"
+        echo 'writable profile file found' >&2
+        exit 91
+    fi
+done
+if (printf changed > "$WITNESS") 2>/dev/null; then
+    echo 'profile did not enforce its write denial' >&2
+    exit 92
+fi
+printf 'inline-profile-enforced\n'
+"#;
+    let env = [
+        ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+        ("TMPDIR".to_string(), scratch.display().to_string()),
+        ("WITNESS".to_string(), witness.display().to_string()),
+    ];
+    // Identical text exercises the former cache-hit path as well as first use.
+    for _ in 0..2 {
+        let child = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+            profile_text: &profile_text,
+            program: "/bin/sh",
+            args: &["-c".to_string(), script.to_string()],
+            env: &env,
+            cwd: Some(&scratch),
+            stdin: Stdio::null(),
+            stdout: Stdio::piped(),
+            stderr: Stdio::piped(),
+            inherited_fds: &[],
+        })
+        .expect("spawn inline profile probe");
+        let (stdout, stderr) = wait_bounded(child);
+        assert_eq!(stdout, "inline-profile-enforced\n", "stderr: {stderr}");
+        assert_eq!(
+            std::fs::read_to_string(&witness).expect("witness"),
+            "unchanged"
+        );
+        let entries: Vec<_> = std::fs::read_dir(&scratch)
+            .expect("list isolated temp root")
+            .map(|entry| entry.expect("temp entry").file_name())
+            .collect();
+        assert_eq!(
+            entries,
+            [std::ffi::OsString::from("denied")],
+            "no profile file may exist after first use or retry"
+        );
+    }
+    // The parent checks the entire temp root after this probe exits.
+    std::fs::remove_file(&witness).expect("remove owned witness");
+    std::fs::remove_dir(&denied).expect("remove owned empty masked tree");
+}
+
 /// Wait for the sandboxed child within [`CHILD_DEADLINE`], then collect its
 /// output. The guard kills and reaps it on any early exit.
 fn wait_bounded(child: Child) -> (String, String) {
+    wait_with_deadline(child, CHILD_DEADLINE)
+}
+
+fn wait_with_deadline(child: Child, deadline: Duration) -> (String, String) {
     use std::io::Read;
 
     let mut guard = ChildGuard(child);
     let status = guard
         .0
-        .wait_timeout(CHILD_DEADLINE)
+        .wait_timeout(deadline)
         .expect("wait for sandboxed child")
-        .unwrap_or_else(|| panic!("sandboxed child ran past {CHILD_DEADLINE:?}"));
+        .unwrap_or_else(|| panic!("sandboxed child ran past {deadline:?}"));
     let mut stdout = String::new();
     let mut stderr = String::new();
     guard

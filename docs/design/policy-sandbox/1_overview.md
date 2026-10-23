@@ -4,7 +4,7 @@ type: design
 title: "Policy & Sandboxing — Overview"
 owner: claude
 last_updated: 2026-10-06
-last_validated: 2026-10-09
+last_validated: 2026-10-21
 status: Draft
 feature: policy-sandbox
 doc_role: overview
@@ -39,7 +39,7 @@ Orbit runs agents against user repositories, so the safety boundary is a product
 
 ### 2.2 Profile resolution materializes an implicit `unrestricted`
 
-When an activity omits `fsProfile:`, the v2 host uses `UNRESTRICTED_FS_PROFILE`. If the policy does not define that profile, the resolver synthesizes `read: ["./**"]` and `modify: ["./**"]`, then injects global denies.
+When an activity omits `fsProfile:`, the engine host uses `UNRESTRICTED_FS_PROFILE`. If the policy does not define that profile, the resolver synthesizes `read: ["./**"]` and `modify: ["./**"]`, then injects global denies.
 
 ### 2.3 Path evaluation is last-match-wins over a normalized rule list
 
@@ -53,7 +53,7 @@ Linux provider launch materializes a missing write-grant anchor before spawning,
 
 Shipped agent activities run on the CLI path only. They do not call in-process `fs.*` builtins — that family was retired in [ORB-10828] and [ORB-10833]. Filesystem writes are constrained by harness delegation plus the configured executor sandbox: `sandbox-exec` on macOS and Bubblewrap write confinement on Linux. `FsCallEvent` / `FsAuditLogger` types remain on `ToolContext` for historical traces and a possible future harness, but nothing registered emits them.
 
-When the default policy denies workspace `.orbit/**`, the v2 host re-allows only the narrow child Orbit runtime stores needed by currently activity-exposed write tools. It does not blanket-allow workspace `.orbit`; newly exposed Orbit write tools must add their store roots intentionally.
+When the default policy denies workspace `.orbit/**`, the engine host re-allows only the narrow child Orbit runtime stores needed by currently activity-exposed write tools. It does not blanket-allow workspace `.orbit`; newly exposed Orbit write tools must add their store roots intentionally.
 
 ### 2.5 Exec supervision is not default OS isolation
 
@@ -67,15 +67,15 @@ When the default policy denies workspace `.orbit/**`, the v2 host re-allows only
 |---------|----------------|-----------------|
 | Policy schema and validation | `crates/orbit-types/src/policy/policy_def.rs`, `crates/orbit-types/src/resource/data.rs` | [T20260416-0728] |
 | Allow/deny enum | `crates/orbit-types/src/policy/policy_decision.rs` | [T20260426-0622] |
-| Policy facade | `crates/orbit-policy/src/{lib,engine,evaluator,decision}.rs` | [T20260416-0728] |
+| Policy facade | `crates/orbit-policy/src/{lib,engine,evaluator}.rs` | [T20260416-0728] |
 | Profile resolution + deny injection | `crates/orbit-types/src/policy/policy_def.rs` (`effective_profile`, `check_path`) | [T20260416-0728] |
-| Versioned `.orbit` modify boundary and missing-anchor preparation | `crates/orbit-core/assets/policies/default.yaml`, `crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`, `crates/orbit-exec/src/{linux_sandbox,macos_sandbox}/` | [ORB-10560], [ORB-10573], [ORB-10602] |
-| Implicit `unrestricted` materialization | `crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/resolve.rs` (`resolve_fs_profile_absolute`) | [T20260419-0503] |
+| Versioned `.orbit` modify boundary and missing-anchor preparation | `crates/orbit-core/assets/policies/default.yaml`, `crates/orbit-core/src/adapter/engine_host/actions/sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`, `crates/orbit-exec/src/{linux_sandbox,macos_sandbox}/` | [ORB-10560], [ORB-10573], [ORB-10602] |
+| Implicit `unrestricted` materialization | `crates/orbit-core/src/adapter/engine_host/actions/sandbox/resolve.rs` (`resolve_fs_profile_absolute`) | [T20260419-0503] |
 | Retired tool-layer fs enforcement | Removed with the `fs.*` builtins ([ORB-10828], [ORB-10833]); `FsAuditLogger` types remain in `crates/orbit-tools/src/fs_audit.rs` | [ORB-10833] |
 | Activity `fsProfile:` binding | `crates/orbit-engine/src/activity_job/dispatcher.rs`, `crates/orbit-engine/src/activity_job/job_executor/{step,target}.rs` | [T20260419-0503] |
 | Exec spawn primitive | `crates/orbit-exec/src/{lib,runner,process,sandbox}.rs` | [T20260417-0550] |
 | Linux CLI write confinement | `crates/orbit-exec/src/linux_sandbox/` | [ORB-10552] |
-| Process supervision | `crates/orbit-exec/src/supervision/{wait,cleanup,signal,tee}.rs` | [T20260417-0558-4], [T20260417-0558-5] |
+| Process supervision | `crates/orbit-common/src/process/supervisor/`; exec's policy in `crates/orbit-exec/src/supervision/` | [T20260417-0558-4], [T20260417-0558-5] |
 | Filesystem denial audit channel | `crates/orbit-tools/src/fs_audit.rs` (`FsAuditLogger`), `crates/orbit-engine/src/activity_job/dispatcher.rs` → `docs/design/auditability/2_design.md §3` | [T20260426-0605] |
 
 ---

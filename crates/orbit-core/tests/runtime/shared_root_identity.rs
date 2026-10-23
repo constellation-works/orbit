@@ -16,8 +16,6 @@ use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::dispatch_admission::isolated;
-
 fn binding(repo: &Path, logical: &str, partition: &str) -> WorkspaceRuntimeBinding {
     WorkspaceRuntimeBinding {
         logical_workspace_id: logical.into(),
@@ -90,14 +88,8 @@ fn seed_recovery(runtime: &OrbitRuntime, event_id: &str, run_id: &str) {
         .unwrap();
 }
 
-#[test]
 fn selected_shared_root_isolates_records_reservations_and_claims() {
-    if !isolated(
-        "shared_root_identity::selected_shared_root_isolates_records_reservations_and_claims",
-    ) {
-        return;
-    }
-    let temp = TempDir::new().unwrap();
+    let temp = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let root = temp.path().join("shared-root");
     std::fs::create_dir_all(&root).unwrap();
     // The compatibility config belongs to the first registered repository.
@@ -268,14 +260,8 @@ fn selected_shared_root_isolates_records_reservations_and_claims() {
     assert_eq!(claim(&beta, 60)["acquired"], false);
 }
 
-#[test]
 fn ordinary_checkout_keeps_its_partition_after_logical_registration() {
-    if !isolated(
-        "shared_root_identity::ordinary_checkout_keeps_its_partition_after_logical_registration",
-    ) {
-        return;
-    }
-    let temp = TempDir::new().unwrap();
+    let temp = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = temp.path().join("global");
     let repo = temp.path().join("repo");
     let root = repo.join(".orbit");
@@ -324,3 +310,10 @@ fn ordinary_checkout_keeps_its_partition_after_logical_registration() {
     assert_eq!(reserve(&registered, 60)["reserved"], false);
     assert_eq!(claim(&registered, 60)["acquired"], false);
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    selected_shared_root_isolates_records_reservations_and_claims_scenarios,
+    selected_shared_root_isolates_records_reservations_and_claims,
+    ordinary_checkout_keeps_its_partition_after_logical_registration
+);

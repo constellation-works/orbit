@@ -5,7 +5,7 @@ tags: [operations, website, sandbox, playwright, validation]
 paths: ["website/**"]
 related_features: [orbit-docs]
 related_artifacts: ["ORB-11329", "ORB-11379"]
-last_validated: 2026-10-11
+last_validated: 2026-10-19
 ---
 
 # Validate Website Changes in a Job-Run Sandbox
@@ -108,9 +108,12 @@ candidate dependencies, generated pages and output directories are untouched.
 
 ## Stage Playwright and Chromium without root
 
-Prefer sourcing `~/.local/chromium-deps/env.sh` if the host already has a
-[prepared browser kit](../../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md).
-The disposable installation below is the fallback when that file is absent.
+Prefer the host's
+[browser kit](../../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md):
+in a worker, source `"$ORBIT_BROWSER_KIT_ENV"`, which Orbit sets once
+`orbit browser-kit install` has verified the kit; by hand, source
+`~/.local/chromium-deps/env.sh`. The disposable installation below is the
+fallback when neither is available.
 
 Install Playwright and its browser under the scratch root. `playwright install-deps` is not a
 solution in a job-run sandbox: it installs operating-system packages and therefore needs
@@ -266,17 +269,17 @@ Stop the server after validation:
 ### Dashboard tour and run screenshot
 
 When regenerating public dashboard media, inspect decoded pixels rather than
-searching the binary files or pinning prose in a test. The dated v2 tour has
-eight chapters over 42.2 seconds at 1320 × 1100, with boundaries at 0, 4.6,
-10.8, 15.4, 22.2, 26.8, 33.0 and 37.6 seconds. Decode a frame within each
-chapter, both sides of every cut, and the pans and final loop cross-fade.
+searching the binary files or pinning prose in a test. The dated v3 tour has
+six chapters over 39.8 seconds at 1320 × 1100, with boundaries at 0, 6.4,
+13.2, 19.4, 26.2 and 32.8 seconds. Decode a frame within each chapter, both
+sides of every cut, and the pans and final loop cross-fade.
 In Chromium, seek with `requestVideoFrameCallback` and record `mediaTime` so
 the evidence identifies the decoded frame, rather than the requested seek.
 
-Inspect task list rows, task records and address bars, run lists and headers,
-audit targets, incident messages, and friction list/detail prose. Production
-task, friction and run identifiers must be omitted or replaced with demo
-labels before encoding. Sanitizing the source screenshots before camera pans
+Inspect task list rows, the Drain dock, address bars, run headers, routine
+last-run links, auto-task last-minted links, the slowest-runs list and the
+codebase view's regressed tasks. Production task, friction and run
+identifiers must be omitted or replaced with demo labels before encoding. Sanitizing the source screenshots before camera pans
 keeps replacements aligned through the whole tour. Check the run-detail PNG
 separately, including its header and Task field. Preserve readable UI, chapter
 captions, dated counts and the capture date.
@@ -321,7 +324,9 @@ The script discovers every built HTML page and checks 375, 768, 1024, 1280 and
 1440px in both site themes with web fonts loaded. It also checks
 `/reference/config/` at 320, 1152 and 1920px in both themes, including
 code clipping, delimiter-only line breaks, single-line desktop keys, and table
-and page width. It opens disclosures, selects each provider panel, measures
+and page width. On `/reference/cli/`, it checks every table for code clipping,
+preserved copy text, and first-line alignment between the command/option and
+its description. It opens disclosures, selects each provider panel, measures
 glyph line breaks and code/container bounds, checks that `.`, `,`, `;`, `:` or
 `)` after a code stays on the code's last line, checks that links containing
 only code keep their underline (painted, for four known links at 1280px),
@@ -341,13 +346,19 @@ It wraps each inline code in a `nowrap` box so punctuation after it cannot start
 a line, and the stylesheet leaves room for that punctuation and repeats the link
 underline on code inside links.
 
+CLI reference tables instead keep code fully visible in both columns, with
+additional breaks after `_`, `|`, `:` and internal hyphens for long identifiers
+and flags. The leading `--` stays attached to its flag name. This exception is
+scoped to the CLI reference; other pages retain the shared wrapping policy.
+
 ## Site content and generated assets
 
 Pages are authored by hand under `website/src/content/docs/`, with two exceptions under
 `website/src/pages/`: `/changelog/` renders the repository's tracked `CHANGELOG.md` so the
 site never carries a drifting copy, and `/tasks/` is the landing for the task links Orbit
 mints into pull requests (`website/public/_redirects` sends `/tasks/<id>` there). Nothing on
-this site is fetched or generated at build time, so `npm run build` is a pure function of the
+this site is fetched at build time. Besides the static pages, the build writes a derived Pagefind
+search index (`pagefind: true` in `astro.config.mjs`), so `npm run build` is a pure function of the
 tracked sources. Before website commands run, a cleanup hook removes the retired generated
 `website/src/content/docs/metrics/` directory left by older checkouts. Do not author pages in
 that reserved directory; the hook does not generate content.

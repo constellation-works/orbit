@@ -36,7 +36,8 @@ pub struct ResolvedWorkspaceSelection {
 /// that keeps a built runtime to notice an edit without re-opening anything. A
 /// caller that also compares the registry records it resolved (as the MCP
 /// server does) covers same-size edits to those records; the stamp covers the
-/// remaining composition inputs — the rest of the registry file, the
+/// remaining composition inputs — the rest of the workspace registry file,
+/// the host registry that supplies serving-host operating systems, the
 /// checkout's own `config.yaml` task binding, and both `config.toml` layers
 /// the runtime settings (crews, default crew, execution policy, this
 /// machine's `[machine]` identity, and the workspace `[plugin_enablement]`
@@ -45,6 +46,7 @@ pub struct ResolvedWorkspaceSelection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredRuntimeStamp {
     registry: FileStamp,
+    host_registry: FileStamp,
     workspace_binding: FileStamp,
     global_config: FileStamp,
     workspace_config: FileStamp,
@@ -68,6 +70,7 @@ impl RegisteredRuntimeStamp {
     pub fn read(global_root: &Path, checkout: &WorkspaceCheckout) -> Self {
         Self {
             registry: FileStamp::read(&workspace_registry::registry_path_for(global_root)),
+            host_registry: FileStamp::read(&orbit_registry::hosts::hosts_path(global_root)),
             workspace_binding: FileStamp::read(&workspace_config_path(&checkout.orbit_dir)),
             global_config: FileStamp::read(&global_root.join(CONFIG_TOML_FILE)),
             workspace_config: FileStamp::read(&checkout.orbit_dir.join(CONFIG_TOML_FILE)),
@@ -101,18 +104,6 @@ pub fn workspace_runtime_binding(
     checkout: &WorkspaceCheckout,
 ) -> Result<WorkspaceRuntimeBinding, OrbitError> {
     orbit_core::runtime::workspace_runtime_binding(workspace, checkout)
-}
-
-pub fn resolved_workspace_binding(
-    workspace: &Workspace,
-    checkout: &WorkspaceCheckout,
-) -> Result<ResolvedWorkspaceBinding, OrbitError> {
-    Ok(ResolvedWorkspaceBinding {
-        logical_workspace_id: workspace.id.clone(),
-        runtime: workspace_runtime_binding(workspace, checkout)?,
-        role: checkout.role,
-        owner_machine_id: workspace.owner_machine_id.clone(),
-    })
 }
 
 /// Registry-aware runtime factory. Registered checkouts carry an explicit
@@ -595,6 +586,36 @@ impl RegisteredRuntimeFactory {
                 &identity,
             )
         })
+    }
+
+    /// Normalize an explicit CLI owner selector without changing the runtime.
+    ///
+    /// Registered names, logical IDs and paths must resolve to the selected
+    /// checkout. The exact internal task-partition ID remains accepted too,
+    /// including when it differs from the logical registry ID, provided it
+    /// does not select another registered workspace. Core retains responsibility
+    /// for operator admission and the owner partition guard.
+    pub fn resolve_cli_owner_workspace(
+        runtime: &OrbitRuntime,
+        selector: &str,
+    ) -> Result<String, OrbitError> {
+        let owner = runtime.workspace_id()?;
+        let global_root = runtime.global_root();
+        let registry = Self::load_registry_for_selectors(&global_root)?;
+        if selector == owner && workspace_registry::find_workspace(&registry, selector)?.is_none() {
+            return Ok(owner);
+        }
+        let selected = Self::resolve_selector_in(
+            &registry,
+            selector,
+            inspect_machine_identity(&global_root)?.id(),
+        )?;
+        if !same_cli_checkout(runtime, &selected.checkout) {
+            return Err(OrbitError::CapabilityDenied(
+                "retry owner workspace must match the selected workspace".into(),
+            ));
+        }
+        Ok(owner)
     }
 
     /// Bind a CLI `orbit tool run` invocation to the workspace named in `input`.

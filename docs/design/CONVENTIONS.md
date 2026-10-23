@@ -1,8 +1,8 @@
 ---
 title: Design Doc Conventions
 owner: daniel
-last_updated: 2026-10-11
-last_validated: 2026-10-09
+last_updated: 2026-10-12
+last_validated: 2026-10-13
 status: Accepted
 ---
 
@@ -211,6 +211,7 @@ Retired features are removed from this table along with their folder.
 |---------|--------|------|
 | Activity / Job | [docs/design/activity-job/](./activity-job/) | codex |
 | Agent Families | [docs/design/agent-families/](./agent-families/) | grok |
+| Agent Scorecards | [docs/design/agent-scorecards/](./agent-scorecards/) | claude |
 | Auditability | [docs/design/auditability/](./auditability/) | codex |
 | Auto-concurrency | [docs/design/auto-concurrency/](./auto-concurrency/) | claude |
 | Auto-tasks | [docs/design/auto-tasks/](./auto-tasks/) | claude |
@@ -218,6 +219,7 @@ Retired features are removed from this table along with their folder.
 | Distributed Drain | [docs/design/distributed-drain/](./distributed-drain/) | claude |
 | Executors | [docs/design/executors/](./executors/) | claude |
 | Federated MCP | [docs/design/federated-mcp/](./federated-mcp/) | grok |
+| Finding Verification | [docs/design/finding-verification/](./finding-verification/) | claude |
 | Host Registry | [docs/design/host-registry/](./host-registry/) | codex |
 | MCP Bridge | [docs/design/mcp-bridge/](./mcp-bridge/) | codex |
 | MCP Session Context | [docs/design/mcp-session-context/](./mcp-session-context/) | codex |
@@ -225,6 +227,7 @@ Retired features are removed from this table along with their folder.
 | Orbit Core | [docs/design/orbit-core/](./orbit-core/) | codex |
 | Orbit Search | [docs/design/orbit-search/](./orbit-search/) | codex |
 | Policy & Sandboxing | [docs/design/policy-sandbox/](./policy-sandbox/) | claude |
+| Process Supervision | [docs/design/process-supervision/](./process-supervision/) | claude |
 | Project Learnings | [docs/design/project-learnings/](./project-learnings/) | claude |
 | Remote Access | [docs/design/remote-access/](./remote-access/) | codex |
 | Review Gate | [docs/design/review-gate/](./review-gate/) | codex |

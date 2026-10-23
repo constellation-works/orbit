@@ -40,15 +40,18 @@ fn reserved_aliases_and_duplicate_canonical_requirements_cannot_create_a_hold() 
         REVIEW_REPORT_ARTIFACT,
         REVIEW_REPORT_HISTORY_ARTIFACT,
     ] {
-        for alias in [
-            reserved.to_string(),
-            format!(" {reserved}"),
-            format!("{reserved} "),
-            format!("{reserved}/"),
-            format!("./{reserved}"),
-        ] {
-            cases.push(vec![alias]);
-        }
+        cases.push(vec![reserved.to_string()]);
+    }
+    // evidence_artifact_path normalizes before one shared reserved-name
+    // check. Cover every protected name and every normalization form without
+    // rebuilding the same review fixture for their Cartesian product.
+    for alias in [
+        format!(" {REVIEW_GATE_ARTIFACT}"),
+        format!("{REVIEW_GATE_ARTIFACT} "),
+        format!("{REVIEW_GATE_ARTIFACT}/"),
+        format!("./{REVIEW_GATE_ARTIFACT}"),
+    ] {
+        cases.push(vec![alias]);
     }
     for alias in [
         " evidence/check.json",

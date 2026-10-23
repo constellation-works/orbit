@@ -1,8 +1,8 @@
 ---
 title: Review Gate — Design
 owner: codex
-last_updated: 2026-10-10
-last_validated: 2026-10-10
+last_updated: 2026-10-19
+last_validated: 2026-10-19
 status: Accepted
 feature: review-gate
 doc_role: design
@@ -22,48 +22,50 @@ changes no schedule; a verdict grants no merge permission.
 ## 1. Preferences: three timings [ORB-13992] [ORB-14849]
 
 Automatic review runs at up to three timings. Before-PR review and
-before-landing review are `config.toml` booleans; after-landing review is the
+before-landing review are the two values of the `config.toml` key
+`review.timing` besides `off`; after-landing review is the
 `delivery-code-review` auto-task's own `enabled` flag. Config preferences
 resolve **built-in → global → workspace**, each with its winning layer
 recorded. Unknown keys and out-of-range values fail config load.
 
 | Key | Values (default) |
 | --- | --- |
-| `review.before_pr` | bool (`false`) |
-| `review.before_landing` | bool (`false`) |
+| `review.timing` | `off`, `before_pr` or `before_landing` (`off`) |
 | `review.before_landing_hosts` | machine ids (`[]` by default; entries are `hm_…`; owner policy for claimed leaves) |
 | `review.minutes` | 1..=1440 (30): wall-clock limit for one candidate's review |
-| `operation.review_crew` | crew name or weighted pool |
+| `workflow.purpose_crews.review` | crew name or weighted pool |
+| `workflow.purpose_crews.pre_landing_review` | crew name or weighted pool for before-PR and before-landing review; unset falls back to `workflow.purpose_crews.review` |
 
-`review.before_pr` holds PR creation for a fresh reviewer (§3).
-`review.before_landing` opens the PR first and reviews it while hosted CI
+`review.timing = "before_pr"` holds PR creation for a fresh reviewer (§3).
+`before_landing` opens the PR first and reviews it while hosted CI
 runs, so a clean review costs about max(review, CI) of wall time instead of
 review + CI; the PR lands only at the head that review settled (§3.2). Both
 need an explicit `review_crew`, and admission escalates
 `review_crew_unconfigured` until one is set; both share `review.minutes`, and
 each candidate gets one review (§5).
 
-There is one review layer before landing. A resolution with both
-`review.before_pr` and `review.before_landing` on fails config load with an
-error naming both keys and the layer that set each, and `orbit config set`
-refuses an edit that would turn both on in one file. After-landing review is
-independent of either and may run beside them.
+There is one review layer before landing, so `review.timing` selects at most
+one of them. A file still carrying the deprecated `review.before_pr` and
+`review.before_landing` booleans with both on fails config load, naming both
+keys. After-landing review is independent of either and may run beside them.
 
 An owner can use `review.before_landing_hosts` to turn before-landing review
 on for claimed leaves from selected machines while leaving the owner's own
 deliveries and unlisted machines unaffected. It is owner-side delivery
 policy, not machine authentication; it is redundant when
-`review.before_landing` is already on and cannot be combined with
-`review.before_pr`. The [configuration reference](../../CONFIG.md) documents
+`review.timing` is already `before_landing` and cannot be combined with
+`before_pr`. The [configuration reference](../../CONFIG.md) documents
 the list's validation and claim behavior.
 
 After-landing review is carried out by the workspace's shipped
 `delivery-code-review` delivery auto-task [ORB-13896], switched with
 `orbit auto-task toggle delivery-code-review on|off`. While enabled it freezes
 landed base-branch deliveries into batches and mints one review task per batch
-at its threshold or maximum wait. When `review_crew` is set it is the crew of
-every review task the consumer mints; unset, the definition's template crew
-(`system`) applies. Changing `review_crew` changes only future mints, never the
+at its threshold or maximum wait. When `review_crew` is set, each review task the
+consumer mints carries that crew; a pool draws one member per mint, preferring
+one that implemented none of the batch's deliveries. Unset, the shipped template
+names no crew, so each minted task is unassigned and draws from the complexity
+pool for its complexity. Changing `review_crew` changes only future mints, never the
 consumer's epoch or its retained debt. The consumer admits only on the machine
 that owns the workspace (see [delivery automation
 operations](../automation-triggers/5_operations.md)). After-landing review
@@ -88,8 +90,8 @@ before-PR or before-landing review switched on without a resolvable
 
 **Migration.** `operation.review_policy` and `operation.review_minutes` are
 deprecated: they are translated on load with a warning naming each key, and a
-later release makes them errors. `before-pr` sets `review.before_pr = true`;
-`none` turns neither switch on; `after-landing` enables the consumer only while
+later release makes them errors. `before-pr` sets `review.timing = "before_pr"`;
+`none` sets it `off`; `after-landing` enables the consumer only while
 no operator has configured it (its `updated_by` is unset or `system`) — once
 `orbit auto-task toggle` or any other edit stamps an actor, its own flag
 decides. `orbit auto-task list`/`show` report that as `effective_enabled`. A
@@ -97,10 +99,10 @@ decides. `orbit auto-task list`/`show` report that as `effective_enabled`. A
 `operation.review_minutes` becomes `review.minutes`. The budget keys
 `operation.review_reviewer_starts` and `operation.review_repair_cycles` are
 retired [ORB-13989]: one review per candidate counts neither, so both are
-warned about by name and ignored. The resolved-policy version is 2; a
-version-1 snapshot fails closed and must be replaced. A snapshot captured
-before the retirement still carries `reviewer_starts` or `repair_cycles`; it
-reads and the values are ignored.
+warned about by name and ignored. The resolved-policy version is 5; the
+review-admission contract remains version 1 and refuses unsupported contract
+versions. A snapshot captured before the retirement still carries
+`reviewer_starts` or `repair_cycles`; it reads and the values are ignored.
 
 ## 2. Captured timing
 
@@ -109,7 +111,8 @@ submission in the delivery family (`workspace_auto_pipeline`,
 `task_auto_pipeline`, `task_gate_pipeline`, `task_pr_pipeline`,
 `task_local_pipeline`) carries a versioned `review`
 snapshot in its immutable input: timing and its source, the reviewer crew
-selected from `operation.review_crew` and its source, the lineage budget,
+selected from `workflow.purpose_crews.pre_landing_review` (else
+`workflow.purpose_crews.review`) and its source, the lineage budget,
 the policy version, the owner's `workflow.required_validation_commands`
 list, and its `review.baseline_commands` list (§4). A
 parent-authorized child inherits its parent's snapshot exactly; any other submission resolves from the
@@ -117,14 +120,14 @@ workspace preferences at that moment. A distributed drain
 (`workspace_pull_pipeline`) captures the same snapshot, so the `before_pr` it
 declares to owners is the value it was submitted with. Ordinary input naming
 the reserved `review` key is refused, and a resume keeps its persisted input,
-so switching `review.before_pr` off never weakens a gate that is already
+so setting `review.timing` to `off` never weakens a gate that is already
 active and switching it on never gates a run already admitted. The captured
 timing is `before-pr`, `before-landing` [ORB-14849] or `none`, with the source
 of the switch that decided it. A run captured under the retired
 `after-landing` policy value reads as not gated.
-`review.before_pr` is refused at submission for `task_local_pipeline` delivery,
+`review.timing = "before_pr"` is refused at submission for `task_local_pipeline` delivery,
 with no exemption: epic assembly was the one caller that gated a combined
-candidate later, and it is retired [ORB-12491]. `review.before_landing` is
+candidate later, and it is retired [ORB-12491]. `before_landing` is
 refused there the same way, since a local delivery opens no pull request to
 review. Readiness and the drain's wave hold such backlog work before dispatch
 (`local_route_before_pr`, `local_route_before_landing`), and doctor fails its
@@ -139,6 +142,13 @@ before push/PR creation, as four top-level steps: `review_gate_admit`,
 fixes what it finds; there is no second review round [ORB-13989]. With
 before-PR review off at capture, or a checked no-diff exemption, the gate reports
 `applies: false` and publication proceeds unchanged with no certificate.
+Every admission step's output is the `orbit-types` `ReviewGateAdmissionOutput`:
+an admitted attempt, a passed budget preflight, or not applicable with its
+reason and captured timing. Run state checkpoints it and job templates read
+its fields, so its serde shape is a persisted contract. Settlement, the
+failure handoff, recovery and interrupted-review preservation parse it once
+rather than reading fields by name. Fields added after the gate first shipped
+default when absent, so run state recorded before them still settles.
 
 Admission pins the candidate (base and head commits and trees, every
 implementation commit with the attribution Git recorded), digests each task's
@@ -219,7 +229,7 @@ nor recover: a settled `reject` or `incomplete` verdict, a reviewer timeout, an 
 budget, an unconfigured, unavailable, or excluded crew, and a local route.
 `review_validate` has no retry and no step recovery: its failure is the
 review's `reject`. Every such failure is still eligible for the job's final
-recovery (one look by `workflow.final_recovery_crews`) before the failure
+recovery (one look by `workflow.purpose_crews.final_recovery`) before the failure
 handoff runs.
 
 ### 3.1 Verdicts, the two-commit shape, and revalidation [ORB-13989]
@@ -231,7 +241,7 @@ everything the reviewer left uncommitted as one second commit on top of it:
 ```text
 <implementation commit(s)>     authored by the implementer
 review: <first line of the reviewer summary> [<task ids>]
-                               authored <family>-reviewer, Orbit committer
+                               authored orbit[<reviewer model>], <family>-reviewer@orbit.local, Orbit committer
     Findings: F1, F2
     Paths: src/a.rs, docs/b.md
     Orbit-Review-Attempt: <attempt id>
@@ -254,6 +264,7 @@ Findings:
 - `F1` [high, fixed] <summary>
   - Changed: <what the reviewer changed> (<paths>)
 - `F2` [low, open] <summary>
+  - Cited: <paths the finding cites>
 
 - Reviewer: crew `<crew>` (<provider> / <model>)
 - Implementation: `<sha>` on base `<sha>` (N commit(s), unchanged by review)
@@ -269,6 +280,8 @@ Findings:
 
 <what the verdict means for delivery>
 ```
+
+A fixed finding names its changed paths on its `Changed:` line. Any other finding that cites paths lists them on a `Cited:` line. The [agent scorecards](../agent-scorecards/2_design.md#53-reviewers) judge a `reject` by whether the next implementation run changed those paths.
 
 With a reviewer commit, settlement returns `reviewer_fixed: true`,
 `implementation_head_sha` (the head the reviewer examined), and
@@ -348,7 +361,7 @@ promoted, an evidence-only `incomplete` is not held in progress (§4): it ends l
 recovery still gets one look, as for a failed re-review.
 
 **Claimed leaves: the review runs on the leaf.** A claim from an owner with
-`review.before_landing` on, or a caller matching
+`review.timing = "before_landing"`, or a caller matching
 `review.before_landing_hosts`, captures `before_landing` and the owner's
 review contract in its ship contract. A host-list-only match leaves
 `before_pr` off. The owner admits only an executor whose
@@ -441,16 +454,42 @@ deferred test as `host_sandbox_test` evidence instead. A result from a host
 that executed the path, such as owner fulfilment below, stands in for the
 record and clears its notices.
 
+A broader required run can defer the very tests the reviewer names
+[ORB-17043]: `cargo test -p <crate> --test <target> <module>` passes with a
+deferral notice for each of two tests, and each test is its own
+`host_sandbox_test` requirement with its own required `not_run` record. A
+requirement covers a notice only when its command is admitted as
+`cargo test -p <crate> --test <target> <test>`, with the broader run's one
+package and one target and a filter equal to the test the notice names
+(`<prefix> <test>: <detail>`, for a Bubblewrap, Seatbelt or ps-denied
+notice). A requirement without a filter, a module filter, another package or
+target, or a command outside the grammar covers nothing. The broader run may
+also carry `--locked`, `--frozen`, `--offline`, `--no-fail-fast`, `-q` or
+`--quiet`, which select no target and change no build. Any other option, such
+as a target selector (`--lib`, `--bins`, `--all-targets`, `--workspace` and the
+like) or a build option (`--release`, `--features`, `--profile`, `--target`),
+leaves its notices uncovered. When every notice on the record is covered, the
+review counts as evidence-only, so it holds or
+a claimed host replays the requirements. Each passing result clears only the
+notice it covers and notes its result and log on the broader record, which
+passes once none is left. A replay that skips, defers, runs no test or meets
+an unavailable sandbox leaves its notice, and the review holds for that
+requirement. A failing replay fails its own record and the broader one. One
+uncovered notice keeps the record `not_run`, the review is not evidence-only,
+and nothing is replayed. A record that failed keeps its failure.
+
 The implementer lane follows the same reading [ORB-15287]. An affected-test
-gate that exits 0 with only one sandbox's notices is handed off by naming the
+gate that exits 0 with only deferral notices is handed off by naming the
 gate's validation summary, and the implement step derives the typed
 `deferred_sandbox_validation` record from it before commit [ORB-15516]: one
 of the owner's validation gates, exit 0, executed tests on the pinned base,
-and either only Bubblewrap `DEFERRED:` notices with a failing namespace probe
-(Linux), only Seatbelt `SKIP: sandbox-exec cannot apply a profile:` notices
-with a refused apply probe (macOS) [ORB-15409], or, on a macOS claimed leaf
-only, `DEFERRED: ps denied:` notices with a refused `ps` probe [ORB-15587],
-the probe run by Orbit in the implementer's lane. The owner's `candidate_validate`, or a claim's `claim_validate` on its
+and only notices of these kinds, each backed by its own probe that Orbit runs
+in the implementer's lane: Bubblewrap `DEFERRED:` notices with a failing
+namespace probe (Linux), Seatbelt `SKIP: sandbox-exec cannot apply a
+profile:` notices with a refused apply probe (macOS) [ORB-15409], and, on a
+macOS claimed leaf only, `DEFERRED: ps denied:` notices with a refused `ps`
+probe [ORB-15587]. A gate that prints several kinds, as a Mac claimed leaf's
+broad gate does, needs every kind's probe refused [ORB-15692]. The owner's `candidate_validate`, or a claim's `claim_validate` on its
 claim host, replays that gate outside the agent sandbox before delivery and
 refuses a replay that defers again (`validation_environment`) or reports no
 executed tests. The implementer's own pass stays `not_run`.
@@ -491,6 +530,20 @@ verdict claimed. A target that is not a repository-relative path (absolute,
 home-relative, climbing out of the repository, inside `.git`, or a `dir:` or
 `symbol:` selector) cannot be compared and is refused as
 `validation_unevidenced`, never passed for want of a match.
+A control on a file the review's own repair changed cannot come back to the
+reviewed bytes, and the repair commit captures whatever the control left
+there [ORB-16447]. The record declares that target's repaired state in
+`repaired_blob`: the target's path mapped to the `git hash-object` blob the
+reviewer took after its repair and before the control. Settlement accepts
+such a target only when a `repaired` finding lists it, the attempt's own
+repair commit (the final candidate) changed it, and the final candidate
+carries exactly the declared blob. A target with no declared blob, one no
+repaired finding lists, or one whose final blob differs from the declaration
+(a partial restore) settles `incomplete` with `validation_contradicted`. A
+declared blob the final candidate does not carry is refused even when the
+target is otherwise unchanged. A repair commit the host did not record for
+the attempt never reaches the verdict: settlement refuses a candidate whose
+head is not the attempt's own repair as `candidate_changed`.
 Coverage does not re-judge mutation targets: a certificate that passed
 settlement had them restored.
 
@@ -509,7 +562,7 @@ validator cannot tell an unlisted policy check from an optional one, so that
 rule is contract text only. A report that still carries the `not_run`
 diagnostic after the correction settles `incomplete` with
 `validation_contradicted`; a denied diagnostic or a control that never ran
-stays an observation. When the reviewer step returns
+is a role contradiction as well, and the reviewer cannot correct it. When the reviewer step returns
 successfully, the engine asks the host (`RuntimeHost::review_report_correction`)
 to judge the attached report as settlement would, over the scope settlement
 would derive (the task selectors plus the implementation's paths and the
@@ -653,8 +706,8 @@ the certificate's `known_red` records the command, record id, base, final
 candidate, run and tests, and coverage (`validation_evidence`) counts a
 failed required record only through an entry bound to the certificate's
 own base and final candidate. Each task's history gets the
-`known_red_validation` note `pr_open` reads. One held check anywhere in the
-review still holds it. A candidate
+`known_red_validation` event whose typed decision `pr_open` reads. One held
+check anywhere in the review still holds it. A candidate
 that adds failures keeps its verdict (`baseline_exceeded`). Once the host
 refutes the claim, its run on the final candidate decides the check
 [ORB-15122]. A pass there, with no open finding and no pending external
@@ -705,8 +758,9 @@ predate the attempt are ignored, the rest merge into the most severe verdict
 with every distinct finding and validation record — (none, a wrong attempt,
 another contract version, or an unreadable report is `incomplete`), commits every
 uncommitted change as the one reviewer commit (§3.1) authored
-`<family>-reviewer <<family>-reviewer@orbit.local>` with the Orbit committer
-and the `Orbit-Review-Attempt` and `Orbit-Review-Crew` trailers, widens the
+`orbit[<reviewer model>] <<family>-reviewer@orbit.local>` (falling back to
+`<family>-reviewer <<family>-reviewer@orbit.local>` when the model is unknown)
+with the Orbit committer and the `Orbit-Review-Attempt` and `Orbit-Review-Crew` trailers, widens the
 tasks' selectors with an exact `file:` entry for every repaired path they do
 not cover, declared in a finding or not, with one `context_files_widened`
 history entry (step `review`), and cross-checks the claim. The reviewer may
@@ -893,8 +947,9 @@ apply: macOS `sandbox_apply` fails with `EPERM`, and Bubblewrap cannot create
 its namespaces. So the reviewer cannot run Orbit's sandbox tests, nor an
 owner-required command that runs them. Settlement on the leaf's host is
 Orbit's deterministic worker, outside the agent sandbox. When the report would
-otherwise be an evidence-only hold, it runs each requirement whose `os` is this
-host's and that no accepted result already satisfies. The command must be
+otherwise be an evidence-only hold, including a broader run whose every
+deferred test a requirement covers (above), it runs each requirement whose
+`os` is this host's and that no accepted result already satisfies. The command must be
 either an exact owner-required validation command or
 `cargo test -p <crate> --test <target> [<filter>]`. That form takes no other
 option, and the command may use only `[A-Za-z0-9._/:@+=-]` and spaces. A
@@ -912,7 +967,8 @@ no sandbox-unavailable diagnostic, prints no skip notice (`SKIP:`, `DEFERRED:`,
 those checks leaves the evidence missing with `sandbox_unavailable`,
 `self_skipped`, `no_tests_ran`, `tool_missing`, `timed_out` or `run_failed`, so
 the review holds as above. A failing test (`test_failed`) fails the reviewer's
-required record, and the review blocks. A passing run attaches a result like
+required record, and any broader record that deferred the test, and the
+review blocks. A passing run attaches a result like
 the operator's, with `os`, and settlement counts it on this tree, so the review
 passes with no hold. The certificate's `host_evidence` lists every attempt.
 
@@ -979,9 +1035,10 @@ query or a workspace without hosted CodeQL never loses its obligation.
 The owner enforces owner-owed evidence. Handoff acceptance refuses a
 certificate whose `owner_owed_evidence` names a check its captured rules did
 not declare hosted for a before-landing review. `handoff_land` merges only once
-each owed hosted check reports a pass in the pull request's status rollup for
-the pinned head; it waits while one is absent or running and stops when one
-failed, independent of branch protection.
+each owed hosted check reports an explicit success (CheckRun `SUCCESS` or
+StatusContext `SUCCESS`) in the pull request's status rollup for the pinned
+head. It waits while one is absent, running, or completed `SKIPPED` or
+`NEUTRAL`, and stops when one failed, independent of branch protection.
 
 The same review decides the owner's required gates from the claim host's own
 runs. `claim_validate` ran them natively, outside the agent sandbox, on the
@@ -1228,8 +1285,7 @@ Existing runs without a `review` snapshot behave exactly as before. The
 seeded cron `code-review` auto-task and any custom definition stay untouched;
 migrating to delivery-triggered review remains the explicit edit described in
 [delivery automation operations](../automation-triggers/5_operations.md).
-To roll back, set `review.before_pr = false` or `review.before_landing =
-false` (and toggle the
+To roll back, set `review.timing = "off"` (and toggle the
 `delivery-code-review` consumer on for after-landing review, §1): future
 submissions capture the new value, admitted runs keep their gate, and
 certificates, ledgers, and landings stay readable. An older binary cannot settle an
@@ -1255,7 +1311,7 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
   its intent.
 - Provider token and cost caps are not enforced; only reviewer runtime is
   bounded, so reviewer spend stays unknown.
-- `review.before_pr` and `review.before_landing` have no meaning on the
+- `review.timing` `before_pr` and `before_landing` have no meaning on the
   local-only delivery route and are refused at submission rather than
   downgraded.
 - A before-landing reviewer's fixes reach the open PR as a commit, not as a
@@ -1265,7 +1321,7 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
   PR is already published, so it leaves the PR open in review like any other
   `incomplete`. A claimed leaf instead releases its claim with the evidence
   hold while its owner's task is still in progress.
-- The resolved-policy version is 5 with `review.before_landing`, and the
+- The resolved-policy version is 5 with before-landing review, and the
   distributed pull request schema changed with the ship contract's
   `before_landing`: owner and followers must run matching builds.
 - A denied required check is not evidence either way: it keeps its own

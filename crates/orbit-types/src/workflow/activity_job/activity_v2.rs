@@ -49,6 +49,24 @@ pub struct AgentLoopSpec {
     /// System prompt / instruction delivered to the agent loop.
     #[serde(default)]
     pub instruction: String,
+    /// Advisory mid-run steering checkpoint re-read, appended to
+    /// [`Self::instruction`] only when the workspace enables
+    /// `workflow.mid_run_steering`. Absent or disabled, the rendered
+    /// instruction is byte-identical to `instruction` alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steering_instruction: Option<String>,
+    /// How the agent acts on the task context's `regression_risk` marks,
+    /// appended to the instruction only when the host marked a context file
+    /// for this prompt. Declaring it is what asks the host for marks; absent,
+    /// or with nothing marked, the rendered instruction is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regression_risk_instruction: Option<String>,
+    /// Read-only exploration delegation an implement or review-repair agent
+    /// may use, appended to the instruction only when the host enables
+    /// `workflow.explore` and has an explorer crew to draw [ORB-16814].
+    /// Absent or unavailable, the rendered instruction offers no delegation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explore_instruction: Option<String>,
     /// Tool allowlist (§6). Custom activities keep this exact allowlist
     /// contract. An empty list with no `tool_disallow_list` is deprecated:
     /// asset load warns and enforcement keeps its legacy behaviour until the
@@ -152,6 +170,18 @@ pub struct AgentLoopSpec {
     /// grants it. See `crate::workflow::activity_job::trusted_host`.
     #[serde(rename = "trustedHostExecution", default)]
     pub trusted_host_execution: bool,
+    /// The dispatching crew's `[crews.<name>] env` entries, set by crew
+    /// resolution just before dispatch. Never read from an asset or a
+    /// persisted snapshot, so only the executing host's global config can
+    /// supply it.
+    #[serde(skip)]
+    pub crew_env: Vec<crate::identity::CrewEnvVar>,
+    /// The dispatching crew's name when it sets `env` and so is its own
+    /// provider account ([`crate::identity::Crew::account`]), set with
+    /// `crew_env`. A failure, a usage reading and an invocation of this
+    /// dispatch are attributed to that account. Never persisted.
+    #[serde(skip)]
+    pub crew_account: Option<String>,
 }
 
 /// Accepted-but-inert value of the retired `backend:` key [ORB-10801].
@@ -221,6 +251,7 @@ pub enum Provider {
     Pi,
     Antigravity,
     Opencode,
+    Muse,
 }
 
 /// One accepted non-canonical spelling for a [`Provider`]. Alias normalization
@@ -261,7 +292,7 @@ impl std::error::Error for ProviderParseError {}
 impl Provider {
     /// Every canonical provider, in declaration order. Adding a variant here is
     /// a compile-time forcing function for the match arms below.
-    pub const ALL: [Provider; 11] = [
+    pub const ALL: [Provider; 12] = [
         Provider::Claude,
         Provider::Codex,
         Provider::Gemini,
@@ -273,6 +304,7 @@ impl Provider {
         Provider::Pi,
         Provider::Antigravity,
         Provider::Opencode,
+        Provider::Muse,
     ];
 
     /// Accepted non-canonical spellings, normalized by [`Provider::parse`] /
@@ -284,16 +316,17 @@ impl Provider {
     /// This table is **closed** — an unlisted string is `provider.unknown`,
     /// never guessed. New aliases require a contract bump.
     ///
-    /// `copilot`, `cursor`, `pi`, `antigravity`, and `opencode` deliberately
-    /// have **no** alias rows.
+    /// `copilot`, `cursor`, `pi`, `antigravity`, `opencode`, and `muse`
+    /// deliberately have **no** alias rows.
     /// Neither the platform name nor a selected underlying model vendor may
     /// resolve to a different execution lane. This matters most for `pi`,
     /// whose own `--provider` flag names the model vendor (`anthropic`,
     /// `openai`, ...) *inside* the Pi lane: those vendor spellings already
     /// resolve to other Orbit executors and must keep doing so. The same holds
     /// for `opencode`, whose `--model provider/model` argument names the model
-    /// vendor *inside* the OpenCode lane. [ORB-10946] [ORB-10945] [ORB-11296]
-    /// [ORB-11299] [ORB-11295]
+    /// vendor *inside* the OpenCode lane. `muse` (Muse Code) is Meta's CLI;
+    /// `meta` must not become an alias for it. [ORB-10946] [ORB-10945]
+    /// [ORB-11296] [ORB-11299] [ORB-11295] [ORB-16577]
     pub const ALIASES: &'static [ProviderAlias] = &[
         ProviderAlias {
             alias: "anthropic",
@@ -328,7 +361,7 @@ impl Provider {
     ];
 
     /// Human-readable canonical id list used in diagnostics.
-    pub const CANONICAL_LIST: &'static str = "claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor, pi, antigravity, opencode";
+    pub const CANONICAL_LIST: &'static str = "claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor, pi, antigravity, opencode, muse";
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -343,6 +376,7 @@ impl Provider {
             Provider::Pi => "pi",
             Provider::Antigravity => "antigravity",
             Provider::Opencode => "opencode",
+            Provider::Muse => "muse",
         }
     }
 
@@ -400,6 +434,21 @@ impl Provider {
     pub fn has_cli_runtime(self) -> bool {
         !matches!(self, Provider::OpenaiCompat)
     }
+
+    /// Whether this provider's CLI has a native file-read and command surface
+    /// a pinned-source inspection activity can enable. Only Codex and Claude
+    /// do; crew selection for such an activity draws only these providers,
+    /// and the CLI runner refuses any other before launch.
+    pub fn has_native_inspection(self) -> bool {
+        matches!(self, Provider::Codex | Provider::Claude)
+    }
+}
+
+/// Whether an activity input asks for native pinned-source inspection: it
+/// carries the `inspection_revision` and `partition_index` fields of the
+/// task-pilot contract, which finding verification shares.
+pub fn requires_native_inspection(input: &Value) -> bool {
+    input.get("inspection_revision").is_some() && input.get("partition_index").is_some()
 }
 
 impl fmt::Display for Provider {
@@ -699,6 +748,24 @@ pub enum OnDenial {
     Terminate,
     /// Continue the loop with the structured tool-result error.
     Continue,
+}
+
+impl AgentLoopSpec {
+    /// The instruction bytes for one envelope. With steering disabled, or
+    /// with no `steering_instruction` declared, this is exactly
+    /// `instruction`; with steering enabled and a declared paragraph, it is
+    /// `instruction`, a blank line, then that paragraph.
+    pub fn envelope_instruction(
+        &self,
+        mid_run_steering_enabled: bool,
+    ) -> std::borrow::Cow<'_, str> {
+        match (&self.steering_instruction, mid_run_steering_enabled) {
+            (Some(extra), true) if !extra.trim().is_empty() => {
+                std::borrow::Cow::Owned(format!("{}\n\n{}", self.instruction, extra))
+            }
+            _ => std::borrow::Cow::Borrowed(&self.instruction),
+        }
+    }
 }
 
 const fn default_max_iterations() -> u32 {

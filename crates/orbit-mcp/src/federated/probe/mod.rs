@@ -20,7 +20,4 @@ pub use local::{CompositeDestinationProbe, InProcessDestinationProbe};
 pub use ssh::SshDestinationProbe;
 
 #[cfg(test)]
-pub(super) use session::DestinationSession;
-
-#[cfg(test)]
 mod tests;

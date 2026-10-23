@@ -1,0 +1,39 @@
+Show a task by ID. Runs on reports OS tags intersected with the stored crew executor host_os, naming the source or an unresolved/conflicting constraint. This readout is derived and never stored. An unset crew leaves automatic routing undecided.
+
+Usage: orbit task show [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          Task ID
+
+Options:
+      --host <HOST>
+          Host that `--workspace` names, by registered host name or `machine_id` (see `orbit host list`). Orbit reads that host's live workspace list and uses the selector it lists for the workspace. Without it, a task id goes to the host its prefix names
+
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --fields <FIELDS>...
+          Print only the specified field projection(s). Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, readiness, pilot_warnings, orchestrator, orchestrator_model, orchestrator_model_source, origin, created_at, updated_at, comments, history, artifacts. Repeat the flag or use a comma-separated value list. Combined with --json, a single field returns that field as JSON and multiple fields return a JSON object. The derived terminal field remains keyed as an object.
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')

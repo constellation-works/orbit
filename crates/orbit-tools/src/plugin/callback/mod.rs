@@ -11,12 +11,13 @@
 //! descriptors — and a later `orbit tool run` or MCP `tools/call` reads the
 //! record off the descriptor to learn which session it runs under.
 //!
-//! A descendant that closes the descriptor holds no credential and is
-//! refused. That refusal is the sandbox's, not the process tree's: a confined
-//! backend is denied the session directory (design
-//! `docs/design/plugins/1_scope.md` §4.3), so a process that cannot even list
-//! it is inside a plugin sandbox and a missing credential there is a refusal
-//! rather than an ordinary caller.
+//! A descendant that closes the descriptor is refused when the inherited
+//! backend marker, live ancestry, or sandbox identifies it as a plugin child.
+//! The marker carries no authority; it keeps a detached unsandboxed child
+//! from becoming an ordinary caller merely by dropping its descriptor. A
+//! confined backend is also denied the session directory (design
+//! `docs/design/plugins/1_scope.md` §4.3), so an unreadable directory refuses
+//! a missing credential even after the child clears its environment.
 //!
 //! **A descriptor is a credential only if the host wrote what is on it.** A
 //! backend can open any file it likes on the number, so three things must
@@ -25,12 +26,6 @@
 //! directory. The last check is what makes the credential unforgeable — a
 //! plugin may write neither that directory nor any other plugin's record
 //! (§4.3), so a file that answers to a name there is one the host wrote.
-//!
-//! The environment token plus pid/ppid/pgid ancestry that identified a
-//! backend before this is kept for one release behind
-//! `plugin.legacy_callback_identity`, which `orbit plugin doctor` reports for
-//! as long as it is on. It is off by default: it is the path `setsid` escaped
-//! [ORB-12798], and the descriptor does not have that shape.
 //!
 //! The record carries *authority* as well as identity: the effective tool
 //! ceiling the spawning caller had when the host minted it. Knowing which

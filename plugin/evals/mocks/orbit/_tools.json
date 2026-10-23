@@ -675,7 +675,7 @@
             "type": "string"
           },
           "relations": {
-            "description": "Optional typed task relations as an array of {type, target} objects",
+            "description": "Optional typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified",
             "type": "array"
           },
           "required_tools": {
@@ -711,7 +711,7 @@
             "type": "string"
           },
           "type": {
-            "description": "Optional task type",
+            "description": "Optional task type (defaults to chore)",
             "enum": [
               "feature",
               "bug",
@@ -810,7 +810,7 @@
             "type": "string"
           },
           "source_path": {
-            "description": "Source file to store as a task artifact. Resolved against the caller cwd, then confined to the workspace checkout after symlink resolution. Absolute paths and symlinks that escape the workspace are rejected. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`); sources under `/tmp` are outside the workspace and are refused.",
+            "description": "Source file to store as a task artifact. Resolved against the caller cwd, not the checkout root, so a file that exists only at the checkout root is refused with the absolute path to pass. Then confined to the workspace checkout after symlink resolution. Absolute paths and symlinks that escape the workspace are rejected. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`); sources under `/tmp` are outside the workspace and are refused.",
             "type": "string"
           },
           "workspace": {
@@ -1141,7 +1141,7 @@
             "type": "string"
           },
           "relations": {
-            "description": "Replacement typed task relations as an array of {type, target} objects",
+            "description": "Replacement typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified",
             "type": "array"
           },
           "source_task_id": {
@@ -1210,7 +1210,7 @@
     },
     {
       "name": "orbit_workflow_run_list",
-      "description": "List durable workflow runs newest-first with optional bounded filters.",
+      "description": "List durable workflow runs newest-first with optional bounded filters. Requires operator capability; agent sessions are refused.",
       "inputSchema": {
         "additionalProperties": true,
         "properties": {
@@ -1247,7 +1247,7 @@
     },
     {
       "name": "orbit_workflow_run_resume",
-      "description": "Resume a terminal resumable workflow run as a new linked run.",
+      "description": "Resume a terminal resumable workflow run as a new linked run. Requires operator capability; agent sessions are refused.",
       "inputSchema": {
         "additionalProperties": true,
         "properties": {
@@ -1279,7 +1279,7 @@
     },
     {
       "name": "orbit_workflow_run_show",
-      "description": "Fetch one durable workflow run by ID.",
+      "description": "Fetch one durable workflow run by ID. Requires operator capability; agent sessions are refused.",
       "inputSchema": {
         "additionalProperties": true,
         "properties": {

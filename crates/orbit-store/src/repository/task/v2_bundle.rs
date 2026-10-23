@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{
-    atomic_write_text, hold_step, sync_parent_dir, with_exclusive_file_lock, with_shared_file_lock,
+    FileLockOptions, FileLockProbe, HeldFileLock, atomic_write_text, atomic_write_text_volatile,
+    hold_exclusive_file_lock_options, hold_step, probe_file_lock, sync_parent_dir,
+    with_exclusive_file_lock, with_shared_file_lock,
 };
 use orbit_types::task::{
     ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACTS_DIR_NAME,
@@ -16,12 +18,13 @@ use orbit_types::task::{
 };
 
 use crate::driver::file::task_bundle::bundle_lock_target;
-pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2, TaskSearchDocs};
 use crate::driver::file::task_bundle::{
-    append_jsonl_row, cleanup_partial_bundle_best_effort, is_unpublished_stub, publish_envelope,
-    read_bundle_at, read_bundle_lightweight_at, read_envelope_at, read_search_docs_at,
-    recover_pending_write, write_bundle_at,
+    PENDING_WRITE_FILE_NAME, append_jsonl_row, append_jsonl_rows,
+    cleanup_partial_bundle_best_effort, is_unpublished_stub, publish_envelope, read_bundle_at,
+    read_bundle_lightweight_at, read_comments_at, read_envelope_at, read_events_at,
+    read_search_docs_at, recover_pending_write, write_bundle_at,
 };
+pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2, TaskSearchDocs};
 use crate::driver::sqlite::task_registry::{TaskBundleBinding, TaskRegistryStore};
 use crate::fs::yaml::write_yaml_durable_with;
 
@@ -31,6 +34,57 @@ use crate::fs::yaml::write_yaml_durable_with;
 const BUNDLE_READ_STEP: &str = "bundle read";
 const ENVELOPE_READ_STEP: &str = "envelope read";
 const SEARCH_DOCS_READ_STEP: &str = "search docs read";
+const SIDECAR_READ_STEP: &str = "sidecar read";
+
+/// Directory beside a partition's bundles holding one lease per task whose
+/// coordinated commit has prepared and not yet settled. Its committer holds
+/// the lease's lock, inside the task's bundle lock, for the whole commit.
+pub(crate) const COMMIT_LEASE_DIR: &str = ".task-commit-applying";
+
+/// The commit lease for the task whose bundle is `bundle_dir`.
+pub(crate) fn commit_lease_path(bundle_dir: &Path) -> Option<PathBuf> {
+    Some(
+        bundle_dir
+            .parent()?
+            .join(COMMIT_LEASE_DIR)
+            .join(bundle_dir.file_name()?),
+    )
+}
+
+/// Refuse a bundle whose coordinated commit died between its decision and
+/// its apply. Its committer held the bundle lock for as long as it held the
+/// lease, so a lease nobody holds, seen under that bundle lock, outlived it:
+/// reading would show a half-applied transition, and writing would add rows
+/// the commit's replay then truncates. The partition replays the commit the
+/// next time any section enters it, so the caller can retry.
+fn refuse_interrupted_commit(bundle_dir: &Path) -> Result<(), OrbitError> {
+    if has_interrupted_commit(bundle_dir)? {
+        return Err(OrbitError::Store(format!(
+            "task bundle '{}' has an interrupted commit awaiting replay; retry once its \
+             partition has recovered",
+            bundle_dir.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Whether this bundle's commit lease outlived its committer; see
+/// [`refuse_interrupted_commit`].
+fn has_interrupted_commit(bundle_dir: &Path) -> Result<bool, OrbitError> {
+    let Some(lease) = commit_lease_path(bundle_dir) else {
+        return Ok(false);
+    };
+    Ok(
+        probe_file_lock(&lease).map_err(|err| OrbitError::from_write_io(&lease, err))?
+            == FileLockProbe::Free,
+    )
+}
+
+/// This task's exclusive bundle lock, held until the guard drops. See
+/// [`TaskBundleStoreV2::hold_bundle_write_lock`].
+pub(crate) struct BundleWriteHold {
+    _lock: HeldFileLock,
+}
 
 fn sync_parent_path(path: &Path) -> Result<(), OrbitError> {
     let parent = path.parent().ok_or_else(|| {
@@ -86,14 +140,51 @@ impl TaskBundleStoreV2 {
     where
         F: FnOnce() -> Result<T, OrbitError>,
     {
+        let _hold = self.hold_bundle_write_lock(task_id)?;
+        op()
+    }
+
+    /// [`Self::with_bundle_write_lock`]'s lock, held until the returned guard
+    /// drops, for a coordinated commit that keeps the bundle after it
+    /// releases its partition. A bundle whose earlier commit was interrupted
+    /// is refused until its partition replays that commit.
+    pub(crate) fn hold_bundle_write_lock(
+        &self,
+        task_id: &str,
+    ) -> Result<BundleWriteHold, OrbitError> {
+        let hold = self.hold_bundle_lock_for_write(task_id)?;
+        if !hold._lock.is_reentry() {
+            refuse_interrupted_commit(&self.bundle_path(task_id)?)?;
+        }
+        Ok(hold)
+    }
+
+    /// The write lock a commit replay takes: the one bundle writer admitted
+    /// past an interrupted commit, since it is that commit's settlement.
+    pub(crate) fn with_bundle_replay_lock<T, F>(
+        &self,
+        task_id: &str,
+        op: F,
+    ) -> Result<T, OrbitError>
+    where
+        F: FnOnce() -> Result<T, OrbitError>,
+    {
+        let _hold = self.hold_bundle_lock_for_write(task_id)?;
+        op()
+    }
+
+    fn hold_bundle_lock_for_write(&self, task_id: &str) -> Result<BundleWriteHold, OrbitError> {
         let bundle_dir = self.bundle_path(task_id)?;
-        with_exclusive_file_lock(&bundle_lock_target(&bundle_dir), "task artifact v2", || {
-            // A queued writer may resume after deletion. Check under the
-            // stable lock before any helper can create parent directories.
-            read_envelope_at(&bundle_dir)?;
-            recover_pending_write(&bundle_dir)?;
-            op()
-        })
+        let lock = hold_exclusive_file_lock_options(
+            &bundle_lock_target(&bundle_dir),
+            "task artifact v2",
+            FileLockOptions::default(),
+        )?;
+        // A queued writer may resume after deletion. Check under the stable
+        // lock before any helper can create parent directories.
+        read_envelope_at(&bundle_dir)?;
+        recover_pending_write(&bundle_dir)?;
+        Ok(BundleWriteHold { _lock: lock })
     }
 
     /// Run `op` while holding this task's shared bundle lock.
@@ -108,6 +199,7 @@ impl TaskBundleStoreV2 {
         let bundle_dir = self.bundle_path(task_id)?;
         with_shared_file_lock(&bundle_lock_target(&bundle_dir), "task artifact v2", || {
             read_envelope_at(&bundle_dir)?;
+            refuse_interrupted_commit(&bundle_dir)?;
             op()
         })
     }
@@ -205,6 +297,43 @@ impl TaskBundleStoreV2 {
     pub(crate) fn read_bundle(&self, task_id: &str) -> Result<TaskBundleV2, OrbitError> {
         let bundle_dir = self.bundle_path(task_id)?;
         read_bundle_consistently(&bundle_dir)
+    }
+
+    /// Registration is the creation commit point, after the complete bundle and
+    /// its parent directory have been synced. Check it under the publication /
+    /// deletion lock, then verify only the envelope identity. Mutable documents,
+    /// history, comments and artifacts are deliberately outside receipt recovery.
+    pub(crate) fn committed_creation_id(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        let bundle_dir = self.bundle_path(task_id)?;
+        with_shared_file_lock(
+            &bundle_lock_target(&bundle_dir),
+            "task creation receipt",
+            || {
+                let Some(binding) = self.registry.find_task_binding(task_id)? else {
+                    // The existing creation path will either finish publication at
+                    // the reserved ID or refuse an unreadable retained bundle.
+                    return Ok(None);
+                };
+                if binding.partition_id != self.workspace_id
+                    || crate::fs::path_safety::normalize_path(&binding.canonical_path)
+                        != crate::fs::path_safety::normalize_path(&bundle_dir)
+                {
+                    return Err(OrbitError::Store(
+                        "creation task registration does not match its workspace and bundle".into(),
+                    ));
+                }
+                // Do not translate missing/corrupt registered envelopes to None:
+                // that would route damage into the creation/recovery path.
+                let envelope = read_envelope_at(&bundle_dir)?;
+                envelope
+                    .validate()
+                    .map_err(|error| OrbitError::Store(error.to_string()))?;
+                Ok(Some(envelope.id))
+            },
+        )
     }
 
     /// Assemble a task bundle without opening artifact payload bytes.
@@ -327,6 +456,68 @@ impl TaskBundleStoreV2 {
         .flatten()
     }
 
+    /// This task's event log alone, read under its shared bundle lock without
+    /// the rest of the bundle (see [`read_events_at`]).
+    ///
+    /// `None` when the log cannot be read on its own: an incomplete write is
+    /// recorded for the bundle, or a commit interrupted after its decision
+    /// awaits replay. The caller then settles the partition and reads the
+    /// whole bundle.
+    pub(crate) fn read_events_if_settled(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<Vec<TaskEventRowV2>>, OrbitError> {
+        self.read_sidecar_if_settled(task_id, read_events_at)
+    }
+
+    /// [`Self::read_events_if_settled`] for the comment log.
+    pub(crate) fn read_comments_if_settled(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<Vec<TaskCommentRowV2>>, OrbitError> {
+        self.read_sidecar_if_settled(task_id, read_comments_at)
+    }
+
+    /// The event and comment logs the two reads above parse, for a caller
+    /// that stamps them instead of reading them. `None` when the logs alone
+    /// do not show what a read would return: an incomplete write is recorded
+    /// for the bundle, or an interrupted commit awaits replay.
+    pub(crate) fn settled_log_paths(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<[PathBuf; 2]>, OrbitError> {
+        let bundle_dir = self.bundle_path(task_id)?;
+        if bundle_dir.join(PENDING_WRITE_FILE_NAME).try_exists()?
+            || has_interrupted_commit(&bundle_dir)?
+        {
+            return Ok(None);
+        }
+        Ok(Some([
+            bundle_dir.join(TASK_EVENTS_FILE_NAME),
+            bundle_dir.join(TASK_COMMENTS_FILE_NAME),
+        ]))
+    }
+
+    fn read_sidecar_if_settled<T>(
+        &self,
+        task_id: &str,
+        read: fn(&Path) -> Result<Option<Vec<T>>, OrbitError>,
+    ) -> Result<Option<Vec<T>>, OrbitError> {
+        let bundle_dir = self.bundle_path(task_id)?;
+        // As for a whole-bundle read, a missing bundle needs no lock target.
+        if !bundle_dir.try_exists()? {
+            return read(&bundle_dir);
+        }
+        hold_step(SIDECAR_READ_STEP, || {
+            with_shared_file_lock(&bundle_lock_target(&bundle_dir), "task artifact v2", || {
+                if has_interrupted_commit(&bundle_dir)? {
+                    return Ok(None);
+                }
+                read(&bundle_dir)
+            })
+        })
+    }
+
     /// Read one registered bundle's envelope, skipping it when a concurrent
     /// writer has it in flight. See [`Self::list_bundles`] for the rule.
     pub(crate) fn read_envelope_if_settled(
@@ -355,14 +546,26 @@ impl TaskBundleStoreV2 {
         task_id: &str,
         envelope: &TaskEnvelopeV2,
     ) -> Result<(), OrbitError> {
-        if envelope.id != task_id {
-            return Err(OrbitError::InvalidInput(format!(
-                "task envelope id '{}' does not match target task id '{task_id}'",
-                envelope.id
-            )));
-        }
-        envelope.validate()?;
+        validate_envelope_for(task_id, envelope)?;
         publish_envelope(&self.envelope_path(task_id)?, envelope)
+    }
+
+    /// Show `envelope` to readers at once, without its durability syncs. For
+    /// a coordinated commit's decided transition, whose journal replays it
+    /// durably if the volatile copy is lost; [`Self::rewrite_envelope`]
+    /// makes it durable before the journal settles.
+    pub(crate) fn publish_envelope_volatile(
+        &self,
+        task_id: &str,
+        envelope: &TaskEnvelopeV2,
+    ) -> Result<(), OrbitError> {
+        validate_envelope_for(task_id, envelope)?;
+        let path = self.envelope_path(task_id)?;
+        let yaml = crate::fs::yaml::serialize_yaml_with(envelope, |err| {
+            OrbitError::Store(err.to_string())
+        })?;
+        atomic_write_text_volatile(&path, &yaml)
+            .map_err(|err| OrbitError::from_write_io(&path, err))
     }
 
     pub(crate) fn rewrite_artifact_manifest(
@@ -404,12 +607,52 @@ impl TaskBundleStoreV2 {
             comment,
         )
     }
+
+    /// Append `events` in order with one write and one sync.
+    pub(crate) fn append_events(
+        &self,
+        task_id: &str,
+        events: &[TaskEventRowV2],
+    ) -> Result<(), OrbitError> {
+        for event in events {
+            event.validate()?;
+        }
+        append_jsonl_rows(
+            &self.bundle_path(task_id)?.join(TASK_EVENTS_FILE_NAME),
+            events,
+        )
+    }
+
+    /// Append `comments` in order with one write and one sync.
+    pub(crate) fn append_comments(
+        &self,
+        task_id: &str,
+        comments: &[TaskCommentRowV2],
+    ) -> Result<(), OrbitError> {
+        for comment in comments {
+            comment.validate()?;
+        }
+        append_jsonl_rows(
+            &self.bundle_path(task_id)?.join(TASK_COMMENTS_FILE_NAME),
+            comments,
+        )
+    }
 }
 
 /// A published deletion is retained here until registry/projection removal and
 /// cleanup finish. Canonical and tombstone coexistence is ambiguous and retained.
 pub(crate) fn deletion_path(bundle_dir: &Path) -> PathBuf {
     bundle_dir.with_extension("deleted")
+}
+
+fn validate_envelope_for(task_id: &str, envelope: &TaskEnvelopeV2) -> Result<(), OrbitError> {
+    if envelope.id != task_id {
+        return Err(OrbitError::InvalidInput(format!(
+            "task envelope id '{}' does not match target task id '{task_id}'",
+            envelope.id
+        )));
+    }
+    Ok(envelope.validate()?)
 }
 
 /// Assemble a whole bundle under this task's shared read lock.
@@ -434,6 +677,7 @@ fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitErro
     CANONICAL_BUNDLE_READS.with(|reads| reads.set(reads.get() + 1));
     hold_step(BUNDLE_READ_STEP, || {
         with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
+            refuse_interrupted_commit(bundle_dir)?;
             read_bundle_at(bundle_dir)
         })
     })
@@ -449,6 +693,7 @@ fn read_bundle_lightweight_consistently(bundle_dir: &Path) -> Result<TaskBundleV
 
     hold_step(BUNDLE_READ_STEP, || {
         with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
+            refuse_interrupted_commit(bundle_dir)?;
             read_bundle_lightweight_at(bundle_dir)
         })
     })

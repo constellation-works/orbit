@@ -69,7 +69,13 @@ instead. See [friction](friction.md) for workspace ownership and retry rules.
    necessary. See [task fields](task-fields.md) for `required_tools` and capabilities.
 4. Create through `orbit.task.add` with `model` attribution. Required inputs are
    title, description, workspace and assessed complexity (`low`, `medium`, `hard`,
-   `xhard`).
+   `xhard`). An orchestrator also sets `origin`: `operator_request` when a human
+   asked for the work (in chat or elsewhere outside Orbit), or
+   `orchestrator_initiative` when you decided on your own that it is needed.
+   An orchestrator passes `orchestrator` (its own crew) on every create, so the
+   task records that crew's configured model as `orchestrator_model`. Pass
+   `orchestrator_model` only when your session runs a different model than that
+   crew is configured with; it is recorded once and never updated.
    Use the advertised schema; detailed `plan` belongs to pickup, not task creation.
    Creation does not approve promotion, dispatch or completion.
 5. Read the returned ID using `fields: ["id"]` or a JSON parser. Never truncate a
@@ -86,9 +92,17 @@ orbit tool run orbit.task.add --input '{
   "context_files": ["file:<verified-modification-target>"],
   "workspace": "<discovered-selector>",
   "complexity": "medium", "type": "feature", "model": "<agent-family>",
+  "origin": "operator_request", "orchestrator": "<your-crew>",
   "fields": ["id"]
 }'
 ```
+
+Write the title as a concrete outcome that fits the commit subject. The pipeline
+writes the title as `<type>: <title>` and cuts that part at 72 characters with
+an ellipsis, so a longer title ends mid-word in the history. Keep titles to at
+most 67 characters for a bug, 66 for a feature, 65 for a chore and 62 for a
+refactor, which is 72 minus the type's prefix. Put the detail in the
+description, not the title.
 
 Assign `crew` to the actual intended implementer. If you will implement the task
 personally, use your own configured crew rather than the crew you would have
@@ -96,6 +110,8 @@ chosen for delegation. On an authorized takeover, correct a stale assignment
 before continuing; do not leave another crew named for work it is not doing.
 `model` is tool-call provenance (agent family), while `orchestrator` identifies
 who prepared/supervised the work; neither substitutes for execution `crew`.
+`model` never sets `orchestrator_model`: that comes from the `orchestrator`
+crew's configuration unless you override it.
 
 Task IDs come from the store. Use task tools to change records, never edit their
 filesystem projections. Reuse existing tags. Use `feature`, `bug`, `refactor` or
@@ -129,7 +145,8 @@ name the required validation gate that runs that test. The worker sandbox may
 prevent the nested sandbox from starting; the sanctioned deferred-sandbox
 replay then runs that gate on the claim host, outside the worker sandbox. A
 passing host replay is the native-sandbox evidence and satisfies the criterion,
-including on a clean-base NoDiff handoff. The in-worker skip is not evidence by
+including on a verified clean-base NoDiff handoff (a `no-diff-expected` skip
+runs no gate, so it replays nothing). The in-worker skip is not evidence by
 itself; the passing replay is. Do not write acceptance criteria that require
 "no sandbox deferral" or say a skip cannot count as evidence for these tests.
 The replay covers only a required gate named by the deferred record, not a
@@ -145,12 +162,118 @@ orbit tool run orbit.task.update --input '{"id": "<task-id>",
 
 The next admission honours it. A task already running or claimed is not moved.
 
+## UI tag
+
+Tag every task whose change a user will see (a dashboard, web pages, a docs
+site, a desktop app UI) `ui`. Topical tags such as `dashboard` or `website`
+may stay alongside it, but `ui` is the one tooling reads; don't invent
+variants (`web-ui`, `frontend`). Its delivery owes screenshots of each changed
+view as task artifacts ([task-execution.md](task-execution.md#screenshots-of-a-ui-change)),
+and its reviewer checks them. The tag carries those two rules into the
+implementer's and reviewer's prompts as tag instructions (below).
+
+The tag also routes the task to a host with a verified headless browser kit
+(the orbit-setup browser-checks reference). Admission reads the kit every
+time it considers the task. A local drain, ship discovery and `orbit run ship`
+start the task only on a host whose kit is verified, and an owner hands a
+pull-drain claim only to a follower that reports one. Elsewhere the task stays
+in `backlog` as `browser_kit_missing`, with the wait named in readiness,
+`orbit run show` and the dashboard Drain card (`waits for a host with the
+browser kit (ui)`, naming `orbit browser-kit install`), and `orbit doctor`
+warns on a host whose own kit is what the task waits for. The requirement
+combines with `os:` tags and the crew's executor OS: a host must satisfy all
+of them, and the OS wait is named first. Only the exact `ui` tag routes,
+ignoring case.
+
+When task-pilot finds a task's criteria or context files are user-facing UI
+and the task has no `ui` tag, it adds one; QA sweeps add it to the UI
+findings they file. Neither ever removes a `ui` tag someone set. The
+screenshot rule follows the diff, not the tag: an untagged UI change still
+owes screenshots.
+
+## Tags that carry instructions
+
+Some tags add trusted instructions to the prompts of the activities that work
+on the task. Orbit ships them for `no-diff-expected` (the read-only handoff
+rule, for implementers), `skip-validation` (no local validation while the
+change stays light, for implementers) and `ui` (the screenshot rule, for
+implementers and reviewers). A workspace can map any tag to a repository file per role
+(implement, review, recovery) under `[workflow.tag_instructions.<tag>]`,
+replace a shipped default, or switch one off (docs/CONFIG.md). QA sweeps are
+implement tasks tagged `qa-sweep`, so that tag's implement file instructs QA.
+
+The text comes only from those defaults and from the mapped file as committed
+at the delivery's base revision. Nothing you write on the task supplies it:
+put task-specific guidance in the description and criteria, not in a tag, and
+don't invent a tag to smuggle instructions in. Tags match ignoring case. The
+instructions add to an activity's built-in rules and never override them. An
+oversized or missing mapped file fails the activity by name rather than
+running without it. `orbit run show` lists the tag instructions each dispatch
+received.
+
+## Light delivery tags
+
+For a documentation or CI-only change, file the task with `skip-review`, `skip-validation`
+or both:
+
+- `skip-review`: no agent review before the PR, before landing or after
+  landing.
+- `skip-validation`: the implementer runs no local validation, and delivery runs
+  no required validation and attaches no validation logs.
+
+Either way the PR is gated only by the required hosted checks.
+
+Set them when you file the task, or as an operator. An agent's update, the
+implementer's own included, cannot add either tag to an existing task.
+Naming an agent model on the update is enough, even when the process has no
+agent environment.
+
+A tag applies only while every path the final candidate changes matches
+`workflow.light_delivery_paths`. By default that is documentation, CI
+configuration and CI helper scripts (`orbit config show` lists the patterns).
+Any other changed path makes delivery ignore
+both tags and review and validate normally, and the task's history records
+why. A reviewer that does run keeps its own checks, so tag a task with both to
+skip everything. Don't tag code changes in the hope they stay small: the
+allow-list, not the tag, decides.
+
 ## Modification footprint
 
-`context_files` declares intended creation, modification and deletion targets
-inside this workspace using `file:`, `dir:` or `symbol:path#name:kind`. Prefer
+`context_files` is the task's lock footprint: list only likely creation,
+modification and deletion targets that are a substantive part of the change
+inside this workspace using `file:`, `dir:` or `symbol:path#name:kind`. Omit
+read-only files, tests and fixtures only consulted, and shared reference docs
+that at most need an incidental line update. An entry matching
+`workflow.unlocked_context_paths` (default every Markdown file) stays in the
+task's context but takes no lock, unless every entry matches; the implementer
+must still update affected docs in the same PR, and auto-fix resolves textual
+merges of incidental edits. Put supporting evidence paths
+in the description instead of reserving locks for them. Prefer
 precise verified files/symbols; a directory is appropriate for a genuinely owned
 area, not a shortcut for all possibly relevant code.
+
+For substantive source targets, inspect the repository's generator or
+synchronization evidence at the revision being scoped. Declare each exact
+generated companion that the planned source change is expected to alter
+alongside its canonical source, and record the source-to-output mapping and
+generator evidence in the description. Edit canonical sources and regenerate
+through the repository's generator; declaring a companion does not authorize
+hand-editing derived files. Do not sweep a generated tree, add unrelated
+goldens, or attach outputs of read-only evidence sources. Add no companion
+without evidence that it will change. Existing selector checks and creation
+authorization still apply: use the supported creation-intent path below for a
+known missing companion; a generator relationship alone grants no creation
+intent. Task-pilot records an expected missing output without authorization
+as an evidence gap rather than proposing an undeclared missing selector.
+
+For review-filed tasks, task-pilot keeps selectors the finding names as change
+targets. It may omit a selector it verifies as read-only evidence or an
+incidental shared-doc touch by recording its exact selector and inspection
+reason in `context_evidence_dropped`. Apply validates each record against
+omitted, resolving review selectors and saves it in the assessment audit;
+unexplained omissions remain in filed order as `context_evidence_retained`.
+A record cannot override a proposed change target or an operator-declared
+creation target. Keep evidence references in the finding's description.
 
 Check helper filenames against `.github/codeql/codeql-config.yml` exclusions before prescribing them; production helpers must remain in CodeQL's source selection.
 
@@ -169,10 +292,17 @@ containment and file/directory kind are still checked, and comments, plans or
 agent proposals never grant intent. When task-pilot reports a missing selector
 that carries no such record, re-declare it through that update path.
 
-A worker updating its own task through `orbit.task.update` from its run's
-linked worktree gets the existence relaxation automatically for that task,
-without recording creation intent, and the response lists the
-stored-but-unresolved selectors as `context_files_unverified`.
+A worker updating its own task through `orbit.task.update` or `orbit task
+update` from its run's linked worktree gets the existence relaxation
+automatically for that task, without recording creation intent, and the
+response lists the stored-but-unresolved selectors as
+`context_files_unverified`. A dashboard request is never bound to a run, so it
+keeps the strict check. Task writes on every surface return the same advisory
+`warnings` (on add: a disabled required tool, an unreadable parent, or a
+proposed task added without `context_files` and without the `no-diff-expected`
+tag, regardless of type; on add and update: an unreadable dependency or a
+backlog task with no footprint; and on approval: task-pilot blockers and a
+backlog task with no footprint); they never refuse the write.
 Missing-file selectors remain valid declarations; do not prune them because a
 checkout cannot yet resolve them. Empty context holds no context lock, so a
 drain or ship with more than one slot holds such a task: it waits for an

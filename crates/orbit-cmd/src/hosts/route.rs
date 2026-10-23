@@ -162,6 +162,38 @@ pub fn resolve_host_workspace(
     })
 }
 
+/// The owner selector `orbit run auto --pull <workspace> [--host <host>]`
+/// pulls from. Orbit never picks the owner host itself: without `--host`, the
+/// value must already be host-qualified, and a `--host` naming this machine is
+/// refused because a local backlog drains with plain `orbit run auto`.
+pub fn pull_selector(
+    global_root: &Path,
+    host: Option<&str>,
+    pull: &str,
+) -> Result<String, OrbitError> {
+    let Some(host) = host.map(str::trim).filter(|host| !host.is_empty()) else {
+        if pull
+            .trim()
+            .parse::<federated::MachineQualifiedSelector>()
+            .is_err()
+        {
+            return Err(OrbitError::UnknownSelector(format!(
+                "'{pull}' is not a host-qualified selector; name the owner with `--host <host>` \
+                 (see `orbit host list`), or pass the full selector federated discovery lists \
+                 (`orbit_workspace_list`)"
+            )));
+        }
+        return Ok(pull.trim().to_string());
+    };
+    match resolve_host_workspace(global_root, host, pull)? {
+        HostWorkspaceRoute::Remote { selector, .. } => Ok(selector),
+        HostWorkspaceRoute::Local { .. } => Err(OrbitError::CapabilityRefused(format!(
+            "`--pull` pulls from another host's workspace, and '{host}' is this machine; run \
+             plain `orbit run auto` to drain a local backlog"
+        ))),
+    }
+}
+
 /// `--host` naming this machine: the workspace must be one it registers.
 fn local_workspace(
     global_root: &Path,

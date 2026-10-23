@@ -2,13 +2,16 @@
 //! build-directory size bound (§3.4, §4 resource exhaustion).
 
 use std::collections::VecDeque;
-use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use orbit_common::OrbitError;
+use orbit_common::process::supervisor::{
+    OutputSink, Periodic, ProcessStopCause, SinkVerdict, Stdin, Stream, SupervisedChild,
+    Supervision, Termination,
+};
 
 use super::{BuildPhaseEnd, BuildPhaseRequest};
 
@@ -19,14 +22,11 @@ pub const PLUGIN_BUILD_LOG_CAP_BYTES: usize = 1024 * 1024;
 /// How often the build directory is measured. The cap can be overshot by
 /// what a build writes in one interval.
 const SIZE_POLL_INTERVAL: Duration = Duration::from_secs(1);
-const OUTPUT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// How long output is drained after the phase's process exits. A descendant
 /// that escaped the process group can hold the pipe open; it is not waited
 /// for.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
-const KILL_POLL_INTERVAL: Duration = Duration::from_millis(20);
-/// Bound of the reader-to-supervisor channel, in chunks.
-const OUTPUT_CHANNEL_CHUNKS: usize = 64;
+const BUILD_DIR_CAP_REASON: &str = "build directory cap exceeded";
 
 /// The build log of one install: both phases' stdout and stderr, and Orbit's
 /// own phase notes, capped at a head and a tail.
@@ -94,7 +94,7 @@ impl BuildLog {
 }
 
 /// Spawn `command` (the sandbox wrapper) and supervise it. `guard` holds what
-/// the wrapper needs until it ends (a ruleset descriptor, a profile file).
+/// the wrapper needs until it ends (a ruleset descriptor).
 pub(super) fn run<G>(
     mut command: Command,
     guard: G,
@@ -131,101 +131,84 @@ pub(super) fn run<G>(
             });
         }
     }
-    let mut child = command.spawn().map_err(|error| {
+    let child = SupervisedChild::adopt(command.spawn().map_err(|error| {
         OrbitError::Execution(format!("failed to start the build sandbox: {error}"))
-    })?;
-    let (sender, output) = mpsc::sync_channel::<Vec<u8>>(OUTPUT_CHANNEL_CHUNKS);
-    let readers: Vec<_> = [
-        child
-            .stdout
-            .take()
-            .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
-        child
-            .stderr
-            .take()
-            .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
-    ]
-    .into_iter()
-    .flatten()
-    .map(|pipe| {
-        let sender = sender.clone();
-        std::thread::spawn(move || relay(pipe, &sender))
-    })
-    .collect();
-    drop(sender);
-
-    let started = Instant::now();
-    let mut next_size_check = started + SIZE_POLL_INTERVAL;
-    let mut end = loop {
-        if let Ok(chunk) = output.recv_timeout(OUTPUT_POLL_INTERVAL) {
-            log.push(&chunk);
-        }
-        let status = child
-            .try_wait()
-            .map_err(|error| OrbitError::Execution(format!("wait for the build: {error}")))?;
-        if let Some(status) = status {
-            break exit_end(status);
-        }
-        let now = Instant::now();
-        if now.duration_since(started) >= request.timeout {
-            stop(&mut child)?;
-            break BuildPhaseEnd::TimedOut;
-        }
-        if now >= next_size_check {
-            next_size_check = now + SIZE_POLL_INTERVAL;
-            if tree_exceeds(request.sandbox.build_dir, request.build_dir_cap_bytes) {
-                stop(&mut child)?;
-                break BuildPhaseEnd::BuildDirCapExceeded;
-            }
-        }
+    })?);
+    // Both pipe workers append to the same capped log, including prior phase
+    // output and Orbit's notes. Restore it even if supervision returns an error.
+    let shared = Arc::new(Mutex::new(std::mem::take(log)));
+    let mut check_size = || {
+        tree_exceeds(request.sandbox.build_dir, request.build_dir_cap_bytes).then_some(
+            ProcessStopCause::Requested {
+                reason: BUILD_DIR_CAP_REASON,
+            },
+        )
     };
-    // Whatever the phase left behind in its group goes with it.
-    stop(&mut child)?;
-    // The polling interval bounds how far an active writer can overshoot,
-    // but a phase can also finish between polls. Do not accept a successful
-    // build whose directory is already over the cap.
+    let outcome = child.supervise(Supervision {
+        stdin: Stdin::Null,
+        stdout: Stream::Sink(Box::new(BuildLogSink(Arc::clone(&shared)))),
+        stderr: Stream::Sink(Box::new(BuildLogSink(Arc::clone(&shared)))),
+        timeout: Some(request.timeout),
+        clock: None,
+        extendable_deadline: None,
+        termination: Termination::Grace(crate::supervision::TERMINATION_GRACE_PERIOD),
+        cancelled: None,
+        intercept_signals: false,
+        drain_budget: DRAIN_GRACE,
+        cap_drain_at_deadline: false,
+        require_eof: false,
+        stopped_descendants: None,
+        on_stopped_descendant: None,
+        on_spawn: None,
+        every: Some(Periodic {
+            interval: SIZE_POLL_INTERVAL,
+            run: &mut check_size,
+        }),
+    });
+    *log = std::mem::take(&mut *shared.lock().unwrap_or_else(|error| error.into_inner()));
+    // The ruleset descriptor remains live until the child and its pipes end.
+    drop(guard);
+    let outcome = outcome?;
+    let mut end = if outcome.timed_out {
+        BuildPhaseEnd::TimedOut
+    } else if outcome.stop_causes.contains(&ProcessStopCause::Requested {
+        reason: BUILD_DIR_CAP_REASON,
+    }) {
+        BuildPhaseEnd::BuildDirCapExceeded
+    } else if let Some(status) = outcome.stop_causes.iter().find_map(|cause| match cause {
+        ProcessStopCause::TerminationStatus { status } => Some(*status),
+        _ => None,
+    }) {
+        exit_end(status)
+    } else {
+        BuildPhaseEnd::Exited(outcome.exit_code.unwrap_or(-1))
+    };
+    // A phase can finish between polls. Do not accept a build whose
+    // directory is already over the cap.
     if matches!(end, BuildPhaseEnd::Exited(_))
         && tree_exceeds(request.sandbox.build_dir, request.build_dir_cap_bytes)
     {
         end = BuildPhaseEnd::BuildDirCapExceeded;
     }
-    let drain_until = Instant::now() + DRAIN_GRACE;
-    while let Some(left) = drain_until.checked_duration_since(Instant::now()) {
-        match output.recv_timeout(left) {
-            Ok(chunk) => log.push(&chunk),
-            Err(_) => break,
-        }
-    }
-    drop(output);
-    for reader in readers {
-        if reader.is_finished() {
-            let _ = reader.join();
-        }
-    }
-    drop(guard);
     Ok(end)
 }
 
-fn relay(mut pipe: Box<dyn Read + Send>, sender: &mpsc::SyncSender<Vec<u8>>) {
-    let mut buffer = vec![0u8; 16 * 1024];
-    loop {
-        match pipe.read(&mut buffer) {
-            Ok(0) | Err(_) => return,
-            Ok(read) => {
-                if sender.send(buffer[..read].to_vec()).is_err() {
-                    return;
-                }
-            }
-        }
-    }
-}
+/// Each stream shares one log; reaching its cap elides output without
+/// stopping the build or closing either pipe.
+struct BuildLogSink(Arc<Mutex<BuildLog>>);
 
-fn stop(child: &mut std::process::Child) -> Result<(), OrbitError> {
-    crate::supervision::terminate_process_group(
-        child,
-        crate::supervision::termination_signal(),
-        KILL_POLL_INTERVAL,
-    )
+impl OutputSink for BuildLogSink {
+    fn push(&mut self, bytes: &[u8]) -> SinkVerdict {
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(bytes);
+        SinkVerdict::Continue
+    }
+
+    fn finish(self: Box<Self>) -> Vec<u8> {
+        Vec::new()
+    }
 }
 
 fn exit_end(status: std::process::ExitStatus) -> BuildPhaseEnd {

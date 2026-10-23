@@ -97,6 +97,11 @@ fn every_allowlisted_owner_call_reaches_the_owner_through_the_broker_on_the_clai
             PUT,
             json!({"id": TASK, "path": "evidence.json", "source_path": evidence, "model": "codex"}),
         ),
+        ("orbit.task.list", json!({"fields": ["id", "title"]})),
+        (
+            "orbit.search",
+            json!({"query": "owner backlog", "kind": "task"}),
+        ),
     ];
     for (name, input) in calls.clone() {
         fixture
@@ -150,6 +155,16 @@ fn the_broker_refuses_cross_task_and_unlisted_calls_without_reaching_the_owner()
     let broker = fixture.serve("agent_implement");
     let (report, _) = fixture.report("report.json", "any-attempt");
     let cases = [
+        (
+            "federated search",
+            "orbit.search",
+            json!({"query": "backlog", "workspaces": ["ws_other"]}),
+        ),
+        (
+            "all-workspace search",
+            "orbit.search",
+            json!({"query": "backlog", "allWorkspaces": "true"}),
+        ),
         ("another task's record", SHOW, json!({"id": "TSO-2"})),
         (
             "an internal projection",
@@ -217,7 +232,11 @@ fn the_broker_refuses_cross_task_and_unlisted_calls_without_reaching_the_owner()
     let serving = RunDispatch::new(fixture.runtime.clone(), fixture.run("agent_implement"));
     for (tool, input) in [
         ("orbit.task.update", json!({"id": TASK, "status": "done"})),
-        ("orbit.task.list", json!({})),
+        ("orbit.task.requeue", json!({"id": TASK})),
+        (
+            "orbit.auto_task.update",
+            json!({"name": "audit", "enabled": false}),
+        ),
         (
             "orbit.friction.update",
             json!({"id": "F-1", "status": "resolved"}),

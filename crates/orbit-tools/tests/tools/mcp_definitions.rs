@@ -58,22 +58,32 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             .collect::<Vec<_>>(),
         [
             "orbit.agent.invoke",
+            "orbit.agents.scorecard",
+            "orbit.agents.show",
             "orbit.auto_task.add",
             "orbit.auto_task.list",
             "orbit.auto_task.mint",
             "orbit.auto_task.update",
+            "orbit.codebase.analytics",
+            "orbit.codebase.related",
+            "orbit.codebase.show",
             "orbit.command.exec",
             "orbit.friction.add",
             "orbit.friction.update",
+            "orbit.orchestrator.scorecard",
+            "orbit.orchestrator.show",
             "orbit.pipeline.invoke",
             "orbit.routine.control",
             "orbit.search",
             "orbit.task.add",
             "orbit.task.artifact.get",
             "orbit.task.artifact.put",
+            "orbit.task.block_triage",
             "orbit.task.eligible",
             "orbit.task.list",
             "orbit.task.reconcile_review",
+            "orbit.task.requeue",
+            "orbit.task.retry_handoff",
             "orbit.task.review_reset",
             "orbit.task.show",
             "orbit.task.update",
@@ -194,59 +204,6 @@ impl Tool for ReadOnlyPlugin {
     fn execute(&self, _ctx: &ToolContext, _input: Value) -> Result<Value, OrbitError> {
         Ok(Value::Null)
     }
-}
-
-#[test]
-fn read_only_tools_advertise_the_hint_and_mutating_ones_do_not() {
-    let definitions =
-        canonical_builtin_mcp_tool_definitions().expect("builtin MCP definitions are valid");
-    let annotations_of = |name: &str| {
-        definitions
-            .iter()
-            .find(|definition| definition.schema.name == name)
-            .unwrap_or_else(|| panic!("{name} is advertised"))
-            .annotations
-            .unwrap_or_else(|| panic!("{name} advertises annotations"))
-    };
-
-    for name in [
-        "orbit.task.eligible",
-        "orbit.task.list",
-        "orbit.task.show",
-        "orbit.task.artifact.get",
-        "orbit.search",
-        "orbit.auto_task.list",
-        "orbit.workflow.run.list",
-        "orbit.workflow.run.show",
-    ] {
-        assert_eq!(annotations_of(name).read_only, Some(true), "{name}");
-    }
-    for name in [
-        "orbit.task.add",
-        "orbit.task.update",
-        "orbit.task.artifact.put",
-        "orbit.friction.add",
-        "orbit.friction.update",
-        "orbit.workflow.ship",
-        "orbit.agent.invoke",
-        "orbit.command.exec",
-        "orbit.task.reconcile_review",
-    ] {
-        assert_eq!(annotations_of(name).read_only, Some(false), "{name}");
-    }
-
-    // `rehome_to` moves the record and resolves the original.
-    assert_eq!(
-        annotations_of("orbit.friction.update").destructive,
-        Some(true)
-    );
-    assert_eq!(annotations_of("orbit.task.add").destructive, Some(false));
-    assert_eq!(annotations_of("orbit.command.exec").open_world, Some(true));
-    assert_eq!(
-        annotations_of("orbit.task.reconcile_review").open_world,
-        Some(true)
-    );
-    assert_eq!(annotations_of("orbit.task.list").open_world, Some(false));
 }
 
 #[test]

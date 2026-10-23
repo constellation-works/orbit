@@ -1,17 +1,17 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-10-08
-last_validated: 2026-10-08
+last_updated: 2026-10-14
+last_validated: 2026-10-12
 status: Accepted
 feature: operations-as-data
 doc_role: decisions
 type: design
-summary: Decision log for the operations-as-data registry — the split spec/handler table, what stayed hand-written, and the touch-it-move-it ratchet.
+summary: Decision log for the operations-as-data registry — the split spec/handler table, what stays hand-written, capability governance, and the kernel v2 rules and planned migration.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/tests/authorization.rs", "crates/orbit-cli/tests/tool/tool_list.rs"]
+paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-common/src/governance/authorization/catalog.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-common/tests/common/mechanisms/governance.rs", "crates/orbit-cli/tests/tool/tool_list.rs", "crates/orbit-tools/src/mcp_rules.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/host_route.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582]
+related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582, ORB-15932, ORB-15933, ORB-15935, ORB-15937, ORB-15938, ORB-15940, ORB-15941]
 ---
 
 # Operations as Data — Decisions
@@ -21,25 +21,36 @@ related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582]
 > earlier entries are retained as historical context only.
 
 The parent bearing is **[North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry)** (north-star: operations as data behind an
-operation registry), whose stored body now carries the friction pilot outcome and
-the ratchet.
+operation registry), whose stored body carries the friction pilot outcome and
+the touch-it-move-it ratchet. [Migrate the remaining nouns on a plan, not on contact](#migrate-the-remaining-nouns-on-a-plan-not-on-contact)
+replaces that ratchet.
 
-- **[Split spec/handler table joined by a typed verb enum](#split-spechandler-table-joined-by-a-typed-verb-enum) — Split spec/handler table joined by a typed verb enum** — Accepted.
-- **[Renderers and HTTP routes stay hand-written](#renderers-and-http-routes-stay-hand-written) — Renderers and HTTP routes stay hand-written** — Accepted.
-- **[Freeze the pre-migration surface as fixtures before migrating](#freeze-the-pre-migration-surface-as-fixtures-before-migrating) — Freeze the pre-migration surface as fixtures before migrating** — Accepted.
-- **[Capability chokepoint for destructive operations outside MCP](#capability-chokepoint-for-destructive-operations-outside-mcp) — Capability chokepoint for destructive operations outside MCP** — Accepted.
-- **[MCP advertisement is placement; the capability chokepoint is permission](#mcp-advertisement-is-placement-the-capability-chokepoint-is-permission) — MCP advertisement is placement; the capability chokepoint is permission** — Accepted.
-- **[Dashboard `web connect` grants operator by default](#dashboard-web-connect-grants-operator-by-default) — Dashboard `web connect` grants operator by default** — Accepted.
+The last four entries came from the 2026-10-12 design review and were accepted
+the same day. They govern kernel v2 and the migration plan in
+[2_design.md](./2_design.md).
+
+- **[Split spec/handler table joined by a typed verb enum](#split-spechandler-table-joined-by-a-typed-verb-enum)** — Accepted.
+- **[Renderers and HTTP routes stay hand-written](#renderers-and-http-routes-stay-hand-written)** — Accepted; renderer selection amended by a later entry.
+- **[Freeze the pre-migration surface as fixtures before migrating](#freeze-the-pre-migration-surface-as-fixtures-before-migrating)** — Accepted.
+- **[Capability chokepoint for destructive operations outside MCP](#capability-chokepoint-for-destructive-operations-outside-mcp)** — Accepted.
+- **[MCP advertisement is placement; the capability chokepoint is permission](#mcp-advertisement-is-placement-the-capability-chokepoint-is-permission)** — Accepted.
+- **[Dashboard `web connect` grants operator by default](#dashboard-web-connect-grants-operator-by-default)** — Accepted.
+- **[A governed row may be an identification floor, not only an operator gate](#a-governed-row-may-be-an-identification-floor-not-only-an-operator-gate)** — Accepted.
+- **[The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface)** — Accepted; followed by friction since [ORB-15932].
+- **[Declare effect, aliases, and redaction in the spec, and validate input once at the tool entry](#declare-effect-aliases-and-redaction-in-the-spec-and-validate-input-once-at-the-tool-entry)** — Accepted; `effect` and redaction built on friction in [ORB-15932], input validation built in warn mode ([ORB-15933]).
+- **[Migrated CLI verbs execute through the tool path](#migrated-cli-verbs-execute-through-the-tool-path)** — Accepted; built on auto-task in [ORB-15935] and the task reads in [ORB-15937].
+- **[Migrate the remaining nouns on a plan, not on contact](#migrate-the-remaining-nouns-on-a-plan-not-on-contact)** — Accepted.
+- **[ID routing is keyed by tool name in the MCP rule tables, not declared in the spec](#id-routing-is-keyed-by-tool-name-in-the-mcp-rule-tables-not-declared-in-the-spec)** — Accepted in [ORB-15937].
 
 ## Split spec/handler table joined by a typed verb enum
 
 **Recorded:** 2026-07-26 00:55:47.755882Z · [ORB-10358]
-**Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-common/src/governance/friction/**`
+**Paths:** `crates/orbit-common/src/governance/operation/mod.rs`, `crates/orbit-common/src/governance/friction/**`
 
 ### Context
  [North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry) bearing 1 describes one operation table holding both the
 serializable definition and its handler. Orbit's layering makes that
-unreachable: every surface (`orbit-tools`, `orbit-cli`, `orbit-dashboard`) must
+unreachable: every surface (`orbit-tools`, `orbit-cli`, `orbit-web`) must
 read the definition, so it has to live at or below `orbit-common`; handlers need
 `&OrbitRuntime`, which lives in `orbit-core`, well above it. Co-locating them
 would either drag the runtime into the leaf crate or lift the specs above the
@@ -72,8 +83,10 @@ verb that is declared but not implemented fails to compile.
 
 ## Renderers and HTTP routes stay hand-written
 
+**Amended by:** [The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface) moves the renderer *selection* (`CliRender`) out of the spec into a CLI surface table. [ORB-15932] did so for friction and removed `CliRender` from the kernel. Routes and renderers stay hand-written.
+
 **Recorded:** 2026-07-26 00:55:47.967899Z · [ORB-10358]
-**Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-common/src/governance/friction/**`
+**Paths:** `crates/orbit-common/src/governance/operation/mod.rs`, `crates/orbit-common/src/governance/friction/**`
 
 ### Context
  Once verbs are data, the obvious next step is to make the rest of
@@ -86,7 +99,7 @@ friction pilot.
  The spec declares *which* rendering a verb wants (`CliRender`) but
 not how to render; the friction record and table printers stay in `orbit-cli` and
 know friction field names. Dashboard route shapes, serde request bodies, and
-HTTP-specific defaults stay hand-written in `orbit-dashboard`, which takes only
+HTTP-specific defaults stay hand-written in `orbit-web`, which takes only
 tool names and parameter names from the registry.
 
 
@@ -100,7 +113,8 @@ tool names and parameter names from the registry.
 - Adding a friction verb that should be reachable over HTTP is still a two-place
   change (registry + route).
 - A noun whose output has a genuinely new shape needs a new `CliRender` variant
-  plus a renderer — also two places.
+  plus a renderer — also two places. (Since the amendment, it needs only a
+  renderer arm in the noun's CLI surface table.)
 - Cost: the dashboard is only partially derived, so it remains possible to add a
   verb and forget the route entirely; nothing fails, the verb is simply absent
   from the web UI, and no test catches it.
@@ -108,7 +122,7 @@ tool names and parameter names from the registry.
 ## Freeze the pre-migration surface as fixtures before migrating
 
 **Recorded:** 2026-07-26 00:55:48.187121Z · [ORB-10358]
-**Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-common/src/governance/friction/**`
+**Paths:** `crates/orbit-common/src/governance/operation/mod.rs`, `crates/orbit-common/src/governance/friction/**`
 
 ### Context
  The pilot's hard requirement was that CLI argv/output and MCP tool
@@ -193,7 +207,7 @@ This is an **accident guard, not a security boundary**. Agents on a development 
 ## MCP advertisement is placement; the capability chokepoint is permission
 
 **Recorded:** 2026-08 · [ORB-10478] · **Implemented** in [ORB-10478]
-**Paths:** `crates/orbit-common/src/governance/authorization/mod.rs`, `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`
+**Paths:** `crates/orbit-common/src/governance/authorization/mod.rs`, `crates/orbit-common/src/governance/operation/mod.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`
 
 ### Context
 
@@ -216,12 +230,29 @@ The gap the earlier entry named has therefore closed by deletion, not by a fix: 
 
 4. **An advertised governed tool must not list `agent` among its allowed capabilities.** Governing an operation the ordinary MCP caller already holds the capability for buys nothing and dilutes the entries that do refuse. A second assertion enforces it.
 
+Current surface addition (2026-10-14): `orbit.task.retry_handoff` is advertised for
+operator discovery and governed by the operator capability. The dashboard's
+`handoff.retry` action uses the same operator floor. Managed agents are refused;
+advertisement grants no execution authority. The retry reserves a durable receipt
+for the existing handoff and uses normal owner landing, as specified in
+[owner handoff retry](../distributed-drain/specs/task-pull.md#owner-retry-of-an-authorized-handoff).
+
+Current surface addition (2026-10-16): `orbit.task.requeue` is advertised for
+operator discovery and governed by the operator capability, like
+`review_reset`. Managed agents are refused at the tool entry as well.
+Requeuing a blocked task supersedes its recorded escalation and preserves the
+publication its failure handoff made; the next run still re-authenticates that
+publication before adopting it, as described in
+[stuck job runs](../../runbooks/stuck-job-runs.md#requeue-a-failure-handoff-task-onto-its-published-candidate).
+
 ### Rejected alternatives
 
 - **Give the exposure declaration a second axis — "which surface advertises" versus "which capability may perform" — and derive chokepoint enforcement from the second** (ORB-10478 option 1). Rejected: there is no longer a second advertisement axis to split. `McpExposure` is gone and `mcp_scope` is a plain placement decision, so this would mean *introducing* a policy framework to unify two declarations that already have one enforcement point between them — speculative v2 machinery for a drift that a ten-line table catches.
 - **Narrow `OperatorOnly` to performable-only-by-operator, move the read-only friction triage tools to an agent exposure, and enforce `allowed_capabilities()` at the tool chokepoint** (option 2). Rejected: `OperatorOnly` no longer exists to narrow, and the chokepoint already enforces capabilities from a single declaration. The remaining content of the option — deriving enforcement from placement — would govern `orbit friction show` because it is unadvertised, which is precisely the CLI regression the earlier entry declined to ship.
 - **Reconsidering the owner-path `admitted()` denial** (option 3's own follow-through). Not rejected but already satisfied: that denial was removed with the owner route, so MCP placement no longer acts as an authorization statement anywhere and there is nothing left to reconsider.
 - **Leaving the pairing to a reader.** Rejected: it is exactly what the filing complained about — the relationship was true but only discoverable by holding two crates open, which is how it drifted in the first place.
+
+**Note (2026-10-13):** `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`, named in decision 2, was retired with the orbit-tools unit tests in [ORB-13832]. Verification in [ORB-15943] confirmed that while the authorization matrix golden in `crates/orbit-cli/tests/output/output_goldens.rs` catches permission drift (such as adding `agent` to a non-floor advertised governed tool) via recorded `required_any` capabilities and verdicts, it does not fail on MCP advertisement placement changes alone because `ToolRegistry::all_schemas()` enumerates tools regardless of `mcp_scope`. A boundary assertion in `crates/orbit-cli/tests/output/output_goldens.rs::authorization_matrix_matches_live_registry` now asserts the declared placement (`GOVERNED_TOOL_PLACEMENT`) of every governed tool against the live registry in both directions and asserts that no advertised governed tool lists `agent`, restoring the verified placement and permission guard at the integration boundary.
 
 ### Consequences
 
@@ -293,9 +324,564 @@ That read is only correct on one surface. An MCP session's capabilities are stam
 - Cost: a CLI caller with no session grant, no agent envelope, and no TTY — a bare shell script or a cron entry — is refused both tools and must identify itself, the same trade the original chokepoint entry recorded for governed operations generally.
 - Cost: the guardrail table now has an exception list, asserted in both directions, so adding a name requires the same deliberate line as adding a governed tool does. [ORB-13625] added the distributed drain's executor lifecycle — `orbit.task.pull`, `orbit.drain.claim.bind`, `orbit.drain.claim.settle` — on the same floor: a follower's drain holds `agent` and nothing more, and attempt ownership is fenced by the claim journal against the session's own machine, not by a stronger capability.
 
+## The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface
+
+**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; first applied by [ORB-15932]
+
+### Context
+
+The friction pilot put every fact it could express as data into the spec,
+including the CLI's choice of renderer (`CliRender`, whose `TagList` variant
+existed only for friction). Facts it could not express stayed on the surfaces,
+several of them more than once and behind wildcard arms: the read/write class of
+a friction verb was decided in `FrictionOperationTool::execution_kind`
+(`_ => Mutating`), in the `Commands::Friction` arm of the CLI registry
+(`== List`, else the full runtime), in the redaction policy, and in claimed-worker
+routing. Two of those disagreed about `show`, `stats` and `tags`. The
+remaining nouns bring more single-surface facts: MCP schema conditionals for
+guarded task creation, CLI renderers, ID-addressed routing.
+
+### Decision
+
+Every per-verb fact has exactly one home, chosen by who needs it:
+
+1. A fact needed by two or more surfaces, or by the single tool entry every
+   surface traverses, is a field of the spec in `orbit-common`.
+2. A fact needed by one surface only is an exhaustive `match` on the verb enum
+   in that surface's crate.
+3. A surface table for a migrated noun has no wildcard arm. Adding a verb must
+   fail to compile wherever a decision about it is owed.
+
+This applies to every noun that migrates and to every new per-verb fact,
+including ones nobody has met yet: ask which surfaces need it, then place it.
+
+### Rejected alternatives
+
+- **Everything in the spec.** Kernel enums would grow a variant per noun quirk
+  (`CliRender::TagList` was the first), and MCP-only JSON Schema fragments or
+  CLI-only request shaping would sit in the leaf crate every surface compiles
+  against.
+- **Per-surface override tables with a default.** Shorter, but a default is a
+  wildcard: a new verb silently inherits whatever the default says, which is how
+  `execution_kind` and the CLI runtime choice drifted apart.
+
+### Consequences
+
+- A new verb produces a compile-error checklist across every surface that has a
+  decision to make about it, not just the spec and the handler.
+- `CliRender` leaves the spec for a CLI renderer table; MCP schema extensions get
+  an `orbit-tools` table.
+- Cost: one noun's behaviour lives in the spec plus up to one table per surface,
+  so reading a verb end to end means opening several files, and adding a verb
+  means editing each of them.
+
+## Declare effect, aliases, and redaction in the spec, and validate input once at the tool entry
+
+**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; `effect` and `redact` built on friction by [ORB-15932], input validation by [ORB-15933]
+**Paths:** `crates/orbit-common/src/governance/operation/mod.rs`, `crates/orbit-core/src/adapter/tool_host/friction_tools.rs`, `crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs`, `crates/orbit-tools/src/builtin/orbit/operation.rs`, `crates/orbit-common/src/protocol/tool_input.rs`
+
+### Context
+
+The friction spec declares parameter names, but nothing checks input against
+it. Each handler re-reads input by string name and silently accepts spellings
+the spec does not list (`required_string(&input, &["body", "description"],
+"body")`). Unknown fields are refused only by tools that call
+`reject_unknown_tool_fields` themselves, and friction does not. The redaction
+policy names `title`, `body` and the `description` alias in a separate file.
+The dashboard added its own field-name check (`FrictionCall::set`) to catch
+drift the tool entry does not.
+
+### Decision
+
+1. The spec declares each verb's `effect` (`Read` or `Write`) and each
+   parameter's `aliases` and `redact` class. Tool execution kind, the CLI's
+   default runtime need, the read route for claimed workers and the redaction
+   field lists are derived from them.
+2. `OperationSpec::parse_input` validates every call once, in the generic
+   operation tool's `execute`, which every surface reaches: it resolves aliases,
+   refuses retired and unknown fields, checks types, required presence and
+   `at_least_one_of`. Handlers read canonical names only.
+3. Validation checks presence and shape. Content rules stay in handlers.
+4. Unknown-field refusal is introduced per noun as warn-and-audit first, then
+   refusal after the 30-day compatibility window.
+
+### Rejected alternatives
+
+- **Typed per-verb request structs (`#[derive(Deserialize)]` with serde
+  aliases).** Gives handlers compile-time field access, but declares every
+  parameter twice, once in the spec and once in the struct, unless one is
+  generated from the other. Kept open as [3_vision.md](./3_vision.md) question 2.
+- **Validate in each adapter.** Three validators (CLI, MCP, dashboard) that
+  agree only by care, and the deterministic dispatcher would have none.
+- **Status quo.** Handlers stay the fifth copy of every parameter name, and the
+  aliases they accept stay invisible to every surface and to the compatibility
+  window.
+
+### Consequences
+
+- MCP, the CLI, the dashboard and the dispatcher get the same refusal, with the
+  same did-you-mean hint, for the same bad input.
+- Retiring an alias under the compatibility window is deleting one array entry.
+- `rejects_agent_field` and task `add`'s retired creation-time fields became
+  `retired_fields` entries.
+- Cost: refusing unknown fields is a wire change for callers that send extra
+  fields today, and each noun spends a 30-day window in which a mistyped field is
+  logged but still ignored.
+- Friction's claimed-worker routing stayed an exhaustive surface table in
+  [ORB-15932] instead of deriving its read arm from `effect`: its write arms
+  carry logic (the `add` → claim rewrite), and a derived read route beside an
+  exhaustive verb match would need a wildcard arm.
+- Cost: `parse_input` has to reproduce the existing leniency exactly — a
+  `StringList` that accepts a string, an array or a comma-separated string — or
+  a migration changes what callers may send.
+
+## Migrated CLI verbs execute through the tool path
+
+**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; first applied by [ORB-15935] · **Implemented** for auto-task in [ORB-15935], the task reads in [ORB-15937] and the task writes in [ORB-15938]; no workflow-run CLI verb migrates ([ORB-15941])
+**Paths:** `crates/orbit-cli/src/command/friction.rs`, `crates/orbit-cli/src/command/auto_task/command.rs`, `crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs`, `crates/orbit-common/src/governance/authorization/catalog.rs`, `crates/orbit-cli/src/command/task/operation.rs`, `crates/orbit-core/src/adapter/tool_host/task/write.rs`
+
+### Context
+
+The friction CLI executes every verb with `runtime.run_tool`, so the CLI and MCP
+reach the same handler through the same capability chokepoint. The task,
+auto-task, routine and workflow-run CLIs call core services directly and build
+their own parameters: `TaskAddParams` is assembled from input in the CLI's
+`add.rs` and again in the tool handler, with different attribution
+(`mutation_identity` versus the `model` parameter) and different write
+screening.
+
+### Decision
+
+Every migrated CLI verb executes through `run_tool`. A verb the CLI has and MCP
+does not becomes a spec with `mcp_scope: None`: registered, unadvertised, and
+dispatched the same way. A noun migration that would keep a direct core call is
+not a migration.
+
+### Rejected alternatives
+
+- **Derive the CLI from the spec but keep calling the core service.** Keeps
+  today's CLI behaviour exactly, but leaves two input-to-parameter mappings and
+  two authorization paths per verb, which is the duplication the feature
+  exists to remove.
+
+### Consequences
+
+- One handler, one input mapping and one authorization decision per verb, on
+  every surface.
+- Cost: for task, auto-task, routine and workflow run, migration changes
+  behaviour. Capability resolution, audit rows, attribution and write screening
+  move to the tool path, so each migration PR documents a behaviour diff on top
+  of its help goldens and MCP snapshot.
+- Cost: CLI-only verbs become tools, and an unadvertised tool is still reachable
+  through `orbit tool run`. A destructive CLI-only verb such as `auto-task
+  delete` needs a `GOVERNED_OPERATIONS` row, and a re-blessed authorization
+  matrix golden, in the same PR.
+
+**Auto-task outcome ([ORB-15935]).** The six CLI-only verbs (`show`, `toggle`,
+`delete`, `restore`, `recover`, `reset`) are tools with `mcp_scope: None`.
+`orbit.auto_task.delete` and `orbit.auto_task.reset` are governed `operator`
+and unadvertised, and `GOVERNED_TOOL_PLACEMENT` records both: delete discards a
+definition's cursor and delivery consumer state, and reset forgets coverage
+debt and may abandon an executing action. `toggle`, `restore` and `recover`
+stay ungoverned. `toggle` has the authority `orbit.auto_task.update`'s
+`enabled` already has, `restore` reinstates a shipped default disabled, and
+`recover` never covers, waives or discards an obligation. Shipped activities'
+`tool_disallow_list` still names only `add`, `mint` and `update`: the five
+CLI-only tools are not in the agent-facing schema set an activity list is
+validated against, so a deny-mode activity never grants them. The dashboard's
+`auto_task.toggle` and `auto_task.mint` rows are unchanged: the dashboard still
+calls the runtime directly and still refuses a non-operator.
+
+The measured differences against the pre-migration CLI, from an isolated
+fixture run of every verb with and without `ORBIT_OPERATOR=1`:
+
+- **Capability.** `delete` and `reset` now refuse a caller with no capability (a
+  non-interactive shell without `ORBIT_OPERATOR=1` or an agent envelope); the
+  old CLI performed them. The refusal covers `reset`'s preview (no
+  `--reason`) too, because the row governs the tool. A person at a terminal
+  is unaffected. An operator override writes an `authorization` audit row.
+  The CLI integration tests that delete or reset now set `ORBIT_OPERATOR=1`.
+  The other verbs answer as before.
+- **Audit rows.** The CLI's own `auto-task <verb>` row is unchanged: same
+  subcommand label, `target_id` the definition name (`list` none), same role.
+  `add` and `update` now add `artifact_redaction` rows when they redact.
+  `delete` still writes its core row.
+- **Redaction.** CLI `add` and `update` now redact the template's free text
+  (title, body, criteria) and the description before they are stored, as the
+  tool always did; the old CLI stored a credential-shaped token verbatim.
+- **Output.** `add` and `update` JSON gains `redactions`/`redactions_applied`,
+  and `update` gains `effective_enabled`. `list` JSON with `--all` gains
+  `inactive_plugin` on an inactive row. `show`, `list`, `toggle`, `mint`,
+  `restore`, `recover`, `reset` and `delete` JSON otherwise match, and every
+  text rendering is byte-identical.
+- **Attribution.** Unchanged: `created_by`/`updated_by`/`deleted_by` resolve to
+  the same actor (`operator`, or `unknown` for an unidentified caller).
+- **Input.** Optional strings and list items are trimmed, as for every
+  registry-derived CLI. Flag-combination errors (`--waive-batch` without
+  `--waiver-reason`, `--replay-history` with `--adopt-settings`) are refused by
+  the CLI's `prepare` table or the handler with an `invalid input` error rather
+  than by clap's usage error. `add` checks `required_tools` before the write on
+  every surface, so a refused tool name no longer leaves a definition behind
+  over MCP.
+
+**Task reads outcome ([ORB-15937]).** `show`, `list`, `eligible` and `lint`
+execute through `run_tool`; `orbit.task.lint` is a CLI-only tool
+(`mcp_scope: None`, registered inactive as before). None is governed. The
+Step 0 baseline ran 74 argv cases (text and `--json`, every flag and the
+refusals) on one fixture with the old and new binaries, then on a fixture
+the new binary built, because a binary that joins another binary's store
+generation skips its CLI audit row. Standard output was identical in every
+case except `lint`'s elapsed milliseconds. The measured and reviewed
+differences:
+
+- **Audit rows.** The CLI rows keep their subcommand labels and target IDs;
+  `list` and `eligible` rows now carry target type `task`, as `show` and
+  `lint` did.
+- **Usage errors.** `lint <ID> --status …` and `list`/`eligible --limit 0`
+  were clap usage errors (exit 2, no audit row). The handler now refuses them
+  (exit 1, `invalid input`, a failed audit row). The `lint` message is
+  "`status` narrows the sweep and cannot be combined with `id`".
+- **One answer on every surface.** The MCP and `orbit tool run` `show` full
+  record gains the `next_step` and `final_recovery` the CLI printed. `list`
+  accepts `external_ref` and `has_ref`, and applies `priority` outside the
+  bounded view, which it previously ignored. An empty `list` page reports
+  `unindexed_bundle_count`, which the CLI turns into its existing reindex
+  error. Counting missing bundles remains observational, including an
+  unselected explicit data root without a workspace config; replica reads
+  keep owner task bundles hidden. The CLI `show` resolves relation targets
+  through the bounded status index MCP uses, so a cross-workspace reference
+  gets the same status label on both.
+- **Field selection.** CLI `show --fields delivery` now returns the delivery
+  observation, as the tool always did. A blank `--fields ''` is dropped, which
+  shows the full record, instead of being refused; an empty selector over MCP
+  is still refused, with the message "task show field selectors must not be
+  empty".
+- **Unknown fields.** `orbit.task.eligible` used to refuse an unknown field;
+  like every migrated verb it now warns and audits it in warn mode (§4).
+- **Input.** Optional strings are trimmed, as for every registry-derived CLI.
+- **Schemas.** The MCP snapshot moved only for `orbit.task.list` (the
+  `external_ref` and `has_ref` filters and the `priority` wording). The
+  inactive `orbit.task.lint` schema now matches its spec.
+
+**Task writes outcome ([ORB-15938]).** `add` and `update` execute through
+`run_tool`, and one core handler assembles their parameters on every surface.
+The operator command's options that MCP does not have travel in a hidden
+`cli_options` object that only a caller without an MCP session may send
+([2_design.md §9](./2_design.md#phase-3b-task-writes-implemented)). Neither
+tool is governed anew. The Step 0 baseline ran 59 argv cases (every `add` and
+`update` flag, the environment identities and the refusals) and the audit
+list on a fixture each binary built, comparing standard output, standard
+error and exit codes after normalising timestamps, paths, hashes and randomly
+drawn crews. `update --host` routing is covered by the existing replica
+routing tests, which pass unchanged. Every case matched except these, all
+reviewed:
+
+- **Redaction.** `add` and `update` now redact credential-shaped text in
+  free-text fields (title, description, comment and the other `redact`
+  parameters) before it is stored, as the tool always did; the old CLI
+  stored it verbatim. The JSON gains `redactions_applied` and `redactions`,
+  and each redaction writes an `artifact_redaction` audit row.
+- **Usage errors.** `update --note` without `--approve`, `--approve` with a
+  field edit or status, `--force` without `--status`, and an unknown
+  `--pr-status` were clap usage errors (exit 2, `usage_error`, no audit row). The handler or `prepare` table now refuses them
+  (exit 1, `invalid input`, a failed audit row): "`note` is recorded on an
+  approval; pass it with `approve`", "`approve` takes the task's next approval
+  step and cannot be combined with field edits or a status: <fields>",
+  "`force` applies a status change; pass it with `status`", and "unknown PR
+  status '<value>': expected `approve` or `request-changes` (empty string
+  clears)".
+- **Input.** Optional strings and list items are trimmed, as for every
+  registry-derived CLI. An explicit JSON `null` is absent, except `update`'s
+  `crew: null`, which is still refused.
+  Ordinary task writes retain the legacy singleton `relations` object and
+  trimmed, case-insensitive `true`/`false` strings for `allow_missing_context`
+  and update's `allow_drop_system_tags`. The task adapter normalizes only
+  those fields after guarded-mode preemption and before strict spec parsing;
+  guarded contracts and other nouns keep their existing shape checks. A
+  `relations` array replaces the list, `[]` clears it, and `null` preserves it.
+- **Attribution.** The CLI passes `--model`, else the environment's agent
+  model or name, as the tool's `model`, so attribution goes through tool
+  identity resolution. The baseline's `created_by`, `updated_by` and history
+  actors are unchanged.
+- **Unknown and retired fields.** Unchanged on every surface: the tool
+  registry's schema check refuses them first with "unknown field '<name>'".
+  The specs keep the tools' own retired-field messages for a direct handler
+  call, and both writes refuse unknown fields rather than warn (§4).
+- **Schemas and help.** The MCP snapshot and the `add` and `update` help
+  goldens are byte-identical.
+- **Not migrated.** The dashboard's task create and update routes still
+  call the runtime directly.
+
+**Workflow-run outcome ([ORB-15941]).** The five workflow tools are served by
+the generic tool from a tool-only noun ([2_design.md §9](./2_design.md#phase-4-workflow-run-implemented)).
+No `orbit run` or `orbit job` subcommand migrates. Each overlapping
+subcommand is a wider operation than its tool. A local caller with no
+capability runs `run ship`, `run show`, `run history`, `run auto --stop`
+and `job resume`; the tools are governed `operator` and refuse that caller.
+`run_tool` would therefore govern a CLI the baseline leaves open. Serving the
+CLI-only inputs instead takes a new `mcp_scope: None` tool, which moves the
+authorization golden this phase must keep. Phase 3c kept contention
+hand-wired for the same reason. The inventory:
+
+| CLI subcommand | Tool | Verdict |
+|---|---|---|
+| `run ship` | `orbit.workflow.ship` | Keep. Adds `--complete`, which the tool refuses by contract ([ORB-11187]); auto-selection with no task IDs; `--strict-worker-containment`; and the registry-checkout ship-mode fallback |
+| `run show` | `orbit.workflow.run.show` | Keep. Optional ID defaulting to the latest run, `--step`, `--no-reconcile` and `--verbose`, plus pull-claim, crew-window, drain-summary, lock-holder and root-cause sections the tool does not return |
+| `run history` | `orbit.workflow.run.list` | Keep. `--task`, several states, a relative `--since`, `--incidents` and a default of 50 rows, answered as `{runs}` where the tool answers `{items}`. `--failures` is CLI-only and answers `{failures}`: one row per task and root cause |
+| `run auto` | `orbit.workflow.auto` | Keep. A different operation: `--pull`, complexity pools, `--allow-crew` and strict containment, with no resize, force or status; those are `run concurrency` and `run readiness` |
+| `job resume` | `orbit.workflow.run.resume` | Keep. Another noun's CLI, with `--wait` |
+| `run ship-sweep`, `task-pilot`, `job`, `agent`, `logs`, `events`, `trace`, `settlements`, `cancel`, `concurrency`, `extend`, `readiness`, `profiles` | none (`agent` has `orbit.agent.invoke`, phase 5) | Keep: no workflow tool to share a handler with |
+
+The Step 0 baseline ran 87 cases against a fixture each binary built: 67
+`tool run` calls across the five tools with and without capability and under
+a run ID, three tool schemas, six help pages, ten CLI counterparts (four
+of them without capability) and the audit list. Standard output,
+standard error and exit codes were compared after normalising paths and
+times. The help pages, schemas and CLI cases are identical, and the MCP
+snapshot and authorization golden are unchanged. These differences remain,
+all reviewed:
+
+- **Input checked at the tool entry.** A non-object input is refused as
+  "orbit.workflow.ship input must be a JSON object" rather than "missing
+  `task_ids`". A negative `run.list` `limit` is refused as "must be a
+  non-negative integer" rather than "must be a positive integer". A
+  non-boolean bounded `include_catalog` names the field in backticks. A
+  `workflow.auto` call with neither `action` nor `workspace` names `action`,
+  the first declared field, where it named `workspace`.
+- **Types before content.** Auto's `for_seconds: "abc"` is refused as "must
+  be a non-negative integer" rather than with the drain's window message.
+  When several fields are malformed, the first mistyped one is named: a
+  string `complete` before an out-of-range `concurrency`. Values of the
+  right type still get the drain control's own messages.
+- **Null is absent.** `run.show` with `view: null` reads the full record and
+  `run.list` with `include_catalog: null` lists, where both were refused.
+- **Unknown fields.** Ship, run show, list and resume warn about and audit an
+  unknown field ("ignored unknown input field"), adding one `unknown_field`
+  audit row per call; the field still has no effect. `workflow.auto` refuses
+  them as before, and its bounded and status modes keep their allowlists.
+
+**Review and lifecycle outcome ([ORB-15940]).** `orbit task review-reset`
+and `orbit task reconcile-review` already executed through `run_tool`, so
+they keep the tool path; they are now registry-derived
+([2_design.md §9](./2_design.md#phase-3d-task-review-and-lifecycle-implemented)).
+Reject and delete have no CLI. The Step 0 baseline ran 33 cases against a
+fixture each binary built: the four reconcile-review actions and review-reset
+on the CLI with and without operator authority and in text and JSON, 17 `tool
+run` calls across the four tools (unknown, misspelled and identity fields,
+a bad action, missing fields, a string boolean, a managed run, and reject
+and delete while inactive), the tool list and the audit list. The six help
+goldens, the tool list, the MCP snapshot and the authorization golden are
+unchanged, and so is every other case after normalising paths and times,
+except these, both reviewed:
+
+- **Types at the tool entry.** `review_reset` with
+  `adopt_configured_budget: "true"` is refused as "`adopt_configured_budget`
+  must be a boolean"; the old tool read the string as `false` and went on.
+- **One authorization row.** `reconcile_review` with no `id` is refused at
+  the tool entry, so it writes one operator-override audit row where the old
+  tool wrote two. Its message is unchanged.
+
+`orbit task reconcile-review status --reconciliation` is trimmed like every
+optional string on a registry-derived CLI, and `review-reset` sends
+`adopt_configured_budget` only when the flag is set; the handler's default is
+the value the old command sent. Delete still accepts `force` as a `"true"`
+or `"false"` string.
+
+Phase 5 migrated the search query path. Its Step 0 captured 62 calls on
+isolated fixtures, including representative plain/JSON queries, partial-match
+notes, tag/status/limit filters, query refusals, reindex and tool friction
+listings, with and without `ORBIT_OPERATOR=1`. The candidate matches search
+output, exit status and stderr in that capture, and all 48 CLI audit rows have
+the same command, subcommand, target, role and status. Search remains
+ungoverned and read-only; it writes no task/friction attribution. Root search
+and reindex help are frozen from the pre-migration binary.
+
+The generic adapter trims optional strings and list entries and drops blank
+list entries before dispatch, as for the earlier migrated CLIs. The tool keeps
+its legacy string booleans and scalar-tag semantics. Supplying a canonical
+field together with its alias is now refused by the shared parser instead of
+silently choosing one, and unknown fields at the generic entry warn and audit.
+The ordinary tool transport's existing schema admission still runs first.
+The tool's u32 limit bound now also applies to the query CLI. These parser
+rules are shared kernel behavior; the representative capture does not claim
+exhaustive equivalence for malformed inputs.
+
+## Migrate the remaining nouns on a plan, not on contact
+
+**Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; migration tasks tagged `operations-as-data`, starting with [ORB-15932]
+
+### Context
+
+The friction pilot ([ORB-10358], 2026-07-26) set the touch-it-move-it ratchet:
+the next feature that touches a hand-wired noun migrates it. In the eleven weeks
+since, task, auto-task and workflow run all changed often, and no noun migrated.
+The ratchet depended on a reviewer noticing, at review time, that a change
+counted as touching a noun, and on the author accepting a migration as the price
+of an unrelated feature. Neither happened.
+
+### Decision
+
+Migrate the remaining nouns in a planned order, one Orbit task per phase (tagged
+`operations-as-data`), as in [2_design.md §9](./2_design.md#9-migration-plan).
+Progress is two counts the weekly code-health sweep reports: hand-written
+`impl Tool for` under `crates/orbit-tools/src/builtin/orbit/`, and
+`OrbitBuiltinAction` variants that are not the `Desktop*` actions or a noun's
+single variant. This amends the adoption model of bearing 1 of
+[North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry)
+only; the migration is still incremental, one noun at a time.
+
+### Rejected alternatives
+
+- **Keep the ratchet.** Its eleven-week record is the evidence against it.
+- **A CI check that fails on a new hand-written tool.** Turns the ratchet into a
+  merge gate, which Orbit does not use on `agent-main`; a reported count gives
+  the same visibility without blocking unrelated work.
+- **Big-bang migration.** Rejected by the north-star decision for the same
+  reasons it gave: churn across every surface with no incremental payoff.
+
+### Consequences
+
+- The scoped transition ends at phase 5. Explicit exceptions remain hand-wired
+  where there is no equivalent second surface; §9 records each verdict.
+- Cost: migration tasks compete with feature work for drain capacity, and a
+  phase runs even when no feature currently needs that noun.
+
+## ID routing is keyed by tool name in the MCP rule tables, not declared in the spec
+
+**Recorded:** 2026-10-13 · [ORB-15937]
+**Code anchors:** `crates/orbit-cli/src/command/operation/spec.rs::task_operation`, `crates/orbit-cli/src/command/host_route.rs::routed_command_id`, `crates/orbit-tools/src/mcp_rules.rs::ID_ROUTED_TASK_TOOLS`
+
+### Context
+
+ID routing is a cross-surface fact: `orbit task show` and `orbit.task.show`
+over MCP both follow a task ID to the host its prefix names and the workspace
+that owns it. Under
+[The spec holds cross-surface facts](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface),
+that points at a spec field. But two tool-name lists already hold it for
+every task-ID tool, migrated or not: `ID_ROUTED_TASK_TOOLS` (host prefix
+routing: `show`, `update`, `reject`, `delete`, `artifact get`/`put`, the
+review tools) with `NOT_ID_ROUTED_TOOLS` giving the reason a required-ID tool
+such as `orbit.friction.show` does not route, and `ID_RESOLVED_WORKSPACE_TOOLS`
+(owner workspace binding: `show` and `artifact get`). The federated MCP, the MCP
+server, `orbit tool run` and the CLI host preflight read them by tool name.
+Phase 3a migrated only `show` of those tools.
+`lint` now accepts an optional ID for its workspace sweep, so it no longer
+belongs in the required-ID exclusion table. It keeps the selected workspace
+on both its single-task and sweep paths.
+
+### Decision
+
+ID routing stays keyed by tool name in those lists. A migrated verb's CLI
+derives its routing from them by its spec's `tool_name`, as `task_operation`
+and the host preflight do, and writes no routing of its own. Revisit when
+every tool in the lists has a spec: a `routing` field could then replace them
+without leaving a second home behind.
+
+### Rejected alternatives
+
+- **A `routing` field on `OperationSpec`.** Until the last task-ID tool
+  migrates, the fact would live in the field for migrated verbs and in the
+  lists for the rest, two homes for one fact. The lists also record the
+  negative case with its reason, which a field on migrated specs alone would
+  not cover.
+- **A CLI override per verb, as before.** The hand-wired task arm restated
+  the owner binding for `show` beside the shared list; that copy is the kind
+  of drift the shared list was introduced to stop ([ORB-12263]).
+
+### Consequences
+
+- Every surface routes a task ID from the same two lists, and the routing
+  tests (`global_artifacts_and_workspace_selectors`, the `host_routing` and
+  `workspace_selector` suites) guard them.
+- Cost: the lists are strings, not compiler-checked against the registry. A
+  renamed tool silently loses its routing until a routing test fails, and a
+  new task-ID verb has to be added to a list by hand rather than being
+  prompted by a compile error.
+
+## A multiplexed tool's action is an enum parameter; per-action rules are guarded modes
+
+**Recorded:** 2026-10-13 · [ORB-15941]
+
+### Context
+
+`orbit.workflow.auto` and `orbit.routine.control` multiplex several actions
+behind one required `action` field. Each action accepts its own fields and
+may reach a different host action: auto's `status` is a desktop read that
+accepts only `workspace`, while `start`, `stop` and `resize` reach the drain
+control, which refuses a field from another action by name ("`force` is a
+stop setting; start does not accept it"). Routine control's `list` and
+`toggle` differ in the same way. The kernel declares one flat parameter list
+per operation.
+
+### Decision
+
+A multiplexed tool is one operation, and its selector is a
+`ParamType::Enum` naming every action. The spec declares the union of the
+actions' fields with their shipped types, so type checks and unknown-field
+handling cover every action. Which fields an action accepts, and which host
+action serves it, belongs to the noun's surface table. An action served by
+another host action is a `guarded_mode` that checks its own allowlist. An
+action served by the verb's handler leaves its field rules to that handler.
+This applies to each multiplexed tool that migrates. Phase 5 kept
+`orbit.routine.control` hand-wired because its routine CLI operations have
+different contracts; a future equivalent surface can use this shape.
+
+### Rejected alternatives
+
+- **A kernel `Action` parameter kind with per-action field sets.**
+  `parse_input` would refuse a field outside the named action's set, so the
+  spec would hold the whole contract. But each action is served by one table
+  or the other, and its field rule belongs where it is served. A
+  kernel-level set would duplicate the drain control's worded refusals or
+  replace them with generic ones. It would also add a variant every surface
+  adapter must handle, for two tools.
+- **One operation per action** (`orbit.workflow.auto.status`, …). Clean
+  specs, but it renames shipped tools and moves the MCP snapshot and the
+  authorization golden.
+
+### Consequences
+
+- The MCP schema stays flat and identical to the shipped one; the actions
+  are still listed in the selector's description.
+- Cost: no surface can read an action's accepted fields from the spec. A
+  reader opens the surface table or the handler to learn them, and a field
+  meant for one action passes the type check on every action, so the action
+  rule must be written and tested where the action is served.
+- **Amended 2026-10-13 ([ORB-15940]):** a command line may spell the actions
+  as subcommands. `orbit task reconcile-review` shipped one subcommand per
+  action, each with its own arguments, so the kernel gained
+  `CliArgKind::Actions`: a CLI binding on the selector that lists each
+  action's subcommand and arguments. It is not the rejected kernel field
+  set. `parse_input` never reads it, the wire schema stays flat, and the
+  handler still owns which fields an action accepts. The subcommand's
+  arguments say only what that command line offers.
+
 ## Task References
 
+- [ORB-15932], [ORB-15933], [ORB-15935] — first applications of the 2026-10-12
+  kernel v2 decisions (friction kernel port, input validation, auto-task).
 - [ORB-10358] — piloted [North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry) bearing 1 on the friction noun; produced the
   split table, the derived adapters, and the frozen-surface method.
+- [ORB-15932] — built kernel v2's structure on friction: `effect`, `redact`,
+  `NounSpec`, the generic tool and CLI adapters, and the CLI surface tables
+  that replaced `CliRender`.
+- [ORB-15933] — built `parse_input` at the tool entry on friction in warn mode,
+  with `aliases`, `retired_fields` and `at_least_one_of` in the spec.
+- [ORB-15935] — migrated auto-task through the tool path, governing its
+  destructive CLI-only verbs.
+- [ORB-15937] — migrated the task read verbs through the tool path and kept ID
+  routing keyed by tool name.
+- [ORB-15938] — migrated task `add` and `update` through the tool path, with
+  the operator command's options in a hidden `cli_options` object.
+- [ORB-15940] — migrated the task review and lifecycle tools, spelled
+  reconcile-review's actions as CLI subcommands, and kept the tool-less task
+  subcommands hand-wired.
+- [ORB-15941] — migrated the workflow-run tools onto a tool-only noun, kept
+  every `orbit run` and `orbit job` subcommand hand-wired, and settled the
+  multiplexed-action shape.
+- [ORB-11187] — made completion authority an operator decision the ship tool
+  does not accept.
+- [ORB-12263] — made `orbit tool run` and `orbit task artifact get` share the
+  owner-workspace list with MCP instead of keeping their own.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -9,8 +9,9 @@
 //!
 //! ORB-12731: the worker bound to a run may also declare, from that run's
 //! worktree, a file it has not created yet — for the task the run owns only —
-//! and the write reports those selectors as `context_files_unverified`. Every
-//! other missing-target rejection names the escape hatch.
+//! and the write reports those selectors as `context_files_unverified`, through
+//! `orbit.task.update` and `orbit task update` alike. Every other
+//! missing-target rejection names the escape hatch.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -118,6 +119,18 @@ impl Workspace {
             cwd,
             &["tool", "run", "orbit.task.update", "--input", &input],
         );
+        command
+            .env("ORBIT_MANAGED_RUN_CONTEXT", "1")
+            .env("ORBIT_RUN_ID", run_id);
+        command.output().expect("run orbit as managed worker")
+    }
+
+    /// Run `orbit task update <args>` from `cwd` carrying the managed-run
+    /// envelope that binds the call to `run_id`, as a worker's shell does.
+    fn cli_update_as_run(&self, cwd: &Path, run_id: &str, args: &[&str]) -> Output {
+        let mut argv = vec!["task", "update"];
+        argv.extend_from_slice(args);
+        let mut command = self.orbit(cwd, &argv);
         command
             .env("ORBIT_MANAGED_RUN_CONTEXT", "1")
             .env("ORBIT_RUN_ID", run_id);
@@ -306,7 +319,6 @@ fn linked_worktree_caller_can_declare_a_file_that_exists_only_there() {
     );
 }
 
-#[test]
 fn selector_missing_from_both_checkouts_is_rejected_from_a_worktree() {
     let workspace = Workspace::init();
     let task_id = workspace.author_task("Worktree context selector typo");
@@ -351,7 +363,6 @@ fn selector_missing_from_both_checkouts_is_rejected_from_a_worktree() {
 /// Managed job-run worktrees live under `<repo>/.orbit/state/worktrees/**`, so
 /// they sit inside the registered checkout's directory tree while being
 /// separate checkouts: a path-prefix test cannot tell them apart.
-#[test]
 fn worktree_nested_under_the_registered_checkout_can_declare_its_own_file() {
     let workspace = Workspace::init();
     let task_id = workspace.author_task("Nested worktree context selector");
@@ -384,7 +395,6 @@ fn worktree_nested_under_the_registered_checkout_can_declare_its_own_file() {
 /// file it is about to create for the task that run admitted. The response
 /// says which selectors were stored unverified; a selector that resolves is
 /// not listed.
-#[test]
 fn owning_worker_in_its_worktree_may_declare_a_file_it_has_not_created_yet() {
     let workspace = Workspace::init();
     let run_id = "jrun-fixture-owner";
@@ -449,10 +459,77 @@ fn owning_worker_in_its_worktree_may_declare_a_file_it_has_not_created_yet() {
     );
 }
 
+/// The relaxation is a property of the core update, so the owning worker's
+/// `orbit task update` gets it as `orbit.task.update` does: the same response
+/// key, the same stored scope, and the strict check for a task its run does
+/// not own or a shell outside a managed run.
+fn owning_worker_cli_update_gets_the_same_relaxation_as_the_tool() {
+    let workspace = Workspace::init();
+    let run_id = "jrun-fixture-owner";
+    let task_id = workspace.author_task("Owned task updated from the CLI");
+    workspace.bind_task_to_run(&task_id, run_id);
+    let foreign = workspace.author_task("Task the run does not own");
+    let worktree = workspace.add_worktree_with_new_file(
+        &workspace
+            .repo
+            .join(".orbit/state/worktrees/orbit-jrun-fixture-owner"),
+        "orbit-context-owner-cli",
+        "src/brand_new.rs",
+    );
+
+    let response = Workspace::assert_success(
+        &workspace.cli_update_as_run(
+            &worktree,
+            run_id,
+            &[
+                &task_id,
+                "--context",
+                "file:src/lib.rs,file:src/brand_new.rs,file:src/not_yet.rs",
+                "--json",
+            ],
+        ),
+        "owning worker's CLI update declaring a to-be-created target",
+    );
+    assert_eq!(
+        response["context_files_unverified"],
+        json!(["file:src/not_yet.rs"]),
+        "only the selector no checkout could verify is reported: {response}"
+    );
+    assert_eq!(
+        workspace.stored_context_files(&task_id),
+        vec![
+            "file:src/lib.rs".to_string(),
+            "file:src/brand_new.rs".to_string(),
+            "file:src/not_yet.rs".to_string(),
+        ],
+    );
+
+    let rejected = Workspace::assert_failure(
+        &workspace.cli_update_as_run(
+            &worktree,
+            run_id,
+            &[&foreign, "--context", "file:src/not_yet.rs"],
+        ),
+        "owning worker's CLI update of a task its run does not own",
+    );
+    assert!(
+        rejected.contains("file:src/not_yet.rs") && rejected.contains("--allow-missing-context"),
+        "the strict rejection must name the selector and the flag: {rejected}"
+    );
+
+    let rejected = workspace.run_failure(
+        &worktree,
+        &["task", "update", &task_id, "--context", "file:src/later.rs"],
+    );
+    assert!(
+        rejected.contains("file:src/later.rs"),
+        "a shell outside the managed run gets the strict check: {rejected}"
+    );
+}
+
 /// The relaxation is per task, not per worktree: the same worker, from the
 /// same worktree, still gets the strict rejection — with the escape hatch
 /// named — for a task its run did not admit.
-#[test]
 fn owning_worker_cannot_relax_a_task_its_run_does_not_own() {
     let workspace = Workspace::init();
     let run_id = "jrun-fixture-owner";
@@ -514,7 +591,6 @@ fn owning_worker_cannot_relax_a_task_its_run_does_not_own() {
 /// The relaxation only forgives a missing anchor. A selector that escapes the
 /// workspace, uses an unsupported kind, or contradicts the kind of an existing
 /// target is refused for the owning worker too.
-#[test]
 fn owning_worker_relaxation_still_rejects_invalid_selectors() {
     let workspace = Workspace::init();
     let run_id = "jrun-fixture-owner";
@@ -556,7 +632,6 @@ fn owning_worker_relaxation_still_rejects_invalid_selectors() {
 
 /// The worker's run binding alone is not enough: from the registered checkout
 /// rather than a linked worktree, the strict guard applies.
-#[test]
 fn owning_worker_outside_a_worktree_gets_the_strict_guard() {
     let workspace = Workspace::init();
     let run_id = "jrun-fixture-owner";
@@ -575,4 +650,50 @@ fn owning_worker_outside_a_worktree_gets_the_strict_guard() {
         rejected.contains("file:src/not_yet.rs") && rejected.contains("allow_missing_context"),
         "the registered checkout keeps the strict guard: {rejected}"
     );
+}
+
+#[test]
+fn worktree_scope_and_owned_creation() {
+    for (name, check) in [
+        (
+            "selector_missing_from_both_checkouts_is_rejected_from_a_worktree",
+            selector_missing_from_both_checkouts_is_rejected_from_a_worktree as fn(),
+        ),
+        (
+            "worktree_nested_under_the_registered_checkout_can_declare_its_own_file",
+            worktree_nested_under_the_registered_checkout_can_declare_its_own_file as fn(),
+        ),
+        (
+            "owning_worker_in_its_worktree_may_declare_a_file_it_has_not_created_yet",
+            owning_worker_in_its_worktree_may_declare_a_file_it_has_not_created_yet as fn(),
+        ),
+        (
+            "owning_worker_cli_update_gets_the_same_relaxation_as_the_tool",
+            owning_worker_cli_update_gets_the_same_relaxation_as_the_tool as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn foreign_and_invalid_creation_refusals() {
+    for (name, check) in [
+        (
+            "owning_worker_cannot_relax_a_task_its_run_does_not_own",
+            owning_worker_cannot_relax_a_task_its_run_does_not_own as fn(),
+        ),
+        (
+            "owning_worker_relaxation_still_rejects_invalid_selectors",
+            owning_worker_relaxation_still_rejects_invalid_selectors as fn(),
+        ),
+        (
+            "owning_worker_outside_a_worktree_gets_the_strict_guard",
+            owning_worker_outside_a_worktree_gets_the_strict_guard as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

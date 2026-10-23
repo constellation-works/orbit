@@ -49,7 +49,12 @@ journalctl --user -u orbit-sweep.service --since '1 hour ago' --no-pager -o shor
 
 `orbit clock status` and the doctor's `clock-unit` row flag a tick still running
 after its five-minute budget, a failed service start, or missing recovery
-settings. An exhausted cooperative budget exits nonzero and names deferred
+settings. The doctor row also flags a systemd timer that is disabled or inactive,
+and on macOS a launchd agent that is not loaded or a `sweep.log` older than the
+tick interval. `orbit clock enable` arms it again. `orbit clock status` still
+reports an operator pause as `paused`.
+
+An exhausted cooperative budget exits nonzero and names deferred
 workspaces in the tick report (`deadline_exceeded`, `skipped_workspaces` in
 JSON). A synchronous operation that never returns hits systemd's ten-minute
 startup timeout, which kills the service group and lets the timer recover.
@@ -128,6 +133,42 @@ For a failed, cancelled, or stuck run, continue with
 [run-debugging.md](../../orbit-orchestrate/references/run-debugging.md). It covers the run bundle, v2
 audit trail, blobs, and live-process checks in the right order.
 
+## Delivery Profiles and Admission Diagnostics
+
+Inspect these read-only surfaces when work waits despite a free worker slot:
+
+```bash
+orbit run profiles --json
+orbit run profiles --accuracy --json
+orbit run readiness --json
+orbit config keys --json
+orbit config show
+```
+
+Profiles summarize per-delivery CPU and memory by workspace, work class and
+complexity on this host; `auto-task:<template>` profiles omit complexity.
+They use recent completed deliveries from the last 30 days, excluding resumed
+or retried deliveries. Sparse keys fall back to broader profiles; inspect
+sample counts and spread before drawing conclusions. `BUILD_FLAG` identifies
+no-diff work using more than one core for two consecutive minutes, with its
+deliveries listed; templates that build by design, such as QA sweeps, are exempt.
+It is diagnostic evidence, not proof of a defect.
+
+`--accuracy` compares forecasts recorded in `shadow` or `enforce` with measured
+host load 5, 10, 20 and 30 minutes ahead, and reports shadow admission differences.
+Error is forecast minus measured; negative errors are underestimates. Unmeasured
+points are reported separately and cannot establish accuracy. Forecast modes
+and settings are in [configuration.md](configuration.md#common-settings).
+Forecast fit, the fixed worker-slot ceiling, and sustained resource throttling
+are separate admission checks; diagnostics authorize no policy change.
+
+Readiness names `host_shutdown_scheduled` with the scheduled time and mode.
+New unattended admissions hold within `machine.host_shutdown_hold_minutes`
+(default 180); later schedules are still visible while admissions continue.
+Running work is left alone by the hold. Report the schedule and configured
+window; preserve the hold and operator capacity policy rather than raising
+concurrency, changing forecast thresholds, or cancelling a shutdown automatically.
+
 ## Worker Resource Containment
 
 On Linux with a reachable systemd user manager, every detached pipeline worker
@@ -151,9 +192,9 @@ scripts. Compare that value with the service's `Environment=PATH=…` when a too
 cannot be found. Restart the launching service between runs after changing its
 environment, then confirm a new box delivery passes `candidate_validate`.
 
-The config schema exposes `workflow.validation_env.login_shell` to disable
-shell probing and `workflow.validation_env.interactive` to select only the
-non-interactive probe. `workflow.validation_env.path` adds explicit PATH entries
+The config schema exposes `workflow.validation_env.shell_probe`: `interactive`
+(default), `login` to select only the non-interactive probe, or `off` to
+disable shell probing. `workflow.validation_env.path` adds explicit PATH entries
 (leading `~/` expands to the owner's home); `workflow.validation_env.path_mode`
 is `prepend` by default or `replace` to use only those entries. Only allow-listed
 toolchain variables cross the probe; it does not copy the shell's environment.
@@ -167,8 +208,7 @@ The limits live only in the global `~/.orbit/config.toml` `[machine]` table:
 
 | Key | Default | Scope property |
 | --- | --- | --- |
-| `machine.worker_containment` | `true` | `false` launches workers in the caller's cgroup |
-| `machine.worker_containment_strict` | `false` | Refuse a worker launch when a systemd user scope is unavailable; requires containment enabled |
+| `machine.worker_containment` | `warn` | `off` launches workers in the caller's cgroup; `warn` falls back to it with a warning when a systemd user scope is unavailable; `strict` refuses the worker launch instead |
 | `machine.worker_memory_high` | `40%` | `MemoryHigh=`: the kernel throttles the run above it |
 | `machine.worker_memory_max` | `50%` | `MemoryMax=`: OOM kills stay inside the run |
 | `machine.worker_tasks_max` | `4096` | `TasksMax=`: processes plus threads before fork/clone fails |
@@ -183,6 +223,16 @@ the value its launching process loaded, so restart a long-lived
 also sets `OOMPolicy=continue`: the kernel kills the largest process in the run
 rather than systemd stopping the whole scope, so the worker survives to record
 the cause.
+
+Every Linux worker, contained or not, also starts with an `oom_score_adj` of
+at least 500, and everything it spawns inherits it. On a host-wide OOM the
+kernel therefore kills a worker process before the user manager
+(`user@.service` runs at 100), the drain that launched it, or the dashboard.
+Without it, a host whose largest process was already killed can lose the user
+`systemd` itself, and every worker scope with it (2026-10-12). Scope units
+accept no `OOMScoreAdjust=`, so the worker sets the value on itself before
+`systemd-run` execs it; check a live worker with
+`cat /proc/<worker_pid>/oom_score_adj`.
 
 `machine.worker_cpu_quota` caps a run's CPU so a stress loop or runaway test
 loop in one leaf cannot take every core and starve the other leaves and the
@@ -212,8 +262,20 @@ A run that fails after its scope hit a limit carries the error code
 and how many processes were OOM-killed or forks refused. The worker records it
 itself; if the worker process died instead, its launcher records it when it is
 still watching the child. A run whose launcher had already exited can still
-end as `interrupted` / `process_not_found`; then correlate with the kernel log
-(`journalctl -k --since '1 hour ago' | rg -i 'oom|orbit-worker'`).
+end as `interrupted` / `process_not_found`. Its diagnostic's `worker exit:`
+clause then says no exit status was observed and what the scope recorded at
+claim time still reports: unit result and counters, or that the scope is gone
+and the `journalctl --user -u <unit>` command for it. Correlate with the kernel
+log (`journalctl -k --since '1 hour ago' | rg -i 'oom|orbit-worker'`).
+
+When a drain and its leaves die together (the user manager was killed), no
+cancel is needed. `orbit run history` or `orbit run show` on the follower
+marks each run whose worker is gone `interrupted`. It also settles the pull
+claims those runs left with the owner: a dead leaf's recorded failure, and the
+release of a claim its drain admitted but never launched. Only claims that no
+live drain pulls for and whose leaf is no longer running are settled, so
+these reads contact no owner while a drain or leaf is alive. Pass
+`--no-reconcile` to read the stored records without either step.
 
 By default, containment falls back to the old behaviour, with one warning per
 Orbit process (`orbit log tail --level warn --target orbit.core.job_run`: "pipeline
@@ -221,7 +283,7 @@ workers launch without a bounded systemd scope"), when it is disabled or when
 `systemd-run --user --scope` cannot reach a user manager on Linux (containers,
 sandboxes, sessions without `XDG_RUNTIME_DIR`). macOS and other platforms
 without systemd launch uncontained silently: no warning is logged. With
-`machine.worker_containment_strict=true` or `--strict-worker-containment` on
+`machine.worker_containment = "strict"` or `--strict-worker-containment` on
 `orbit run ship` or `orbit run auto`, an unavailable scope instead refuses the
 worker before spawn; `orbit run show` reports
 `worker_containment_unavailable` and the reason. The CLI flag is inherited by
@@ -238,9 +300,11 @@ in-flight uncontained runs.
 
 Restarts: a contained worker lives outside the `orbit-web.service` and
 `orbit-sweep.service` cgroups, so restarting either never signals it. An
-uncontained worker keeps the existing guarantee: it runs in its own `setsid`
-session and the sweep unit uses `KillMode=process`. Stopping a worker scope
-(`systemctl --user stop orbit-worker-….scope`) kills that run; use
+uncontained worker runs in its own `setsid` session but remains in the launching
+service's cgroup. The sweep unit uses `KillMode=mixed` and
+`TimeoutStartSec=10min`, so service stops or that timeout can kill uncontained
+workers; a separate session does not protect them from cgroup cleanup. Stopping
+a worker scope (`systemctl --user stop orbit-worker-….scope`) kills that run; use
 `orbit run cancel <run-id> --confirm` instead.
 
 ## Archive-Pruning Warning

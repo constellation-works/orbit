@@ -1,0 +1,56 @@
+Show what each kind of delivery costs on this host, minute by minute
+
+Usage: orbit run profiles [OPTIONS]
+
+Options:
+      --accuracy
+          Compare recorded admission forecasts with the host's measured load
+
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --since <TIMESTAMP>
+          Include forecasts at or after this RFC3339 timestamp (accuracy only)
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --drain <RUN>
+          Select an exact drain run id (accuracy only)
+
+      --mode <MODE>
+          Select the recorded admission mode: shadow or enforce (accuracy only)
+
+      --wide
+          Print every per-offset accuracy column instead of the summary (accuracy only)
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+One resource profile per workspace, work class and complexity, from the CPU and memory
+recent deliveries recorded. `--accuracy` instead compares admission forecasts with the
+host's measured load. Read-only.
+Column reference: docs/runbooks/forecast-accuracy.md.
+
+Examples:
+  orbit run profiles
+  orbit run profiles --json
+  orbit run profiles --accuracy
+  orbit run profiles --accuracy --wide
+  orbit run profiles --accuracy --since 2026-10-15T00:00:00Z --drain <RUN> --mode enforce --json

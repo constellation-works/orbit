@@ -20,7 +20,7 @@ use crate::application::auto_tasks::scheduler::run_auto_task_scheduler_with_cach
 use crate::application::automation::SourceCache;
 use crate::application::job::run_owner_liveness;
 use crate::application::routines::clock::load_clock_settings;
-use crate::runtime::host_signal::{HostSignalProbe, default_host_signal_probe};
+use crate::runtime::host_signal::{HostSignalProbe, ScheduledShutdown, default_host_signal_probe};
 use chrono::Utc;
 use orbit_automation::routines::sweep::TICK_DEADLINE;
 use orbit_automation::routines::sweep::run_sweep_core;
@@ -40,23 +40,6 @@ pub(crate) struct RuntimeDispatch<'a> {
     runtimes: BTreeMap<PathBuf, &'a OrbitRuntime>,
     shown_runs: RefCell<HashMap<(PathBuf, String), JobRun>>,
     source_cache: SourceCache,
-}
-
-/// Refresh each discovered workspace's read-side token projection once per
-/// successful sweep. The writer skips the rewrite when no invocation has
-/// landed since the last stamp. A stale projection must not stop routine
-/// evaluation.
-pub(crate) fn refresh_discovered_token_scoreboards(workspaces: &[(Workspace, OrbitRuntime)]) {
-    for (workspace, runtime) in workspaces {
-        if let Err(error) = runtime.refresh_token_scoreboard() {
-            tracing::warn!(
-                target: "orbit.core.scoreboard",
-                workspace = %workspace.name,
-                error = %error,
-                "failed to refresh tokens scoreboard during routine sweep",
-            );
-        }
-    }
 }
 
 impl RoutineDispatch for RuntimeDispatch<'_> {
@@ -256,16 +239,12 @@ pub(crate) fn run_sweep_at_with_providers_at(
     let mut discovered = workspace_provider.discover_workspaces_until(global_root, deadline)?;
     let mut skipped_workspaces: BTreeSet<String> =
         discovered.skipped_workspaces.iter().cloned().collect();
-    for entry in &discovered.entries {
-        if tick_allows_workspace(deadline, &entry.0, &mut skipped_workspaces) {
-            refresh_discovered_token_scoreboards(std::slice::from_ref(entry));
-        }
-    }
     let mut load_errors: Vec<RoutineLoadError> = discovered.errors.clone();
     let no_workspace_loaded = no_workspace_loaded_row(&discovered);
 
-    // [ORB-14173] Replica checkouts contribute only their host-local
-    // worktree GC routines; the rest are reported as owner work below.
+    // [ORB-14173] [ORB-16354] Replica checkouts contribute only their
+    // host-local worktree GC and store GC routines; the rest are reported
+    // as owner work below.
     let host = if Instant::now() < deadline {
         collect_host_routines(&discovered)
     } else {
@@ -298,12 +277,14 @@ pub(crate) fn run_sweep_at_with_providers_at(
         }
     }
 
-    // [ORB-12968] A pending host shutdown or reboot would kill anything this
-    // tick starts, so the whole fire phase — routines and auto-tasks — stands
-    // down for it. Cursors are not advanced, so once the schedule is cancelled
-    // or the host is back, each routine's own `missed_run` policy decides what
-    // the held slots become, exactly as after any other downtime.
-    if let Some(shutdown) = host_signals.scheduled_shutdown() {
+    // [ORB-12968] A host shutdown inside the hold horizon would kill anything
+    // this tick starts, so the whole fire phase — routines and auto-tasks —
+    // stands down for it. A later schedule does not. Cursors are not advanced
+    // while held, so once the schedule is cancelled, the horizon lifts, or
+    // the host is back, each routine's own `missed_run` policy decides what
+    // the held slots become, exactly as after any other downtime. The horizon
+    // is the global machine setting, judged against this tick's clock.
+    if let Some(shutdown) = shutdown_holding_admission(global_root, host_signals, now_utc)? {
         let reason = shutdown.hold_reason();
         tracing::warn!(
             target: "orbit.core.sweep",
@@ -517,11 +498,31 @@ pub(crate) fn run_sweep_at_with_providers_at(
 
     // The final-recovery backstop runs last: it only submits runs for tasks
     // already blocked, and stands down itself off the owner or with an empty
-    // `workflow.final_recovery_crews` pool.
+    // `workflow.purpose_crews.final_recovery` pool.
     if !options.dry_run {
         for (workspace, runtime) in &discovered.entries {
             if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
                 continue;
+            }
+            // A transient-infrastructure block whose probe passes goes back
+            // onto its candidate before the backstop looks at blocked tasks.
+            if runtime.worker_invocation().is_none() && runtime.coordination_write_owner().is_none()
+            {
+                match runtime.requeue_cleared_transient_infra_blocks() {
+                    Ok(requeued) if !requeued.is_empty() => tracing::info!(
+                        target: "orbit.core.sweep",
+                        workspace = %workspace.name,
+                        requeued = requeued.len(),
+                        "sweep.transient_infra_requeue"
+                    ),
+                    Ok(_) => {}
+                    Err(error) => tracing::warn!(
+                        target: "orbit.core.sweep",
+                        workspace = %workspace.name,
+                        error = %error,
+                        "sweep.transient_infra_requeue_failed"
+                    ),
+                }
             }
             match runtime.run_blocked_task_recovery_tick(now_utc) {
                 Ok(tick) => {
@@ -629,9 +630,10 @@ pub(crate) fn run_sweep_at_with_providers_at(
 }
 
 /// Load the `clock.env` values any discovered workspace's effective
-/// `execution.env.pass` lists. A refused or unreadable file is a load error
-/// row, not a failed tick: runs still start, and a Claude activity without its
-/// token then fails fast with an actionable error.
+/// `execution.env.pass` lists or a crew's `env` reads. A refused or
+/// unreadable file is a load error row, not a failed tick: runs still start,
+/// and a Claude activity without its token then fails fast with an
+/// actionable error.
 fn load_clock_env_for(
     global_root: &Path,
     discovered: &mut super::loader::DiscoveredWorkspaces,
@@ -641,7 +643,7 @@ fn load_clock_env_for(
         .entries
         .iter()
         .chain(&discovered.replicas)
-        .flat_map(|(_, runtime)| runtime.env_pass_names())
+        .flat_map(|(_, runtime)| runtime.child_env_default_names())
         .collect();
     let pass: Vec<String> = pass.into_iter().collect();
     match orbit_common::security::operator_env::load_clock_env(global_root, &pass) {
@@ -732,6 +734,26 @@ fn no_workspace_loaded_row(discovered: &super::loader::DiscoveredWorkspaces) -> 
         first.source_workspace,
         first.message
     ))
+}
+
+/// The global shutdown horizon, and the schedule when it holds this tick.
+///
+/// A missing config file is the built-in default. An invalid global config
+/// fails the tick rather than silently admitting into a reboot.
+fn shutdown_holding_admission(
+    global_root: &Path,
+    host_signals: &dyn HostSignalProbe,
+    now_utc: chrono::DateTime<Utc>,
+) -> Result<Option<ScheduledShutdown>, OrbitError> {
+    let Some(shutdown) = host_signals.scheduled_shutdown() else {
+        return Ok(None);
+    };
+    let loaded =
+        orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(global_root))?;
+    let minutes = loaded.snapshot.host_shutdown_hold_minutes();
+    Ok(shutdown
+        .holds_admission(now_utc, minutes)
+        .then_some(shutdown))
 }
 
 /// Bind a routine sweep to the same cadence the host clock installer renders.

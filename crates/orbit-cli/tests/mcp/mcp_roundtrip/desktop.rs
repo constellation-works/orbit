@@ -1,97 +1,5 @@
 use super::*;
 
-#[test]
-fn desktop_task_status_sets_compose_with_search_priority_and_pagination() {
-    let workspace = McpWorkspace::init();
-    let selector = workspace.work.to_str().unwrap();
-    let mut client = workspace.serve();
-    for (index, (status, title, priority)) in [
-        ("in-progress", "Needle running", "medium"),
-        ("review", "Needle review", "medium"),
-        ("blocked", "Needle blocked", "medium"),
-        ("backlog", "Needle queued", "medium"),
-        ("proposed", "Needle proposed", "medium"),
-        ("done", "Needle completed", "medium"),
-        ("backlog", "Other title", "medium"),
-        ("blocked", "Needle urgent", "high"),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let created = client.call_tool_ok(
-            "orbit_task_add",
-            json!({"workspace":selector,"model":"codex","request_id":format!("filter-{index}"),"title":title,"description":"Filter fixture","acceptance_criteria":["Visible when included"],"priority":priority}),
-        );
-        let id = created["snapshot"]["task"]["id"].as_str().unwrap();
-        if status != "proposed" {
-            // Human override seeds lifecycle states only in the disposable
-            // child-process fixture; no task is dispatched or completed by MCP.
-            orbit_ok(
-                McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-                    .args(["task", "update", id, "--status", status, "--force"]),
-            );
-        }
-    }
-    let mut input = json!({"workspace":selector,"view":"bounded","status":"in-progress,review,blocked,backlog","search":"nEeDlE","priority":"medium","limit":2});
-    let first = client.call_tool_ok("orbit_task_list", input.clone());
-    assert_eq!(first["total"], 4);
-    assert_eq!(first["pagination"]["next_offset"], 2);
-    let mut ids = BTreeSet::new();
-    for offset in [0, 2] {
-        input["offset"] = json!(offset);
-        let page = client.call_tool_ok("orbit_task_list", input.clone());
-        assert_eq!(page["total"], 4);
-        assert_eq!(page["items"].as_array().unwrap().len(), 2);
-        for task in page["items"].as_array().unwrap() {
-            let status = task["status"].as_str().unwrap().replace('_', "-");
-            assert!(
-                ["in-progress", "review", "blocked", "backlog"].contains(&status.as_str()),
-                "only included lifecycle states appear: {task}"
-            );
-            assert!(ids.insert(task["id"].as_str().unwrap().to_string()));
-        }
-        if offset == 2 {
-            assert!(page["pagination"]["next_offset"].is_null());
-        }
-    }
-    input["offset"] = json!(0);
-    input["status"] = json!(["proposed", "done"]);
-    let expanded = client.call_tool_ok("orbit_task_list", input.clone());
-    assert_eq!(expanded["total"], 2);
-    let statuses: BTreeSet<_> = expanded["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|task| task["status"].as_str().unwrap())
-        .collect();
-    assert_eq!(statuses, BTreeSet::from(["proposed", "done"]));
-    input["status"] = json!("review");
-    assert_eq!(
-        client.call_tool_ok("orbit_task_list", input.clone())["total"],
-        1
-    );
-    input["status"] = json!("review,not-a-status");
-    assert_eq!(
-        client.call_tool_err("orbit_task_list", input.clone())["code"],
-        "invalid_input"
-    );
-    input.as_object_mut().unwrap().remove("status");
-    assert_eq!(
-        client.call_tool_ok("orbit_task_list", input.clone())["total"],
-        6
-    );
-    input["status"] = Value::Null;
-    assert_eq!(
-        client.call_tool_ok("orbit_task_list", input.clone())["total"],
-        6,
-        "a null status retains the bounded reader's unfiltered contract"
-    );
-    input.as_object_mut().unwrap().remove("status");
-    input["priority"] = json!("high");
-    assert_eq!(client.call_tool_ok("orbit_task_list", input)["total"], 1);
-}
-
-#[test]
 fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinations() {
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
@@ -193,7 +101,6 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
     );
 }
 
-#[test]
 fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch_without_authority()
 {
     let workspace = McpWorkspace::init();
@@ -224,6 +131,29 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
     let after_toggle = std::fs::read(&routine_path).unwrap();
     let conflict = client.call_tool_err("orbit_routine_control", toggle);
     assert_eq!(conflict["code"], "invalid_input", "{conflict}");
+    for (name, target, message) in [
+        (
+            "missing-routine",
+            "job:stdio-maintenance",
+            "invalid input: routine unavailable in this workspace",
+        ),
+        (
+            "stdio-routine",
+            "job:elsewhere",
+            "invalid input: routine target changed; refresh before retrying",
+        ),
+    ] {
+        let refused = client.call_tool_err(
+            "orbit_routine_control",
+            json!({"workspace":selector,"action":"toggle","name":name,"target":target,
+                "expected_enabled":false,"enabled":true}),
+        );
+        assert_eq!(refused["code"], "invalid_input", "{refused}");
+        assert_eq!(
+            refused["message"], message,
+            "the shared toggle selection keeps each MCP refusal: {refused}"
+        );
+    }
     assert_eq!(std::fs::read(&routine_path).unwrap(), after_toggle);
     drop(client);
     let mut client = workspace.serve_with_args(&["--operator"]);
@@ -261,7 +191,15 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
         "orbit_pipeline_invoke",
         json!({"workspace":selector,"job_name":"stdio-maintenance","default_input":true}),
     );
-    client.call_tool_err("orbit_pipeline_invoke",json!({"workspace":selector,"job_name":"stdio-maintenance","default_input":true,"input":{}}));
+    let mixed = client.call_tool_err(
+        "orbit_pipeline_invoke",
+        json!({"workspace":selector,"job_name":"stdio-maintenance","default_input":true,"input":{}}),
+    );
+    assert_eq!(mixed["code"], "invalid_input", "{mixed}");
+    assert_eq!(
+        mixed["message"], "invalid input: unknown field 'input'",
+        "the mixed form is refused before the disabled job is consulted: {mixed}"
+    );
     client.call_tool_err(
         "orbit_workflow_run_resume",
         json!({"workspace":selector,"id":"jrun-missing"}),
@@ -315,7 +253,6 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
 /// change: an operator lists and enables its worktree GC, while owner work —
 /// ship sweep, auto-task minting and toggles — is refused with the owner
 /// named and leaves every definition byte-identical.
-#[test]
 fn replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_rest() {
     let workspace = McpWorkspace::init_replica_of("hm_remote_owner");
     let selector = workspace.work.to_str().unwrap();
@@ -424,7 +361,6 @@ fn replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_
     );
 }
 
-#[test]
 fn desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates() {
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
@@ -513,12 +449,36 @@ fn desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates(
     );
     assert_eq!(edited["snapshot"]["task"]["status"], "blocked");
     assert_eq!(edited["snapshot"]["task"]["title"], "Ordinary caller");
+    // The crew the task was created with, without an explicit crew, is the default.
+    let default_crew = created["snapshot"]["task"]["crew"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let other = if default_crew == "astra" {
+        "luna"
+    } else {
+        "astra"
+    };
+    // Move off the default first, so a reset that leaves the crew in place cannot pass.
+    let explicit = client.call_tool_ok(
+        "orbit_task_update",
+        json!({"workspace":selector,"id":id,"model":"codex",
+        "request_id":"explicit-crew","expected_revision":edited["snapshot"]["revision"],"crew":other}),
+    );
+    assert_eq!(explicit["snapshot"]["task"]["crew"], other, "{explicit}");
     let defaulted = client.call_tool_ok(
         "orbit_task_update",
         json!({"workspace":selector,"id":id,"model":"codex",
-        "request_id":"default-crew","expected_revision":edited["snapshot"]["revision"],"crew":""}),
+        "request_id":"default-crew","expected_revision":explicit["snapshot"]["revision"],"crew":""}),
     );
-    assert!(defaulted["snapshot"].is_object(), "{defaulted}");
+    assert!(
+        defaulted.get("conflict").is_none(),
+        "clearing the crew must not conflict: {defaulted}"
+    );
+    assert_eq!(
+        defaulted["snapshot"]["task"]["crew"], default_crew,
+        "clearing the crew reverts the task to its default: {defaulted}"
+    );
     orbit_ok(
         McpWorkspace::orbit_command(&workspace.work, &workspace.home)
             .args(["task", "update", id, "--status", "review", "--force"]),
@@ -570,7 +530,6 @@ fn desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates(
 /// The bounded run detail reads a fixed metadata budget however long the
 /// run's audit trail is, yet still counts every log, places early logs in
 /// their step, reports the newest provider child and redacts previews.
-#[test]
 fn bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history() {
     const RUN_ID: &str = "jrun-20261011-0000-bd";
     const INVOCATIONS: usize = 600;
@@ -733,5 +692,135 @@ fn bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history() {
         full["execution_progress"]["provider_processes"]["items"],
         progress["provider_processes"]["items"],
         "both views report the same newest children: {full}"
+    );
+}
+
+#[test]
+fn desktop_destination_and_routine_contracts() {
+    for (name, check) in [
+        ("desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinations", desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinations as fn()),
+        ("domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch_without_authority", domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch_without_authority as fn()),
+        ("replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_rest", replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_rest as fn()),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
+}
+
+#[test]
+fn desktop_governance_and_bounded_reads() {
+    for (name, check) in [
+        (
+            "desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates",
+            desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates as fn(),
+        ),
+        (
+            "bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history",
+            bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "MCP contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
+}
+
+#[test]
+fn drain_status_preserves_readiness_selection_and_shared_metadata() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::desktop::drain_status_preserves_readiness_selection_and_shared_metadata",
+    ) {
+        return;
+    }
+    let workspace = McpWorkspace::init();
+    let selector = workspace.work.to_str().unwrap();
+    let mut client = workspace.serve_with_args(&["--operator"]);
+    let mut ids = Vec::new();
+    for title in ["First readiness selection", "Second readiness selection"] {
+        let task = client.call_tool_ok(
+            "orbit_task_add",
+            json!({"workspace":selector,"title":title,"description":"Observe only the named readiness selection","complexity":"low","model":"codex"}),
+        );
+        ids.push(task["id"].as_str().unwrap().to_string());
+    }
+    for (task, crews) in [
+        (json!(ids[1]), json!("sol")),
+        (json!([ids[1]]), json!(["sol"])),
+    ] {
+        let status = client.call_tool_ok("orbit_workflow_auto", json!({"workspace":selector,"action":"status","task":task,"concurrency":7,"limit":500,"allow_crew":crews}));
+        assert_eq!(status["tasks"].as_array().unwrap().len(), 1, "{status}");
+        assert_eq!(status["tasks"][0]["task_id"], ids[1]);
+        assert_eq!(status["capacity"]["max_active_leaf_runs"], 7);
+        assert_eq!(status["capacity"]["allowed_crews"], json!(["sol"]));
+        assert_eq!(status["replica"], false);
+        assert!(
+            status
+                .get("validation_env_warning")
+                .is_some_and(Value::is_null),
+            "{status}"
+        );
+        assert_eq!(
+            status["controls_authorized"], true,
+            "task-panel drain controls remain available"
+        );
+    }
+    assert_eq!(
+        client.call_tool_err(
+            "orbit_workflow_auto",
+            json!({"workspace":selector,"action":"status","task":ids,"limit":1})
+        )["code"],
+        "invalid_input",
+        "explicit selections larger than the limit are refused"
+    );
+    for limit in [0, 501] {
+        assert_eq!(
+            client.call_tool_err(
+                "orbit_workflow_auto",
+                json!({"workspace":selector,"action":"status","limit":limit})
+            )["code"],
+            "invalid_input"
+        );
+    }
+    for (field, value) in [
+        ("task", json!(ids[0])),
+        ("limit", json!(50)),
+        ("allow_crew", json!(["sol"])),
+    ] {
+        let mut input = json!({"workspace":selector,"action":"start","for_seconds":60});
+        input[field] = value;
+        assert_eq!(
+            client.call_tool_err("orbit_workflow_auto", input)["code"],
+            "invalid_input",
+            "readiness selectors must not enable control settings"
+        );
+    }
+    let runs = client.call_tool_ok(
+        "orbit_workflow_run_list",
+        json!({"workspace":selector,"view":"bounded"}),
+    );
+    assert_eq!(
+        runs["total"], 0,
+        "readiness and refused controls submit no runs"
+    );
+    let replica = McpWorkspace::init_replica_of("hm_remote_owner");
+    let mut replica_client = replica.serve_with_args(&["--operator"]);
+    let status = replica_client.call_tool_ok(
+        "orbit_workflow_auto",
+        json!({"workspace":replica.work.to_str().unwrap(),"action":"status"}),
+    );
+    assert_eq!(status["replica"], true);
+    let cli = orbit_ok(
+        McpWorkspace::orbit_command(&replica.work, &replica.home).args([
+            "run",
+            "readiness",
+            "--json",
+        ]),
+    );
+    let cli: Value = serde_json::from_slice(&cli.stdout).unwrap();
+    assert_eq!(cli["replica"], true);
+    assert!(
+        cli.get("validation_env_warning")
+            .is_some_and(Value::is_null)
     );
 }

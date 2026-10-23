@@ -3,8 +3,8 @@ summary: "Task Artifacts — Design"
 type: design
 title: "Task Artifacts — Design"
 owner: codex
-last_updated: 2026-10-10
-last_validated: 2026-10-10
+last_updated: 2026-10-21
+last_validated: 2026-10-19
 status: Draft
 feature: task-artifacts
 doc_role: design
@@ -65,6 +65,8 @@ complexity: hard
 job_run_id: null
 crew: implementer-crew
 orchestrator: orchestration-crew
+orchestrator_model: claude-opus-5-5
+orchestrator_model_source: crew_config
 relations:
   - type: supersedes
     target: ORB-00000
@@ -80,7 +82,7 @@ created_at: 2026-05-11T00:00:00Z
 updated_at: 2026-05-11T00:00:00Z
 ```
 
-The envelope should not include prose bodies, comments, review message bodies, execution summaries, `workspace_path`, `repo_root`, `agent`, `model`, or the old `batch_id` name. Local execution bindings live in the local task registry, keyed by task ID and workspace binding. Execution fan-out membership is `job_run_id`, a foreign reference to the job-run store rather than a task relation. `crew` selects the named execution crew; `orchestrator` is separate, explicit attribution for the named crew responsible for orchestrating the task. It never selects a model/provider and is never inferred from actor attribution or `crew`. A non-empty orchestrator must name a configured crew and may be set, changed, or cleared only while the task is `proposed` or `backlog`; stored aliases remain readable if configuration later removes them. `relations` can also carry cross-artifact provenance via `produces` and `resolves` targets (valid task IDs under any configured prefix, `FYYYY-MM-NNN`, or `ADR-` IDs); `covered_by` targets a task or GitHub PR external key (`github-pr:NUMBER` or `github-pr:https://github.com/OWNER/REPO/pull/NUMBER`) for exact-key CI operator coverage. Task-only relation types target valid task IDs under any configured prefix (for example, `ORB-00000` or `DANI-00001`). `schema_version` remains `1`: readers default a missing `orchestrator` to `null`, but older writers may drop the new field, so forward compatibility is limited to tolerant reads rather than preservation through legacy rewrites.
+The envelope should not include prose bodies, comments, review message bodies, execution summaries, `workspace_path`, `repo_root`, `agent`, `model`, or the old `batch_id` name. Local execution bindings live in the local task registry, keyed by task ID and workspace binding. Execution fan-out membership is `job_run_id`, a foreign reference to the job-run store rather than a task relation. `crew` selects the named execution crew; `orchestrator` is separate, explicit attribution for the named crew responsible for orchestrating the task. It never selects a model/provider and is never inferred from actor attribution or `crew`. A non-empty orchestrator must name a configured crew and may be set, changed, or cleared only while the task is `proposed` or `backlog`; stored aliases remain readable if configuration later removes them. `orchestrator_model` and `orchestrator_model_source` snapshot the orchestrator's model once, at creation: an explicit create input (`explicit`), else the orchestrator crew's configured model (`crew_config`). They are never updated, so a later crew-config change or orchestrator change leaves them as recorded, and a task created without an orchestrator has neither. `relations` can also carry cross-artifact provenance via `produces` and `resolves` targets (valid task IDs under any configured prefix, `FYYYY-MM-NNN`, or `ADR-` IDs); `covered_by` targets a task or GitHub PR external key (`github-pr:NUMBER` or `github-pr:https://github.com/OWNER/REPO/pull/NUMBER`) for exact-key CI operator coverage. Task-only relation types target valid task IDs under any configured prefix (for example, `ORB-00000` or `DANI-00001`). `schema_version` remains `1`: readers default a missing `orchestrator` to `null`, but older writers may drop the new field, so forward compatibility is limited to tolerant reads rather than preservation through legacy rewrites.
 
 ## 3. Prose Documents
 
@@ -137,7 +139,7 @@ files:
 
 Manifest paths are stored in canonical relative form: slash-separated, no absolute paths, no `..`, no `.`, and no leading `./`. Writers that ingest hand-authored manifests should normalize a leading `./` before validation. SHA-256 values are lowercase hex; writer code should format digest bytes with lowercase hex (`{:x}`).
 
-Task artifact discovery surfaces (`orbit.task.show` with `field: "artifacts"`, `orbit artifacts <ID> --task`) emit bounded metadata only (path, media type, size, attribution); storage and API DTOs must not require UTF-8, and artifact payload bytes are retrieved on demand through `orbit.task.artifact.get` or the dashboard download route.
+Task artifact discovery surfaces (`orbit.task.show` with `field: "artifacts"`, `orbit task show <ID> --fields artifacts`) emit bounded metadata only (path, media type, size, attribution); storage and API DTOs must not require UTF-8, and artifact payload bytes are retrieved on demand through `orbit.task.artifact.get` or the dashboard download route.
 
 ## 5a. Image Artifacts, Presentation, and Retrieval
 
@@ -152,7 +154,7 @@ Metadata listing stays compact and payloads are fetched on demand:
 | attach | MCP | `orbit.task.artifact.put` with `id`, `source_path`, optional `path` |
 | attach | CLI | `orbit task artifact put <ID> <SOURCE> --path <ARTIFACT_PATH>` |
 | list | MCP | `orbit.task.show` with `field: "artifacts"` — `path`, `media_type`, `size`, `created_by` |
-| list | CLI | `orbit artifacts <ID> --task` |
+| list | CLI | `orbit task show <ID> --fields artifacts` |
 | view | MCP | `orbit.task.artifact.get` with `id` and `path` |
 | view | CLI | `orbit task artifact get <ID> <PATH> [--out FILE]` |
 | view | dashboard | task detail → click the artifact row |
@@ -190,7 +192,16 @@ To avoid spending the payload twice, the JSON text mirror is replaced with a one
 
 ### `source_path` is caller-local, and paths do not travel
 
-`source_path` on `orbit.task.artifact.put` is resolved **on the machine that makes the call**, relative to that caller's cwd, then confined to that machine's workspace checkout after symlink resolution. Absolute paths and in-workspace symlinks that escape the checkout are rejected as `invalid_input`. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR` in a managed worker; gitignored, run-scoped in a job worktree). Sources under `/tmp` are outside the workspace and are refused. The path is consumed locally and never crosses the coordination boundary: the spoke broker reads the bytes first and sends a path-free payload, which the hub accepts only over the authenticated `ssh-mcp` connector.
+`source_path` on `orbit.task.artifact.put` is resolved **on the machine that makes the call**, relative to that caller's cwd when not absolute, then confined to that machine's workspace checkout after symlink resolution. A relative path missing under that cwd is never read from the checkout root; when the same relative path names a confined file at the checkout root, the call is refused naming that file's absolute path, so a scratch-folder caller that repeats the checkout-relative prefix gets a clear remedy instead of a bare missing-file read. Absolute paths within the checkout are accepted; paths and in-workspace symlinks that resolve outside it are rejected as `invalid_input`. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR` in a managed worker; gitignored, run-scoped in a job worktree). Sources under `/tmp` are outside the workspace and are refused. The path is consumed locally and never crosses the coordination boundary: the spoke broker reads the bytes first and sends a path-free payload, which the hub accepts only over the authenticated `ssh-mcp` connector.
+
+CLI attachment preserves the supplied source filename, including leading
+or trailing whitespace, before filesystem resolution and bounded reads. MCP
+attachment retains its existing trimming of the source string. Remote
+preparation carries the trusted caller transport (or the nested broker
+bridge's entry point), so owner location does not change source selection.
+Deterministic claim attachments select exact filenames. Artifact names
+are normalized independently on both surfaces; whitespace in a source filename
+does not select a sibling file with a trimmed name on the CLI.
 
 Attachment accepts only task `id`, `source_path`, optional artifact `path`, `model` attribution, and the transport `workspace` / `_meta` wrappers. The local path and artifact path have compatibility aliases. The authenticated spoke payload replaces the source and path fields with `artifacts`; it accepts the same identity and transport fields. Other task update fields, including `title`, `status`, and `plan`, are rejected before the task host is called. Task metadata changes belong on `orbit.task.update`.
 
@@ -239,7 +250,7 @@ Task delete publishes a canonical-bundle tombstone, unregisters the binding from
 
 The bundle remains canonical. The registry maintains generated projections from each task envelope:
 
-- `task_bundle_index`: one row per registered task with workspace, status, priority, `job_run_id`, timestamps, terminal month, and complexity (empty string for unset; SQL `NULL` only until the first rebuild after the column was added).
+- `task_bundle_index`: one row per registered task with workspace, status, priority, `job_run_id`, timestamps, terminal month, complexity (empty string for unset; SQL `NULL` only until the first rebuild after the column was added), and task type (SQL `NULL` only until the defect trend's first rebuild after registry v2 added it).
 - `task_bundle_tags`: normalized tag rows with AND-style filtering semantics.
 - `task_bundle_relations`: directed `(source_task_id, relation_type, target_id)` rows plus an inverse lookup index for task targets.
 

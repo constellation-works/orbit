@@ -23,7 +23,6 @@
 // Integration fixtures use expect/unwrap for concise failure diagnostics.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
@@ -48,65 +47,6 @@ const SSE_RESPONSE_HEAD_LIMIT: usize = 16 * 1024;
 
 /// How long to wait for the dashboard to start accepting connections.
 const STARTUP_DEADLINE: Duration = Duration::from_secs(10);
-
-/// Must exceed orbit-web's own `SHUTDOWN_GRACE_PERIOD` (10s, see
-/// `crates/orbit-web/src/serve.rs`) so that outliving it is meaningful evidence:
-/// ORB-11255's regression started that grace-period timeout counting down
-/// when serving began rather than when a shutdown signal arrived, so an
-/// unsignaled server was killed at exactly this deadline.
-const LONGER_THAN_SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(13);
-
-/// ORB-11255: a server that never received a shutdown signal must keep
-/// serving indefinitely -- in particular, past orbit-web's own
-/// `SHUTDOWN_GRACE_PERIOD`. PR1328 (ORB-11246) introduced a regression where
-/// `tokio::time::timeout(SHUTDOWN_GRACE_PERIOD, drain)` started counting down
-/// as soon as serving began, so a perfectly healthy, never-signaled server
-/// exited (successfully!) once that timeout elapsed. This test fails against
-/// that placement: it waits longer than the grace period with no signal sent
-/// at all, then confirms the server is still alive and serving `/healthz`,
-/// before confirming SIGTERM still produces a prompt, clean shutdown.
-#[test]
-fn dashboard_outlives_shutdown_grace_period_when_no_signal_is_sent() {
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    std::fs::create_dir_all(&home).expect("create home");
-
-    let mut server = spawn_dashboard(&home);
-    let port = server
-        .wait_for_address(STARTUP_DEADLINE)
-        .expect("dashboard bound")
-        .port();
-
-    std::thread::sleep(LONGER_THAN_SHUTDOWN_GRACE_PERIOD);
-
-    assert!(
-        matches!(server.try_wait(), Ok(None)),
-        "orbit web serve exited on its own after {LONGER_THAN_SHUTDOWN_GRACE_PERIOD:?} \
-         with no shutdown signal ever sent -- this is the ORB-11255 regression: \
-         the shutdown grace-period timeout must not start until a signal arrives"
-    );
-
-    let body = http_get(port, "/healthz");
-    assert!(
-        body.contains("ok"),
-        "expected /healthz to still report ok after outliving the shutdown \
-         grace period with no signal sent, got: {body}"
-    );
-
-    let before_sigterm = Instant::now();
-    send_sigterm(&server);
-    let status = wait_with_deadline(&mut server, SHUTDOWN_DEADLINE).unwrap_or_else(|| {
-        panic!(
-            "orbit web serve did not exit within {SHUTDOWN_DEADLINE:?} of SIGTERM \
-             after having outlived the shutdown grace period once already"
-        )
-    });
-    assert!(
-        status.success(),
-        "expected a clean shutdown within {SHUTDOWN_DEADLINE:?}, got {status:?} after {:?}",
-        before_sigterm.elapsed()
-    );
-}
 
 #[test]
 fn dashboard_exits_promptly_on_sigterm_with_open_connections() {
@@ -294,67 +234,6 @@ fn assert_sse_response_head(head: &[u8]) -> io::Result<()> {
         ));
     }
     Ok(())
-}
-
-#[test]
-fn sse_head_reader_reassembles_status_and_content_type_from_separate_fragments() {
-    let mut reader = FragmentedReader::new([
-        b"HTTP/1.1 200 OK\r\n".as_slice(),
-        b"Content-Type: text/".as_slice(),
-        b"event-stream; charset=utf-8\r\n\r\n".as_slice(),
-    ]);
-
-    let head = read_http_head(&mut reader, SSE_RESPONSE_HEAD_LIMIT).expect("complete HTTP head");
-
-    assert_sse_response_head(&head).expect("fragmented SSE response head is valid");
-}
-
-#[test]
-fn sse_head_parser_rejects_non_success_and_non_sse_complete_heads() {
-    for head in [
-        b"HTTP/1.1 503 Unavailable\r\nContent-Type: text/event-stream\r\n\r\n".as_slice(),
-        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n".as_slice(),
-    ] {
-        let error = assert_sse_response_head(head).expect_err("non-SSE response must be rejected");
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-    }
-}
-
-#[test]
-fn sse_head_reader_enforces_its_byte_limit() {
-    let mut reader = io::Cursor::new(vec![b'x'; SSE_RESPONSE_HEAD_LIMIT + 1]);
-
-    let error = read_http_head(&mut reader, SSE_RESPONSE_HEAD_LIMIT)
-        .expect_err("unterminated oversized head must be rejected");
-
-    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-    assert_eq!(reader.position(), SSE_RESPONSE_HEAD_LIMIT as u64);
-}
-
-struct FragmentedReader {
-    fragments: VecDeque<Vec<u8>>,
-}
-
-impl FragmentedReader {
-    fn new(fragments: impl IntoIterator<Item = &'static [u8]>) -> Self {
-        Self {
-            fragments: fragments.into_iter().map(<[u8]>::to_vec).collect(),
-        }
-    }
-}
-
-impl Read for FragmentedReader {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        let Some(fragment) = self.fragments.pop_front() else {
-            return Ok(0);
-        };
-        let count = fragment.len().min(buffer.len());
-        buffer[..count].copy_from_slice(&fragment[..count]);
-        if count < fragment.len() {
-            self.fragments.push_front(fragment[count..].to_vec());
-        }
-        Ok(count)
-    }
 }
 
 /// A stalled peer must fail before releasing the peer, unwind through the

@@ -37,9 +37,12 @@ mod switches;
 #[cfg(test)]
 mod tests;
 
+pub use admission::pull_review_request_refusal;
 pub(crate) use admission::{
-    install_review_admission, local_route_before_landing_conflict, local_route_before_pr_conflict,
-    run_review_admission, upgrade_resume_admission_mismatch,
+    admit_review_request, input_run_review_admission, install_review_admission,
+    local_route_before_landing_conflict, local_route_before_pr_conflict,
+    local_route_run_option_refusal, review_layer_json, run_review_admission,
+    upgrade_resume_admission_mismatch,
 };
 pub(crate) use coverage::exclusions;
 pub(crate) use fulfilment::fulfil_review_evidence;
@@ -67,7 +70,7 @@ pub use switches::{
 pub(crate) const REVIEW_AUDIT: &str = "review.gate";
 
 /// The jobs whose submission captures a review admission: the delivery
-/// family, so a leaf PR pipeline can inherit the `review.before_pr` its
+/// family, so a leaf PR pipeline can inherit the `review.timing` its
 /// coordinator captured, and the follower's pull drain, which declares its
 /// captured value on every pull [ORB-13992].
 ///
@@ -84,9 +87,42 @@ pub(crate) const REVIEW_ADMITTED_JOBS: &[&str] = &[
     "task_local_pipeline",
 ];
 
-/// The job that delivers locally and therefore cannot honour `review.before_pr`
+/// The job that delivers locally and therefore cannot honour `review.timing`
 /// as a final route.
 pub(crate) const LOCAL_ROUTE_JOB: &str = "task_local_pipeline";
+
+/// Longest resume chain followed back to its first run.
+const MAX_RESUME_CHAIN: usize = 64;
+
+/// Whether `run_id` resumes `owner` through same-job `retry_source_run_id`
+/// links, within the bounded resume chain. Review admission and evidence
+/// receipt must agree on the checkpoint owner's authority.
+fn resumes_owner(
+    runtime: &crate::OrbitRuntime,
+    run_id: &str,
+    owner: &str,
+) -> Result<bool, OrbitError> {
+    let Some(mut current) = runtime.get_job_run_backend(run_id)? else {
+        return Ok(false);
+    };
+    let job_id = current.job_id.clone();
+    for _ in 0..MAX_RESUME_CHAIN {
+        let Some(source) = current.retry_source_run_id.clone() else {
+            return Ok(false);
+        };
+        let Some(parent) = runtime.get_job_run_backend(&source)? else {
+            return Ok(false);
+        };
+        if parent.job_id != job_id {
+            return Ok(false);
+        }
+        if parent.run_id == owner {
+            return Ok(true);
+        }
+        current = parent;
+    }
+    Ok(false)
+}
 
 /// One candidate lineage: the task set one delivery run lineage delivers
 /// together against a base. `root_run_id` is the first run of the

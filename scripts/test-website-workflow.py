@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the path filters that select the website validation workflow."""
+"""Exercise PR coverage and push filters for the website validation workflow."""
 
 from pathlib import Path
 import re
@@ -41,9 +41,11 @@ class WebsiteWorkflowTests(unittest.TestCase):
         self.events = document.get("on", document.get(True, {}))
 
     def selects_website_checks(self, event, changed_paths):
-        filters = self.events[event]
+        filters = self.events[event] or {}
         if event == "push" and "main" not in filters.get("branches", []):
             return False
+        if "paths" not in filters:
+            return True
         patterns = filters.get("paths", [])
         return any(path_matches(pattern, path)
                    for pattern in patterns for path in changed_paths)
@@ -57,10 +59,11 @@ class WebsiteWorkflowTests(unittest.TestCase):
                 with self.subTest(event=event, path=path):
                     self.assertTrue(self.selects_website_checks(event, [path]))
 
-    def test_unrelated_root_file_does_not_select_checks(self):
-        for event in ("pull_request", "push"):
-            with self.subTest(event=event):
-                self.assertFalse(self.selects_website_checks(event, ["README.md"]))
+    def test_unrelated_changes_select_no_website_checks(self):
+        for path in ("README.md", "crates/orbit-exec/src/lib.rs"):
+            with self.subTest(path=path):
+                self.assertFalse(self.selects_website_checks("pull_request", [path]))
+                self.assertFalse(self.selects_website_checks("push", [path]))
 
 
 if __name__ == "__main__":

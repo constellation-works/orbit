@@ -14,8 +14,6 @@ use orbit_types::workflow::{JobRunState, JobRunTrigger};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::dispatch_admission::isolated;
-
 /// A Claude and a Codex crew, `pool` as the hard-complexity pool, and
 /// `extra` under `[workflow]`.
 fn config(pool: &str, extra: &str) -> String {
@@ -34,7 +32,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(config: &str) -> Self {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         std::fs::create_dir_all(root.path().join("global/resources/jobs")).unwrap();
         std::fs::create_dir_all(root.path().join("repo/.orbit")).unwrap();
         let fixture = Self { root };
@@ -92,15 +90,36 @@ impl Fixture {
 
     /// Record a Claude `five_hour` reading, observed now.
     fn read_claude(&self, used_percent: f64, exhausted: bool, resets_at: DateTime<Utc>) {
+        self.read(
+            "claude",
+            "five_hour",
+            ProviderLimitSource::Event,
+            Some(used_percent),
+            exhausted,
+            resets_at,
+        );
+    }
+
+    /// Record one usage reading.
+    fn read(
+        &self,
+        provider: &str,
+        window: &str,
+        source: ProviderLimitSource,
+        used_percent: Option<f64>,
+        exhausted: bool,
+        resets_at: DateTime<Utc>,
+    ) {
         self.runtime()
             .record_provider_limit(&ProviderLimitObservation {
-                provider: "claude".into(),
+                provider: provider.into(),
+                account: None,
                 model: None,
-                window: Some("five_hour".into()),
+                window: Some(window.into()),
                 exhausted,
-                source: ProviderLimitSource::Event,
+                source,
                 resets_at: Some(resets_at),
-                used_percent: Some(used_percent),
+                used_percent,
                 window_minutes: Some(300),
                 gating: true,
                 partial: false,
@@ -112,6 +131,16 @@ impl Fixture {
             .unwrap();
     }
 
+    /// Every live reading in `orbit run readiness --json`.
+    fn limits(&self) -> Vec<Value> {
+        self.runtime()
+            .workspace_auto_readiness(&[], None, 50, &[])
+            .unwrap()["provider_limits"]
+            .as_array()
+            .cloned()
+            .unwrap()
+    }
+
     /// The observation a run records when Antigravity fails on its quota
     /// (exit 0 or not): exhausted, no window, from an error, resetting at
     /// `resets_at`.
@@ -119,6 +148,7 @@ impl Fixture {
         self.runtime()
             .record_provider_limit(&ProviderLimitObservation {
                 provider: "antigravity".into(),
+                account: None,
                 model: None,
                 window: None,
                 exhausted: true,
@@ -138,9 +168,18 @@ impl Fixture {
 
     /// `task`'s entry in `orbit run readiness --json`.
     fn readiness(&self, task: &str) -> Value {
+        self.readiness_allowing(task, &[])
+    }
+
+    /// `task`'s readiness entry under an explicit `--allow-crew` list.
+    fn readiness_allowing(&self, task: &str, allowed: &[&str]) -> Value {
+        let allowed = allowed
+            .iter()
+            .map(|crew| (*crew).to_string())
+            .collect::<Vec<_>>();
         let readiness = self
             .runtime()
-            .workspace_auto_readiness(&[], None, 50, &[])
+            .workspace_auto_readiness(&[], None, 50, &allowed)
             .unwrap();
         readiness["tasks"]
             .as_array()
@@ -149,6 +188,37 @@ impl Fixture {
             .find(|entry| entry["task_id"] == task)
             .cloned()
             .unwrap_or_else(|| panic!("{task} missing from readiness: {readiness}"))
+    }
+
+    /// A hard backlog task, tagged `tags`, pinned to `crew` when one is named.
+    ///
+    /// `context` is its only selector (`file:<path>`). The file is written
+    /// into the repo so two tasks in one workspace do not share `dir:.` and
+    /// block each other with a live claim.
+    fn filed_task(&self, crew: Option<&str>, tags: &[&str], context: &str) -> orbit_core::Task {
+        let relative = context.strip_prefix("file:").unwrap_or_else(|| {
+            panic!("purpose-limit fixture wants a file selector, got {context}")
+        });
+        let path = self.root.path().join("repo").join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, "fixture\n").unwrap();
+        self.runtime()
+            .add_task(TaskAddParams {
+                title: "Purpose limit fixture".into(),
+                description: "A baseline-red repair whose provider can hit a limit.".into(),
+                acceptance_criteria: vec!["Delivered.".into()],
+                plan: "1. Deliver it.".into(),
+                complexity: TaskComplexity::Hard,
+                context_files: vec![context.to_string()],
+                task_type: Some(orbit_core::TaskType::Chore),
+                status: Some(TaskStatus::Backlog),
+                tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+                crew: crew.map(str::to_string),
+                ..Default::default()
+            })
+            .unwrap()
     }
 
     /// The run input a replay of a failed delivery of `task`, submitted with
@@ -197,12 +267,7 @@ fn substitute_worker() {
     ]);
 }
 
-#[test]
 fn a_task_waits_on_an_exhausted_provider_until_the_reset() {
-    if !isolated("provider_limit_admission::a_task_waits_on_an_exhausted_provider_until_the_reset")
-    {
-        return;
-    }
     let fx = Fixture::new(&config(r#"["opus"]"#, ""));
     let task = fx.task(None);
     // The store keeps microseconds, so the expected reset must too.
@@ -227,13 +292,7 @@ fn a_task_waits_on_an_exhausted_provider_until_the_reset() {
     assert_eq!(entry["eligible"], true, "{entry}");
 }
 
-#[test]
 fn an_explicit_crew_waits_unless_the_policy_draws_from_its_pool() {
-    if !isolated(
-        "provider_limit_admission::an_explicit_crew_waits_unless_the_policy_draws_from_its_pool",
-    ) {
-        return;
-    }
     substitute_worker();
     let pool = r#"["opus", "sol"]"#;
     let fx = Fixture::new(&config(pool, ""));
@@ -274,13 +333,7 @@ fn an_explicit_crew_waits_unless_the_policy_draws_from_its_pool() {
     );
 }
 
-#[test]
 fn an_override_at_one_hundred_gates_only_an_exhausted_window() {
-    if !isolated(
-        "provider_limit_admission::an_override_at_one_hundred_gates_only_an_exhausted_window",
-    ) {
-        return;
-    }
     let fx = Fixture::new(&config(
         r#"["opus"]"#,
         "provider_limit_overrides = [\"claude:100\"]",
@@ -298,15 +351,62 @@ fn an_override_at_one_hundred_gates_only_an_exhausted_window() {
     assert_eq!(entry["reason"], "provider_limit", "{entry}");
 }
 
+/// [ORB-16371] `codex:off` leaves an exhausted event reading and a
+/// usage-limit failure observation visible, with `gated: false` and
+/// threshold `off`, and the codex-pool task eligible. Removing the entry
+/// gates that same state again.
+fn an_off_override_leaves_an_exhausted_provider_eligible() {
+    let pool = r#"["sol"]"#;
+    let fx = Fixture::new(&config(pool, "provider_limit_overrides = [\"codex:off\"]"));
+    let task = fx.task(None);
+    let reset = (Utc::now() + Duration::hours(2)).trunc_subsecs(6);
+    fx.read(
+        "codex",
+        "primary",
+        ProviderLimitSource::Event,
+        Some(100.0),
+        true,
+        reset,
+    );
+    fx.read(
+        "codex",
+        "secondary",
+        ProviderLimitSource::Error,
+        None,
+        true,
+        reset,
+    );
+
+    let limits = fx.limits();
+    for window in ["primary", "secondary"] {
+        let reading = limits
+            .iter()
+            .find(|reading| reading["provider"] == "codex" && reading["window"] == window)
+            .unwrap_or_else(|| panic!("no {window} reading: {limits:?}"));
+        assert_eq!(reading["gated"], false, "{reading}");
+        assert_eq!(reading["threshold"], "off", "{reading}");
+        assert_eq!(reading["exhausted"], true, "{reading}");
+    }
+    let entry = fx.readiness(&task);
+    assert_eq!(entry["eligible"], true, "{entry}");
+    assert_ne!(entry["reason"], "provider_limit", "{entry}");
+
+    fx.configure(&config(pool, ""));
+    let entry = fx.readiness(&task);
+    assert_eq!(entry["eligible"], false, "{entry}");
+    assert_eq!(entry["reason"], "provider_limit", "{entry}");
+    let limits = fx.limits();
+    let primary = limits
+        .iter()
+        .find(|reading| reading["window"] == "primary")
+        .unwrap();
+    assert_eq!(primary["gated"], true, "{primary}");
+    assert_eq!(primary["threshold"], 90, "{primary}");
+}
+
 /// [ORB-15102] The observation a quota failure records keeps a low-complexity
 /// task off the Antigravity crew until the reset it named.
-#[test]
 fn a_recorded_antigravity_quota_keeps_low_complexity_work_off_its_crew_until_the_reset() {
-    if !isolated(
-        "provider_limit_admission::a_recorded_antigravity_quota_keeps_low_complexity_work_off_its_crew_until_the_reset",
-    ) {
-        return;
-    }
     substitute_worker();
     let low_config = |pool: &str| config(r#"["opus"]"#, &format!("low_complexity_crews = {pool}"));
     let fx = Fixture::new(&low_config(r#"["flash"]"#));
@@ -341,3 +441,257 @@ fn a_recorded_antigravity_quota_keeps_low_complexity_work_off_its_crew_until_the
         "the selection names the limit: {source}"
     );
 }
+
+/// A purpose pool of one Claude crew and two weighted Codex crews, plus a
+/// parked Antigravity member and a disabled crew. `extra` sits under
+/// `[workflow]`. The complexity pool is only `flash`, so a fallback to it
+/// cannot be mistaken for a purpose redraw.
+fn purpose_limit_config(pool: &str, extra: &str) -> String {
+    format!(
+        "[workflow]\ndefault_crew = \"flash\"\nhard_complexity_crews = [\"flash\"]\n{extra}\n\n\
+         [workflow.purpose_crews]\nbaseline_red_repair = {pool}\n\n\
+         [crews.opus]\nprovider = \"claude\"\nmodel = \"opus-model\"\n\n\
+         [crews.sol]\nprovider = \"codex\"\nmodel = \"sol-model\"\n\n\
+         [crews.luna]\nprovider = \"codex\"\nmodel = \"luna-model\"\n\n\
+         [crews.flash]\nprovider = \"antigravity\"\nmodel = \"flash-model\"\n\n\
+         [crews.idle]\nprovider = \"gemini\"\nmodel = \"idle-model\"\nenabled = false\n\n\
+         [review]\nbefore_pr = false\n"
+    )
+}
+
+/// [ORB-16540] A baseline-red repair assigned from its purpose pool stays
+/// eligible when that crew's provider is limited, and admission draws another
+/// enabled positive-weight member of the same pool. Weights and the run
+/// allowlist survive. An explicit task or run crew keeps the documented
+/// policy. The complexity pool is a different provider, so it cannot hide a
+/// failure to retry the purpose pool.
+fn a_purpose_assignment_redraws_within_its_pool_when_its_provider_is_limited() {
+    substitute_worker();
+    let widened = r#"["opus:1", "sol:3", "luna:1", "flash:0", "idle:1"]"#;
+    let fx = Fixture::new(&purpose_limit_config(r#"["opus"]"#, ""));
+    let created = fx.filed_task(None, &["baseline-red-repair"], "file:purpose.txt");
+    assert_eq!(created.crew.as_deref(), Some("opus"), "{created:?}");
+    assert_eq!(
+        created.crew_source.as_deref(),
+        Some("purpose:baseline_red_repair"),
+        "{created:?}"
+    );
+    let task = created.id.clone();
+
+    // The second member joins after creation. Admission reads the pool now,
+    // not the singleton stored on the task.
+    fx.configure(&purpose_limit_config(widened, ""));
+    let reset = (Utc::now() + Duration::hours(2)).trunc_subsecs(6);
+    fx.read(
+        "claude",
+        "five_hour",
+        ProviderLimitSource::Event,
+        Some(100.0),
+        true,
+        reset,
+    );
+
+    let entry = fx.readiness(&task);
+    assert_eq!(entry["eligible"], true, "{entry}");
+    assert_ne!(entry["reason"], "provider_limit", "{entry}");
+
+    let admitted = fx.replay_admission(json!({ "task_ids": [task] }));
+    let crew = admitted["crew"].as_str().unwrap();
+    assert!(
+        crew == "sol" || crew == "luna",
+        "a purpose member, not the complexity pool: {admitted}"
+    );
+    assert_eq!(
+        admitted["crew_selection"]["eligible_pool"],
+        json!([{"name": "luna", "weight": 1}, {"name": "sol", "weight": 3}]),
+        "parked and disabled members stay out, weights stay: {admitted}"
+    );
+    let source = admitted["crew_selection"]["source"].as_str().unwrap();
+    assert!(
+        source.starts_with(
+            "workflow.purpose_crews.baseline_red_repair; provider limit: claude five_hour"
+        ) && source.contains("crews opus skipped"),
+        "{source}"
+    );
+
+    let admitted = fx.replay_admission(json!({ "task_ids": [task], "allowed_crews": ["luna"] }));
+    assert_eq!(admitted["crew"], "luna", "{admitted}");
+    assert_eq!(
+        admitted["crew_selection"]["eligible_pool"],
+        json!([{"name": "luna", "weight": 1}]),
+        "{admitted}"
+    );
+    let blocked = fx.readiness_allowing(&task, &["flash"]);
+    assert_eq!(blocked["reason"], "crew_not_allowed", "{blocked}");
+    assert_eq!(blocked["crew"], "luna, sol", "{blocked}");
+
+    // An explicit crew on a purpose-tagged task is still a pin.
+    let explicit = fx.filed_task(Some("opus"), &["baseline-red-repair"], "file:explicit.txt");
+    assert_eq!(explicit.crew_source.as_deref(), Some("explicit"));
+    let entry = fx.readiness(&explicit.id);
+    assert_eq!(entry["eligible"], false, "{entry}");
+    assert_eq!(entry["reason"], "provider_limit", "{entry}");
+
+    fx.configure(&purpose_limit_config(
+        widened,
+        "provider_limit_explicit_crews = \"pool\"",
+    ));
+    let admitted = fx.replay_admission(json!({ "task_ids": [task] }));
+    assert!(
+        admitted["crew"] == "sol" || admitted["crew"] == "luna",
+        "the explicit-crew policy does not pull a purpose task into the complexity pool: {admitted}"
+    );
+    let entry = fx.readiness(&explicit.id);
+    assert_eq!(entry["eligible"], true, "{entry}");
+    let admitted = fx.replay_admission(json!({ "task_ids": [explicit.id] }));
+    assert_eq!(
+        admitted["crew"], "flash",
+        "pool policy draws the complexity pool, not the purpose pool: {admitted}"
+    );
+    let source = admitted["crew_selection"]["source"].as_str().unwrap();
+    assert!(
+        source.starts_with("workflow.hard_complexity_crews; provider limit:"),
+        "{source}"
+    );
+
+    // An explicit run crew is the operator's call.
+    let admitted = fx.replay_admission(json!({
+        "task_ids": [explicit.id],
+        "crew": "opus",
+        "crew_selection": {"task_id": explicit.id, "crew": "opus", "source": "explicit"},
+    }));
+    assert_eq!(admitted["crew"], "opus", "{admitted}");
+    assert_eq!(admitted["crew_selection"]["source"], "explicit");
+    let limit = admitted["crew_selection"]["provider_limit"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        limit.starts_with("claude five_hour at 100% (limit 90%)"),
+        "{admitted}"
+    );
+
+    // With every purpose member limited, the complexity pool is the fallback.
+    // When that crew is limited too, the task waits with provider_limit.
+    fx.read(
+        "codex",
+        "primary",
+        ProviderLimitSource::Event,
+        Some(100.0),
+        true,
+        reset,
+    );
+    let admitted = fx.replay_admission(json!({ "task_ids": [task] }));
+    assert_eq!(admitted["crew"], "flash", "{admitted}");
+    let source = admitted["crew_selection"]["source"].as_str().unwrap();
+    assert!(
+        source.starts_with("workflow.hard_complexity_crews; provider limit:"),
+        "{source}"
+    );
+    fx.read(
+        "antigravity",
+        "quota",
+        ProviderLimitSource::Event,
+        Some(100.0),
+        true,
+        reset,
+    );
+    let entry = fx.readiness(&task);
+    assert_eq!(entry["eligible"], false, "{entry}");
+    assert_eq!(entry["reason"], "provider_limit", "{entry}");
+}
+
+/// A single live runtime and drain observe workspace and global policy edits.
+fn live_provider_policy_reloads_and_keeps_the_last_good_config() {
+    use orbit_engine::RuntimeHost;
+    use orbit_tools::ToolContext;
+    use orbit_types::workflow::PipelineState;
+
+    let fx = Fixture::new(&config(r#"["opus"]"#, ""));
+    let task = fx.task(Some("opus"));
+    fx.read_claude(93.0, false, Utc::now() + Duration::hours(2));
+    let runtime = fx.runtime();
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        runtime.sqlite_store().unwrap(),
+        runtime.workspace_id().unwrap(),
+    );
+    let run = jobs
+        .insert_job_run(
+            "workspace_auto_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({})),
+            None,
+        )
+        .unwrap();
+    runtime
+        .write_run_state(
+            &run.run_id,
+            &PipelineState::new(run.run_id.clone(), run.job_id, json!({})),
+        )
+        .unwrap();
+    jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .unwrap();
+    let pass = || {
+        runtime
+            .run_deterministic(
+                "classify_workspace_auto_tasks",
+                &json!({}),
+                &json!({"run_id": run.run_id, "max_active_leaf_runs": 1}),
+                ToolContext::default(),
+            )
+            .unwrap()
+    };
+    assert_eq!(pass()["loose_task_ids"], json!([]));
+    let global_config = runtime.global_root().join("config.toml");
+    std::fs::write(
+        &global_config,
+        "[workflow]\nprovider_limit_overrides = [\"claude:100\"]\n",
+    )
+    .unwrap();
+    assert_eq!(pass()["loose_task_ids"], json!([task]));
+
+    // An invalid replacement must neither fail the pass nor erase its policy.
+    let log = fx.root.path().join("reload.log");
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(std::sync::Mutex::new(std::fs::File::create(&log).unwrap()))
+        .finish();
+    tracing::subscriber::with_default(subscriber, || {
+        std::fs::write(&global_config, "[workflow\n").unwrap();
+        assert_eq!(pass()["loose_task_ids"], json!([task]));
+        assert_eq!(pass()["loose_task_ids"], json!([task]));
+    });
+    let warnings = std::fs::read_to_string(log).unwrap();
+    assert_eq!(
+        warnings
+            .matches("could not reload admission configuration; keeping previous policy")
+            .count(),
+        1,
+        "{warnings}"
+    );
+    // A workspace override then takes precedence and restores the gate.
+    std::fs::write(
+        &global_config,
+        "[workflow]\nprovider_limit_overrides = [\"claude:100\"]\n",
+    )
+    .unwrap();
+    fx.configure(&config(
+        r#"["opus"]"#,
+        "provider_limit_overrides = [\"claude:80\"]",
+    ));
+    assert_eq!(pass()["loose_task_ids"], json!([]));
+}
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_task_waits_on_an_exhausted_provider_until_the_reset_scenarios,
+    a_task_waits_on_an_exhausted_provider_until_the_reset,
+    live_provider_policy_reloads_and_keeps_the_last_good_config,
+    an_explicit_crew_waits_unless_the_policy_draws_from_its_pool,
+    an_override_at_one_hundred_gates_only_an_exhausted_window,
+    an_off_override_leaves_an_exhausted_provider_eligible,
+    a_recorded_antigravity_quota_keeps_low_complexity_work_off_its_crew_until_the_reset,
+    a_purpose_assignment_redraws_within_its_pool_when_its_provider_is_limited
+);

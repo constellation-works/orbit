@@ -3,10 +3,10 @@
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{Task, TaskComplexity, TaskStatus};
+use orbit_types::task::{PilotAdmissionVerdict, TaskDecision};
 use serde_json::json;
 
 use super::Workspace;
-use crate::dispatch_admission::isolated;
 
 fn backlog_task(workspace: &Workspace) -> Task {
     task_at_status(workspace, TaskStatus::Backlog)
@@ -86,13 +86,7 @@ fn assess_disposition(
     );
 }
 
-#[test]
 fn host_operational_holds_human_approved_work_until_a_current_operator_decision() {
-    if !isolated(
-        "task_pilot::admission::host_operational_holds_human_approved_work_until_a_current_operator_decision",
-    ) {
-        return;
-    }
     for decision in ["approve-anyway", "clear", "evaluated"] {
         let workspace = Workspace::new();
         let task = task_at_status(&workspace, TaskStatus::Proposed);
@@ -139,8 +133,7 @@ fn host_operational_holds_human_approved_work_until_a_current_operator_decision(
         assert!(!evidence.is_empty());
         let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
         let audit: serde_json::Value =
-            serde_json::from_str(comments.last().unwrap().message.split_once('\n').unwrap().1)
-                .unwrap();
+            serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
         assert_eq!(audit["host_operational_hold"], record["hold"]);
         assert_eq!(audit["assessment"]["evidence"], evidence);
         let refused = orbit_engine::RuntimeHost::admit_task_for_workflow(
@@ -254,13 +247,7 @@ fn host_operational_holds_human_approved_work_until_a_current_operator_decision(
     }
 }
 
-#[test]
 fn host_operational_material_and_newer_dispositions_control_admission() {
-    if !isolated(
-        "task_pilot::admission::host_operational_material_and_newer_dispositions_control_admission",
-    ) {
-        return;
-    }
     for release in ["selectors", "verified_no_diff", "rescope"] {
         let workspace = Workspace::new();
         let task =
@@ -298,13 +285,7 @@ fn host_operational_material_and_newer_dispositions_control_admission() {
     }
 }
 
-#[test]
 fn legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material() {
-    if !isolated(
-        "task_pilot::admission::legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = human_approved_validation_task(&workspace, "The owner-side repair is observable.");
     let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
@@ -335,6 +316,7 @@ fn legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material() 
                     at,
                     by: "task-pilot".into(),
                     message: format!("operation_id=legacy-host-pilot\n{audit}"),
+                    operation_id: None,
                 }],
                 append_history: vec![orbit_types::task::TaskHistoryEntry {
                     at,
@@ -343,6 +325,8 @@ fn legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material() 
                     note: Some("host_operational (operation_id=legacy-host-pilot)".into()),
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
+                    decision: None,
                 }],
                 ..Default::default()
             },
@@ -451,13 +435,7 @@ fn assert_admission(workspace: &Workspace, task: &Task, reason: Option<&str>) {
     }
 }
 
-#[test]
 fn latest_pilot_finding_holds_backlog_until_a_clear_assessment() {
-    if !isolated(
-        "task_pilot::admission::latest_pilot_finding_holds_backlog_until_a_clear_assessment",
-    ) {
-        return;
-    }
     for (field, reason) in [
         ("duplicate_of", "pilot_duplicate"),
         ("already_landed", "pilot_already_landed"),
@@ -487,12 +465,7 @@ fn latest_pilot_finding_holds_backlog_until_a_clear_assessment() {
     }
 }
 
-#[test]
 fn human_pilot_decisions_release_only_the_current_assessment() {
-    if !isolated("task_pilot::admission::human_pilot_decisions_release_only_the_current_assessment")
-    {
-        return;
-    }
     for decision in ["approve-anyway", "clear"] {
         for (field, reason) in [
             ("duplicate_of", "pilot_duplicate"),
@@ -614,13 +587,7 @@ fn human_approved_validation_task_with_tools(
     human_approved_validation_task_with_criteria(workspace, vec![criterion.into()], required_tools)
 }
 
-#[test]
 fn operator_validation_holds_human_approved_work_and_requires_an_evidenced_decision() {
-    if !isolated(
-        "task_pilot::admission::operator_validation_holds_human_approved_work_and_requires_an_evidenced_decision",
-    ) {
-        return;
-    }
     for decision in ["evaluated", "approve-anyway", "clear"] {
         let mut workspace = Workspace::new();
         workspace.runtime = workspace
@@ -672,8 +639,7 @@ fn operator_validation_holds_human_approved_work_and_requires_an_evidenced_decis
         );
         let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
         let audit: serde_json::Value =
-            serde_json::from_str(comments.last().unwrap().message.split_once('\n').unwrap().1)
-                .unwrap();
+            serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
         assert_eq!(
             audit["operator_validation_hold"]["requirements"],
             hold["hold"]["requirements"]
@@ -834,13 +800,7 @@ fn operator_validation_holds_human_approved_work_and_requires_an_evidenced_decis
     }
 }
 
-#[test]
 fn repairable_tool_findings_and_expected_denials_remain_advisory() {
-    if !isolated(
-        "task_pilot::admission::repairable_tool_findings_and_expected_denials_remain_advisory",
-    ) {
-        return;
-    }
     for (criterion, warns) in [
         ("Call `proc.spawn` over MCP to validate the fixture.", true),
         ("Read the fixture through `orbit.task.eligible`.", true),
@@ -862,8 +822,7 @@ fn repairable_tool_findings_and_expected_denials_remain_advisory() {
         assess(&workspace, &task, None);
         let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
         let audit: serde_json::Value =
-            serde_json::from_str(comments.last().unwrap().message.split_once('\n').unwrap().1)
-                .unwrap();
+            serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
         assert_eq!(
             !audit["assessment"]["validation_tool_warnings"]
                 .as_array()
@@ -881,13 +840,7 @@ fn repairable_tool_findings_and_expected_denials_remain_advisory() {
     assert_admission(&workspace, &task, None);
 }
 
-#[test]
 fn changed_criteria_make_the_pilot_validation_assessment_stale() {
-    if !isolated(
-        "task_pilot::admission::changed_criteria_make_the_pilot_validation_assessment_stale",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task =
         human_approved_validation_task(&workspace, "Evaluate through `orbit.pipeline.invoke`.");
@@ -911,13 +864,7 @@ fn changed_criteria_make_the_pilot_validation_assessment_stale() {
     assert_admission(&workspace, &task, Some("operator_validation_handoff"));
 }
 
-#[test]
 fn legacy_operator_warning_is_backfilled_once_at_admission_and_stales_on_edit() {
-    if !isolated(
-        "task_pilot::admission::legacy_operator_warning_is_backfilled_once_at_admission_and_stales_on_edit",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     let task = human_approved_validation_task(&workspace, "Evaluate with `orbit.pipeline.invoke`.");
     let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
@@ -951,11 +898,14 @@ fn legacy_operator_warning_is_backfilled_once_at_admission_and_stales_on_edit() 
                     note: Some("legacy assessment (operation_id=legacy-pilot)".into()),
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
+                    decision: None,
                 }],
                 append_comments: vec![orbit_types::task::TaskComment {
                     at,
                     by: "task-pilot".into(),
                     message: format!("operation_id=legacy-pilot\n{audit}"),
+                    operation_id: None,
                 }],
                 ..Default::default()
             },
@@ -993,13 +943,7 @@ fn legacy_operator_warning_is_backfilled_once_at_admission_and_stales_on_edit() 
     assert_admission(&workspace, &task, None);
 }
 
-#[test]
 fn operator_validation_hold_is_retained_when_warnings_exceed_cap() {
-    if !isolated(
-        "task_pilot::admission::operator_validation_hold_is_retained_when_warnings_exceed_cap",
-    ) {
-        return;
-    }
     let criteria = vec![
         "Validate with `github.run.list` over MCP.".into(),
         "Validate with `github.run.view` over MCP.".into(),
@@ -1013,7 +957,7 @@ fn operator_validation_hold_is_retained_when_warnings_exceed_cap() {
     assess(&workspace, &task, None);
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
     let audit: serde_json::Value =
-        serde_json::from_str(comments.last().unwrap().message.split_once('\n').unwrap().1).unwrap();
+        serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
     let warnings = audit["assessment"]["validation_tool_warnings"]
         .as_array()
         .unwrap();
@@ -1068,11 +1012,14 @@ fn operator_validation_hold_is_retained_when_warnings_exceed_cap() {
                     note: Some("legacy assessment (operation_id=legacy-pilot)".into()),
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
+                    decision: None,
                 }],
                 append_comments: vec![orbit_types::task::TaskComment {
                     at,
                     by: "task-pilot".into(),
                     message: format!("operation_id=legacy-pilot\n{legacy_audit}"),
+                    operation_id: None,
                 }],
                 ..Default::default()
             },
@@ -1104,3 +1051,166 @@ fn operator_validation_hold_is_retained_when_warnings_exceed_cap() {
         "orbit.pipeline.invoke"
     );
 }
+
+/// Append `message` as `by`'s comment at `at`, as a binary that predates
+/// typed decisions recorded it.
+fn append_comment(workspace: &Workspace, task: &Task, by: &str, at: &str, message: &str) {
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(
+            &workspace.runtime.global_root(),
+        ),
+    )
+    .unwrap();
+    orbit_store::compose::workspace_coordinated_backends(
+        registry,
+        workspace.runtime.workspace_id().unwrap(),
+        workspace.runtime.sqlite_store().unwrap(),
+    )
+    .unwrap()
+    .task
+    .history
+    .update_task_history(
+        &task.id,
+        orbit_store::contracts::TaskHistoryUpdateParams {
+            actor: by.into(),
+            append_comments: vec![orbit_types::task::TaskComment {
+                at: at.parse().unwrap(),
+                by: by.into(),
+                message: message.into(),
+                operation_id: None,
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+}
+
+fn an_override_comment_decides_only_when_written_before_the_store_recorded_typed_decisions() {
+    for (decision, verdict) in [
+        ("approve-anyway", PilotAdmissionVerdict::ApproveAnyway),
+        ("clear", PilotAdmissionVerdict::Clear),
+    ] {
+        for (field, reason) in [
+            ("duplicate_of", "pilot_duplicate"),
+            ("already_landed", "pilot_already_landed"),
+        ] {
+            // The first open by this binary records the store's boundary.
+            let first_open = chrono::Utc::now();
+            let workspace = Workspace::new();
+            let task = backlog_task(&workspace);
+            let comment = format!("task-pilot-admission: {decision}\nReviewed the finding.");
+            // Overrides an older binary wrote: before typed decisions shipped,
+            // on the day they shipped before this host upgraded, and on a host
+            // that kept running an older binary until just before this store
+            // was first opened by this one.
+            for legacy_at in [
+                "2026-10-01T00:00:00Z".to_string(),
+                "2026-10-12T09:00:00Z".to_string(),
+                (first_open - chrono::Duration::seconds(1)).to_rfc3339(),
+            ] {
+                assess(&workspace, &task, Some(field));
+                // Comment text written since is open to any author; it decides
+                // nothing, and opening the store again does not move the boundary.
+                let now = chrono::Utc::now().to_rfc3339();
+                append_comment(&workspace, &task, "human:fixture", &now, &comment);
+                super::runtime_at(
+                    &workspace.runtime.global_root(),
+                    &workspace.repo.join(".orbit"),
+                );
+                assert_admission(&workspace, &task, Some(reason));
+                append_comment(&workspace, &task, "human:fixture", &legacy_at, &comment);
+                assert_admission(&workspace, &task, None);
+            }
+
+            // A decision made now is the typed one the trusted path records;
+            // an override needs no explanation below its header.
+            assess(&workspace, &task, Some(field));
+            assert_admission(&workspace, &task, Some(reason));
+            workspace
+                .runtime
+                .update_task_as_human(
+                    &task.id,
+                    TaskUpdateParams {
+                        comment: Some(format!("task-pilot-admission: {decision}")),
+                        ..Default::default()
+                    },
+                    "human:fixture".into(),
+                )
+                .unwrap();
+            assert_admission(&workspace, &task, None);
+            let decided = workspace
+                .runtime
+                .get_task_history(&task.id)
+                .unwrap()
+                .into_iter()
+                .filter_map(|entry| match entry.decision {
+                    Some(TaskDecision::PilotAdmission { verdict, .. }) => Some(verdict),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(decided, vec![verdict]);
+        }
+    }
+}
+
+fn an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_open_repairs_it() {
+    let comment = "task-pilot-admission: approve-anyway\nReviewed the finding.";
+    // Empty, as a crash after the older binary created the file left it, and
+    // cut short, as a failed write did.
+    for content in ["", "2026-10-12T1"] {
+        let workspace = Workspace::new();
+        let global_root = workspace.runtime.global_root();
+        let task = backlog_task(&workspace);
+        let modified = crate::drain_approval::seed_incomplete_boundary(&global_root, content);
+        // A reader counts from the incomplete file's modification time; then
+        // a writable open records that instant, never a later one.
+        for reopen in [false, true] {
+            if reopen {
+                super::runtime_at(&global_root, &workspace.repo.join(".orbit"));
+                assert_eq!(
+                    crate::drain_approval::recorded_boundary(&global_root),
+                    modified,
+                    "{content:?}"
+                );
+            }
+            assess(&workspace, &task, Some("duplicate_of"));
+            let now = chrono::Utc::now().to_rfc3339();
+            append_comment(&workspace, &task, "human:fixture", &now, comment);
+            assert_admission(&workspace, &task, Some("pilot_duplicate"));
+            // Written on the rollout day before the upgrade.
+            append_comment(
+                &workspace,
+                &task,
+                "human:fixture",
+                "2026-10-12T09:00:00Z",
+                comment,
+            );
+            assert_admission(&workspace, &task, None);
+        }
+    }
+}
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    host_operational_holds_human_approved_work_until_a_current_operator_decision_scenarios,
+    host_operational_holds_human_approved_work_until_a_current_operator_decision,
+    host_operational_material_and_newer_dispositions_control_admission,
+    legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material,
+    latest_pilot_finding_holds_backlog_until_a_clear_assessment,
+    human_pilot_decisions_release_only_the_current_assessment
+);
+
+crate::scenario_table!(
+    operator_validation_holds_human_approved_work_and_requires_an_evidenced_decision_scenarios,
+    operator_validation_holds_human_approved_work_and_requires_an_evidenced_decision,
+    repairable_tool_findings_and_expected_denials_remain_advisory,
+    changed_criteria_make_the_pilot_validation_assessment_stale,
+    legacy_operator_warning_is_backfilled_once_at_admission_and_stales_on_edit,
+    operator_validation_hold_is_retained_when_warnings_exceed_cap
+);
+
+crate::scenario_table!(
+    an_override_comment_decides_only_when_written_before_the_store_recorded_typed_decisions_scenarios,
+    an_override_comment_decides_only_when_written_before_the_store_recorded_typed_decisions,
+    an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_open_repairs_it
+);

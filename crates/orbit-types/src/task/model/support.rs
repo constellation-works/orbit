@@ -5,6 +5,10 @@ pub struct TaskComment {
     pub at: DateTime<Utc>,
     pub by: String,
     pub message: String,
+    /// Idempotency key of the task mutation that wrote this comment; read it
+    /// through [`TaskComment::receipt`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -18,6 +22,13 @@ pub struct TaskHistoryEntry {
     pub from_status: Option<TaskStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_status: Option<TaskStatus>,
+    /// Idempotency key of the task mutation that wrote this event; read it
+    /// through [`TaskHistoryEntry::receipt`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    /// The decision this event records, for the automation that acts on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<TaskDecision>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -41,6 +52,20 @@ impl TaskArtifact {
             content: content.into_bytes(),
             created_by: None,
         }
+    }
+
+    /// Refuse oversized inline evidence rather than returning partial bytes.
+    pub fn validate_inline_size(&self, task_id: &str) -> Result<(), TaskError> {
+        let size = self.content.len();
+        if size as u64 > MAX_TASK_ARTIFACT_CONTENT_BYTES {
+            return Err(TaskError::Invalid(format!(
+                "artifact '{}' on task '{task_id}' is {size} bytes, over the \
+                 {MAX_TASK_ARTIFACT_CONTENT_BYTES} byte inline read limit; download it from \
+                 /api/tasks/{task_id}/artifacts/{} instead",
+                self.path, self.path
+            )));
+        }
+        Ok(())
     }
 
     pub fn text_content(&self) -> Option<&str> {
@@ -242,6 +267,9 @@ pub struct ResolvedTaskRelation {
     pub relation_type: TaskRelationType,
     /// Referenced task or artifact ID.
     pub target: OrbitId,
+    /// Nature and escape of a classified `regression_from` link.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regression: Option<RegressionClassification>,
     /// Local verification limitation, present only for a foreign task prefix.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verification: Option<String>,
@@ -323,6 +351,23 @@ pub struct ExternalRef {
 }
 
 pub const GITHUB_PR_EXTERNAL_REF_SYSTEM: &str = "github-pr";
+
+/// Whether a pull request is shaped like one Orbit published for `task_id`:
+/// its head branch is `orbit/<TASK-ID>-…` and its body names the task as a
+/// whole token, so `ORB-1` never matches `ORB-10`'s pull requests. Who
+/// authored it is the caller's to check.
+pub fn names_task_delivery_pull_request(head_branch: &str, body: &str, task_id: &str) -> bool {
+    let branch_prefix = format!("orbit/{task_id}-");
+    if task_id.is_empty() || !head_branch.starts_with(&branch_prefix) {
+        return false;
+    }
+    let is_id_char = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+    body.match_indices(task_id).any(|(start, _)| {
+        let before = body[..start].chars().next_back();
+        let after = body[start + task_id.len()..].chars().next();
+        !before.is_some_and(is_id_char) && !after.is_some_and(is_id_char)
+    })
+}
 
 impl ExternalRef {
     pub fn try_new(system: String, id: String, url: Option<String>) -> Result<Self, TaskError> {

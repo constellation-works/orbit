@@ -30,6 +30,8 @@ use super::git_ops::{
     git_commit_with_identity, stage_paths, staged_changed_files,
 };
 use super::message::{batch_commit_message, finalize_commit_message, task_commit_message};
+use super::published_replay::final_recovery_published_candidate;
+use super::recovery::{RecoveryCommit, RecoveryCommitRequest, commit_recovery_repair};
 use super::scope::{NewPathPolicy, attribute_candidate_paths, task_candidate_paths};
 use super::summary::ensure_durable_execution_summary;
 use super::tagged_no_diff;
@@ -288,41 +290,48 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let (base_sha, head_moved) = match validate_pinned_head(&workspace_path, input)? {
-        PinnedHead::Matched(base_sha) => (Some(base_sha), false),
-        PinnedHead::Unpinned => (None, false),
-        PinnedHead::Changed { base_sha, head_sha } => {
-            let preserved_failure_head = commit_head_matches_failure_handoff(
-                host,
-                input,
-                &task,
-                batch_id,
-                &workspace_path,
-                &base_sha,
-                &head_sha,
-            )?;
-            let tagged_descendant =
-                no_diff_expected && head_descends_from_pin(&workspace_path, &base_sha, &head_sha)?;
-            if !preserved_failure_head
-                && !allow_moved_head
-                && !tagged_descendant
-                && !head_matches_final_recovery(
+    let published_replay =
+        final_recovery_published_candidate(host, input, batch_id, &task.id, &workspace_path)?;
+    let (base_sha, head_moved) = if let Some((pin, _)) = &published_replay {
+        (Some(pin.clone()), true)
+    } else {
+        match validate_pinned_head(&workspace_path, input)? {
+            PinnedHead::Matched(base_sha) => (Some(base_sha), false),
+            PinnedHead::Unpinned => (None, false),
+            PinnedHead::Changed { base_sha, head_sha } => {
+                let preserved_failure_head = commit_head_matches_failure_handoff(
                     host,
+                    input,
+                    &task,
                     batch_id,
-                    &task.id,
                     &workspace_path,
                     &base_sha,
                     &head_sha,
-                )?
-            {
-                return Err(changed_head_error(
-                    &task.id,
-                    &workspace_path,
-                    &base_sha,
-                    &head_sha,
-                ));
+                )?;
+                let tagged_descendant = no_diff_expected
+                    && head_descends_from_pin(&workspace_path, &base_sha, &head_sha)?;
+                if !preserved_failure_head
+                    && !allow_moved_head
+                    && !tagged_descendant
+                    && !head_matches_final_recovery(
+                        host,
+                        input,
+                        batch_id,
+                        &task.id,
+                        &workspace_path,
+                        &base_sha,
+                        &head_sha,
+                    )?
+                {
+                    return Err(changed_head_error(
+                        &task.id,
+                        &workspace_path,
+                        &base_sha,
+                        &head_sha,
+                    ));
+                }
+                (Some(base_sha), true)
             }
-            (Some(base_sha), true)
         }
     };
 
@@ -341,6 +350,56 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
             candidate_paths.len(),
             head_moved,
         ));
+    }
+    if claimed {
+        super::super::claim::import_implementation_evidence(
+            host,
+            &task.id,
+            &workspace_path,
+            input,
+        )?;
+    }
+    if published_replay.is_some() {
+        // Metadata-only replay preserves the host candidate without staging
+        // or creating a commit. File edits use the existing host repair guard;
+        // the replay reruns all candidate validation and review afterward.
+        let repaired = commit_recovery_repair(&RecoveryCommitRequest {
+            workspace_path: &workspace_path,
+            run_id: batch_id,
+            failed_step_id: "commit",
+            recovery_activity: "final_recovery",
+            task_ids: std::slice::from_ref(&task.id),
+            recovery_model: host.resolved_crew_model(batch_id)?,
+            repair_paths: None,
+            no_diff_route: no_diff_expected,
+            reviewed_heads: &[],
+        })
+        .map_err(|error| OrbitError::Execution(error.to_string()))?;
+        let (decision, committed, commit_sha) = match repaired {
+            RecoveryCommit::Clean => (
+                "already_committed",
+                false,
+                git_output(&workspace_path, &["rev-parse", "HEAD"])?,
+            ),
+            RecoveryCommit::Committed { commit_sha, .. } => ("performed", true, commit_sha),
+        };
+        attribute_candidate_paths(
+            host,
+            batch_id,
+            ContextWideningStep::Implement,
+            "git_commit",
+            &candidate_paths.iter().cloned().collect(),
+            &workspace_path,
+            std::slice::from_ref(&task),
+            true,
+        );
+        return Ok(json!({
+            "phase": "commit", "decision": decision, "committed": committed,
+            "commit_sha": commit_sha, "job_run_id": batch_id, "task_id": task.id,
+            "base_sha": base_sha, "skipped_no_diff_expected": false,
+            "final_recovery_replay": true,
+            "candidate_branch": git_output(&workspace_path, &["symbolic-ref", "--quiet", "--short", "HEAD"])?,
+        }));
     }
     stage_paths(&workspace_path, &candidate_paths)?;
 
@@ -373,14 +432,6 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         if input.get("verify_already_landed").and_then(Value::as_bool) == Some(true)
             && let Some(base_sha) = base_sha.as_deref()
         {
-            if claimed {
-                super::super::claim::import_implementation_evidence(
-                    host,
-                    &task.id,
-                    &workspace_path,
-                    input,
-                )?;
-            }
             return verify_clean_tree(host, &task, &workspace_path, run_id, base_sha).map_err(
                 |error| match empty_stage_error(&task.id, &workspace_path, Some(base_sha)) {
                     Ok(OrbitError::Execution(observed)) => {

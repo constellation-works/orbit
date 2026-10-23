@@ -1,15 +1,15 @@
 ---
 title: Finding Verification — Design
 owner: claude
-last_updated: 2026-10-11
-last_validated: 2026-10-11
+last_updated: 2026-10-17
+last_validated: 2026-10-19
 status: Accepted
 feature: finding-verification
 doc_role: design
 type: design
 summary: How finding_verification_pipeline selects review findings, draws verifier crews from the complexity pools, validates and records verdicts, escalates doubtful ones, and gates promotion and drain admission.
 tags: [finding-verification, review, automation, admission]
-paths: ["crates/orbit-core/src/application/task/finding_verification.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/finding_verification/**", "crates/orbit-core/assets/jobs/finding_verification_pipeline.yaml"]
+paths: ["crates/orbit-core/src/application/task/finding_verification.rs", "crates/orbit-core/src/application/task/finding_verification_steps/**", "crates/orbit-core/assets/jobs/finding_verification_pipeline.yaml"]
 related_features: [automation-triggers, review-gate, distributed-drain, routines]
 related_artifacts: [ORB-15662]
 ---
@@ -50,7 +50,11 @@ verification there until its latest verification record is CONFIRMED and its
 2. **`verify_finding`** (agent, `fsProfile: reviewer`). One worker runs per
    partition, with that partition's crew, at `inspection_revision`. It
    returns one verifier report per task. It has no task-update, lifecycle,
-   dispatch or repository-write grant.
+   dispatch or repository-write grant. Its explicit `tool_disallow_list`
+   withholds mutation and dispatch tools, and the reviewer filesystem profile
+   keeps repository inspection read-only. Shipped activities declare their
+   tool policy explicitly; an empty policy in a custom activity still warns
+   when loaded.
 3. **`apply_finding_verification`** (deterministic). It validates each report
    (§3), then either escalates it (§4) or records it (§5). A second
    `verify_finding` fan-out and a second apply run only when there are
@@ -80,9 +84,7 @@ The shipped job forwards the position-aligned `fan_in.errors` array to apply
 as `partition_errors`: a failed verifier leaves `verifier_failed`, with its
 partition, crew and dispatch diagnostic. Failed workers retain null output
 slots, so one failed partition cannot shift or discard successful siblings'
-verdicts. Gemini and Grok currently fail native pinned-source inspection
-before launch with `inspection_tools_unavailable`; Codex and Claude provide
-that inspection surface.
+verdicts.
 
 The recorded **`FindingVerification`** (`schema_version: 1`) holds:
 
@@ -101,18 +103,30 @@ The recorded **`FindingVerification`** (`schema_version: 1`) holds:
 There is no verification-specific crew setting. The verifier of a task is
 drawn from `workflow.<tier>_complexity_crews`. The tier is the task's
 complexity, and an unassessed task reads as `medium`. Only pool members with
-a positive weight are drawn. When the pool offers another crew, a crew named
-by the task's filer (`created_by`, matched by crew name, model, provider or
-agent family) is passed over. The draw is seeded by task and tier, so a
-retried preparation draws the same crew. When the tier's pool has no enabled
-member, the default crew verifies.
+a positive weight are drawn.
+
+`verify_finding` inspects the pinned source with the provider's native
+file-read and command tools, which only Codex and Claude have
+(`Provider::has_native_inspection`). The draw therefore keeps only enabled
+members of those providers; Gemini, Grok and other crews are never drawn as
+verifiers [ORB-15792]. A tier whose pool has no such member passes to the
+next tier up (low → medium → hard → xhard), and the assignment records the
+tier actually drawn from. When no tier from the task's upward has one, the
+default crew verifies if it can inspect. Otherwise preparation fails with
+`inspection_crew_unavailable` before any verifier is dispatched.
+
+When the pool offers another crew, a crew named by the task's filer
+(`created_by`, matched by crew name, model, provider or agent family) is
+passed over. The draw is seeded by task and tier, so a retried preparation
+draws the same crew.
 
 In the initial round, a REJECTED verdict from the `low` tier, or a verdict of
 `low` confidence from any tier, is not recorded. The task is judged again by
-a crew from the next tier's pool (low → medium → hard → xhard). That draw
-passes over every crew that already judged the task, and the filer's. The
-second verdict decides. With no next-tier pool member, or from `xhard`, the
-first verdict stands. There is one escalation round. The escalation checkpoint
+a crew from the next tier's pool (low → medium → hard → xhard), under the same
+inspection rule: a tier with no inspection-capable member passes upward. That
+draw passes over every crew that already judged the task, and the filer's.
+The second verdict decides. With no inspection-capable member from the next
+tier upward, or from `xhard`, the first verdict stands. There is one escalation round. The escalation checkpoint
 retains the initial finding fingerprint, even when its task re-read sees edited
 material; the final write checks that original fingerprint.
 
@@ -159,9 +173,9 @@ seeded `finding_verification.yaml` routine. It also mentions a prior REJECTED
 verdict.
 These surfaces enforce it:
 
-- `orbit task approve`, an update to `backlog` or `in_progress` from
-  `proposed` or `someday`, and `orbit task start` from those statuses. All
-  of them refuse with the hold detail. The update check applies the update's
+- `orbit task update <id> --approve` (`proposed` → `backlog`), and an update
+  to `in_progress` from `proposed` or `someday` (the start path). Both refuse
+  with the hold detail. The update check applies the update's
   own `tags` and `type` first, so retyping or retagging in the same update
   is honoured.
 - Workflow entry and pull admission, through `pilot_admission_hold_in`. The

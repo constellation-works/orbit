@@ -77,7 +77,8 @@ one layer: what it guarantees and what it refuses. For commands, see the
 - **Isolated, sandboxed runs.** Each run gets its own git worktree and runs its agent CLI under `sandbox-exec` on macOS or Bubblewrap on Linux. On Linux, workers use memory-bounded cgroups when a systemd user manager is available; see [worker containment](../reference/config/#settable-keys).
 - **Conflict-aware scheduling.** Runs reserve their task's files as locks before starting, so overlapping work waits in line instead of producing merge conflicts later.
 - **Gated pipeline.** Each run goes plan → execute → review, with repair budgets and failure recovery. Dependencies gate admission, so you declare the order once and the queue enforces it.
-- **Nine agent CLIs, routed by crews.** Claude Code, Codex, Cursor, Copilot, Grok, Gemini, Antigravity, OpenCode, and Pi. Crews pin a provider, model, and effort level. Complexity-tiered, weighted crew pools spread the work across them ([how routing works](../reference/config/#crews)).
+- **Ten agent CLIs, routed by crews.** Claude Code, Codex, Cursor, Copilot, Grok, Gemini, Antigravity, OpenCode, Pi, and Muse Code (macOS only). Crews pin a provider, model, and supported effort level. Complexity-tiered, weighted crew pools spread the work across them ([how routing works](../reference/config/#crews)).
+- **Read-only exploration and operator steering.** Opt-in exploration lets implementing and review-repair agents ask an explorer crew bounded code-reading questions. Opt-in mid-run steering delivers new operator comments and holds promotion until the run consumes them ([agent execution](./agents/)).
 
 ### Run unattended
 
@@ -89,7 +90,7 @@ one layer: what it guarantees and what it refuses. For commands, see the
 
 ### Observe and extend
 
-- **Dashboard** (`orbit web serve`). Shows the task backlog, live audit feed, per-agent scoreboard, jobs, frictions, and effective config, with inline editing.
+- **Dashboard** (`orbit web serve`). Shows the task backlog, live audit feed, managed-execution cost, jobs, frictions, and effective config, with inline editing. Agent scorecards link each role's scores to their evidence; host resource analytics compare measured CPU and memory with admission forecasts.
 - **Plugins** (`orbit plugin`). A plugin can add its own tools, jobs, routines, auto-tasks, skills, and CLI commands. Plugins run sandboxed under explicit permission grants, and `orbit plugin scaffold` generates a starter.
 - **Agent skills.** Three skills ship with Orbit: `orbit` (everyday task work), `orbit-orchestrate` (backlog and dispatch), and `orbit-setup` (machine and repo configuration). `orbit init` links them into your agents.
 

@@ -19,15 +19,9 @@ pub const PLUGIN_CALLBACK_FD: i32 = 3;
 /// record is no credential at all.
 pub const ORBIT_PLUGIN_CALLBACK_FD_ENV: &str = "ORBIT_PLUGIN_CALLBACK_FD";
 
-/// Host-issued callback token, stamped into the backend child and inherited
-/// by its descendants.
-///
-/// Retired: identity is [`PLUGIN_CALLBACK_FD`]. This variable is read only
-/// while `plugin.legacy_callback_identity` is on, and is removed with the rest
-/// of that path in the next release. A value that matches no session — or that
-/// names a session belonging to another process — is a missing credential and
-/// is refused. Dropping it inside the sandbox is a refusal too, never a way
-/// out of the plugin's allowlist.
+/// Backend marker, accepted only as evidence to refuse a caller without the
+/// host-issued descriptor. Older hosts stamped their retired token here;
+/// current hosts stamp a non-secret marker that never authorizes a callback.
 pub const ORBIT_PLUGIN_CALLBACK_ENV: &str = "ORBIT_PLUGIN_CALLBACK";
 
 pub(super) const SESSION_DIR: &str = "state/plugin-callbacks";
@@ -56,7 +50,6 @@ pub(super) const SESSION_SCHEMA_VERSION: u32 = 3;
 #[derive(Debug)]
 pub struct PluginCallbackSession {
     path: PathBuf,
-    token: String,
     record: SessionRecord,
     /// The host's own read handle on the record, opened at mint time and
     /// handed to the child as [`PLUGIN_CALLBACK_FD`]. Held for the session's
@@ -145,7 +138,6 @@ impl PluginCallbackSession {
                     let credential = open_credential(&path)?;
                     return Ok(Self {
                         path,
-                        token,
                         record,
                         credential,
                     });
@@ -164,16 +156,15 @@ impl PluginCallbackSession {
         ))
     }
 
-    /// Stamp the callback variables into the cleared-and-set child
-    /// environment.
-    ///
-    /// Neither is the gate. `ORBIT_PLUGIN_CALLBACK_FD` tells a backend which
-    /// descriptor carries its credential; `ORBIT_PLUGIN_CALLBACK` is the
-    /// retired token, still stamped so an operator who turns
-    /// `plugin.legacy_callback_identity` back on for a release does not have
-    /// to respawn every live backend to make it work.
+    /// Name the inherited descriptor and mark the child for refusal if it
+    /// drops that descriptor. The marker carries no authority and preserves
+    /// refusal after a detached unsandboxed child loses its ancestry match.
     pub fn stamp_env(&self, env: &mut Vec<(String, String)>) {
-        upsert_env(env, ORBIT_PLUGIN_CALLBACK_ENV, self.token.clone());
+        upsert_env(
+            env,
+            ORBIT_PLUGIN_CALLBACK_ENV,
+            "descriptor-required".to_string(),
+        );
         upsert_env(
             env,
             ORBIT_PLUGIN_CALLBACK_FD_ENV,
@@ -192,11 +183,6 @@ impl PluginCallbackSession {
         self.credential.as_raw_fd()
     }
 
-    /// The token stamped into the child. Tests use this to present or clear it.
-    pub fn token(&self) -> &str {
-        &self.token
-    }
-
     /// The ceiling this session was minted with, as it was recorded.
     pub fn effective_tools(&self) -> &[String] {
         &self.record.effective_tools
@@ -209,8 +195,8 @@ impl PluginCallbackSession {
         &self.path
     }
 
-    /// Record the spawned child's pid and start time so ancestry can find it
-    /// after the child unsets its environment.
+    /// Record the spawned child's pid and start time for stale-session cleanup
+    /// and refusal of descendants that drop the callback descriptor.
     pub fn bind_pid(&mut self, pid: u32) -> Result<(), OrbitError> {
         let key = process_start_key(pid).ok_or_else(|| {
             OrbitError::Execution(format!(

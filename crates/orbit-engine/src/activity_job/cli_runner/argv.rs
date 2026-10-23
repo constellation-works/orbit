@@ -14,10 +14,9 @@ use super::spawn::linux_bwrap_mask;
 
 /// Build the argv we audit-log. When wrapped, the parent process the kernel
 /// sees is the trusted `sandbox-exec`, so we prepend
-/// `<trusted sandbox-exec> -f <profile_path>` to
-/// the child program. The profile path is the literal `<profile.sb>` because
-/// the real path is a tempfile created at spawn time and only meaningful to
-/// the kernel — the placeholder keeps the audit record stable across runs.
+/// `<trusted sandbox-exec> -p <profile>` to the child program. The compiled
+/// profile is passed inline at spawn time; a placeholder keeps its SBPL text
+/// out of the audit record.
 fn audit_argv_for_dispatch(
     program: &str,
     args: &[String],
@@ -27,8 +26,8 @@ fn audit_argv_for_dispatch(
         Some(sb) if sb.kind == ExecutorSandboxKind::MacosSandboxExec => {
             let mut out = Vec::with_capacity(args.len() + 4);
             out.push(sandbox_exec_program_for_audit().to_string());
-            out.push("-f".to_string());
-            out.push("<profile.sb>".to_string());
+            out.push("-p".to_string());
+            out.push("<profile>".to_string());
             out.push(program.to_string());
             out.extend(args.iter().cloned());
             out
@@ -115,10 +114,39 @@ pub(super) fn apply_trusted_host_provider_sandbox(
     }
 }
 
+/// Select an explorer's enforced read-only inner sandbox when Orbit's
+/// executor sandbox does not wrap the provider [ORB-16814].
+///
+/// Codex is the only provider whose inner sandbox is a dynamic `--sandbox`
+/// mode. Returns whether that mode was applied. A provider that returns
+/// false has no enforced read-only mode, so dispatch must refuse the
+/// explorer before spawn: its activity profile and instruction are not an
+/// OS boundary.
+pub(super) fn apply_read_only_provider_sandbox(
+    provider: &str,
+    provider_config: &mut HashMap<String, String>,
+) -> bool {
+    if provider == "codex" {
+        provider_config.insert(
+            "sandbox".to_string(),
+            orbit_types::workflow::activity_job::EXPLORE_PROVIDER_SANDBOX_MODE.to_string(),
+        );
+        true
+    } else {
+        false
+    }
+}
+
 /// Pin codex's `--sandbox` to `danger-full-access`, drop gemini's `-s` /
-/// `--sandbox` toggle, and drop grok's `--sandbox <profile>` value so the
-/// inner CLI sandbox does not double-encode the outer orbit-exec sandbox.
-/// Claude has no native sandbox flag — nothing to neutralize.
+/// `--sandbox` toggle, drop grok's `--sandbox <profile>` value, and turn off
+/// Muse's default-on sandbox so the inner CLI sandbox does not double-encode
+/// the outer orbit-exec sandbox. Claude has no native sandbox flag — nothing
+/// to neutralize.
+///
+/// Muse Code enables its own sandbox by default (network `proxy-only`). Under
+/// Orbit's `sandbox-exec` profile a second Seatbelt profile cannot be applied
+/// from inside the first, and Orbit's profile is the filesystem boundary on
+/// both platforms, so `--disable-sandbox` is appended. [ORB-16577]
 pub(super) fn neutralize_inner_sandbox(
     provider: &str,
     provider_config: &mut HashMap<String, String>,
@@ -133,6 +161,9 @@ pub(super) fn neutralize_inner_sandbox(
         }
         "grok" => {
             *static_args = filter_grok_inner_sandbox_args(static_args);
+        }
+        "muse" if !static_args.iter().any(|arg| arg == "--disable-sandbox") => {
+            static_args.push("--disable-sandbox".to_string());
         }
         _ => {}
     }

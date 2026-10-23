@@ -20,19 +20,20 @@ fn spawn_with_timeout_kills_grandchild_holding_output_pipes() {
     let args = sh_args(&script);
 
     let started = std::time::Instant::now();
-    let (stdout, stderr, exit_code, duration, timed_out) = spawn_with_timeout(spawn_test_request(
-        "/bin/sh",
-        &args,
-        None,
-        Duration::from_millis(150),
-        SpawnTraceContext {
-            provider: "codex",
-            job_run_id: "job-timeout-tree",
-            task_id: Some("TTREE"),
-            cwd: None,
-        },
-    ))
-    .expect("spawn succeeds");
+    let (stdout, stderr, exit_code, duration, timed_out, _) =
+        spawn_with_timeout(spawn_test_request(
+            "/bin/sh",
+            &args,
+            None,
+            Duration::from_millis(150),
+            SpawnTraceContext {
+                provider: "codex",
+                job_run_id: "job-timeout-tree",
+                task_id: Some("TTREE"),
+                cwd: None,
+            },
+        ))
+        .expect("spawn succeeds");
 
     assert!(timed_out);
     assert_eq!(exit_code, None);
@@ -61,7 +62,7 @@ fn a_running_childs_output_is_sampled_before_it_exits() {
             .borrow_mut()
             .push((progress.observed_bytes, progress.recent.clone()));
     };
-    let (stdout, _stderr, exit_code, _duration, timed_out) =
+    let (stdout, _stderr, exit_code, _duration, timed_out, _) =
         spawn_with_timeout(SpawnWithTimeoutRequest {
             on_progress: Some(ProgressReporter {
                 interval: Duration::from_millis(100),

@@ -4,6 +4,7 @@ mod actor;
 mod agent_family;
 mod agent_pair;
 mod artifact_ids;
+mod crew_env;
 mod digest;
 mod error;
 mod id;
@@ -11,7 +12,7 @@ mod machine;
 pub use error::{IdentityError, ProviderModelError};
 
 pub use actor::{
-    ActorIdentity, agent_from_model, normalize_attribution_label,
+    ActorIdentity, agent_from_model, is_automation_actor, normalize_attribution_label,
     normalize_optional_attribution_label, provider_for_agent_family, provider_from_model,
 };
 pub use agent_family::AgentFamily;
@@ -21,6 +22,7 @@ pub use agent_pair::{
     require_canonical_agent_family, resolve_crew, validate_antigravity_model,
 };
 pub use artifact_ids::{is_valid_adr_id, is_valid_friction_id, validate_friction_id};
+pub use crew_env::CrewEnvVar;
 pub use digest::lower_hex;
 pub use id::OrbitId;
 pub use machine::{

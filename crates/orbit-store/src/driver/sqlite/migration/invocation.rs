@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 use super::introspect::{add_column_if_missing, table_exists, table_has_column};
@@ -9,7 +10,7 @@ use super::introspect::{add_column_if_missing, table_exists, table_has_column};
 ///
 /// The 5m/1h cache split (`cache_create_1h_tokens`) and the token-derived
 /// cost column (`provider_cost_usd`) were added to
-/// [`ensure_invocation_schema`], which only ever runs as part of the v1
+/// the pre-ledger invocation-schema step, which ran as part of the v1
 /// `baseline` migration. Every database created before those columns landed
 /// is already at v1 or newer, so `run_migrations` skips baseline and the
 /// `ALTER`s never reach it — the insert then binds columns the table lacks
@@ -33,10 +34,10 @@ pub(super) fn apply_invocation_telemetry_columns(conn: &Connection) -> Result<()
         "cache_create_1h_tokens",
         "INTEGER NOT NULL DEFAULT 0",
     )?;
-    ensure_invocation_schema_v1(conn)
+    ensure_invocation_schema_v10(conn)
 }
 
-pub(super) fn ensure_invocation_schema_v1(conn: &Connection) -> Result<(), OrbitError> {
+fn ensure_invocation_schema_v10(conn: &Connection) -> Result<(), OrbitError> {
     add_column_if_missing(conn, "invocations", "slot", "TEXT")?;
     conn.execute_batch(
         r#"
@@ -56,13 +57,13 @@ pub(super) fn ensure_invocation_schema_v1(conn: &Connection) -> Result<(), Orbit
             ON tool_calls(tool_name);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v20 `invocations_ts_index`: cover the accounting window filters and the
 /// newest-first invocation listing on `invocations(ts, id)`.
 ///
-/// Guarded like v19: `ensure_invocation_schema_v1` declares the same index
+/// Guarded like v19: the frozen v1 and v10 invocation steps declare the same index
 /// for a database whose `invocations` table is created or upgraded at open.
 pub(super) fn apply_invocations_ts_index(conn: &Connection) -> Result<(), OrbitError> {
     if !table_has_column(conn, "invocations", "ts")? {
@@ -74,7 +75,7 @@ pub(super) fn apply_invocations_ts_index(conn: &Connection) -> Result<(), OrbitE
             ON invocations(ts DESC, id DESC);
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v36 `invocation_workspace_scope`: record the workspace each invocation
@@ -113,7 +114,7 @@ pub(super) fn apply_invocation_workspace_scope(conn: &Connection) -> Result<(), 
                 WHERE workspace_id IS NULL;
             "#
         ))
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
 
     conn.execute_batch(
@@ -122,7 +123,7 @@ pub(super) fn apply_invocation_workspace_scope(conn: &Connection) -> Result<(), 
             ON invocations(workspace_id, job_run_id);
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v40 `provider_limit_observations` [ORB-14695]: the host's provider usage
@@ -150,7 +151,7 @@ pub(super) fn apply_provider_limit_observations(conn: &Connection) -> Result<(),
             );
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// v41 `provider_limit_readings` [ORB-14696]: a provider's own reading of a
@@ -172,6 +173,30 @@ pub(super) fn apply_provider_limit_readings(conn: &Connection) -> Result<(), Orb
     Ok(())
 }
 
+/// v52 `provider_crew_outages` [ORB-16379]: the crews this host could not
+/// run because their provider was unavailable here (an expired login, say),
+/// beside the usage limits in the host-global database, since an outage
+/// belongs to the provider login on this host too.
+///
+/// One row per provider and crew; the empty string stands for a provider the
+/// failure did not name. Purely additive: an older binary never reads the
+/// table.
+pub(super) fn apply_provider_crew_outages(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS provider_crew_outages (
+                provider TEXT NOT NULL DEFAULT '',
+                crew TEXT NOT NULL,
+                until_at TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                PRIMARY KEY (provider, crew)
+            );
+        "#,
+    )
+    .map_err(sqlite_store_error)
+}
+
 /// v42 `invocation_provider` [ORB-14699]: the canonical provider an
 /// invocation ran on, so a provider budget can read its spend from the
 /// ledger. `agent` is the model's family, which is not the provider for
@@ -182,4 +207,46 @@ pub(super) fn apply_provider_limit_readings(conn: &Connection) -> Result<(), Orb
 /// migration, by its `agent`.
 pub(super) fn apply_invocation_provider(conn: &Connection) -> Result<(), OrbitError> {
     add_column_if_missing(conn, "invocations", "provider", "TEXT")
+}
+
+/// v56 `provider_crew_accounts` [ORB-17288]: a crew that sets `env` runs on
+/// its own provider account, so its usage readings and its spend are kept
+/// apart from its provider's default login's.
+///
+/// `provider_account_limit_observations` holds a crew account's readings,
+/// one row per provider, account, model scope and window, with the columns of
+/// `provider_limit_observations`, whose rows stay the default login's.
+/// `invocations.account` names the crew account an invocation ran under;
+/// `NULL` is the default login, as is every row recorded before it.
+///
+/// Additive: a new table an older binary never reads, and a nullable column
+/// an older binary keeps inserting without, so its rows read as the default
+/// login's.
+pub(super) fn apply_provider_crew_accounts(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS provider_account_limit_observations (
+                provider TEXT NOT NULL,
+                account TEXT NOT NULL,
+                model_scope TEXT NOT NULL DEFAULT '',
+                window_label TEXT NOT NULL DEFAULT '',
+                exhausted INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                resets_at TEXT,
+                observed_at TEXT NOT NULL,
+                run_id TEXT,
+                crew TEXT,
+                detail TEXT NOT NULL DEFAULT '',
+                used_percent REAL,
+                window_minutes INTEGER,
+                gating INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (provider, account, model_scope, window_label)
+            );
+        "#,
+    )
+    .map_err(sqlite_store_error)?;
+    if table_exists(conn, "invocations")? {
+        add_column_if_missing(conn, "invocations", "account", "TEXT")?;
+    }
+    Ok(())
 }

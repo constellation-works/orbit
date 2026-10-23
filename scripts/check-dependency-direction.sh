@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ! command -v rg >/dev/null 2>&1; then
+  echo "check-dependency-direction: ripgrep (rg) is required; install it before running" >&2
+  exit 1
+fi
+
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 
 fail=0
@@ -38,7 +43,8 @@ allowed_internal_deps() {
       echo "orbit-common orbit-types"
       ;;
     orbit-engine)
-      echo "orbit-agent orbit-common orbit-exec orbit-store orbit-tools orbit-types"
+      # Its dev-only self dependency enables the `test-support` feature.
+      echo "orbit-agent orbit-common orbit-engine orbit-exec orbit-store orbit-tools orbit-types"
       ;;
     orbit-automation)
       echo "orbit-common orbit-store orbit-types"
@@ -47,7 +53,7 @@ allowed_internal_deps() {
       # ORB-10617: Linux sandbox regression tests compose Core with Exec; this
       # remains test-only and does not widen Core's production dependency graph.
       # Its dev-only self dependency enables the `test-support` feature.
-      echo "orbit-automation orbit-common orbit-config orbit-core orbit-search orbit-engine orbit-exec orbit-policy orbit-store orbit-tools orbit-types"
+      echo "orbit-automation orbit-common orbit-config orbit-core orbit-search orbit-engine orbit-exec orbit-policy orbit-registry orbit-store orbit-tools orbit-types"
       ;;
     orbit-cmd)
       # The shared application composition layer joins Core runtime kernels to
@@ -79,6 +85,11 @@ allowed_dev_only_deps() {
       ;;
     orbit-cli)
       echo "orbit-engine orbit-exec orbit-tools"
+      ;;
+    orbit-engine)
+      # Engine's own tests enable its `test-support` feature to build host
+      # doubles on the null host base; no other crate is reached.
+      echo "orbit-engine"
       ;;
     orbit-core)
       # Core's own integration tests enable its `test-support` feature to

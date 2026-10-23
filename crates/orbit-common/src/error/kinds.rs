@@ -67,16 +67,25 @@ pub struct DependencyNotDelivered {
     pub detail: String,
 }
 
+/// One unmerged index path and the conservative trivial-resolution classification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConflictedFile {
+    pub path: String,
+    /// True only if index modes and object IDs prove identical sides or an unchanged side.
+    pub deterministically_resolvable: bool,
+}
+
 /// Structured evidence for a merge or rebase conflict that an explicitly
 /// configured recovery activity may repair. Keeping the classification typed
 /// prevents unrelated VCS diagnostics from launching a recovery agent based
 /// on message matching.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RecoverableVcsConflict {
     pub operation: String,
     pub original_base_sha: String,
     pub target_base_sha: String,
     pub conflicting_paths: Vec<String>,
+    pub conflicting_files: Vec<ConflictedFile>,
     pub diagnostic: String,
 }
 
@@ -269,4 +278,68 @@ impl std::fmt::Display for HostRegistryCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
+}
+
+/// Facts certified when conflict recovery leaves a candidate on its covering base.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateAbsorbed {
+    /// The recovered branch.
+    pub head: String,
+    /// The base commit the recovered branch sits on.
+    pub base_sha: String,
+    /// The base ref that still reaches the covering commit.
+    pub base_ref: String,
+    /// The commit that already carries the candidate's content.
+    pub covering_commit: String,
+}
+
+impl std::fmt::Display for CandidateAbsorbed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[candidate_absorbed] git_rebase: conflict recovery left '{}' on base \
+             '{}' with no candidate commit; covering commit {} on '{}' already carries the \
+             candidate's change, so verified no-diff settlement completes the task",
+            self.head, self.base_sha, self.covering_commit, self.base_ref
+        )
+    }
+}
+
+/// How a failed private automation VCS operation reads, decided once where
+/// the provider's diagnostic is read rather than from a rendered message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivateVcsFailureClass {
+    /// A transient gateway, transport or GraphQL failure that carries no
+    /// credential, permission or permanent-HTTP diagnostic, so a failed
+    /// read-only observation may be retried later.
+    TransientObservation,
+    /// A transient failure whose diagnostic also names a credential,
+    /// permission or permanent-HTTP refusal. A lookup may retry it; an
+    /// observation is not resumable on it.
+    Transient,
+    /// A read-only completion observation lost to a transient observation
+    /// failure before any completion mutation. The host may resume the
+    /// unchanged completion only after authenticating its prefix.
+    CompletionObservationUnavailable,
+    /// Any other failure.
+    Other,
+}
+
+impl PrivateVcsFailureClass {
+    /// Whether the provider failure was transient, whatever completion then
+    /// decided about it.
+    pub fn is_transient(self) -> bool {
+        !matches!(self, Self::Other)
+    }
+}
+
+/// A private automation VCS operation failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivateVcsFailure {
+    /// The operation that failed.
+    pub operation: String,
+    /// How the provider's diagnostic reads.
+    pub class: PrivateVcsFailureClass,
+    /// The rendered message, without the `execution failed: ` prefix.
+    pub message: String,
 }

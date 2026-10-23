@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::{
     JobRun, JobRunState, PipelineState, REVIEW_ADMISSION_KEY, ReviewAdmission, ReviewTiming,
     RunIdRole,
@@ -19,51 +20,16 @@ use crate::contracts::{
     AdmissionRequest, ClaimMutation, ClaimRepair, DrainLeafOccupancy, LocalPullAdmission,
     LocalPullMutation, LocalPullPhase, PullDestination, PullFailureStreak,
 };
-use crate::driver::sqlite::migration::FeatureMigration;
 
-/// This feature's schema ledger name.
-pub(crate) const FEATURE: &str = "local_pull";
-
-/// Append-only schema registry for this feature.
-pub(crate) const MIGRATIONS: &[FeatureMigration] = &[FeatureMigration::breaking(
-    1,
-    "pending_requests_and_unique_leaves",
-    |conn| {
-        conn.execute_batch("CREATE TABLE local_pull_admissions (
-            workspace_id TEXT NOT NULL, owner_machine TEXT NOT NULL,
-            owner_workspace TEXT NOT NULL, execution_machine TEXT NOT NULL,
-            request_id TEXT NOT NULL, claim_id TEXT, leaf_run_id TEXT, record_json TEXT NOT NULL,
-            PRIMARY KEY(workspace_id, owner_machine, owner_workspace, execution_machine, request_id),
-            UNIQUE(workspace_id, owner_machine, owner_workspace, claim_id),
-            UNIQUE(workspace_id, leaf_run_id));")
-            .map_err(db_error)
-    },
-)];
-
-fn initialize(store: &Store) -> Result<(), OrbitError> {
-    store.apply_feature_migrations(FEATURE, MIGRATIONS)
-}
-
-fn db_error(error: impl std::fmt::Display) -> OrbitError {
+fn codec_error(error: serde_json::Error) -> OrbitError {
     OrbitError::Store(error.to_string())
 }
 fn invalid(message: &str) -> OrbitError {
     OrbitError::JobValidation(message.into())
 }
 fn decode(raw: String) -> Result<LocalPullAdmission, OrbitError> {
-    serde_json::from_str(&raw).map_err(db_error)
+    serde_json::from_str(&raw).map_err(codec_error)
 }
-/// Whether the `local_pull` feature migration has ever run here. A reader must
-/// not create the feature schema merely to discover there are no admissions.
-fn admissions_table_exists(conn: &Connection) -> Result<bool, OrbitError> {
-    conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_pull_admissions')",
-        [],
-        |row| row.get(0),
-    )
-    .map_err(db_error)
-}
-
 /// Serialized names (`LocalPullPhase` is `snake_case`) of the phases that no
 /// longer hold a drain slot: an idle poll, a settled claim, a refused request.
 /// SQL narrows reads to the rest so the occupancy check inside the writer
@@ -85,12 +51,12 @@ fn records(conn: &Connection, workspace: &str) -> Result<Vec<LocalPullAdmission>
         .prepare(
             "SELECT record_json FROM local_pull_admissions WHERE workspace_id=?1 ORDER BY rowid",
         )
-        .map_err(db_error)?;
+        .map_err(sqlite_store_error)?;
     let raw = stmt
         .query_map([workspace], |r| r.get::<_, String>(0))
-        .map_err(db_error)?
+        .map_err(sqlite_store_error)?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(db_error)?;
+        .map_err(sqlite_store_error)?;
     raw.into_iter().map(decode).collect()
 }
 /// Admissions that still hold a slot, in admission order.
@@ -103,12 +69,12 @@ fn holding_records(
             "SELECT record_json FROM local_pull_admissions WHERE workspace_id=?1 \
              AND json_extract(record_json,'$.phase') NOT IN {RELEASED_PHASES_SQL} ORDER BY rowid"
         ))
-        .map_err(db_error)?;
+        .map_err(sqlite_store_error)?;
     let raw = stmt
         .query_map([workspace], |r| r.get::<_, String>(0))
-        .map_err(db_error)?
+        .map_err(sqlite_store_error)?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(db_error)?;
+        .map_err(sqlite_store_error)?;
     let mut holding = Vec::with_capacity(raw.len());
     for record in raw.into_iter().map(decode) {
         let record = record?;
@@ -129,7 +95,7 @@ fn prune_terminal_rows(conn: &Connection, workspace: &str) -> Result<(), OrbitEr
             [workspace],
             |row| row.get(0),
         )
-        .map_err(db_error)?;
+        .map_err(sqlite_store_error)?;
     let retained = i64::try_from(TERMINAL_ROWS_RETAINED).unwrap_or(i64::MAX);
     if rows <= retained {
         return Ok(());
@@ -142,7 +108,7 @@ fn prune_terminal_rows(conn: &Connection, workspace: &str) -> Result<(), OrbitEr
              ORDER BY rowid DESC LIMIT ?2)",
         params![workspace, retained],
     )
-    .map_err(db_error)?;
+    .map_err(sqlite_store_error)?;
     Ok(())
 }
 
@@ -154,7 +120,7 @@ fn read(
 ) -> Result<Option<LocalPullAdmission>, OrbitError> {
     conn.query_row("SELECT record_json FROM local_pull_admissions WHERE workspace_id=?1 AND owner_machine=?2 AND owner_workspace=?3 AND execution_machine=?4 AND request_id=?5",
         params![workspace, destination.owner_machine_id, destination.owner_workspace_id, destination.execution_machine_id, request_id], |r| r.get::<_, String>(0))
-        .optional().map_err(db_error)?.map(decode).transpose()
+        .optional().map_err(sqlite_store_error)?.map(decode).transpose()
 }
 fn write(
     conn: &Connection,
@@ -171,47 +137,40 @@ fn write(
         DO UPDATE SET claim_id=excluded.claim_id, leaf_run_id=excluded.leaf_run_id, record_json=excluded.record_json",
         params![workspace, record.destination.owner_machine_id, record.destination.owner_workspace_id,
             record.destination.execution_machine_id, record.request.request_id, claim, record.leaf_run_id,
-            serde_json::to_string(record).map_err(db_error)?]).map_err(db_error)?;
+            serde_json::to_string(record).map_err(codec_error)?]).map_err(sqlite_store_error)?;
     Ok(())
 }
 
-/// Existing generic workers/resume reads must neither create a feature schema
-/// nor scan all historical receipts merely to discover that a run is unclaimed.
+/// Existing generic workers/resume reads must not scan all historical receipts
+/// merely to discover that a run is unclaimed.
 pub(super) fn for_run(
     store: &Store,
     workspace: &str,
     run_id: &str,
 ) -> Result<Option<LocalPullAdmission>, OrbitError> {
     store.with_read_connection(|conn| {
-        if !admissions_table_exists(conn)? { return Ok(None); }
         conn.query_row("SELECT record_json FROM local_pull_admissions WHERE workspace_id=?1 AND leaf_run_id=?2",
             params![workspace, run_id], |row| row.get::<_, String>(0))
-            .optional().map_err(db_error)?.map(decode).transpose()
+            .optional().map_err(sqlite_store_error)?.map(decode).transpose()
     })
 }
 
 pub(super) fn list(store: &Store, workspace: &str) -> Result<Vec<LocalPullAdmission>, OrbitError> {
-    initialize(store)?;
     store.with_read_connection(|conn| records(conn, workspace))
 }
 
-/// Admissions still holding a slot, without creating the feature schema: a
-/// settle-only pass runs from `orbit run cancel` and `orbit run auto --stop`
-/// in workspaces that may never have pulled [ORB-13663].
+/// Admissions still holding a slot. A settle-only pass reads them from
+/// `orbit run cancel` and `orbit run auto --stop` in workspaces that may never
+/// have pulled [ORB-13663].
 pub(super) fn unsettled(
     store: &Store,
     workspace: &str,
 ) -> Result<Vec<LocalPullAdmission>, OrbitError> {
-    store.with_read_connection(|conn| {
-        if !admissions_table_exists(conn)? {
-            return Ok(Vec::new());
-        }
-        holding_records(conn, workspace)
-    })
+    store.with_read_connection(|conn| holding_records(conn, workspace))
 }
 
 /// `run_id`'s most recent settled claims against `destination` that failed
-/// in a row, without creating the feature schema.
+/// in a row.
 ///
 /// The breaker that stops a failing drain reads this on every pass, so it must
 /// not decode the whole table: SQL narrows to this drain's settled claims,
@@ -233,9 +192,6 @@ pub(super) fn consecutive_failed_settlements(
     run_id: &str,
 ) -> Result<PullFailureStreak, OrbitError> {
     store.with_read_connection(|conn| {
-        if !admissions_table_exists(conn)? {
-            return Ok(PullFailureStreak::default());
-        }
         let mut stmt = conn
             .prepare(
                 "SELECT record_json FROM local_pull_admissions \
@@ -246,7 +202,7 @@ pub(super) fn consecutive_failed_settlements(
                  AND json_extract(record_json,'$.destination.selector')=?6 \
                  ORDER BY rowid DESC",
             )
-            .map_err(db_error)?;
+            .map_err(sqlite_store_error)?;
         let mut rows = stmt
             .query(params![
                 workspace,
@@ -256,10 +212,10 @@ pub(super) fn consecutive_failed_settlements(
                 run_id,
                 destination.selector,
             ])
-            .map_err(db_error)?;
+            .map_err(sqlite_store_error)?;
         let mut streak = PullFailureStreak::default();
-        while let Some(row) = rows.next().map_err(db_error)? {
-            let record = decode(row.get::<_, String>(0).map_err(db_error)?)?;
+        while let Some(row) = rows.next().map_err(sqlite_store_error)? {
+            let record = decode(row.get::<_, String>(0).map_err(sqlite_store_error)?)?;
             // SQL only narrows; the record stays the authority.
             if record.destination != *destination
                 || record.request.run_context.run_id != run_id
@@ -292,9 +248,6 @@ pub(super) fn claims_admitted_by(
     run_id: &str,
 ) -> Result<Vec<LocalPullAdmission>, OrbitError> {
     store.with_read_connection(|conn| {
-        if !admissions_table_exists(conn)? {
-            return Ok(Vec::new());
-        }
         let mut stmt = conn
             .prepare(
                 "SELECT record_json FROM local_pull_admissions \
@@ -302,12 +255,12 @@ pub(super) fn claims_admitted_by(
                  AND json_extract(record_json,'$.request.run_context.run_id')=?2 \
                  ORDER BY rowid",
             )
-            .map_err(db_error)?;
+            .map_err(sqlite_store_error)?;
         let raw = stmt
             .query_map(params![workspace, run_id], |r| r.get::<_, String>(0))
-            .map_err(db_error)?
+            .map_err(sqlite_store_error)?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(db_error)?;
+            .map_err(sqlite_store_error)?;
         let mut claims = Vec::with_capacity(raw.len());
         for record in raw.into_iter().map(decode) {
             let record = record?;
@@ -336,7 +289,7 @@ fn dispatch_lineage(
     for _ in 0..MAX_DISPATCH_LINEAGE_DEPTH {
         let mut next = Vec::new();
         for raw in frontier.into_iter().flatten() {
-            let state: PipelineState = serde_json::from_str(&raw).map_err(db_error)?;
+            let state: PipelineState = serde_json::from_str(&raw).map_err(codec_error)?;
             for child in state.child_dispatches {
                 if seen.insert(child.child_run_id.clone()) {
                     next.push(read_state_json_conn(conn, workspace, &child.child_run_id)?);
@@ -371,7 +324,7 @@ fn occupancy(
              LEFT JOIN job_run_states s ON s.workspace_id = r.workspace_id AND s.run_id = r.run_id \
              WHERE r.workspace_id=?1 AND r.state IN ('pending','running','retrying')",
         )
-        .map_err(db_error)?;
+        .map_err(sqlite_store_error)?;
     let active = stmt
         .query_map([workspace], |r| {
             Ok((
@@ -380,17 +333,13 @@ fn occupancy(
                 r.get::<_, Option<String>>(2)?,
             ))
         })
-        .map_err(db_error)?
+        .map_err(sqlite_store_error)?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(db_error)?;
+        .map_err(sqlite_store_error)?;
     // Admissions that still hold capacity. Read before the wrapper walk
     // because a wrapper whose lineage reaches one of their leaves is
     // represented by that admission, terminal leaf or not.
-    let pending = if admissions_table_exists(conn)? {
-        holding_records(conn, workspace)?
-    } else {
-        Vec::new()
-    };
+    let pending = holding_records(conn, workspace)?;
     let admitted_runs: BTreeSet<String> = pending
         .iter()
         .filter_map(|record| record.leaf_run_id.clone())
@@ -476,11 +425,17 @@ fn occupancy(
 
 /// The slots a new pull admission competes for under `ceiling` [ORB-15194].
 ///
-/// A claimed leaf in its before-landing review runs no implementer, yet holds
-/// its slot until its claim settles, one to two hours later. Each such leaf
-/// frees its slot for a replacement, but at most `ceiling` of them do, so one
-/// drain carries at most `ceiling` implementing leaves plus `ceiling`
-/// reviewing ones. Build-budget admission still limits the compilers they run.
+/// Pull-only review credit starts after the persisted before-landing admission
+/// has `applies=true`; validation and publishing before that boundary remain
+/// implementing. The leaf then stays reviewing through revalidation and
+/// handoff while its claim settles. Admission counts occupied minus
+/// `min(reviewing, ceiling)`, so credit is capped at `ceiling` but the reviewing
+/// population can exceed it as replacements reach review. With an unchanged
+/// ceiling and no pre-existing excess, occupied leaves stay at most twice the
+/// ceiling and implementing leaves at most the ceiling. Lowering the ceiling
+/// preserves running leaves, so existing excess may remain. Owner/local drains
+/// continue counting every in-flight child against their ceiling. Review
+/// rebuilds still compete for the repository build budget.
 fn pull_admission_load(occupancy: &DrainLeafOccupancy, ceiling: usize) -> usize {
     occupancy
         .occupied
@@ -489,8 +444,7 @@ fn pull_admission_load(occupancy: &DrainLeafOccupancy, ceiling: usize) -> usize 
 
 /// The shared reading both admission paths allocate against [ORB-12617].
 ///
-/// Read-only and schema-neutral: a workspace that has never pulled has no
-/// `local_pull` feature schema, and asking how full it is must not create one.
+/// Read-only: asking how full a drain is never writes.
 pub(super) fn drain_occupancy(
     store: &Store,
     workspace: &str,
@@ -585,7 +539,6 @@ pub(super) fn allocate(
     request: &AdmissionRequest,
     ceiling: usize,
 ) -> Result<Option<LocalPullAdmission>, OrbitError> {
-    initialize(store)?;
     if [
         &destination.owner_machine_id,
         &destination.owner_workspace_id,
@@ -609,7 +562,7 @@ pub(super) fn allocate(
         && !(request.review_gate && request.ship.mode == "pr")
     {
         return Err(invalid(
-            "an owner with review.before_pr or review.before_landing on admits only a PR leaf \
+            "an owner with review.timing = before_pr or before_landing admits only a PR leaf \
              that runs the review gate",
         ));
     }
@@ -629,7 +582,7 @@ pub(super) fn allocate(
         let raw = read_state_json_conn(conn, workspace, &parent.run_id)?;
         let state: PipelineState =
             serde_json::from_str(&raw.ok_or_else(|| invalid("pull drain state missing"))?)
-                .map_err(db_error)?;
+                .map_err(codec_error)?;
         if state.admissions_stopped() {
             return Ok(None);
         }
@@ -664,7 +617,6 @@ pub(super) fn mutate(
     request_id: &str,
     mutation: &LocalPullMutation,
 ) -> Result<LocalPullAdmission, OrbitError> {
-    initialize(store)?;
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
         let conn = tx.connection();
         let mut record = read(conn, workspace, destination, request_id)?.ok_or_else(|| invalid("local pull request missing"))?;
@@ -703,16 +655,31 @@ pub(super) fn mutate(
                 // owner task's crew rather than this host's `default_crew`.
                 let task = record.receipt.as_ref().and_then(|r| r.task.as_ref()).filter(|task| task.id == claim.task_id).ok_or_else(|| invalid("claimed task snapshot missing"))?;
                 let mut input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == CLAIMED_LOCAL_PIPELINE {"local"} else {"remote"}, "claimed_task": {"id": task.id, "crew": task.crew}});
+                // Carry the profile key already chosen by admission into the
+                // queued leaf. The host forecast then exchanges its reservation
+                // for a run with the same price before the worker starts.
+                let resource_class = conn.query_row(
+                    "SELECT work_class, complexity, reserved_at FROM admission_reservations
+                     WHERE workspace_id = ?1 AND task_id = ?2 ORDER BY reserved_at DESC, rowid DESC LIMIT 1",
+                    params![workspace, claim.task_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?)),
+                ).optional().map_err(sqlite_store_error)?;
+                if let Some((work_class, complexity, admitted_at)) = resource_class {
+                    input["resource_class"] = serde_json::json!({
+                        "task_id": claim.task_id, "work_class": work_class,
+                        "complexity": complexity, "admitted_at": admitted_at,
+                    });
+                }
                 // The leaf's review admission is the claim's captured contract,
                 // never this host's settings [ORB-13908].
                 if let (Some(review), Some(object)) = (claim_review_admission(&record.request, now), input.as_object_mut()) {
-                    object.insert(REVIEW_ADMISSION_KEY.into(), serde_json::to_value(review).map_err(db_error)?);
+                    object.insert(REVIEW_ADMISSION_KEY.into(), serde_json::to_value(review).map_err(codec_error)?);
                 }
                 // [ORB-14257] The candidate an earlier claim preserved, for the
                 // leaf's `resume_candidate` step to carry onto this base; a
                 // claimed-local leaf continues one too [ORB-14338].
                 if let (Some(candidate), Some(object)) = (&task.resume_candidate, input.as_object_mut()) {
-                    object.insert("resume_candidate".into(), serde_json::to_value(candidate).map_err(db_error)?);
+                    object.insert("resume_candidate".into(), serde_json::to_value(candidate).map_err(codec_error)?);
                 }
                 // A repair claim's leaf restores the candidate its stopped
                 // landing preserved rather than implementing afresh [ORB-14261].

@@ -1,19 +1,17 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
-use super::audit_events::ensure_audit_events_schema;
-use super::introspect::{add_column_if_missing, table_exists, table_has_foreign_key_to};
-use super::invocation::ensure_invocation_schema_v1;
-use super::learning::ensure_learning_index_schema;
-use super::task_reservations::ensure_task_reservations_schema;
-use super::tools::ensure_tools_schema;
+use super::introspect::{
+    add_column_if_missing, table_exists, table_has_column, table_has_foreign_key_to,
+};
 
 /// v1 `baseline` migration: the full pre-ledger idempotent schema. Safe to
 /// run on both a fresh database and any legacy database created by the
 /// pre-versioning migration code, which is how existing databases adopt
 /// the versioned ledger.
 ///
-/// ADR-0287: this shipped structure is immutable. Later schema belongs in a
+/// This shipped structure is immutable. Later schema belongs in a
 /// new migration so databases that already recorded v1 receive it too.
 pub(super) fn apply_baseline_schema(conn: &Connection) -> Result<(), OrbitError> {
     conn.execute_batch(
@@ -151,12 +149,12 @@ pub(super) fn apply_baseline_schema(conn: &Connection) -> Result<(), OrbitError>
             CREATE INDEX IF NOT EXISTS idx_adrs_owner ON adrs(owner);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     ensure_agent_sessions_schema(conn)?;
     ensure_tools_schema(conn)?;
     ensure_adr_index_schema(conn)?;
-    ensure_audit_events_schema(conn)?;
+    ensure_audit_events_schema_v1(conn)?;
     ensure_task_reservations_schema(conn)?;
     ensure_learning_index_schema(conn)?;
     ensure_invocation_schema_v1(conn)?;
@@ -207,7 +205,7 @@ fn ensure_agent_sessions_schema(conn: &Connection) -> Result<(), OrbitError> {
                 DROP TABLE agent_sessions_legacy;
             "#,
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
 
     add_column_if_missing(conn, "agent_sessions", "identity_id", "TEXT")?;
@@ -218,7 +216,7 @@ fn ensure_agent_sessions_schema(conn: &Connection) -> Result<(), OrbitError> {
     Ok(())
 }
 
-pub(super) fn ensure_v2_state_consolidation_schema(conn: &Connection) -> Result<(), OrbitError> {
+fn ensure_v2_state_consolidation_schema(conn: &Connection) -> Result<(), OrbitError> {
     conn.execute_batch(
         r#"
             CREATE TABLE IF NOT EXISTS v2_audit_events (
@@ -317,5 +315,241 @@ pub(super) fn ensure_v2_state_consolidation_schema(conn: &Connection) -> Result<
             );
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))
+    .map_err(sqlite_store_error)
+}
+
+// Frozen private copy for v1. Do not share with another migration.
+fn ensure_audit_events_schema_v1(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                command TEXT NOT NULL,
+                subcommand TEXT,
+                tool_name TEXT,
+                target_type TEXT,
+                target_id TEXT,
+                role TEXT NOT NULL,
+                status TEXT NOT NULL,
+                exit_code INTEGER NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                working_directory TEXT NOT NULL,
+                arguments_json TEXT,
+                stdout_truncated TEXT,
+                stderr_truncated TEXT,
+                error_message TEXT,
+                host TEXT,
+                pid INTEGER NOT NULL,
+                session_id TEXT,
+                task_id TEXT,
+                job_run_id TEXT,
+                activity_id TEXT,
+                step_index INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp
+            ON audit_events(timestamp);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_tool_name
+            ON audit_events(tool_name);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_status
+            ON audit_events(status);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_role
+            ON audit_events(role);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_target
+            ON audit_events(target_type, target_id);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_events_execution_id
+            ON audit_events(execution_id);
+        "#,
+    )
+    .map_err(sqlite_store_error)?;
+
+    add_column_if_missing(conn, "audit_events", "task_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "job_run_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "activity_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "step_index", "INTEGER")?;
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_audit_events_task_id
+            ON audit_events(task_id);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_job_run_id
+            ON audit_events(job_run_id);
+        "#,
+    )
+    .map_err(sqlite_store_error)?;
+
+    Ok(())
+}
+
+fn ensure_task_reservations_schema(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS task_reservations (
+                reservation_id TEXT PRIMARY KEY,
+                workspace_orbit_dir TEXT NOT NULL,
+                task_ids_json TEXT NOT NULL,
+                files_json TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                released_at TEXT,
+                owner_run_id TEXT,
+                owner_metadata_json TEXT,
+                release_reason TEXT,
+                release_metadata_json TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_task_reservations_workspace_expires
+            ON task_reservations(workspace_orbit_dir, expires_at);
+
+            CREATE INDEX IF NOT EXISTS idx_task_reservations_workspace_release
+            ON task_reservations(workspace_orbit_dir, released_at);
+        "#,
+    )
+    .map_err(sqlite_store_error)?;
+
+    add_column_if_missing(conn, "task_reservations", "workspace_id", "TEXT")?;
+    add_column_if_missing(conn, "task_reservations", "owner_run_id", "TEXT")?;
+    add_column_if_missing(conn, "task_reservations", "owner_metadata_json", "TEXT")?;
+    add_column_if_missing(conn, "task_reservations", "release_reason", "TEXT")?;
+    add_column_if_missing(conn, "task_reservations", "release_metadata_json", "TEXT")?;
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_task_reservations_workspace_owner_release
+            ON task_reservations(workspace_orbit_dir, owner_run_id, released_at);
+
+            CREATE INDEX IF NOT EXISTS idx_task_reservations_workspace_id_release
+            ON task_reservations(workspace_id, released_at);
+
+            CREATE INDEX IF NOT EXISTS idx_task_reservations_workspace_id_expires
+            ON task_reservations(workspace_id, expires_at);
+        "#,
+    )
+    .map_err(sqlite_store_error)?;
+
+    Ok(())
+}
+
+fn ensure_invocation_schema_v1(conn: &Connection) -> Result<(), OrbitError> {
+    add_column_if_missing(conn, "invocations", "slot", "TEXT")?;
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_invocations_job_run_id
+            ON invocations(job_run_id);
+
+            CREATE INDEX IF NOT EXISTS idx_invocations_activity_id
+            ON invocations(activity_id);
+
+            CREATE INDEX IF NOT EXISTS idx_invocations_ts
+            ON invocations(ts DESC, id DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_invocation_tasks_task_id
+            ON invocation_tasks(task_id);
+
+            CREATE INDEX IF NOT EXISTS idx_tool_calls_tool_name
+            ON tool_calls(tool_name);
+        "#,
+    )
+    .map_err(sqlite_store_error)
+}
+
+fn ensure_learning_index_schema(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            -- Project-learnings envelope index. YAML records live on disk under
+            -- `<root>/<id>/learning.yaml`; status lives in the YAML body.
+            -- this table indexes the envelope fields for fast scope-glob
+            -- lookups. Arrays are stored as JSON strings for the same reason
+            -- the ADR index does it: phase-1 corpora are small and a junction
+            -- table is overkill. Per ADR-004, ranking and FTS over body
+            -- content are deferred to phase 2.
+            CREATE TABLE IF NOT EXISTS learnings_index (
+                id          TEXT PRIMARY KEY,
+                status      TEXT NOT NULL,
+                paths       TEXT NOT NULL,
+                tags        TEXT NOT NULL,
+                summary     TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS learnings_active
+                ON learnings_index(status) WHERE status = 'active';
+        "#,
+    )
+    .map_err(sqlite_store_error)?;
+
+    // C2 (T20260511-6) adds an optional `priority` column used as the
+    // secondary ranking key in `search`. NULL is acceptable; the search
+    // path orders Some(N) ahead of None and falls back to updated_at.
+    add_column_if_missing(conn, "learnings_index", "priority", "INTEGER")?;
+
+    Ok(())
+}
+
+fn ensure_tools_schema(conn: &Connection) -> Result<(), OrbitError> {
+    add_column_if_missing(
+        conn,
+        "tools",
+        "parameters_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    add_column_if_missing(conn, "tools", "enabled", "INTEGER NOT NULL DEFAULT 1")?;
+    add_column_if_missing(conn, "tools", "builtin", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(conn, "tools", "created_at", "TEXT NOT NULL DEFAULT ''")?;
+    add_column_if_missing(conn, "tools", "updated_at", "TEXT NOT NULL DEFAULT ''")?;
+
+    if table_has_column(conn, "tools", "is_enabled")? {
+        conn.execute(
+            r#"
+                UPDATE tools
+                SET enabled = CASE
+                    WHEN lower(CAST(is_enabled AS TEXT)) IN ('0', 'false', 'f', 'no') THEN 0
+                    ELSE 1
+                END
+            "#,
+            [],
+        )
+        .map_err(sqlite_store_error)?;
+    }
+
+    if table_has_column(conn, "tools", "is_builtin")? {
+        conn.execute(
+            r#"
+                UPDATE tools
+                SET builtin = CASE
+                    WHEN lower(CAST(is_builtin AS TEXT)) IN ('1', 'true', 't', 'yes') THEN 1
+                    ELSE 0
+                END
+            "#,
+            [],
+        )
+        .map_err(sqlite_store_error)?;
+    }
+
+    conn.execute(
+        "UPDATE tools SET parameters_json = '[]' WHERE parameters_json = ''",
+        [],
+    )
+    .map_err(sqlite_store_error)?;
+    conn.execute(
+        "UPDATE tools SET created_at = datetime('now') WHERE created_at = ''",
+        [],
+    )
+    .map_err(sqlite_store_error)?;
+    conn.execute(
+        "UPDATE tools SET updated_at = datetime('now') WHERE updated_at = ''",
+        [],
+    )
+    .map_err(sqlite_store_error)?;
+
+    Ok(())
 }

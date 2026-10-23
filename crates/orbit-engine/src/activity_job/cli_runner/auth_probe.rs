@@ -5,14 +5,14 @@ use std::time::Duration;
 
 use orbit_agent::{Agent, AgentConfig, AgentOperation, AgentRequest};
 use orbit_common::security::child_env::MCP_MANAGED_BINDING_ENV_VARS;
+use orbit_types::identity::CrewEnvVar;
 use orbit_types::workflow::{AuthProbe, AuthProbeSuccess};
 
 use super::launcher::{orbit_tool_env, resolve_provider_launcher};
 use super::orchestrator::provider_child_environment;
 use super::spawn::{SpawnError, prepare_sandbox_for_dispatch};
 use super::supervisor::{
-    SpawnTraceContext, SpawnWithTimeoutRequest, kill_child_process_tree, spawn_for_supervision,
-    spawn_with_timeout,
+    SpawnTraceContext, SpawnWithTimeoutRequest, spawn_for_supervision, spawn_with_timeout,
 };
 use crate::{DispatchError, RuntimeHost};
 
@@ -23,10 +23,18 @@ pub struct AuthProbeOutcome {
     pub credential_source: String,
 }
 
-/// Credential origin visible to a leaf after applying the host's env allowlist.
-/// Cache/keychain labels describe the fallback; Orbit does not read credentials.
-pub fn auth_credential_source(host: &dyn RuntimeHost, provider: &str) -> String {
-    credential_source(provider, &host.agent_subprocess_environment(&[]))
+/// Credential origin visible to a leaf of a crew with `crew_env` entries after
+/// applying the host's env allowlist and the crew overlay. Cache/keychain
+/// labels describe the fallback; Orbit does not read credentials.
+pub fn auth_credential_source(
+    host: &dyn RuntimeHost,
+    provider: &str,
+    crew_env: &[CrewEnvVar],
+) -> String {
+    credential_source(
+        provider,
+        &host.crew_agent_subprocess_environment(crew_env, &[]),
+    )
 }
 
 fn credential_source(provider: &str, env: &[(String, String)]) -> String {
@@ -46,11 +54,13 @@ fn credential_source(provider: &str, env: &[(String, String)]) -> String {
     "provider credential cache (no passed token identified)".into()
 }
 
-/// Run a declared probe with the leaf launcher, cleared allowlisted environment,
-/// sandbox and process-tree timeout. No activity tools or broker are granted.
+/// Run a declared probe with the leaf launcher, cleared allowlisted environment
+/// (with the probed crew's `env` overlay), sandbox and process-tree timeout.
+/// No activity tools or broker are granted.
 pub fn run_auth_probe(
     host: &dyn RuntimeHost,
     provider: &str,
+    crew_env: &[CrewEnvVar],
     probe: &AuthProbe,
     run_id: &str,
     cwd: &Path,
@@ -89,6 +99,7 @@ pub fn run_auth_probe(
         host,
         provider,
         prepared.effective,
+        crew_env,
         invocation.required_env_vars,
     );
     let source = credential_source(provider, &env);
@@ -120,22 +131,21 @@ pub fn run_auth_probe(
     .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
     let guard = spawned.take_linux_post_run_guard();
     let registered = host
-        .register_worker_process(spawned.child.id())
+        .register_worker_process(spawned.child.pid())
         .and_then(|()| {
             if prepared.effective.is_some_and(|sandbox| {
                 sandbox.kind == orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap
             }) {
-                host.register_worker_pid_namespace(spawned.child.id())
+                host.register_worker_pid_namespace(spawned.child.pid())
             } else {
                 Ok(())
             }
         });
     if let Err(error) = registered {
-        kill_child_process_tree(&mut spawned.child);
         return Err(DispatchError::CliInvocationPermanent(error.to_string()));
     }
     let cwd_text = cwd.display().to_string();
-    let (stdout, _, exit, _, timed_out) = spawn_with_timeout(SpawnWithTimeoutRequest {
+    let (stdout, _, exit, _, timed_out, _) = spawn_with_timeout(SpawnWithTimeoutRequest {
         program: &program,
         args: &probe.args,
         stdin_bytes: probe.stdin.as_bytes(),
@@ -153,11 +163,8 @@ pub fn run_auth_probe(
         on_spawn: None,
         on_progress: None,
         stopped_descendants: None,
-        wait: None,
-        live_readers: None,
         spawned_child: Some(spawned),
-        #[cfg(unix)]
-        cancel_pair: None,
+        stall_window: host.agent_stall_window(),
     })
     .map_err(|SpawnError { message, .. }| DispatchError::CliInvocationPermanent(message))?;
     if let Some(guard) = guard {

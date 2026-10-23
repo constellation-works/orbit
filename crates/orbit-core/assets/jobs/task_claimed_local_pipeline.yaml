@@ -52,6 +52,13 @@ spec:
   # No job-level ceiling: the drain's own worker limit (`--concurrency`, retuned
   # live by `orbit run concurrency`) bounds how many of these run at once.
   max_active_runs: 0
+  # With steering enabled the gate reads the task's comment log and the
+  # leaf's watermark from the owner, never the replica, and an owner it
+  # cannot read fails the run before commit. With steering disabled the gate
+  # is inert.
+  steering_gate:
+    before: commit
+    round: implement_bundle
   default_input:
     task_ids: []
     base_branch: main
@@ -115,6 +122,10 @@ spec:
               # ORB-15287: the pinned delivery base a deferred sandbox
               # validation must name.
               base_sha: "{{ steps.worktree.output.base_sha }}"
+              # ORB-15963: `validate` runs the required commands on the final
+              # candidate, so the envelope lists them for the implementer to
+              # leave to it.
+              final_validation: true
               # Claimed mode: the injected envelope is the task, the agent
               # writes no owner task state, and it returns its execution
               # summary in its output for the handoff to carry.
@@ -137,7 +148,9 @@ spec:
 
     # Required validation runs on the committed candidate, before any handoff
     # exists. There is nothing to publish first: the local candidate is the
-    # delivery.
+    # delivery. A clean base takes the NoDiff route; its `no-diff-expected`
+    # skip runs no command or replay, as the owner's own pipelines skip
+    # `validate` for the tag [ORB-15764].
     - id: validate
       target: activity:claim_validate
       default_input:

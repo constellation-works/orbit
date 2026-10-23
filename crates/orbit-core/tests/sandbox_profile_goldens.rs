@@ -115,6 +115,7 @@ fn run_child(root: &Path, output: &Path) {
         .env_clear()
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .env("HOME", root.join("home"))
+        .env("XDG_RUNTIME_DIR", root.join("runtime"))
         .env(OUTPUT_ENV, output)
         .env(ROOT_ENV, &root)
         .args([
@@ -211,7 +212,12 @@ impl Fixture {
         let repo = root.join("repo");
         let worktree = repo.join(".orbit/state/worktrees/orbit-jrun-golden");
         let inspection = root.join("inspection");
-        for dir in [&global, &worktree.join("src"), &inspection.join("src")] {
+        for dir in [
+            &global,
+            &worktree.join("src"),
+            &inspection.join("src"),
+            &root.join("runtime"),
+        ] {
             std::fs::create_dir_all(dir).expect("fixture dir");
         }
         // Present, so the Linux mask binds `/dev/null` over it.
@@ -297,6 +303,7 @@ fn seed_linux_executor(runtime: &OrbitRuntime, provider: &str) {
             env: Default::default(),
             sandbox: Some(ExecutorSandboxKind::LinuxBwrap),
             allow_fallback: false,
+            host_os: None,
             created_at: None,
             updated_at: None,
         })
@@ -334,7 +341,22 @@ fn bwrap_lines(sandbox: &ResolvedSandbox, cwd: &Path) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     let mut after_separator = false;
     let mut previous = "";
-    for arg in &plan.args {
+    // Render the fixture's XDG runtime mask, not the login-session-dependent
+    // /run/user mask. Both use the same mandatory masking mechanism.
+    // SAFETY: getuid has no arguments or memory-safety preconditions.
+    let host_runtime = PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() }))
+        .canonicalize()
+        .ok();
+    let mut argv = plan.args.iter().peekable();
+    while let Some(arg) = argv.next() {
+        if arg == "--tmpfs"
+            && argv
+                .peek()
+                .is_some_and(|path| host_runtime.as_deref() == Some(Path::new(path.as_str())))
+        {
+            argv.next();
+            continue;
+        }
         let starts_option = !after_separator && arg.starts_with("--");
         if arg == "--" {
             after_separator = true;

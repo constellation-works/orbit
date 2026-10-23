@@ -1,14 +1,19 @@
 //! The runtime reads behind a pull drain's settlement reports and crew
 //! window, and how an owner's answer to a pull is classified.
 
-use chrono::Utc;
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{ClaimMutation, LocalPullPhase};
 use orbit_types::workflow::{
     CrewExclusion, CrewExclusionSource, PullAuthExclusion, PullCrewPreflight,
 };
 
-use super::crew_window::{PullCrewWindow, phase_guidance, phase_name};
+use super::crew_window::{
+    CapacityFailures, OwnerBusyReleases, OwnerBusyVerdict, PullCrewWindow, phase_guidance,
+    phase_name,
+};
 use super::entries::{ClaimedLeafStage, DrainClaimedLeaf, PullLeafClaim, RefusedPullSettlement};
 
 impl crate::OrbitRuntime {
@@ -54,6 +59,23 @@ impl crate::OrbitRuntime {
             }
         }
         Ok(carried)
+    }
+
+    /// The workspace capacity a pull drain competes for, from the same reading
+    /// as the allocator. Includes admissions without a live leaf and leaves
+    /// belonging to other drains; reviewing claims earn capped admission credit.
+    /// `None` for every other run. Reading capacity never writes state.
+    pub fn pull_drain_occupancy(
+        &self,
+        drain_run_id: &str,
+    ) -> Result<Option<orbit_store::contracts::DrainLeafOccupancy>, OrbitError> {
+        let jobs = self.stores().jobs();
+        match jobs.get_job_run(drain_run_id)? {
+            Some(run) if run.job_id == super::super::PULL_DRAIN_JOB => {
+                jobs.drain_leaf_occupancy().map(Some)
+            }
+            _ => Ok(None),
+        }
     }
 
     /// The claimed leaves a pull drain is still carrying: launched and not
@@ -132,7 +154,7 @@ impl crate::OrbitRuntime {
         }
         let preflight = self
             .read_run_state(drain_run_id)?
-            .and_then(|state| state.pull_crew_preflight);
+            .and_then(|state| state.pull_drain.pull_crew_preflight);
         self.crew_window_from(drain_run_id, preflight).map(Some)
     }
 
@@ -149,10 +171,12 @@ impl crate::OrbitRuntime {
             .unwrap_or_default();
         let stored_recovery = self
             .read_run_state(drain_run_id)?
-            .map(|state| state.pull_auth_recovery)
+            .map(|state| state.pull_drain.pull_auth_recovery)
             .unwrap_or_default();
         let mut auth_exclusions = Vec::new();
+        let mut capacity = BTreeMap::<String, CapacityFailures>::new();
         let mut host_suppressed = None;
+        let mut owner_busy = OwnerBusyReleases::default();
         let default_crew = match &preflight {
             Some(preflight) => preflight.default_crew.clone(),
             None => self
@@ -175,6 +199,22 @@ impl crate::OrbitRuntime {
                 .and_then(|receipt| receipt.claim.as_ref())
                 .map(|claim| claim.task_id.as_str())
                 .unwrap_or("a claimed task");
+            // The owner's own busy store blames neither this host nor the
+            // crew: it backs the drain off for a bounded time below, and
+            // suppresses the host only past its episode bound.
+            if let Some(failure) = &evidence.failure
+                && failure.owner_busy
+            {
+                // A leaf whose run is no longer recorded here ended long
+                // ago: its release still counts towards the episode bound,
+                // and its backoff has passed. A failed read fails the window
+                // instead, so it cannot add an episode.
+                let at = self
+                    .leaf_ended_at(record.leaf_run_id.as_deref())?
+                    .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+                owner_busy.record(at, format!("{task} was released: {}", failure.reason));
+                continue;
+            }
             if let Some(failure) = &evidence.failure
                 && failure.class.suppresses_host()
                 && host_suppressed.is_none()
@@ -189,12 +229,16 @@ impl crate::OrbitRuntime {
             // released failure whose class blames this host excludes the crew
             // too. [ORB-14262] Authentication is the provider's login, not the
             // crew's model, so every configured crew of that provider is
-            // excluded. Capacity stays on the named crew: another model may
+            // excluded; [ORB-17288] of that provider account, that is: a crew
+            // that sets `env` is its own account and alone excluded, and a
+            // crew without one excludes the provider's other crews without
+            // one. Capacity stays on the named crew: another model may
             // still have room. Provider labels are parsed, so `anthropic`
             // groups with `claude`. [ORB-14697] A usage limit excludes nothing
             // here: the leaf recorded it in this host's provider-limit store,
             // whose reading excludes the provider's crews below until it
-            // lapses.
+            // lapses. [ORB-15791] Capacity is transient too, so it backs the
+            // crew off for a bounded time below rather than for the window.
             let authentication = evidence.provider_unavailable.is_some()
                 && self.leaf_reported_authentication(record.leaf_run_id.as_deref());
             if authentication
@@ -203,19 +247,34 @@ impl crate::OrbitRuntime {
                 if incident.recovered_at.is_some() {
                     continue;
                 }
-                if !auth_exclusions
-                    .iter()
-                    .any(|entry: &PullAuthExclusion| entry.provider == incident.exclusion.provider)
-                {
+                if !auth_exclusions.iter().any(|entry: &PullAuthExclusion| {
+                    entry.provider == incident.exclusion.provider
+                        && entry.account == incident.exclusion.account
+                }) {
                     auth_exclusions.push(incident.exclusion);
                 }
+            }
+            if !authentication
+                && !evidence
+                    .failure
+                    .as_ref()
+                    .is_some_and(|failure| failure.provider_limit)
+                && let Some(unavailable) = &evidence.provider_unavailable
+                && let Some(crew) = unavailable.crew.as_deref()
+                && let Some(at) = self.leaf_ended_at(record.leaf_run_id.as_deref())?
+            {
+                capacity
+                    .entry(crew.to_string())
+                    .or_default()
+                    .record(at, format!("{task} failed: {}", unavailable.reason));
+                continue;
             }
             let (crews, source, reason) = match (&evidence.provider_unavailable, &evidence.failure)
             {
                 (Some(_), Some(failure)) if failure.provider_limit && !authentication => continue,
                 (Some(unavailable), _) => {
                     let crews = match unavailable.crew.as_deref() {
-                        Some(crew) if authentication => self.crews_sharing_provider(crew),
+                        Some(crew) if authentication => self.crews_sharing_account(crew),
                         Some(crew) => vec![crew.to_string()],
                         None => Vec::new(),
                     };
@@ -262,9 +321,40 @@ impl crate::OrbitRuntime {
                 });
             }
         }
+        // [ORB-15791] Recomputed on every pass like a provider limit, so a
+        // crew whose capacity backoff passed is runnable again in the same
+        // window. A crew excluded for the window already keeps that.
+        let now = Utc::now();
+        let mut host_suppressed_by_busy_owner = false;
+        let owner_busy_backoff = match owner_busy.verdict() {
+            Some(OwnerBusyVerdict::Suppress(reason)) => {
+                if host_suppressed.is_none() {
+                    host_suppressed = Some(reason);
+                    host_suppressed_by_busy_owner = true;
+                }
+                None
+            }
+            Some(OwnerBusyVerdict::Backoff(backoff)) if backoff.until > now => Some(backoff),
+            _ => None,
+        };
+        for (crew, failures) in capacity {
+            if excluded.iter().any(|exclusion| exclusion.crew == crew) {
+                continue;
+            }
+            if let Some((until, reason)) = failures.backoff()
+                && until > now
+            {
+                excluded.push(CrewExclusion {
+                    crew,
+                    source: CrewExclusionSource::ProviderUnavailable,
+                    reason,
+                    until: Some(until),
+                });
+            }
+        }
         // [ORB-14697] Recomputed on every pass, so a crew whose reading
         // lapses is runnable again in the same window.
-        let gate = self.provider_limit_gate(Utc::now());
+        let gate = self.provider_limit_gate(now);
         for crew in self.context.settings().crews().values() {
             if excluded.iter().any(|exclusion| exclusion.crew == crew.name) {
                 continue;
@@ -273,27 +363,32 @@ impl crate::OrbitRuntime {
                 excluded.push(CrewExclusion {
                     crew: crew.name.clone(),
                     source: CrewExclusionSource::ProviderLimit,
-                    reason: limit.describe(),
+                    reason: format!(
+                        "{}; reading from host {}",
+                        limit.describe(),
+                        self.automation_machine_identity().unwrap_or("unregistered")
+                    ),
                     until: Some(limit.until),
                 });
             }
         }
-        let limited = |crew: &str| {
-            excluded.iter().any(|exclusion| {
-                exclusion.crew == crew && exclusion.source == CrewExclusionSource::ProviderLimit
-            })
+        let timed = |crew: &str| {
+            excluded
+                .iter()
+                .any(|exclusion| exclusion.crew == crew && exclusion.until.is_some())
         };
+        // The crews the window can run once every timed exclusion lifts.
         // Review is not delivery admission, so a provider limit does not
-        // keep the owner's reviewer from running here.
+        // keep the owner's reviewer from running here; a capacity backoff
+        // does, until it lifts ([`PullCrewWindow::reviewer_unrunnable_reason`]).
         let reviewable: Option<Vec<String>> = preflight.as_ref().map(|preflight| {
             preflight
                 .runnable
                 .iter()
                 .filter(|crew| {
-                    !excluded.iter().any(|exclusion| {
-                        &exclusion.crew == *crew
-                            && exclusion.source != CrewExclusionSource::ProviderLimit
-                    })
+                    !excluded
+                        .iter()
+                        .any(|exclusion| &exclusion.crew == *crew && exclusion.until.is_none())
                 })
                 .cloned()
                 .collect()
@@ -311,7 +406,7 @@ impl crate::OrbitRuntime {
         let unlimited = reviewable.as_ref().map(|crews| {
             crews
                 .iter()
-                .filter(|crew| !limited(crew))
+                .filter(|crew| !timed(crew))
                 .cloned()
                 .collect::<Vec<_>>()
         });
@@ -346,6 +441,8 @@ impl crate::OrbitRuntime {
             excluded,
             auth_exclusions,
             host_suppressed,
+            host_suppressed_by_busy_owner,
+            owner_busy_backoff,
         })
     }
 
@@ -366,18 +463,38 @@ impl crate::OrbitRuntime {
                     step.error_code.as_deref()
                         == Some(orbit_types::workflow::PROVIDER_UNAVAILABLE_ERROR_CODE)
                         || step.error_message.as_deref().is_some_and(|message| {
-                            message.contains(orbit_types::workflow::PROVIDER_UNAVAILABLE_MARKER)
+                            orbit_types::workflow::failure_classification_text(message)
+                                .contains(orbit_types::workflow::PROVIDER_UNAVAILABLE_MARKER)
                         })
                 })
             })
     }
 
-    /// `failed` plus every configured crew whose provider parses to the same
-    /// canonical provider. An unparsable or unknown crew stays a single name.
-    fn crews_sharing_provider(&self, failed: &str) -> Vec<String> {
+    /// When `leaf` ended, or started when it records no end; `None` when its
+    /// run is unknown here. A failed read is an error, not an unknown run.
+    fn leaf_ended_at(&self, leaf: Option<&str>) -> Result<Option<DateTime<Utc>>, OrbitError> {
+        let Some(leaf) = leaf else {
+            return Ok(None);
+        };
+        Ok(self
+            .stores()
+            .jobs()
+            .get_job_run(leaf)?
+            .map(|run| run.finished_at.or(run.started_at).unwrap_or(run.created_at)))
+    }
+
+    /// `failed` plus every configured crew on the same provider account:
+    /// whose provider parses to the same canonical provider and, [ORB-17288]
+    /// as a crew that sets `env` is its own account, that shares `failed`'s
+    /// account. A crew with `env` is alone on its account; one without
+    /// shares the provider's default login with the others without. An
+    /// unparsable or unknown crew stays a single name.
+    fn crews_sharing_account(&self, failed: &str) -> Vec<String> {
         let registry = self.context.settings().crews();
-        let Some(provider) = registry.get(failed).and_then(|crew| {
-            orbit_types::workflow::Provider::parse(&crew.assignment.provider).ok()
+        let Some((provider, account)) = registry.get(failed).and_then(|crew| {
+            orbit_types::workflow::Provider::parse(&crew.assignment.provider)
+                .ok()
+                .map(|provider| (provider, crew.account()))
         }) else {
             return vec![failed.to_string()];
         };
@@ -386,6 +503,7 @@ impl crate::OrbitRuntime {
             .filter(|crew| {
                 orbit_types::workflow::Provider::parse(&crew.assignment.provider).ok()
                     == Some(provider)
+                    && crew.account() == account
             })
             .map(|crew| crew.name.clone())
             .collect::<Vec<_>>();

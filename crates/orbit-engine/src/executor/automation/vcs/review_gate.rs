@@ -12,7 +12,7 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::CommitIdentity;
 use orbit_types::workflow::automation::SourceRevision;
 
-pub use super::base_claim::{
+pub use super::base::claim::{
     BaseFailureCheck, BaseFailureVerdict, BaseReplay, ReplayBudget, verify_base_failure,
 };
 pub use super::claim::implementer_summary;
@@ -20,13 +20,16 @@ use super::commit::{
     commit_reviewer_repairs_in, reviewer_repair_identity, stage_everything, staged_paths,
 };
 use super::git::{
-    base_sync_mode_from_input, git_command_success, git_failure_error, git_output, git_output_raw,
+    BaseSyncMode, git_command_success, git_failure_error, git_output, git_output_raw,
     git_run_bytes, git_success, git_timeout_error, resolve_worktree_start_point,
 };
 pub use super::host_evidence::{HostEvidenceRun, run_host_sandbox_test};
 pub use super::interrupted_review::{
     INTERRUPTED_REVIEW_KEY, PreservedReviewRepair, ReviewInFlight, carry_interrupted_review,
     interrupted_review_ref, preserve_interrupted_review, review_in_flight,
+};
+pub use super::scratch_target::{
+    ScratchHostTarget, ScratchHostTargetLease, lease_scratch_host_target,
 };
 
 /// Commit-message trailer naming the review attempt a repair commit belongs to.
@@ -82,10 +85,9 @@ pub fn revision(workspace_path: &Path, spec: &str) -> Result<SourceRevision, Orb
 pub fn synchronized_base(
     workspace_path: &Path,
     base: &str,
-    base_sync: &str,
+    base_sync: BaseSyncMode,
 ) -> Result<SourceRevision, OrbitError> {
-    let mode = base_sync_mode_from_input(&serde_json::json!({ "base_sync": base_sync }))?;
-    let base_ref = resolve_worktree_start_point(workspace_path, base, mode)?;
+    let base_ref = resolve_worktree_start_point(workspace_path, base, base_sync)?;
     let merge_base = git_output(workspace_path, &["merge-base", "HEAD", &base_ref])?;
     revision(workspace_path, &merge_base)
 }
@@ -310,6 +312,36 @@ pub fn path_changed_between(
     Ok(raw.split('\0').any(|changed| !changed.is_empty()))
 }
 
+/// [ORB-16447] The blob id the repository-relative `path` names in `commit`,
+/// or `None` when `commit` holds no file there. `path` is a literal
+/// pathspec, never a pattern, and a directory is no file.
+pub fn path_blob_at(
+    workspace_path: &Path,
+    commit: &str,
+    path: &str,
+) -> Result<Option<String>, OrbitError> {
+    let raw = git_output_raw(
+        workspace_path,
+        &[
+            "--literal-pathspecs",
+            "ls-tree",
+            "-z",
+            "--full-tree",
+            "--end-of-options",
+            commit,
+            "--",
+            path,
+        ],
+    )?;
+    // Each entry reads `<mode> <type> <object>\t<path>`.
+    Ok(raw.split('\0').find_map(|entry| {
+        let (meta, entry_path) = entry.split_once('\t')?;
+        let mut fields = meta.split_whitespace();
+        let (_, kind, object) = (fields.next()?, fields.next()?, fields.next()?);
+        (entry_path == path && kind == "blob").then(|| object.to_string())
+    }))
+}
+
 /// What a managed landing looks like against the reviewed candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LandedFacts {
@@ -531,12 +563,12 @@ pub fn run_required_validation<H: crate::context::RuntimeHost + ?Sized>(
     workspace_path: &Path,
     command: &str,
 ) -> Result<RequiredValidationRun, OrbitError> {
-    let run = super::required_command::run_required_command(
+    let run = super::required::command::run_required_command(
         host,
         workspace_path,
         command,
         None,
-        super::required_command::VALIDATION_TIMEOUT_MS,
+        super::required::command::VALIDATION_TIMEOUT_MS,
     )?;
     Ok(RequiredValidationRun {
         failure_kind: run.failure_kind().as_str().map(str::to_string),

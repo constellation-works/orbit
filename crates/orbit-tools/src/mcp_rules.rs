@@ -17,15 +17,12 @@ pub const ID_ROUTED_TASK_TOOLS: &[&str] = &[
     "orbit.task.artifact.put",
     "orbit.task.review_reset",
     "orbit.task.reconcile_review",
+    "orbit.task.requeue",
 ];
 
 /// Tools that take a required `id` and an optional workspace but are not
 /// id-routed, each with the reason.
 pub const NOT_ID_ROUTED_TOOLS: &[(&str, &str)] = &[
-    (
-        "orbit.task.lint",
-        "lints a task against the selected workspace's configuration; it keeps selector behavior",
-    ),
     (
         "orbit.friction.show",
         "a friction id is workspace-local and carries no host prefix",

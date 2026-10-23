@@ -10,6 +10,7 @@ mod boundary_guard;
 mod cwd;
 mod declared_pair;
 pub(crate) mod fingerprint;
+pub(crate) mod generated_paths;
 mod rebase_recovery;
 mod rebase_repairs;
 mod recovery;

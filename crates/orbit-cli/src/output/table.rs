@@ -217,6 +217,8 @@ impl Table {
     /// The plain form: the same visible columns and the same cell values as
     /// `table`, with the header suppressed, no borders or ANSI, no truncation,
     /// and a single tab between fields — what `cut -f` expects (spec §2).
+    /// A sink that asked for `--header` gets the header row first, in the
+    /// same tab-separated form.
     ///
     /// Truncation is disabled by construction rather than by passing a width:
     /// a plain sink has no width, and silently shortening a value on its way
@@ -225,15 +227,23 @@ impl Table {
     /// split one record into extra fields or lines (spec §1).
     fn render_plain(&self, sink: &OutputSink) -> String {
         let visible = self.visible_columns(sink.suppress_uniform_columns());
-        self.rows
-            .iter()
-            .map(|row| {
-                visible
-                    .iter()
-                    .map(|index| escape_plain(&cell_at(row, *index).content()))
-                    .collect::<Vec<_>>()
-                    .join("\t")
-            })
+        let header = sink.plain_header().then(|| {
+            visible
+                .iter()
+                .map(|index| escape_plain(&self.columns[*index].header))
+                .collect::<Vec<_>>()
+                .join("\t")
+        });
+        let rows = self.rows.iter().map(|row| {
+            visible
+                .iter()
+                .map(|index| escape_plain(&cell_at(row, *index).content()))
+                .collect::<Vec<_>>()
+                .join("\t")
+        });
+        header
+            .into_iter()
+            .chain(rows)
             .collect::<Vec<_>>()
             .join("\n")
     }

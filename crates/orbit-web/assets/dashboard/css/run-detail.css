@@ -109,6 +109,11 @@ a.failure-id-link:focus-visible {
   margin-bottom: 4px;
 }
 .child-dispatch-meta { color: var(--fg-dim); }
+.requests-held { border-left: 3px solid var(--state-held); overflow-wrap: anywhere; }
+.pilot-warning { border-left: 3px solid var(--warn-fg); overflow-wrap: anywhere; }
+.pilot-warning .child-dispatch-notice { margin-bottom: 0; color: var(--warn-fg); }
+.requests-held .child-dispatch-notice:last-child { margin-bottom: 0; }
+.settlement-remedy { margin: 0 0 8px; color: var(--fg-dim); line-height: 1.5; }
 .waiting-task { color: var(--fg-dim); }
 .waiting-task-link { color: var(--accent); text-decoration: none; }
 .waiting-task-link:hover { text-decoration: underline; }
@@ -132,102 +137,285 @@ a.failure-id-link:focus-visible {
   color: var(--fg-mute);
   font-style: italic;
 }
+/* A claim reads as a two-column list of facts — a muted sentence-case label,
+   then a short value whose explanation is an info hint — so the Delivery tab
+   scans like the task's Details. */
 .claim-panel {
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  padding: 10px 12px;
-  margin-bottom: 10px;
-  font-size: 12px;
+  font-size: 13px;
 }
-.claim-panel:last-child { margin-bottom: 0; }
+.claim-panel + .claim-panel {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hair);
+}
 .claim-header {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 4px 12px;
-  padding-bottom: 6px;
-  margin-bottom: 4px;
-  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
 }
-.claim-header .claim-id { font-family: var(--font-mono); font-size: 11px; color: var(--fg); }
-.claim-header .claim-created { color: var(--fg-mute); font-size: 11px; }
+.claim-header .claim-id { font-family: var(--font-mono); font-size: 12px; color: var(--fg-dim); }
+.claim-header .claim-created { color: var(--fg-mute); font-size: 12px; }
 .claim-line {
+  position: relative;
+  --hint-left: 126px;
   display: grid;
-  grid-template-columns: minmax(90px, 140px) 1fr;
-  gap: 8px;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 2px 14px;
   padding: 3px 0;
   align-items: baseline;
 }
 .claim-line > .label {
-  color: var(--fg-dim);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  grid-row: 1 / span 2;
+  color: var(--fg-mute);
+  font-size: 13px;
 }
-.claim-line > .value { overflow-wrap: anywhere; }
-.claim-line .mono, .claim-footprint .mono { font-family: var(--font-mono); font-size: 11px; }
+.claim-line > .label::first-letter { text-transform: uppercase; }
+.claim-line > :nth-child(2) { min-width: 0; color: var(--fg); overflow-wrap: anywhere; }
+.claim-line.mono-value > .value,
+.claim-line .mono, .claim-footprint .mono { font-family: var(--font-mono); font-size: 12px; }
+.claim-line a { color: var(--accent); text-decoration: none; }
+.claim-line a:hover { text-decoration: underline; }
+.claim-line > .exec-origin { font-size: 12px; }
 .claim-line.expired > .value { color: var(--state-failed); }
 .claim-line.remote > .value { color: var(--fg-dim); }
 .claim-line.released > .value { color: var(--fg-mute); }
-/* Labels stack above values once the detail column is too narrow for two
-   columns; a 90px label track leaves a machine id or selector unreadable. */
-@media (max-width: 480px) {
-  .claim-line { grid-template-columns: 1fr; gap: 2px; }
+/* A status (phase, review verdict, authority, landing) is a dot and text in
+   one tone, like a state label elsewhere; the rest of the value stays dim. */
+.claim-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--tone, var(--fg));
 }
+.claim-status::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tone, var(--fg-dim));
+}
+.claim-status.tone-ok { --tone: var(--state-success); }
+.claim-status.tone-active { --tone: var(--state-running); }
+.claim-status.tone-warn { --tone: var(--warn-fg); }
+.claim-status.tone-danger { --tone: var(--danger-fg); }
+.claim-status.tone-muted { --tone: var(--fg-mute); }
+.claim-status-detail { color: var(--fg-dim); }
 .claim-note {
-  grid-column: 1 / -1;
+  grid-column: 2;
   color: var(--fg-mute);
-  font-size: 11px;
-  line-height: 1.4;
+  font-size: 12px;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
-.claim-footprint { max-height: 180px; overflow-y: auto; }
+/* Labels stack above values once the column is too narrow for two; a
+   112px label track leaves a machine id or selector unreadable. */
+@media (max-width: 480px) {
+  .claim-line { grid-template-columns: 1fr; gap: 2px; --hint-left: 0; }
+  .claim-line > .label { grid-row: auto; }
+  .claim-note { grid-column: 1; }
+}
+@container task-pane (max-width: 400px) {
+  .claim-line { grid-template-columns: 1fr; gap: 2px; --hint-left: 0; }
+  .claim-line > .label { grid-row: auto; }
+  .claim-note { grid-column: 1; }
+}
+/* The handoff's delivery facts lead the claim, then the attempt that
+   produced them; each group opens on a small subhead. */
+.claim-group + .claim-group {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hair);
+}
+.claim-subhead {
+  margin: 0 0 4px;
+  color: var(--fg-dim);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+/* Long lists and raw evidence sit behind a native disclosure. */
+.claim-disclosure > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+}
+.claim-disclosure > summary::-webkit-details-marker { display: none; }
+.claim-disclosure > summary::after {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+.claim-disclosure[open] > summary::after { transform: rotate(45deg); }
+.claim-disclosure > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.claim-footprint {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  overflow-y: auto;
+  background: var(--bg-well);
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  color: var(--fg-soft);
+  overflow-wrap: anywhere;
+}
+.landing-evidence {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hair);
+}
+.landing-evidence > summary {
+  display: flex;
+  width: 100%;
+  color: var(--fg-dim);
+  font-size: 13px;
+}
+.landing-evidence > summary::after { order: -1; }
+.claim-disclosure-meta { margin-left: auto; color: var(--fg-mute); font-size: 12px; }
+.landing-evidence-body {
+  margin: 10px 0 0;
+  padding: 12px 14px;
+  max-height: 220px;
+  overflow: auto;
+  background: var(--bg-well);
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--fg-soft);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .claim-warning {
-  border-left: 2px solid var(--state-failed);
-  padding: 6px 10px;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius-sm);
+  background: var(--danger-wash);
+  padding: 8px 12px;
   margin: 8px 0;
   color: var(--fg);
 }
 .claim-warning .label {
-  color: var(--fg-dim);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  color: var(--danger-fg);
+  font-size: 12px;
   margin-right: 8px;
 }
-.handoff-panel {
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-}
-.handoff-panel h5 {
-  margin: 0 0 6px 0;
-}
+/* The owner actions are one card, apart from the claim's facts and from the
+   task's own actions under the tabs: approval, then recovery with a single
+   reason field and its actions grouped by what they act on. */
 .claim-actions {
+  position: relative;
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+  padding: 14px 16px 16px;
+  background: var(--bg-well);
+  border: 1px solid var(--hair);
+  border-radius: var(--radius);
+}
+.claim-actions-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.claim-actions-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-strong);
+}
+.claim-approval {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+.claim-recovery { display: grid; gap: 10px; }
+.claim-approval + .claim-recovery {
+  padding-top: 12px;
+  border-top: 1px solid var(--hair);
+}
+.claim-recovery > .claim-subhead { margin: 0; }
+.claim-reason-field {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 12px;
+}
+.claim-reason-label { color: var(--fg-mute); font-size: 12.5px; }
+.claim-reason-problem {
+  grid-column: 2;
+  color: var(--danger-fg);
+  font-size: 12px;
+}
+.claim-reason-problem:empty { display: none; }
+.claim-action-group {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 4px 12px;
+}
+.claim-action-group-label { color: var(--fg-mute); font-size: 12.5px; }
+.claim-action-group-body { display: grid; gap: 4px; min-width: 0; }
+.claim-action-buttons {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
+}
+.claim-action-hint {
+  color: var(--fg-mute);
+  font-size: 12px;
+  line-height: 1.45;
+}
+@container task-pane (max-width: 400px) {
+  .claim-reason-field,
+  .claim-action-group { grid-template-columns: 1fr; }
+  .claim-reason-problem { grid-column: 1; }
+}
+@media (max-width: 480px) {
+  .claim-reason-field,
+  .claim-action-group { grid-template-columns: 1fr; }
+  .claim-reason-problem { grid-column: 1; }
 }
 .claim-action {
-  background: var(--bg-elev);
+  min-height: 30px;
+  background: transparent;
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0 12px;
   font: inherit;
-  font-size: 11px;
+  font-size: 12.5px;
+  font-weight: 500;
   cursor: pointer;
 }
 .claim-action:hover:not(:disabled) { color: var(--fg); border-color: var(--fg-dim); }
 .claim-action:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Approval is the card's primary decision and reads like the task's own
+   approve. */
+.claim-action.approve {
+  border-color: #24493e;
+  background: #0f1f18;
+  color: #bdf0d6;
+}
+.claim-action.approve:hover:not(:disabled) { border-color: var(--state-success); color: #d8fbe9; }
 /* Revoke and Recover withdraw authority or fence an attempt, so they carry
    the same destructive treatment as a reject. */
 .claim-action.revoke,
-.claim-action.recover { color: #e7b8b1; }
+.claim-action.recover { color: #e7b8b1; border-color: color-mix(in srgb, var(--danger-fg) 28%, var(--border)); }
 .claim-action.revoke:hover:not(:disabled),
 .claim-action.recover:hover:not(:disabled) {
   border-color: #5a2a27;
@@ -236,29 +424,33 @@ a.failure-id-link:focus-visible {
 }
 .claim-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .claim-reason {
+  width: 100%;
+  min-height: 32px;
+  box-sizing: border-box;
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 2px;
-  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  padding: 0 10px;
   font: inherit;
-  font-size: 11px;
+  font-size: 12.5px;
   min-width: 0;
-  flex: 1 1 160px;
 }
+.claim-reason:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.claim-reason[aria-invalid="true"] { border-color: var(--danger-fg); }
 
 /* An unauthorized action is explained, not hidden: the operator learns
    why, and the server refuses the call either way. */
 .claim-action-denied {
   color: var(--fg-mute);
-  font-size: 11px;
+  font-size: 12px;
   font-style: italic;
   overflow-wrap: anywhere;
 }
 .claim-feedback {
   padding: 6px 10px;
   margin-bottom: 8px;
-  font-size: 11px;
+  font-size: 12px;
   border-left: 2px solid var(--border);
   overflow-wrap: anywhere;
 }
@@ -486,3 +678,25 @@ a.failure-id-link:focus-visible {
 }
 .knowledge-grid .value { color: var(--fg); }
 .knowledge-grid .value.ratio { color: var(--accent-hover); }
+
+/* Run events: a one-line preview that opens to the full fields. */
+/* Takes the width the other columns leave, so the table fits the panel. */
+td.run-event-detail { width: 100%; max-width: 0; min-width: 16rem; }
+td.run-event-detail summary {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+td.run-event-detail summary::-webkit-details-marker { display: none; }
+td.run-event-detail summary::before { content: "▸ "; color: var(--fg-dim); }
+td.run-event-detail details[open] summary::before { content: "▾ "; }
+td.run-event-detail details[open] summary { color: var(--fg); }
+td.run-event-detail pre {
+  margin: 6px 0 2px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  color: var(--fg);
+}

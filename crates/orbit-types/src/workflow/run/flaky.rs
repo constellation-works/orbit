@@ -5,9 +5,11 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::task::{TaskDecision, TaskHistoryEntry};
+
 /// Maximum number of failed tests eligible for one isolated candidate replay.
 pub const MAX_FLAKY_TESTS: usize = 3;
-/// Task history event carrying a [`FlakyValidation`] record.
+/// Task history event whose decision is a [`FlakyValidation`] record.
 pub const FLAKY_VALIDATION_EVENT: &str = "flaky_validation";
 const MARKER: &str = "[flaky_validation]";
 
@@ -87,14 +89,26 @@ impl FlakyValidation {
         )
     }
 
-    /// Recover the structured record from a history note.
+    /// The record a history entry carries: its decision, or for an entry
+    /// written before typed decisions, its note. A record that is not
+    /// [`valid`](Self::valid) is none.
     #[must_use]
-    pub fn from_text(text: &str) -> Option<Self> {
+    pub fn from_entry(entry: &TaskHistoryEntry) -> Option<Self> {
+        match &entry.decision {
+            Some(TaskDecision::FlakyValidation(record)) => Some(record.clone()),
+            Some(_) => None,
+            None => Self::from_legacy_note(entry.note.as_deref()?),
+        }
+        .filter(Self::valid)
+    }
+
+    /// Legacy reader: the record a note written before typed decisions
+    /// carries after the marker.
+    fn from_legacy_note(text: &str) -> Option<Self> {
         let (_, rest) = text.split_once(MARKER)?;
         serde_json::Deserializer::from_str(rest.trim_start())
             .into_iter::<Self>()
             .next()?
             .ok()
-            .filter(Self::valid)
     }
 }

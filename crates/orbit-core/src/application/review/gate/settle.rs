@@ -1,6 +1,5 @@
 //! Settle the reviewer's report into an honest verdict and certificate.
 
-use std::collections::BTreeMap;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -17,7 +16,8 @@ use orbit_types::workflow::handoff::{HandoffArtifactRef, HandoffReviewEvidence};
 use orbit_types::workflow::{
     CommitIdentity, REVIEW_ABANDONED_MARKER, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
     REVIEW_LANDING_DECISION_PENDING, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT,
-    ReviewAttemptState, ReviewCertificate, ReviewTiming, ReviewerIdentity,
+    ReviewAttemptState, ReviewCertificate, ReviewGateAdmissionOutput, ReviewGateAdmitted,
+    ReviewGateDecision, ReviewGateHistoryNote, ReviewGateRefusal, ReviewTiming, ReviewerIdentity,
 };
 use serde_json::{Value, json};
 
@@ -33,10 +33,7 @@ use super::judgement::{
     Delivery, Judgement, comment_lead, repair_author_label, review_fixes_section, verdict_comment,
     write_artifact,
 };
-use super::owed::{
-    EVIDENCE_RECEIVED_DECISION, defers_linux_codeql, owed_evidence, owed_hold_received,
-    split_owner_owed,
-};
+use super::owed::{defers_linux_codeql, owed_evidence, owed_hold_received, split_owner_owed};
 use super::release::release_review_attempt;
 
 /// Close the admitted attempt with an honest verdict.
@@ -58,25 +55,36 @@ pub(crate) fn review_gate_settle(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
-    let admission_output = input.get("admission").cloned().unwrap_or(Value::Null);
-    if admission_output.get("applies").and_then(Value::as_bool) != Some(true) {
-        return Ok(json!({
-            "gate": "not_required",
-            "reason": admission_output.get("reason").cloned().unwrap_or(Value::Null),
-            "reviewed_head_sha": "",
-            "reviewed_base_sha": "",
-            "reviewer_fixed": false,
-            "review_fixes": "",
-            // Always present: a claimed leaf's handoff forwards it typed.
-            "handoff_evidence": null,
-        }));
-    }
+    // The admission step's output, parsed once; `null` when it recorded none.
+    let admission_output = input
+        .get("admission")
+        .filter(|admission| !admission.is_null())
+        .map(ReviewGateAdmissionOutput::from_value)
+        .transpose()
+        .map_err(|error| {
+            DispatchError::action_failed(
+                action,
+                format!("review_gate_settle requires a readable admission ({error})"),
+            )
+        })?;
+    let admitted = match admission_output {
+        Some(ReviewGateAdmissionOutput::Admitted(admitted)) => admitted,
+        Some(ReviewGateAdmissionOutput::PreflightPassed { .. }) => {
+            return Err(DispatchError::action_failed(
+                action,
+                "review_gate_settle requires admission.attempt_id; a budget preflight admits \
+                 no attempt"
+                    .to_string(),
+            ));
+        }
+        Some(ReviewGateAdmissionOutput::NotApplicable(not_applicable)) => {
+            return Ok(not_required(Some(not_applicable.reason)));
+        }
+        None => return Ok(not_required(None)),
+    };
     let mut settle_input = input.clone();
-    if let (Some(object), Some(base_sha)) = (
-        settle_input.as_object_mut(),
-        admission_output.get("base_sha").cloned(),
-    ) {
-        object.insert("base_sha".to_string(), base_sha);
+    if let Some(object) = settle_input.as_object_mut() {
+        object.insert("base_sha".to_string(), json!(admitted.base_sha));
     }
     let mut context = GateContext::load(runtime, &settle_input, None)
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
@@ -86,27 +94,17 @@ pub(crate) fn review_gate_settle(
             "review_gate_stale: the run no longer carries a review admission".to_string(),
         ));
     }
-    let attempt_id = admission_output
-        .get("attempt_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            DispatchError::action_failed(
-                action,
-                "review_gate_settle requires admission.attempt_id".to_string(),
-            )
-        })?
-        .to_string();
-    let reviewer = reviewer_identity(runtime, &context, &admission_output)
+    if admitted.attempt_id.trim().is_empty() {
+        return Err(DispatchError::action_failed(
+            action,
+            "review_gate_settle requires admission.attempt_id".to_string(),
+        ));
+    }
+    let attempt_id = admitted.attempt_id.clone();
+    let reviewer = reviewer_identity(runtime, &context, &admitted.reviewer)
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
 
-    let outcome = settle(
-        runtime,
-        &mut context,
-        &attempt_id,
-        reviewer,
-        &admission_output,
-    );
+    let outcome = settle(runtime, &mut context, &attempt_id, reviewer, &admitted);
     let (status, decision, error) = match &outcome {
         Ok(Settled::Passed(value)) => (AuditEventStatus::Success, value.clone(), None),
         Ok(Settled::AwaitingEvidence(hold)) => (
@@ -159,8 +157,9 @@ pub(crate) fn review_gate_settle(
     match outcome {
         Ok(Settled::Passed(value)) => Ok(value),
         Ok(Settled::AwaitingEvidence(hold)) => Err(DispatchError::ReviewEvidenceHold(hold)),
-        Ok(Settled::Blocked(certificate)) => Err(DispatchError::DeterministicActionRefused {
+        Ok(Settled::Blocked(certificate)) => Err(DispatchError::ReviewGateRefused {
             action: action.to_string(),
+            refusal: ReviewGateRefusal::Blocked,
             message: format!(
                 "review_gate_blocked: verdict {} ({}); {} finding(s) recorded; {}",
                 certificate.verdict.as_str(),
@@ -169,7 +168,7 @@ pub(crate) fn review_gate_settle(
                     .as_deref()
                     .unwrap_or("no escalation reason recorded"),
                 certificate.findings.len(),
-                candidate_standing(&admission_output)
+                candidate_standing(&admitted)
             ),
         }),
         // Typed `[baseline_red]`, so the failure handoff keeps the candidate
@@ -179,26 +178,39 @@ pub(crate) fn review_gate_settle(
             message: baseline::baseline_red_refusal(&certificate.baseline_red, &attempt_id)
                 .unwrap_or_default(),
         }),
-        Ok(Settled::Abandoned) => Err(DispatchError::DeterministicActionRefused {
+        Ok(Settled::Abandoned) => Err(DispatchError::ReviewGateRefused {
             action: action.to_string(),
+            refusal: ReviewGateRefusal::Abandoned,
             message: format!(
                 "{REVIEW_ABANDONED_MARKER} the reviewer exited successfully but its only report \
                  is the initial provisional one (verdict incomplete, no escalation, finding or \
                  validation record, never updated); attempt {attempt_id} was released without a \
                  verdict, so the candidate's review is not spent and a reviewer is admitted again \
                  within its remaining minutes; {}",
-                candidate_standing(&admission_output)
+                candidate_standing(&admitted)
             ),
         }),
         Err(error) => Err(DispatchError::action_failed(action, error.to_string())),
     }
 }
 
+/// The settlement of a gate that did not apply, for `reason`.
+fn not_required(reason: Option<String>) -> Value {
+    json!({
+        "gate": "not_required",
+        "reason": reason,
+        "reviewed_head_sha": "",
+        "reviewed_base_sha": "",
+        "reviewer_fixed": false,
+        "review_fixes": "",
+        // Always present: a claimed leaf's handoff forwards it typed.
+        "handoff_evidence": null,
+    })
+}
+
 /// What a settled-without-approval review leaves the candidate waiting for.
-fn candidate_standing(admission_output: &Value) -> &'static str {
-    if admission_output.get("timing").and_then(Value::as_str)
-        == Some(ReviewTiming::BeforeLanding.as_str())
-    {
+fn candidate_standing(admitted: &ReviewGateAdmitted) -> &'static str {
+    if admitted.timing == ReviewTiming::BeforeLanding {
         REVIEW_LANDING_DECISION_PENDING
     } else {
         "the candidate stays unpublished until a recorded decision resumes delivery"
@@ -223,14 +235,12 @@ fn settle(
     context: &mut GateContext,
     attempt_id: &str,
     reviewer: ReviewerIdentity,
-    admission_output: &Value,
+    admitted: &ReviewGateAdmitted,
 ) -> Result<Settled, OrbitError> {
     let store = runtime.review_store()?;
     // The admission names the lineage it reserved in; a resumed run reuses
     // that admission, so settlement never re-derives a different key.
-    let lineage_key = admission_output
-        .get("lineage_key")
-        .and_then(Value::as_str)
+    let lineage_key = Some(admitted.lineage_key.as_str())
         .filter(|key| !key.trim().is_empty())
         .map_or_else(|| context.lineage_key(), ToOwned::to_owned);
     let ledger = store
@@ -320,9 +330,7 @@ fn settle(
 
     // A held review whose owed evidence arrived settles without a reviewer,
     // on exactly the clean candidate its admission pinned.
-    let held = if admission_output.get("decision").and_then(Value::as_str)
-        == Some(EVIDENCE_RECEIVED_DECISION)
-    {
+    let held = if admitted.decision == ReviewGateDecision::EvidenceReceived {
         if head.commit != attempt.candidate.commit
             || !uncommitted_paths(&context.workspace_path)?.is_empty()
         {
@@ -333,9 +341,7 @@ fn settle(
                 attempt.candidate.commit
             )));
         }
-        let held_attempt = admission_output
-            .get("held_attempt_id")
-            .and_then(Value::as_str);
+        let held_attempt = admitted.held_attempt_id.as_deref();
         Some(
             owed_hold_received(runtime, context, &reviewed)?
                 .filter(|(hold, _)| Some(hold.attempt_id.as_str()) == held_attempt)
@@ -353,16 +359,8 @@ fn settle(
         Some((hold, certificate)) => Judgement::from_held_certificate(context, hold, certificate),
         None => Judgement::from_report(runtime, context, &attempt)?,
     };
-    let admitted_selectors = admission_output
-        .get("task_selectors")
-        .cloned()
-        .map(serde_json::from_value::<BTreeMap<String, Vec<String>>>)
-        .transpose()
-        .map_err(|error| {
-            OrbitError::InvalidInput(format!("admission.task_selectors is unreadable: {error}"))
-        })?
-        .unwrap_or_default();
-    judgement.check_task_meaning(context, &attempt, &admitted_selectors)?;
+    let admitted_selectors = &admitted.task_selectors;
+    judgement.check_task_meaning(context, &attempt, admitted_selectors)?;
     // [ORB-15130] A reviewer that ended its session with nothing but the
     // provisional report it persisted first produced no verdict. Settling it
     // would count it as the candidate's one review, so the attempt is released
@@ -389,7 +387,7 @@ fn settle(
     let repair = match committed_repair {
         Some(commit) => {
             let paths = committed_paths(&context.workspace_path, &commit.commit)?;
-            judgement.adopt_repairs(runtime, context, &paths, &admitted_selectors)?;
+            judgement.adopt_repairs(runtime, context, &paths, admitted_selectors)?;
             Some(commit)
         }
         // A settled ledger never charged a repair that was not committed.
@@ -437,7 +435,7 @@ fn settle(
         // [ORB-15630] The claim host ran the owner's required gates on the
         // reviewed candidate outside the agent sandbox; its results decide
         // those checks, not the reviewer's sandboxed records.
-        let gates = admitted_host_gates(admission_output, &reviewed.head.commit)?;
+        let gates = admitted_host_gates(admitted, &reviewed.head.commit);
         judgement.adopt_host_gates(&gates, &reviewed.base.commit, repair.is_some());
     }
     // [ORB-14478] A claimed leaf's host runs the sandbox-gated checks its
@@ -480,11 +478,13 @@ fn settle(
     )?;
     judgement.accept_on_host_evidence(repair.as_ref(), &validation_scope, !baseline_red.is_empty());
     // [ORB-14616] Every file a control mutated must come back byte-identical
-    // in the final candidate.
+    // in the final candidate. [ORB-16447] One this attempt's own repair
+    // changed comes back to the repaired blob its record declares.
     let unrestored = judgement.unrestored_mutation(
         &context.workspace_path,
         &reviewed.head.commit,
         &final_candidate.commit,
+        repair.as_ref(),
     )?;
     judgement.reconcile_verdict(repair.as_ref(), &validation_scope, unrestored.as_ref());
     let now = Utc::now();
@@ -719,8 +719,12 @@ fn reconcile_settled(
             )));
         }
     }
-    // Settlement may have stopped before every task carried the evidence.
+    // Settlement may have stopped before every task carried the evidence
+    // or its known-red decisions. Both writes reconcile only missing entries.
     publish_certificate(runtime, context, &certificate)?;
+    if certificate.verdict.passed() {
+        baseline::record_known_red(runtime, &context.task_ids, &certificate.known_red)?;
+    }
     settled_outcome(runtime, context, certificate)
 }
 
@@ -846,16 +850,20 @@ fn settled_outcome(
                         && hold.task_meaning_digest == certificate.task_meaning_digest
                 })
             {
-                runtime.apply_task_automation_update(task_id, TaskAutomationUpdate {
-                    expected_status: Some(orbit_types::task::TaskStatus::InProgress),
-                    status: Some(orbit_types::task::TaskStatus::InProgress),
-                    status_event: Some("review_awaiting_evidence".into()),
-                    status_note: Some(format!(
-                        "run={}; candidate={}; awaiting named external checks; receipt queues a fresh review",
-                        context.run_id, hold.candidate.commit,
-                    )),
-                    ..Default::default()
-                })?;
+                runtime.apply_task_automation_update(
+                    task_id,
+                    TaskAutomationUpdate {
+                        expected_status: Some(orbit_types::task::TaskStatus::InProgress),
+                        status: Some(orbit_types::task::TaskStatus::InProgress),
+                        status_event: Some("review_awaiting_evidence".into()),
+                        status_note: Some(ReviewGateHistoryNote::awaiting_evidence_text(
+                            &context.run_id,
+                            &hold.candidate.commit,
+                            None,
+                        )),
+                        ..Default::default()
+                    },
+                )?;
                 return Ok(Settled::AwaitingEvidence(Box::new(hold)));
             }
         }

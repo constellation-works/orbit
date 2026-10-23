@@ -27,8 +27,8 @@
 //! tip to the durable ref, and the next claim on another host resumes it.
 
 use orbit_engine::TaskAutomationUpdate;
-use orbit_types::task::{CANDIDATE_RESUME_EVENT, TaskStatus};
-use orbit_types::workflow::BaselineRedHold;
+use orbit_types::task::{CANDIDATE_RESUME_EVENT, TaskDecision, TaskStatus};
+use orbit_types::workflow::{BaselineRedHold, CANDIDATE_HELD_EVENT};
 
 use super::*;
 
@@ -88,7 +88,7 @@ pub(super) fn bare(pair: &Pair) -> PathBuf {
 }
 
 pub(super) fn has_commit(repo: &Path, sha: &str) -> bool {
-    std::process::Command::new("git")
+    crate::git_test_support::command()
         .arg("-C")
         .arg(repo)
         .args(["cat-file", "-e", &format!("{sha}^{{commit}}")])
@@ -208,14 +208,7 @@ pub(super) fn claim_candidate(
 /// A candidate committed on one host and released before its push is carried
 /// to a durable ref on `origin`, and the task's next claim on a host with its
 /// own object store resumes that same commit instead of implementing anew.
-#[test]
 fn a_carried_candidate_resumes_on_another_host() {
-    if !isolated(
-        module_path!(),
-        "a_carried_candidate_resumes_on_another_host",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -291,14 +284,7 @@ fn a_carried_candidate_resumes_on_another_host() {
 /// When the candidate cannot be pushed to a durable ref, a claim on another
 /// host implements fresh and the owner's task history says why, typed; the
 /// host that holds the candidate is still offered it.
-#[test]
 fn an_uncarried_candidate_is_fresh_elsewhere_with_a_typed_reason() {
-    if !isolated(
-        module_path!(),
-        "an_uncarried_candidate_is_fresh_elsewhere_with_a_typed_reason",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -422,9 +408,9 @@ fn owner_run_named(pair: &Pair, run_id: &str, task: &str) {
     owner.write_run_state(run_id, &state).unwrap();
 }
 
-/// The owner's own `task_pr_pipeline` run of `task`: its checkout, then its
-/// `resume_candidate` step, with the inputs the pipeline passes them.
-fn owner_local_run(pair: &Pair, task: &str) -> (Value, Value) {
+/// The owner's own `task_pr_pipeline` run through worktree setup, which stamps
+/// its binding even if the run stops before its candidate-resume step.
+fn owner_local_setup(pair: &Pair, task: &str) -> (String, Value) {
     let owner = &pair.wire.owner;
     let run = owner_jobs(pair)
         .insert_job_run("task_pr_pipeline", 1, Utc::now(), None, None)
@@ -442,8 +428,13 @@ fn owner_local_run(pair: &Pair, task: &str) -> (Value, Value) {
             "dependency_delivery": "ignore",
         }),
     );
+    (run, setup)
+}
+
+fn owner_local_run(pair: &Pair, task: &str) -> (Value, Value) {
+    let (run, setup) = owner_local_setup(pair, task);
     let resumed = engine_action(
-        owner,
+        &pair.wire.owner,
         "candidate_resume",
         &json!({
             "job_run_id": run,
@@ -455,6 +446,92 @@ fn owner_local_run(pair: &Pair, task: &str) -> (Value, Value) {
         }),
     );
     (setup, resumed)
+}
+
+/// A stopped local attempt that kept nothing does not inherit an older claim's
+/// candidate. Requeue must distinguish that route from the next claim's offer.
+fn a_candidateless_local_attempt_reports_distinct_requeue_routes() {
+    let pair = Pair::new(1);
+    let task = pair.tasks[0].clone();
+    let base = owner_published(&pair);
+    let follower = host_checkout(&pair, &pair);
+    let (_, leaf, head, carry) = committed_then_stopped(&pair, &follower, &base, true);
+    assert_eq!(carry["carry"], "durable", "{carry}");
+    pair.wire
+        .owner
+        .requeue_blocked_task(&task, "keep claim A", false)
+        .unwrap();
+
+    // B stamps its owner-local binding, then stops before candidate_resume.
+    let (local, _) = owner_local_setup(&pair, &task);
+    assert_eq!(pair.owner_task(&task)["job_run_id"], local);
+    owner_jobs(&pair)
+        .finalize_job_run(&local, JobRunState::Cancelled, Utc::now(), None)
+        .unwrap();
+    pair.wire
+        .owner
+        .apply_task_automation_update(
+            &task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Blocked),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let report = pair
+        .wire
+        .owner
+        .requeue_blocked_task(&task, "local attempt stopped without a candidate", false)
+        .unwrap();
+
+    // C actually starts fresh; its source must agree with the public report.
+    let (setup, resumed) = owner_local_run(&pair, &task);
+    assert_eq!(setup["prior_job_run_id"], local);
+    assert_eq!(resumed["outcome"], "fresh", "{resumed}");
+    assert_eq!(resumed["reason_code"], "no_candidate", "{resumed}");
+    assert_eq!(report["resumes"]["owner_local"], false, "{report:#}");
+    assert_eq!(report["resumes"]["source"], "claim", "{report:#}");
+    assert_eq!(report["resumes"]["source_run_id"], leaf, "{report:#}");
+    assert_eq!(report["resumes"]["machine_id"], FOLLOWER, "{report:#}");
+    assert_eq!(report["resumes"]["head_sha"], head, "{report:#}");
+    let next = report["next_step"].as_str().unwrap();
+    assert!(
+        next.contains("owner-local run implements fresh") && next.contains("claimed run continues"),
+        "{report:#}"
+    );
+    let checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    assert_ne!(
+        std::fs::read_to_string(checkout.join("src/f0.rs")).unwrap(),
+        CARRIED
+    );
+
+    // Stopping C still leaves A available to a subsequent claimed attempt.
+    let current = pair.owner_task(&task)["job_run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    owner_jobs(&pair)
+        .finalize_job_run(&current, JobRunState::Cancelled, Utc::now(), None)
+        .unwrap();
+    pair.wire
+        .owner
+        .apply_task_automation_update(
+            &task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Blocked),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    pair.wire
+        .owner
+        .requeue_blocked_task(&task, "use the claim route", false)
+        .unwrap();
+    let drain = pair.run_drain();
+    let next = pair.running_leaf(&drain, 1);
+    let offered = claim_candidate(&pair, &next).expect("claim admission retains A");
+    assert_eq!(offered.head_sha, head);
+    assert_eq!(offered.source_run_id.as_deref(), Some(leaf.as_str()));
 }
 
 /// The note of the owner's latest `candidate_resume` event for `task`.
@@ -475,14 +552,7 @@ fn resume_note(pair: &Pair, task: &str) -> String {
 /// `task_pr_pipeline`. That run continues the follower's candidate — same
 /// source run, same commit — instead of implementing anew, and never reads
 /// the unrelated owner run that shares the leaf's id.
-#[test]
 fn an_owner_local_run_continues_a_failed_claims_candidate() {
-    if !isolated(
-        module_path!(),
-        "an_owner_local_run_continues_a_failed_claims_candidate",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -530,14 +600,7 @@ fn an_owner_local_run_continues_a_failed_claims_candidate() {
 /// owner's own run implements fresh, says the foreign machine's run kept
 /// nothing, and does not resume what an unrelated owner run under the same
 /// id preserved.
-#[test]
 fn an_owner_local_run_never_reads_a_local_run_sharing_the_leafs_id() {
-    if !isolated(
-        module_path!(),
-        "an_owner_local_run_never_reads_a_local_run_sharing_the_leafs_id",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     owner_published(&pair);
@@ -567,14 +630,7 @@ fn an_owner_local_run_never_reads_a_local_run_sharing_the_leafs_id() {
 /// not carry it to `origin` — is set aside by the owner's own run with a
 /// typed reason in the task's history naming the claim and the machine that
 /// holds it.
-#[test]
 fn an_owner_local_run_records_why_it_sets_a_kept_candidate_aside() {
-    if !isolated(
-        module_path!(),
-        "an_owner_local_run_records_why_it_sets_a_kept_candidate_aside",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -665,6 +721,22 @@ fn owner_run_held_on_red_base(pair: &Pair, task: &str, base: &str) -> (String, S
     assert_eq!(handoff["decision"], "held_baseline_red", "{handoff}");
     assert_eq!(handoff["head_sha"], head.as_str(), "{handoff}");
     assert_eq!(pair.owner_status(task), "backlog", "the task is held");
+    let history = owner.get_task_history(task).unwrap();
+    let entry = history
+        .iter()
+        .rev()
+        .find(|entry| entry.event == CANDIDATE_HELD_EVENT)
+        .expect("the hold records where the candidate is");
+    let Some(TaskDecision::CandidateHeld(held)) = &entry.decision else {
+        panic!("the held candidate is a typed decision: {entry:?}");
+    };
+    assert_eq!(held.head_sha, head);
+    assert_eq!(held.run_id, run);
+    assert_eq!(
+        entry.note,
+        Some(held.text()),
+        "the note is unchanged beside the decision"
+    );
     (run, head, handoff)
 }
 
@@ -689,14 +761,7 @@ fn hold_superseded(pair: &Pair, task: &str) {
 /// [ORB-14905] An owner-local run held on a red base pushes its candidate to
 /// a durable ref on `origin`, and the task's next claim — on a host with its
 /// own object store — resumes that commit instead of implementing anew.
-#[test]
 fn a_red_base_hold_carries_its_candidate_to_another_hosts_claim() {
-    if !isolated(
-        module_path!(),
-        "a_red_base_hold_carries_its_candidate_to_another_hosts_claim",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -766,14 +831,7 @@ fn a_red_base_hold_carries_its_candidate_to_another_hosts_claim() {
 /// still held, the hold's output and comment say the candidate is host-local
 /// with the push diagnostic, and a claim on another host implements fresh
 /// for that typed reason.
-#[test]
 fn a_red_base_hold_whose_push_is_refused_stays_host_local() {
-    if !isolated(
-        module_path!(),
-        "a_red_base_hold_whose_push_is_refused_stays_host_local",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -795,7 +853,7 @@ fn a_red_base_hold_whose_push_is_refused_stays_host_local() {
     assert!(!failure.is_empty(), "the push diagnostic: {handoff}");
     let reference = format!("refs/orbit/candidates/{task}/{run}");
     assert!(
-        std::process::Command::new("git")
+        crate::git_test_support::command()
             .arg("-C")
             .arg(bare(&pair))
             .args(["rev-parse", "--verify", "--quiet", &reference])
@@ -840,19 +898,13 @@ fn a_red_base_hold_whose_push_is_refused_stays_host_local() {
 }
 
 /// [ORB-15308] The claim pushed its candidate, opened #41 and failed in its
-/// before-landing review: a candidate failure, so the owner blocks the task.
-/// On-call returns it to the backlog; the next claim on the same host is
+/// before-landing review: a candidate failure, so the owner blocks the task
+/// and records the candidate on it [ORB-16770]. On-call requeues it, which
+/// reports the candidate it resumes; the next claim on the same host is
 /// handed the kept candidate with its pull request, and its resume takes
 /// over the published branch from the earlier claim's retained checkout, so
 /// the leaf's push and `pr_open` go through #41 rather than a second PR.
-#[test]
 fn a_requeued_claim_continues_its_published_branch_and_pull_request() {
-    if !isolated(
-        module_path!(),
-        "a_requeued_claim_continues_its_published_branch_and_pull_request",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let base = owner_published(&pair);
@@ -902,12 +954,37 @@ fn a_requeued_claim_continues_its_published_branch_and_pull_request() {
         kept["failed_step_id"], "landing_review_gate_settle",
         "{kept}"
     );
-
-    returned_to_backlog(&pair, &task);
+    // [ORB-16770] The owner's task records the kept candidate, and the
+    // owner's requeue reports that its next run continues it.
+    let recorded = pair
+        .wire
+        .owner
+        .get_task_history(&task)
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.event == orbit_types::task::CLAIM_CANDIDATE_KEPT_EVENT)
+        .and_then(|entry| entry.note)
+        .expect("the settlement records the kept candidate on the task");
+    assert!(
+        recorded.contains(&head) && recorded.contains(&branch) && recorded.contains("#41"),
+        "the record names the commit, its branch and pull request: {recorded}"
+    );
+    let requeued = pair
+        .wire
+        .owner
+        .requeue_blocked_task(&task, "keep the reviewed candidate", false)
+        .expect("the owner requeues the blocked task");
+    let resumes = &requeued["resumes"];
+    assert_eq!(resumes["source"], "claim", "{requeued:#}");
+    assert_eq!(resumes["head_sha"], head.as_str(), "{requeued:#}");
+    assert_eq!(resumes["branch"], branch.as_str(), "{requeued:#}");
+    assert_eq!(resumes["pull_request"], "41", "{requeued:#}");
+    assert_eq!(resumes["host_local"], false, "{requeued:#}");
+    assert_eq!(pair.owner_status(&task), "backlog");
     let drain = pair.run_drain();
     let next = pair.running_leaf(&drain, 1);
     assert_eq!(pair.claimed_task(&next), task, "the task is pulled again");
-    let offered = claim_candidate(&pair, &next).expect("the backlog move keeps the candidate");
+    let offered = claim_candidate(&pair, &next).expect("the requeue keeps the candidate");
     assert_eq!(
         (offered.branch.as_str(), offered.head_sha.as_str()),
         (branch.as_str(), head.as_str())
@@ -1015,6 +1092,7 @@ fn landing_review_stopped(
         .complete_job_run_step(
             leaf,
             &JobRunStepParams {
+                lock_wait_ms: None,
                 step_index: 0,
                 target_type: JobTargetType::Activity,
                 target_id: "landing_review_gate_settle".into(),
@@ -1041,41 +1119,20 @@ fn landing_review_stopped(
 /// carries the reviewer-fixed tip to the durable ref, the owner keeps that
 /// tip, and the task's next claim on a host whose object store never had the
 /// fix resumes it, fix included.
-#[test]
 fn a_rejected_landing_reviews_unpushed_fix_survives_to_another_host() {
-    if !isolated(
-        module_path!(),
-        "a_rejected_landing_reviews_unpushed_fix_survives_to_another_host",
-    ) {
-        return;
-    }
     landing_review_fix_resumes(true, JobRunState::Failed);
 }
 
 /// A carry push failure must keep the reviewer's local tip for this host's
 /// next claim, rather than silently offering the older published head.
-#[test]
 fn a_rejected_landing_reviews_uncarried_fix_resumes_on_its_host() {
-    if !isolated(
-        module_path!(),
-        "a_rejected_landing_reviews_uncarried_fix_resumes_on_its_host",
-    ) {
-        return;
-    }
     landing_review_fix_resumes(false, JobRunState::Failed);
 }
 
 /// A held leaf without a named external-evidence hold still settles its
 /// carried candidate; the reviewer-fixed tip must survive that terminal
 /// state just as it survives a failed review.
-#[test]
 fn a_held_landing_reviews_unpushed_fix_survives_to_another_host() {
-    if !isolated(
-        module_path!(),
-        "a_held_landing_reviews_unpushed_fix_survives_to_another_host",
-    ) {
-        return;
-    }
     landing_review_fix_resumes(true, JobRunState::Held);
 }
 
@@ -1250,3 +1307,24 @@ fn landing_review_fix_resumes(carry_available: bool, terminal: JobRunState) {
         "the reviewer's fix is applied for the next claim to continue"
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_carried_candidate_resumes_on_another_host_scenarios,
+    a_carried_candidate_resumes_on_another_host,
+    an_uncarried_candidate_is_fresh_elsewhere_with_a_typed_reason,
+    an_owner_local_run_continues_a_failed_claims_candidate,
+    an_owner_local_run_never_reads_a_local_run_sharing_the_leafs_id,
+    an_owner_local_run_records_why_it_sets_a_kept_candidate_aside,
+    a_red_base_hold_carries_its_candidate_to_another_hosts_claim,
+    a_red_base_hold_whose_push_is_refused_stays_host_local,
+    a_requeued_claim_continues_its_published_branch_and_pull_request,
+    a_candidateless_local_attempt_reports_distinct_requeue_routes
+);
+
+crate::scenario_table!(
+    a_rejected_landing_reviews_unpushed_fix_survives_to_another_host_scenarios,
+    a_rejected_landing_reviews_unpushed_fix_survives_to_another_host,
+    a_rejected_landing_reviews_uncarried_fix_resumes_on_its_host,
+    a_held_landing_reviews_unpushed_fix_survives_to_another_host
+);

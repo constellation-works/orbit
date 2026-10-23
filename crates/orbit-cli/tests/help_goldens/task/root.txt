@@ -1,0 +1,67 @@
+Create, update, and manage tasks
+
+Usage: orbit task <COMMAND>
+
+Tasks:
+  add          Create a new task
+  update       Update task fields; `--approve` takes the next approval step
+  archive      Archive a task
+  list         List tasks with optional filters
+  eligible     List backlog/proposed tasks that collide with no in-flight work
+  show         Show one task in detail, by ID, across registered workspaces
+  artifact     Manage task artifact files
+
+Health:
+  lint         Lint tasks for context-file and acceptance-criteria problems
+  flow         Show filed-vs-closed rates over time — is the backlog draining?
+  locks        Inspect, reserve, and release the file locks that gate dispatch
+  review-reset Reset one review lineage budget with an audited reason
+  reconcile-review
+               Validate and review a recovered delivery's changed merged head
+  retry-handoff
+               Retry a stopped authorized handoff through normal owner landing
+  requeue      Requeue a blocked task onto its published candidate
+  recheck-blocked
+               Requeue tasks whose infrastructure block has cleared
+  settle-merged
+               Settle tasks whose delivery pull request merged outside Orbit
+
+Bundles:
+  export       Export task bundles to a portable tar.zst archive
+  import       Import task bundles from a tar.zst archive
+  publication  Publish, inspect, diagnose, or restore task snapshots
+  reindex      Rebuild the registry index from on-disk task bundles
+
+Options:
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+
+Lifecycle:
+  orbit task update <id> --approve                  proposed -> backlog, review -> done
+  orbit task update <id> --status in-progress       take the work
+  orbit task update <id> --status review            hand it off
+
+Run `orbit task <COMMAND> --help` for a command's own options and examples.

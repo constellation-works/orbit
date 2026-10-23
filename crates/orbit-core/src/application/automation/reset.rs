@@ -40,21 +40,36 @@ pub fn reset_auto_task(
     let epoch = ownership::auto_task_epoch(definition, &trigger)?;
 
     // The baseline is read from the configured branch, not the executor's
-    // HEAD: it is the position the next evaluation will actually seed at.
+    // HEAD. Preserve remote-first resolution, but let operator reset and
+    // teardown proceed from the local ref when origin no longer serves it.
+    // Capture the fallback first: fetch can spend the source's whole deadline.
+    // Keep its error until needed so a missing local branch cannot prevent a
+    // successful remote-first reset.
     let source = Source::new(&runtime.paths().repo_root);
-    let (_, baseline) = source
-        .head(&trigger.branch)
-        .map_err(automation_error_to_orbit)?;
+    let local = source.local_head(&trigger.branch);
+    let baseline = match source.head(&trigger.branch) {
+        Ok((_, baseline)) => baseline,
+        Err(error) => {
+            tracing::warn!(
+                branch = %trigger.branch,
+                %error,
+                "reset source fetch unavailable; using local branch head"
+            );
+            local
+                .map(|(_, baseline)| baseline)
+                .map_err(automation_error_to_orbit)?
+        }
+    };
 
     let consumer = super::consumer_key(runtime, "auto-task", &definition.name)?;
     let by = runtime.actor().resolve_write_label(None, None)?;
     let store = runtime.automation_store()?;
-    let action_liveness = super::auto_task_action_liveness(
-        runtime,
-        definition,
-        store.automation_state(&consumer)?.as_ref(),
-        now,
-    );
+    let inspected_state = store.automation_state(&consumer)?;
+    let action_liveness =
+        super::auto_task_action_liveness(runtime, definition, inspected_state.as_ref(), now);
+
+    #[cfg(feature = "test-support")]
+    probe_hook::after_probe();
 
     if !request.mutates() {
         return reset::preview(
@@ -69,6 +84,7 @@ pub fn reset_auto_task(
                 now,
                 baseline,
                 released_refs: vec![],
+                inspected_state: inspected_state.as_ref(),
                 action_terminal: action_liveness.terminal,
                 action_failed_without_evidence: action_liveness.failed_without_evidence,
             },
@@ -80,7 +96,9 @@ pub fn reset_auto_task(
 
     // The pins are read before the write so the audit record names them, and
     // released after it: a refused reset must leave the frozen inputs of the
-    // debt it did not forget reachable.
+    // debt it did not forget reachable. This local pass gets its own budget:
+    // even a successful fetch may have spent the baseline source's deadline.
+    let source = Source::new(&runtime.paths().repo_root);
     let retained = source
         .retained_refs(&consumer)
         .map_err(automation_error_to_orbit)?;
@@ -97,6 +115,7 @@ pub fn reset_auto_task(
             now,
             baseline,
             released_refs: retained.clone(),
+            inspected_state: inspected_state.as_ref(),
             action_terminal: action_liveness.terminal,
             action_failed_without_evidence: action_liveness.failed_without_evidence,
         },
@@ -187,6 +206,8 @@ pub(crate) fn tear_down_auto_task_consumer(
 
     // Reset releases the pins it knows about; this catches the ones a consumer
     // without state, or a reset that could not delete them, left behind.
+    // Reset may have exhausted a fetch deadline since the initial pin read.
+    let source = Source::new(&runtime.paths().repo_root);
     let retained = source
         .retained_refs(&consumer)
         .map_err(automation_error_to_orbit)?;
@@ -217,4 +238,35 @@ fn delivery_consumer(
         return Ok(None);
     }
     super::consumer_key(runtime, "auto-task", &definition.name).map(Some)
+}
+
+#[cfg(feature = "test-support")]
+pub(crate) mod probe_hook {
+    use std::{cell::RefCell, rc::Rc};
+
+    type Hook = Rc<dyn Fn()>;
+    thread_local! {
+        static HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) };
+    }
+
+    /// Interleave a consumer transition after reset inspects action liveness.
+    /// Scoped to this thread and restored on return or unwind.
+    pub fn with_reset_probe_hook<T>(hook: impl Fn() + 'static, operation: impl FnOnce() -> T) -> T {
+        let _restore = Restore(HOOK.with(|slot| slot.replace(Some(Rc::new(hook)))));
+        operation()
+    }
+
+    struct Restore(Option<Hook>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            HOOK.with(|slot| slot.replace(self.0.take()));
+        }
+    }
+
+    pub(super) fn after_probe() {
+        let hook = HOOK.with(|slot| slot.borrow().clone());
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
 }

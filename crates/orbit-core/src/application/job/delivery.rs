@@ -18,12 +18,94 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_common::OrbitError;
 use orbit_common::fs::git::run_git;
 use orbit_types::task::{DELIVERY_JOB_TAG_PREFIX, Task, delivery_job_selection};
-use orbit_types::workflow::{JobKind, JobV2, ShipMode};
+use orbit_types::workflow::{ActivityV2Spec, JobKind, JobV2, JobV2Step, JobV2StepBody, ShipMode};
 use orbit_types::workspace::{git_remote_network_host, redact_git_remote};
 
 use super::catalog::{DEFAULT_JOB_FILES, is_default_job_name, shipped_job_spec};
 use crate::OrbitRuntime;
 use crate::application::review::LOCAL_ROUTE_JOB;
+use crate::runtime::task::locks::parse_task_ids;
+
+/// `git_commit` defaults to the singleton `all` scope in both PR and local
+/// leaves. Recognize renamed snapshots and inline/nested actions by contract;
+/// per-task commit jobs and coordinators dispatching children remain supported.
+fn has_single_task_delivery(spec: &JobV2) -> bool {
+    any_target(&spec.steps, &|action, input| {
+        action == "git_commit"
+            && input
+                .and_then(|input| input.get("scope"))
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|scope| scope == "all")
+    })
+}
+
+fn any_target(
+    steps: &[JobV2Step],
+    predicate: &impl Fn(&str, Option<&serde_json::Value>) -> bool,
+) -> bool {
+    steps.iter().any(|step| match &step.body {
+        JobV2StepBody::TargetRef(target) => target
+            .target
+            .strip_prefix("activity:")
+            .is_some_and(|action| predicate(action, target.default_input.as_ref())),
+        JobV2StepBody::Target(target) => match &target.spec {
+            ActivityV2Spec::Deterministic(spec) => {
+                predicate(&spec.action, target.default_input.as_ref())
+            }
+            ActivityV2Spec::AgentLoop(_) => false,
+        },
+        JobV2StepBody::Parallel { parallel } => any_target(&parallel.branches, predicate),
+        JobV2StepBody::FanOut { fan_out, .. } => {
+            any_target(std::slice::from_ref(fan_out.worker.as_ref()), predicate)
+        }
+        JobV2StepBody::Loop { loop_ } => any_target(&loop_.steps, predicate),
+    })
+}
+
+/// Validate the effective singleton task selection before admission effects, and
+/// normalize repeated IDs so the implementation loop runs once per task.
+pub(crate) fn normalize_delivery_input(
+    spec: &JobV2,
+    input: &mut serde_json::Value,
+) -> Result<(), OrbitError> {
+    if !has_single_task_delivery(spec) {
+        return Ok(());
+    }
+    let task_ids = input
+        .get("task_ids")
+        .or_else(|| spec.default_input.as_ref()?.get("task_ids"));
+    if let Some(task_ids) = task_ids
+        && task_ids.as_array().is_none_or(|ids| !ids.is_empty())
+    {
+        let ids = parse_task_ids(&serde_json::json!({"task_ids": task_ids}))?;
+        require_single_delivery_task(ids.len())?;
+        if input.is_null() {
+            *input = serde_json::json!({});
+        }
+        if !input.is_object() {
+            return Err(OrbitError::InvalidInput(
+                "job input must be an object".into(),
+            ));
+        }
+        input["task_ids"] = serde_json::json!(ids);
+    }
+    Ok(())
+}
+
+/// Admission must reject unsupported singleton bundles before any delivery effects.
+pub(crate) fn require_single_delivery_task(count: usize) -> Result<(), OrbitError> {
+    if count > 1 {
+        return Err(OrbitError::InvalidInput(
+            "delivery with git_commit scope: all supports exactly one distinct task per run; \
+             submit separate singleton PR or local runs (orbit run ship dispatches selections \
+             as singletons). For bundled local delivery, use a custom pipeline with explicit \
+             git_commit scope: per_task and compatible per-task validation, no-diff and recovery; \
+             task_local_pipeline is a singleton leaf"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
 
 /// The job that opens a pull request: the one route a forge remote gates.
 const PR_ROUTE_JOB: &str = "task_pr_pipeline";
@@ -93,6 +175,18 @@ impl OrbitRuntime {
         forge: &PrForgeCheck,
     ) -> Result<DeliveryRoute, OrbitError> {
         let route = self.resolve_delivery_route(tasks, mode)?;
+        if tasks.len() > 1
+            && (route.opens_pull_request()
+                || has_single_task_delivery(&self.resolved_job_spec(&route.job_name)?))
+        {
+            require_single_delivery_task(
+                tasks
+                    .iter()
+                    .map(|task| &task.id)
+                    .collect::<BTreeSet<_>>()
+                    .len(),
+            )?;
+        }
         if route.opens_pull_request() {
             forge.require(self)?;
         }

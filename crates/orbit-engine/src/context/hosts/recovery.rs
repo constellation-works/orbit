@@ -12,9 +12,10 @@ pub enum StepRecoveryAdmission {
     Denied { reason: String },
 }
 
-/// What one admitted conflict recovery may complete, fixed before its provider
-/// runs: the checkout, the HEAD the stopped rebase started from, and the
-/// pinned base it continues onto.
+/// What one host-owned preparation or rebase recovery may certify: the
+/// checkout, its candidate HEAD before rewriting, and the observed target
+/// base. A preparation certifies these observations without rewriting HEAD;
+/// conflict recovery fixes them before its provider runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RebaseRecoveryAttemptScope {
     pub workspace_path: String,
@@ -130,6 +131,10 @@ pub struct FinalRecoveryApplication {
     /// Top-level index a `resume` reruns from. Durable step checkpoints at and
     /// after it are stale once the run goes back there.
     pub resume_step_index: Option<u32>,
+    /// Successful host history checkpoints retained as provenance. These are
+    /// engine-selected indices, never activity response fields; replay still
+    /// reruns their actions and all validation/review after the resume point.
+    pub preserved_steps: Vec<u32>,
     /// Engine-observed HEAD advance during this recovery dispatch. Never read
     /// from the recovery activity's response.
     pub repair_commit: Option<orbit_types::workflow::FinalRecoveryRepairCommit>,
@@ -140,6 +145,10 @@ pub struct FinalRecoveryApplication {
     pub workspace_path: std::path::PathBuf,
     /// Whether the run held `completion: done` authority.
     pub completion_done: bool,
+    /// Set when the engine, not an agent, classified the failed step as
+    /// transient infrastructure. The decision is then an `escalate` the host
+    /// records as an infra block that a passing probe requeues.
+    pub infrastructure: Option<orbit_types::workflow::TransientInfrastructure>,
 }
 
 /// [ORB-13907] What applying a final-recovery decision did.
@@ -155,4 +164,28 @@ pub enum FinalRecoveryApplied {
     /// override, or because the applier refused it; the run's
     /// `failure_activity` follows.
     Escalated { outcome: String },
+}
+
+/// A pull-request repair the completion watcher asks to dispatch under
+/// `--auto-fix`: the run, the bundle, and the exact head and blocker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrAutoFixRequest {
+    pub run_id: String,
+    pub task_ids: Vec<String>,
+    pub pr_number: String,
+    pub head_sha: String,
+    pub blocker: orbit_types::workflow::PrAutoFixBlocker,
+    /// The run's `allowed_crews`, which the repair crew's draw honours.
+    pub allowed_crews: serde_json::Value,
+}
+
+/// What the host decided for a [`PrAutoFixRequest`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrAutoFixAdmission {
+    /// The ledger's decision, recorded under the primary task's lock when it
+    /// admits.
+    Decided(orbit_types::workflow::PrAutoFixDecision),
+    /// No repair may run here, for this reason: no usable crew, or a host
+    /// that does not own the task's record.
+    Refused(String),
 }

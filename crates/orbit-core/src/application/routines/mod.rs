@@ -7,8 +7,8 @@
 //! [`run_sweep_with_providers`] pass, invoked every minute by the OS clock
 //! (see [`clock`]), fires whatever is due on this host through the existing
 //! v2 run machinery. Every owner checkout is an independent schedule; a
-//! replica checkout schedules only host-local worktree GC [ORB-14173]
-//! (design in `docs/design/routines/`).
+//! replica checkout schedules only host-local worktree GC [ORB-14173] and
+//! store GC [ORB-16354] (design in `docs/design/routines/`).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -26,13 +26,14 @@ pub mod sweep;
 pub(crate) mod template;
 
 pub use clock::{
-    ClockInstallReport, ClockSettings, ClockStatus, ClockUnitConvergence, ClockUnitDrift,
-    ClockUnitInspection, ClockUnitReload, ClockUnitRewrite, ClockUnitVerdict,
+    ClockHealth, ClockInstallReport, ClockSettings, ClockStatus, ClockUnitConvergence,
+    ClockUnitDrift, ClockUnitInspection, ClockUnitReload, ClockUnitRewrite, ClockUnitVerdict,
     DEFAULT_CLOCK_CADENCE_SECONDS, RunningBinary, clock_status, clock_unit_drift_warning,
-    converge_clock_unit, inspect_clock_unit, install_clock, load_clock_settings,
-    probe_program_version, save_clock_settings, set_clock_cadence, set_clock_enabled,
+    converge_clock_unit, doctor_clock_not_running_issue, inspect_clock_unit, install_clock,
+    load_clock_settings, probe_program_version, save_clock_settings, set_clock_cadence,
+    set_clock_enabled,
 };
-pub use due::{DueDecision, due_decision, parse_cron};
+pub use due::{DueDecision, due_decision, minimum_cron_interval, parse_cron};
 pub use loader::{
     DiscoveredWorkspaces, HostRoutines, LoadedRoutine, OwnerOnlyRoutine, REPLICA_LOCAL_ROUTINE_JOB,
     RetiredRoutine, RoutineCollection, RoutineLoadError, RoutineOrigin, RoutineWorkspaceProvider,
@@ -40,8 +41,9 @@ pub use loader::{
 };
 pub(crate) use status::rewrite_enabled_line;
 pub use status::{
-    RoutineStatus, RoutineStatusReport, RoutineToggleOutcome, ScheduleDisplayState, pause_routine,
-    recent_fires, resume_routine, routine_statuses_with_providers, set_routine_enabled,
+    FireField, RoutineField, RoutineStatus, RoutineStatusReport, RoutineToggleOutcome,
+    RoutineToggleRefusal, ScheduleDisplayState, pause_routine, project_fire, recent_fires,
+    resume_routine, routine_statuses_with_providers, set_routine_enabled, toggle_listed_routine,
 };
 pub use sweep::{
     AutoTaskSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,

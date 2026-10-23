@@ -3,6 +3,7 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskComment, TaskStatus};
+use orbit_types::workflow::ReviewGateAdmissionOutput;
 use serde_json::{Value, json};
 
 use crate::context::{ReviewReleaseRequest, RuntimeHost, TaskAutomationUpdate};
@@ -172,6 +173,7 @@ pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
                 at: Utc::now(),
                 by: "system".to_string(),
                 message: note,
+                operation_id: None,
             }],
             ..TaskAutomationUpdate::default()
         },
@@ -221,10 +223,13 @@ fn reviewer_push_sentence(reviewer_push: Option<&Value>) -> String {
     }
 }
 
-/// The typed reason a failure message leads with — the first `snake_case:`
-/// token, such as `review_gate_blocked` or `review_timeout_incomplete` —
-/// else the step's error code.
+/// The typed reason for a failed step: a review-gate refusal's code, else the
+/// first `snake_case:` token its message leads with, such as
+/// `push_lease_lost`, else the step's error code.
 fn typed_reason(error_code: &str, error_message: &str) -> String {
+    if let Some(refusal) = orbit_types::workflow::ReviewGateRefusal::from_error_code(error_code) {
+        return refusal.error_code().to_string();
+    }
     error_message
         .split_whitespace()
         .filter_map(|word| word.strip_suffix(':'))
@@ -291,6 +296,7 @@ pub(super) fn refuse_foreign_rebase<H: RuntimeHost + ?Sized>(
                 at: Utc::now(),
                 by: "system".to_string(),
                 message,
+                operation_id: None,
             }],
             ..TaskAutomationUpdate::default()
         },
@@ -321,22 +327,23 @@ pub(super) fn release_review_attempts<H: RuntimeHost + ?Sized>(
     run_id: &str,
 ) {
     for step in REVIEW_ADMISSION_STEPS {
-        let Ok(admission) = pipeline_step(input, step) else {
+        let Some(admission) = pipeline_step(input, step)
+            .ok()
+            .and_then(|output| ReviewGateAdmissionOutput::from_value(output).ok())
+        else {
             continue;
         };
-        if admission.get("applies").and_then(Value::as_bool) != Some(true) {
+        let Some(admitted) = admission.admitted() else {
+            continue;
+        };
+        let (lineage_key, attempt_id) = (admitted.lineage_key.trim(), admitted.attempt_id.trim());
+        if lineage_key.is_empty() || attempt_id.is_empty() {
             continue;
         }
-        let (Some(lineage_key), Some(attempt_id)) = (
-            input_string_field(admission, "lineage_key"),
-            input_string_field(admission, "attempt_id"),
-        ) else {
-            continue;
-        };
         let request = ReviewReleaseRequest {
             run_id: run_id.to_string(),
-            lineage_key,
-            attempt_id,
+            lineage_key: lineage_key.to_string(),
+            attempt_id: attempt_id.to_string(),
         };
         if let Err(error) = host.release_review_attempt(&request) {
             tracing::warn!(

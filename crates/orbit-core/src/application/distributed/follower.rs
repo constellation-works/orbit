@@ -10,7 +10,7 @@
 //! - the owner answers the read-only probe **as that machine**, and would
 //!   admit this executor now (binary, protocol schema, ship mode), and this
 //!   host can resolve the before-PR reviewer crew the owner's ship contract
-//!   captured, when `review.before_pr` is on there.
+//!   captured, when `review.timing` is `before_pr` there.
 //!
 //! An empty `workflow.required_validation_commands` is not a refusal: its
 //! claimed leaves run no required check, as an owner's own delivery does, and
@@ -42,7 +42,8 @@ use std::collections::BTreeMap;
 use orbit_common::OrbitError;
 use orbit_store::contracts::PullDestination;
 use orbit_types::workflow::{
-    DrainAdmissionPass, JobRunTrigger, PullSinglePass, ResourceThrottle, ValidationGates,
+    DrainAdmissionPass, DrainPassObservation, JobRunTrigger, PullSinglePass, ResourceThrottle,
+    ValidationGates,
 };
 use serde_json::{Value, json};
 
@@ -88,6 +89,11 @@ impl crate::OrbitRuntime {
     /// `admission_refusal` is why this pass requested no new claim [ORB-15637],
     /// recorded so `orbit run show` and readiness can say so; it is never
     /// carried to a later pass.
+    ///
+    /// `observation`, when given, counts the pass in the drain's pass
+    /// counters in the same write, with every reason an idle answer gave for
+    /// a task it kept off this host.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_pull_pass(
         &self,
         run_id: &str,
@@ -96,6 +102,7 @@ impl crate::OrbitRuntime {
         error: Option<&str>,
         error_code: Option<&str>,
         owner_answer: OwnerAnswer<'_>,
+        observation: Option<DrainPassObservation>,
     ) -> Result<DrainAdmissionPass, OrbitError> {
         let mut recorded = None;
         let answer = match owner_answer {
@@ -105,7 +112,7 @@ impl crate::OrbitRuntime {
         self.stores()
             .jobs()
             .update_run_state(run_id, &mut |_, state| {
-                let previous = state.drain_last_pass.as_ref();
+                let previous = state.pull_drain.drain_last_pass.as_ref();
                 let now = chrono::Utc::now();
                 let was_degraded = previous.is_some_and(|pass| pass.degraded);
                 let previous_count = previous.map_or(0, |pass| pass.consecutive_pass_failures);
@@ -154,6 +161,7 @@ impl crate::OrbitRuntime {
                     waiting_by_reason: waiting.by_reason,
                     consecutive_idle_passes,
                     resource_throttle: resource_throttle.clone(),
+                    task_pilot_warning: None,
                     admission_refusal: admission_refusal.map(ToOwned::to_owned),
                     last_pass_error: error.map(ToOwned::to_owned).or_else(|| {
                         was_degraded
@@ -164,8 +172,18 @@ impl crate::OrbitRuntime {
                     degraded: was_degraded
                         || error_code == Some("protocol_skew")
                         || consecutive_pass_failures >= PASS_FAILURE_THRESHOLD,
+                    admission_forecast: None,
                 };
-                state.drain_last_pass = Some(pass.clone());
+                if let Some(observation) = &observation {
+                    let mut observation = observation.clone();
+                    if let Some(answer) = &answer {
+                        observation
+                            .waiting_reasons
+                            .extend(answer.by_reason.keys().cloned());
+                    }
+                    state.pull_drain.count_admission_pass(&observation, now);
+                }
+                state.pull_drain.drain_last_pass = Some(pass.clone());
                 recorded = Some(pass);
                 Ok(())
             })?;
@@ -195,11 +213,11 @@ impl crate::OrbitRuntime {
             .jobs()
             .update_run_state(run_id, &mut |_, state| {
                 taken = !retry_run
-                    && state.pull_single_pass.is_none()
-                    && state.drain_admissions_stop.is_none()
-                    && state.drain_cancel.is_none();
+                    && state.pull_drain.pull_single_pass.is_none()
+                    && state.pull_drain.drain_admissions_stop.is_none()
+                    && state.pull_drain.drain_cancel.is_none();
                 if taken {
-                    state.pull_single_pass = Some(PullSinglePass {
+                    state.pull_drain.pull_single_pass = Some(PullSinglePass {
                         consumed_at: chrono::Utc::now(),
                     });
                 }
@@ -214,6 +232,7 @@ impl crate::OrbitRuntime {
     }
 
     /// Verify this replica against its owner and submit its pull drain.
+    /// Windows over 24 hours are refused before contacting the owner.
     pub fn submit_workspace_pull_run(
         &self,
         request: WorkspacePullRequest<'_>,
@@ -222,6 +241,7 @@ impl crate::OrbitRuntime {
         ensure_distributed_mutation_available("orbit.workflow.auto --pull")?;
         // Operator input that needs no owner is checked before the probe, so a
         // typo costs no network round trip.
+        crate::application::workflow::validate_drain_window(request.for_seconds)?;
         if request.max_active_leaf_runs == Some(0) {
             return Err(OrbitError::InvalidInput(
                 "--concurrency must be at least 1".into(),
@@ -229,7 +249,8 @@ impl crate::OrbitRuntime {
         }
         // Unknown or blank names fail here, before the probe and before any
         // run exists; canonical names are what every pass reads back.
-        let allowed_crews = self.canonical_allowed_crews(request.allowed_crews)?;
+        let allowed_crews =
+            self.drain_crews_runnable_here(self.canonical_allowed_crews(request.allowed_crews)?)?;
         // A host that would refuse every leaf claims nothing: no run exists yet.
         self.preflight_git_protection()?;
         let (destination, owner_gates) = self.resolve_pull_destination(request.selector)?;
@@ -257,6 +278,15 @@ impl crate::OrbitRuntime {
             tracing::warn!("pull drain {}: {drift}", submitted.run_id);
         }
         Ok(submitted)
+    }
+
+    /// Why this checkout cannot start a pull drain at all, before any owner is
+    /// contacted: an owner checkout drains with plain `orbit run auto`. `None`
+    /// on a replica. Surfaces that offer `--pull` show it before submission.
+    pub fn pull_drain_checkout_refusal(&self) -> Option<OrbitError> {
+        self.coordination_write_owner()
+            .is_none()
+            .then(pull_on_owner_refusal)
     }
 
     /// [ORB-15622] How this replica's `workflow.required_validation_commands`
@@ -304,13 +334,9 @@ impl crate::OrbitRuntime {
         selector: &str,
     ) -> Result<(PullDestination, Option<ValidationGates>), OrbitError> {
         let selector = selector.trim();
-        let owner_machine = self.coordination_write_owner().ok_or_else(|| {
-            OrbitError::CapabilityRefused(
-                "`--pull` runs on a replica checkout; this checkout is its workspace's owner, \
-                 whose drain is plain `orbit run auto`"
-                    .into(),
-            )
-        })?;
+        let owner_machine = self
+            .coordination_write_owner()
+            .ok_or_else(pull_on_owner_refusal)?;
         let (selector_machine, selector_workspace) = selector.split_once('/').ok_or_else(|| {
             OrbitError::UnknownSelector(format!(
                 "'{selector}' is not a host-qualified selector; copy `selector` from federated \
@@ -420,4 +446,12 @@ impl crate::OrbitRuntime {
             gates,
         ))
     }
+}
+
+fn pull_on_owner_refusal() -> OrbitError {
+    OrbitError::CapabilityRefused(
+        "`--pull` runs on a replica checkout; this checkout is its workspace's owner, whose \
+         drain is plain `orbit run auto`"
+            .into(),
+    )
 }

@@ -135,7 +135,7 @@ try {
   };
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
-  await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture#diagnostics/runs`);
+  await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture#jobs/history`);
   await page.locator('#runs-body [data-key^="run-"]').first().waitFor();
   await page.evaluate(async () => (await import('/static/js/router.js')).navigateToRun('jrun-events-fixture'));
   await page.locator('#run-steps-body .skeleton-state').waitFor({ state: 'attached' });
@@ -156,9 +156,9 @@ try {
   assert.match(await rows.nth(98).textContent(), /run_cancelled/);
   assert.match(await rows.last().textContent(), /run_finished/);
   const times = await rows.locator('td:first-child').allTextContents();
-  assert.match(times[0], /2026-10-09 23:59:10 PDT/);
-  assert.match(times[50], /2026-10-10 00:00:00 PDT/);
-  assert.match(times[99], /^00:00:49 PDT$/);
+  assert.match(times[0], /2026-10-10 06:59:10 UTC/);
+  assert.match(times[50], /^07:00:00 UTC$/);
+  assert.match(times[99], /^07:00:49 UTC$/);
   assert.equal(new Set(times).size, 100, 'each event second is distinguishable');
   results.times = { first: times[0], midnight: times[50], last: times[99] };
   for (const width of [1440, 600]) {
@@ -257,6 +257,69 @@ try {
   await refresh();
   await assertRetries('scan recovered');
   assert.equal(await page.locator('.gantt-retry-status').count(), 0);
+
+  // Exercise the shipped renderer's public inputs and inspect the visible rows.
+  // Invocation counters and inherited messages must never cross child boundaries.
+  await page.evaluate(async () => (await import('/static/js/router.js')).setRunDetailSubtab('events'));
+  const sampleKind = 'cli_invocation_activity';
+  const activityCases = [
+    {
+      label: 'a message-less child cannot borrow another child\'s message',
+      samples: [['parent-a', 'agent-a', 1000, 'Working on task A'], ['parent-b', 'agent-b', 10, null]],
+      rows: [[sampleKind, 'agent-a', '1000', 'Working on task A'], [sampleKind, 'agent-b', '10', null]],
+    },
+    {
+      label: 'equal messages and agent names cannot identify an invocation',
+      samples: [['parent-a', 'agent-a', 1000, 'Working'], ['parent-b', 'agent-a', 10, 'Working']],
+      rows: [[sampleKind, 'agent-a', '1000', 'Working'], [sampleKind, 'agent-a', '10', 'Working']],
+    },
+    {
+      label: 'conflicting agent identities remain attributable',
+      samples: [['parent-a', 'agent-a', 1000, 'Working'], ['parent-a', 'agent-b', 10, null]],
+      rows: [[sampleKind, 'agent-a', '1000', 'Working'], [sampleKind, 'agent-b', '10', null]],
+    },
+    {
+      label: 'interleaving separates children while consecutive samples of one child fold',
+      samples: [
+        ['parent-a', 'agent-a', 1000, 'Working'], ['parent-b', 'agent-b', 10, null],
+        ['parent-a', 'agent-a', 1100, 'Working'], ['parent-a', 'agent-a', 1200, null],
+        ['parent-a', 'agent-a', 1300, 'Working'], ['parent-b', 'agent-b', 20, 'Working'],
+        ['parent-b', 'agent-b', 30, 'Working'], ['parent-b', 'agent-b', 40, 'Next message'],
+      ],
+      rows: [
+        [sampleKind, 'agent-a', '1000', 'Working'], [sampleKind, 'agent-b', '10', null],
+        [`${sampleKind} ×3`, 'agent-a', '1100→1300', 'Working'],
+        [`${sampleKind} ×2`, 'agent-b', '20→30', 'Working'], [sampleKind, 'agent-b', '40', 'Next message'],
+      ],
+    },
+    ...[undefined, null, ''].map(parent => ({
+      label: `legacy parent ${String(parent)} is insufficient to fold samples`,
+      samples: [[parent, 'agent-a', 1000, 'Working'], [parent, 'agent-a', 10, 'Working'], [parent, 'agent-a', 20, null]],
+      rows: [[sampleKind, 'agent-a', '1000', 'Working'], [sampleKind, 'agent-a', '10', 'Working'], [sampleKind, 'agent-a', '20', null]],
+    })),
+  ];
+  results.activityChecks = [];
+  for (const scenario of activityCases) {
+    const samples = scenario.samples.map(([parent, agent, bytes, message], index) => ({
+      event_id: `${scenario.label}-${index}`, ts: events[index].ts,
+      body_kind: sampleKind, provider: 'codex', agent_identity: agent,
+      ...(parent === undefined ? {} : { parent_event_id: parent }),
+      observed_bytes: bytes, ...(message === null ? {} : { latest_message: message }),
+    }));
+    await page.evaluate(async samples => {
+      const detail = await import('/static/js/run-detail.js');
+      detail.setActiveRunEvents(samples);
+      detail.renderRunEvents();
+    }, samples);
+    const actual = await rows.evaluateAll(nodes => nodes.map(row => {
+      const fields = row.querySelector('pre').textContent.split('\n');
+      const field = name => fields.find(value => value.startsWith(`${name}=`))?.slice(name.length + 1) ?? null;
+      return [row.cells[1].textContent, row.cells[2].textContent, field('observed_bytes'), field('latest_message')];
+    }));
+    results.activityChecks.push({ label: scenario.label, rows: actual });
+    fs.writeFileSync(path.join(evidence, 'activity-result.json'), JSON.stringify(results.activityChecks, null, 2));
+    assert.deepEqual(actual, scenario.rows, scenario.label);
+  }
   failDetail = true;
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#run-detail-meta').textContent.includes('Unable to load run'));

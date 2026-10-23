@@ -56,8 +56,8 @@ pub(super) struct StateInner {
     /// Per-server memo for `/api/audit/summary`. Keyed by runtime identity
     /// and the raw `since` window so relative cutoffs (`24h`) still hit.
     audit_summary: RuntimeMemo<String>,
-    /// Per-server scoreboard memo, keyed by live workspace runtime and window.
-    scoreboard: RuntimeMemo<String>,
+    /// Per-server Cost page memo, keyed by live workspace runtime and window.
+    cost: RuntimeMemo<String>,
     /// Host-wide routine projection, invalidated by its input stamps.
     routines: RuntimeMemo<crate::api::routines::RoutineMemoKey>,
     /// Per-server single-flight TTL memo for audited plugin panel reads.
@@ -70,8 +70,11 @@ pub(super) struct StateInner {
     /// bounded row limit. Collapses overlapping Runs-tab polls into one scan.
     diagnostics_friction: RuntimeMemo<(String, usize)>,
     /// Per-server cache of the codebase analytics scan, one per workspace
-    /// runtime. Holds typed facts; every window and rollup slices them.
-    codebase: RuntimeMemo<(), crate::api::CodebaseFacts>,
+    /// runtime: history-only analytics or related delivery facts per window.
+    codebase: RuntimeMemo<Option<String>, orbit_core::application::codebase::CodebaseFacts>,
+    /// Per-server cache of the agent scorecard scan, one per workspace
+    /// runtime. Every role, window, detail and the attribution strip slice it.
+    agents: RuntimeMemo<(), orbit_core::application::agents::AgentFacts>,
     /// Per-server cache of the last `orbit doctor` report for each workspace
     /// runtime, behind `/api/doctor`.
     doctor_reports: DoctorReports,
@@ -410,12 +413,13 @@ impl DashboardState {
                 // Next successful refresh allocates INITIAL_GENERATION + 1.
                 generation_counter: AtomicU64::new(INITIAL_GENERATION + 1),
                 audit_summary: RuntimeMemo::new("audit summary aggregation"),
-                scoreboard: RuntimeMemo::new("scoreboard aggregation"),
+                cost: RuntimeMemo::new("managed-execution cost"),
                 routines: RuntimeMemo::new("routine health"),
                 plugin_panels: RuntimeMemo::new("plugin panel execution"),
                 diagnostics_errors: RuntimeMemo::new("diagnostics errors aggregation"),
                 diagnostics_friction: RuntimeMemo::new("diagnostics friction aggregation"),
                 codebase: RuntimeMemo::new("codebase analytics scan"),
+                agents: RuntimeMemo::new("agent scorecard scan"),
                 doctor_reports: DoctorReports::new(),
                 operator: AtomicBool::new(false),
                 #[cfg(test)]
@@ -472,6 +476,23 @@ impl DashboardState {
         Ok(monitor.snapshot(&paths))
     }
 
+    /// The serving host's live provider usage readings, as readiness lists
+    /// them, for the top bar. The store is host-wide; thresholds and crew
+    /// coverage come from the default workspace's effective config, so with no
+    /// servable workspace (or an unreadable store) this is `None` and the bar
+    /// shows the readings as unavailable. May read files and must be called
+    /// through `blocking`.
+    pub(crate) fn host_provider_limits(&self) -> Option<serde_json::Value> {
+        let pinned = self.pin();
+        let runtime = pinned.runtime_for(pinned.default_workspace()?).ok()?;
+        let view = runtime.provider_limits_view(chrono::Utc::now());
+        if let Some(error) = &view.error {
+            tracing::warn!("top bar shows no provider usage: {error}");
+            return None;
+        }
+        serde_json::to_value(view.readings).ok()
+    }
+
     /// The serving host's host file: its last valid snapshot, reloaded when
     /// the file changes, and the error of a newer file that failed to load.
     /// May read files and must be called through `blocking`.
@@ -490,9 +511,9 @@ impl DashboardState {
         &self.inner.audit_summary
     }
 
-    /// Process-local scoreboard memo shared by every dashboard tab.
-    pub(crate) fn scoreboard_memo(&self) -> &RuntimeMemo<String> {
-        &self.inner.scoreboard
+    /// Process-local Cost page memo shared by every dashboard tab.
+    pub(crate) fn cost_memo(&self) -> &RuntimeMemo<String> {
+        &self.inner.cost
     }
 
     /// Host-wide routine memo shared even across different selected workspaces.
@@ -506,8 +527,17 @@ impl DashboardState {
     }
 
     /// Process-local codebase analytics scan cache for this server instance.
-    pub(crate) fn codebase_memo(&self) -> &RuntimeMemo<(), crate::api::CodebaseFacts> {
+    pub(crate) fn codebase_memo(
+        &self,
+    ) -> &RuntimeMemo<Option<String>, orbit_core::application::codebase::CodebaseFacts> {
         &self.inner.codebase
+    }
+
+    /// Process-local agent scorecard scan cache for this server instance.
+    pub(crate) fn agent_memo(
+        &self,
+    ) -> &RuntimeMemo<(), orbit_core::application::agents::AgentFacts> {
+        &self.inner.agents
     }
 
     /// Process-local `/api/diagnostics/errors` memo for this server instance.
@@ -616,6 +646,20 @@ impl DashboardState {
             inner: self.inner.clone(),
             snapshot: self.inner.snapshot(),
         }
+    }
+
+    /// Writes cannot rely on the last valid registry when a newer registry is
+    /// unreadable. Reads retain their existing keep-last-valid behavior.
+    pub(crate) fn pin_for_write(&self) -> Result<Pinned, OrbitError> {
+        let pinned = self.pin();
+        if let Some(source) = self.inner.source.as_ref()
+            && !self.registry_is_current(source)
+        {
+            return Err(OrbitError::PolicyDenied(
+                "current workspace registry is unavailable; refresh before writing".into(),
+            ));
+        }
+        Ok(pinned)
     }
 
     /// Reload the registered workspace set from the authoritative registry and

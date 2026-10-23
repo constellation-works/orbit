@@ -1,6 +1,7 @@
 //! Composition root joining resolved configuration, the runtime kernel, and adapters.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::generation::{
@@ -11,6 +12,7 @@ use orbit_store::Store;
 pub use orbit_store::compose::compiled_compatibility;
 use orbit_store::compose::global_policy_def_store;
 
+use crate::application::task::legacy_decisions::record_typed_decisions_boundary;
 use crate::bootstrap::global_defaults::global_defaults_are_current;
 use crate::bootstrap::init::ensure_orbit_root_initialized;
 use crate::bootstrap::policy::seed_default_policies;
@@ -20,9 +22,10 @@ use crate::bootstrap::task_migration::apply_configured_id_start;
 use crate::runtime::run_input::managed_dispatch_context_from_env;
 use crate::runtime::run_input::managed_run_context_from_env;
 use crate::runtime::{
-    HostLifetime, OrbitRuntime, OrbitRuntimeRoots, ResolvedOrbitRoots, WorkspaceRootHint,
-    WorkspaceRuntimeBinding, resolve_bootstrap_roots, resolve_bootstrap_roots_with_hint,
-    resolve_global_root, resolve_initialize_roots, resolve_initialize_roots_with_hint,
+    HostLifetime, OrbitRuntime, OrbitRuntimeRoots, ResolvedOrbitRoots, RuntimeConfigLoader,
+    WorkspaceRootHint, WorkspaceRuntimeBinding, resolve_bootstrap_roots,
+    resolve_bootstrap_roots_with_hint, resolve_global_root, resolve_initialize_roots,
+    resolve_initialize_roots_with_hint,
 };
 
 impl OrbitRuntime {
@@ -230,13 +233,16 @@ impl OrbitRuntime {
         let layout_report = observe_or_upgrade_layout(shared_root, true)?;
         let config = ResolvedConfig::load(&ConfigRoots::new(global_root, shared_root))?;
         Self::build_from_resolved_config_write_free(
-            global_root,
-            shared_root,
-            shared_root,
+            &OrbitRuntimeRoots {
+                global_root: global_root.to_path_buf(),
+                shared_root: shared_root.to_path_buf(),
+                local_root: shared_root.to_path_buf(),
+            },
             Some(binding),
             &config,
             layout_report,
             HostLifetime::ShortLived,
+            runtime_config_loader(global_root, shared_root),
         )
     }
 
@@ -253,6 +259,7 @@ impl OrbitRuntime {
             &workspace_root,
             &runtime_config,
             temp_dir,
+            runtime_config_loader(&data_root, &workspace_root),
         )
     }
 }
@@ -318,26 +325,47 @@ fn build_runtime(
     } else {
         prepare_resolved_config(global_root, shared_root)?
     };
+    let config_loader = runtime_config_loader(global_root, shared_root);
+    if !write_free && !read_only {
+        // Before this runtime can write a task record, so text-form decisions
+        // an older binary wrote stay legacy and text written from now on does
+        // not.
+        if let Err(error) = record_typed_decisions_boundary(global_root) {
+            if error.is_readonly_or_access_failure() {
+                tracing::warn!(
+                    target: "orbit.core.bootstrap",
+                    root = %global_root.display(),
+                    error = %error,
+                    "skipped incidental typed decisions boundary persistence"
+                );
+            } else {
+                return Err(error);
+            }
+        }
+    }
+    let roots = OrbitRuntimeRoots {
+        global_root: global_root.to_path_buf(),
+        shared_root: shared_root.to_path_buf(),
+        local_root: local_root.to_path_buf(),
+    };
     let runtime = if write_free {
         OrbitRuntime::build_from_resolved_config_write_free(
-            global_root,
-            shared_root,
-            local_root,
+            &roots,
             binding,
             &runtime_config,
             layout_report,
             host_lifetime,
+            config_loader,
         )?
     } else {
         OrbitRuntime::build_from_resolved_config(
-            global_root,
-            shared_root,
-            local_root,
+            &roots,
             binding,
             &runtime_config,
             layout_report,
             host_lifetime,
             read_only,
+            config_loader,
         )?
     };
     let _generation = generation;
@@ -345,6 +373,12 @@ fn build_runtime(
         runtime.reconcile_stale_job_runs_on_open();
     }
     Ok(runtime)
+}
+
+fn runtime_config_loader(global_root: &Path, shared_root: &Path) -> RuntimeConfigLoader {
+    let global_root = global_root.to_path_buf();
+    let shared_root = shared_root.to_path_buf();
+    Arc::new(move || ResolvedConfig::load(&ConfigRoots::new(&global_root, &shared_root)))
 }
 
 fn observe_or_upgrade_layout(

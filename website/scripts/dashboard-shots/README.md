@@ -22,7 +22,9 @@ and the host file the pages show is an isolated demo registry: `local-demo`
 is local and `build-box` uses `build-box.invalid`, an intentionally
 unreachable example target, so the Hosts view shows its real error reporting.
 The page clock is pinned to 2026-10-08 07:26:47 PDT, so relative times and the
-refresh clock come out the same on every capture.
+refresh clock come out the same on every capture. For the Drain shot only, the
+fixture holds admissions on a CPU throttle, so that page shows its throttle
+banner; the other captures keep an unthrottled host.
 
 The run detail uses a dated live capture. The script replaces its task,
 friction and run identifiers with demo labels in the capture DOM before
@@ -68,8 +70,8 @@ and text evidence under `.orbit/tmp/dashboard-capture-*` for inspection.
 This regression does not replace the rendered-pixel inspection below.
 
 The browser viewport is 1440 × 900 CSS pixels at device scale factor 2, and
-taller (1600) for the task list, the Drain dock, and the run detail so nothing
-is cut. Every crop stops above the log ticker along the bottom edge, which
+taller for the task list and the run detail (1600) and the Drain page (1800) so
+nothing is cut. Every crop stops above the log ticker along the bottom edge, which
 prints host paths. The Hosts crop also excludes the scope strip and trailing
 SSH error detail, which can contain host paths. Before committing, look at
 each image for anything that shouldn't be public, including production task,
@@ -81,11 +83,12 @@ pixels even when the capture script sanitizes text.
 | `dashboard-tasks.png` | 2880 × 1732 | The whole Tasks view: top bar with host resources and the refresh clock, the rail, status cards, and the Drain dock | Quickstart, Use the Dashboard |
 | `dashboard-approve-ship.png` | 1648 × 1416 | The task list: Awaiting approval with **Approve**, In progress with **View run**, Backlog with its readiness strip and **Ship** | First Task |
 | `dashboard-run-detail.png` | 2396 × 1782 | A successful `task_pr_pipeline` run and its step timeline | First Task |
-| `dashboard-drain-card.png` | 816 × 1506 | The Drain dock: the Auto-drain card and Start a window | Delivery Workflows, Use the Dashboard |
+| `dashboard-drain-card.png` | 2448 × 2878 | The Drain page's Overview: throttle banner, summary tiles, the Auto-drain card and why tasks are waiting, then fleet drains and Locks held | Delivery Workflows, Use the Dashboard |
 | `dashboard-automation.png` | 2880 × 1732 | Automation → Routines with the sweep clock, the next hour, and each routine | Use the Dashboard, Schedule Recurring Work |
 | `dashboard-hosts.png` | 2348 × 498 | Settings → Hosts add control and host table with each host's health | Use the Dashboard |
 
-All six were captured on 2026-10-10 from the redesigned dashboard (status-card
-task list, Drain and Log dock, full-width top bar). The run detail shows a
+Five were captured on 2026-10-10 from the redesigned dashboard (status-card
+task list, Drain and Log dock, full-width top bar). The Drain image was
+recaptured on 2026-10-19 after Drain became its own page. The run detail shows a
 red-CI fix, 21 steps in 20m 35s, with its artifact identifiers replaced by
 demo labels. Its counts are from that moment, not live.

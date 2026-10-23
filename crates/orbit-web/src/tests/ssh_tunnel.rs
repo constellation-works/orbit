@@ -2,8 +2,10 @@
 //! connection, not when `ssh` is spawned.
 //!
 //! Admitted as a unit test (fault injection). `connect` cannot host it: that
-//! entry point blocks on signals and may open a browser, and `establish` is
-//! crate-private. The stub is a real executable with ssh's `-L` argv contract.
+//! entry point blocks on signals and may open a browser. Host forwarding uses
+//! the same probe, but fixes its attach/ready budgets and hides the direct
+//! probe result; the private `TunnelSpec`/`ProbeLimit` seams inject the short
+//! budgets below. The stub is a real executable with ssh's `-L` argv contract.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -25,10 +27,21 @@ const BIND_DELAY: Duration = Duration::from_millis(2000);
 const ATTACH_BUDGET: Duration = Duration::from_millis(500);
 
 const STUB_SSH: &str = r#"#!/usr/bin/env python3
-import os, socket, subprocess, sys, threading, time
+import json, os, socket, subprocess, sys, threading, time
 from pathlib import Path
 
+def phase(stage, **details):
+    path = Path(sys.argv[0]).resolve().parent / "phases.jsonl"
+    event = {"stage": stage, "pid": os.getpid(), "parent": os.getppid(),
+             "monotonic_ns": time.monotonic_ns(), **details}
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        os.write(fd, (json.dumps(event) + "\n").encode())
+    finally:
+        os.close(fd)
+
 def main():
+    phase("child_started")
     cfg = Path(sys.argv[0]).resolve().parent / "ssh.cfg"
     delay_line, count_path = cfg.read_text().splitlines()[:2]
     fd = os.open(count_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
@@ -41,11 +54,19 @@ def main():
     time.sleep(float(delay_line))
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind(("127.0.0.1", local_port))
+    phase("bind_start", port=local_port)
+    try:
+        listener.bind(("127.0.0.1", local_port))
+    except OSError as error:
+        phase("bind_failed", port=local_port, errno=error.errno)
+        raise
     listener.listen(32)
+    phase("bound", port=local_port)
     local_command(sys.argv[1:])
+    phase("proxy_ready")
     while True:
         client, _ = listener.accept()
+        phase("proxy_accepted")
         threading.Thread(
             target=proxy, args=(client, remote_port), daemon=True
         ).start()
@@ -55,7 +76,9 @@ def local_command(argv):
     opts = dict(argv[i + 1].split("=", 1) for i, a in enumerate(argv) if a == "-o")
     if opts.get("PermitLocalCommand") == "yes" and "LocalCommand" in opts:
         shell = os.environ.get("SHELL") or "/bin/sh"
-        subprocess.run([shell, "-c", opts["LocalCommand"].replace("%%", "%")])
+        phase("local_command_start", shell=shell)
+        result = subprocess.run([shell, "-c", opts["LocalCommand"].replace("%%", "%")])
+        phase("local_command_end", status=result.returncode)
 
 def parse_forward(argv):
     for i, arg in enumerate(argv):
@@ -69,15 +92,21 @@ def parse_forward(argv):
 def proxy(client, remote_port):
     try:
         remote = socket.create_connection(("127.0.0.1", remote_port), timeout=2)
-    except OSError:
+    except OSError as error:
+        phase("remote_failed", errno=error.errno)
         client.close()
         return
+    phase("remote_connected", port=remote_port)
     def pump(src, dst):
+        first = src is client
         try:
             while True:
                 data = src.recv(65536)
                 if not data:
                     break
+                if first:
+                    phase("probe_request", request=data.split(b"\r\n", 1)[0].decode("ascii", "replace"))
+                    first = False
                 dst.sendall(data)
         except OSError:
             pass
@@ -98,6 +127,42 @@ if __name__ == "__main__":
     main()
 "#;
 
+/// Snapshot phases and stop logged children before cleaning up a failed fixture.
+struct StubDir(tempfile::TempDir);
+
+impl StubDir {
+    fn new() -> Self {
+        Self(tempfile::tempdir().expect("temp dir"))
+    }
+
+    fn path(&self) -> &Path {
+        self.0.path()
+    }
+}
+
+impl Drop for StubDir {
+    fn drop(&mut self) {
+        if thread::panicking() {
+            for name in ["spawns.log", "spawns.log.pids", "phases.jsonl"] {
+                // Diagnostic I/O must not interrupt child cleanup during unwind.
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "SSH fixture {name}: {}",
+                    fs::read_to_string(self.path().join(name))
+                        .unwrap_or_else(|error| format!("unavailable: {error}"))
+                );
+            }
+            for pid in child_pids(&self.path().join("spawns.log")) {
+                // SAFETY: this fixture recorded the child it started. Its
+                // establish thread owns reaping, just as on a normal error.
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn delayed_forward_bind_attaches_without_a_second_ssh() {
     assert!(
@@ -114,7 +179,7 @@ fn delayed_forward_bind_attaches_without_a_second_ssh() {
         String::from_utf8_lossy(&python.stderr)
     );
 
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = StubDir::new();
     let count_path = dir.path().join("spawns.log");
     let stub = write_stub(dir.path(), BIND_DELAY, &count_path);
 
@@ -222,7 +287,7 @@ fn paced_status_fragments_cannot_outlive_the_readiness_budget() {
         FRAGMENT < connect::PROBE_IO_TIMEOUT,
         "fragments must arrive before one socket read times out"
     );
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = StubDir::new();
     let count_path = dir.path().join("spawns.log");
     let stub = write_stub(dir.path(), Duration::from_millis(50), &count_path);
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind paced peer");
@@ -255,7 +320,7 @@ fn paced_status_fragments_cannot_outlive_the_readiness_budget() {
 
 #[test]
 fn cancel_during_a_paced_status_reaps_the_ssh_child() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = StubDir::new();
     let count_path = dir.path().join("spawns.log");
     let stub = write_stub(dir.path(), Duration::from_millis(50), &count_path);
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind paced peer");
@@ -341,7 +406,7 @@ fn oversized_status_line_is_refused_without_draining_the_flood() {
         "the flood peer never saw a probe"
     );
 
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = StubDir::new();
     let count_path = dir.path().join("spawns.log");
     let stub = write_stub(dir.path(), Duration::from_millis(50), &count_path);
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind tunneled flood");
@@ -408,9 +473,11 @@ fn run_establish(
         });
         let _ = tx.send(outcome);
     });
-    rx.recv_timeout(wait).unwrap_or_else(|_| {
-        panic!("establish hung; a probe must return within the readiness budget")
-    })
+    rx.recv_timeout(wait)
+        .unwrap_or_else(|_| {
+            panic!("establish hung; a probe must return within the readiness budget")
+        })
+        .map_err(orbit_core::OrbitError::from)
 }
 
 fn child_pids(count_path: &Path) -> Vec<i32> {

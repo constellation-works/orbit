@@ -3,11 +3,13 @@
 //! Each handler delegates to the same `*_to_json` helpers used by the CLI's
 //! `--json` paths so the wire format stays in lockstep with the CLI.
 
+mod agents;
 mod audit;
 mod auto_tasks;
 mod automation;
 mod codebase;
 mod config;
+mod cost;
 mod crews;
 mod denials;
 mod diagnostics;
@@ -25,17 +27,15 @@ mod origin;
 mod pagination;
 mod plugins;
 mod reliability;
+mod resource_profiles;
 mod routes;
 pub(crate) mod routines;
-mod run_failure;
-mod run_tasks;
 mod runs;
-mod scoreboard;
 mod search;
+mod task_create;
 mod tasks;
 mod workspaces;
 
-pub(crate) use codebase::CodebaseFacts;
 use helpers::*;
 pub(crate) use host::host_error_code;
 pub(crate) use origin::{nosniff_json_responses, require_localhost_origin};

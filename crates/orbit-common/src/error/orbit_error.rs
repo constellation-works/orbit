@@ -2,8 +2,9 @@ use serde::Serialize;
 use thiserror::Error;
 
 use super::{
-    ArtifactOrigin, ClaimRefusalKind, DependencyNotDelivered, FrictionNotLocal, HostRegistryCode,
-    NotFoundKind, RecoverableVcsConflict, SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    ArtifactOrigin, CandidateAbsorbed, ClaimRefusalKind, DependencyNotDelivered, FrictionNotLocal,
+    HostRegistryCode, NotFoundKind, PrivateVcsFailure, RecoverableVcsConflict, SqliteContention,
+    StorageLayer, WorkspaceClaimHeld,
 };
 
 #[derive(Debug, Error, Serialize)]
@@ -153,11 +154,22 @@ pub enum OrbitError {
     },
     #[error("execution failed: {0}")]
     Execution(String),
+    /// Conflict recovery certified that the base already carries the candidate.
+    /// Keeps the execution error's display and serialized string for compatibility.
+    #[error("execution failed: {0}")]
+    #[serde(rename = "Execution", serialize_with = "serialize_absorbed_candidate")]
+    CandidateAbsorbed(Box<CandidateAbsorbed>),
     /// An execution step failed because an operation it supervised hit its
     /// deadline. Reads and codes exactly as [`Self::Execution`]; the variant
     /// carries the timeout class so callers never read it from the text.
     #[error("execution failed: {message}")]
     ExecutionTimeout { timeout_ms: u64, message: String },
+    /// A private automation VCS operation failed. Displays and serializes
+    /// exactly as [`Self::Execution`]; the failure class is decided where the
+    /// provider's diagnostic is read, so callers never read it from the text.
+    #[error("execution failed: {}", .0.message)]
+    #[serde(rename = "Execution", serialize_with = "serialize_private_vcs_failure")]
+    PrivateVcs(Box<PrivateVcsFailure>),
     /// A child process exceeded its deadline. The supervisor signalled the
     /// owned process group and reaped the leader; descendants that remained in
     /// that group were signalled with it.
@@ -165,7 +177,7 @@ pub enum OrbitError {
     ProcessTimeout { timeout_ms: u64, detail: String },
     /// Strict worker containment refused a launch before the worker existed.
     #[error(
-        "worker containment required but unavailable: {reason}; enable machine.worker_containment and run under a Linux systemd user manager, or drop --strict-worker-containment / machine.worker_containment_strict"
+        "worker containment required but unavailable: {reason}; run under a Linux systemd user manager, or drop --strict-worker-containment and set machine.worker_containment to warn"
     )]
     WorkerContainmentUnavailable { reason: String },
     #[error(
@@ -243,6 +255,11 @@ pub enum OrbitError {
          the task `delivery:task_local_pipeline` to deliver it locally"
     )]
     PrForgeRemoteMissing { remotes: String },
+    /// GitHub has not finished calculating whether an open pull request can
+    /// merge. Callers should defer that pull request without treating the
+    /// answer as a forge failure.
+    #[error("pull request #{number} mergeability is unknown")]
+    PullRequestMergeabilityUnknown { number: u64 },
     /// Completion cannot overtake the linked implementation run while its
     /// recorded PID and start-time identity still name a running owner.
     #[error(
@@ -326,3 +343,17 @@ const _: () = assert!(
     std::mem::size_of::<OrbitError>() <= 128,
     "OrbitError exceeds its 128-byte size budget; box multi-field variant payloads"
 );
+
+fn serialize_absorbed_candidate<S: serde::Serializer>(
+    candidate: &CandidateAbsorbed,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&candidate.to_string())
+}
+
+fn serialize_private_vcs_failure<S: serde::Serializer>(
+    failure: &PrivateVcsFailure,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&failure.message)
+}

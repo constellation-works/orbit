@@ -8,7 +8,7 @@ status: Draft
 feature: policy-sandbox
 doc_role: decisions
 tags: ["policy-sandbox"]
-last_validated: 2026-10-10
+last_validated: 2026-10-17
 ---
 
 # Policy & Sandboxing — Decisions
@@ -141,7 +141,7 @@ On Unix, every spawned child calls `command.process_group(0)` so the child becom
 A timed-out or interrupted child needs a chance to flush state before being killed, but the supervisor cannot wait indefinitely. The escalation policy needs a single, predictable shape.
 
 ### Decision
-`terminate_process_group` sends `SIGTERM` (or the supplied signal) to the group, polls `probe_process_group_liveness` for `TERMINATION_GRACE_PERIOD = 5 seconds`, and on expiry sends `SIGKILL` to the group plus a direct `child.kill()`/`child.wait()`. stderr is annotated with `process timed out` (deadline path) or `process interrupted by signal SIG…` (parent-signal path).
+`OwnedChild::terminate_with_signal` sends `SIGTERM` (or the supplied signal) to the group, polls `probe_process_group_liveness` for `TERMINATION_GRACE_PERIOD = 5 seconds`, and on expiry sends `SIGKILL` to the group plus a direct `child.kill()`/`child.wait()`. stderr is annotated with `process timed out` (deadline path) or `process interrupted by signal SIG…` (parent-signal path).
 
 ### Consequences
 - Termination is deterministic, and annotated stderr distinguishes timeout, signal, and clean-exit paths.
@@ -156,9 +156,9 @@ A timed-out or interrupted child needs a chance to flush state before being kill
 Installing parent-side SIGINT/SIGTERM handlers is a process-global operation. Two concurrent `run_process` calls cannot install independent handlers without races, and a panicking call must restore the prior handler so the orbit process itself remains interruptible. Holding the install mutex for each child's entire lifetime also silently serialized every supervised subprocess in the daemon (parallel job branches, MCP `proc.spawn`, web-server `gh` calls).
 
 ### Decision
-`SignalHandlerGuard::install` refcounts a process-wide handler. The first live waiter installs SIGINT/SIGTERM and snapshots the previous `sigaction` structs; the last drop restores them and re-raises a captured signal (except `SIG_IGN`) so daemons still shut down. The mutex is held only for that install/drop critical section, never across `raise`. Each waiter registers its child's pgid in a lock-free table and snapshots a signal generation counter. The handler is async-signal-safe: atomic store of the signal, generation, and pending-forward, then `killpg` to every registered group. Waiters poll the generation counter and still run `terminate_process_group` so a missed slot or a race with unregister cannot leave a child running.
+`SignalHandlerGuard::install` refcounts a process-wide handler. The first live waiter installs SIGINT/SIGTERM and snapshots the previous `sigaction` structs; the last drop restores them and re-raises a captured signal (except `SIG_IGN`) so daemons still shut down. The mutex is held only for that install/drop critical section, never across `raise`. Each waiter registers its child's pgid in a lock-free table and snapshots a signal generation counter. The handler is async-signal-safe: atomic store of the signal, generation, and pending-forward, then `killpg` to every registered group. Waiters poll the generation counter and still run `OwnedChild::terminate_with_signal` so a missed slot or a race with unregister cannot leave a child running.
 
-The table must never hold a bare pid. `install` registers the child only when `getpgid(pid) == pid` and that group is not the supervisor's own (`getpgrp`); the waiter releases the slot as soon as the child is reaped, before it joins the output drains; and the handler re-validates `getpgid(pgid) == pgid` and skips `getpgrp()` before each `killpg`. A child whose pid is not registered is still terminated by the waiter's own `terminate_process_group` on the next poll. [DANI-10447]
+The table must never hold a bare pid. `install` registers the child only when `getpgid(pid) == pid` and that group is not the supervisor's own (`getpgrp`); the waiter releases the slot as soon as the child is reaped, before it joins the output drains; and the handler re-validates `getpgid(pgid) == pgid` and skips `getpgrp()` before each `killpg`. A child whose pid is not registered is still terminated by the waiter's own `OwnedChild::terminate_with_signal` on the next poll. [DANI-10447]
 
 ### Consequences
 - Concurrent `run_process` / `supervise_child` waits overlap. Ctrl-C terminates every live child process group, not only the waiter that would have held an exclusive mutex.
@@ -189,7 +189,7 @@ Ship `NoSandbox` as the default and only implementation. Defer kernel-level isol
 [Tool layer is the policy enforcement point for HTTP-backed activities](#tool-layer-is-the-policy-enforcement-point-for-http-backed-activities) left CLI backends outside Orbit's tool-layer enforcement: the harness emits `tool_allowlist.harness_delegated`, but Claude/Codex/Gemini built-in tools run with the orbit process's filesystem rights. Provider-native sandboxes were inconsistent (`codex --sandbox`, `gemini -s`, no Claude equivalent), leaving `fsProfile` unenforced for some CLI runs.
 
 ### Decision
-Add `orbit-exec::macos_sandbox` as the declarative seam: compile a `ResolvedFsProfile` to SBPL and wrap Claude, Codex, and Gemini invocations with `sandbox-exec -f <profile>` when executor YAML declares `spec.sandbox: macos-sandbox-exec`. When Orbit owns the outer sandbox, neutralize provider-native sandbox flags so there is one filesystem authority. Resolve descriptors in `V2RuntimeHost::resolve_executor_sandbox` and compile SBPL in orbit-engine near the spawn site.
+Add `orbit-exec::macos_sandbox` as the declarative seam: compile a `ResolvedFsProfile` to SBPL and wrap Claude, Codex, and Gemini invocations with `sandbox-exec -f <profile>` when executor YAML declares `spec.sandbox: macos-sandbox-exec`. When Orbit owns the outer sandbox, neutralize provider-native sandbox flags so there is one filesystem authority. Resolve descriptors in `resolve_executor_sandbox` (`orbit-core`, `adapter/engine_host/actions/sandbox/resolve.rs`) and compile SBPL in orbit-engine near the spawn site.
 
 ### Consequences
 - All three providers share `FsProfile` compiled to SBPL as the macOS filesystem authority, giving Claude OS-enforced narrowing too.
@@ -219,7 +219,7 @@ Keep `sandbox-exec` authoritative and add narrow Codex allowances: `$CODEX_HOME`
 [Codex state and side roots are narrow sandbox write allowances](#codex-state-and-side-roots-are-narrow-sandbox-write-allowances) unblocked Codex state writes, but Claude writes startup state under `$HOME/.claude` or `$CLAUDE_CONFIG_DIR`, and Gemini writes under `$HOME/.gemini`. SBPL compilation receives `ResolvedFsProfile` plus host env, not the active provider, so provider-conditional allow clauses would require new plumbing.
 
 ### Decision
-Emit state-dir allows for all supported CLI providers on every macOS sandbox profile: `$CODEX_HOME` / `$HOME/.codex`, `$CLAUDE_CONFIG_DIR` / `$HOME/.claude`, and `$HOME/.gemini`. Keep `append_provider_side_write_roots` Codex-only because Claude and Gemini have no `--add-dir` equivalent; document that a future provider with such a surface should generalize the branch.
+Emit state-dir allows for all supported CLI providers on every macOS sandbox profile: `$CODEX_HOME` / `$HOME/.codex`, `$CLAUDE_CONFIG_DIR` / `$HOME/.claude`, and `$HOME/.gemini`. Keep `append_codex_side_write_roots` Codex-only because Claude and Gemini have no `--add-dir` equivalent; document that a future provider with such a surface should generalize the branch.
 
 ### Consequences
 - Claude and Gemini reach past CLI startup under `macos-sandbox-exec` with the same state-dir defense story as Codex.
@@ -268,7 +268,7 @@ Resolve the wrapper only from trusted absolute locations, currently `/usr/bin/sa
 ## Use Bubblewrap for shipped Linux CLI write confinement
 
 **Recorded:** 2026-08-01 23:26:11.357573Z · [ORB-10552]
-**Paths:** `crates/orbit-exec/src/linux_sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/**/*.rs`, `crates/orbit-core/src/runtime/v2_host/sandbox.rs`
+**Paths:** `crates/orbit-exec/src/linux_sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/**/*.rs`, `crates/orbit-core/src/adapter/engine_host/actions/sandbox/`
 
 ### Context
 Linux CLI agents previously ran with the worker account's ambient filesystem rights. The real alternatives were a Bubblewrap mount-namespace boundary, a Landlock allowlist layer, or continued delegation to provider-native sandboxes; Bubblewrap closes the highest-value write gap at the existing executor wrapper seam without turning Orbit into a container runtime.
@@ -380,7 +380,7 @@ Derive Linux write-grant candidates at every provider spawn from the same ordere
 ## Keep checkout identity outside managed-agent write grants
 
 **Recorded:** 2026-09-06 · [ORB-11376]
-**Paths:** `crates/orbit-core/assets/policies/default.yaml`, `crates/orbit-cli/src/command/workspace/init.rs`, `docs/runbooks/state-and-backup.md`
+**Paths:** `crates/orbit-core/assets/policies/default.yaml`, `crates/orbit-cli/src/command/workspace/init/`, `docs/runbooks/state-and-backup.md`
 
 ### Context
 

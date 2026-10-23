@@ -2,24 +2,27 @@
 type: design
 summary: "Scope: a cloud delivery mode that ships a task through a Claude Code cloud session, polls GitHub for its PR, and adopts that PR's number and summary onto the task"
 tags: [cloud, dispatch, claude, routines, pr, polling]
-last_validated: 2026-10-11
+last_validated: 2026-10-19
 ---
 
 # Scope: Cloud dispatch
 
 Status: proposal, not started. Phase 0 is a manual spike with no code, against `orbit` first.
 Open questions resolved 2026-09-23 (see the end of this doc).
-Bearing: the workspace rule that gates read durable artifacts and task state, never the agent's
-final message (root `AGENTS.md`, "Gates"). The cloud session is untrusted remote
+Bearing: the workspace gate rule reads durable artifacts and task state, never the execution
+summary as an oracle (`crates/orbit-core/assets/activities/agent_implement.yaml`); this design
+applies the same rule to the agent's final message. The cloud session is untrusted remote
 execution; GitHub is the only record Orbit believes.
 Precedents: the distributed-drain split where a follower opens the PR and the owner re-reads
-everything from GitHub (`task_claimed_pr_pipeline`, `task_landing_pipeline`, `vcs/landing.rs`);
-`pr_complete`'s blocking GitHub poll (`vcs/pr/complete.rs`).
+everything from GitHub (`task_claimed_pr_pipeline`, `task_landing_pipeline`, `vcs/landing/`);
+`pr_complete`'s blocking GitHub poll (`vcs/pr/complete/`).
 
 ## Problem
 
 Every Orbit delivery runs an agent as a local subprocess in a local worktree
-(`cli_runner/orchestrator/dispatch.rs`, `run_cli_backend`). Throughput is bounded by the host:
+(`crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch.rs`,
+`run_cli_backend_for_step`; entry point `run_cli_backend` in `entry.rs`). Throughput is bounded by
+the host:
 about ten concurrent agents on either the Mac or a Linux server before CPU, ports and
 worktrees contend, and larger codebases lower that ceiling. Claude Code cloud sessions run
 in Anthropic-managed VMs and keep running when the host sleeps. During the 2026-09-23
@@ -89,10 +92,13 @@ Why this route:
 
 Properties the design depends on:
 
-- **The CLI clones the checkout's GitHub remote at its current branch**, not the local
-  working tree. Orbit runs the command from a dedicated clean worktree detached at
-  `origin/<base_branch>`, never from the primary checkout, which would trip
-  `primary_checkout_drift`. The branch name still comes from the payload.
+- **The CLI normally clones the checkout's GitHub remote at its current branch**, not the
+  local working tree. Current CLI docs say that without a GitHub remote or the Claude GitHub
+  App, it can upload a local bundle instead; that bundle can include uncommitted tracked
+  files. Orbit therefore needs a clean worktree detached at `origin/<base_branch>` and must
+  guard against the bundle fallback when it cannot guarantee that pinned base. Never run
+  from the primary checkout, which would trip `primary_checkout_drift`. The branch name still
+  comes from the payload.
 - **A claude.ai OAuth login on the dispatching host**, the same `user:sessions:claude_code`
   scope the follow-up message needs. Its refresh grant is capped at 30 days. On the Mac the
   desktop app has repeatedly revoked the CLI's login (probe: `claude auth status` →
@@ -123,9 +129,10 @@ It has a documented JSON response and needs no login on the host. It costs:
   promotional-credit eligible.** Offers and plan terms change; verify before deployment.
 - **The fire text arrives as untrusted.** It comes wrapped in a `<routine-fire-payload>`
   block, so the routine needs a saved prompt that explicitly opts in (Appendix A).
-- **One routine per repository** in this proposal. The current API documentation limits each
-  routine to 30 fires per hour and each account to 100 fires per hour; the endpoint returns
-  `429` with `Retry-After` when a limit is reached.
+- **One routine per repository** in this proposal. The current API documentation allows up
+  to 30 fires per routine per hour, shared across API calls, the web UI's Run now button and
+  one-shot re-arms; each account can make up to 100 API fires per hour across all routines.
+  Rate-limited calls return `429` with `Retry-After`.
 - **Experimental API.** Its request and response shapes, rate limits, and token semantics
   may change. The `anthropic-beta: experimental-cc-routine-2026-04-01` header is optional;
   the endpoint accepts requests with or without it.
@@ -189,7 +196,8 @@ The payload carries:
 - **Where to work.** The repository and base branch, plus the exact branch to push:
   `claude/orbit-orb-12345`, lowercased and derived by Orbit.
 - **The commit marker.** `[ORB-12345]` goes in every commit subject. Dependency and
-  obsolescence checks already key on this marker (`activity-job/2_design.md:915`).
+  obsolescence checks already key on this marker
+  (`crates/orbit-engine/src/executor/automation/vcs/delivery_marker.rs`).
 - **The PR contract.**
   - Title: `[ORB-12345] <task title>`.
   - The body must have an `## Execution summary` section, written under the same rules
@@ -207,7 +215,7 @@ The payload carries:
 ## 4. Pipeline
 
 `task_gate_pipeline` already chooses `task_{{ input.mode }}_pipeline`
-(`assets/jobs/task_gate_pipeline.yaml:117`). A new `task_cloud_pipeline` slots in beside
+(`crates/orbit-core/assets/jobs/task_gate_pipeline.yaml:10-12`). A new `task_cloud_pipeline` slots in beside
 `task_pr_pipeline` and reuses the gate's locks and eligibility checks unchanged. Its steps
 are deterministic actions. None of them is an `agent_loop`, so the envelope contract doesn't
 apply.
@@ -254,7 +262,7 @@ Retries are allowed only when no session can have been created:
 
 ### 4.2 Polling
 
-`cloud_await_pr` copies `pr_complete::drive_pr_to_merged` (`vcs/pr/complete.rs`): a blocking
+`cloud_await_pr` copies `pr_complete::drive_pr_to_merged` (`vcs/pr/complete/drive.rs`): a blocking
 loop with a sleep in the run's worker process and GitHub read-back only. Each poll runs:
 
 ```
@@ -302,14 +310,15 @@ Cloud runs do not count against the drain's slots. Today they would:
 
 - `classify_workspace_auto_tasks` counts every live `task_auto_pipeline` run against
   `max_active_leaf_runs` (default 5);
-- `task_auto_pipeline` declares `max_active_runs: 10` as a hard ceiling
-  (`assets/jobs/workspace_auto_pipeline.yaml:7-14, 50-60`).
+- `task_auto_pipeline` declares `max_active_runs: 0`, so the job has no ceiling of its own
+  (`crates/orbit-core/assets/jobs/task_auto_pipeline.yaml:43`); the number of live runs is the drain's bound
+  (`crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml:7-14`, `orbit run auto --concurrency`).
 
 A cloud task waiting three hours in `cloud_await_pr` would hold one of those slots while the
 host does nothing for it. Phase 1 therefore:
 
-- dispatches cloud leaves as their own job, `task_cloud_auto_pipeline`, so the job-level
-  `max_active_runs` ceiling of `task_auto_pipeline` doesn't apply to them;
+- dispatches cloud leaves as their own job, `task_cloud_auto_pipeline`, so cloud leaves are
+  kept out of the local leaf count;
 - makes classify count local and cloud leaves separately: local leaves against
   `max_active_leaf_runs` as now, cloud leaves against `[cloud].max_in_flight` only;
 - keeps both counts in one admission pass, so `--stop`, the deadline and
@@ -326,8 +335,9 @@ claude.ai connectors. These tasks are ineligible:
 - tasks whose criteria need the host, such as `orbit` CLI state, the sweep clock, `~/.orbit`,
   launchd/systemd or the LAN;
 - tasks that need Orbit MCP during the work;
-- tasks in repositories the cloud session can't reach (no GitHub App, and no `/web-setup`
-  token);
+- tasks without GitHub access through the Claude GitHub App or `/web-setup`. The CLI may
+  upload a local bundle in this case, but that does not provide the GitHub remote access the
+  PR delivery contract requires;
 - tasks with unmet task dependencies, the same check `task_pr_pipeline` applies.
 
 v1 gates this on an explicit opt-in: the workspace sets `[cloud] enabled`, and the dispatch

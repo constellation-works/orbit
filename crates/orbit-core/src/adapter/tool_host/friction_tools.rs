@@ -6,6 +6,11 @@
 //! is joined to the spec half by [`FrictionVerb`]. [`dispatch`] is the join
 //! point, and its exhaustive `match` is what makes a spec without a handler a
 //! compile error.
+//!
+//! The tool entry checked the input against the verb's spec before it got
+//! here, so handlers read canonical parameter names from [`OperationInput`]
+//! and keep only content rules: blank required values, status names, and the
+//! meaning of an empty `title` or `rehome_to`.
 
 use std::str::FromStr;
 
@@ -14,9 +19,7 @@ use orbit_common::governance::friction::{
     FRICTION_LIST_RESPONSE_MODE_WITH_NOTES, FrictionVerb, effective_title,
     normalize_friction_tag_aliases, normalize_title,
 };
-use orbit_common::protocol::tool_input::{
-    optional_csv_or_string_list_alias, optional_raw_string, optional_string, required_string,
-};
+use orbit_common::governance::operation::{OperationInput, OperationVerb};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{
     FrictionAddParams, FrictionListFilter, FrictionRehomeOutcome, FrictionStoreBackend,
@@ -41,20 +44,26 @@ pub(super) fn dispatch(
     if matches!(verb, FrictionVerb::Add | FrictionVerb::Rehome) {
         runtime.ensure_coordination_task_write_permitted()?;
     }
+    // Re-wraps the input the tool entry already parsed; see `parse_input`.
+    let input = verb.spec().parse_input(input)?;
     match verb {
-        FrictionVerb::Add => add(runtime, input, model),
-        FrictionVerb::List => list(runtime, input),
-        FrictionVerb::Show => show(runtime, input),
+        FrictionVerb::Add => add(runtime, &input, model),
+        FrictionVerb::List => list(runtime, &input),
+        FrictionVerb::Show => show(runtime, &input),
         FrictionVerb::Stats => stats(runtime),
         FrictionVerb::Tags => tags(runtime),
-        FrictionVerb::Update => update(runtime, input),
-        FrictionVerb::Resolve => resolve(runtime, input),
-        FrictionVerb::Rehome => rehome(runtime, input),
+        FrictionVerb::Update => update(runtime, &input),
+        FrictionVerb::Resolve => resolve(runtime, &input),
+        FrictionVerb::Rehome => rehome(runtime, &input),
     }
 }
 
-fn add(runtime: &OrbitRuntime, input: Value, model: Option<String>) -> Result<Value, OrbitError> {
-    let (params, substitutions) = add_params(&input, model)?;
+fn add(
+    runtime: &OrbitRuntime,
+    input: &OperationInput,
+    model: Option<String>,
+) -> Result<Value, OrbitError> {
+    let (params, substitutions) = add_params(input, model)?;
     if let Some(task_id) = params.during_task.as_deref() {
         runtime.ensure_friction_task_exists(task_id)?;
     }
@@ -63,16 +72,17 @@ fn add(runtime: &OrbitRuntime, input: Value, model: Option<String>) -> Result<Va
 }
 
 pub(super) fn add_params(
-    input: &Value,
+    input: &OperationInput,
     model: Option<String>,
 ) -> Result<(FrictionAddParams, Vec<(String, String)>), OrbitError> {
-    let body = required_string(input, &["body", "description"], "body")?;
-    let title = optional_raw_string(input, "title")?
+    let body = input.required_string("body")?;
+    let title = input
+        .optional_raw_string("title")?
         .map(|raw| normalize_title(&raw))
         .transpose()?;
-    let tags = optional_csv_or_string_list_alias(input, &["tags", "tag"])?.unwrap_or_default();
+    let tags = input.optional_string_list("tags")?.unwrap_or_default();
     let (tags, substitutions) = normalize_friction_tag_aliases(tags);
-    let during_task = optional_string(input, "during_task")?.or(optional_string(input, "task_id")?);
+    let during_task = input.optional_string("during_task")?;
     let model = model
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -93,7 +103,7 @@ pub(super) fn add_params(
     ))
 }
 
-fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
+fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
     list_in(
         crate::runtime::friction::store_for(runtime)?.as_ref(),
         input,
@@ -102,8 +112,8 @@ fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
 
 /// Translate the wire filter into the store filter, including the page, so
 /// SQLite decides which rows exist before any body is decoded.
-fn list_in(store: &dyn FrictionStoreBackend, input: Value) -> Result<Value, OrbitError> {
-    let response_mode = optional_string(&input, "response_mode")?;
+fn list_in(store: &dyn FrictionStoreBackend, input: &OperationInput) -> Result<Value, OrbitError> {
+    let response_mode = input.optional_string("response_mode")?;
     let with_notes = match response_mode.as_deref() {
         None => false,
         Some(FRICTION_LIST_RESPONSE_MODE_WITH_NOTES) => true,
@@ -113,29 +123,44 @@ fn list_in(store: &dyn FrictionStoreBackend, input: Value) -> Result<Value, Orbi
             )));
         }
     };
-    let month_bounds = optional_string(&input, "month")?
+    let month_bounds = input
+        .optional_string("month")?
         .map(|raw| parse_month_bounds(&raw))
         .transpose()?;
     let (month_from, month_to) = month_bounds
         .map(|(from, to)| (Some(from), Some(to)))
         .unwrap_or((None, None));
+    let newest_first = match input.optional_string("order")?.as_deref() {
+        None | Some("oldest") => false,
+        Some("newest") => true,
+        Some(value) => {
+            return Err(OrbitError::InvalidInput(format!(
+                "`order` must be `oldest` or `newest`, got '{value}'"
+            )));
+        }
+    };
     let filter = FrictionListFilter {
-        model: optional_string(&input, "model")?,
-        status: optional_string(&input, "status")?
-            .map(|status| parse_status(&status))
-            .transpose()?,
-        tag: optional_string(&input, "tag")?,
-        q: optional_string(&input, "q")?,
-        from: optional_string(&input, "from")?
+        model: input.optional_string("model")?,
+        statuses: input
+            .optional_string("status")?
+            .map(|statuses| parse_status_filter(&statuses))
+            .transpose()?
+            .unwrap_or_default(),
+        tag: input.optional_string("tag")?,
+        q: input.optional_string("q")?,
+        from: input
+            .optional_string("from")?
             .map(|raw| parse_timestamp("from", &raw))
             .transpose()?
             .or(month_from),
-        to: optional_string(&input, "to")?
+        to: input
+            .optional_string("to")?
             .map(|raw| parse_timestamp("to", &raw))
             .transpose()?
             .or(month_to),
-        limit: optional_usize(&input, "limit")?,
-        offset: optional_usize(&input, "offset")?.unwrap_or(0),
+        limit: input.optional_count("limit")?,
+        offset: input.optional_count("offset")?.unwrap_or(0),
+        newest_first,
     };
     let records = store
         .list(&filter)?
@@ -162,15 +187,15 @@ fn list_payload(records: Vec<Value>, query: Option<&str>, with_notes: bool) -> V
     Value::Array(records)
 }
 
-fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
+fn show(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
     show_in(
         crate::runtime::friction::store_for(runtime)?.as_ref(),
         input,
     )
 }
 
-fn show_in(store: &dyn FrictionStoreBackend, input: Value) -> Result<Value, OrbitError> {
-    let id = required_string(&input, &["id"], "id")?;
+fn show_in(store: &dyn FrictionStoreBackend, input: &OperationInput) -> Result<Value, OrbitError> {
+    let id = input.required_string("id")?;
     let Some(stored) = store.show(&id)? else {
         return Err(OrbitError::not_found(NotFoundKind::Friction, id));
     };
@@ -187,40 +212,33 @@ fn tags(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
     Ok(json!(crate::runtime::friction::store_for(runtime)?.tags()?))
 }
 
-fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    let id = required_string(&input, &["id"], "id")?;
-    let status = optional_string(&input, "status")?
+fn update(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
+    let id = input.required_string("id")?;
+    let status = input
+        .optional_string("status")?
         .map(|status| parse_status(&status))
         .transpose()?;
-    let (tags, substitutions) = match optional_csv_or_string_list_alias(&input, &["tags", "tag"])? {
+    let (tags, substitutions) = match input.optional_string_list("tags")? {
         Some(tags) => {
             let (tags, substitutions) = normalize_friction_tag_aliases(tags);
             (Some(tags), substitutions)
         }
         None => (None, Vec::new()),
     };
-    let body = optional_string(&input, "body")?;
+    let body = input.optional_string("body")?;
     // An explicit empty `title` clears the stored one, which restores
     // derivation from the body — distinct from omitting the field entirely.
-    let title = match optional_raw_string(&input, "title")? {
+    let title = match input.optional_raw_string("title")? {
         None => None,
         Some(raw) if raw.trim().is_empty() => Some(None),
         Some(raw) => Some(Some(normalize_title(&raw)?)),
     };
     // Like `title`, an explicit empty `rehome_to` clears the disposition.
-    let rehome_to = optional_raw_string(&input, "rehome_to")?.map(|raw| {
+    let rehome_to = input.optional_raw_string("rehome_to")?.map(|raw| {
         let raw = raw.trim();
         (!raw.is_empty()).then(|| raw.to_string())
     });
-    let move_record = match input.get("move") {
-        None | Some(Value::Null) => None,
-        Some(Value::Bool(value)) => Some(*value),
-        Some(_) => {
-            return Err(OrbitError::InvalidInput(
-                "`move` must be a boolean".to_string(),
-            ));
-        }
-    };
+    let move_record = input.optional_bool("move")?;
     if move_record.is_some() && !matches!(rehome_to, Some(Some(_))) {
         return Err(OrbitError::InvalidInput(
             "`move` applies only with a non-empty `rehome_to`".to_string(),
@@ -253,27 +271,21 @@ fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
         let outcome = runtime.rehome_friction(&id, to_workspace, has_edits.then_some(edits))?;
         return rehome_to_json(outcome, substitutions);
     }
-    if !has_edits && rehome_to.is_none() {
-        return Err(OrbitError::InvalidInput(
-            "orbit.friction.update requires `status`, `tags`, `body`, `title`, or `rehome_to`"
-                .to_string(),
-        ));
-    }
     let stored = crate::runtime::friction::store_for(runtime)?
         .update(&id, FrictionUpdateParams { rehome_to, ..edits })?;
     record_to_json_with_tag_normalizations(stored, substitutions)
 }
 
-fn resolve(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    let id = required_string(&input, &["id"], "id")?;
+fn resolve(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
+    let id = input.required_string("id")?;
     runtime.ensure_local_friction_resolution_permitted(&id)?;
     let stored = crate::runtime::friction::store_for(runtime)?.resolve(&id, Utc::now())?;
     record_to_json(stored)
 }
 
-fn rehome(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    let id = required_string(&input, &["id"], "id")?;
-    let to_workspace = required_string(&input, &["to_workspace"], "to_workspace")?;
+fn rehome(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
+    let id = input.required_string("id")?;
+    let to_workspace = input.required_string("to_workspace")?;
     rehome_to_json(
         runtime.rehome_friction(&id, &to_workspace, None)?,
         Vec::new(),
@@ -340,25 +352,22 @@ fn parse_month_bounds(raw: &str) -> Result<(DateTime<Utc>, DateTime<Utc>), Orbit
     Ok((start, end_exclusive - chrono::Duration::nanoseconds(1)))
 }
 
+/// A list's status filter: one status, several comma-separated, or `all`
+/// for every status (an empty filter).
+fn parse_status_filter(raw: &str) -> Result<Vec<FrictionStatus>, OrbitError> {
+    if raw.trim() == "all" {
+        return Ok(Vec::new());
+    }
+    raw.split(',')
+        .map(str::trim)
+        .filter(|status| !status.is_empty())
+        .map(parse_status)
+        .collect()
+}
+
 fn parse_status(raw: &str) -> Result<FrictionStatus, OrbitError> {
     FrictionStatus::from_str(raw)
         .map_err(|error| OrbitError::InvalidInput(format!("`status` {error}")))
-}
-
-fn optional_usize(input: &Value, field: &str) -> Result<Option<usize>, OrbitError> {
-    let Some(value) = input.get(field) else {
-        return Ok(None);
-    };
-    if value.is_null() {
-        return Ok(None);
-    }
-    let n = match value {
-        Value::Number(number) => number.as_u64(),
-        Value::String(raw) => raw.trim().parse::<u64>().ok(),
-        _ => None,
-    }
-    .ok_or_else(|| OrbitError::InvalidInput(format!("`{field}` must be a non-negative integer")))?;
-    Ok(Some(n as usize))
 }
 
 fn record_to_json(stored: StoredFrictionRecord) -> Result<Value, OrbitError> {

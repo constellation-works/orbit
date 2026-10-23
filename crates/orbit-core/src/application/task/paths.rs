@@ -4,7 +4,8 @@ use orbit_common::fs::selector::{
     anchor_path, canonical_selector_in_workspace, exists_in_workspace,
 };
 use orbit_types::task::{
-    ContextCreationState, MAX_CONTEXT_CREATION_SELECTORS, Task, TaskHistoryEntry, TaskType,
+    ContextCreationState, MAX_CONTEXT_CREATION_SELECTORS, ReadinessGapCode, Task, TaskHistoryEntry,
+    task_readiness,
 };
 use orbit_types::workspace::WorkspacePaths;
 use std::path::{Path, PathBuf};
@@ -72,6 +73,8 @@ pub(super) fn context_files_restored_history_entry(
         )),
         from_status: None,
         to_status: None,
+        operation_id: None,
+        decision: None,
     }
 }
 
@@ -82,7 +85,7 @@ pub(super) fn context_files_restored_history_entry(
 /// automation seeding, and runtime host updates legitimately record targets the
 /// task is about to create, and no read path drops a declaration for a missing
 /// target ([ORB-12490]). Operator surfaces guard typos separately through
-/// [`OrbitRuntime::ensure_context_selectors_exist`].
+/// [`OrbitRuntime::add_task_screened`] and its update counterparts.
 pub(crate) fn normalize_context_files_for_write(
     candidates: Vec<String>,
     workspace_root: &Path,
@@ -99,7 +102,8 @@ pub(crate) fn normalize_context_files_for_write(
 /// What an operator surface's selector screening established for one task
 /// write, carried into the write so it commits with the scope it describes.
 ///
-/// Only the screening methods below construct a non-default value, and the
+/// Only the screened writes ([`OrbitRuntime::add_task_screened`] and its
+/// update counterparts) construct a non-default value, and the
 /// write re-checks it against the task under the task lock, so neither a
 /// transport field nor a copied value can mint creation intent.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -144,7 +148,7 @@ impl OrbitRuntime {
     /// kind of an existing target are enforced exactly as on a strict write;
     /// only a missing anchor is accepted, and every such selector is returned
     /// as an exact canonical creation grant. Grants are bounded per task.
-    pub fn authorize_missing_context(
+    pub(crate) fn authorize_missing_context(
         &self,
         selectors: &[String],
     ) -> Result<ContextCreationAuthorization, OrbitError> {
@@ -177,34 +181,23 @@ impl OrbitRuntime {
         })
     }
 
-    /// The strict operator-surface check for a write replacing `task_id`'s
-    /// `context_files`: [`Self::ensure_context_selectors_exist`], except that
-    /// a missing selector the task already holds a creation grant for is
-    /// kept. Re-sending a declared creation target therefore needs no new
-    /// opt-out, and the returned authorization pins the grant relied on.
-    pub fn ensure_context_selectors_exist_for_update(
-        &self,
-        task_id: &str,
-        selectors: &[String],
-    ) -> Result<ContextCreationAuthorization, OrbitError> {
-        self.ensure_context_selectors_exist_for_task_write(task_id, None, selectors)
-            .map(|(_, authorization)| authorization)
-    }
-
     /// Reject context selectors whose filesystem anchor does not exist in the
     /// workspace the task write will use.
     ///
-    /// This is an operator-surface guard: `orbit task add` / `orbit task
-    /// update`, the `orbit.task.add` / `orbit.task.update` tools, and the
-    /// dashboard `POST /api/tasks` / `PATCH /api/tasks/:id` handlers all call
-    /// it so a mistyped selector cannot ship a task whose context is dead on
-    /// arrival. Existence is the filesystem anchor only: a `symbol:` name and
-    /// kind are parsed and stored, but not looked up. Every surface exposes an
+    /// This is an operator-surface guard: the screened add
+    /// ([`Self::add_task_screened`]) behind `orbit task add`, the
+    /// `orbit.task.add` tool and the dashboard `POST /api/tasks` runs it so a
+    /// mistyped selector cannot ship a task whose context is dead on arrival.
+    /// Existence is the filesystem anchor only: a `symbol:` name and kind are
+    /// parsed and stored, but not looked up. Every surface exposes an
     /// explicit `allow_missing_context` escape for the deliberate
     /// not-yet-created target, and the rejection names it. `add_task` and
     /// `update_task` themselves stay permissive so internal callers are
     /// unaffected.
-    pub fn ensure_context_selectors_exist(&self, selectors: &[String]) -> Result<(), OrbitError> {
+    pub(crate) fn ensure_context_selectors_exist(
+        &self,
+        selectors: &[String],
+    ) -> Result<(), OrbitError> {
         if selectors.is_empty() {
             return Ok(());
         }
@@ -216,8 +209,8 @@ impl OrbitRuntime {
         })
     }
 
-    /// [`Self::ensure_context_selectors_exist`] for an `orbit.task.update`
-    /// write, relaxed for the worker that owns the task.
+    /// [`Self::ensure_context_selectors_exist`] for a screened task update,
+    /// relaxed for the worker that owns the task.
     ///
     /// A managed run's worker declares the files it is about to create before
     /// they exist, and the audit behind [ORB-12731] showed that is the common
@@ -231,9 +224,8 @@ impl OrbitRuntime {
     /// task the run does not own gets the strict check with its escape hint.
     ///
     /// A missing selector the task holds a durable creation grant for is
-    /// accepted for any caller (see
-    /// [`Self::ensure_context_selectors_exist_for_update`]); the returned
-    /// authorization pins that grant.
+    /// accepted for any caller, so re-sending a declared creation target
+    /// needs no new opt-out; the returned authorization pins that grant.
     pub(crate) fn ensure_context_selectors_exist_for_task_write(
         &self,
         task_id: &str,
@@ -489,20 +481,16 @@ fn unsupported_selector_kind(entry: &str) -> OrbitError {
 
 pub(crate) use crate::runtime::task::canonicalize_context_files_for_read;
 
-/// Compute advisory warnings for an `orbit.task.add` call based on the raw
-/// `context_files` (or legacy `context`) values supplied by the caller and the
-/// effective task type. Warnings are purely response-time signals; they do not
-/// block creation or mutate the stored task.
-pub(crate) fn compute_task_add_warnings(
-    context_files: &[String],
-    task_type: TaskType,
-) -> Vec<String> {
+/// Compute advisory warnings for a screened task add from the raw
+/// `context_files` values the caller supplied and the created task. Warnings
+/// are purely response-time signals; they do not block creation or mutate the
+/// stored task.
+pub(super) fn compute_task_add_warnings(context_files: &[String], task: &Task) -> Vec<String> {
     let mut warnings = Vec::new();
 
-    let is_chore = task_type == TaskType::Chore;
-    if context_files.is_empty() && !is_chore {
+    if missing_context_blocks_readiness(task) {
         warnings.push(
-            "task created without context_files: it holds no file lock, so a drain will not approve it, and once promoted it can conflict with concurrent work. Add selectors for the files/dirs/symbols it will modify (orbit.task.update with context_files), or let the task pilot prepare it before promoting it".to_string(),
+            "task created without context_files: it holds no file lock, so a drain will not approve it, and once promoted it can conflict with concurrent work. Add selectors for the files/dirs/symbols it will modify (a task update with context_files), or let the task pilot prepare it before promoting it".to_string(),
         );
     }
 
@@ -520,6 +508,19 @@ pub(crate) fn compute_task_add_warnings(
     }
 
     warnings
+}
+
+/// Whether readiness holds `task` on a blocking missing-context gap. The
+/// warning follows that gap rather than the task type, so a defaulted chore is
+/// warned like any other task. A backlog task's gap is advisory, and its
+/// backlog footprint warning already says so, so it gets no second warning.
+fn missing_context_blocks_readiness(task: &Task) -> bool {
+    task_readiness(task).is_some_and(|readiness| {
+        readiness
+            .gaps
+            .iter()
+            .any(|gap| gap.code == ReadinessGapCode::MissingContextFiles && gap.is_blocking())
+    })
 }
 
 /// Returns true for entries that match the over-inclusion patterns (repo-root
@@ -562,30 +563,6 @@ fn is_over_inclusion_selector(entry: &str) -> bool {
     }
 
     false
-}
-
-pub(super) fn extract_task_path_mentions(text: &str, workspace_root: &Path) -> Vec<String> {
-    let mut paths = std::collections::BTreeSet::new();
-    let is_wrapper = |ch: char| {
-        matches!(
-            ch,
-            '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | ':' | ';'
-        )
-    };
-    for raw in text.split_whitespace() {
-        // Sentence punctuation and closing wrappers interleave at the end of a
-        // token (`(see crates/a.rs).`), so strip them together, not in turn.
-        let trimmed = raw
-            .trim_start_matches(is_wrapper)
-            .trim_end_matches(|ch: char| is_wrapper(ch) || matches!(ch, '.' | '!' | '?'));
-        if let Some(path) = normalize_path_token(trimmed) {
-            if path.starts_with('/') && !is_path_under_workspace(Path::new(&path), workspace_root) {
-                continue;
-            }
-            paths.insert(path);
-        }
-    }
-    paths.into_iter().collect()
 }
 
 /// Whether a token names a pattern, a placeholder, or a host location rather

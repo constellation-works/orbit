@@ -4,7 +4,8 @@ use super::envelope_cache::EnvelopeStamp;
 use super::repair_gate::{RepairEvidence, RepairGate, RepairTicket};
 use super::*;
 use crate::contracts::{
-    EnvelopeStampRecord, IndexedTaskRow, TaskCompletionByComplexity, TaskTerminalTransition,
+    EnvelopeStampRecord, IndexedTaskRow, TaskCompletionByComplexity, TaskDefectFiling,
+    TaskTerminalTransition,
 };
 use orbit_common::StorageLayer;
 use orbit_common::fs::io::hold_step;
@@ -33,6 +34,14 @@ impl TaskV2Store {
         self.registry.task_status_index_for(workspace_id, targets)
     }
 
+    pub(crate) fn task_ids_with_tag(
+        &self,
+        tag: &str,
+        task_ids: &BTreeSet<String>,
+    ) -> Result<BTreeSet<String>, OrbitError> {
+        self.registry.task_ids_with_tag(tag, task_ids)
+    }
+
     pub(crate) fn task_completion_by_complexity(
         &self,
     ) -> Result<Vec<TaskCompletionByComplexity>, OrbitError> {
@@ -52,6 +61,33 @@ impl TaskV2Store {
         self.ensure_complexity_indexed()?;
         self.registry
             .terminal_transitions(&self.workspace_id, since)
+    }
+
+    pub(crate) fn task_defect_filings(
+        &self,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Vec<TaskDefectFiling>, OrbitError> {
+        self.ensure_task_type_indexed()?;
+        self.registry.defect_filings(&self.workspace_id, since)
+    }
+
+    /// Older writers leave new rows' type NULL and preserve existing rows'
+    /// type even when the canonical type changes. Check every row, including
+    /// named causes, against its envelope before using the defect projection.
+    /// Repair stays best effort: unreadable bundles or a refused repair leave
+    /// the projection serving the index it already holds.
+    fn ensure_task_type_indexed(&self) -> Result<(), OrbitError> {
+        // A failed freshness scan is a read failure. Swallowing it and serving
+        // the projection would hide a store error behind a stale count.
+        if self.validate_index()?.is_some() {
+            return Ok(());
+        }
+        if let Some(ticket) = self.admit_index_repair()?
+            && let Ok(bundles) = self.bundle_store.list_bundles()
+        {
+            self.attempt_index_repair(ticket, &bundles, "missing or stale defect projection");
+        }
+        Ok(())
     }
 
     /// One-time rebuild after `complexity` was added as a nullable column.
@@ -118,8 +154,8 @@ impl TaskV2Store {
     /// `Some(unsettled)` means the index is usable; `unsettled` names the
     /// registered tasks whose bundle a concurrent writer holds, which a
     /// selection must leave out. `None` means a row is missing or disagrees
-    /// with its envelope — on `updated_at` or on any field listing filters or
-    /// orders by — and the caller must rebuild or scan bundles instead.
+    /// with its envelope — on `updated_at` or on a listing or defect projection
+    /// field — and the caller must rebuild or scan bundles instead.
     ///
     /// Each registered task costs one metadata probe. Its envelope is parsed
     /// again only when neither the in-process [`EnvelopeCache`] nor a stamp
@@ -129,6 +165,13 @@ impl TaskV2Store {
     /// comparison — a reused envelope that disagrees with its index row still
     /// sends the caller to a rebuild.
     pub(super) fn validate_index(&self) -> Result<Option<Vec<String>>, OrbitError> {
+        self.validate_index_with_proofs(true)
+    }
+
+    pub(super) fn validate_index_with_proofs(
+        &self,
+        persist_proofs: bool,
+    ) -> Result<Option<Vec<String>>, OrbitError> {
         let _span = orbit_common::tracing::trace_span!(
             target: "orbit.store.task_query",
             "task_index_freshness",
@@ -141,7 +184,7 @@ impl TaskV2Store {
             // against a new snapshot before paying for a workspace-wide
             // bundle scan.
             for _ in 0..2 {
-                if let Some(unsettled) = self.validate_index_once()? {
+                if let Some(unsettled) = self.validate_index_once(persist_proofs)? {
                     orbit_common::tracing::debug!(
                         target: "orbit.store.task_query",
                         workspace_id = %self.workspace_id,
@@ -155,7 +198,7 @@ impl TaskV2Store {
         })
     }
 
-    fn validate_index_once(&self) -> Result<Option<Vec<String>>, OrbitError> {
+    fn validate_index_once(&self, persist_proofs: bool) -> Result<Option<Vec<String>>, OrbitError> {
         let (registered, indexed) = hold_step(INDEX_SNAPSHOT_STEP, || {
             Ok::<_, OrbitError>((
                 self.registry.tasks_for_workspace(&self.workspace_id)?,
@@ -199,7 +242,7 @@ impl TaskV2Store {
         // not even attempt to persist them through a read-only connection,
         // and a busy registry writer skips them rather than holding this
         // read's boundary section while it waits.
-        if !self.registry.is_read_only()? {
+        if persist_proofs && !self.registry.is_read_only()? {
             let recorded = hold_step(ENVELOPE_STAMP_WRITE_STEP, || {
                 self.registry
                     .record_envelope_stamps(&self.workspace_id, &proofs)
@@ -533,6 +576,26 @@ impl TaskV2Store {
                 boundary.refuse_unscoped_claim_write(id)?;
             }
             self.bundle_store.with_bundle_write_lock(id, op)
+        })
+    }
+
+    /// [`Self::with_task_lock`] for an operator's comment-only write, the one
+    /// unscoped write an execution claim admits [ORB-16723]. The lock itself
+    /// does not refuse a protecting claim; `op` learns whether one protects
+    /// the task. Every write inside still takes [`Self::with_task_lock`] or
+    /// classifies itself as `update_task_history` does, so nothing but the
+    /// comment lands under the claim.
+    pub(crate) fn with_task_comment_lock<T, F>(&self, id: &str, op: F) -> Result<T, OrbitError>
+    where
+        F: FnOnce(bool) -> Result<T, OrbitError>,
+    {
+        // Same boundary-then-bundle order as `with_task_lock` (ORB-12528).
+        self.in_boundary(|| {
+            let claimed = match &self.coordination {
+                Some(boundary) => boundary.protecting_claim_for_task(id)?.is_some(),
+                None => false,
+            };
+            self.bundle_store.with_bundle_write_lock(id, || op(claimed))
         })
     }
 }

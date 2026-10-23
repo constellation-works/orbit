@@ -28,6 +28,7 @@ pub(crate) const CREW_CONFIG_FIELDS: &[&str] = &[
     "description",
     "effort",
     "enabled",
+    "env",
     "model",
     "provider",
     "tags",
@@ -59,11 +60,12 @@ pub enum ConfigSection {
     Crews,
     /// `execution.*` — how agent subprocesses run.
     Execution,
-    /// `review.*` and `operation.review_crew` — before-PR review and the
-    /// automatic-review crew. After-landing review is an auto-task flag, not
-    /// a key.
+    /// `review.*`, `workflow.purpose_crews.review` and
+    /// `workflow.purpose_crews.pre_landing_review` — review before landing
+    /// and the automatic-review crews. After-landing review is an auto-task
+    /// flag, not a key.
     Review,
-    /// Everything else: `automation.*`, `runtime.*`, `scoring.*`, `tasks.*`,
+    /// Everything else: `automation.*`, `runtime.*`, `tasks.*`,
     /// `pr.*`, `plugin.*`.
     Housekeeping,
 }
@@ -86,7 +88,7 @@ impl ConfigSection {
             Self::Delivery => "Delivery (workflow.*)",
             Self::Crews => "Crews (crews.*)",
             Self::Execution => "Execution (execution.*)",
-            Self::Review => "Review (review.*, operation.review_crew)",
+            Self::Review => "Review (review.*, workflow.purpose_crews.review)",
             Self::Housekeeping => "Housekeeping",
         }
     }
@@ -98,8 +100,8 @@ impl ConfigSection {
             Self::Delivery => "how tasks are shipped",
             Self::Crews => "named provider/model assignments",
             Self::Execution => "how agent subprocesses run",
-            Self::Review => "before-PR review and the automatic-review crew",
-            Self::Housekeeping => "logs, scoring, ids, plugins, and PR links",
+            Self::Review => "review before landing and the automatic-review crew",
+            Self::Housekeeping => "logs, ids, plugins, and PR links",
         }
     }
 
@@ -130,6 +132,26 @@ impl ConfigSection {
     }
 }
 
+/// Display tier for a registered configuration key. Loading and editing do not
+/// depend on this tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigKeyTier {
+    /// Shown in the ordinary configuration overview.
+    Standard,
+    /// Shown when configured in any layer or explicitly requested.
+    Advanced,
+}
+
+impl ConfigKeyTier {
+    /// Stable lowercase token for configuration JSON metadata.
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Advanced => "advanced",
+        }
+    }
+}
+
 /// One settable `config.toml` key, as advertised by `orbit config keys`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConfigKeyDescriptor {
@@ -138,9 +160,14 @@ pub struct ConfigKeyDescriptor {
     /// Human-readable value type (`string`, `bool`, `array<string>`, ...).
     pub value_type: &'static str,
     /// What the setting controls.
+    ///
+    /// One sentence of at most 100 characters. Defaults, ranges and
+    /// interactions live in `docs/CONFIG.md`.
     pub description: &'static str,
     /// Grouping for `orbit config show`/`keys`.
     pub section: ConfigSection,
+    /// Visibility in the ordinary configuration overview.
+    pub tier: ConfigKeyTier,
     /// Relevance ordinal within the section; lower renders first. Registry
     /// declaration order stays alphabetical (a store test enforces it), so
     /// this is what puts the settings an operator reaches for at the top.
@@ -151,15 +178,17 @@ mod keys;
 mod settings;
 
 pub(crate) use keys::{
-    DEPRECATED_CONFIG_KEYS, REMOVED_CONFIG_KEYS, deprecated_key_note, is_machine_identity_key,
-    parse_crew_field_key, removed_key_note,
+    DEPRECATED_CONFIG_KEYS, DEPRECATED_VALUE_FORMS, REMOVED_CONFIG_KEYS,
+    is_compatibility_config_key, is_machine_identity_key, parse_crew_field_key,
 };
 pub use keys::{
     GLOBAL_ONLY_KEY_PREFIX, admit_config_key, admit_settable_config_key, config_key_options,
     describe, immutable_key_note, is_global_only_key,
 };
 pub(crate) use settings::read_optional;
+pub(crate) use settings::resolve_percent;
 pub use settings::{
-    CONFIG_KEY_REGISTRY, ConfigSnapshot, MachineSettings, ResourceThrottleSettings,
+    AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigSnapshot, ExploreSettings, MachineSettings,
+    MidRunSteeringSettings, RegressionRiskSettings, ResourceThrottleSettings,
     WorkerContainmentSettings,
 };

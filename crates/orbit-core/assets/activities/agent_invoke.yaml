@@ -48,10 +48,14 @@ spec:
     properties:
       prompt:
         type: string
-      # The subprocess cwd. Named `workspace_path` because that is the key the
-      # CLI runner resolves the child's working directory from; the admission
-      # below records the owning checkout separately.
+      # The canonical subprocess cwd. For a linked checkout this must be its
+      # exact root, matching the internally derived repo_root below.
       workspace_path:
+        type: string
+      # Internal assigned checkout identity, derived by governed submission
+      # from cwd and the registered primary's Git common directory. Absent
+      # for primary/interior invocations; never a public caller override.
+      repo_root:
         type: string
       cwd:
         type: string
@@ -86,7 +90,8 @@ spec:
     on the host.
 
     Input contains `prompt` (what the operator wants investigated), `cwd` (the
-    directory you start in, also supplied as `workspace_path`), and the
+    directory you start in, also supplied as `workspace_path`), an internally
+    derived `repo_root` when targeting a linked checkout root, and the
     operator's `trusted_host_admission`.
 
     You are running outside Orbit's filesystem sandbox as the operator's own

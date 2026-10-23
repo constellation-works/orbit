@@ -3,9 +3,14 @@
 //! `orbit run readiness`, `orbit doctor` and the dashboard show provider
 //! limits only through [`ProviderLimitsView`], never by reading the store: which
 //! readings are live, which keep their crews out of delivery admission, until
-//! when, and which crews those are. Liveness, thresholds and crew coverage are
-//! admission's own rules (`provider_limit`), so no surface can disagree with
-//! the drain about what is gated.
+//! when, which crews those are, and how old each reading is. Liveness,
+//! thresholds and crew coverage are admission's own rules (`provider_limit`),
+//! so no surface can disagree with the drain about what is gated. A reading
+//! observed on an earlier UTC date is stale even while its reset keeps it live.
+//!
+//! [ORB-17288] A crew that sets `env` is its own provider account, so its
+//! readings, and the status of its account, are listed apart from its
+//! provider's default login's, under `provider/crew`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -14,8 +19,10 @@ use orbit_types::identity::Crew;
 use orbit_types::telemetry::{
     ProviderLimitObservation, ProviderLimitSource, USAGE_REPORTING_PROVIDERS,
 };
-use orbit_types::workflow::Provider;
+use orbit_types::workflow::{Provider, provider_account_label};
 use serde::{Deserialize, Serialize};
+
+use orbit_config::ProviderLimitThreshold;
 
 use super::gate::{reading_at_limit, reading_covers, reading_lifetime};
 use super::ledger::PARTIAL_NOTE;
@@ -26,6 +33,10 @@ use crate::OrbitRuntime;
 pub struct ProviderLimitReading {
     /// Canonical provider name (`claude`, `codex`).
     pub provider: String,
+    /// The crew account the reading was taken under, a crew that sets
+    /// `env`; `None` for the provider's default login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     /// The model or model family the reading covers; `None` covers the whole
     /// account.
     pub scope: Option<String>,
@@ -40,15 +51,24 @@ pub struct ProviderLimitReading {
     pub resets_at: Option<DateTime<Utc>>,
     pub source: ProviderLimitSource,
     pub observed_at: DateTime<Utc>,
+    /// Seconds from `observed_at` until the view was built. Never negative:
+    /// a reading observed in the future reports `0`.
+    #[serde(default)]
+    pub age_seconds: i64,
+    /// Whether `observed_at` falls on an earlier UTC date than the view.
+    /// A reading from earlier the same UTC date is fresh.
+    #[serde(default)]
+    pub stale: bool,
     /// Whether reaching this window stops the account's runs; an overage
     /// window is shown but never gates.
     pub gating: bool,
     /// Whether the reading undercounts: a `usd` budget read from the ledger
     /// leaves out invocations that recorded no cost.
     pub partial: bool,
-    /// The used percent at or above which the provider's crews are skipped
-    /// (`workflow.provider_limit_*`).
-    pub threshold: u8,
+    /// The used percent at or above which the provider's crews are skipped,
+    /// or `off` when `workflow.provider_limit_overrides` turns that gate off.
+    /// JSON is the number, or the string `off`.
+    pub threshold: ProviderLimitThreshold,
     /// Whether the reading keeps the crews it covers out of delivery
     /// admission now.
     pub gated: bool,
@@ -61,8 +81,8 @@ pub struct ProviderLimitReading {
 }
 
 impl ProviderLimitReading {
-    /// `claude five_hour`, or `claude [opus] seven_day` for a model-scoped
-    /// reading.
+    /// `claude five_hour`, `claude [opus] seven_day` for a model-scoped
+    /// reading, or `claude/opus-credits 30d budget` for a crew account's.
     #[must_use]
     pub fn label(&self) -> String {
         let scope = self
@@ -72,21 +92,29 @@ impl ProviderLimitReading {
             .unwrap_or_default();
         format!(
             "{}{scope} {}",
-            self.provider,
+            provider_account_label(&self.provider, self.account.as_deref()),
             self.window.as_deref().unwrap_or("usage window")
         )
     }
 
     /// `claude five_hour 93% >= 90% until 15:00Z` for a gated reading,
-    /// `claude five_hour 40% (limit 90%)` otherwise. The reset is written
-    /// as a time of day when it falls on `now`'s UTC date.
+    /// `claude five_hour 40% (limit 90%)` below a percent threshold, and
+    /// `codex primary 100% (gating off)` when the provider's gate is off.
+    /// The reset is written as a time of day when it falls on `now`'s UTC date.
     #[must_use]
     pub fn describe(&self, now: DateTime<Utc>) -> String {
         let label = self.label();
+        let reported = self.used_percent.map_or_else(
+            || "usage not reported".to_string(),
+            |used| format!("{used}%"),
+        );
+        let ProviderLimitThreshold::Percent(threshold) = self.threshold else {
+            return format!("{label} {reported}{} (gating off)", self.partial_note());
+        };
         if self.gated {
             let usage = match self.used_percent {
-                Some(used) if used >= f64::from(self.threshold) => {
-                    format!("{used}% >= {}%", self.threshold)
+                Some(used) if used >= f64::from(threshold) => {
+                    format!("{used}% >= {threshold}%")
                 }
                 Some(used) => format!("exhausted at {used}%"),
                 None => "exhausted".to_string(),
@@ -97,18 +125,13 @@ impl ProviderLimitReading {
                 short_time(self.until, now)
             );
         }
-        let usage = self.used_percent.map_or_else(
-            || "usage not reported".to_string(),
-            |used| format!("{used}%"),
-        );
         if self.gating {
             format!(
-                "{label} {usage}{} (limit {}%)",
-                self.partial_note(),
-                self.threshold
+                "{label} {reported}{} (limit {threshold}%)",
+                self.partial_note()
             )
         } else {
-            format!("{label} {usage} (overage window; never gates)")
+            format!("{label} {reported} (overage window; never gates)")
         }
     }
 
@@ -133,19 +156,33 @@ impl ProviderLimitReading {
     }
 }
 
-/// What the host knows about one configured provider's usage.
+/// What the host knows about one configured provider account's usage: a
+/// provider's default login, or [ORB-17288] a crew that sets `env`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProviderUsageStatus {
     /// Canonical provider name.
     pub provider: String,
+    /// The crew account, for a crew that sets `env`; `None` for the
+    /// provider's default login.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     /// Whether the provider reports its usage windows after a run. One that
     /// does not is read only from a limit failure.
     pub reports_usage: bool,
-    pub threshold: u8,
+    /// The provider's gate: a percent, or `off`. JSON is the number or `"off"`.
+    pub threshold: ProviderLimitThreshold,
     /// Whether any live reading gates it now.
     pub gated: bool,
     /// Its enabled configured crews.
     pub crews: Vec<String>,
+}
+
+impl ProviderUsageStatus {
+    /// `claude`, or `claude/opus-credits` for a crew account.
+    #[must_use]
+    pub fn label(&self) -> String {
+        provider_account_label(&self.provider, self.account.as_deref())
+    }
 }
 
 /// The reading closest to its limit among those covering one crew.
@@ -153,12 +190,16 @@ pub struct ProviderUsageStatus {
 pub struct CrewProviderLimit {
     pub crew: String,
     pub provider: String,
+    /// The crew account the reading belongs to, when the crew sets `env`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     pub scope: Option<String>,
     pub window: Option<String>,
     pub used_percent: Option<f64>,
     pub exhausted: bool,
     pub resets_at: Option<DateTime<Utc>>,
-    pub threshold: u8,
+    /// The crew's provider gate: a percent, or `off`. JSON is the number or `"off"`.
+    pub threshold: ProviderLimitThreshold,
     /// Whether admission skips the crew now.
     pub gated: bool,
     pub until: DateTime<Utc>,
@@ -167,7 +208,8 @@ pub struct CrewProviderLimit {
 /// A lane admission does not gate whose crew's provider is at its limit.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct UngatedLaneLimit {
-    /// The setting naming the lane's crew: `operation.review_crew`.
+    /// The setting naming the lane's crew: `workflow.purpose_crews.review`
+    /// or `workflow.purpose_crews.pre_landing_review`.
     pub setting: &'static str,
     pub crew: String,
     pub provider: String,
@@ -179,9 +221,10 @@ pub struct UngatedLaneLimit {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProviderLimitsView {
     pub as_of: DateTime<Utc>,
-    /// Every live reading, by provider, scope and window.
+    /// Every live reading, by provider, account, scope and window.
     pub readings: Vec<ProviderLimitReading>,
-    /// Every provider an enabled configured crew uses, by name.
+    /// Every provider account an enabled configured crew uses, by provider
+    /// and account.
     pub providers: Vec<ProviderUsageStatus>,
     /// Each configured crew some live gating reading covers, by name.
     pub crews: Vec<CrewProviderLimit>,
@@ -202,7 +245,7 @@ impl ProviderLimitsView {
         now: DateTime<Utc>,
     ) -> Self {
         let settings = runtime.context.settings();
-        let policy = settings.provider_limit();
+        let policy = runtime.provider_limit_policy();
         let crews = settings.crews().values().collect::<Vec<_>>();
         let mut readings = observations
             .iter()
@@ -211,9 +254,17 @@ impl ProviderLimitsView {
                 if until <= now {
                     return None;
                 }
-                let threshold = policy.threshold(&observation.provider);
+                let threshold =
+                    policy.account_threshold(&observation.provider, observation.account.as_deref());
+                let gated = match threshold {
+                    ProviderLimitThreshold::Off => false,
+                    ProviderLimitThreshold::Percent(percent) => {
+                        observation.gating && reading_at_limit(observation, percent)
+                    }
+                };
                 Some(ProviderLimitReading {
                     provider: canonical_provider(&observation.provider),
+                    account: observation.account.clone(),
                     scope: observation.model.clone(),
                     window: observation.window.clone(),
                     used_percent: observation.used_percent,
@@ -221,10 +272,12 @@ impl ProviderLimitsView {
                     resets_at: observation.resets_at,
                     source: observation.source,
                     observed_at: observation.observed_at,
+                    age_seconds: (now - observation.observed_at).num_seconds().max(0),
+                    stale: observation.observed_at.date_naive() < now.date_naive(),
                     gating: observation.gating,
                     partial: observation.partial,
                     threshold,
-                    gated: observation.gating && reading_at_limit(observation, threshold),
+                    gated,
                     until,
                     crews: crews
                         .iter()
@@ -232,6 +285,7 @@ impl ProviderLimitsView {
                             crew.enabled
                                 && reading_covers(
                                     &observation.provider,
+                                    observation.account.as_deref(),
                                     observation.model.as_deref(),
                                     crew,
                                 )
@@ -242,30 +296,35 @@ impl ProviderLimitsView {
             })
             .collect::<Vec<_>>();
         readings.sort_by(|left, right| {
-            (&left.provider, &left.scope, &left.window).cmp(&(
+            (&left.provider, &left.account, &left.scope, &left.window).cmp(&(
                 &right.provider,
+                &right.account,
                 &right.scope,
                 &right.window,
             ))
         });
 
-        let mut providers = BTreeMap::<String, BTreeSet<String>>::new();
+        let mut providers = BTreeMap::<(String, Option<String>), BTreeSet<String>>::new();
         for crew in crews.iter().filter(|crew| crew.enabled) {
             providers
-                .entry(canonical_provider(&crew.assignment.provider))
+                .entry((
+                    canonical_provider(&crew.assignment.provider),
+                    crew.account().map(ToOwned::to_owned),
+                ))
                 .or_default()
                 .insert(crew.name.clone());
         }
         let providers = providers
             .into_iter()
-            .map(|(provider, crews)| ProviderUsageStatus {
+            .map(|((provider, account), crews)| ProviderUsageStatus {
                 reports_usage: USAGE_REPORTING_PROVIDERS.contains(&provider.as_str()),
-                threshold: policy.threshold(&provider),
-                gated: readings
-                    .iter()
-                    .any(|reading| reading.gated && reading.provider == provider),
+                threshold: policy.account_threshold(&provider, account.as_deref()),
+                gated: readings.iter().any(|reading| {
+                    reading.gated && reading.provider == provider && reading.account == account
+                }),
                 crews: crews.into_iter().collect(),
                 provider,
+                account,
             })
             .collect();
 
@@ -280,7 +339,12 @@ impl ProviderLimitsView {
                 .iter()
                 .filter(|reading| {
                     reading.gated
-                        && reading_covers(&reading.provider, reading.scope.as_deref(), crew)
+                        && reading_covers(
+                            &reading.provider,
+                            reading.account.as_deref(),
+                            reading.scope.as_deref(),
+                            crew,
+                        )
                 })
                 .map(|reading| reading.until)
                 .max()?;
@@ -292,22 +356,36 @@ impl ProviderLimitsView {
             })
         };
         // A review pool skips its limited members, so it is held only when
-        // every member is [ORB-15195].
-        let review_pool = &runtime.operation_policy().review_crew.value;
-        let review_limits: Vec<UngatedLaneLimit> = review_pool
-            .iter()
-            .filter_map(|entry| {
-                let name = entry
-                    .split_once(':')
-                    .map_or(entry.as_str(), |(name, _)| name);
-                lane_limit("operation.review_crew", name)
+        // every member is [ORB-15195]. The pre-landing pool is a lane of its
+        // own only while it is set; unset, the review pool is that lane too.
+        let policy = runtime.operation_policy();
+        let mut review_pools = vec![(
+            orbit_config::REVIEW_CREW_KEY,
+            policy.review_crew.value.as_slice(),
+        )];
+        let pre_landing = policy.pre_landing_review_pool();
+        if !pre_landing.is_fallback() {
+            review_pools.push((pre_landing.key, pre_landing.entries));
+        }
+        let ungated_lanes = review_pools
+            .into_iter()
+            .flat_map(|(setting, pool)| {
+                let limits: Vec<UngatedLaneLimit> = pool
+                    .iter()
+                    .filter_map(|entry| {
+                        let name = entry
+                            .split_once(':')
+                            .map_or(entry.as_str(), |(name, _)| name);
+                        lane_limit(setting, name)
+                    })
+                    .collect();
+                if !pool.is_empty() && limits.len() == pool.len() {
+                    limits
+                } else {
+                    Vec::new()
+                }
             })
             .collect();
-        let ungated_lanes = if !review_pool.is_empty() && review_limits.len() == review_pool.len() {
-            review_limits
-        } else {
-            Vec::new()
-        };
 
         Self {
             as_of: now,
@@ -325,14 +403,16 @@ impl ProviderLimitsView {
         self.crews.iter().find(|limit| limit.crew == crew)
     }
 
-    /// The live readings of `provider`.
+    /// The live readings of `provider`'s `account`: its default login's for
+    /// `None`.
     pub fn provider_readings<'a>(
         &'a self,
         provider: &'a str,
+        account: Option<&'a str>,
     ) -> impl Iterator<Item = &'a ProviderLimitReading> {
-        self.readings
-            .iter()
-            .filter(move |reading| reading.provider == provider)
+        self.readings.iter().filter(move |reading| {
+            reading.provider == provider && reading.account.as_deref() == account
+        })
     }
 }
 
@@ -358,7 +438,13 @@ fn tightest(readings: &[ProviderLimitReading], crew: &Crew) -> Option<CrewProvid
     let covering = readings
         .iter()
         .filter(|reading| {
-            reading.gating && reading_covers(&reading.provider, reading.scope.as_deref(), crew)
+            reading.gating
+                && reading_covers(
+                    &reading.provider,
+                    reading.account.as_deref(),
+                    reading.scope.as_deref(),
+                    crew,
+                )
         })
         .collect::<Vec<_>>();
     let reading = covering
@@ -380,6 +466,7 @@ fn tightest(readings: &[ProviderLimitReading], crew: &Crew) -> Option<CrewProvid
     Some(CrewProviderLimit {
         crew: crew.name.clone(),
         provider: reading.provider.clone(),
+        account: reading.account.clone(),
         scope: reading.scope.clone(),
         window: reading.window.clone(),
         used_percent: reading.used_percent,

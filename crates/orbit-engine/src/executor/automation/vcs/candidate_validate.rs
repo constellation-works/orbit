@@ -5,9 +5,13 @@
 //! after the candidate is synchronized onto its base and before it is
 //! published or landed: an agent's report that it ran the commands is not
 //! evidence; this step is. It runs each command the way `claim_validate` does
-//! (see [`super::required_command`]), so a command that fails for lack of a
+//! (see [`super::required::command`]), so a command that fails for lack of a
 //! tool is the validation environment's failure rather than the candidate's
 //! [ORB-13987].
+//!
+//! Managed PR synchronization that ends absorbed uses this same runner on
+//! its final clean base before settlement, including a claimed leaf whose
+//! logs are routed through its trusted owner binding.
 //!
 //! A failure that survives the network reruns is compared with the
 //! synchronized base [ORB-14258] (see [`super::baseline`]). One the base shares
@@ -34,34 +38,50 @@
 //! here after the required commands, outside any agent sandbox: it is judged
 //! like them, a pass that still defers is the validation environment's
 //! failure, and one that reports no executed tests is refused.
+//!
+//! [ORB-16784] A candidate whose tree differs from the last tree this run
+//! passed the full list on only in `workflow.unlocked_context_paths` runs
+//! `workflow.unlocked_path_validation_commands` instead, when that is set
+//! (see [`super::validation_scope`]); every output and log names the scope.
+//!
+//! [ORB-16855] A candidate whose delivered tasks all carry `skip-validation`
+//! and whose every changed path since `base_sha` matches
+//! `workflow.light_delivery_paths` runs no command: the decision is
+//! `skipped_light_delivery` and each task's history records why (see
+//! [`super::light_delivery`]). Any other changed path ignores the tag.
 
 use std::collections::BTreeSet;
+use std::time::Instant;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::task::{ContextWideningStep, TaskHistoryEntry};
+use orbit_types::task::{ContextWideningStep, SKIP_VALIDATION_TAG, TaskDecision, TaskHistoryEntry};
 use orbit_types::workflow::handoff::HandoffArtifactRef;
 use orbit_types::workflow::{
     BaselineRedFailures, BaselineRedHold, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
 };
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{RuntimeHost, TaskAutomationUpdate, ValidatedTree};
 use crate::executor::automation::input::{input_string_field, required_job_run_id};
 
 use super::baseline::{
-    BaselineCheck, baseline_red_failure, candidate_failure, compare_with_base,
+    BaselineCheck, baseline_red_failure, candidate_failure, compare_candidate_with_base,
     run_validation_command,
 };
 use super::claim::{
-    NO_REQUIRED_COMMANDS_NOTE, SKIPPED_NO_REQUIRED_COMMANDS, require_clean_checkout,
+    NO_REQUIRED_COMMANDS_NOTE, SKIPPED_LIGHT_DELIVERY, SKIPPED_NO_REQUIRED_COMMANDS,
+    require_clean_checkout,
 };
 use super::commit::attribute_candidate_paths;
 use super::deferred_sandbox::{deferred_replays, with_replays};
 use super::flaky::rerun_failed_tests;
 use super::git::{git_command_success, git_output};
 use super::handoff::completed_task_ids_from_input;
+use super::light_delivery::{light_delivery_decision, record_light_delivery};
+use super::validation_log::{FailureLog, rerun_log};
+use super::validation_scope::validation_scope;
 
 /// Run the workspace's required commands on the owner's committed candidate
 /// and attach one captured log per command to every task the run delivers.
@@ -95,12 +115,23 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
     };
     let commands = with_replays(host.required_validation_commands(), &replays);
     if commands.is_empty() {
+        // [ORB-17140] Optional reuse evidence: with nothing to run, the
+        // effective policy is all an unchanged completion retry can bind.
+        let completion_policy = required_job_run_id(input, "candidate_validate")
+            .ok()
+            .zip(completed_task_ids_from_input(input))
+            .and_then(|(run_id, task_ids)| {
+                host.completion_policy_digest(run_id, &task_ids)
+                    .ok()
+                    .flatten()
+            });
         let mut output = json!({
             "phase": "validate",
             "decision": SKIPPED_NO_REQUIRED_COMMANDS,
             "note": NO_REQUIRED_COMMANDS_NOTE,
             "commands": [],
             "validation": [],
+            "completion_policy": completion_policy,
         });
         if let Some(owned_paths) = owned_paths {
             output["owned_paths"] = json!(owned_paths);
@@ -145,7 +176,46 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         )));
     }
     require_clean_checkout(&workspace_path, &branch, &candidate, "the candidate")?;
+    if let Some(base_sha) = base_sha.as_deref()
+        && let Some(decision) = light_delivery_decision(
+            host,
+            &workspace_path,
+            base_sha,
+            &candidate,
+            &task_ids,
+            SKIP_VALIDATION_TAG,
+        )?
+    {
+        record_light_delivery(host, &task_ids, &decision)?;
+        if decision.applies() {
+            let mut output = json!({
+                "phase": "validate",
+                "base_sha": base_sha,
+                "decision": SKIPPED_LIGHT_DELIVERY,
+                "note": decision.note(),
+                "commands": [],
+                "validation": [],
+                "branch": branch,
+                "tested_head": candidate,
+            });
+            if let Some(owned_paths) = owned_paths {
+                output["owned_paths"] = json!(owned_paths);
+            }
+            return Ok(output);
+        }
+    }
+    let tree = git_output(
+        &workspace_path,
+        &["rev-parse", "--verify", &format!("{candidate}^{{tree}}")],
+    )?;
+    let scope = validation_scope(host, &workspace_path, &run_id, &task_ids, commands, &tree);
+    let commands = &scope.commands;
 
+    // Capturing optional reuse evidence must not change ordinary validation.
+    let completion_policy = host
+        .completion_policy_digest(&run_id, &task_ids)
+        .ok()
+        .flatten();
     let mut logs = Vec::new();
     let mut passed = Vec::new();
     let mut known_red = Vec::new();
@@ -156,12 +226,16 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         validation_env = run.environment_record();
         // [ORB-14258] A conclusive failure that is not a missing tool is rerun on the
         // synchronized base, so a red base is told apart from the candidate.
+        let baseline_started = Instant::now();
         let baseline: Option<BaselineCheck> = base_sha
             .as_deref()
             .filter(|_| {
                 !run.passed && run.missing_tool.is_none() && run.infrastructure_failure.is_none()
             })
-            .map(|base| compare_with_base(host, &workspace_path, base, command, run.selection()));
+            .map(|base| compare_candidate_with_base(host, &workspace_path, base, &run));
+        let baseline_comparison_ms = baseline
+            .as_ref()
+            .map(|_| baseline_started.elapsed().as_millis());
         let log_path = format!("validation/{run_id}/{index}.json");
         let baseline_path = baseline
             .as_ref()
@@ -195,6 +269,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
                     failures: BaselineRedFailures::new(failures.iter().cloned(), ""),
                 })
             });
+        let rerun_started = Instant::now();
         let rerun = if coverage_failure.is_none() {
             rerun_failed_tests(
                 host,
@@ -207,6 +282,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         } else {
             None
         };
+        let candidate_rerun_ms = rerun.as_ref().map(|_| rerun_started.elapsed().as_millis());
         let recovered = rerun.as_ref().and_then(|rerun| rerun.flaky.as_ref());
         let rerun_path = format!("validation/{run_id}/{index}.rerun.json");
         let evidence = if rerun.is_some() {
@@ -217,57 +293,36 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         if let Some(rerun) = &rerun {
             logs.push((
                 rerun_path.clone(),
-                serde_json::to_vec(&json!({
-                    "schema_version": 1, "role": "candidate_rerun", "run_id": run_id,
-                    "tested_head": candidate, "command": rerun.run.command,
-                    "exit_code": rerun.run.exit_code, "timed_out": rerun.run.timed_out,
-                    "output": rerun.run.output, "summary": rerun.run.summary,
-                    "validation_env": rerun.run.environment_record(), "flaky": rerun.flaky,
-                }))
-                .map_err(|error| {
+                serde_json::to_vec(&rerun_log(rerun, &run_id, &candidate)).map_err(|error| {
                     OrbitError::Execution(format!("encode candidate rerun: {error}"))
                 })?,
             ));
         }
-        let content = serde_json::to_vec(&json!({
-            "schema_version": 1,
-            "run_id": run_id,
-            "task_ids": task_ids,
-            "branch": branch,
-            "tested_head": candidate,
-            "base_sha": base_sha,
-            "command": run.command,
-            "exit_code": run.exit_code,
-            "timed_out": run.timed_out,
-            "output": run.output,
-            "validation_env": validation_env,
-            "failure_kind": if recovered.is_some() {
-                json!("flaky")
-            } else if known.is_some() {
-                json!("known_red")
-            } else if red {
-                json!("baseline_red")
-            } else if baseline.as_ref().is_some_and(|check| check.infrastructure_failure().is_some()) {
-                json!("environment")
-            } else {
-                run.failure_kind()
-            },
-            "known_red": known.as_ref().map(|known| &known.failures),
-            "flaky": recovered,
-            "candidate_rerun": rerun.as_ref().map(|_| &rerun_path),
-            "deferred_notice": run.deferred_notice,
-            "host_output_refusal": run.host_output_refusal.as_ref().map(|refusal| json!({
-                "reason": refusal.reason.as_str(),
-                "detail": refusal.detail,
+        let content = serde_json::to_vec(
+            &FailureLog {
+                run: &run,
+                run_id: &run_id,
+                tested_head: &candidate,
+                base_sha: base_sha.as_deref(),
+                baseline: baseline.as_ref(),
+                baseline_path: baseline_path.as_deref(),
+                flaky: recovered,
+                known_red: known.is_some(),
+                network_transient: false,
+            }
+            .record(json!({
+                "task_ids": task_ids,
+                "branch": branch,
+                "known_red": known.as_ref().map(|known| &known.failures),
+                "candidate_rerun": rerun.as_ref().map(|_| &rerun_path),
+                "deferred_notice": run.deferred_notice,
+                "deferred_sandbox_replay": replays.contains(&run.command),
+                "missing_tool": run.missing_tool_name(),
+                "baseline_comparison_ms": baseline_comparison_ms,
+                "candidate_rerun_ms": candidate_rerun_ms,
+                "validation_scope": scope.record,
             })),
-            "deferred_sandbox_replay": replays.contains(&run.command),
-            "missing_tool": run.missing_tool_name(),
-            "network_retries": run.network_retries,
-            "summary": run.summary,
-            "baseline": baseline
-                .as_ref()
-                .map(|check| check.record(baseline_path.as_deref())),
-        }))
+        )
         .map_err(|error| OrbitError::Execution(format!("encode validation log: {error}")))?;
         logs.push((log_path.clone(), content));
         if let (Some(check), Some(path)) = (&baseline, &baseline_path) {
@@ -329,18 +384,50 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         passed.push(run.command);
     }
 
+    // A policy or mandate changed while commands ran cannot confer reusable evidence.
+    let completion_policy = completion_policy.filter(|before| {
+        host.completion_policy_digest(&run_id, &task_ids)
+            .ok()
+            .flatten()
+            .as_ref()
+            == Some(before)
+    });
     let references = attach_logs(host, &task_ids, &run_id, &logs)?;
+    if scope.full {
+        // Optional evidence: a host that cannot keep it validates later
+        // candidates of this run in full.
+        if let Err(error) = host.record_validated_tree(&ValidatedTree {
+            run_id: run_id.clone(),
+            task_ids: task_ids.clone(),
+            workspace_path: workspace_path.to_string_lossy().into_owned(),
+            head: candidate.clone(),
+            tree: tree.clone(),
+            base_sha: base_sha.clone(),
+            commands: commands.clone(),
+        }) {
+            tracing::warn!(
+                target: "orbit.engine.validation",
+                run_id = %run_id,
+                %error,
+                "could not record the validated tree; later candidates of this run validate in full"
+            );
+        }
+    }
     let mut output = json!({
         "phase": "validate",
+        "base_sha": base_sha,
+        "completion_policy": completion_policy,
         "decision": if !known_red.is_empty() { "passed_with_known_red" } else if !flaky.is_empty() { "passed_with_flaky_tests" } else { "passed" },
         "commands": passed,
         "known_red": known_red,
         "flaky": flaky,
         "branch": branch,
         "tested_head": candidate,
+        "tested_tree": tree,
         "validation": serde_json::to_value(&references)
             .map_err(|error| OrbitError::Execution(error.to_string()))?,
         "validation_env": validation_env,
+        "validation_scope": scope.record,
     });
     if let Some(owned_paths) = owned_paths {
         output["owned_paths"] = json!(owned_paths);
@@ -401,8 +488,8 @@ fn attribute_reviewed_paths<H: RuntimeHost + ?Sized>(
     Ok(changed.into_iter().collect())
 }
 
-/// Record `known` on each delivered task's history, the note `pr_open` reads
-/// for the pull request.
+/// Record `known` on each delivered task's history, the decision `pr_open`
+/// reads for the pull request.
 fn record_known_red<H: RuntimeHost + ?Sized>(
     host: &H,
     task_ids: &[String],
@@ -430,6 +517,8 @@ fn record_known_red<H: RuntimeHost + ?Sized>(
                     note: Some(note.clone()),
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
+                    decision: Some(TaskDecision::KnownRedValidation(known.clone())),
                 }],
                 ..TaskAutomationUpdate::default()
             },
@@ -444,14 +533,49 @@ fn attach_logs<H: RuntimeHost + ?Sized>(
     run_id: &str,
     logs: &[(String, Vec<u8>)],
 ) -> Result<Vec<HandoffArtifactRef>, OrbitError> {
+    // Absorbed PR synchronization also uses this runner on a claimed leaf:
+    // there is no PR candidate to pin through claim_validate. Route its
+    // diagnostic evidence through the trusted claim, never the local store.
+    let claimed = host.worker_invocation().is_some();
+    if claimed {
+        let claim = host.claim_execution_context()?;
+        if task_ids != std::slice::from_ref(&claim.task_id) || run_id != claim.run_id {
+            return Err(OrbitError::PolicyDenied(
+                "validation evidence does not belong to the bound claim".to_string(),
+            ));
+        }
+    }
     let mut references = Vec::new();
     for (path, content) in logs {
+        // Preserve the previous canonical bytes before replacing them. A first
+        // observation needs only its canonical record; recovery must not erase
+        // an earlier attempt's cost or failure. Archives are diagnostic only.
+        let content =
+            super::required::evidence::retain(host, task_ids, run_id, path, content, claimed)?;
+        let digest = sha256_hex(&content);
         for task_id in task_ids {
-            host.attach_task_validation_log(task_id, run_id, path, content.clone())?;
+            if let Some(previous) = host.get_task_artifact(task_id, path)?
+                && previous.content != content
+            {
+                let archive = format!(
+                    "validation/{run_id}/attempts/{}.json",
+                    sha256_hex(&previous.content)
+                );
+                if claimed {
+                    host.attach_claim_validation_log(&archive, previous.content)?;
+                } else {
+                    host.attach_task_validation_log(task_id, run_id, &archive, previous.content)?;
+                }
+            }
+            if claimed {
+                host.attach_claim_validation_log(path, content.clone())?;
+            } else {
+                host.attach_task_validation_log(task_id, run_id, path, content.clone())?;
+            }
         }
         references.push(HandoffArtifactRef {
             path: path.clone(),
-            sha256: sha256_hex(content),
+            sha256: digest,
         });
     }
     Ok(references)

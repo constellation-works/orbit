@@ -6,10 +6,18 @@ use orbit_common::{
     security::{redaction::redact_all, release::sha256_hex},
 };
 use orbit_store::contracts::{AtomicTaskMutationOutcome, DesktopTaskMutationParams};
-use orbit_types::{desktop::*, record::OrbitEvent, task::TaskStatus, tool::ToolSessionContext};
+use orbit_types::{
+    desktop::*,
+    record::OrbitEvent,
+    task::{Task, TaskHistoryEntry, TaskStatus},
+    tool::ToolSessionContext,
+};
 
 use crate::OrbitRuntime;
-use crate::application::task::{TaskAddParams, TaskUpdateParams, helpers::effective_actor_label};
+use crate::application::task::{
+    SYSTEM_ACTOR_LABEL, TaskAddParams, TaskUpdateParams, helpers::effective_actor_label,
+    resolves::pending_resolves_history,
+};
 
 use super::validation::{bounded_text, criteria, invalid};
 
@@ -153,7 +161,7 @@ impl OrbitRuntime {
             if history.note.as_deref() != Some(expected_receipt.as_str()) {
                 return Err(invalid("request identity reused with a different payload"));
             }
-            return self.desktop_write_result(&id, true, None, session);
+            return self.desktop_write_result(&id, true, Some(&request.request_id), session);
         }
         let pull_request = if let DesktopTaskOperation::Review { verdict, .. } = &request.operation
         {
@@ -163,8 +171,6 @@ impl OrbitRuntime {
         };
         let head = pull_request.as_ref().map(|pr| pr.head.clone());
         let mut outcome = None;
-        // The status a desktop write replaced, when it changed one.
-        let mut previous_status = None;
         self.stores().tasks().with_task_write_lock(&id, &mut || {
             let key = format!("desktop_request={} ", request.request_id);
             let receipt = format!("{key}digest={digest}");
@@ -188,6 +194,7 @@ impl OrbitRuntime {
             let mut crew_source = None;
             let mut comment = None;
             let mut status = None;
+            let mut append_history = Vec::new();
             match &request.operation {
                 DesktopTaskOperation::Edit { fields: f, .. } => {
                     if matches!(task.status, TaskStatus::Done | TaskStatus::Archived) {
@@ -218,6 +225,15 @@ impl OrbitRuntime {
                     if let Some(v) = &f.acceptance_criteria {
                         criteria(v)?;
                     }
+                    // Desktop edits carry no operator-decision grant. An
+                    // attributed agent identity is still refused if a later
+                    // edit adds a light-delivery tag [ORB-16872].
+                    let writer = super::super::update::task_field_writer(
+                        false,
+                        agent.as_deref(),
+                        model.as_deref(),
+                        &actor,
+                    );
                     let validated = self.validate_and_normalize_task_field_edits(
                         &id,
                         &task,
@@ -229,6 +245,7 @@ impl OrbitRuntime {
                             crew: f.crew.clone().map(Some),
                             ..Default::default()
                         },
+                        writer,
                     )?;
                     crew_source = validated.crew_source;
                     let v = validated.params;
@@ -265,6 +282,9 @@ impl OrbitRuntime {
                         }
                         self.ensure_resolves_are_workspace_local(&task)?;
                         status = Some(TaskStatus::Done);
+                        // Committed with the receipt, so a replay retries
+                        // targets the first call never reached.
+                        append_history = pending_resolves_history(&task);
                     }
                     // The audit names where the reviewed run executed and
                     // which pull request the verdict observed.
@@ -296,6 +316,7 @@ impl OrbitRuntime {
                         crew_source,
                         comment,
                         status,
+                        append_history,
                     },
                 )?;
                 let event =
@@ -309,9 +330,6 @@ impl OrbitRuntime {
                     };
                 Ok((result, event))
             })?);
-            if status.is_some() {
-                previous_status = Some(task.status);
-            }
             Ok(())
         })?;
         if outcome == Some(AtomicTaskMutationOutcome::Stale) {
@@ -319,32 +337,34 @@ impl OrbitRuntime {
                 task_id: id.clone(),
             });
         }
-        if outcome == Some(AtomicTaskMutationOutcome::Applied)
-            && let Some(previous_status) = previous_status
-            && let Ok(task) = self.get_task(&id)
-        {
-            self.close_task_prs_after_transition(previous_status, &task, None);
-        }
         self.desktop_write_result(
             &id,
             outcome == Some(AtomicTaskMutationOutcome::AlreadyApplied),
-            previous_status,
+            Some(&request.request_id),
             session,
         )
     }
+
+    /// The post-commit side effects and snapshot of a desktop write. The
+    /// first call and every replay of `request_id` run the same steps, each
+    /// finishing only what the task's history records as unfinished, so a
+    /// replay completes what a failed first call left behind.
     pub(in crate::application::task) fn desktop_write_result(
         &self,
         id: &str,
         replayed: bool,
-        previous_status: Option<TaskStatus>,
+        request_id: Option<&str>,
         session: &ToolSessionContext,
     ) -> Result<DesktopTaskWriteResult, OrbitError> {
         let refresh = || {
-            let task = self.get_task(id)?;
+            let task = self.desktop_side_effect_task(id)?;
             self.stores().task_records().index_task(&task);
-            // A write that changed no status, and every replay, left the
-            // task where it already was.
-            self.record_resolves_side_effects(previous_status.unwrap_or(task.status), &task);
+            if let Some(request_id) = request_id {
+                self.desktop_close_transition_prs(request_id, &task);
+            }
+            // A completion committed its targets as pending with its
+            // receipt; any other write only retries earlier failures.
+            self.record_resolves_side_effects(task.status, &task);
             Ok(DesktopTaskWriteResult {
                 snapshot: self.desktop_task_snapshot(id, session)?,
                 replayed,
@@ -355,4 +375,80 @@ impl OrbitRuntime {
             reason: error.to_string(),
         })
     }
+
+    fn desktop_side_effect_task(&self, id: &str) -> Result<Task, OrbitError> {
+        #[cfg(test)]
+        if FAIL_SIDE_EFFECT_READ.with(|fail| fail.replace(false)) {
+            return Err(OrbitError::Execution(
+                "injected post-lock task read failure".to_string(),
+            ));
+        }
+        self.get_task(id)
+    }
+
+    /// Close the PRs of the terminal transition `request_id` committed,
+    /// unless a [`DESKTOP_PR_CLOSURE_EVENT`] records that the pass already
+    /// ran. A later status decision wins over the request's transition.
+    fn desktop_close_transition_prs(&self, request_id: &str, task: &Task) {
+        let history = match self.get_task_history(&task.id) {
+            Ok(history) => history,
+            Err(error) => {
+                tracing::warn!(
+                    task_id = %task.id,
+                    %error,
+                    "reading the desktop receipt for PR closure failed"
+                );
+                return;
+            }
+        };
+        let receipt = format!("desktop_request={request_id} ");
+        let Some((previous, committed)) = history
+            .iter()
+            .find(|h| {
+                h.event == "desktop_mutation"
+                    && h.note.as_deref().is_some_and(|n| n.starts_with(&receipt))
+            })
+            .and_then(|h| Some((h.from_status?, h.to_status?)))
+        else {
+            return;
+        };
+        let note = format!("desktop_request={request_id}");
+        if !committed.is_terminal()
+            || task.status != committed
+            || history
+                .iter()
+                .any(|h| h.event == DESKTOP_PR_CLOSURE_EVENT && h.note.as_deref() == Some(&note))
+        {
+            return;
+        }
+        if !self.close_task_prs_after_transition(previous, task, None) {
+            return;
+        }
+        let entry = TaskHistoryEntry {
+            at: chrono::Utc::now(),
+            by: SYSTEM_ACTOR_LABEL.to_string(),
+            event: DESKTOP_PR_CLOSURE_EVENT.to_string(),
+            note: Some(note),
+            from_status: None,
+            to_status: None,
+            operation_id: None,
+            decision: None,
+        };
+        if let Err(error) = self.append_system_history(&task.id, vec![entry]) {
+            tracing::warn!(
+                task_id = %task.id,
+                %error,
+                "recording the desktop PR closure on the task failed"
+            );
+        }
+    }
+}
+
+/// Task history event recording that the PR closure of a desktop request's
+/// terminal transition ran. Its note is `desktop_request=<id>`.
+const DESKTOP_PR_CLOSURE_EVENT: &str = "desktop_pr_closure";
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static FAIL_SIDE_EFFECT_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }

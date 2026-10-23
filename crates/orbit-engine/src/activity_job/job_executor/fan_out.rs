@@ -87,9 +87,12 @@ pub(super) fn run_fan_out(
                     host,
                     input: base_input,
                     pipeline: Arc::new(Mutex::new(pipeline_snapshot)),
+                    resumed_diagnostics: ctx.resumed_diagnostics.clone(),
                     recovery_activity: ctx.recovery_activity.clone(),
                     failure_activity: ctx.failure_activity.clone(),
                     final_recovery_activity: None,
+                    check_repair_activity: ctx.check_repair_activity.clone(),
+                    recovery_validation_continuations: Default::default(),
                     item: Some(item),
                     iteration: Some(idx),
                 };
@@ -149,6 +152,7 @@ pub(super) fn run_fan_out(
     let mut collected_count = 0u32;
     let mut failed_count = 0u32;
     let mut first_error: Option<DispatchError> = None;
+    let mut first_failure: Option<String> = None;
     let mut sorted = results
         .into_inner()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -170,6 +174,15 @@ pub(super) fn run_fan_out(
             Ok(o) => {
                 failed_count += 1;
                 collected.push(Value::Null);
+                let provider_failure = |message: Option<&str>| {
+                    orbit_types::workflow::ProviderFailureClass::of(None, message).is_some()
+                };
+                if first_failure.is_none()
+                    || (provider_failure(o.message.as_deref())
+                        && !provider_failure(first_failure.as_deref()))
+                {
+                    first_failure.clone_from(&o.message);
+                }
                 errors.push(Value::String(o.message.unwrap_or_else(|| {
                     format!("worker {idx} completed with success=false")
                 })));
@@ -215,10 +228,13 @@ pub(super) fn run_fan_out(
     }
     record_pipeline(ctx, &step.id, collected_value.clone());
 
+    // A failed join prefers the first provider diagnostic, otherwise the
+    // first worker message. An ordinary failure earlier in the batch must
+    // not hide a provider failure and leave the next routine tick unheld.
     Ok(StepOutcome {
         success: block_ok,
         output: collected_value,
-        message: None,
+        message: (!block_ok).then_some(first_failure).flatten(),
     })
 }
 

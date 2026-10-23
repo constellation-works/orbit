@@ -4,6 +4,7 @@ use chrono::{DateTime, Duration, Utc};
 use rusqlite::types::ToSql;
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 
 use super::hydrate::{
     hydrate_invocation_records, map_invocation_accounting_fact, map_invocation_record,
@@ -15,13 +16,39 @@ use crate::contracts::{
 };
 
 impl Store {
-    /// Cheap insert-only watermark for the token scoreboard skip path.
-    pub fn invocation_scoreboard_watermark(&self) -> Result<Option<u64>, OrbitError> {
+    /// Latest invocation model for each requested run, scoped to the workspace
+    /// and activity. One indexed batch; no steps, traces or tool calls loaded.
+    pub fn latest_activity_models(
+        &self,
+        workspace_id: &str,
+        activity_id: &str,
+        run_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, Option<String>>, OrbitError> {
+        let mut models = std::collections::HashMap::new();
+        if run_ids.is_empty() {
+            return Ok(models);
+        }
+        let ids =
+            serde_json::to_string(run_ids).map_err(|error| OrbitError::Store(error.to_string()))?;
         let conn = self.read()?;
-        let max_id: Option<i64> = conn
-            .query_row("SELECT MAX(id) FROM invocations", [], |row| row.get(0))
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-        Ok(Some(max_id.unwrap_or(0) as u64))
+        let mut stmt = conn
+            .prepare(
+                "SELECT job_run_id, model FROM invocations
+             WHERE workspace_id = ?1 AND activity_id = ?2
+               AND job_run_id IN (SELECT value FROM json_each(?3))
+             ORDER BY ts DESC, id DESC",
+            )
+            .map_err(sqlite_store_error)?;
+        let rows = stmt
+            .query_map(rusqlite::params![workspace_id, activity_id, ids], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .map_err(sqlite_store_error)?;
+        for row in rows {
+            let (run, model) = row.map_err(sqlite_store_error)?;
+            models.entry(run).or_insert(model);
+        }
+        Ok(models)
     }
 
     pub fn list_invocation_records(
@@ -32,16 +59,14 @@ impl Store {
         let (sql, params) = build_invocation_list_query(filter);
         let param_refs: Vec<&dyn ToSql> = params.iter().map(|value| value.as_ref()).collect();
 
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(param_refs.as_slice(), map_invocation_record)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let mut records = rows
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         drop(stmt);
         drop(conn);
 
@@ -53,16 +78,19 @@ impl Store {
         Ok(records)
     }
 
-    /// Every invocation of the provider since `since`, oldest first, on any
-    /// workspace of this host [ORB-14699].
+    /// Every invocation of the provider account since `since`, oldest
+    /// first, on any workspace of this host [ORB-14699].
     ///
     /// A row's provider is its `provider` column, else its `agent` for a row
-    /// recorded without one. The timestamps are text of varying fractional
-    /// width, so the query reads a second early and the cut is made on the
-    /// parsed time.
+    /// recorded without one. [ORB-17288] `account` names a crew account: only
+    /// its rows count. `None` is the provider's default login: rows recorded
+    /// without an account, every row recorded before accounts were named
+    /// included. The timestamps are text of varying fractional width, so the
+    /// query reads a second early and the cut is made on the parsed time.
     pub fn list_provider_ledger_entries(
         &self,
         provider_names: &[String],
+        account: Option<&str>,
         since: DateTime<Utc>,
     ) -> Result<Vec<ProviderLedgerEntry>, OrbitError> {
         if provider_names.is_empty() {
@@ -82,6 +110,10 @@ impl Store {
         filters
             .conditions
             .push(format!("COALESCE(i.provider, LOWER(i.agent)) IN ({names})"));
+        match account {
+            Some(account) => filters.push_filter("i.account = ?", account.to_string()),
+            None => filters.conditions.push("i.account IS NULL".to_string()),
+        }
         let sql = format!(
             "SELECT i.ts, i.input_tokens, i.output_tokens, i.provider_cost_usd \
              FROM invocations i {} ORDER BY i.ts ASC, i.id ASC",
@@ -92,9 +124,7 @@ impl Store {
             .iter()
             .map(|value| value.as_ref())
             .collect::<Vec<_>>();
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(param_refs.as_slice(), |row| {
                 let ts_raw: String = row.get(0)?;
@@ -105,10 +135,10 @@ impl Store {
                     cost_usd: row.get(3)?,
                 })
             })
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let mut entries = rows
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         entries.retain(|entry| entry.ts >= since);
         Ok(entries)
     }
@@ -142,15 +172,13 @@ impl Store {
             .iter()
             .map(|value| value.as_ref())
             .collect::<Vec<_>>();
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(param_refs.as_slice(), map_invocation_accounting_fact)
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let mut facts = rows
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         drop(stmt);
         drop(conn);
 
@@ -168,6 +196,29 @@ impl Store {
 
 fn build_invocation_list_query(filter: &InvocationQuery) -> (String, Vec<Box<dyn ToSql>>) {
     let mut query = InvocationListQuery::default();
+
+    if filter.succeeded_candidate_only {
+        // Outcomes are workspace-qualified. EXISTS preserves one row per
+        // invocation even when an activity appears more than once in a job.
+        // A later successful retry must not relabel an earlier attempt.
+        query.conditions.push(
+            "EXISTS (SELECT 1 FROM job_runs jr
+             WHERE jr.workspace_id = i.workspace_id AND jr.run_id = i.job_run_id
+               AND jr.state = 'success'
+               AND jr.commit_decision = 'performed'
+               AND jr.commit_committed = 1)
+             AND EXISTS (SELECT 1 FROM job_run_steps s
+             WHERE s.workspace_id = i.workspace_id AND s.run_id = i.job_run_id
+               AND s.target_type = 'activity' AND s.target_id = i.activity_id AND s.state = 'success'
+               AND julianday(i.ts) BETWEEN julianday(s.started_at) AND julianday(s.finished_at)
+               AND NOT EXISTS (SELECT 1 FROM invocations later
+                 WHERE later.workspace_id = i.workspace_id AND later.job_run_id = i.job_run_id
+                   AND later.activity_id = i.activity_id
+                   AND julianday(later.ts) BETWEEN julianday(s.started_at) AND julianday(s.finished_at)
+                   AND (julianday(later.ts), later.id) > (julianday(i.ts), i.id)))"
+                .to_string(),
+        );
+    }
 
     if let Some(since) = &filter.since {
         query.push_filter("i.ts >= ?", since.to_rfc3339());
@@ -209,7 +260,7 @@ fn build_invocation_list_query(filter: &InvocationQuery) -> (String, Vec<Box<dyn
     let sql = format!(
         "SELECT i.id, i.ts, i.job_run_id, i.activity_id, i.agent, i.model, i.duration_ms, \
          i.input_tokens, i.cache_read_tokens, i.cache_create_tokens, i.cache_create_1h_tokens, \
-         i.output_tokens, i.tool_call_count, i.provider_cost_usd \
+         i.output_tokens, i.tool_call_count, i.provider_cost_usd, i.account \
          FROM invocations i {} ORDER BY i.ts DESC, i.id DESC LIMIT ?{}",
         query.where_clause(),
         query.len()

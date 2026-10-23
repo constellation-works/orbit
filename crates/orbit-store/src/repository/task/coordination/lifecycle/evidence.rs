@@ -7,9 +7,13 @@ use orbit_common::fs::io::atomic_write_bytes;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{
     ArtifactManifestFileV2, ArtifactManifestV2, TASK_ARTIFACT_SCHEMA_VERSION,
-    TASK_ARTIFACTS_DIR_NAME, TASK_COMMENTS_FILE_NAME, TaskCommentRowV2,
+    TASK_ARTIFACTS_DIR_NAME, TASK_COMMENTS_FILE_NAME, TaskArtifact, TaskCommentRowV2, TaskRelation,
+    TaskRelationType,
 };
 use orbit_types::workflow::REVIEW_REPORT_HISTORY_ARTIFACT;
+use orbit_types::workflow::automation::{
+    COVERAGE_ARTIFACT, ClaimedSubmission, EVIDENCE_AUTHORITY_ARTIFACT, EvidenceSubmission,
+};
 
 use super::super::{TaskCommitBoundary, TaskCommitIntent};
 use super::invalid;
@@ -41,6 +45,22 @@ impl TaskCommitBoundary {
             }
             intent.envelope.validate()?;
         }
+        for target in &effects.regression_from {
+            // An existing link, classified or not, already records this culprit.
+            if !intent.envelope.relations.iter().any(|relation| {
+                relation.relation_type == TaskRelationType::RegressionFrom
+                    && relation.target == *target
+            }) {
+                intent.envelope.relations.push(TaskRelation {
+                    relation_type: TaskRelationType::RegressionFrom,
+                    target: target.clone(),
+                    regression: None,
+                });
+            }
+        }
+        if !effects.regression_from.is_empty() {
+            intent.envelope.validate()?;
+        }
         if let Some(run) = binding {
             intent.envelope.job_run_id = Some(run.run_id.clone());
             // A machine's display name never participates in ownership checks.
@@ -65,6 +85,7 @@ impl TaskCommitBoundary {
                 at: Utc::now(),
                 by: actor.into(),
                 body: message.clone(),
+                operation_id: None,
             };
             comment.validate()?;
             intent.evidence.comments.push(comment);
@@ -99,18 +120,29 @@ impl TaskCommitBoundary {
                 Utc::now(),
                 effects.worker_update.is_some(),
             )?;
-            let mut stored = Vec::with_capacity(evidence.artifacts.len() + 1);
+            let mut coverage = None;
+            for artifact in &evidence.artifacts {
+                match normalize_v2_artifact_path(&artifact.path)?.as_str() {
+                    EVIDENCE_AUTHORITY_ARTIFACT => {
+                        return Err(invalid("automation evidence authority is reserved"));
+                    }
+                    COVERAGE_ARTIFACT => coverage = Some(&artifact.content),
+                    _ => {}
+                }
+            }
+            let witness = coverage
+                .zip(effects.claimed_submission.as_ref())
+                .map(|(content, submission)| claimed_witness(&intent.task_id, content, submission))
+                .transpose()?;
+            let mut stored = Vec::with_capacity(evidence.artifacts.len() + 2);
             let mut seen_in_request = BTreeSet::new();
-            for artifact in evidence.artifacts.iter().chain(&history) {
+            for artifact in evidence.artifacts.iter().chain(&history).chain(&witness) {
                 // Same canonical contract as an ordinary artifact write, resolved
                 // before the journal decision. `validate_relative_artifact_path`
                 // accepts `notes/`, `a//b`, and surrounding whitespace because
                 // `Path` components drop them; storing that raw string records a
                 // blob the atomic write does not create.
                 let path = normalize_v2_artifact_path(&artifact.path)?;
-                if path == orbit_types::workflow::automation::EVIDENCE_AUTHORITY_ARTIFACT {
-                    return Err(invalid("automation evidence authority is reserved"));
-                }
                 if !seen_in_request.insert(path.clone()) {
                     return Err(invalid("duplicate artifact path"));
                 }
@@ -141,7 +173,7 @@ impl TaskCommitBoundary {
                         writer: None,
                     },
                 );
-                stored.push(orbit_types::task::TaskArtifact {
+                stored.push(TaskArtifact {
                     path,
                     media_type: artifact.media_type.clone(),
                     content: artifact.content.clone(),
@@ -233,9 +265,8 @@ impl TaskCommitBoundary {
         }
         if let Some(len) = intent.evidence.comments_len {
             truncate_jsonl_file(&root.join(TASK_COMMENTS_FILE_NAME), len)?;
-            for comment in &intent.evidence.comments {
-                self.bundle_store.append_comment(id, comment)?;
-            }
+            self.bundle_store
+                .append_comments(id, &intent.evidence.comments)?;
         }
         for artifact in &intent.evidence.artifacts {
             let destination = root
@@ -253,4 +284,31 @@ impl TaskCommitBoundary {
         }
         Ok(())
     }
+}
+
+/// [ORB-15962] The owner's witness for a claimed worker's coverage bytes,
+/// committed in the same journal intent as those bytes. It binds their digest
+/// to the task, the claim the owner authenticated and the follower run it is
+/// bound to, so settlement can verify the submission after the claim lands
+/// and its mutation receipts are pruned, without the follower's run record.
+fn claimed_witness(
+    task_id: &str,
+    content: &[u8],
+    (claim_id, run): &(String, ClaimRun),
+) -> Result<TaskArtifact, OrbitError> {
+    let witness = EvidenceSubmission {
+        action_id: task_id.into(),
+        evidence_digest: sha256_hex(content),
+        run_id: run.run_id.clone(),
+        claim: Some(ClaimedSubmission {
+            claim_id: claim_id.clone(),
+            machine_id: run.machine_id.clone(),
+        }),
+    };
+    Ok(TaskArtifact {
+        path: EVIDENCE_AUTHORITY_ARTIFACT.into(),
+        media_type: "application/json".into(),
+        content: serde_json::to_vec(&witness).map_err(|e| OrbitError::Store(e.to_string()))?,
+        created_by: None,
+    })
 }

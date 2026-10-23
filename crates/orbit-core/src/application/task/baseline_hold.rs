@@ -136,7 +136,7 @@ impl OrbitRuntime {
         let repo = &self.paths().repo_root;
         let mut refresh = self.check_baseline_holds(
             Some(deadline),
-            &|hold| recorded_baseline_hold_status(repo, hold),
+            &|hold| recorded_baseline_hold_status(self, repo, hold),
             Some(&mut RepairIndex::default()),
         )?;
         if refresh.unchecked.is_empty() || self.baseline_hold_refresh_live()? {
@@ -317,6 +317,8 @@ impl OrbitRuntime {
                             note: Some(note.clone()),
                             from_status: None,
                             to_status: None,
+                            operation_id: None,
+                            decision: None,
                         }],
                         ..Default::default()
                     },

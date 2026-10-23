@@ -48,6 +48,24 @@ impl TaskStoreBackend for TaskV2Store {
         self.claim_boundary()?.landing_attempts()
     }
 
+    fn landing_retry_receipt(
+        &self,
+        handoff_id: &str,
+        request_key: &str,
+    ) -> Result<Option<orbit_types::workflow::handoff::LandingRetryReceipt>, OrbitError> {
+        self.claim_boundary()?
+            .landing_retry_receipt(handoff_id, request_key)
+    }
+
+    fn landing_attempt_record(
+        &self,
+        handoff_id: &str,
+        attempt: u32,
+    ) -> Result<Option<orbit_types::workflow::handoff::LandingAttempt>, OrbitError> {
+        self.claim_boundary()?
+            .landing_attempt_record(handoff_id, attempt)
+    }
+
     fn kept_claim_candidate(
         &self,
         task_id: &str,
@@ -74,6 +92,39 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<(), OrbitError> {
         self.claim_boundary()?.verify_worker_claim(context)
     }
+    fn worker_claim_steering(
+        &self,
+        context: &crate::contracts::ClaimInvocation,
+    ) -> Result<crate::contracts::ClaimSteeringReading, OrbitError> {
+        self.claim_boundary()?.worker_claim_steering(context)
+    }
+    fn task_claim_steering(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<orbit_types::workflow::SteeringWatermark>, OrbitError> {
+        match self.coordination_boundary() {
+            Some(boundary) => boundary.task_claim_steering(task_id),
+            None => Ok(None),
+        }
+    }
+    fn record_executor_census(
+        &self,
+        entry: &crate::contracts::ExecutorCensusEntry,
+    ) -> Result<(), OrbitError> {
+        match self.coordination_boundary() {
+            Some(boundary) => boundary.record_executor_census(entry),
+            None => Ok(()),
+        }
+    }
+    fn live_executor_census(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<crate::contracts::ExecutorCensusEntry>, OrbitError> {
+        match self.coordination_boundary() {
+            Some(boundary) => boundary.live_executor_census(now),
+            None => Ok(Vec::new()),
+        }
+    }
     fn inspect_execution_claims(
         &self,
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
@@ -83,6 +134,14 @@ impl TaskStoreBackend for TaskV2Store {
         &self,
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
         self.claim_boundary()?.resolve_execution_claims()
+    }
+    fn execution_claim_state(
+        &self,
+        claim_id: &str,
+    ) -> Result<Option<crate::contracts::ClaimInspection>, OrbitError> {
+        self.coordination_boundary().map_or(Ok(None), |boundary| {
+            boundary.execution_claim_state(claim_id)
+        })
     }
     fn record_deferred_branch_observation(
         &self,
@@ -107,6 +166,15 @@ impl TaskStoreBackend for TaskV2Store {
                 .collect()),
         }
     }
+    fn pending_repairs(
+        &self,
+        owner: &crate::contracts::AdmissionIdentity,
+    ) -> Result<Vec<crate::contracts::PendingRepair>, OrbitError> {
+        match self.coordination_boundary() {
+            Some(boundary) => boundary.pending_repairs(owner),
+            None => Ok(Vec::new()),
+        }
+    }
     fn lookup_admission(
         &self,
         identity: &crate::contracts::AdmissionIdentity,
@@ -128,12 +196,28 @@ impl TaskStoreBackend for TaskV2Store {
         self.in_boundary(|| self.automation_task_for_key(key))
     }
 
+    fn in_read_section(
+        &self,
+        op: &mut dyn FnMut() -> Result<(), OrbitError>,
+    ) -> Result<(), OrbitError> {
+        // The boundary's locks are re-entrant per thread, so each read inside
+        // `op` runs under this acquisition.
+        self.in_boundary(op)
+    }
+
     fn task_candidates(
         &self,
         filter: &crate::contracts::TaskListFilter,
         limit: usize,
     ) -> Result<crate::contracts::TaskCandidates, OrbitError> {
         self.in_boundary(|| self.task_candidates(filter, limit))
+    }
+    fn observe_task_candidates(
+        &self,
+        filter: &crate::contracts::TaskListFilter,
+        limit: usize,
+    ) -> Result<crate::contracts::TaskCandidates, OrbitError> {
+        self.observe_task_candidates(filter, limit)
     }
     fn task_candidate_keys(
         &self,
@@ -182,6 +266,14 @@ impl TaskStoreBackend for TaskV2Store {
         targets: &BTreeSet<String>,
     ) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
         self.in_boundary(|| TaskV2Store::task_status_index_for(self, workspace_id, targets))
+    }
+
+    fn task_ids_with_tag(
+        &self,
+        tag: &str,
+        task_ids: &BTreeSet<String>,
+    ) -> Result<BTreeSet<String>, OrbitError> {
+        self.in_boundary(|| TaskV2Store::task_ids_with_tag(self, tag, task_ids))
     }
 
     fn registered_task(&self, id: &str) -> Result<RegisteredTaskResolution, OrbitError> {
@@ -236,10 +328,11 @@ impl TaskStoreBackend for TaskV2Store {
         &self,
         query: &str,
         tags: &[String],
+        statuses: Option<&[TaskStatus]>,
         admit: &dyn Fn(&Task) -> bool,
         visit: &mut dyn FnMut(Task) -> bool,
     ) -> Result<(), OrbitError> {
-        self.in_boundary(|| self.search_tasks_visit(query, tags, admit, visit))
+        self.in_boundary(|| self.search_tasks_visit(query, tags, statuses, admit, visit))
     }
 
     fn delete_task(&self, id: &str) -> Result<bool, OrbitError> {
@@ -252,6 +345,14 @@ impl TaskStoreBackend for TaskV2Store {
         op: &mut dyn FnMut() -> Result<(), OrbitError>,
     ) -> Result<(), OrbitError> {
         self.with_task_lock(id, op)
+    }
+
+    fn with_task_comment_write_lock(
+        &self,
+        id: &str,
+        op: &mut dyn FnMut() -> Result<(), OrbitError>,
+    ) -> Result<(), OrbitError> {
+        self.with_task_comment_lock(id, |_| op())
     }
 
     fn with_task_read_lock(
@@ -280,6 +381,13 @@ impl TaskStoreBackend for TaskV2Store {
     }
     fn lookup_desktop_creation(&self, key: &str, digest: &str) -> Result<Option<Task>, OrbitError> {
         self.lookup_desktop_creation(key, digest)
+    }
+    fn lookup_committed_creation_id(
+        &self,
+        key: &str,
+        digest: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        self.lookup_committed_creation_id(key, digest)
     }
     fn read_desktop_task(&self, id: &str) -> Result<crate::contracts::DesktopTaskRead, OrbitError> {
         self.read_desktop_task(id)
@@ -311,6 +419,13 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<Vec<crate::contracts::TaskTerminalTransition>, OrbitError> {
         self.in_boundary(|| self.task_terminal_transitions(since))
     }
+
+    fn task_defect_filings(
+        &self,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Vec<crate::contracts::TaskDefectFiling>, OrbitError> {
+        self.in_boundary(|| self.task_defect_filings(since))
+    }
 }
 
 impl ScopedStore<Task> for TaskV2Store {
@@ -341,11 +456,15 @@ impl TaskDocumentStoreBackend for TaskV2Store {
 
 impl TaskHistoryStoreBackend for TaskV2Store {
     fn get_task_comments(&self, id: &str) -> Result<Option<Vec<TaskComment>>, OrbitError> {
-        self.in_boundary(|| self.get_task_comments(id))
+        self.read_task_comments(id)
     }
 
     fn get_task_history(&self, id: &str) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
-        self.in_boundary(|| self.get_task_history(id))
+        self.read_task_history(id)
+    }
+
+    fn task_history_stamp(&self, id: &str) -> Result<Option<String>, OrbitError> {
+        self.task_history_stamp(id)
     }
 
     fn update_task_history(

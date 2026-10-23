@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::workflow::{JobRunState, PipelineState, RunStateUpdate};
 use rusqlite::{OptionalExtension, TransactionBehavior};
@@ -56,7 +57,7 @@ impl Store {
                        ON s.workspace_id = r.workspace_id AND s.run_id = r.run_id \
                      WHERE r.workspace_id = ?1 AND r.run_id IN ({placeholders})"
                 ))
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
             let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
                 vec![Box::new(workspace_id.to_string())];
             params.extend(
@@ -72,9 +73,9 @@ impl Store {
                     let raw: Option<String> = row.get(1)?;
                     Ok((run_id, raw))
                 })
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
             for row in rows {
-                let (run_id, raw) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
+                let (run_id, raw) = row.map_err(sqlite_store_error)?;
                 let state = raw.and_then(|raw| serde_json::from_str(&raw).ok());
                 states.insert(run_id, state);
             }
@@ -88,9 +89,7 @@ impl Store {
         run_id: &str,
         state: &PipelineState,
     ) -> Result<(), OrbitError> {
-        let conn = self
-            .conn
-            .lock()
+        let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         // A snapshot written after the run finished must not bring back what
         // finalization compacted away.
@@ -130,13 +129,13 @@ impl Store {
                      ON CONFLICT(workspace_id, run_id) DO NOTHING",
                     rusqlite::params![workspace_id, run_id, state_json],
                 )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
+                .map_err(sqlite_store_error)?;
             if updated == 0 {
                 let exists = tx.tx.query_row(
                     "SELECT EXISTS(SELECT 1 FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2)",
                     rusqlite::params![workspace_id, run_id],
                     |row| row.get::<_, bool>(0),
-                ).map_err(|error| OrbitError::Store(error.to_string()))?;
+                ).map_err(sqlite_store_error)?;
                 if !exists {
                     return Err(OrbitError::not_found(
                         NotFoundKind::JobRun,
@@ -179,7 +178,7 @@ impl Store {
                 .map(Some)
                 .or_else(|error| match error {
                     rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                    other => Err(OrbitError::Store(other.to_string())),
+                    other => Err(sqlite_store_error(other)),
                 })?;
             let Some((raw_state, raw_pipeline_state)) = row else {
                 return Ok(RunStateUpdate::NotFound);
@@ -201,7 +200,7 @@ impl Store {
                      WHERE workspace_id = ?1 AND run_id = ?2",
                     rusqlite::params![workspace_id, run_id, state_json],
                 )
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
             Ok(RunStateUpdate::Updated)
         })
     }
@@ -220,7 +219,7 @@ pub(super) fn read_state_json_conn(
         |row| row.get::<_, String>(0),
     )
     .optional()
-    .map_err(|e| OrbitError::Store(e.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// Insert or replace the run's serialized pipeline state. `false` when the
@@ -240,7 +239,7 @@ pub(super) fn write_state_json_conn(
         rusqlite::params![workspace_id, run_id, state_json],
     )
     .map(|changed| changed > 0)
-    .map_err(|e| OrbitError::Store(e.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 /// The run's lifecycle state, or `None` when the run does not exist.
@@ -255,7 +254,7 @@ fn run_state_conn(
         |row| row.get::<_, String>(0),
     )
     .optional()
-    .map_err(|e| OrbitError::Store(e.to_string()))?
+    .map_err(sqlite_store_error)?
     .map(|raw| {
         JobRunState::from_str(&raw)
             .map_err(|error| OrbitError::Store(format!("invalid job run state: {error}")))

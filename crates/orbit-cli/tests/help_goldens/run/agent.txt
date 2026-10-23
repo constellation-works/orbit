@@ -11,13 +11,13 @@ Options:
           Absolute directory the agent starts in. Defaults to the current directory; must be inside this workspace's checkout
 
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
       --crew <CREW>
           Configured crew selecting provider, model, and reasoning effort. Defaults to the workspace's default crew
 
       --workspace <SELECTOR>
-          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --timeout <TIMEOUT>
           Provider wall-clock bound (seconds, or e.g. 30m, 2h). Defaults to 1800; maximum 7200. Queue time is excluded
@@ -37,12 +37,15 @@ Options:
           Possible values:
           - auto:   Decide from the sink: a table on a terminal, plain text otherwise
           - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields and no header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
           - json:   A single JSON document
           - ndjson: One complete JSON document per line
 
       --json
           Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
 
   -h, --help
           Print help (see a summary with '-h')
@@ -61,7 +64,7 @@ and read the invocation with the ordinary run surfaces, or pass --wait to
 block until terminal and print the answer (nonzero exit on failure):
   orbit run show <RUN_ID>      outcome, the agent's answer, and live progress
   orbit run logs <RUN_ID> --follow  stream output until terminal
-  orbit run cancel <RUN_ID>    stop it and terminate its process tree
+  orbit run cancel <RUN_ID> --confirm  stop it and terminate its process tree
 
 Examples:
   orbit run agent 'why does the sweep clock keep restarting?'

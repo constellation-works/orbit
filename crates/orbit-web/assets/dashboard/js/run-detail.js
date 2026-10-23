@@ -4,7 +4,7 @@
 //
 // Extracted from app.js (ORB-00181). Owns run-detail state and limits,
 // RUN_EVENT_COLUMNS, renderRunDetail*, renderRunSteps*, renderRunKnowledge, renderRunGantt +
-// tooltip fns, logsForStep/build*, renderRunEvents, summarizeEvent.
+// tooltip fns, logsForStep/build*, renderRunEvents, eventFields.
 // Fetch orchestrators (fetchAndRenderRun*) and refresh wiring remain in app.js as the
 // cross-domain shell. Gantt retry data is independent of the Events table page.
 //
@@ -12,7 +12,7 @@
 // (re-exported by app's routerContext), formatters, run-action builders (from runs.js),
 // and setRunDetailSubtab (from router.js) for the Gantt click-to-steps behavior.
 
-import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatDate, formatClock, elapsedDurationInfo, bindTaskLink } from './common.js';
+import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatDate, formatClock, elapsedDurationInfo, bindTaskLink, reviewLayerText } from './common.js';
 import { buildExecutionProvenance } from './distributed.js';
 import { drainWaitBadge } from './drain-waits.js';
 import { runTaskLinks } from './runs.js';
@@ -41,6 +41,7 @@ let activeRunLogs = [];
 let activeRunLogsError = null;
 let activeRunSubtab = "steps";
 let expandedStepIndices = new Set();
+let expandedRunEvents = new Set();
 // The Step Timeline is drawn at the panel's pixel width; this observer
 // redraws it when that width changes.
 let ganttResizeObserver = null;
@@ -76,12 +77,6 @@ function fmtAbsTime(v) {
 
 function fmtRelative(v) {
   return hasCtx("fmtRelative") ? _runDetailCtx.fmtRelative(v) : (v || "-");
-}
-
-function truncate(text, max = 200) {
-  if (hasCtx("truncate")) return _runDetailCtx.truncate(text, max);
-  if (text == null) return "";
-  return String(text).slice(0, max);
 }
 
 function setRunDetailSubtab(name) {
@@ -171,6 +166,7 @@ function retireRunDetailView() {
   activeRunLogs = [];
   activeRunLogsError = null;
   expandedStepIndices = new Set();
+  expandedRunEvents = new Set();
   if (typeof document !== "undefined" && document.getElementById("run-detail-meta")) {
     renderRunDetailEmpty(activeRunId ? "Loading run…" : "No run selected.", { preserveFeedback: false });
     renderRunSteps();
@@ -309,12 +305,16 @@ export function renderRunDetailMeta() {
   addCell("started", run.started_at ? fmtAbsTime(run.started_at) : "-");
   addCell("finished", run.finished_at ? fmtAbsTime(run.finished_at) : "-");
   addCell("duration", recordDurationText(run));
+  // ORB-16572: a delivery run's captured review layer and whether workspace
+  // policy or the run's own `--review` decided it.
+  if (run.review_layer) addCell("review", reviewLayerText(run.review_layer));
   // ORB-12516: with more than one execution host, a run id alone no longer says
   // where it ran. The store field is the truth; a row without one is *unknown*,
-  // never assumed to be this machine.
+  // never assumed to be this machine. The value already reads "on <host>", so
+  // the label stops at "executed" (ORB-17188).
   {
     const cell = el("div");
-    cell.appendChild(el("div", { class: "label", text: "executed on" }));
+    cell.appendChild(el("div", { class: "label", text: "executed" }));
     const value = el("div", { class: "value" });
     value.appendChild(buildExecutionProvenance(runExecutionLocation(run)));
     cell.appendChild(value);
@@ -329,8 +329,8 @@ export function renderRunDetailMeta() {
     || el("div");
   feedback.dataset.key = "run-detail-feedback";
   const wrap = el("div");
-  const back = el("button", { class: "back-action", text: "← Runs" });
-  back.addEventListener("click", () => setActiveTab("diagnostics/runs"));
+  const back = el("button", { class: "back-action", text: "← Jobs › History" });
+  back.addEventListener("click", () => setActiveTab("jobs/history"));
   const actions = el("div", { class: "run-detail-actions" }, [back]);
   if (run.retry_source_run_id) {
     const sourceId = run.retry_source_run_id;
@@ -341,6 +341,18 @@ export function renderRunDetailMeta() {
     });
     lineage.addEventListener("click", () => navigateToRun(sourceId));
     actions.appendChild(lineage);
+  }
+  // A read-only explorer names the implement or review-repair run that
+  // delegated it.
+  const parentRunId = run.job_id === "agent_explore_pipeline" ? run.input?.parent_run_id : null;
+  if (parentRunId) {
+    const parent = el("button", {
+      class: "back-action explore-parent",
+      text: `Delegated by ${parentRunId}`,
+      title: `Open ${parentRunId}`,
+    });
+    parent.addEventListener("click", () => navigateToRun(parentRunId));
+    actions.appendChild(parent);
   }
   const replay = run.run_id ? buildReplayRunButton(run, feedback) : null;
   if (replay) actions.appendChild(replay);
@@ -358,13 +370,96 @@ export function renderRunDetailMeta() {
   if (leaves) wrap.appendChild(leaves);
   const crews = buildCrewWindow(detail.crew_window || null);
   if (crews) wrap.appendChild(crews);
+  const requestsHeld = buildRequestsHeld(detail);
+  if (requestsHeld) wrap.appendChild(requestsHeld);
   const unsetEnv = buildUnsetEnvPass(run.env_pass_unset);
   if (unsetEnv) wrap.appendChild(unsetEnv);
+  const unsetCrewEnv = buildUnsetCrewEnv(run.crew_env_unset);
+  if (unsetCrewEnv) wrap.appendChild(unsetCrewEnv);
+  const passWarning = buildPassWarning(run);
+  if (passWarning) wrap.appendChild(passWarning);
+  const pilotWarning = buildPilotWarning(run);
+  if (pilotWarning) wrap.appendChild(pilotWarning);
   const waiting = buildStillWaiting(run.drain_last_pass || null, run);
   if (waiting) wrap.appendChild(waiting);
   const children = buildChildDispatches(run);
   if (children) wrap.appendChild(children);
+  const explorers = buildExploreInvocations(detail.explore_invocations);
+  if (explorers) wrap.appendChild(explorers);
+  const processes = buildProviderProcesses(detail.provider_processes);
+  if (processes) wrap.appendChild(processes);
   syncNodes(meta, [wrap, feedback]);
+}
+
+// Match the CLI's Requests held, Breaker and Settlement refused lines. The
+// pass refusal is already operator-facing text; render it and remedies as text.
+function buildRequestsHeld(detail) {
+  const pass = detail.run.drain_last_pass;
+  const refusal = pass?.admission_refusal;
+  const breaker = detail.pull_breaker;
+  const settlements = Array.isArray(detail.refused_settlements) ? detail.refused_settlements : [];
+  if (!refusal && !breaker && !settlements.length) return null;
+  const panel = el("section", { class: "child-dispatch-panel requests-held", "aria-label": "Requests held" });
+  const line = (label, text, className = "") => panel.appendChild(el("div", {
+    class: `child-dispatch-notice ${className}`,
+  }, [el("strong", { text: `${label}: ` }), el("span", { text })]));
+  line("Requests held", refusal
+    ? `${refusal}${pass.recorded_at ? ` (last pass ${fmtAbsTime(pass.recorded_at)})` : ""}`
+    : "See the breaker or refused settlements below.");
+  if (breaker) {
+    const remaining = Math.max(0, Math.ceil((Date.parse(breaker.half_open_at) - Date.now()) / 1000));
+    const classes = breaker.failure_classes?.length ? ` (${breaker.failure_classes.join(", ")})` : "";
+    const next = remaining > 0
+      ? `half-opens at ${fmtAbsTime(breaker.half_open_at)} (in ${Math.floor(remaining / 60)}m ${remaining % 60}s) to admit one probe claim`
+      : `half-open since ${fmtAbsTime(breaker.half_open_at)}: admits one probe claim once nothing this drain claimed is unsettled`;
+    line("Breaker", `open after ${breaker.failures} consecutive failed claims${classes} since ${fmtAbsTime(breaker.opened_at)}; ${next}`, "pull-breaker");
+  }
+  for (const settlement of settlements) {
+    line("Settlement refused", `leaf ${settlement.leaf_run_id || "-"} owner ${settlement.owner} refused it ${settlement.refusals} time(s) since ${fmtAbsTime(settlement.first_refused_at)}: ${settlement.reason}; next attempt after ${fmtAbsTime(settlement.retry_after)}`, "refused-settlement");
+    panel.appendChild(el("p", { class: "settlement-remedy", text: settlement.remedy }));
+  }
+  return panel;
+}
+
+// Provider children of this run's agent steps. Each object is
+// `RunProviderProcess::to_json`: the page already knows the run, so these
+// rows have no `run_id`. Mirrors the `Agent:` lines of `orbit run show`.
+function buildProviderProcesses(processes) {
+  if (!Array.isArray(processes) || processes.length === 0) return null;
+  const panel = el("div", { class: "child-dispatch-panel provider-processes" });
+  panel.appendChild(el("div", { class: "label", text: `provider processes (${processes.length})` }));
+  for (const process of processes) {
+    const blocked = process.blocked_on_stopped_descendant;
+    const parts = [
+      `provider ${process.provider || "-"}`,
+      `pid ${process.pid == null ? "-" : process.pid}`,
+      `step ${process.step_id || "-"}`,
+      `liveness ${process.liveness || "-"}`,
+    ];
+    if (blocked) parts.push("blocked=stopped-descendant");
+    if (process.finished) parts.push("finished");
+    if (process.last_activity_at) parts.push(`last activity ${fmtAbsTime(process.last_activity_at)}`);
+    panel.appendChild(el("div", { class: "child-dispatch-row provider-process" }, [
+      el("span", { class: "child-dispatch-meta", text: parts.join(" · ") }),
+    ]));
+    if (process.latest_message) {
+      panel.appendChild(el("div", {
+        class: "child-dispatch-row provider-process-message",
+        text: process.latest_message,
+      }));
+    }
+    for (const descendant of Array.isArray(process.stopped_descendants) ? process.stopped_descendants : []) {
+      const outcome = descendant.ended
+        ? "ended by the supervisor"
+        : `the supervisor could not end it (${descendant.error || "no reason recorded"})`;
+      const still = descendant.still_stopped ? "; still stopped" : "";
+      panel.appendChild(el("div", {
+        class: "child-dispatch-row stopped-descendant",
+        text: `stopped descendant: pid=${descendant.pid} command=\`${descendant.command || "-"}\`; ${outcome}${still}`,
+      }));
+    }
+  }
+  return panel;
 }
 
 // `execution.env.pass` names the submitting process did not hold when the run
@@ -375,6 +470,25 @@ function buildUnsetEnvPass(names) {
   panel.appendChild(el("div", { class: "child-dispatch-notice" }, [
     el("strong", { text: "Unset env: " }),
     el("span", { text: `${names.join(", ")} (listed in execution.env.pass but not set where this run was submitted, so its agents did not receive them)` }),
+  ]));
+  return panel;
+}
+
+// Crews whose `[crews.<name>] env` sources were unset where this run was
+// submitted (names only), matching the CLI's `Unset crew env:` line.
+function buildUnsetCrewEnv(crews) {
+  if (!Array.isArray(crews) || crews.length === 0) return null;
+  const describe = (crew) => {
+    const sources = (Array.isArray(crew?.env) ? crew.env : []).map((entry) => {
+      const [name, source] = String(entry).split("=");
+      return source ? `${source} (for ${name})` : name;
+    });
+    return `crew \`${crew?.crew ?? "?"}\` env source ${sources.join(", ")}`;
+  };
+  const panel = el("div", { class: "child-dispatch-panel" });
+  panel.appendChild(el("div", { class: "child-dispatch-notice" }, [
+    el("strong", { text: "Unset crew env: " }),
+    el("span", { text: `${crews.map(describe).join("; ")} (unset where this run was submitted: a drain leaves such a crew out of its window, and its activities are refused)` }),
   ]));
   return panel;
 }
@@ -453,7 +567,7 @@ function buildCrewWindow(window) {
   for (const exclusion of auth) {
     panel.appendChild(el("div", { class: "child-dispatch-row auth-exclusion" }, [
       el("span", { class: "child-dispatch-meta", text:
-        `${exclusion.provider} auth failed on ${exclusion.host} at ${exclusion.excluded_at} (${exclusion.error_class}; credentials: ${exclusion.credential_source}); ${exclusion.relogin_hint}; next probe: ${exclusion.next_probe_at || "not declared; start a new drain after re-login"}` }),
+        `${exclusion.provider}${exclusion.account ? `/${exclusion.account}` : ""} auth failed on ${exclusion.host} at ${exclusion.excluded_at} (${exclusion.error_class}; credentials: ${exclusion.credential_source}); ${exclusion.relogin_hint}; next probe: ${exclusion.next_probe_at || "not declared; start a new drain after re-login"}` }),
     ]));
   }
   return panel;
@@ -461,7 +575,7 @@ function buildCrewWindow(window) {
 
 // Reason codes whose `detail` adds useful context to the shared Drain card label.
 const WAITING_DETAIL_REASONS = new Set([
-  "host_os_mismatch", "native_os_required", "local_route_before_pr", "local_route_before_landing", "crew_unavailable", "owner_hold",
+  "host_os_mismatch", "browser_kit_missing", "native_os_required", "local_route_before_pr", "local_route_before_landing", "crew_unavailable", "owner_hold",
   "invalid_candidate",
 ]);
 
@@ -469,6 +583,7 @@ const KEPT_OFF_CAUSES = {
   context_lock_conflict: "footprint holds",
   dependency_not_done: "unmet dependencies",
   host_os_mismatch: "for another OS",
+  browser_kit_missing: "needing a host with the browser kit",
   native_os_required: "needing native evidence from another OS",
   crew_unavailable: "needing a crew this host cannot run",
   owner_hold: "held on the owner",
@@ -520,9 +635,13 @@ function buildStillWaiting(pass, run = {}) {
   const excludedTotal = Math.max(pass.excluded_total || 0, excluded.length);
   if (queued === 0 && deferredTotal === 0 && excludedTotal === 0) return null;
   const panel = el("div", { class: "child-dispatch-panel still-waiting" });
-  const answered = pass.waiting_recorded_at ? ` (the owner answered ${fmtAbsTime(pass.waiting_recorded_at)})` : "";
-  const reasonTaskTotal = deferredTotal + excludedTotal;
   const pullDrain = run.job_id === "workspace_pull_pipeline";
+  // A local drain dates its lists only when it deferred a pass on a busy
+  // lock, which keeps the last completed pass's lists.
+  const answered = !pass.waiting_recorded_at ? ""
+    : pullDrain ? ` (the owner answered ${fmtAbsTime(pass.waiting_recorded_at)})`
+    : ` (as of the last completed pass at ${fmtAbsTime(pass.waiting_recorded_at)})`;
+  const reasonTaskTotal = deferredTotal + excludedTotal;
   const additionalAdmissible = pullDrain ? queued : Math.max(0, queued - deferredTotal);
   const additionalSummary = additionalAdmissible === 1
     ? "1 additional admissible task was not started and is not listed below"
@@ -559,6 +678,47 @@ function buildStillWaiting(pass, run = {}) {
       text: `idle: ${keptOff} backlog task(s) kept off this host for ${pass.consecutive_idle_passes} consecutive passes (${causes})`,
     }));
   }
+  return panel;
+}
+
+// A drain still live whose last admission pass failed: a local drain's pass
+// deferred on a busy lock (retried next pass), or a pull drain's failed pass.
+// A failed run reports the same error in its failure box instead, and a
+// cancelled or finished one has no next pass.
+// Mirrors the `Admission pass deferred:` / `Pull pass warning:` line of
+// `orbit run show`.
+function buildPassWarning(run) {
+  const pass = run.drain_last_pass;
+  if (!pass || !pass.last_pass_error || !LIVE_RUN_STATES.has(run.state)) return null;
+  const pullDrain = run.job_id === "workspace_pull_pipeline";
+  const failures = pass.consecutive_pass_failures || 0;
+  const what = pullDrain ? "Pull pass warning: " : "Admission pass deferred: ";
+  const count = pullDrain
+    ? `${failures} consecutive failed ${failures === 1 ? "pass" : "passes"}`
+    : `${failures} consecutive deferred ${failures === 1 ? "pass" : "passes"}; the next pass retries`;
+  const panel = el("div", { class: "child-dispatch-panel pass-warning" });
+  panel.appendChild(el("div", { class: "child-dispatch-notice" }, [
+    el("strong", { text: what }),
+    el("span", { text: `${count} (last pass ${fmtAbsTime(pass.recorded_at)})` }),
+  ]));
+  const message = el("pre", { class: "run-failure-message mono" });
+  appendLinkified(message, pass.last_pass_error, run.workspace_id || getWorkspace());
+  panel.appendChild(message);
+  return panel;
+}
+
+// A live local drain whose latest pass found no task pilot enabled on this
+// machine: its tasks that need an assessment wait for one that never comes.
+// The sentence names the workspace, the machine and the fix.
+function buildPilotWarning(run) {
+  const warning = run.drain_last_pass?.task_pilot_warning;
+  if (typeof warning !== "string" || !warning || !LIVE_RUN_STATES.has(run.state)) return null;
+  const panel = el("div", { class: "child-dispatch-panel pilot-warning" });
+  panel.setAttribute("role", "status");
+  panel.appendChild(el("div", { class: "child-dispatch-notice" }, [
+    el("strong", { text: "Warning: " }),
+    el("span", { text: warning }),
+  ]));
   return panel;
 }
 
@@ -764,6 +924,50 @@ function buildChildDispatches(run) {
   return el("div", { class: "child-dispatch-panel" }, [
     el("div", { class: "label", text: `child runs (${dispatches.length})` }),
     el("div", { class: "child-dispatch-summary", text: `${dispatches.length} admitted: ${tally}` }),
+    ...rows,
+  ]);
+}
+
+// The read-only explorers this run's implement or review-repair agent
+// delegated to, oldest first: crew, outcome, duration, tokens and cost. They
+// ran on this run's slot, so their spend is part of this delivery's.
+function buildExploreInvocations(invocations) {
+  if (!Array.isArray(invocations) || invocations.length === 0) return null;
+  const tokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+  const known = invocations.filter((i) => typeof i.cost_usd === "number");
+  const totalCost = known.reduce((sum, i) => sum + i.cost_usd, 0);
+  const totalTokens = invocations.reduce((sum, i) => sum + (i.total_tokens || 0), 0);
+  const costText = known.length === 0
+    ? "cost unknown"
+    : `$${totalCost.toFixed(4)}${known.length < invocations.length ? ` (${known.length} of ${invocations.length} priced)` : ""}`;
+  const rows = invocations.map((invocation) => {
+    const state = invocation.state || "unknown";
+    const link = el("button", {
+      class: "back-action",
+      text: invocation.run_id,
+      title: `Open ${invocation.run_id}`,
+    });
+    link.addEventListener("click", () => navigateToRun(invocation.run_id));
+    const parts = [`crew ${invocation.crew || "-"}`];
+    if (invocation.parent_activity) parts.push(`from ${invocation.parent_activity}`);
+    parts.push(`${tokens(invocation.input_tokens || 0)} in / ${tokens(invocation.output_tokens || 0)} out`);
+    parts.push(typeof invocation.cost_usd === "number" ? `$${invocation.cost_usd.toFixed(4)}` : "cost unknown");
+    if (invocation.paths_read != null) parts.push(`${invocation.paths_read} paths read`);
+    const row = el("div", { class: "child-dispatch-row explore-invocation" }, [
+      stateCell(state),
+      link,
+      el("span", { class: "duration", text: recordDurationText(invocation) }),
+      el("span", { class: "child-dispatch-meta", text: parts.join(" · ") }),
+    ]);
+    row.dataset.state = state;
+    return row;
+  });
+  return el("section", { class: "child-dispatch-panel explore-invocations", "aria-label": "Explorer invocations" }, [
+    el("div", { class: "label", text: `explorer invocations (${invocations.length})` }),
+    el("div", {
+      class: "child-dispatch-summary",
+      text: `${invocations.length} read-only ${invocations.length === 1 ? "call" : "calls"} · ${tokens(totalTokens)} tokens · ${costText}`,
+    }),
     ...rows,
   ]);
 }
@@ -1197,13 +1401,63 @@ function buildStepDetail(step) {
   return wrap;
 }
 
+// `event_type` is the dotted spelling of `body_kind`, so it gets no column.
 const RUN_EVENT_COLUMNS = [
   { key: "ts", label: "time" },
   { key: "body_kind", label: "kind" },
-  { key: "event_type", label: "scope" },
   { key: "agent_identity", label: "agent" },
   { key: "summary", label: "detail" },
 ];
+const ACTIVITY_SAMPLE_KIND = "cli_invocation_activity";
+
+// The supervisor samples a running agent every interval its output grows, and
+// each sample repeats the newest assistant message. Fold each consecutive run
+// of samples from one identified invocation that carry one message into a row.
+// A sample whose output tail held no message keeps that invocation's previous
+// one. Without a parent identity, legacy samples remain separate rows.
+function groupRunEvents(events) {
+  const groups = [];
+  for (const ev of events) {
+    const last = groups[groups.length - 1];
+    const head = last?.events[0];
+    if (head && ev.body_kind === ACTIVITY_SAMPLE_KIND && head.body_kind === ACTIVITY_SAMPLE_KIND
+        && ev.parent_event_id && ev.parent_event_id === head.parent_event_id
+        && ev.agent_identity === head.agent_identity
+        && ev.provider === head.provider
+        && (ev.latest_message == null || ev.latest_message === last.message)) {
+      last.events.push(ev);
+    } else {
+      groups.push({ events: [ev], message: ev.latest_message, truncated: ev.latest_message_truncated });
+    }
+  }
+  return groups;
+}
+
+function eventTime(ts, previousDay) {
+  const date = new Date(ts);
+  const day = Number.isFinite(date.getTime()) ? formatDate(ts) : null;
+  const clock = formatClock(ts);
+  return { day, text: day && day !== previousDay ? `${day} ${clock}` : (clock || "-") };
+}
+
+// A one-line preview that opens to every field on its own line.
+function buildEventDetail(key, fields) {
+  const td = el("td", { class: "stderr run-event-detail" });
+  if (fields.length === 0) {
+    td.textContent = "-";
+    return td;
+  }
+  const details = el("details");
+  details.open = expandedRunEvents.has(key);
+  details.addEventListener("toggle", () => {
+    if (details.open) expandedRunEvents.add(key);
+    else expandedRunEvents.delete(key);
+  });
+  details.appendChild(el("summary", { text: fields.join(" ") }));
+  details.appendChild(el("pre", { text: fields.join("\n") }));
+  td.appendChild(details);
+  return td;
+}
 
 export function renderRunEvents() {
   const body = $("run-events-body");
@@ -1257,47 +1511,55 @@ export function renderRunEvents() {
     tbody = table.querySelector("tbody");
   }
   syncNodes(body, [controls, table]);
-  const frag = document.createDocumentFragment();
+  const rows = [];
   let previousDay = null;
-  for (let i = 0; i < events.length; i++) {
-    const ev = events[i];
-    const summary = summarizeEvent(ev);
+  groupRunEvents(events).forEach((group, i) => {
+    const first = group.events[0];
+    const last = group.events[group.events.length - 1];
+    const start = eventTime(first.ts, previousDay);
+    let time = start.text;
+    previousDay = start.day;
+    let kind = first.body_kind || "-";
+    let title = first.ts || "";
+    let fields = eventFields(last);
+    if (first.body_kind === ACTIVITY_SAMPLE_KIND) {
+      // The message leads: it is what the row is read for.
+      fields = fields.filter(field => !field.startsWith("latest_message"));
+      if (group.truncated) fields.unshift("latest_message_truncated=true");
+      if (group.message != null) fields.unshift(`latest_message=${group.message}`);
+    }
+    if (group.events.length > 1) {
+      const end = eventTime(last.ts, previousDay);
+      previousDay = end.day;
+      time = `${time} – ${end.text}`;
+      title = `${first.ts} – ${last.ts}`;
+      kind = `${kind} ×${group.events.length}`;
+      const bytes = fields.findIndex(field => field.startsWith("observed_bytes="));
+      if (bytes >= 0) fields[bytes] = `observed_bytes=${first.observed_bytes}→${last.observed_bytes}`;
+    }
+    const key = `runev-${first.event_id || i}`;
     const tr = el("tr");
-    const date = new Date(ev.ts);
-    const day = Number.isFinite(date.getTime()) ? formatDate(ev.ts) : null;
-    const clock = formatClock(ev.ts);
-    const time = day && day !== previousDay ? `${day} ${clock}` : (clock || "-");
-    previousDay = day;
-    tr.appendChild(el("td", { text: time, title: ev.ts || "" }));
-    tr.appendChild(el("td", { text: ev.body_kind || "-" }));
-    tr.appendChild(el("td", { text: ev.event_type || "-" }));
-    tr.appendChild(el("td", { text: ev.agent_identity || "-" }));
-    const td = el("td", { class: "stderr" });
-    td.title = summary.title;
-    td.textContent = summary.text;
-    tr.appendChild(td);
-    tr.dataset.key = `runev-${ev.event_id || i}`;
-    tr.dataset.hash = `${ev.event_id || i}-${ev.body_kind}-${time}`;
-    frag.appendChild(tr);
-  }
-  syncNodes(tbody, Array.from(frag.children));
+    tr.appendChild(el("td", { text: time, title }));
+    tr.appendChild(el("td", { text: kind }));
+    tr.appendChild(el("td", { text: first.agent_identity || "-" }));
+    tr.appendChild(buildEventDetail(key, fields));
+    tr.dataset.key = key;
+    tr.dataset.hash = `${first.event_id || i}-${last.event_id || i}-${kind}-${time}`;
+    rows.push(tr);
+  });
+  syncNodes(tbody, rows);
 }
 
-function summarizeEvent(ev) {
-  const ignoreKeys = new Set([
-    "schemaVersion", "event_type", "event_id", "ts", "run_id",
-    "agent_identity", "parent_event_id", "workspace_path", "body_kind",
-  ]);
-  const parts = [];
+const EVENT_DETAIL_IGNORED_KEYS = new Set([
+  "schemaVersion", "event_type", "event_id", "ts", "run_id",
+  "agent_identity", "parent_event_id", "workspace_path", "body_kind",
+]);
+
+function eventFields(ev) {
+  const fields = [];
   for (const [k, v] of Object.entries(ev)) {
-    if (ignoreKeys.has(k)) continue;
-    if (v == null) continue;
-    if (typeof v === "object") {
-      parts.push(`${k}=${JSON.stringify(v)}`);
-    } else {
-      parts.push(`${k}=${v}`);
-    }
+    if (EVENT_DETAIL_IGNORED_KEYS.has(k) || v == null) continue;
+    fields.push(`${k}=${typeof v === "object" ? JSON.stringify(v) : v}`);
   }
-  const text = parts.join(" ");
-  return { text: truncate(text, 200), title: text };
+  return fields;
 }

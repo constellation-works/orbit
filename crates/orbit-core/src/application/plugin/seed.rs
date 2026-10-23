@@ -87,7 +87,8 @@ struct PluginAssetRecord {
 ///
 /// `routines_dir` and `auto_tasks_dir` are the workspace directories the
 /// loaders read; the caller supplies them because the two live under different
-/// roots (routines are shared, auto-tasks are per checkout).
+/// roots (routines are shared, auto-task writes are per checkout; linked
+/// checkout inspection falls back to the shared auto-task catalog).
 pub fn seed_plugin_definitions(
     plugin: &LoadedPlugin,
     definitions: &PluginDefinitionSet,

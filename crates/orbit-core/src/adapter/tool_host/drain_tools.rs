@@ -7,76 +7,94 @@
 //! surfaces cannot drift into different lifecycle checks.
 
 use orbit_common::OrbitError;
-use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
-use orbit_store::contracts::{AdmissionRequest, ClaimMutation};
+use orbit_common::governance::drain::DrainVerb;
+use orbit_common::governance::operation::{OperationInput, OperationVerb};
+use orbit_store::contracts::{AdmissionRequest, ClaimAttribution, ClaimMutation};
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::distributed::DeclaredCallerContract;
 
-/// The review-policy label distributed-drain revisions before 5 declared.
-const LEGACY_CALLER_REVIEW_POLICY: &str = "caller_review_policy";
-
-pub(super) fn probe(
+/// Run a drain operation. Compatibility precedes validation, including for
+/// in-process host callers that did not enter through the generic tool.
+pub(super) fn dispatch(
     runtime: &OrbitRuntime,
     session: &ToolSessionContext,
-    input: Value,
+    verb: DrainVerb,
+    mut input: Value,
 ) -> Result<Value, OrbitError> {
-    reject_unknown_tool_fields(
-        &input,
-        &[
-            "caller_version",
-            "caller_schema",
-            "caller_fingerprint",
-            "caller_before_pr",
-            // A revision-4 follower still declares its review-policy label.
-            // Accepted and ignored so its probe answers `protocol_mismatch`
-            // instead of an unknown-field error [ORB-13992].
-            LEGACY_CALLER_REVIEW_POLICY,
-            "workspace",
-            "agent",
-            "model",
-        ],
-    )?;
-    let declared = DeclaredCallerContract {
-        caller_version: optional_string(&input, "caller_version"),
-        caller_schema: optional_u32(&input, "caller_schema")?,
-        caller_fingerprint: match input.get("caller_fingerprint") {
-            None | Some(Value::Null) => None,
-            Some(Value::String(fingerprint)) => Some(fingerprint.clone()),
-            Some(_) => {
-                return Err(OrbitError::InvalidInput(
-                    "caller_fingerprint must be a string".into(),
-                ));
+    prepare_input(verb, &mut input)?;
+    let input = verb.spec().parse_input(input)?;
+    match verb {
+        DrainVerb::Probe => probe(runtime, session, &input),
+        DrainVerb::ReceiptLookup => receipt_lookup(runtime, session, &input),
+        DrainVerb::Pull => pull(runtime, session, &input),
+        DrainVerb::ClaimBind => claim_bind(runtime, session, &input),
+        DrainVerb::ClaimSettle => claim_settle(runtime, session, &input),
+        DrainVerb::Claims => claims(runtime),
+    }
+}
+
+/// A changed build's fingerprint wins over new or malformed wire fields.
+pub(super) fn prepare_input(verb: DrainVerb, input: &mut Value) -> Result<(), OrbitError> {
+    match verb {
+        DrainVerb::Pull => {
+            if let Some(caller) = input.get("caller_fingerprint").and_then(Value::as_str)
+                && caller != orbit_store::contracts::distributed_drain_protocol_fingerprint()
+            {
+                return Err(OrbitError::ProtocolSkew(format!(
+                    "caller fingerprint {caller}; owner fingerprint {}",
+                    orbit_store::contracts::distributed_drain_protocol_fingerprint(),
+                )));
             }
-        },
-        caller_before_pr: optional_bool(&input, "caller_before_pr")?,
+            // The shipped schema asks new callers to send this diagnostic,
+            // but historical requests rely on AdmissionRequest's serde default.
+            // Preserve that input contract before enforcing schema requiredness.
+            if let Some(object) = input.as_object_mut() {
+                object
+                    .entry("caller_before_pr")
+                    .or_insert(Value::Bool(false));
+            }
+            Ok(())
+        }
+        DrainVerb::Probe
+        | DrainVerb::ReceiptLookup
+        | DrainVerb::ClaimBind
+        | DrainVerb::ClaimSettle
+        | DrainVerb::Claims => Ok(()),
+    }
+}
+
+fn probe(
+    runtime: &OrbitRuntime,
+    session: &ToolSessionContext,
+    input: &OperationInput,
+) -> Result<Value, OrbitError> {
+    let value = input.as_value();
+    let declared = DeclaredCallerContract {
+        caller_version: optional_string(value, "caller_version"),
+        caller_schema: optional_u32(value, "caller_schema")?,
+        caller_fingerprint: value
+            .get("caller_fingerprint")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        caller_before_pr: input.optional_bool("caller_before_pr")?,
     };
     let report = runtime.drain_probe(session, &declared)?;
     serde_json::to_value(report).map_err(|error| OrbitError::Store(error.to_string()))
 }
 
-pub(super) fn receipt_lookup(
+fn receipt_lookup(
     runtime: &OrbitRuntime,
     session: &ToolSessionContext,
-    input: Value,
+    input: &OperationInput,
 ) -> Result<Value, OrbitError> {
-    reject_unknown_tool_fields(
-        &input,
-        &[
-            "request_id",
-            "machine_id",
-            "lookup_schema",
-            "workspace",
-            "agent",
-            "model",
-        ],
-    )?;
-    let request_id = orbit_tools::require_str(&input, "request_id")?;
-    let lookup_schema = optional_u32(&input, "lookup_schema")?
+    let input = input.as_value();
+    let request_id = orbit_tools::require_str(input, "request_id")?;
+    let lookup_schema = optional_u32(input, "lookup_schema")?
         .unwrap_or(orbit_store::contracts::ADMISSION_RECEIPT_LOOKUP_SCHEMA);
-    let machine_id = optional_string(&input, "machine_id");
+    let machine_id = optional_string(input, "machine_id");
     let lookup = runtime.lookup_admission_receipt(
         session,
         &request_id,
@@ -88,32 +106,20 @@ pub(super) fn receipt_lookup(
 
 /// `orbit.task.pull`. The request is the caller's durable admission request,
 /// parsed whole so the owner's replay comparison sees exactly what was sent.
-pub(super) fn pull(
+fn pull(
     runtime: &OrbitRuntime,
     session: &ToolSessionContext,
-    input: Value,
+    input: &OperationInput,
 ) -> Result<Value, OrbitError> {
-    // Check the fingerprint before rejecting or deserializing new fields:
-    // the owner may have changed builds after the follower's last probe.
-    if let Some(caller) = input.get("caller_fingerprint").and_then(Value::as_str)
-        && caller != orbit_store::contracts::distributed_drain_protocol_fingerprint()
-    {
-        return Err(OrbitError::ProtocolSkew(format!(
-            "caller fingerprint {caller}; owner fingerprint {}",
-            orbit_store::contracts::distributed_drain_protocol_fingerprint(),
-        )));
-    }
+    let input = input.as_value();
     // The allowed keys come from the actual request type, so a new field
     // cannot be fingerprinted but silently dropped by a parallel field list.
     let schema = orbit_store::contracts::admission_request_schema();
     let properties = schema["properties"]
         .as_object()
         .ok_or_else(|| OrbitError::Store("pull request schema has no properties".into()))?;
-    let mut keys: Vec<&str> = properties.keys().map(String::as_str).collect();
-    keys.extend([LEGACY_CALLER_REVIEW_POLICY, "workspace", "agent", "model"]);
-    reject_unknown_tool_fields(&input, &keys)?;
     let request: AdmissionRequest = parse_fields(
-        &input,
+        input,
         &properties.keys().map(String::as_str).collect::<Vec<_>>(),
     )?;
     let response = runtime.serve_task_pull(session, &request)?;
@@ -121,43 +127,40 @@ pub(super) fn pull(
 }
 
 /// `orbit.drain.claim.bind`.
-pub(super) fn claim_bind(
+fn claim_bind(
     runtime: &OrbitRuntime,
     session: &ToolSessionContext,
-    input: Value,
+    input: &OperationInput,
 ) -> Result<Value, OrbitError> {
-    reject_unknown_tool_fields(
-        &input,
-        &["claim_id", "run_id", "ship", "workspace", "agent", "model"],
-    )?;
-    let claim_id = orbit_tools::require_str(&input, "claim_id")?;
-    let run_id = orbit_tools::require_str(&input, "run_id")?;
-    let ship = parse_field(&input, "ship")?;
+    let input = input.as_value();
+    let claim_id = orbit_tools::require_str(input, "claim_id")?;
+    let run_id = orbit_tools::require_str(input, "run_id")?;
+    let ship = parse_field(input, "ship")?;
     let result = runtime.serve_claim_bind(session, &claim_id, &run_id, ship)?;
     serde_json::to_value(result).map_err(|error| OrbitError::Store(error.to_string()))
 }
 
 /// `orbit.drain.claim.settle`.
-pub(super) fn claim_settle(
+fn claim_settle(
     runtime: &OrbitRuntime,
     session: &ToolSessionContext,
-    input: Value,
+    input: &OperationInput,
 ) -> Result<Value, OrbitError> {
-    reject_unknown_tool_fields(
-        &input,
-        &[
-            "claim_id",
-            "run_id",
-            "settlement",
-            "workspace",
-            "agent",
-            "model",
-        ],
+    let input = input.as_value();
+    let claim_id = orbit_tools::require_str(input, "claim_id")?;
+    let run_id = optional_string(input, "run_id");
+    let settlement: ClaimMutation = parse_field(input, "settlement")?;
+    let attribution = ClaimAttribution {
+        crew: optional_string(input, "crew"),
+        crew_model: optional_string(input, "crew_model"),
+    };
+    let result = runtime.serve_claim_settle(
+        session,
+        &claim_id,
+        run_id.as_deref(),
+        settlement,
+        attribution,
     )?;
-    let claim_id = orbit_tools::require_str(&input, "claim_id")?;
-    let run_id = optional_string(&input, "run_id");
-    let settlement: ClaimMutation = parse_field(&input, "settlement")?;
-    let result = runtime.serve_claim_settle(session, &claim_id, run_id.as_deref(), settlement)?;
     serde_json::to_value(result).map_err(|error| OrbitError::Store(error.to_string()))
 }
 
@@ -188,8 +191,7 @@ fn parse_fields<T: serde::de::DeserializeOwned>(
         .map_err(|error| OrbitError::InvalidInput(error.to_string()))
 }
 
-pub(super) fn claims(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    reject_unknown_tool_fields(&input, &["workspace", "agent", "model"])?;
+fn claims(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
     Ok(Value::Array(runtime.inspect_distributed_claims()?))
 }
 
@@ -200,15 +202,6 @@ fn optional_string(input: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-}
-
-/// A declared switch must be a boolean; a malformed one is invalid input.
-fn optional_bool(input: &Value, key: &str) -> Result<Option<bool>, OrbitError> {
-    match input.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Bool(value)) => Ok(Some(*value)),
-        Some(_) => Err(OrbitError::InvalidInput(format!("{key} must be a boolean"))),
-    }
 }
 
 /// A malformed version field is invalid input, not a compatibility comparison.

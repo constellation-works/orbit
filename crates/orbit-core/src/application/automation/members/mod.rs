@@ -5,12 +5,13 @@ mod host;
 mod member_host;
 mod stale;
 
-pub(crate) use claim::claim;
+pub(crate) use claim::{bundle_crews, claim};
 pub(crate) use host::{evaluate, evaluate_with_cache};
 pub(crate) use stale::stale_tasks;
 
 use super::{pins, preparation::InstructionSnapshot};
 use crate::OrbitRuntime;
+use chrono::{DateTime, Utc};
 use orbit_types::workflow::automation::{members::*, *};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -38,6 +39,14 @@ pub(crate) struct Host<'a> {
     /// runs, shared by page observation, reconciliation and admission.
     head: RefCell<Option<(String, SourceRevision)>>,
     inspection_cache: Option<&'a super::source_cache::SourceCache>,
+    /// One provider-hold scan per evaluation clock, shared by observation and
+    /// admission. Observation replaces it when its clock differs.
+    pilot_hold: RefCell<Option<PilotHoldCache>>,
+}
+
+struct PilotHoldCache {
+    now: DateTime<Utc>,
+    withhold: Option<String>,
 }
 
 /// The task outcome reason apply and prepare record for a task the branch

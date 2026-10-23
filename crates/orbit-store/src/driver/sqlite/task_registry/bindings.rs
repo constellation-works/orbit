@@ -7,6 +7,7 @@ use super::store::TaskRegistryStore;
 use super::util::{now_string, path_to_string};
 use crate::contracts::TaskBundleBinding;
 use crate::fs::path_safety::normalize_path;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::validate_orb_task_id;
 use rusqlite::{Connection, TransactionBehavior, params};
@@ -28,14 +29,14 @@ fn upsert_task_binding(
             canonical_path = excluded.canonical_path,
             updated_at = excluded.updated_at",
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?
+    .map_err(sqlite_store_error)?
     .execute(params![
         task_id,
         partition_id,
         path_to_string(canonical_path),
         now
     ])
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
     Ok(())
 }
 
@@ -66,13 +67,11 @@ impl TaskRegistryStore {
         let partition_id = validate_partition_id(partition_id)?;
         let canonical_path = self.validated_binding_path(&partition_id, task_id, canonical_path)?;
 
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         if workspace_by_id(&tx, &partition_id)?.is_none() {
             return Err(OrbitError::not_found(NotFoundKind::Workspace, partition_id));
@@ -83,7 +82,7 @@ impl TaskRegistryStore {
         let binding = task_bundle_by_id(&tx, task_id)?.ok_or_else(|| {
             OrbitError::Store("failed to read inserted task bundle binding".into())
         })?;
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
+        tx.commit().map_err(sqlite_store_error)?;
         Ok(binding)
     }
 
@@ -112,13 +111,11 @@ impl TaskRegistryStore {
             ));
         }
 
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         if workspace_by_id(&tx, &partition_id)?.is_none() {
             return Err(OrbitError::not_found(NotFoundKind::Workspace, partition_id));
@@ -128,7 +125,7 @@ impl TaskRegistryStore {
         for (task_id, canonical_path) in &rows {
             upsert_task_binding(&tx, task_id, &partition_id, canonical_path, &now)?;
         }
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
+        tx.commit().map_err(sqlite_store_error)
     }
 
     /// A binding may only ever name the path this registry derives for its id,
@@ -160,13 +157,11 @@ impl TaskRegistryStore {
     ) -> Result<bool, OrbitError> {
         validate_orb_task_id(task_id)?;
         let partition_id = validate_partition_id(partition_id)?;
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let Some(binding) = task_bundle_by_id(&tx, task_id)? else {
             return Ok(false);
@@ -180,22 +175,22 @@ impl TaskRegistryStore {
              WHERE source_task_id = ?1 OR target_task_id = ?1",
             [task_id],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
         tx.execute("DELETE FROM task_bundle_tags WHERE task_id = ?1", [task_id])
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         tx.execute(
             "DELETE FROM task_bundle_index WHERE task_id = ?1",
             [task_id],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
         let deleted = tx
             .execute(
                 "DELETE FROM task_bundle_bindings
                  WHERE task_id = ?1 AND workspace_id = ?2",
                 params![task_id, partition_id],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
+        tx.commit().map_err(sqlite_store_error)?;
         Ok(deleted > 0)
     }
 
@@ -212,12 +207,12 @@ impl TaskRegistryStore {
                  WHERE workspace_id = ?1
                  ORDER BY task_id ASC",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map([partition_id], decode_task_bundle_binding)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     /// Look up a task-bundle binding by task id. Task ids are a global primary

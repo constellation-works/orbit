@@ -62,6 +62,9 @@ fn installed_grok_cli_backend_smoke_captures_stdout_artifact() {
     let spec = AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "Return the requested Orbit response envelope.".to_string(),
+        steering_instruction: None,
+        regression_risk_instruction: None,
+        explore_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: Some("grok-4.6".to_string()),
@@ -75,6 +78,8 @@ fn installed_grok_cli_backend_smoke_captures_stdout_artifact() {
         proc_allowed_programs: None,
         proc_disallowed_programs: None,
         trusted_host_execution: false,
+        crew_env: Vec::new(),
+        crew_account: None,
     };
 
     let outcome = dispatch_v2_activity(V2DispatchInput {

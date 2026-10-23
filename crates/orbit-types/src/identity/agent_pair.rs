@@ -5,9 +5,8 @@
 //! model from a cheaper "implementation" helper makes execution mode
 //! deterministic per agent family rather than depending on per-prompt edits.
 //!
-//! Activities reference the resolved pair via the `{{orchestrator_model}}`,
-//! `{{helper_model}}`, and `{{agent_family}}` placeholders, which the runtime
-//! substitutes into the instruction text before invoking the agent.
+//! The pair's judgment model is unrelated to a task's `orchestrator_model`,
+//! which records the model of the crew attributed with orchestrating it.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -16,7 +15,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use super::{AgentFamily, IdentityError, ProviderModelError};
+use super::{AgentFamily, CrewEnvVar, IdentityError, ProviderModelError};
 
 /// A resolved (orchestrator, helper) duo for a given agent family.
 ///
@@ -71,7 +70,10 @@ impl ReasoningEffort {
     /// `--thinking` flag validates against a fixed, model-independent set
     /// (`off, minimal, low, medium, high, xhigh, max`) that is a strict
     /// superset of this enum, and it rejects a value outside that set with a
-    /// diagnostic rather than ignoring it. [ORB-11296]
+    /// diagnostic rather than ignoring it. [ORB-11296] Muse does as well:
+    /// `muse exec --reasoning-effort` accepts
+    /// `none, minimal, low, medium, high, xhigh, max, ultra` (Muse Code
+    /// 1.4.10), a strict superset of this enum. [ORB-16577]
     ///
     /// Grok's published contract is model-specific, so unknown models fail
     /// closed instead of accepting a setting the CLI might silently
@@ -83,7 +85,7 @@ impl ReasoningEffort {
         model: Option<&str>,
     ) -> Result<(), ProviderModelError> {
         match provider {
-            "claude" | "codex" | "pi" => Ok(()),
+            "claude" | "codex" | "pi" | "muse" => Ok(()),
             "grok" => Self::validate_grok_model_effort(self, model),
             "antigravity" => Self::validate_antigravity_effort(self, model),
             "opencode" => Self::validate_opencode_effort(self),
@@ -223,6 +225,23 @@ pub struct Crew {
     /// serialized form while `true`, so existing records keep their shape.
     #[serde(default = "crew_enabled_default", skip_serializing_if = "is_enabled")]
     pub enabled: bool,
+    /// `[crews.<name>] env`: variables this crew's agents receive on top of
+    /// `[execution.env] pass`, names only. Admitted only from the global
+    /// config file, so a workspace cannot route host secrets into agents.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<CrewEnvVar>,
+}
+
+impl Crew {
+    /// The provider account this crew runs on when it is its own: a crew
+    /// that sets `env` runs on the credential that names, so its usage
+    /// limits, provider holds and authentication exclusions are its own,
+    /// keyed by its name. `None` for a crew on its provider's default
+    /// login, which shares those with the provider's other such crews.
+    #[must_use]
+    pub fn account(&self) -> Option<&str> {
+        (!self.env.is_empty()).then_some(self.name.as_str())
+    }
 }
 
 fn crew_enabled_default() -> bool {

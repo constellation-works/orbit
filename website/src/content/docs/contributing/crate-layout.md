@@ -10,11 +10,11 @@ sidebar:
 | Crate | Responsibility |
 |-------|----------------|
 | `orbit-cli` | Clap entry point that composes Core, Cmd, Config, Registry, MCP, and Web. |
-| `orbit-cmd` | CLI-facing command layer split out of `orbit-core`: doctor, migrate, diagnostics, hooks, agent rules, and direct v2 activity runs. Exposes `*Commands` extension traits over `OrbitRuntime`. |
+| `orbit-cmd` | CLI-facing command layer split out of `orbit-core`: doctor, migrate, diagnostics, agent rules, host commands, MCP client config, browser kit, and update. Exposes `*Commands` extension traits over `OrbitRuntime`. |
 | `orbit-core` | Runtime bootstrap, default asset seeding, and runtime-integrated command modules. Provides `OrbitRuntime` to `orbit-cmd`, `orbit-cli`, and `orbit-web`. |
 | `orbit-config` | Owns `config.toml`: the fixed-key registry, workspace-over-global layering, source provenance, resolved views, comment-preserving edits, and default-config seeding. Depends only on `orbit-types` and `orbit-common`. |
 | `orbit-automation` | Scheduling for routines and auto-tasks: definition discovery and validation, due evaluation, overlap and retry coordination, and the shared before-PR review coverage rules. Depends only on `orbit-store`, `orbit-common`, and `orbit-types`. |
-| `orbit-registry` | This machine's identity and the logical workspace catalog, with validation and atomic file persistence. |
+| `orbit-registry` | This machine's identity, the logical workspace catalog, task-publication bindings, and the registered remote hosts, with validation and atomic file persistence. |
 | `orbit-web` | HTTP API, embedded dashboard UI, dashboard mutations, and the SSH web connection, built on Core and Registry. |
 | `orbit-engine` | Activity and job execution, template rendering, and retry. Owns the CLI agent subprocess runner, which uses `orbit-agent::{Agent, AgentConfig}` directly. |
 | `orbit-agent` | Provider CLI runtimes under `providers/<name>/`, stdout projection and response helpers, and the audit types and redacted blob sinks persisted by `orbit-engine`. Depends only on `orbit-common` and `orbit-types`. |
@@ -22,7 +22,7 @@ sidebar:
 | `orbit-policy` | Filesystem-scoping policy engine: `FsProfile` resolution and `denyRead` / `denyModify` evaluation. |
 | `orbit-exec` | Process, sandbox, and supervision primitives for running shell commands under an `FsProfile`. |
 | `orbit-store` | Generic YAML and SQLite stores, connection primitives, the namespaced feature-migration ledger, and immutable historical bootstrap migrations. Feature crates own their active schemas and queries. |
-| `orbit-mcp` | RMCP framing, canonical discovery, server identity context, and the direct SSH stdio proxy. |
+| `orbit-mcp` | RMCP stdio and TCP transports, canonical discovery, server identity context, the direct SSH stdio proxy, and the federated mux. |
 | `orbit-search` | Workspace-local lexical task search: SQLite FTS5 chunks ranked by BM25, kept in sync as tasks change. |
 | `orbit-types` | Lowest contract layer: shared types grouped by domain (`identity`, `workspace`, `task`, `workflow`, `policy`, `resource`, `tool`, `telemetry`, `record`, `plugin`, `desktop`) and `OrbitId`. No I/O and no Orbit crate dependencies. |
 | `orbit-common` | Mechanism crate above `orbit-types`: `OrbitError` plus governance, filesystem, process, storage, protocol, observability, and security helpers. |
@@ -39,11 +39,13 @@ flowchart LR
   CLI --> Web["orbit-web"]
   Cmd --> Core
   Cmd --> Config
-  Cmd --> Engine
+  Cmd --> MCP
+  Cmd --> Tools
   Cmd --> Registry
   Cmd --> Store
   Core --> Config
   Core --> Engine["orbit-engine"]
+  Core --> Exec
   Core --> Automation["orbit-automation"]
   Automation --> Store
   Automation --> Common
@@ -68,6 +70,7 @@ flowchart LR
   MCP --> Registry
   MCP --> Tools
   Registry --> Common
+  Registry --> Config
   Web --> Core
   Web --> Cmd
   Web --> Registry

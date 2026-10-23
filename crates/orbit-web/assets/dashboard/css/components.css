@@ -588,3 +588,56 @@ table.scoreboard-table td.agent.clickable:hover { color: var(--accent); }
   background: var(--bg);
   flex-shrink: 0;
 }
+
+/* infoHint(): a small circled "i" after a value; its caveat shows in a bubble
+   under the row on hover or focus. */
+.info-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 6px;
+  vertical-align: -2px;
+  border: 1px solid var(--fg-mute);
+  border-radius: 50%;
+  color: var(--fg-mute);
+  font: 600 9px/1 var(--font-sans);
+  cursor: help;
+}
+.info-hint::before { content: "i"; }
+.info-hint.warn { border-color: var(--warn-fg); color: var(--warn-fg); }
+.info-hint:hover,
+.info-hint:focus-visible { color: var(--fg); border-color: var(--fg-dim); }
+.info-hint:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.info-hint-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.info-hint:hover > .info-hint-text,
+.info-hint:focus > .info-hint-text {
+  left: var(--hint-left, 0);
+  right: 0;
+  top: calc(100% + 2px);
+  z-index: 6;
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: visible;
+  clip-path: none;
+  white-space: pre-line;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  color: var(--fg-soft);
+  font: 400 12px/1.45 var(--font-sans);
+  overflow-wrap: anywhere;
+  text-align: left;
+}

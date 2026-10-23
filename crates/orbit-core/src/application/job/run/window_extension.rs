@@ -33,7 +33,9 @@ use super::worker_limit::{
 };
 use crate::OrbitRuntime;
 use crate::application::distributed::PULL_DRAIN_JOB;
-use crate::application::workflow::{AUTO_WORKFLOW_ALIAS, MAX_DRAIN_WINDOW_SECONDS, find_workflow};
+use crate::application::workflow::{
+    AUTO_WORKFLOW_ALIAS, MAX_DRAIN_WINDOW_SECONDS, find_workflow, validate_drain_window,
+};
 
 const EXTEND_REQUEST_AUDIT: &str = "pipeline.run.window_extend.requested";
 const EXTEND_COMPLETION_AUDIT: &str = "pipeline.run.window_extend.completed";
@@ -121,8 +123,9 @@ impl OrbitRuntime {
         let request_id = audit_execution_id("window_extend");
         let outcome = self.apply_drain_window_extension(request, &request_id);
         match &outcome {
-            Ok(change) => self.record_extension_completion(
-                request.run_id,
+            Ok(change) => self.record_drain_control_completion(
+                EXTEND_COMPLETION_AUDIT,
+                Some(request.run_id),
                 &request_id,
                 change.outcome.as_str(),
                 json!({
@@ -134,8 +137,9 @@ impl OrbitRuntime {
                 }),
                 None,
             )?,
-            Err(error) => self.record_extension_completion(
-                request.run_id,
+            Err(error) => self.record_drain_control_completion(
+                EXTEND_COMPLETION_AUDIT,
+                Some(request.run_id),
                 &request_id,
                 "rejected",
                 json!({ "for_seconds": request.for_seconds }),
@@ -177,7 +181,7 @@ impl OrbitRuntime {
                 run.job_id
             )));
         }
-        if !(1..=MAX_DRAIN_WINDOW_SECONDS).contains(&request.for_seconds) {
+        if request.for_seconds == 0 || validate_drain_window(Some(request.for_seconds)).is_err() {
             return Err(OrbitError::InvalidInput(format!(
                 "the extension must be between 1 second and {MAX_DRAIN_WINDOW_SECONDS} seconds (24 hours)"
             )));
@@ -228,7 +232,7 @@ impl OrbitRuntime {
                     request.reason.map(str::to_string),
                 );
                 let revision = state
-                    .drain_window_extension
+                    .pull_drain.drain_window_extension
                     .as_ref()
                     .map_or(0, |extension| extension.revision);
                 decided = Some((
@@ -295,8 +299,11 @@ impl OrbitRuntime {
                 closed = pull_window_closed(state, forwarded_expired, Utc::now());
                 // Only a stamped window can be extended, so only its close
                 // needs recording; an unstamped one keeps the forwarded answer.
-                if closed && state.pull_window_close.is_none() && drain_deadline(state).is_some() {
-                    state.pull_window_close = Some(PullWindowClose {
+                if closed
+                    && state.pull_drain.pull_window_close.is_none()
+                    && drain_deadline(state).is_some()
+                {
+                    state.pull_drain.pull_window_close = Some(PullWindowClose {
                         closed_at: Utc::now(),
                     });
                     state.updated_at = Utc::now();
@@ -338,39 +345,6 @@ impl OrbitRuntime {
             None,
         )
     }
-
-    fn record_extension_completion(
-        &self,
-        run_id: &str,
-        request_id: &str,
-        outcome: &str,
-        detail: Value,
-        error: Option<String>,
-    ) -> Result<(), OrbitError> {
-        let mut arguments = json!({
-            "request_id": request_id,
-            "run_id": run_id,
-            "outcome": outcome,
-            "completed_at": Utc::now().to_rfc3339(),
-        });
-        if let (Some(target), Some(detail)) = (arguments.as_object_mut(), detail.as_object()) {
-            for (key, value) in detail {
-                target.insert(key.clone(), value.clone());
-            }
-        }
-        self.record_pipeline_audit(
-            EXTEND_COMPLETION_AUDIT,
-            Some(run_id),
-            None,
-            if outcome == "rejected" {
-                AuditEventStatus::Failure
-            } else {
-                AuditEventStatus::Success
-            },
-            arguments,
-            error,
-        )
-    }
 }
 
 /// The deadline in force for a drain: the one its `open_window` step stamped,
@@ -389,7 +363,7 @@ pub(crate) fn pull_window_closed(
     forwarded_expired: bool,
     now: DateTime<Utc>,
 ) -> bool {
-    if state.pull_window_close.is_some() {
+    if state.pull_drain.pull_window_close.is_some() {
         return true;
     }
     drain_deadline(state).map_or(forwarded_expired, |deadline| {
@@ -423,20 +397,20 @@ fn refuse_closed_drain(
             "job run '{run_id}' is being cancelled; an extension does not reopen it, so start a new drain"
         )));
     }
-    if let Some(stop) = &state.drain_admissions_stop {
+    if let Some(stop) = &state.pull_drain.drain_admissions_stop {
         return Err(OrbitError::JobValidation(format!(
             "job run '{run_id}' had its admissions stopped by {} at {}; an extension does not reopen them, so start a new drain",
             stop.actor,
             rfc3339(stop.stopped_at)
         )));
     }
-    if let Some(close) = &state.pull_window_close {
+    if let Some(close) = &state.pull_drain.pull_window_close {
         return Err(OrbitError::JobValidation(format!(
             "job run '{run_id}' closed its window at {}: its last pass found nothing left to settle and ended admissions, so start a new drain",
             rfc3339(close.closed_at)
         )));
     }
-    if state.pull_single_pass.is_some()
+    if state.pull_drain.pull_single_pass.is_some()
         || submitted_window_seconds(&state.initial_input)
             .or_else(|| run.input.as_ref().and_then(submitted_window_seconds))
             .is_none_or(|seconds| seconds <= 0.0)

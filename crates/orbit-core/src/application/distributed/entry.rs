@@ -135,7 +135,7 @@ pub struct DrainEntryAdmission {
     /// The single capacity reading legacy dispatch and pull both allocate
     /// against.
     pub occupancy: orbit_store::contracts::DrainLeafOccupancy,
-    /// The owner's `review.before_pr`. With it on, every claimed PR leaf runs
+    /// Whether the owner's `review.timing` is `before_pr`. With it on, every claimed PR leaf runs
     /// the before-PR review its claim captures [ORB-13908], which is why it
     /// is reported on every decision rather than left for each surface to
     /// look up. After-landing review never affects admission.
@@ -144,9 +144,11 @@ pub struct DrainEntryAdmission {
     /// same ordered ladder `orbit.task.pull` applies, so a preflight and a
     /// retained entry cannot disagree about it.
     pub claim_admission_refusal: Option<String>,
-    /// The host shutdown pending when the decision was taken. An unattended
-    /// entry point is refused for it; an explicit one is admitted with a
-    /// warning, and the drain it starts still holds its own waves.
+    /// The host shutdown pending when the decision was taken, however far
+    /// away it is. An unattended entry point is refused only when it is
+    /// inside `machine.host_shutdown_hold_minutes`; an explicit one is then
+    /// admitted with a warning. A later schedule is reported and does not
+    /// warn or refuse. A drain started during a hold still holds its own waves.
     pub host_shutdown: Option<ScheduledShutdown>,
     /// Host resource pressure holding admissions when the decision was taken
     /// [ORB-13901]. Discovery is refused for it; an explicit task selection or
@@ -229,7 +231,9 @@ impl crate::OrbitRuntime {
                 return Ok(decision);
             }
         }
-        if let Some(shutdown) = decision.host_shutdown.as_ref() {
+        if let Some(shutdown) = decision.host_shutdown.as_ref().filter(|shutdown| {
+            shutdown.holds_admission(Utc::now(), self.host_shutdown_hold_minutes())
+        }) {
             if unattended {
                 decision.refusal = Some(DrainEntryRefusal::HostShutdownScheduled {
                     shutdown: shutdown.clone(),
@@ -338,6 +342,7 @@ impl crate::OrbitRuntime {
                 self.read_run_state(&run.run_id)
                     .ok()
                     .flatten()?
+                    .pull_drain
                     .drain_last_pass
             })
             .filter(|pass| pass.recorded_at >= cutoff)
@@ -346,7 +351,7 @@ impl crate::OrbitRuntime {
 
     /// Whether the claim contract would admit this workspace, by the spec's
     /// own ordered ladder. Reported rather than raised: a workspace the claim
-    /// contract refuses — `review.before_pr` on a local ship mode, say —
+    /// contract refuses — `review.timing = before_pr` on a local ship mode, say —
     /// still ships through its legacy leaf, and saying so is what keeps the
     /// two facts from being confused.
     fn claim_contract_refusal(&self, ship: &AdmissionShipContract) -> Option<String> {
@@ -373,6 +378,8 @@ impl crate::OrbitRuntime {
             ship: ship.clone(),
             crews: None,
             os: None,
+            browser_kit: false,
+            admissible: None,
         };
         orbit_store::admission_refusal(&identity, &request, owner_binary_version())
             .map(|refusal| refusal.as_str().to_string())

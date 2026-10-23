@@ -33,7 +33,7 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&global).unwrap();
@@ -318,4 +318,98 @@ impl Drop for WriteFault {
             )
             .unwrap();
     }
+}
+
+/// Delivery preparations authenticate unchanged candidates and the full fresh
+/// observation through the same public host boundary as rewritten candidates.
+#[test]
+fn fresh_preparation_certificates_bind_all_observations_across_restart() {
+    let fixture = fixture();
+    let certify = |runtime: &OrbitRuntime, step: &str, base: &str, extra: Value| {
+        let attempt = runtime
+            .begin_rebase_recovery_attempt(
+                &fixture.run,
+                step,
+                &RebaseRecoveryAttemptScope {
+                    workspace_path: fixture.workspace(),
+                    head_sha_before: CANDIDATE.into(),
+                    target_base_sha: base.into(),
+                },
+            )
+            .unwrap();
+        let mut payload = json!({
+            "run_id":fixture.run, "step_id":step, "workspace_path":fixture.workspace(),
+            "head_sha_before":CANDIDATE, "head_sha":CANDIDATE, "target_base_sha":base,
+            "base_sha":base, "recovery_attempt":attempt, "task_ids":["T-REBASE"],
+            "head":"candidate", "remote_sha":HEAD_A, "base_ref":"origin/agent-main",
+        });
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        runtime
+            .checkpoint_rebase_recovery(&fixture.run, step, &payload)
+            .unwrap();
+        payload
+    };
+    let initial = certify(
+        &fixture.runtime,
+        "prepare_branch",
+        PINNED,
+        json!({"kind":"delivery_preparation"}),
+    );
+    let fresh = certify(
+        &fixture.runtime,
+        "sync_base_preparation",
+        ADVANCED,
+        json!({
+            "kind":"delivery_preparation_refresh", "source_preparation":initial,
+            "previous_base_sha":PINNED, "deadline_ms":121000,
+            "original_error":"prepared base moved", "attempt_trace":[{"previous_base_sha":PINNED,"base_sha":ADVANCED}],
+        }),
+    );
+    let restarted =
+        OrbitRuntime::from_roots(&fixture.global, &fixture.repo.join(".orbit")).unwrap();
+    assert!(
+        restarted
+            .verify_rebase_recovery(&fixture.run, "prepare_branch", &initial)
+            .unwrap()
+    );
+    assert!(
+        restarted
+            .verify_rebase_recovery(&fixture.run, "sync_base_preparation", &fresh)
+            .unwrap()
+    );
+    for field in [
+        "run_id",
+        "step_id",
+        "task_ids",
+        "workspace_path",
+        "head",
+        "head_sha",
+        "remote_sha",
+        "base_ref",
+        "base_sha",
+        "previous_base_sha",
+        "source_preparation",
+        "deadline_ms",
+        "original_error",
+        "attempt_trace",
+    ] {
+        let mut altered = fresh.clone();
+        altered[field] = json!("foreign");
+        assert!(
+            !restarted
+                .verify_rebase_recovery(&fixture.run, "sync_base_preparation", &altered)
+                .unwrap_or(false),
+            "altered {field} must never authenticate a fresh preparation"
+        );
+    }
+    assert_eq!(
+        restarted
+            .rebase_recovery_attempts(&fixture.run, "sync_base_preparation")
+            .unwrap()
+            .len(),
+        1
+    );
 }

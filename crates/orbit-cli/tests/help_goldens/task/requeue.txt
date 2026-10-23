@@ -1,0 +1,42 @@
+Requeue a blocked task onto its published candidate
+
+Usage: orbit task requeue [OPTIONS] --reason <REASON> <ID>
+
+Arguments:
+  <ID>
+          Blocked task to requeue
+
+Options:
+      --host <HOST>
+          Host that `--workspace` names, by registered host name or `machine_id` (see `orbit host list`). Orbit reads that host's live workspace list and uses the selector it lists for the workspace. Without it, a task id goes to the host its prefix names
+
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --reason <REASON>
+          Explanation recorded with the operator decision
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --discard-candidate
+          Discard the published or kept candidate and rerun from scratch
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')

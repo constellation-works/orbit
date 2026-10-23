@@ -161,30 +161,6 @@ fn disabled_external_tool_remains_inspectable_without_becoming_executable() {
 }
 
 #[test]
-fn tool_list_all_shows_inactive_lock_reservation_with_required_input_shape() {
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    let work = temp.path().join("work");
-    std::fs::create_dir_all(&home).expect("create home");
-    git_repo::init(&work);
-
-    orbit_at_home(&work, &home)
-        // `--format table` because `assert_cmd` captures through a pipe, where
-        // `auto` resolves to the plain form and suppresses the header
-        // (`specs/output-modes.md` §2). The STATUS *column* is what this test
-        // is about, and naming the mode is how a piped caller asks for it.
-        .args(["tool", "list", "--all", "--format", "table"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("orbit.task.locks.reserve"))
-        .stdout(predicate::str::contains("STATUS"))
-        .stdout(predicate::str::contains("inactive"))
-        .stdout(predicate::str::contains(
-            "Exactly one of `task_ids` or `files`",
-        ));
-}
-
-#[test]
 fn tool_list_json_hides_inactive_tools_by_default() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -212,6 +188,27 @@ fn tool_list_json_hides_inactive_tools_by_default() {
             "inactive tool must not be visible through default `orbit tool list`: {inactive}"
         );
     }
+
+    let task_show = tools
+        .iter()
+        .find(|tool| tool["name"] == "orbit.task.show")
+        .expect("task show tool");
+    let parameters = task_show["parameters"]
+        .as_array()
+        .expect("parameters array");
+    assert!(
+        parameters
+            .iter()
+            .all(|param| { !matches!(param["name"].as_str(), Some("with_context" | "max_docs")) })
+    );
+    assert!(parameters.iter().any(|param| {
+        param["name"] == "workspace"
+            && param["param_type"] == "string"
+            && param["required"] == false
+            && param["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("resolved globally by default"))
+    }));
 }
 
 #[test]
@@ -272,25 +269,7 @@ fn tool_list_json_all_includes_inactive_tools_with_status() {
         assert_eq!(tool["status"], "inactive");
         assert_eq!(tool["active"], false);
     }
-}
 
-#[test]
-fn tool_list_json_all_includes_parameter_schema_for_inactive_tools() {
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    let work = temp.path().join("work");
-    std::fs::create_dir_all(&home).expect("create home");
-    git_repo::init(&work);
-
-    let output = orbit_at_home(&work, &home)
-        .args(["tool", "list", "--json", "--all"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-
-    let tools: Vec<serde_json::Value> = serde_json::from_slice(&output).expect("tool list JSON");
     let mint = tools
         .iter()
         .find(|tool| tool["name"] == "orbit.auto_task.mint")
@@ -300,6 +279,13 @@ fn tool_list_json_all_includes_parameter_schema_for_inactive_tools() {
         .iter()
         .find(|tool| tool["name"] == "orbit.task.locks.reserve")
         .expect("reserve tool");
+    let description = reserve["description"]
+        .as_str()
+        .expect("reserve description");
+    assert!(
+        description.contains("Exactly one of `task_ids` or `files`"),
+        "{description}"
+    );
     let parameters = reserve["parameters"].as_array().expect("parameters array");
     assert!(parameters.iter().any(|param| {
         param["name"] == "task_ids"
@@ -310,45 +296,6 @@ fn tool_list_json_all_includes_parameter_schema_for_inactive_tools() {
         param["name"] == "files"
             && param["param_type"] == "string_list"
             && param["required"] == false
-    }));
-}
-
-#[test]
-fn tool_list_json_excludes_removed_task_show_context_parameters() {
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    let work = temp.path().join("work");
-    std::fs::create_dir_all(&home).expect("create home");
-    git_repo::init(&work);
-
-    let output = orbit_at_home(&work, &home)
-        .args(["tool", "list", "--json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-
-    let tools: Vec<serde_json::Value> = serde_json::from_slice(&output).expect("tool list JSON");
-    let task_show = tools
-        .iter()
-        .find(|tool| tool["name"] == "orbit.task.show")
-        .expect("task show tool");
-    let parameters = task_show["parameters"]
-        .as_array()
-        .expect("parameters array");
-    assert!(
-        parameters
-            .iter()
-            .all(|param| { !matches!(param["name"].as_str(), Some("with_context" | "max_docs")) })
-    );
-    assert!(parameters.iter().any(|param| {
-        param["name"] == "workspace"
-            && param["param_type"] == "string"
-            && param["required"] == false
-            && param["description"]
-                .as_str()
-                .is_some_and(|description| description.contains("resolved globally by default"))
     }));
 }
 
@@ -387,23 +334,36 @@ fn tool_run_rejects_inactive_tools() {
         .assert()
         .success();
     // Exercise both registry refusal sites through their real CLI callers.
-    for args in [
-        vec![
+    let refused = orbit_at_home(&work, &home)
+        .args([
             "tool",
             "run",
             "orbit.friction.list",
             "--input",
             "{\"model\":\"codex\"}",
-        ],
-        vec!["tool", "enable", "orbit.friction.list"],
-    ] {
-        orbit_at_home(&work, &home)
-            .args(args)
-            .assert()
-            .failure()
-            .stdout(predicate::str::is_empty())
-            .stderr(predicate::str::contains("policy denied"));
-    }
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("policy denied"))
+        .get_output()
+        .stderr
+        .clone();
+    let refusal = String::from_utf8_lossy(&refused);
+    assert!(
+        refusal.contains("orbit.search"),
+        "the refusal must name the supported agent listing:\n{refusal}"
+    );
+    assert!(
+        !refusal.contains("operator"),
+        "the refusal must not offer a capability override:\n{refusal}"
+    );
+    orbit_at_home(&work, &home)
+        .args(["tool", "enable", "orbit.friction.list"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("policy denied"));
     let output = orbit_at_home(&work, &home)
         .args(["audit", "list", "--json"])
         .assert()
@@ -429,6 +389,45 @@ fn tool_run_rejects_inactive_tools() {
             "inactive {subcommand} is a policy denial"
         );
     }
+
+    // The listing the refusal names answers the same agent: a friction filed
+    // here comes back from `orbit.search` with no query.
+    let filed = orbit_at_home(&work, &home)
+        .args([
+            "tool",
+            "run",
+            "orbit.friction.add",
+            "--input",
+            "{\"title\":\"Inactive listing probe\",\"body\":\"Filed to check the listing the refusal names.\",\"model\":\"codex\"}",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let filed: Value = serde_json::from_slice(&filed).unwrap();
+    let listed = orbit_at_home(&work, &home)
+        .args([
+            "tool",
+            "run",
+            "orbit.search",
+            "--input",
+            "{\"kind\":\"friction\",\"model\":\"codex\"}",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let listing: Value = serde_json::from_slice(&listed).unwrap();
+    assert!(
+        listing["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|hit| hit["id"] == filed["id"]),
+        "the search the refusal names must list the friction just filed:\n{listing}"
+    );
 }
 
 /// [ORB-12581] `orbit.drain.claims` is off the MCP surface and has no

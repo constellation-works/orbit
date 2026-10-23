@@ -42,6 +42,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/vendor/purify.min.js"),
     ),
     (
+        "/static/js/fleet-drains.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/fleet-drains.js"),
+    ),
+    (
         "/static/js/host-resources.js",
         JS,
         include_bytes!("../assets/dashboard/js/host-resources.js"),
@@ -92,6 +97,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/markdown.js"),
     ),
     (
+        "/static/js/task-create.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-create.js"),
+    ),
+    (
         "/static/js/tasks.js",
         JS,
         include_bytes!("../assets/dashboard/js/tasks.js"),
@@ -112,6 +122,31 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/codebase.js"),
     ),
     (
+        "/static/js/agents.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/agents.js"),
+    ),
+    (
+        "/static/js/agents-implementers.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/agents-implementers.js"),
+    ),
+    (
+        "/static/js/agents-orchestrators.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/agents-orchestrators.js"),
+    ),
+    (
+        "/static/js/agents-reviewers.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/agents-reviewers.js"),
+    ),
+    (
+        "/static/js/agents-pilots.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/agents-pilots.js"),
+    ),
+    (
         "/static/js/scoreboard.js",
         JS,
         include_bytes!("../assets/dashboard/js/scoreboard.js"),
@@ -122,9 +157,19 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/reliability.js"),
     ),
     (
+        "/static/js/sparkline.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/sparkline.js"),
+    ),
+    (
         "/static/js/metrics.js",
         JS,
         include_bytes!("../assets/dashboard/js/metrics.js"),
+    ),
+    (
+        "/static/js/resources.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/resources.js"),
     ),
     (
         "/static/js/doctor.js",
@@ -152,6 +197,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/router.js"),
     ),
     (
+        "/static/js/polling.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/polling.js"),
+    ),
+    (
         "/static/js/runs.js",
         JS,
         include_bytes!("../assets/dashboard/js/runs.js"),
@@ -170,6 +220,16 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         "/static/js/drain-waits.js",
         JS,
         include_bytes!("../assets/dashboard/js/drain-waits.js"),
+    ),
+    (
+        "/static/js/drain-start.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/drain-start.js"),
+    ),
+    (
+        "/static/js/drain-started.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/drain-started.js"),
     ),
     (
         "/static/js/task-runtime.js",
@@ -197,7 +257,7 @@ pub(super) const DASHBOARD_CSP: &str = concat!(
     "script-src 'self'; ",
     "style-src 'self' 'unsafe-inline'; ",
     "font-src 'self'; ",
-    "img-src 'self' data:; ",
+    "img-src 'self' data: blob:; ",
     "connect-src 'self'; ",
     "object-src 'none'; ",
     "base-uri 'none'; ",
@@ -325,16 +385,4 @@ fn accepts_gzip(value: Option<&HeaderValue>) -> bool {
     }
 
     gzip_quality.or(wildcard_quality).unwrap_or(0.0) > 0.0
-}
-
-/// Serve the embedded dashboard file at `route` as its route handler would.
-#[cfg(test)]
-pub(super) fn serve_dashboard_file(route: &str, headers: &HeaderMap) -> Response {
-    let &(_, content_type, body) = DASHBOARD_FILES
-        .iter()
-        .find(|(candidate, _, _)| *candidate == route)
-        .unwrap_or_else(|| panic!("no embedded dashboard file is routed at {route}"));
-    let asset = DashboardAsset::new(content_type, body)
-        .unwrap_or_else(|error| panic!("build dashboard asset {route}: {error}"));
-    dashboard_asset_response(&asset, headers)
 }

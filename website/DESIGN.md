@@ -114,7 +114,7 @@ default chrome (auto title, sidebar, TOC).
   dashboard. It stays on its poster frame under
   `prefers-reduced-motion: reduce`, its caption dates the capture so its counts
   read as a snapshot, and its `aria-label` narrates it. The source lives in
-  `marketing/media/video/orbit-dashboard-tour-v2`; the site serves a web re-encode
+  `marketing/media/video/orbit-dashboard-tour-v3`; the site serves a web re-encode
   from `public/media/`. Public cuts omit production task, friction and run
   identifiers, including those in source screenshots, address bars and
   diagnostic prose. Sanitize before camera pans and encoding; inspect decoded

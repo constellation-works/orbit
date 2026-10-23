@@ -22,17 +22,17 @@ pub(super) const HIGH_WATER_UNKNOWN_AUTHORITY: &str = "high_water_unknown";
 
 fn high_water_unknown(conn: &Connection) -> Result<bool, OrbitError> {
     conn.prepare_cached("SELECT EXISTS(SELECT 1 FROM allocator_state WHERE authority = ?1)")
-        .map_err(|e| OrbitError::Store(e.to_string()))?
+        .map_err(sqlite_store_error)?
         .query_row([HIGH_WATER_UNKNOWN_AUTHORITY], |row| row.get(0))
-        .map_err(|e| OrbitError::Store(e.to_string()))
+        .map_err(sqlite_store_error)
 }
 
 fn read_allocator_next_number(conn: &Connection) -> Result<u32, OrbitError> {
     let next: i64 = conn
         .prepare_cached("SELECT next_number FROM allocator_state WHERE authority = 'local'")
-        .map_err(|e| OrbitError::Store(e.to_string()))?
+        .map_err(sqlite_store_error)?
         .query_row([], |row| row.get(0))
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     if next > i64::from(ORB_TASK_ID_MAX) {
         return Err(OrbitError::Store("ORB task id allocator exhausted".into()));
     }
@@ -60,12 +60,12 @@ pub(super) fn known_task_prefixes(conn: &Connection) -> Result<BTreeSet<String>,
     let mut prefixes = BTreeSet::from([active_task_prefix(conn)?]);
     let mut statement = conn
         .prepare_cached("SELECT task_id FROM task_bundle_bindings")
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let ids = statement
         .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     for id in ids {
-        let id = id.map_err(|e| OrbitError::Store(e.to_string()))?;
+        let id = id.map_err(sqlite_store_error)?;
         if let Some(prefix) = task_id_prefix(&id) {
             prefixes.insert(prefix.to_string());
         }
@@ -75,9 +75,9 @@ pub(super) fn known_task_prefixes(conn: &Connection) -> Result<BTreeSet<String>,
 
 pub(super) fn active_task_prefix(conn: &Connection) -> Result<String, OrbitError> {
     conn.prepare_cached("SELECT task_prefix FROM allocator_state WHERE authority = 'local'")
-        .map_err(|e| OrbitError::Store(e.to_string()))?
+        .map_err(sqlite_store_error)?
         .query_row([], |row| row.get(0))
-        .map_err(|e| OrbitError::Store(e.to_string()))
+        .map_err(sqlite_store_error)
 }
 
 /// Which of `task_ids` have a registered bundle, resolved by one prepared
@@ -94,15 +94,15 @@ pub(super) fn registered_task_ids(
         .prepare(&format!(
             "SELECT task_id FROM task_bundle_bindings WHERE task_id IN ({placeholders})"
         ))
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let rows = stmt
         .query_map(params_from_iter(task_ids.iter()), |row| {
             row.get::<_, String>(0)
         })
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let mut registered = BTreeSet::new();
     for row in rows {
-        registered.insert(row.map_err(|e| OrbitError::Store(e.to_string()))?);
+        registered.insert(row.map_err(sqlite_store_error)?);
     }
     Ok(registered)
 }
@@ -120,11 +120,11 @@ pub(super) fn task_prefix_is_registered(
 ) -> Result<bool, OrbitError> {
     let exists: i64 = conn
         .prepare_cached(TASK_PREFIX_PROBE_SQL)
-        .map_err(|e| OrbitError::Store(e.to_string()))?
+        .map_err(sqlite_store_error)?
         .query_row(params![format!("{prefix}-"), format!("{prefix}.")], |row| {
             row.get(0)
         })
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     Ok(exists != 0)
 }
 
@@ -168,13 +168,11 @@ impl TaskRegistryStore {
             return Ok(Vec::new());
         }
         let count = i64::try_from(count).map_err(|e| OrbitError::Store(e.to_string()))?;
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         if workspace_by_id(&tx, &partition_id)?.is_none() {
             return Err(OrbitError::not_found(NotFoundKind::Workspace, partition_id));
@@ -196,7 +194,7 @@ impl TaskRegistryStore {
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         // `next + count - 1` is the last id this reservation hands out, so a run
         // that would cross the ceiling is refused whole rather than part-served.
         if next.saturating_add(count - 1) > i64::from(ORB_TASK_ID_MAX) {
@@ -206,8 +204,8 @@ impl TaskRegistryStore {
             "UPDATE allocator_state SET next_number = ?1, updated_at = ?2 WHERE authority = 'local'",
             params![next.saturating_add(count), now_string()],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
+        tx.commit().map_err(sqlite_store_error)?;
 
         (next..next.saturating_add(count))
             .map(|number| {
@@ -239,35 +237,33 @@ impl TaskRegistryStore {
                     [],
                     |row| row.get(0),
                 )
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
+                .map_err(sqlite_store_error)?;
             if current == task_prefix {
                 return Ok(());
             }
         }
 
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let (current, next): (String, i64) = tx
             .query_row(
                 "SELECT task_prefix, next_number FROM allocator_state WHERE authority = 'local'",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         if current == task_prefix {
-            tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
+            tx.commit().map_err(sqlite_store_error)?;
             return Ok(());
         }
         let task_count: i64 = tx
             .query_row("SELECT COUNT(*) FROM task_bundle_bindings", [], |row| {
                 row.get(0)
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         if current != "ORB" || next != 0 || task_count != 0 {
             return Err(OrbitError::InvalidInput(format!(
                 "task prefix is immutable after allocation begins (registry uses '{current}', host identity requests '{task_prefix}')"
@@ -277,8 +273,8 @@ impl TaskRegistryStore {
             "UPDATE allocator_state SET task_prefix = ?1, updated_at = ?2 WHERE authority = 'local'",
             params![task_prefix, now_string()],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
+        .map_err(sqlite_store_error)?;
+        tx.commit().map_err(sqlite_store_error)
     }
 
     /// The prefix this host mints under. Task authority follows the prefix, so
@@ -287,9 +283,9 @@ impl TaskRegistryStore {
     pub fn local_task_prefix(&self) -> Result<String, OrbitError> {
         let conn = self.read()?;
         conn.prepare_cached("SELECT task_prefix FROM allocator_state WHERE authority = 'local'")
-            .map_err(|e| OrbitError::Store(e.to_string()))?
+            .map_err(sqlite_store_error)?
             .query_row([], |row| row.get(0))
-            .map_err(|e| OrbitError::Store(e.to_string()))
+            .map_err(sqlite_store_error)
     }
 
     /// The prefix this registry has already minted ids under, when allocation
@@ -306,14 +302,14 @@ impl TaskRegistryStore {
             .prepare_cached(
                 "SELECT task_prefix, next_number FROM allocator_state WHERE authority = 'local'",
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?
+            .map_err(sqlite_store_error)?
             .query_row([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let bound: i64 = conn
             .query_row("SELECT COUNT(*) FROM task_bundle_bindings", [], |row| {
                 row.get(0)
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         if next == 0 && bound == 0 {
             return Ok(None);
         }
@@ -356,13 +352,13 @@ impl TaskRegistryStore {
         let conn = self.read()?;
         let mut statement = conn
             .prepare_cached("SELECT task_id FROM task_bundle_bindings")
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let ids = statement
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let mut max = None;
         for id in ids {
-            let id = id.map_err(|e| OrbitError::Store(e.to_string()))?;
+            let id = id.map_err(sqlite_store_error)?;
             if let Some(number) = parse_orb_task_number(&id) {
                 max = Some(max.map_or(number, |current: u32| current.max(number)));
             }
@@ -378,13 +374,11 @@ impl TaskRegistryStore {
     /// also the operator's assertion of the issued-id high-water mark, so it
     /// lifts the refusal of a registry recreated over existing partitions.
     pub fn seed_allocator_start(&self, start: u32) -> Result<AllocatorSeedOutcome, OrbitError> {
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let previous = read_allocator_next_number(&tx)?;
         if start < previous {
             return Err(OrbitError::InvalidInput(format!(
@@ -400,7 +394,7 @@ impl TaskRegistryStore {
             [HIGH_WATER_UNKNOWN_AUTHORITY],
         )
         .map_err(sqlite_store_error)?;
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
+        tx.commit().map_err(sqlite_store_error)?;
         Ok(AllocatorSeedOutcome {
             previous,
             next: start,
@@ -413,9 +407,7 @@ impl TaskRegistryStore {
     /// highest landed id.
     pub fn bump_allocator_to_at_least(&self, min_next: u32) -> Result<(), OrbitError> {
         let target = min_next;
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -431,28 +423,26 @@ impl TaskRegistryStore {
     /// `u32::MAX + 1`, which marks exhaustion after the final valid ID.
     pub(crate) fn bump_allocator_past_task_number(&self, number: u32) -> Result<(), OrbitError> {
         let target = i64::from(number) + 1;
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let previous: i64 = tx
             .query_row(
                 "SELECT next_number FROM allocator_state WHERE authority = 'local'",
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         if target > previous {
             tx.execute(
                 "UPDATE allocator_state SET next_number = ?1, updated_at = ?2 WHERE authority = 'local'",
                 params![target, now_string()],
             )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         }
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
+        tx.commit().map_err(sqlite_store_error)
     }
 
     /// Restore an allocator value after a larger workflow failed after its
@@ -464,13 +454,11 @@ impl TaskRegistryStore {
         expected_current: u32,
         previous: u32,
     ) -> Result<(), OrbitError> {
-        let mut conn = self
-            .conn
-            .lock()
+        let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let current = read_allocator_next_number(&tx)?;
         if current != expected_current {
             return Err(OrbitError::Store(format!(
@@ -485,6 +473,6 @@ impl TaskRegistryStore {
         if previous != current {
             set_allocator_next_number(&tx, previous)?;
         }
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
+        tx.commit().map_err(sqlite_store_error)
     }
 }

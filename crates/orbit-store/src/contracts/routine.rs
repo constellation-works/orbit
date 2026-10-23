@@ -15,8 +15,9 @@ pub enum RoutineFireState {
     Dispatched,
     /// The dispatched run finished successfully.
     Succeeded,
-    /// The scheduled slot was consumed without dispatch because a workspace
-    /// drain already owned the coordinator slot.
+    /// The scheduled slot was consumed without dispatch. A workspace drain
+    /// already owned the coordinator slot, or `missed_run: skip` recorded a
+    /// gap. `detail` carries the reason.
     Skipped,
     /// The dispatched run finished in failure.
     Failed,
@@ -85,6 +86,19 @@ pub struct RoutineFireIntentParams {
     pub attempt: u32,
     /// Name of the source workspace the definition was loaded from.
     pub source_workspace: String,
+}
+
+/// Attempt occupancy for one scheduled slot.
+///
+/// `highest` includes skipped rows, which occupy the idempotency key.
+/// `non_skipped` counts real tries. A drain yield that recorded `skipped`
+/// does not spend `retries.max`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoutineSlotAttempts {
+    /// Largest attempt number stored for the slot, skipped rows included.
+    pub highest: u32,
+    /// How many of those rows are not `skipped`.
+    pub non_skipped: u32,
 }
 
 /// One recorded fire attempt.

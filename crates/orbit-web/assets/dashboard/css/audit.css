@@ -1,22 +1,6 @@
-/* Audit tab: its layout, event rows and their detail, the codebase view,
-   summary cards (also used by Health), and the failures-by-tool cards. */
-
-@media (min-width: 901px) {
-  .tab-pane[data-tab="audit"] > main.tasks-layout {
-    align-items: stretch;
-  }
-  #audit-pane {
-    display: flex;
-    flex: 1 1 auto;
-    flex-direction: column;
-    min-height: 0;
-  }
-  #audit-body {
-    flex: 1 1 0;
-    min-height: 0;
-    overflow-y: auto;
-  }
-}
+/* Audit records: Health › Incidents › Events rows and their detail, the
+   Analytics › Codebase view, summary cards (also used by Reliability and
+   Metrics), and the failures-by-tool cards. */
 
 .audit-status {
   font-size: 12.5px;
@@ -118,17 +102,11 @@ tr.audit-detail-row td {
   word-break: break-all;
 }
 
-/* Audit layout: Events beside the audit summary; Codebase takes the full
-   width (setAuditSubtab toggles .audit-full and hides the summary column). */
-main.tasks-layout.audit-layout { grid-template-columns: minmax(0, 2fr) minmax(280px, 1.15fr); }
-main.tasks-layout.audit-layout.audit-full { grid-template-columns: minmax(0, 1fr); }
-.audit-primary,
-.audit-side { display: flex; flex-direction: column; min-width: 0; }
-/* `clip`, unlike `hidden`, makes no scroll container, so the sticky detail
-   panel sticks to the tab pane's scroll. */
-main.audit-layout.audit-full #audit-pane { overflow: clip; }
+/* `clip`, unlike `hidden`, makes no scroll container, so the Codebase
+   detail panel sticks to the tab pane's scroll. */
+#codebase-panel { overflow: clip; }
 
-/* Audit › Codebase. Each ranking has one colour, set on the element that
+/* Analytics › Codebase. Each ranking has one colour, set on the element that
    carries data-ranking (or data-tile) and read by its dots and bars. */
 .codebase-head {
   display: flex;
@@ -269,7 +247,8 @@ main.audit-layout.audit-full #audit-pane { overflow: clip; }
 .codebase-definition { margin: 0; max-width: 720px; font-size: 13px; line-height: 1.5; color: var(--fg-dim); }
 .codebase-list > .codebase-hint,
 .codebase-list > .codebase-causebar,
-.codebase-list > .codebase-legend { margin: 0 16px 12px; }
+.codebase-list > .codebase-legend,
+.codebase-list > .codebase-not-failure { margin: 0 16px 12px; }
 .codebase-rows { margin: 0; padding: 0; list-style: none; }
 .codebase-row {
   display: flex;
@@ -383,6 +362,8 @@ main.audit-layout.audit-full #audit-pane { overflow: clip; }
 .codebase-causebar > [data-kind="attributed"], .codebase-cause[data-kind="attributed"] { --cb-color: #c39bff; }
 .codebase-causebar > [data-kind="unclassified"], .codebase-cause[data-kind="unclassified"] { --cb-color: #5b6470; }
 .codebase-causebar > [data-kind="infrastructure"], .codebase-cause[data-kind="infrastructure"] { --cb-color: #3d8bd9; }
+.codebase-causebar > [data-kind="base_conflict"], .codebase-cause[data-kind="base_conflict"] { --cb-color: #e0a458; }
+.codebase-causebar > [data-kind="manual"], .codebase-cause[data-kind="manual"] { --cb-color: #4fb3a9; }
 .codebase-causebar > span { background: var(--cb-color); }
 .codebase-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 0; list-style: none; }
 .codebase-cause { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: #c4cbd4; }
@@ -410,7 +391,7 @@ main.audit-layout.audit-full #audit-pane { overflow: clip; }
 .codebase-standing > .codebase-metric { grid-column: 1 / -1; }
 .codebase-standing .codebase-bar,
 .codebase-detail-block > .codebase-metric .codebase-bar { flex: 1 1 auto; width: auto; }
-.codebase-standing .codebase-frac { min-width: 0; }
+.codebase-standing .codebase-frac { min-width: 0; white-space: normal; }
 .codebase-task { display: flex; flex-direction: column; gap: 4px; padding: 10px 0; border-top: 1px solid var(--hair); }
 .codebase-task-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .codebase-task-link { font-family: var(--font-mono); font-size: 12.5px; color: var(--accent); }
@@ -432,6 +413,62 @@ main.audit-layout.audit-full #audit-pane { overflow: clip; }
 .codebase-crew-row .codebase-frac { min-width: 0; }
 .codebase-pair-line { margin: 0; font-size: 13.5px; color: #c4cbd4; }
 
+/* Regressions: a chip row per dimension that filters the ranking, the
+   nature x escape and escape x layer cross-tabs, and crew and complexity
+   rates. A cross-tab cell's shade is its `data-level` (0-4) against the
+   table's largest count. */
+.codebase-tile-foot.filter { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #ffb0a6; }
+.codebase-definitions { margin-top: 4px; max-width: 720px; font-size: 12.5px; color: var(--fg-dim); }
+.codebase-definitions > summary { cursor: pointer; color: var(--accent); }
+.codebase-definitions-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 12px; margin: 8px 0 0; }
+.codebase-definitions-list dt { font-weight: 600; color: #c4cbd4; }
+.codebase-definitions-list dd { margin: 0; line-height: 1.5; }
+.codebase-facets { display: flex; flex-direction: column; gap: 8px; margin: 0 16px 12px; padding: 12px 14px; border: 1px solid #262c35; border-radius: 10px; background: #15191f; }
+.codebase-facet-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.codebase-facet-label { flex: 0 0 100%; font-size: 12px; font-weight: 600; color: var(--fg-mute); }
+.codebase-facet {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid #262c35;
+  border-radius: 999px;
+  background: #191e25;
+  color: #c4cbd4;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.codebase-facet:hover { border-color: #3a424d; }
+.codebase-facet.on { border-color: #ff7a6b; background: rgba(255, 122, 107, 0.14); color: var(--fg); }
+.codebase-tag.dim { font-weight: 500; }
+.codebase-link-dims > .codebase-extra { font-family: var(--font-mono); }
+.codebase-breakdowns { display: flex; flex-direction: column; gap: 16px; padding: 14px 16px 16px; border-top: 1px solid var(--hair); }
+.codebase-crosstabs { display: flex; flex-direction: column; gap: 16px; }
+.codebase-slices { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.codebase-crosstab-block,
+.codebase-slice { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.codebase-crosstab-scroll { overflow-x: auto; }
+.codebase-crosstab { border-collapse: collapse; font-size: 12px; }
+.codebase-crosstab th { padding: 4px 8px; font-weight: 500; color: var(--fg-mute); text-align: left; text-transform: none; letter-spacing: normal; white-space: nowrap; }
+.codebase-crosstab thead th { min-width: 48px; vertical-align: bottom; text-align: center; white-space: normal; }
+.codebase-crosstab td { min-width: 40px; padding: 5px 8px; border: 1px solid #1f252d; font-family: var(--font-mono); text-align: center; color: var(--fg-dim); }
+.codebase-crosstab td[data-level="1"] { background: rgba(255, 122, 107, 0.12); color: var(--fg); }
+.codebase-crosstab td[data-level="2"] { background: rgba(255, 122, 107, 0.24); color: var(--fg); }
+.codebase-crosstab td[data-level="3"] { background: rgba(255, 122, 107, 0.4); color: var(--fg); }
+.codebase-crosstab td[data-level="4"] { background: rgba(255, 122, 107, 0.6); color: #fff; font-weight: 600; }
+.codebase-slice .codebase-crew-row { grid-template-columns: minmax(64px, 120px) minmax(0, 1fr) 48px 60px; }
+.codebase-risk-table { border-collapse: collapse; font-size: 12px; }
+.codebase-risk-table th { padding: 4px 8px; font-weight: 500; color: var(--fg-mute); text-align: left; text-transform: none; letter-spacing: normal; }
+.codebase-risk-table thead th { white-space: nowrap; }
+.codebase-risk-table td { padding: 5px 8px; border-top: 1px solid #1f252d; white-space: nowrap; color: var(--fg-dim); }
+.codebase-risk-table tbody th { border-top: 1px solid #1f252d; max-width: 360px; overflow-wrap: anywhere; }
+.codebase-risk-table .codebase-risk-total th { color: var(--fg); }
+.codebase-risk-table .codebase-frac { font-family: var(--font-mono); color: var(--fg-mute); }
+.codebase-risk-none { font-style: italic; }
+
 @media (max-width: 520px) {
   .codebase-head { padding: 12px; }
   .panel > .body.codebase-body { padding: 12px; gap: 12px; }
@@ -445,7 +482,58 @@ main.audit-layout.audit-full #audit-pane { overflow: clip; }
   .codebase-list-head { padding: 14px 12px 10px; }
   .codebase-list > .codebase-hint,
   .codebase-list > .codebase-causebar,
-  .codebase-list > .codebase-legend { margin: 0 12px 12px; }
+  .codebase-list > .codebase-legend,
+  .codebase-list > .codebase-not-failure { margin: 0 12px 12px; }
+  .codebase-facets { margin: 0 12px 12px; }
+  .codebase-breakdowns { padding: 12px; }
+  .codebase-slices { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Reliability > Tools summary: one column of cards. On a wide screen the
+   long per-tool failure table keeps the left column and the shorter cards
+   (unexpected failures by tool, categories, lifecycle diagnostics, durations,
+   MCP vs CLI) form a second column beside it instead of sitting below it. */
+#audit-summary-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  background: var(--bg);
+}
+@media (min-width: 1500px) {
+  /* Rows: status note, rate card, one row per side card, then a flexible row
+     that takes the rest of the table's height. The table and last present
+     side card stretch to the shared bottom; earlier side cards keep their
+     own heights. Margins rather than row gaps space the cards, so a card
+     that is absent leaves no gap. */
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    grid-template-rows: repeat(7, auto) 1fr;
+    column-gap: 16px;
+    row-gap: 0;
+    padding-bottom: 0;
+    align-items: start;
+  }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > * { grid-column: 1 / -1; margin-bottom: 16px; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-panel-status] { grid-row: 1; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="tool-call-failure-rate"] { grid-row: 2; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="tool-call-failures-by-tool"] { grid-column: 1; grid-row: 3 / -1; align-self: stretch; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="failures-by-tool"] { grid-column: 2; grid-row: 3; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="failure-categories"] { grid-column: 2; grid-row: 4; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="lifecycle-diagnostics"] { grid-column: 2; grid-row: 5; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="duration-by-tool"] { grid-column: 2; grid-row: 6; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="mcp-vs-cli"] { grid-column: 2; grid-row: 7; }
+  /* syncNodes preserves addCard order: side cards follow the table. A status
+     note has no data-key and must not prevent the last card from stretching. */
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > :is(
+    [data-key="failures-by-tool"],
+    [data-key="failure-categories"],
+    [data-key="lifecycle-diagnostics"],
+    [data-key="duration-by-tool"],
+    [data-key="mcp-vs-cli"]
+  ):not(:has(~ [data-key])) { grid-row-end: -1; align-self: stretch; }
 }
 
 /* Audit & Diagnostics Summary Cards */
@@ -620,3 +708,20 @@ main.audit-layout.audit-full #audit-pane { overflow: clip; }
 .audit-more-btn:disabled { cursor: progress; color: var(--fg-dim); }
 .audit-more-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .audit-more-error { color: var(--state-failed); }
+
+/* File co-change search and evidence. */
+.codebase-related { margin: 0 20px 20px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; }
+.codebase-related h3, .codebase-related h4 { margin: 0 0 12px; overflow-wrap: anywhere; }
+.codebase-related-search { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.codebase-related-search input { flex: 1; min-width: 160px; padding: 8px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 7px; }
+.codebase-path-options { display: flex; flex-direction: column; align-items: stretch; max-height: 220px; overflow: auto; }
+.codebase-path-options button { height: auto; white-space: normal; text-align: left; overflow-wrap: anywhere; padding: 8px; }
+.codebase-related-sorts { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.codebase-related-sorts [aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.codebase-related-list { list-style: none; padding: 0; }
+.codebase-related-row { border-top: 1px solid var(--border); padding: 12px 0; overflow-wrap: anywhere; }
+.codebase-related-row .codebase-task-link { display: block; padding: 4px 0; }
+.codebase-related-row p { color: var(--fg-dim); line-height: 1.6; }
+@media (max-width: 600px) { .codebase-related { margin: 0 10px 10px; padding: 12px; } .codebase-related-search input { width: 100%; } }
+.codebase-path-options .action::first-letter { text-transform: none; }
+.codebase-related-row .codebase-path-base { display: inline-block; max-width: 100%; }

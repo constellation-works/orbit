@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-10-10
-last_validated: 2026-10-09
+last_updated: 2026-10-21
+last_validated: 2026-10-20
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -22,23 +22,29 @@ host clock and routine due-math it uses are documented under `docs/design/routin
 
 The [shared automation-trigger proposal](../automation-triggers/1_overview.md)
 from [ORB-11315] specifies delivery thresholds, preparation/failure eligibility,
-immutable batches and separate successful-coverage checkpoints. It is proposed
-and unimplemented; existing scheduling and action semantics remain current.
+immutable batches and separate successful-coverage checkpoints. Its delivery-trigger
+consumers and `preparation_eligible` state routines are implemented on the existing
+sweep clock with durable batches and checkpoints ([ORB-11330], [ORB-11331]); the
+broader batching and mode design remains proposed. Existing scheduling and action
+semantics remain current.
 
 ## 1. The definition record
 
 `AutoTaskDefinition` (`crates/orbit-types/src/workflow/auto_task/definition.rs`) is a
 `deny_unknown_fields` struct: `schemaVersion`, `name`, `description`, `enabled`,
-`schedule`, `template`, `dedupe`, the optional `skip_if_unchanged` (§4b), and
+`schedule`, `template`, `dedupe`, the optional `skip_if_unchanged` (§4b) and
+`skip_unless_blocked_candidates` (§4c) preconditions, and
 provenance (`created_by/at`, `updated_by/at`). `schedule` is an untagged enum
-— `{ cron: "…" }` or `{ every_minutes: N }`. `template` carries `title`, `description`,
+— exactly one of `{ cron: "…" }`, `{ every_minutes: N }`, or
+`{ deliveries_landed: { … } }`. Delivery schedules use source evaluation and
+durable coverage state rather than time-slot due-math. `template` carries `title`, `description`,
 `acceptance_criteria`, `task_type`, `tags`, `priority`, optional `complexity`,
-`crew`, optional `context_files`, and `status` (default `backlog`).
+`crew`, optional `required_tools` and `context_files`, and `status` (default `backlog`).
 Context selectors are copied unchanged into minted tasks. Diff-producing
 chores must declare a scope in their YAML template; otherwise admission holds
 them for task-pilot. Older definitions without selectors remain readable.
 An explicit complexity must be an
-assessed `low`, `medium`, or `hard` value and is copied to every minted task.
+assessed `low`, `medium`, `hard`, or `xhard` value and is copied to every minted task.
 The bundled defaults all carry reviewed explicit assessments. Legacy and custom
 definitions that omit `complexity` remain valid and mint
 `complexity: unassessed`, preserving the historical automated-creation behavior
@@ -153,8 +159,10 @@ instead of rendering a silent never-observed baseline.
 before mint and cleared only after the consumed-slot checkpoint. It is not a
 cross-store exactly-once token.
 
-`last_skip` is the most recent `skip_if_unchanged` decision: `{ at, slot,
-reason, ref, cursor_sha, tip_sha, cursor_task_id? }`. It explains why a due
+`last_skip` is the most recent precondition skip: `{ at, slot, reason, ref?,
+cursor_sha?, tip_sha?, cursor_task_id?, detail? }`. A `skip_if_unchanged` skip
+fills the ref and SHAs; a `no_blocked_candidates` skip (§4c) leaves them out
+and carries `detail` instead. It explains why a due
 definition minted nothing — `orbit auto-task show <name>` renders it under
 `cursor`, and the dashboard carries it on `last_evaluation.last_skip`. A fire
 clears it.
@@ -256,6 +264,23 @@ tree). `qa-full-sweep`'s cursor task is its roll-up chore, the one task of a
 sweep tagged `qa-full-sweep-rollup`, so neither the coordinator nor an area
 chore of a later sweep can shadow the last decided sweep.
 
+### 4c. `skip_unless_blocked_candidates`: nothing blocked awaits triage
+
+`skip_unless_blocked_candidates: true` is the second mint-time precondition,
+evaluated after `skip_if_unchanged` on `Fire` only. The host's
+`probe_blocked_candidates` reads every blocked task and applies the
+blocked-task triage's candidate rule (`triage_candidacy` in
+`crates/orbit-core/src/application/task/blocked_recovery/triage.rs`): the
+latest transition into `blocked` is one episode, and it qualifies when its
+final-recovery decision escalated, or when it has none and is older than the
+backstop's 72 hours, unless a human set or touched it or it was already
+triaged. `None` skips like `Unchanged` — the slot is not consumed, the skip is
+recorded as `last_skip` with reason `no_blocked_candidates` and a `detail`
+naming how many blocked tasks were read, and the tick report says the same.
+`Qualifying` mints. A probe error or `Unknown` **fails open**: the definition
+mints and the tick report's reason says the precondition was inconclusive. The
+shipped `blocked-task-triage` default carries it.
+
 The host tick calls `run_auto_task_scheduler_at` directly for every registered
 owner checkout after routine evaluation and under the host sweep lock. The pass
 is bounded by the finite discovered workspace and definition collections. Its
@@ -267,7 +292,10 @@ job, activity, or job run is created, and fires do not appear on
 
 `crud.rs` is the single choke point behind both the CLI (`orbit auto-task
 add/list/show/update/toggle`) and the registry tools (`orbit.auto_task.*`). Add
-rejects duplicate names; update patches present fields (on a managed shipped
+checks for duplicate names, clears stale settings, and writes the definition
+under the cursor sidecar lock shared with the other writers. A settings failure
+leaves no definition behind, so the same add can be retried after repair.
+Update patches present fields (on a managed shipped
 default, settings fields go to the settings table, §5c); toggle (the CLI command,
 or `orbit.auto_task.update` with `enabled`) flips `enabled`
 (disabling pauses and preserves; removal is `delete`, below). Update and
@@ -280,7 +308,8 @@ and merged only after the lock is acquired, so unnamed fields retain edits
 committed while the command was waiting. The registry tool's `template`
 object remains a full replacement: omitted fields take the template defaults,
 including clearing optional crew and complexity. Both surfaces validate the schedule
-(cron parse / interval > 0) and crew at write time, so a bad definition is never
+(cron parse / interval from 1 through 525,600 minutes / delivery-trigger validation)
+and crew at write time, so a bad definition is never
 persisted. Successful writes replace the target atomically; a staging or rename
 failure leaves the previous definition bytes intact. In a primary checkout the
 local and shared roots are identical, preserving the operator-facing path.
@@ -293,11 +322,20 @@ default also records it under `optedOut` in the auto-task managed-asset
 manifest. Reconciliation then leaves it absent and doctor does not report it
 missing. `orbit auto-task restore` writes the shipped content back and clears
 the opt-out under the same cursor lock, from the existence check through the
-definition write and manifest update. The opt-out and cursor removal come before
+manifest update and definition write. Restore clears stale settings and updates
+the manifest before publishing the definition, so a manifest failure leaves the
+name available for retry. The opt-out and cursor removal come before
 the reset because they can be undone: a failed delete puts the definition,
 cursor and manifest back.
 The reset cannot be, so a ref release failing after it leaves only that
 audited reset applied.
+
+Reset resolves the configured branch remotely first, retaining its local head
+before fetching so preview, applied reset and forced deletion can recover even
+when origin consumes the entire source deadline. A successful fetch still wins,
+including when there is no local branch. Pin inspection and release use a fresh
+bounded local source pass, as does deletion's final pin cleanup, so a spent
+fetch budget cannot prevent audited teardown.
 
 `list` is fail-closed-aware. The loader collects a per-file `AutoTaskLoadError`
 for every definition it rejects, and after [ORB-10800] those errors are no longer
@@ -308,7 +346,7 @@ that silently stopped firing is discoverable as a `faulty` row on the
 happens to touch it.
 
 The CLI's `auto-task add` and `auto-task update` accept `--complexity
-<low|medium|hard>`. Registry-tool callers supply the same optional field inside
+<low|medium|hard|xhard>`. Registry-tool callers supply the same optional field inside
 the template object. Add, update, YAML persistence, list/show, and mint all use
 the shared typed template, so an explicit value round-trips without a separate
 projection or default. Omitting the field remains supported for compatible
@@ -406,10 +444,16 @@ the resulting history with the next asset change or release preparation.
 The script scans first-parent integration history, recomputes existing records
 from their source revisions (or saved source fixtures in shallow clones), and
 never records uncommitted asset edits. It also regenerates the CLI history
-source fixtures; commit both generated files together. The CLI regression
-iterates every history entry through workspace sync without needing Git history.
-Current bodies are compared directly and need no history entry until they
-become historical.
+source fixtures; commit both generated files together. Run
+`python3 scripts/update-auto-task-body-history.py --check` to verify the history
+and fixtures without changing them. This check requires full Git history and
+rejects shallow checkouts; the CI Check job uses `fetch-depth: 0` and runs it
+before the Rust gates. Every superseded first-parent body must be recorded,
+including the last landed body when the checkout contains an uncommitted
+successor. Current bodies are compared directly and need no history entry until
+they become historical. The CLI regression exercises representative shipped
+bodies through workspace sync, including a settings-edited doc-duties copy,
+without needing Git history.
 The fingerprint format follows the v1 definition's serde defaults; update the
 generator together with any schema change. Unrecognized bodies are preserved
 conservatively; the manifest's exact-byte provenance behavior is unchanged.
@@ -502,9 +546,16 @@ theoretical slot is labeled hypothetical), delivery rows show
 waiting-for-deliveries, a missing cursor is never observed, and inspect
 failures are unavailable. Last scheduler evaluation is the host-local
 cursor; last minted task is the newest tagged instance and is labeled a
-manual mint when the two ids differ. Enable/disable writes `enabled` through the runtime's `auto_task_toggle`
-with `expected_enabled` compare-and-swap, the governed dashboard operation
-`auto_task.toggle`, and a dashboard-operations audit row. `Mint now` calls
+manual mint when the two ids differ. Grouping, the enabled count, row state
+and the switch follow `effective_enabled`, falling back to the raw `enabled`
+flag when a payload omits it. Enable/disable posts that raw flag as
+`expected_enabled` and the opposite of the effective state as `enabled`.
+Compare-and-swap stays on the raw flag. The handler treats the definition as
+already in the requested state only when that matches the effective switch, so
+Disable on a legacy-enabled consumer (raw flag still false) reaches
+`auto_task_toggle_checked` and the operator stamp clears the legacy
+enablement. The governed dashboard operation is `auto_task.toggle`, with a
+dashboard-operations audit row. `Mint now` calls
 `auto_task_mint` after the operator acknowledges the unconditional warning
 (`acknowledge_unconditional: true`); the request is refused without that
 disclosure. All-workspace and inactive/unknown workspace selections stay
@@ -563,7 +614,7 @@ validation correctly produces only task-side effects.
 
 The workspace-local `model-price-audit` definition (ORB-10583) is an enabled
 weekly report-only consumer: it runs Monday at 06:00 in the host-local timezone,
-uses `skip_if_open`, mints a backlog chore for crew `terra`, and carries
+uses `skip_if_open`, mints a backlog chore with its configured crew, and carries
 `model-price-audit`, `pricing`, and `no-diff-expected`. Its template compares
 exact `InvocationRecord.model` strings and every current price-table row against
 authoritative provider pricing/model/cache documentation. It records source
@@ -576,12 +627,12 @@ workspace-local definition.
 
 Operators may inspect it with `orbit auto-task show model-price-audit --json` and
 use scheduler dry-run inspection before the weekly slot. The generated task's
-`execution_summary` is the audit report and must include no-diff evidence,
-observed models, checked sources, and effective periods when the table is
+`execution_summary` is the audit report and must include observed models,
+checked sources, and effective periods when the table is
 accurate.
 
-- **Definitions are not full-text indexed.** Unlike indexed docs, auto-task
-  YAML is not in a SQLite/search index; discovery is a directory scan. Acceptable
+- **Definitions are not full-text indexed.** Auto-task YAML is not in a
+  SQLite/search index; discovery is a directory scan. Acceptable
   at the expected cardinality (a handful of chores per workspace).
 - **Workspace-local definitions, host-wide tick.** The scheduler loads definitions
   from the current runtime's workspace. The host tick evaluates auto-task

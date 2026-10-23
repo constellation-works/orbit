@@ -12,6 +12,7 @@ use super::extend::RunExtendArgs;
 use super::history::RunHistoryArgs;
 use super::job::JobRunArgs;
 use super::logs::RunLogsArgs;
+use super::profiles::RunProfilesArgs;
 use super::readiness::ReadinessCommand;
 use super::settlements::RunSettlementsArgs;
 use super::ship;
@@ -31,7 +32,7 @@ Workflow entrypoints:
   orbit run agent <prompt> [--cwd DIR] [--crew NAME] [--timeout SECONDS] [--provider-sandbox MODE]
 
 Run history:
-  orbit run history [--task <id>] [--state failed,held] [--since 24h] [--limit 50]
+  orbit run history [--task <id>] [--state failed,held] [--since 24h] [--limit 50] [--failures]
   orbit run history -j <job_id>
   orbit run show [run_id] [-s step_id] [--json]
   orbit run logs [run_id] [-s step_id] [--json]
@@ -40,9 +41,17 @@ Run history:
   orbit run settlements [--since 7d] [--json]
 
 Maintenance:
-  orbit run cancel <run_id>
+  orbit run cancel <run_id> --confirm
   orbit run concurrency <run_id> --set 7
   orbit run extend <run_id> --for 2h [--concurrency <N>]
+  orbit run profiles [--accuracy] [--json]
+
+Owner/local drains count every in-flight child against N. Pull drains grant capped replacement
+credit for leaves in before-landing review: admission counts occupied - min(reviewing, N)
+against N. Reviewing leaves can exceed N as replacements reach review; with an unchanged N and
+no pre-existing excess, total occupied is at most 2N and implementing at most N. Lowering N
+preserves running leaves, so existing excess can remain temporarily. orbit run show reports
+stage counts, and review rebuilds still use repository build-budget slots.
 ";
 
 #[derive(Args)]
@@ -75,9 +84,10 @@ Audits:
 
 Maintenance:
   cancel       Cancel a pending or running job run
-  concurrency  Change how many tasks a running drain keeps in flight
+  concurrency  Retune a running drain's admission ceiling
   extend       Lengthen a running drain's window, and optionally retune it
   readiness    Explain why backlog tasks are waiting in auto-drain
+  profiles     Show what each kind of delivery costs on this host, minute by minute
 
 Options:
 {options}
@@ -100,9 +110,6 @@ pub enum RunSubcommand {
     Auto(auto::AutoCommand),
     /// Ship backlog or explicitly selected tasks through the gated task pipeline
     Ship(ship::ShipCommand),
-    /// Deprecated alias for `orbit run ship --mode local`
-    #[command(name = "ship-local", hide = true)]
-    ShipLocal(ship::LegacyShipLocalCommand),
     /// Dispatch ship runs in every registered workspace with ready backlog tasks
     #[command(name = "ship-sweep")]
     ShipSweep(sweep::ShipSweepCommand),
@@ -111,6 +118,8 @@ pub enum RunSubcommand {
     TaskPilot(task_pilot::TaskPilotCommand),
     /// Explain why backlog tasks can or cannot start in auto-drain
     Readiness(ReadinessCommand),
+    /// Show what each kind of delivery costs on this host, minute by minute
+    Profiles(RunProfilesArgs),
     /// Show recent job runs filtered by job, task, state or time
     History(RunHistoryArgs),
     /// Show structured state and step summary for a job run
@@ -125,7 +134,7 @@ pub enum RunSubcommand {
     Settlements(RunSettlementsArgs),
     /// Cancel a pending or running job run
     Cancel(RunCancelArgs),
-    /// Change how many tasks a running drain keeps in flight
+    /// Retune a running drain's admission ceiling
     Concurrency(RunConcurrencyArgs),
     /// Lengthen a running drain's window, and optionally retune it
     Extend(RunExtendArgs),
@@ -140,12 +149,12 @@ impl Execute for RunSubcommand {
         match self {
             RunSubcommand::Auto(command) => command.execute(runtime),
             RunSubcommand::Ship(command) => command.execute(runtime),
-            RunSubcommand::ShipLocal(command) => command.execute(runtime),
             // Normally dispatched before runtime init (see main.rs); the
             // registry-driven sweep never uses the cwd-derived runtime.
             RunSubcommand::ShipSweep(command) => command.execute_without_runtime(None),
             RunSubcommand::TaskPilot(command) => command.execute(runtime),
             RunSubcommand::Readiness(command) => command.execute(runtime),
+            RunSubcommand::Profiles(command) => command.execute(runtime),
             RunSubcommand::History(command) => command.execute(runtime),
             RunSubcommand::Show(command) => command.execute(runtime),
             RunSubcommand::Logs(command) => command.execute(runtime),

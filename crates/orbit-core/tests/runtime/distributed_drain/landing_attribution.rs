@@ -49,6 +49,7 @@ fn complete_landing(pair: &Pair) -> String {
         owner_completion_authority: None,
         review: None,
         known_red: vec![],
+        light_delivery: Vec::new(),
     });
     owner
         .mutate_execution_claim(
@@ -81,14 +82,7 @@ fn complete_landing(pair: &Pair) -> String {
     delivered.task_id
 }
 
-#[test]
 fn landing_resolves_named_frictions_and_preserves_prior_resolutions() {
-    if !isolated(
-        module_path!(),
-        "landing_resolves_named_frictions_and_preserves_prior_resolutions",
-    ) {
-        return;
-    }
     for (named, claimed) in [(true, true), (false, true), (true, false), (false, false)] {
         let pair = Pair::new(1);
         let owner = &pair.wire.owner;
@@ -183,14 +177,7 @@ fn landing_resolves_named_frictions_and_preserves_prior_resolutions() {
     }
 }
 
-#[test]
 fn landing_retries_failed_prose_targets_with_the_original_delivery_evidence() {
-    if !isolated(
-        module_path!(),
-        "landing_retries_failed_prose_targets_with_the_original_delivery_evidence",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let owner = &pair.wire.owner;
     let store = frictions(owner);
@@ -268,14 +255,7 @@ fn landing_retries_failed_prose_targets_with_the_original_delivery_evidence() {
 /// that fast-forwards keeps the task its landing intent names, even across a
 /// retried attempt, and a PR no record names is reported as unattributed,
 /// with the reason.
-#[test]
 fn the_owners_review_batch_names_the_tasks_handoff_landings_delivered() {
-    if !isolated(
-        module_path!(),
-        "the_owners_review_batch_names_the_tasks_handoff_landings_delivered",
-    ) {
-        return;
-    }
     let pair = Pair::new(1);
     let owner = &pair.wire.owner;
     *pair.wire.accept_handoffs.lock().unwrap() = true;
@@ -447,3 +427,11 @@ fn the_owners_review_batch_names_the_tasks_handoff_landings_delivered() {
         ]
     );
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    landing_resolves_named_frictions_and_preserves_prior_resolutions_scenarios,
+    landing_resolves_named_frictions_and_preserves_prior_resolutions,
+    landing_retries_failed_prose_targets_with_the_original_delivery_evidence,
+    the_owners_review_batch_names_the_tasks_handoff_landings_delivered
+);

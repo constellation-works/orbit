@@ -19,6 +19,7 @@
 mod certificate;
 mod error;
 mod root;
+mod schema;
 mod worker;
 
 pub(crate) use certificate::RecoveryAuthority;

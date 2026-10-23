@@ -5,6 +5,3 @@ mod attempts;
 mod backend;
 mod ledger;
 mod reconciliation;
-mod schema;
-
-pub(crate) use schema::{FEATURE, MIGRATIONS, initialize};

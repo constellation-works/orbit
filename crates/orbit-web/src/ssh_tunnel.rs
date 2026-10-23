@@ -26,6 +26,7 @@
 //! dashboard's host forward ([`crate::host_tunnels`]) runs it on the blocking
 //! pool with [`Unattended`] bounds.
 
+use std::io::Read;
 use std::net::{Ipv4Addr, TcpListener};
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -37,6 +38,10 @@ use orbit_core::OrbitError;
 
 /// Delay between readiness probes.
 pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Maximum initial SSH diagnostic retained in memory. An incomplete capture
+/// cannot authorize another allocation.
+const MAX_SSH_DIAGNOSTICS_BYTES: usize = 8 * 1024;
 
 /// Grace period between SIGTERM and SIGKILL when tearing the tunnel down.
 #[cfg(unix)]
@@ -111,6 +116,35 @@ pub(crate) enum TunnelOrigin {
     Spawned,
 }
 
+/// An establish failure, distinguishing only a proven initial local bind
+/// collision from connection, readiness and remote-command failures.
+#[derive(Debug)]
+pub(crate) struct EstablishError {
+    pub(crate) error: Box<OrbitError>,
+    pub(crate) local_port_conflict: bool,
+}
+
+impl From<OrbitError> for EstablishError {
+    fn from(error: OrbitError) -> Self {
+        Self {
+            error: Box::new(error),
+            local_port_conflict: false,
+        }
+    }
+}
+
+impl From<EstablishError> for OrbitError {
+    fn from(failure: EstablishError) -> Self {
+        *failure.error
+    }
+}
+
+impl std::fmt::Display for EstablishError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(formatter)
+    }
+}
+
 /// Bring up a forward to `spec.remote_port`, attaching to an already-running
 /// remote server when `ready` answers through a bare probe forward and starting
 /// `spec.remote_command` only when nothing does.
@@ -133,11 +167,20 @@ pub(crate) enum TunnelOrigin {
 pub(crate) fn establish(
     spec: &TunnelSpec,
     mut ready: impl FnMut(ProbeLimit<'_>) -> bool,
-) -> Result<(SshTunnel, TunnelOrigin), OrbitError> {
+) -> Result<(SshTunnel, TunnelOrigin), EstablishError> {
     let unattended = spec.unattended.as_ref();
     let mut probe = spawn_tunnel(spec, None)?;
     // No marker yet is "still authenticating", not "nothing listening".
-    wait_until_forward_bound(&mut probe, spec)?;
+    if let Err(error) = wait_until_forward_bound(&mut probe, spec) {
+        // Exit 255 alone includes authentication/network failures. Reallocation
+        // is authorized only by this child's exact local bind diagnostic,
+        // before its own marker and before any remote command was started.
+        let local_port_conflict = probe.initial_port_conflict(spec.local_port);
+        return Err(EstablishError {
+            error: Box::new(error),
+            local_port_conflict,
+        });
+    }
     if poll_until_ready(
         &mut probe,
         &mut ready,
@@ -169,7 +212,8 @@ pub(crate) fn establish(
             "timed out after {}s {detail}",
             spec.ready_timeout.as_secs(),
         )),
-    })
+    }
+    .into())
 }
 
 fn cancel_flag(spec: &TunnelSpec) -> Option<&AtomicBool> {
@@ -207,8 +251,18 @@ fn spawn_tunnel(spec: &TunnelSpec, remote_command: Option<&str>) -> Result<SshTu
             command,
         ),
     };
+    // Only unattended initial probes need a diagnostic for ephemeral
+    // allocation. Foreground prompts and spawned children keep inherited stderr.
+    let diagnostics = if spec.unattended.is_some() && remote_command.is_none() {
+        Some(
+            std::fs::File::create(marker.dir.join("stderr"))
+                .map_err(|error| OrbitError::Io(format!("creating ssh diagnostics: {error}")))?,
+        )
+    } else {
+        None
+    };
     Ok(SshTunnel {
-        child: Some(spawn_ssh_for(spec, &args)?),
+        child: Some(spawn_ssh_for(spec, &args, diagnostics)?),
         marker: Some(marker),
     })
 }
@@ -217,13 +271,22 @@ fn spawn_tunnel(spec: &TunnelSpec, remote_command: Option<&str>) -> Result<SshTu
 /// `stdin` is null so Ctrl-C is delivered to *us* (the foreground process)
 /// rather than being forwarded down a pty to the remote.
 ///
-/// `stderr` is inherited so `ssh`'s own diagnostics (host key prompts, auth
-/// failures) still reach the operator, or the server's log when unattended.
-fn spawn_ssh_for(spec: &TunnelSpec, ssh_args: &[String]) -> Result<Child, OrbitError> {
+/// Foreground and spawned children inherit stderr. An unattended initial
+/// probe records it privately for bind classification and logs it on teardown.
+fn spawn_ssh_for(
+    spec: &TunnelSpec,
+    ssh_args: &[String],
+    diagnostics: Option<std::fs::File>,
+) -> Result<Child, OrbitError> {
     let mut command = Command::new(&spec.ssh_program);
     command.args(ssh_args).stdin(Stdio::null());
     if spec.unattended.is_some() {
         command.stdout(Stdio::null());
+    }
+    if let Some(diagnostics) = diagnostics {
+        // Stable local OpenSSH diagnostics; this does not change the remote
+        // command or request an environment variable be sent to the host.
+        command.env("LC_ALL", "C").stderr(diagnostics);
     }
     // A freshly written test stub can still be open for write across a sibling
     // fork; Linux then returns ETXTBSY for a short window (ORB-11340).
@@ -359,6 +422,19 @@ struct ForwardMarker {
 }
 
 impl ForwardMarker {
+    fn diagnostics(&self) -> (String, bool) {
+        let mut bytes = Vec::new();
+        let complete = std::fs::File::open(self.dir.join("stderr"))
+            .and_then(|file| {
+                file.take((MAX_SSH_DIAGNOSTICS_BYTES + 1) as u64)
+                    .read_to_end(&mut bytes)
+            })
+            .is_ok()
+            && bytes.len() <= MAX_SSH_DIAGNOSTICS_BYTES;
+        bytes.truncate(MAX_SSH_DIAGNOSTICS_BYTES);
+        (String::from_utf8_lossy(&bytes).into_owned(), complete)
+    }
+
     fn create() -> Result<Self, OrbitError> {
         static SEQUENCE: AtomicU64 = AtomicU64::new(0);
         let nanos = SystemTime::now()
@@ -565,6 +641,22 @@ pub(crate) struct SshTunnel {
 }
 
 impl SshTunnel {
+    fn initial_port_conflict(&mut self, port: u16) -> bool {
+        if !matches!(self.try_wait(), Ok(Some(status)) if status.code() == Some(255))
+            || self.forward_bound()
+        {
+            return false;
+        }
+        let Some(marker) = &self.marker else {
+            return false;
+        };
+        let (diagnostics, complete) = marker.diagnostics();
+        let bind = format!("bind [127.0.0.1]:{port}: Address already in use");
+        complete
+            && diagnostics.lines().any(|line| line == bind)
+            && diagnostics.lines().last() == Some("Could not request local forwarding.")
+    }
+
     /// True once the child has reported that it bound its local forward.
     fn forward_bound(&self) -> bool {
         self.marker.as_ref().is_some_and(ForwardMarker::seen)
@@ -588,6 +680,12 @@ impl SshTunnel {
         };
         if !matches!(child.try_wait(), Ok(Some(_))) {
             terminate_child(&mut child);
+        }
+        if let Some(marker) = &marker {
+            let (diagnostics, complete) = marker.diagnostics();
+            if !diagnostics.is_empty() {
+                tracing::warn!(%diagnostics, truncated = !complete, "ssh initial-forward diagnostics");
+            }
         }
         drop(marker);
     }

@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-// A long title, one that fits, and one with no break opportunity at all.
-const longTitle = 'Dashboard task titles should show enough information to recognise the work before opening the full detail panel';
-const titleTexts = [longTitle, longTitle, 'Short title', 'LongUnbrokenTitle'.repeat(8)];
+// A long title, one that fits, and one with no break opportunity at all, long
+// enough to overflow the full-width title column at 1440px.
+const longTitle = 'Dashboard task titles should show enough information to recognise the work before opening the full detail panel. '.repeat(2).trim();
+const titleTexts = [longTitle, longTitle, 'Short title', 'LongUnbrokenTitle'.repeat(12)];
 
-// Runs inside the full dashboard browser harness, with its default dock.
+// Runs inside the full dashboard browser harness, with its full-width Tasks page.
 export async function assertTaskTitleLayout(page, evidence) {
   await page.evaluate(async titleTexts => {
     const { setWorkspace } = await import('/js/common.js');
@@ -55,7 +56,6 @@ export async function assertTaskTitleLayout(page, evidence) {
       return globalThis.taskTitleFixture.priorFetch(url, options);
     };
     cacheCrewPayload(crews);
-    document.querySelector('main.tasks-layout').style.removeProperty('--dock-w');
     globalThis.taskTitleFixture.render();
   }, titleTexts);
   try {
@@ -112,10 +112,11 @@ export async function assertTaskTitleLayout(page, evidence) {
       measurements.push(measured);
       const fail = reason => { throw new Error(`${reason}: ${JSON.stringify(measured)}`); };
       if (layout.horizontalOverflow) fail('Task rows must not scroll sideways');
-      // Rows keep one height whatever the title length or badges, and the
-      // desktop row is compact because no title reserves a second line.
+      // Rows keep one height whatever the title length or badges. A desktop
+      // row is two lines by design (the title, then the full ID and its wait or
+      // run), so it stays compact at 56px: no title reserves a third line.
       if (Math.max(...layout.heights) - Math.min(...layout.heights) > 1) fail('Task rows must have a consistent height');
-      if (!layout.stacked && Math.max(...layout.heights) > 46.5) fail('A desktop task row must stay compact (46px at most)');
+      if (!layout.stacked && Math.max(...layout.heights) > 56.5) fail('A desktop task row is two fixed lines, title then ID, so it stays compact (56px at most)');
       for (const title of layout.titles) {
         if (title.whiteSpace !== 'nowrap' || title.textLines !== 1) fail(`Task title ${title.id} must render on a single line`);
         if (title.contentHeight >= title.characterHeight * 1.5) fail(`Task title ${title.id} must be one line box tall`);
@@ -135,7 +136,7 @@ export async function assertTaskTitleLayout(page, evidence) {
         const named = await page.locator(`#tasks-body [data-key="task-${taskId}"]`).getByRole('button', { name: titleTexts[index] }).count();
         if (named !== 1) fail(`The ${taskId} title button must be named with its full title`);
       }
-      // Beside the default dock the single line must still be wide enough to
+      // The full-width single line must still be wide enough to
       // recognise the work: the title column gained its width in ORB-15231.
       if (viewport.width >= 1280 && (plain.width < 260 || plain.visibleCharacters < 30 || badged.visibleCharacters < 20)) {
         fail('Plain and badged titles must show enough of their text on one line');
@@ -145,7 +146,7 @@ export async function assertTaskTitleLayout(page, evidence) {
     await page.setViewportSize({ width: 1280, height: 800 });
     const row = page.locator('#tasks-body [data-key="task-TITLE-1"]');
     // Rows group by status, so a row edits only its crew; status is a property
-    // of the expanded detail.
+    // of the task detail pane.
     if (await row.locator('.task-status-select').count() !== 0) throw new Error('A task row must not carry a status editor');
     await row.locator('.title').focus();
     await page.keyboard.press('Tab');
@@ -165,12 +166,20 @@ export async function assertTaskTitleLayout(page, evidence) {
     });
     await row.locator('.title').focus();
     await page.keyboard.press('Enter');
-    const status = page.locator('#tasks-body [data-key="detail-TITLE-1"] .task-status-select');
+    const status = page.locator('#task-detail-body [data-key="detail-TITLE-1"] .task-status-select');
     await status.waitFor({ state: 'visible' });
     await status.focus();
-    await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('Enter');
-    await page.keyboard.press('Tab');
+    if (!(await status.evaluate(node => document.activeElement === node && getComputedStyle(node).opacity === '1'))) {
+      throw new Error('Focus must reveal the native status editor');
+    }
+    await status.evaluate(node => node.addEventListener('change', event => {
+      globalThis.taskTitleFixture.keyboardStatusChange = { value: node.value, trusted: event.isTrusted };
+    }, { once: true }));
+    // macOS headless Chromium does not navigate the native popup with
+    // ArrowDown/Enter. Native select typeahead commits the matching option
+    // directly, including when the current option is hidden and disabled.
+    // Use real keyboard input, not selectOption or a dispatched change event.
+    await page.keyboard.press('i');
     await page.waitForFunction(() => globalThis.taskTitleFixture.tasks[0].status === 'in-progress', undefined, { timeout: 5000 }).catch(async error => {
       const state = await page.evaluate(() => ({
         writes: globalThis.taskTitleFixture.writes,
@@ -180,21 +189,27 @@ export async function assertTaskTitleLayout(page, evidence) {
       }));
       throw new Error(`${error.message}: ${JSON.stringify(state)}`);
     });
-    const writes = await page.evaluate(() => globalThis.taskTitleFixture.writes);
-    if (!writes.some(write => write.status === 'in-progress') || !writes.some(write => write.crew === 'sol')) {
+    const { writes, keyboardStatusChange } = await page.evaluate(() => ({
+      writes: globalThis.taskTitleFixture.writes,
+      keyboardStatusChange: globalThis.taskTitleFixture.keyboardStatusChange,
+    }));
+    if (keyboardStatusChange?.value !== 'in-progress' || keyboardStatusChange.trusted !== true) {
+      throw new Error(`Keyboard typeahead must emit a native status change: ${JSON.stringify(keyboardStatusChange)}`);
+    }
+    if (writes.length !== 2 || writes[0].crew !== 'sol' || JSON.stringify(writes[1]) !== JSON.stringify({ status: 'in-progress' })) {
       throw new Error(`Keyboard edits must reach the task mutation boundary: ${JSON.stringify(writes)}`);
     }
     await assertStatusChangeFoldsDetail(page, evidence);
     // The edits' Undo feedback expires with a redraw in this fixture's
     // context; let it land here rather than in a later scenario.
     await page.waitForFunction(() => !document.querySelector('#tasks-body .mutation-feedback'), undefined, { timeout: 15000 });
-    fs.writeFileSync(path.join(evidence, 'task-titles-result.json'), JSON.stringify({ passed: true, measurements, writes }, null, 2));
+    fs.writeFileSync(path.join(evidence, 'task-titles-result.json'), JSON.stringify({ passed: true, measurements, writes, keyboardStatusChange }, null, 2));
   } finally {
     await page.evaluate(() => { globalThis.fetch = globalThis.taskTitleFixture.priorFetch; delete globalThis.taskTitleFixture; });
   }
 }
 
-// Status lives in the expanded detail and rows group by status, so a status
+// Status lives in the task detail pane and rows group by status, so a status
 // change from the detail folds it in. Its feedback and undo follow the row (or a
 // notice when the new status is filtered out); a refused change keeps the detail
 // open with its feedback; a refresh that changes status leaves rows as they are.
@@ -209,7 +224,7 @@ async function assertStatusChangeFoldsDetail(page, evidence) {
     throw new Error(`${reason}: ${JSON.stringify(state)}`);
   };
   const row = id => page.locator(`#tasks-body .row[data-key="task-${id}"]`);
-  const detail = id => page.locator(`#tasks-body [data-key="detail-${id}"]`);
+  const detail = id => page.locator(`#task-detail-body [data-key="detail-${id}"]`);
   const note = id => row(id).locator('.task-status-note');
   const notice = id => page.locator(`#tasks-body [data-key="status-notice-${id}"]`);
   const openParam = () => page.evaluate(() => new URLSearchParams(window.location.hash.split('?')[1] || '').get('open'));

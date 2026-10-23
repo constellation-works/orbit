@@ -5,34 +5,36 @@ use orbit_common::OrbitError;
 
 use super::super::TaskCommitBoundary;
 use super::codec::{FRICTION, RELEASE_BUDGET_WINDOW_HOURS, STATE};
-use super::decode;
+use super::{decode, decode_state};
 use crate::contracts::*;
 
 impl TaskCommitBoundary {
-    /// What a drain run on `machine_id` already gave back for failures that
-    /// blame its host [ORB-14257]. Admission keeps each such task from that
-    /// drain for the rest of its window — the follower excludes the leaf's
-    /// crew too, but a release its worker delivered after the follower built
-    /// its next request must not be pulled straight back — and keeps every
+    /// What a drain run on `machine_id` already gave back for a task-scoped
+    /// operator cancel or failures that blame its host. Admission keeps each
+    /// such task from that drain for the rest of its window, even when a
+    /// release arrives after the follower built its next request. A cancel
+    /// leaves unrelated work and reviewers eligible. Admission keeps every
     /// task from it once one release blames the host whatever crew runs
-    /// there. A release for a forge outage blames neither [ORB-14634].
+    /// there. A release for a forge outage blames neither [ORB-14634], nor
+    /// does one for the owner's own busy store.
     pub(in super::super) fn drain_releases(
         &self,
         machine_id: &str,
         run_id: &str,
     ) -> Result<DrainReleases, OrbitError> {
         let mut released = DrainReleases::default();
-        for row in self.coordination_rows(STATE)? {
-            let state: ClaimInspection = decode(&row.payload_json)?;
+        for row in self.coordination_rows_mentioning(STATE, run_id)? {
+            let state = decode_state(&row.payload_json)?;
             if state.claim.executed_on.machine_id != machine_id
                 || state.claim.run_context.run_id != run_id
             {
                 continue;
             }
-            let Some(record) = state
-                .release
-                .filter(|record| record.class.excludes_crew() && !record.forge_unavailable)
-            else {
+            let Some(record) = state.release.filter(|record| {
+                record.class.suppresses_task_repull()
+                    && !record.forge_unavailable
+                    && !record.owner_busy
+            }) else {
                 continue;
             };
             if record.class.suppresses_host() && released.host.is_none() {
@@ -81,6 +83,7 @@ impl TaskCommitBoundary {
                 durable_ref: carry.and_then(|carry| carry.durable_ref.clone()),
                 carry_failure: carry.and_then(|carry| carry.carry_failure.clone()),
                 interrupted_review: None,
+                landing_stop: None,
             })
         });
         let Some(mut candidate) = evidence
@@ -99,6 +102,53 @@ impl TaskCommitBoundary {
             task_spec_digest: self.full_task(task_id)?.spec_digest(),
             recorded_at: Utc::now().to_rfc3339(),
         }))
+    }
+
+    /// The task history entry naming the candidate a claim's settlement
+    /// kept, so the owner's task shows what the next run continues; `None`
+    /// when the leaf ended without one. It is written with the settlement
+    /// that keeps the candidate and names exactly what that record holds.
+    pub(super) fn kept_candidate_entry(
+        claim: &ExecutionClaim,
+        kept: Option<&PreservedClaimCandidate>,
+    ) -> Option<orbit_types::task::TaskHistoryEntry> {
+        let candidate = &kept?.candidate;
+        let machine = &claim.executed_on.machine_id;
+        let mut note = format!(
+            "kept candidate {} on {}",
+            candidate.head_sha, candidate.branch
+        );
+        if let Some(reference) = &candidate.durable_ref {
+            note.push_str(&format!(", durable at {reference}"));
+        } else if !candidate.published {
+            note.push_str(&format!(", only on {machine}"));
+            if let Some(failure) = &candidate.carry_failure {
+                note.push_str(&format!(" (pushing it failed: {failure})"));
+            }
+        }
+        if let Some(pull_request) = &candidate.pull_request {
+            note.push_str(&format!(", pull request #{pull_request}"));
+        }
+        if let Some(run_id) = &candidate.source_run_id {
+            note.push_str(&format!("; run {run_id} on {machine}"));
+        }
+        if let Some(step) = &candidate.failed_step_id {
+            note.push_str(&format!(", stopped at {step}"));
+        }
+        note.push_str(
+            "; the task's next run continues it unless the task's spec changes or an operator \
+             discards it",
+        );
+        Some(orbit_types::task::TaskHistoryEntry {
+            at: Utc::now(),
+            by: machine.clone(),
+            event: orbit_types::task::CLAIM_CANDIDATE_KEPT_EVENT.into(),
+            note: Some(note),
+            from_status: None,
+            to_status: None,
+            operation_id: None,
+            decision: None,
+        })
     }
 
     /// [ORB-15314] Copy the verdict and findings of the interrupted attempt's
@@ -154,8 +204,8 @@ impl TaskCommitBoundary {
             PreservedClaimCandidate,
             ExecutionClaim,
         )> = None;
-        for row in self.coordination_rows(STATE)? {
-            let state: ClaimInspection = decode(&row.payload_json)?;
+        for row in self.coordination_rows_mentioning(STATE, &task.id)? {
+            let state = decode_state(&row.payload_json)?;
             if state.claim.task_id != task.id {
                 continue;
             }
@@ -245,7 +295,10 @@ impl TaskCommitBoundary {
         self.candidate_offer(&self.full_task(task_id)?, machine_id)
     }
 
-    fn full_task(&self, task_id: &str) -> Result<orbit_types::task::Task, OrbitError> {
+    pub(in super::super) fn full_task(
+        &self,
+        task_id: &str,
+    ) -> Result<orbit_types::task::Task, OrbitError> {
         crate::repository::task::v2::TaskV2Store::new(
             self.registry.clone(),
             self.workspace_id.clone(),
@@ -262,18 +315,43 @@ impl TaskCommitBoundary {
         task_id: &str,
         now: chrono::DateTime<Utc>,
     ) -> Result<Vec<ClaimReleaseRecord>, OrbitError> {
+        self.releases_in_budget_window(task_id, now, ClaimReleaseRecord::budgeted)
+    }
+
+    /// The releases of `task_id` inside its release-budget window at `now`
+    /// that a busy owner exempted from the budget, oldest first
+    /// ([`super::codec::OWNER_BUSY_RELEASE_ALLOWANCE`]).
+    pub(super) fn owner_busy_releases(
+        &self,
+        task_id: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<Vec<ClaimReleaseRecord>, OrbitError> {
+        self.releases_in_budget_window(task_id, now, |record| record.owner_busy)
+    }
+
+    /// The releases of `task_id` that `keep` selects, inside the budget window
+    /// at `now` and after the last release that exhausted the budget, oldest
+    /// first.
+    fn releases_in_budget_window(
+        &self,
+        task_id: &str,
+        now: chrono::DateTime<Utc>,
+        keep: impl Fn(&ClaimReleaseRecord) -> bool,
+    ) -> Result<Vec<ClaimReleaseRecord>, OrbitError> {
         let at = |record: &ClaimReleaseRecord| {
             chrono::DateTime::parse_from_rfc3339(&record.released_at)
                 .map(|at| at.with_timezone(&Utc))
                 .map_err(|e| OrbitError::Store(e.to_string()))
         };
         let mut releases = Vec::new();
-        for row in self.coordination_rows(STATE)? {
-            let state: ClaimInspection = decode(&row.payload_json)?;
+        for row in self.coordination_rows_mentioning(STATE, task_id)? {
+            let state = decode_state(&row.payload_json)?;
             if state.claim.task_id != task_id {
                 continue;
             }
-            if let Some(record) = state.release.filter(ClaimReleaseRecord::budgeted) {
+            if let Some(record) = state.release
+                && (record.budget_exhausted || keep(&record))
+            {
                 releases.push((at(&record)?, record));
             }
         }
@@ -301,10 +379,10 @@ impl TaskCommitBoundary {
     }
 }
 
-/// The releases one drain run made for failures that blame its host.
+/// The releases that suppress a task or the host for one drain run.
 #[derive(Debug, Default)]
 pub(in super::super) struct DrainReleases {
-    /// Each task released for a class that excludes the leaf's crew.
+    /// Each task whose release prevents immediate repull by this drain.
     pub(in super::super) tasks: BTreeMap<String, ClaimReleaseRecord>,
     /// The first release whose class suppresses the whole host.
     pub(in super::super) host: Option<ClaimReleaseRecord>,
@@ -336,7 +414,7 @@ fn held_candidate_offer(
         .iter()
         .rev()
         .find(|entry| entry.event == CANDIDATE_HELD_EVENT)?;
-    let held = HeldCandidate::from_text(entry.note.as_deref()?)?;
+    let held = HeldCandidate::from_entry(entry)?;
     if task.job_run_id.as_deref() != Some(held.run_id.as_str()) {
         return None;
     }
@@ -388,6 +466,7 @@ fn held_candidate_offer(
             durable_ref: held.durable_ref,
             carry_failure: held.carry_failure,
             interrupted_review: None,
+            landing_stop: None,
         },
         fresh,
     })
@@ -418,6 +497,8 @@ pub(in super::super) fn fresh_offer_history(
         )),
         from_status: None,
         to_status: None,
+        operation_id: None,
+        decision: None,
     })
 }
 

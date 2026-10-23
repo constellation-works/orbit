@@ -65,7 +65,9 @@ impl crate::OrbitRuntime {
                     "step recovery '{step_id}' task '{task_id}' has no active run owner"
                 ))
             })?;
-            if !matches!(task.status, TaskStatus::InProgress | TaskStatus::Review) {
+            if !self.task_run_is_local(&task)
+                || !matches!(task.status, TaskStatus::InProgress | TaskStatus::Review)
+            {
                 return Err(OrbitError::Execution(format!(
                     "step recovery '{step_id}' task '{task_id}' is no longer owned by active run '{run_id}'"
                 )));

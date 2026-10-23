@@ -87,9 +87,10 @@ impl RoutineWorkspaceProvider for RegistryRoutineEnvironment {
 /// `.orbit/` directory. Registration is the whole opt-in [ORB-12236]. A
 /// replica cannot write the owner's coordination store, so it is opened apart:
 /// the sweep delivers the pull settlements its follower drains recorded
-/// [ORB-13892] and fires only its host-local worktree GC routine, never task
-/// minting, shipping or recovery [ORB-14173]. The provider delegates here so
-/// this production path can be exercised with an explicit global root.
+/// [ORB-13892] and fires only its host-local worktree GC and store GC
+/// routines, never task minting, shipping or recovery [ORB-14173]
+/// [ORB-16354]. The provider delegates here so this production path can be
+/// exercised with an explicit global root.
 pub(crate) fn discover_registered_workspaces(
     global_root: &Path,
     workspace_filter: Option<&str>,
@@ -104,20 +105,14 @@ fn discover_registered_workspaces_until(
     read_only: bool,
 ) -> Result<DiscoveredWorkspaces, OrbitError> {
     let registry_path = workspace_registry::registry_path_for(global_root);
-    let registry = if read_only {
-        let mut registry =
-            workspace_registry::load_registry_from_read_only(&registry_path)?.registry;
-        workspace_registry::validate_workspaces(&mut registry);
-        registry
-    } else {
-        workspace_registry::with_registry_lock(&registry_path, || {
-            let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-            if workspace_registry::validate_workspaces(&mut registry) {
-                workspace_registry::save_registry_to(&registry, &registry_path)?;
-            }
-            Ok(registry)
-        })?
-    };
+    let registry = workspace_registry::load_validated_registry_from(
+        &registry_path,
+        if read_only {
+            workspace_registry::WorkspaceValidationMode::ReadOnly
+        } else {
+            workspace_registry::WorkspaceValidationMode::Persist
+        },
+    )?;
 
     let open = if read_only {
         RegisteredRuntimeFactory::open_registered_checkout_observational

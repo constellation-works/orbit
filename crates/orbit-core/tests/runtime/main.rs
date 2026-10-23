@@ -1,8 +1,9 @@
 //! The composed runtime through its public surface: dispatch admission, the
-//! distributed drain, `os:` tag routing, retired deterministic stubs, final
+//! distributed drain, `os:` and `ui` tag routing, retired deterministic stubs, final
 //! recovery, repeated rebase recovery, relation auto-close, PR closure on
-//! terminal decisions, plugin inspection, the sandbox opt-out, the agent
-//! sandbox mask and cold lexical search hydration.
+//! terminal decisions and requeues, settlement from a delivery PR merged
+//! outside Orbit, orphaned delivery adoption, plugin inspection, the sandbox
+//! opt-out, the agent sandbox mask and cold lexical search hydration.
 //!
 //! One integration-test binary per area keeps link cost down; add a module
 //! here rather than a new top-level `tests/*.rs` file
@@ -11,19 +12,43 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "../support/git.rs"]
+mod git_test_support;
+
 orbit_common::isolate_test_process!();
 
+mod scenarios;
+
+/// Keep related permutations in one table with isolated fixture state.
+macro_rules! scenario_table {
+    ($table:ident, $($row:ident),+ $(,)?) => {
+        #[test]
+        fn $table() {
+            crate::scenarios::run(module_path!(), stringify!($table), &[
+                $((stringify!($row), $row as fn())),+
+            ]);
+        }
+    };
+}
+pub(crate) use scenario_table;
+
 mod actor_identity;
+mod admission_forecast;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod agent_sandbox_mask;
 mod artifact_tools;
+mod audit_commit_report;
 mod auto_task_update;
 mod baseline_hold_refresh;
 mod baseline_hold_tick;
 mod baseline_red_repair;
+mod blocked_task_triage;
 mod cascade_outcomes;
 mod child_wait_audit;
+#[cfg(target_os = "macos")]
+mod claude_worker_credential;
 mod config_settings;
+mod crew_accounts;
 mod dispatch_admission;
 mod distributed_drain;
 mod drain_approval;
@@ -31,14 +56,19 @@ mod drain_cancel;
 mod drain_extend;
 mod final_recovery;
 mod finding_verification;
+mod fixture_template;
 mod flaky_validation;
+mod forecast_accuracy;
 mod forge_hold_resume;
 mod git_protection;
 mod held_child_guard;
+#[cfg(target_os = "linux")]
+mod muse_state_grant;
 mod rebase_recovery_attempts;
 mod relation_auto_close;
 mod resume_ownership;
 mod retired_stubs;
+mod review_admission_shape;
 mod review_baseline_hold;
 mod review_before_landing;
 mod review_continuation;
@@ -50,6 +80,7 @@ mod review_gate_audit;
 mod review_held_resume;
 mod review_record_ids;
 mod review_report_revisions;
+mod review_run_option;
 mod sandbox_off;
 mod search_hydration;
 mod security_alert_sweep;
@@ -59,29 +90,44 @@ mod step_recovery;
 mod system_work_crews;
 mod workspace_seed;
 
+mod host_os_executor;
 mod host_os_routing;
 mod host_resources;
+mod host_ui_routing;
 mod implement_blocker;
 mod invocation_metrics;
 mod job_finalization;
+mod light_delivery;
 mod local_route_before_pr;
+mod mid_run_steering;
+mod orphan_adoption;
 mod plugin_inspection;
 mod pr_forge_admission;
+mod pr_infrastructure;
 mod process_isolation;
 mod provider_failure_hold;
 mod provider_limit_admission;
 mod provider_limit_budget;
 mod provider_limit_hold;
+mod purpose_crews;
+mod readiness_population;
+mod regression_risk;
+mod resource_profiles;
 
 mod run_cli_invocations;
 mod run_history;
 mod run_outcome_contract;
+mod tag_instructions;
 mod task_delivery;
+mod task_external_merge;
 mod task_lint_paths;
 mod task_pilot;
 mod task_pr_closure;
 mod task_update;
 mod upgrade_pending_requeue;
 mod upgrade_resume;
+mod worker_exit_diagnostic;
 mod worker_fixture;
 mod worktree_reclaim;
+
+mod admission_audit;

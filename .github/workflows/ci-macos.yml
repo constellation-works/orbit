@@ -5,69 +5,20 @@ name: macOS Platform
 # `/usr/bin/sandbox-exec`. The primary CI workflow runs on Linux, where those
 # tests are compiled out entirely — which is how ORB-00366's `(?i)` SBPL
 # breakage (ORB-00372) reached agent-main undetected. This leg runs them on a
-# real macOS runner. Path-filtered so the (cost-weighted) macOS runner only
-# fires on PRs that touch sandbox or portable process-boundary code.
+# real macOS runner on pushes to main and agent-main so those checks report.
 
 on:
   push:
     branches: [main, agent-main]
-  pull_request:
-    paths:
-      - "crates/orbit-exec/**"
-      # [ORB-13689] Activity-scoped proc.spawn must run on macOS without the
-      # former Linux-only Landlock child boundary.
-      - "crates/orbit-tools/src/builtin/proc/**"
-      - "crates/orbit-tools/tests/tools/proc_spawn_lockdown.rs"
-      # [ORB-11055] Child-runtime write-root inventory lives in orbit-core and
-      # is compiled into the SBPL profile the macOS sandbox job enforces.
-      - "crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/**"
-      # [ORB-10009] SBPL profiles are compiled from resolved policy rules, so
-      # policy-evaluation changes can alter what the macOS sandbox enforces.
-      - "crates/orbit-policy/**"
-      - "crates/orbit-common/src/fs/**"
-      - "crates/orbit-cli/tests/workspace/generation_root.rs"
-      - "crates/orbit-cli/tests/process/**"
-      - "crates/orbit-cli/tests/mcp/**"
-      - "crates/orbit-cli/tests/output/error_output.rs"
-      - "crates/orbit-cli/tests/support/generation_fixture.rs"
-      - "crates/orbit-types/src/policy/**"
-      # [ORB-11067] Managed-child logging must use the registry root authorized
-      # by the macOS sandbox rather than the provider-specific HOME.
-      - "crates/orbit-common/src/observability/logging.rs"
-      # [ORB-10682] Darwin owner/cancellation liveness uses native libproc
-      # state so unreaped zombies do not look like surviving work.
-      - "crates/orbit-common/src/process/**"
-      - "crates/orbit-common/src/test_env/**"
-      - "crates/orbit-common/tests/test_env.rs"
-      - "crates/orbit-core/src/application/job/run/owner.rs"
-      - "crates/orbit-core/src/application/job/run/tests/actions.rs"
-      - "crates/orbit-core/src/application/job/run/tests/owner.rs"
-      - "crates/orbit-core/src/application/plugin/tests/build.rs"
-      - "scripts/check-ci-macos.sh"
-      - "scripts/qa-full-sweep-inventory.json"
-      - "scripts/test-qa-full-sweep.py"
-      # [ORB-13017] The uv-locked Python plugin fixture runs under the
-      # plugin's sandbox-exec profile.
-      - "crates/orbit-tools/src/plugin/backend/**"
-      # [ORB-13237] A backend the host spawns for an agent runs under the
-      # plugin profile intersected with the agent's; proven through
-      # sandbox-exec.
-      - "crates/orbit-tools/src/plugin/tests/backend/brokered.rs"
-      # [ORB-13236] The agent-call broker authenticates peers by their
-      # ancestry to the spawned sandbox-exec, read through Darwin's
-      # LOCAL_PEERTOKEN and libproc.
-      - "crates/orbit-core/src/runtime/plugin/broker/**"
-      - "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs"
-      - "crates/orbit-tools/tests/fixtures/plugins/uv-example/**"
-      - "crates/orbit-cli/tests/tool/plugin_cli_group.rs"
-      - "Cargo.lock"
-      - ".github/workflows/ci-macos.yml"
 
-# Superseded PR heads must not compete with their replacement. Every non-PR
-# run gets its own group, preserving independent push and scheduled runs.
+# Push runs share one group per branch and are never cancelled: GitHub keeps at
+# most one running and one pending run there, and a newer push replaces the
+# pending one. An intermediate agent-main commit can therefore get no macOS
+# run, while the newest commit always does. This bounds the queue on the two
+# macOS runners.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -79,43 +30,14 @@ env:
   UV_MACOS_ARM64_SHA256: 33540eb7c883ab857eff79bd5ac2aa31fe27b595abecb4a9c003a2c998447232
 
 jobs:
-  # Read live state before allocating build runners; the PR event can be stale.
-  pr-state:
-    name: Live PR state
-    if: ${{ github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    permissions:
-      pull-requests: read
-    outputs:
-      state: ${{ steps.state.outputs.state }}
-    steps:
-      - name: Read live PR state
-        id: state
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" | jq -er '
-            if .merged == true then "merged"
-            elif .state == "open" or .state == "closed" then .state
-            else error("Unexpected pull request state") end
-          ')"
-          echo "state=$state" >> "$GITHUB_OUTPUT"
-          echo "PR #${PR_NUMBER} live state: $state"
-
   macos-clippy:
-    needs: pr-state
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
     name: macOS Clippy (informational)
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
@@ -135,24 +57,23 @@ jobs:
             ${{ runner.os }}-cargo-macos-sandbox-
             ${{ runner.os }}-cargo-
 
+      - name: Install ripgrep
+        run: brew install ripgrep
+
       - name: Run workspace Clippy gates
         run: make ci-lint
 
   macos-sandbox:
-    needs: pr-state
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
     name: macOS Sandbox
     runs-on: macos-latest
     timeout-minutes: 30 # Observed ~6 minutes; allows cold builds on shared runners.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # On pull_request, use the PR head SHA: not the branch name
-          # GitHub deletes on merge, and not github.sha (the ephemeral
-          # merge commit). On push, use github.sha directly so a run that
-          # sat queued still builds and reports on the commit that
-          # triggered it, not whatever the branch points to once it starts.
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          # Use github.sha so a run that sat queued still builds and reports
+          # on the commit that triggered it, not whatever the branch points
+          # to once it starts.
+          ref: ${{ github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
@@ -171,6 +92,13 @@ jobs:
             ${{ runner.os }}-cargo-macos-sandbox-
             ${{ runner.os }}-cargo-
 
+      # The worker-profile integration test runs the build-budget self-test,
+      # whose bounded subprocess probes use GNU timeout.
+      - name: Install build-budget test prerequisite
+        run: |
+          brew install coreutils
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
+
       # Exercises the real sandbox-exec profiles, compiled SBPL goldens and
       # tests/sandbox/macos_sandbox.rs enforcement tests. The shared apply guard
       # reports a nested sandbox_apply refusal elsewhere, but must fail here:
@@ -178,18 +106,25 @@ jobs:
       - name: Run orbit-exec sandbox tests (real sandbox-exec)
         env:
           ORBIT_REQUIRE_SANDBOX_EXEC: "1"
-        run: cargo test --no-fail-fast -p orbit-exec --locked
+        run: python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-exec --locked
 
       # Native ps must execute here: the nested-agent denial path is replayed
       # by the claim host, while this job asserts real orphan-group cleanup.
       - name: Run orphaned-fixture process tests
-        run: cargo test --no-fail-fast -p orbit-common --test test_env --locked
+        run: |
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --locked --test common orphaned_fixture_children::
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --locked --test common durability_syncs::
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --locked --test common reexec_guard_rejects_missing_ignored_and_failed_children -- --exact
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --locked --test common inherited_authority_is_removed_from_a_child_command -- --exact
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --locked --test common a_fixture_overrun_names_its_phase_and_progress -- --exact
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --locked --test common a_fixture_that_keeps_advancing_outlives_its_stall_deadline -- --exact
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --locked --test common managed_run_env_is_absent_in_a_test_process_the_parent_exported_it_to -- --exact
 
       - name: Run macOS proc.spawn regressions
         run: |
-          /usr/bin/sandbox-exec -p '(version 1)(allow default)' cargo test --locked -p orbit-tools restrictive_fs_profile_does_not_narrow_the_parent_read_view -- --nocapture
-          cargo test --locked -p orbit-tools git_can_read_a_benign_host_file_visible_to_its_parent -- --nocapture
-          cargo test --locked -p orbit-tools git_inherits_parent_access_to_a_deny_read_file -- --nocapture
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command /usr/bin/sandbox-exec -p '(version 1)(allow default)' cargo test --locked -p orbit-tools restrictive_fs_profile_does_not_narrow_the_parent_read_view -- --nocapture
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --locked -p orbit-tools git_can_read_a_benign_host_file_visible_to_its_parent -- --nocapture
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --locked -p orbit-tools git_inherits_parent_access_to_a_deny_read_file -- --nocapture
 
       # [ORB-13237] A plugin backend the host spawns on an agent's behalf must
       # stay inside the agent's profile, widened only by its own plugin state.
@@ -197,20 +132,22 @@ jobs:
       # sandbox gate covers the Linux boundary through orbit-exec's
       # Bubblewrap integration tests.
       - name: Run brokered plugin backend confinement tests (real sandbox-exec)
-        run: cargo test --no-fail-fast -p orbit-tools --locked plugin::tests::backend::brokered -- --include-ignored
+        run: python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-tools --locked --test tools plugin_admission::brokered -- --include-ignored
 
       - name: Run orbit-core sandbox and blocked-recovery tests
         env:
           ORBIT_REQUIRE_SANDBOX_EXEC: "1"
         run: |
-          cargo test --no-fail-fast -p orbit-core --locked sandbox
-          cargo test --no-fail-fast -p orbit-core --locked blocked_recovery
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked sandbox
+          # This table also retains the sandbox-command grammar refusal row.
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked a_self_skipped_host_run_holds_the_review_scenarios
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked blocked_recovery
 
       # [ORB-13236] Darwin peer credentials and the ancestry walk: a client
       # inside the run's sandbox-exec is answered, another run's client and a
       # same-UID host process are refused.
       - name: Run agent-call broker tests (real sandbox-exec)
-        run: cargo test --no-fail-fast -p orbit-core --locked runtime::plugin::broker
+        run: python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked runtime::plugin::broker
 
       # [ORB-12553] Generation admission turns on Darwin descriptor and flock
       # behavior. The orbit-common unit tests that drove it directly were
@@ -219,29 +156,30 @@ jobs:
       # the trailing `::` out of YAML's mapping syntax.
       - name: Run executable-generation admission tests
         run: |
-          cargo test --no-fail-fast -p orbit-cli --locked generation_root::
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked generation_root::
 
       # Shared process behavior uses locked participant records, FIFO
       # rendezvous and a file-size limit instead of /proc and /dev/full.
       - name: Run portable process-boundary tests
         run: |
-          cargo test --no-fail-fast -p orbit-cli --locked update:: --test process
-          cargo test --no-fail-fast -p orbit-cli --locked run_observation:: --test process
-          cargo test --no-fail-fast -p orbit-cli --locked web_serve_handover:: --test process
-          cargo test --no-fail-fast -p orbit-cli --locked mcp_roundtrip::upgrade:: --test mcp
-          cargo test --no-fail-fast -p orbit-cli --locked absent_unwritable_partition_keeps_cli_tool_reads_observational --test mcp
-          cargo test --no-fail-fast -p orbit-cli --locked non_epipe_stdout_write_failure_in_ndjson_mode_remains_a_failure --test output
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked update:: --test process
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cmd --locked --lib update::tests::converge::
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked run_observation:: --test process
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked web_serve_handover:: --test process
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked mcp_roundtrip::upgrade:: --test mcp
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked observational_read_only_stores --test mcp
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked non_epipe_stdout_write_failure_in_ndjson_mode_remains_a_failure --test output
 
       # Linux cannot exercise Darwin's libproc zombie/group semantics. Keep
       # these filters aligned with the owner/liveness path triggers above.
       - name: Run process identity and job-run owner tests
         run: |
-          cargo test --no-fail-fast -p orbit-common --locked process::tests::identity -- --nocapture # check-ci-macos: darwin-only
-          cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::owner -- --nocapture
-          cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::actions -- --nocapture
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --locked process::tests::identity -- --nocapture # check-ci-macos: darwin-only
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::owner -- --nocapture
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::actions -- --nocapture
 
       - name: Run macOS plugin fetch refusal
-        run: cargo test --no-fail-fast -p orbit-core --locked a_fetch_phase_is_refused_on_macos -- --nocapture # check-ci-macos: darwin-only
+        run: python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked a_fetch_phase_is_refused_on_macos -- --nocapture # check-ci-macos: darwin-only
 
       # [ORB-13017] A Python exec backend with a uv-locked dependency must
       # certify, install and follow a lockfile upgrade under the sandbox-exec
@@ -260,16 +198,16 @@ jobs:
           uv --version | grep -F "${UV_VERSION}"
 
       - name: Run uv-locked Python plugin fixture test
-        run: cargo test --no-fail-fast -p orbit-cli --locked plugin_cli_group::a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade --test tool -- --exact
+        run: python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked plugin_cli_group::a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade --test tool -- --exact
 
       # This runs only after every required macOS command above succeeds. The
-      # report records the physical checkout HEAD rather than github.sha, which
-      # is an ephemeral merge commit for pull_request events.
+      # report records the physical checkout HEAD for the push that triggered
+      # this run.
       - name: Emit exact-checkout macOS QA evidence
         run: ./scripts/check-ci-macos.sh --evidence-output macos-platform-evidence.json
 
       - name: Upload exact-checkout macOS QA evidence
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-platform-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: macos-platform-evidence.json

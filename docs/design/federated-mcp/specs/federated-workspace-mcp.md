@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Federated workspace MCP mux, selector, capabilities, list schema, and fail-closed routing"
-last_validated: 2026-10-12
+last_validated: 2026-10-19
 title: Spec — Federated workspace MCP
 owner: grok
 status: Draft
@@ -29,7 +29,7 @@ Without this contract, an implementation will key selectors on renameable `host_
 
 ## Destination membership file
 
-Remote federated membership is the machine-global host file `~/.orbit/hosts.toml`, written by `orbit host add` and owned by host-registry ([host-commands](../../host-registry/specs/host-commands.md), [ORB-14448]). It is not part of workspace `config.toml` or `workspaces.json`. Each entry supplies the `ssh` target and `machine_id` the mux routes by; its `name` and `task_prefix` are host-registry fields the mux does not read. Local workspaces require no entry: federated serve always includes the accepting machine. A missing file or an empty `hosts` list is a valid local-only configuration.
+Remote federated membership is the machine-global host file `~/.orbit/hosts.toml`, written by `orbit host add` and owned by host-registry ([host-commands](../../host-registry/specs/host-commands.md), [ORB-14448]). It is not part of workspace `config.toml` or `workspaces.json`. Each entry supplies the `ssh` target and `machine_id` the mux routes by; its `name` is a host-registry field the mux does not read, and `task_prefix` builds the task-ID routing table the mux uses for id-only task calls. Local workspaces require no entry: federated serve always includes the accepting machine. A missing file or an empty `hosts` list is a valid local-only configuration.
 
 ```toml
 schema_version = 1
@@ -41,7 +41,7 @@ ssh = "orbit-linux"
 task_prefix = "AL"
 ```
 
-The host file is validated at config load, before the gateway advertises tools or accepts any `tools/call`: a duplicate `machine_id` makes the whole file invalid with `ambiguous_destination`, and every other host-file invariant (unique names and prefixes, valid SSH target, no entry for the local machine) fails closed with its host-registry code.
+The host file is validated at config load, before the gateway advertises tools or accepts any `tools/call`: a duplicate `machine_id` makes the whole file invalid with `ambiguous_destination`, and every other host-file invariant fails closed with its own code: `host_name_conflict` (duplicate name), `task_prefix_conflict` (duplicate prefix), `host_is_local` (an entry naming this machine), or `invalid_input` (malformed SSH target or identity field).
 
 **Legacy file, one release.** While `~/.orbit/mcp-destinations.toml` is the only file, its rows are the membership:
 
@@ -118,8 +118,8 @@ Federated `orbit_workspace_list` is a **new session-unbound response shape**, no
 
 Implemented in [ORB-11014] as `orbit mcp serve --mode federated`
 (`crates/orbit-mcp/src/federated/`), with implicit local membership in
-[ORB-11044]. Remote membership is loaded once at startup from the destinations
-file; the accepting machine is always prepended. Every list call then probes
+[ORB-11044]. Remote membership is loaded once at startup from the host file
+(`hosts.toml`, or the legacy `mcp-destinations.toml` while it is the only file); the accepting machine is always prepended. Every list call then probes
 each destination live — local in-process, remotes over the v1 SSH argv — and
 caches nothing. The response envelope is `{"workspaces": [...]}` — no envelope
 `machine_id`. After [ORB-11015] the mux advertises the canonical MCP tool
@@ -129,10 +129,18 @@ id-routed task tool follows the task-id-prefix route described above.
 
 v1 (`crates/orbit-mcp/src/remote/discovery.rs`) returns `{"machine_id": "hm_…", "workspaces": […]}` with `machine_id` on the **envelope**, and filters to `Active` workspaces that are locally checked out on the accepting machine.
 
+Each destination validates checkout roots against its filesystem on every
+list call without persisting status changes. A removed checkout is excluded
+from the v1 list; the federated destination envelope retains its row with
+`status: invalid`, which the mux projects as `checkout_health: invalid`.
+Restoring the checkout makes it active on the next discovery call.
+
 Federated list does **not** inherit that envelope or that filter:
 
 1. **Session-unbound.** The tool must not require a workspace selector. Session/initialize workspace metadata is not an input and not a filter.
 2. **`machine_id` on each descriptor**, not on the envelope. Each descriptor keeps today's v1 workspace fields (`id`, `name`, `ship_mode`, `owner_machine_id`, `git_remote`, `base_branch`, `status`, `created_at`, `updated_at`) and adds:
+
+   When present, `git_remote` passes through the shared `redact_git_remote` projection, as in `orbit workspace show`. Both local and federated destination envelopes apply it, and the accepting mux applies it again when building a descriptor so credentials from an older destination are never relayed. Optional fields retain their existing presence rules; the stored workspace record is unchanged.
 
    | Field | Meaning |
    |---|---|

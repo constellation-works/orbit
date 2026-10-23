@@ -123,6 +123,26 @@
         }
       ],
       "skipped_keys": []
+    },
+    {
+      "filed_count": 1,
+      "tasks": [
+        {
+          "failure_key": "b344de826260cca8",
+          "signature": "error: unused import: `compare_with_base`",
+          "step_fallback": false,
+          "excerpt": "2026-10-13T22:17:37.4638325Z ##[group]Run ./scripts/ci-guardrails.sh\n2026-10-13T22:20:03.7135360Z check-ci-macos: orbit-common process::tests::identity is Darwin-only; listed by the macOS job\n2026-10-13T22:20:03.7137364Z check-ci-macos: orbit-core a_fetch_phase_is_refused_on_macos is Darwin-only; listed by the macOS job\n2026-10-13T22:20:03.7139240Z check-ci-macos: workflow paths and filtered tests passed\n2026-10-13T22:20:24.5153992Z error: unused import: `compare_with_base`\n2026-10-13T22:20:24.5154519Z   --> crates/orbit-engine/src/executor/automation/vcs/baseline/mod.rs:79:38\n2026-10-13T22:20:24.5154874Z    |\n2026-10-13T22:20:24.5155308Z 79 |     compare_claimed_with_base_until, compare_with_base, compare_with_base_until, hold_failures,\n2026-10-13T22:20:24.5155834Z    |                                      ^^^^^^^^^^^^^^^^^\n2026-10-13T22:20:24.5156131Z    |\n2026-10-13T22:20:24.5160501Z    = note: `-D unused-imports` implied by `-D warnings`\n2026-10-13T22:20:24.5160985Z    = help: to override `-D warnings` add `#[allow(unused_imports)]`\n2026-10-13T22:20:24.5161215Z \n2026-10-13T22:20:27.9071527Z ##[error]Process completed with exit code 101.",
+          "excerpt_has_note": false
+        }
+      ],
+      "skipped_keys": []
+    },
+    {
+      "filed_count": 0,
+      "tasks": [],
+      "skipped_keys": [
+        "b344de826260cca8"
+      ]
     }
   ],
   "distinct_rust_panics_with_the_same_passing_preamble_keep_distinct_keys": [
@@ -438,6 +458,179 @@
         "diagnostic_step": "Test",
         "step_attribution": "unattributed",
         "failure_anchor_count": 2
+      }
+    }
+  ],
+  "printed_command_bodies_do_not_replace_emitted_diagnostics": [
+    {
+      "filed_count": 5,
+      "tasks": [
+        {
+          "failure_key": "2bc24d14fd2bfe92",
+          "signature": "step.sh: line <n>: scripts/ci-download-verified.sh: no such file or directory",
+          "step_fallback": false,
+          "excerpt": "##[group]Run verify\nsuccessful setup\n##[group]Run verify\nstep.sh: line 8: scripts/ci-download-verified.sh: No such file or directory\n##[error]Process completed with exit code 127.",
+          "excerpt_has_note": false
+        },
+        {
+          "failure_key": "6a4573d2702985fe",
+          "signature": "##[error]false source failure",
+          "step_fallback": false,
+          "excerpt": "##[group]Run verify\n##[error]false source failure\n##[error]Process completed with exit code 127.",
+          "excerpt_has_note": false
+        },
+        {
+          "failure_key": "9ace3932cddc0fcb",
+          "signature": "error[e0433]: cannot find module `real`",
+          "step_fallback": false,
+          "excerpt": "##[group]Run verify\nerror[E0433]: cannot find module `real`\n --> crates/example/src/lib.rs:8:1\n\n##[error]Process completed with exit code 127.",
+          "excerpt_has_note": false
+        },
+        {
+          "failure_key": "70a99a89969f73d1",
+          "signature": "thread 'real_test' panicked at tests/real.rs:<n>:<n>:",
+          "step_fallback": false,
+          "excerpt": "##[group]Run verify\nthread 'real_test' panicked at tests/real.rs:8:1:\nassertion failed: real invariant\n\n##[error]Process completed with exit code 127.",
+          "excerpt_has_note": false
+        },
+        {
+          "failure_key": "1a8d34207296ec56",
+          "signature": "test real_case ... failed",
+          "step_fallback": false,
+          "excerpt": "##[group]Run verify\ntest real_case ... FAILED\n##[error]Process completed with exit code 127.",
+          "excerpt_has_note": false
+        }
+      ],
+      "skipped_keys": []
+    }
+  ],
+  "printed_commands_with_ansi_runner_columns_keep_runtime_cause": [
+    {
+      "filed_count": 1,
+      "tasks": [
+        {
+          "failure_key": "2bc24d14fd2bfe92",
+          "signature": "step.sh: line <n>: scripts/ci-download-verified.sh: no such file or directory",
+          "step_fallback": false,
+          "excerpt": "build\tRun CI\t2026-10-15T02:42:56Z ##[group]Run verify\nbuild\tRun CI\t2026-10-15T02:42:56Z step.sh: line 8: scripts/ci-download-verified.sh: No such file or directory\nbuild\tRun CI\t2026-10-15T02:42:56Z ##[error]Process completed with exit code 127.",
+          "excerpt_has_note": false
+        }
+      ],
+      "skipped_keys": []
+    }
+  ],
+  "unclosed_command_and_orphan_close_are_context_only": [
+    {
+      "filed_count": 1,
+      "tasks": [
+        {
+          "failure_key": "dfb62a66f8e38017",
+          "signature": "run ci",
+          "step_fallback": true,
+          "excerpt": "##[group]Run verify",
+          "excerpt_has_note": true
+        }
+      ],
+      "skipped_keys": []
+    },
+    {
+      "filed_count": 0,
+      "tasks": [],
+      "skipped_keys": [
+        "dfb62a66f8e38017"
+      ]
+    }
+  ],
+  "unannotated_failure_excerpt_survives_cleanup_tail": [
+    {
+      "filed_count": 1,
+      "tasks": [
+        {
+          "failure_key": "2bc24d14fd2bfe92",
+          "signature": "step.sh: line <n>: scripts/ci-download-verified.sh: no such file or directory",
+          "step_fallback": false,
+          "excerpt": "##[group]Run verify\nstep.sh: line 8: scripts/ci-download-verified.sh: No such file or directory\n##[error]Process completed with exit code 127.\ncleanup completed\ncleanup completed\ncleanup completed\ncleanup completed\ncleanup completed\ncleanup completed\ncleanup completed\ncleanup completed\ncleanup completed\ncleanup completed\ncleanup completed",
+          "excerpt_has_note": false
+        }
+      ],
+      "skipped_keys": []
+    }
+  ],
+  "printed_nextest_source_does_not_replace_emitted_test": [
+    {
+      "filed_count": 1,
+      "tasks": [
+        {
+          "failure_key": "c35d0e9d247e9e7a",
+          "signature": "fail [ <n>.<n>s] suite real_nextest_case",
+          "step_fallback": false,
+          "excerpt": "##[group]Run verify\nFAIL [ 0.3s] suite real_nextest_case\n##[error]Process completed with exit code 127.",
+          "excerpt_has_note": false
+        }
+      ],
+      "skipped_keys": []
+    }
+  ],
+  "excerpt_anchor_uses_emitted_line_position_when_command_repeats_it": [
+    {
+      "filed_count": 1,
+      "tasks": [
+        {
+          "failure_key": "34cc25b3efac1e4c",
+          "signature": "error: actual runtime failure",
+          "step_fallback": false,
+          "excerpt": "[...]\nerror: actual runtime failure\n##[error]Process completed with exit code 1.",
+          "excerpt_has_note": false
+        }
+      ],
+      "skipped_keys": []
+    }
+  ],
+  "collection_ignores_printed_anchors_and_keeps_missing_resource": [
+    {
+      "filed_count": 1,
+      "tasks": [
+        {
+          "failure_key": "332baaf8d8bc9731",
+          "signature": "step.sh: line <n>: scripts/ci-download-verified.sh: no such file or directory",
+          "step_fallback": false,
+          "excerpt": "Check / Clippy / Test\tTest\t2026-10-15T02:42:56Z ##[group]Run verify\nCheck / Clippy / Test\tTest\t2026-10-15T02:42:56Z step.sh: line 8: scripts/ci-download-verified.sh: No such file or directory\nCheck / Clippy / Test\tTest\t2026-10-15T02:42:56Z ##[error]Process completed with exit code 127.",
+          "excerpt_has_note": false
+        }
+      ],
+      "skipped_keys": [],
+      "collected": {
+        "source_bytes": 779,
+        "log_truncated": false,
+        "retryable_errors": [],
+        "diagnostic_kind": "runner_command",
+        "diagnostic_step": "Test",
+        "step_attribution": null,
+        "failure_anchor_count": null
+      }
+    }
+  ],
+  "collection_failure_regions_keep_printed_command_provenance": [
+    {
+      "filed_count": 1,
+      "tasks": [
+        {
+          "failure_key": "26ccc5a6451a803c",
+          "signature": "error[e0433]: cannot find module `real`",
+          "step_fallback": false,
+          "excerpt": "Check / Clippy / Test\tTest\t2026-10-15T02:42:56Z ##[group]Run verify\nCheck / Clippy / Test\tTest\t[... 335 command bytes omitted ...]\nCheck / Clippy / Test\tTest\t2026-10-15T02:42:56Z ##[endgroup]\nCheck / Clippy / Test\tTest\t[... 384000 command bytes omitted ...]\nCheck / Clippy / Test\tTest\t2026-10-15T02:42:56Z error[E0433]: cannot find module `real`\nCheck / Clippy / Test\tTest\t2026-10-15T02:42:56Z  --> crates/sample/src/lib.rs:8:1\nCheck / Clippy / Test\tTest\t2026-10-15T02:42:56Z ##[error]Process completed with exit code 1.\n",
+          "excerpt_has_note": true
+        }
+      ],
+      "skipped_keys": [],
+      "collected": {
+        "source_bytes": 384823,
+        "log_truncated": true,
+        "retryable_errors": [],
+        "diagnostic_kind": "runner_failure_regions",
+        "diagnostic_step": "Test",
+        "step_attribution": null,
+        "failure_anchor_count": 1
       }
     }
   ]

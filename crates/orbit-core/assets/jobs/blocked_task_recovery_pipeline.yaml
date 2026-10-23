@@ -17,7 +17,7 @@
 #
 # Decision
 # - `recover` runs the shipped `final_recovery` activity with a crew drawn
-#   from `workflow.final_recovery_crews`, in a detached checkout of the
+#   from `workflow.purpose_crews.final_recovery`, in a detached checkout of the
 #   workspace base branch that `apply` removes again. Its input lists only
 #   the decisions this lane applies (`decisions`, no `resume`), states that
 #   the checkout is never delivered (`lane_contract`), and names the failed
@@ -29,7 +29,7 @@
 #   bound. Every escalation names the retained candidate, and every decision
 #   is a task comment carrying this run's id.
 #
-# Opt-out: set `workflow.final_recovery_crews = []`. With an empty pool the
+# Opt-out: set `workflow.purpose_crews.final_recovery = []`. With an empty pool the
 # tick submits nothing.
 
 schemaVersion: 2

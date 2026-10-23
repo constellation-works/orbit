@@ -5,7 +5,7 @@ tags: [operations, logs, tracing, rotation, routines]
 paths: ["crates/orbit-common/src/observability/log_rotation.rs", "crates/orbit-core/src/application/routines/sweep.rs"]
 related_features: [auditability, routines]
 related_artifacts: [ORB-00423]
-last_validated: 2026-10-11
+last_validated: 2026-10-19
 ---
 
 # Inspect and Retain Logs
@@ -29,7 +29,10 @@ read another sink with `--path` or `$ORBIT_LOG_PATH`; filenames other than
 `orbit log tail` exits non-zero with `orbit log file not found`; `-f` waits for
 either feed to appear. Relay targets and `RUST_LOG` filters retain
 their existing behavior; the reserved `agent_output` tracing field routes
-stdout/stderr records to the independent feed.
+stdout/stderr records to the independent feed. That feed blocks the emitter
+when its queue is full, so a burst cannot discard relay lines. The operational
+feed still drops a line when its own queue is full, which keeps a slow disk
+from stalling ordinary tracing.
 
 One JSON object is written per line:
 `{"timestamp", "level", "target", "fields": {..., "message"}}`. Secret-looking values
@@ -84,7 +87,7 @@ opening an archive last written before the window. When retention has already pr
 the start of the window, its header shows "covers since" with the oldest
 retained instant.
 
-The Tasks dock's Log mode and the bottom status bar put the message before
+WORK > Drain's Log view (`#drain/log`) and the bottom status bar put the message before
 structured context. Agent relays show the provider event kind (or the stream
 name for plain output), its item kind when it has one, and a compact run
 identifier first; the raw provider line is omitted when the kind is known.
@@ -97,20 +100,20 @@ follows the same toggle: while stdout relays are hidden it holds the newest
 event that is not one, so a drain's agent traffic does not replace an Orbit
 warning.
 
-To validate the dashboard with a prepared Playwright module and Chromium, run
-the isolated browser fixture (1440 px, snapshot, live and paused relays, paths,
-filters, and reload persistence):
+To validate the dashboard in Chromium, source the host's
+[browser kit](../DEVELOPMENT.md#browser-checks-on-a-prepared-host) and run the
+isolated browser fixture (1440 px, snapshot, live and paused relays, paths,
+filters, and reload persistence). The kit's `env.sh` exports
+`PLAYWRIGHT_MODULE` and `PLAYWRIGHT_BROWSERS_PATH`, plus `LD_LIBRARY_PATH` and
+`FONTCONFIG_FILE` on Linux:
 
 ```sh
-ORBIT_PLAYWRIGHT_MODULE="$PWD/.orbit/tmp/browser/node_modules/playwright/index.mjs" \
+. "${ORBIT_BROWSER_KIT_ENV:-$HOME/.local/chromium-deps/env.sh}"
+ORBIT_PLAYWRIGHT_MODULE="$PLAYWRIGHT_MODULE" \
 ORBIT_LOG_BROWSER_EVIDENCE_DIR="$PWD/.orbit/tmp/log-browser" \
-PLAYWRIGHT_BROWSERS_PATH="$PWD/.orbit/tmp/browser/browsers" \
 ./scripts/build-budget.py -- cargo test -p orbit-web --test http_api \
   log::dashboard_log_message_priority_and_agent_filter -- --ignored --nocapture
 ```
-
-On minimal Linux images, also supply the prepared browser's
-`LD_LIBRARY_PATH` and `FONTCONFIG_FILE` for its private libraries and fonts.
 
 ## Rotation and retention
 

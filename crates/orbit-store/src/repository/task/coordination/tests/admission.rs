@@ -146,6 +146,9 @@ impl Owner {
                 crew: None,
                 crew_source: None,
                 orchestrator: None,
+                orchestrator_model: None,
+                orchestrator_model_source: None,
+                origin: None,
                 comments: Vec::new(),
                 context_creation: Vec::new(),
             })
@@ -245,6 +248,8 @@ fn request(id: &str) -> AdmissionRequest {
         },
         crews: None,
         os: None,
+        browser_kit: false,
+        admissible: None,
     }
 }
 
@@ -433,6 +438,7 @@ fn a_candidate_changed_after_selection_is_never_admitted_from_the_selection() {
                             at: Utc::now(),
                             by: "task-pilot".into(),
                             message: "held".into(),
+                            operation_id: None,
                         }],
                         ..TaskHistoryUpdateParams::default()
                     },

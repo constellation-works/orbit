@@ -31,17 +31,19 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_engine::BaseSyncMode;
 use orbit_engine::KnownRedUnconfirmed;
 use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionReceipt, AdmissionRequest,
-    ClaimEvidence, ClaimFailure, ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun,
-    ExecutionClaim, ExecutionClaimPhase, HandoffObservation, HandoffReviewObservation, JobRunQuery,
-    KnownRedObservation,
+    ClaimAttribution, ClaimEvidence, ClaimFailure, ClaimInvocation, ClaimMutation,
+    ClaimMutationResult, ClaimRun, ExecutionClaim, ExecutionClaimPhase, ExecutorCapability,
+    HandoffObservation, HandoffReviewObservation, JobRunQuery, KnownRedObservation,
+    KnownRedOsAcceptance,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::task::{Task, TaskStatus};
-use orbit_types::tool::ToolSessionContext;
+use orbit_types::tool::{CLAIMED_MODE_DENIED_TOOLS, ToolSessionContext, is_claimed_owner_tool};
 use orbit_types::workflow::{
     ClaimFailureClass, JobRunState, ProviderFailureClass, ProviderFailureHold,
     handoff::{HandoffCandidate, HandoffDelivery, HandoffValidationLog, TaskHandoff},
@@ -54,6 +56,23 @@ use crate::runtime::run_input::recorded_task_ids;
 
 use super::contract::{is_remote, session_machine_id, trusted_identity};
 use super::{ensure_distributed_mutation_available, owner_binary_version};
+
+/// A remote claimed implementer's restrictions, using the same deny set as
+/// the engine and the same coordination classification and closed bridge as
+/// dispatch. Workspace search and listing use the claimed-owner bridge;
+/// other coordination tools must remain satisfiable under the same boundary.
+fn claimed_required_tool_hold(task: &Task) -> Option<String> {
+    task.required_tools.iter().find_map(|tool| {
+        let restriction = if CLAIMED_MODE_DENIED_TOOLS.contains(&tool.as_str()) {
+            "denied in claimed mode; the implementer returns task state through its output"
+        } else if crate::runtime::is_coordination_tool(tool) && !is_claimed_owner_tool(tool) {
+            "owner coordination outside the closed claimed-owner bridge"
+        } else {
+            return None;
+        };
+        Some(format!("required tool `{tool}` is {restriction}"))
+    })
+}
 
 /// What `orbit.task.pull` answers: the immutable receipt and, separately, the
 /// claim's phase right now. A replayed receipt is historical evidence; the
@@ -125,7 +144,7 @@ impl crate::OrbitRuntime {
             if request.ship != owner {
                 return Err(OrbitError::InvalidInput(format!(
                     "ship_contract_mismatch: this owner now resolves mode '{}', base '{}', landing \
-                     '{}', review.before_pr {}, review.before_landing {}, completion '{}' for this \
+                     '{}', before-PR review {}, before-landing review {}, completion '{}' for this \
                      machine; re-read the probe before sending a new request",
                     owner.mode,
                     owner.base_branch,
@@ -205,6 +224,7 @@ impl crate::OrbitRuntime {
         claim_id: &str,
         run_id: Option<&str>,
         settlement: ClaimMutation,
+        attribution: ClaimAttribution,
     ) -> Result<ClaimMutationResult, OrbitError> {
         ensure_distributed_mutation_available("orbit.drain.claim.settle")?;
         self.ensure_distributed_owner_workspace()?;
@@ -217,35 +237,46 @@ impl crate::OrbitRuntime {
                 machine_id: machine.clone(),
                 run_id: run_id.to_string(),
             });
+        // The leaf's crew and model are attribution only: the record keeps
+        // them, and nothing that decides the settlement reads them.
         let context = ClaimInvocation::trusted_worker(
             claim.task_id.clone(),
             claim.claim_id.clone(),
             machine,
             run,
-        );
+        )
+        .with_attribution(attribution);
         match settlement {
             ClaimMutation::Fail(evidence) => {
+                self.validate_claimed_review_carry(&claim, evidence.claimed_review.as_ref())?;
+                let evidence = self.prepare_claimed_review_settlement(&claim, evidence);
                 let final_recovery = evidence.final_recovery.clone();
+                let carry = evidence.claimed_review.clone();
                 let result = self.mutate_execution_claim(
                     Some(&context),
                     &fail_mutation_id(&claim.claim_id),
                     &ClaimMutation::Fail(evidence),
                 )?;
+                self.import_claimed_review_ledgers(carry.as_ref());
                 if let Some(final_recovery) = final_recovery {
                     self.apply_settled_final_recovery(&claim, run_id, &result, &final_recovery);
                 }
                 Ok(result)
             }
             ClaimMutation::Release(evidence) => {
+                self.validate_claimed_review_carry(&claim, evidence.claimed_review.as_ref())?;
+                let carry = evidence.claimed_review.clone();
                 let context = match self.refused_release_hold(&claim, run_id, &evidence) {
                     Some(hold) => context.with_provider_hold(hold),
                     None => context,
                 };
-                self.mutate_execution_claim(
+                let result = self.mutate_execution_claim(
                     Some(&context),
                     &release_mutation_id(&claim.claim_id),
                     &ClaimMutation::Release(evidence),
-                )
+                )?;
+                self.import_claimed_review_ledgers(carry.as_ref());
+                Ok(result)
             }
             ClaimMutation::AcceptHandoff(handoff) => {
                 let deadline = std::time::Instant::now() + self.claim_known_red_budget;
@@ -309,6 +340,7 @@ impl crate::OrbitRuntime {
                 candidate: None,
                 provider_limit: false,
                 provider_refusal: false,
+                owner_busy: false,
             }),
             ..ClaimEvidence::default()
         };
@@ -382,6 +414,28 @@ impl crate::OrbitRuntime {
         handoff: &TaskHandoff,
         remote: bool,
     ) -> Result<HandoffObservation, OrbitError> {
+        self.observe_handoff_candidate(handoff, remote, None)
+    }
+
+    /// Only a stored acceptance may use provider base-only adoption. Initial
+    /// settlement continues through the strict published candidate observer.
+    pub(crate) fn observe_accepted_claim_handoff(
+        &self,
+        accepted: &orbit_types::workflow::handoff::AcceptedHandoff,
+    ) -> Result<HandoffObservation, OrbitError> {
+        let current = self.accepted_task_handoff(&accepted.handoff.claim_id)?;
+        if current != *accepted {
+            return Err(refused("accepted handoff changed before observation"));
+        }
+        self.observe_handoff_candidate(&accepted.handoff, false, Some(accepted))
+    }
+
+    fn observe_handoff_candidate(
+        &self,
+        handoff: &TaskHandoff,
+        remote: bool,
+        accepted: Option<&orbit_types::workflow::handoff::AcceptedHandoff>,
+    ) -> Result<HandoffObservation, OrbitError> {
         let receipt = self.claim_receipt(&handoff.claim_id)?;
         let candidate = match handoff.candidate.delivery {
             HandoffDelivery::NoDiff { .. } => orbit_engine::observe_no_diff_candidate(
@@ -389,9 +443,9 @@ impl crate::OrbitRuntime {
                 &self.paths().repo_root,
                 handoff,
                 if receipt.request.ship.mode == "pr" {
-                    "remote"
+                    BaseSyncMode::Remote
                 } else {
-                    "local"
+                    BaseSyncMode::Local
                 },
             )?,
             HandoffDelivery::LocalCandidate if remote => {
@@ -410,11 +464,18 @@ impl crate::OrbitRuntime {
                 &handoff.workspace_id,
                 // An owner-local candidate has no origin to fetch and must
                 // keep reading the local base it was synchronized onto.
-                "local",
+                BaseSyncMode::Local,
             )?,
             // [ORB-12500] The owner reads the published pull request itself:
             // the provider names the delivery, and the candidate and base
             // objects are resolved in this checkout.
+            HandoffDelivery::PullRequest { .. } if accepted.is_some() => {
+                orbit_engine::observe_accepted_published_handoff(
+                    self,
+                    &self.paths().repo_root,
+                    accepted.ok_or_else(|| refused("accepted handoff required"))?,
+                )?
+            }
             HandoffDelivery::PullRequest { .. } => orbit_engine::observe_published_candidate(
                 self,
                 &self.paths().repo_root,
@@ -450,6 +511,7 @@ impl crate::OrbitRuntime {
             }
         }
         let review = self.observe_handoff_review(handoff, &candidate)?;
+        let light_delivery = self.owner_light_delivery(&handoff.task_id, &candidate)?;
         // An empty list is no required check: the handoff is accepted with no
         // validation logs, the way the owner's own delivery runs none.
         Ok(HandoffObservation {
@@ -459,6 +521,7 @@ impl crate::OrbitRuntime {
             owner_completion_authority: self.owner_completion_authority(),
             review,
             known_red: Vec::new(),
+            light_delivery,
         })
     }
 
@@ -488,6 +551,13 @@ impl crate::OrbitRuntime {
     /// that cannot be read is left to the claim journal, which refuses it.
     /// A verdict the owner's base run contradicts is also returned on its own
     /// [ORB-15566], since it ends the claim rather than refusing it.
+    ///
+    /// That comparison is scoped to the host OS recorded when the follower
+    /// was admitted [ORB-16432]. A different OS is a different validation
+    /// environment: the owner's base run is not started and cannot contradict
+    /// the report. After the same owner-base history check, the owner accepts
+    /// the follower's reported failures for that OS and keeps the handoff,
+    /// including a pull request the leaf opened.
     fn observe_known_red(
         &self,
         handoff: &TaskHandoff,
@@ -514,8 +584,24 @@ impl crate::OrbitRuntime {
         }
         // The owner's own base, as admission captured it: never the branch a
         // handoff or its pull request names.
-        let ship = self.claim_receipt(&handoff.claim_id)?.request.ship;
-        let base_sync = if ship.mode == "pr" { "remote" } else { "local" };
+        let receipt = self.claim_receipt(&handoff.claim_id)?;
+        let follower_os = receipt.request.os;
+        let owner_os = self.host_os();
+        // Both sides known and different: the owner's run is another
+        // validation environment. An unrecorded OS stays comparable, which is
+        // how a same-host admission that predates the field is still judged.
+        let across_os = match (owner_os, follower_os) {
+            (Some(owner), Some(follower)) if owner != follower => {
+                Some(KnownRedOsAcceptance { follower, owner })
+            }
+            _ => None,
+        };
+        let ship = receipt.request.ship;
+        let base_sync = if ship.mode == "pr" {
+            BaseSyncMode::Remote
+        } else {
+            BaseSyncMode::Local
+        };
         let mut known_red = OwnerKnownRed::default();
         for (command, exit_code, report) in reported {
             let verdict = if !observation.required_commands.contains(&command) {
@@ -527,6 +613,14 @@ impl crate::OrbitRuntime {
                     "the report names base {}",
                     report.base_sha
                 )))
+            } else if across_os.is_some() {
+                orbit_engine::verify_claimed_known_red_base(
+                    &self.paths().repo_root,
+                    &ship.base_branch,
+                    base_sync,
+                    base_sha,
+                )
+                .map(|()| report.failures.clone())
             } else {
                 orbit_engine::verify_claimed_known_red(
                     self,
@@ -543,6 +637,7 @@ impl crate::OrbitRuntime {
                     deadline,
                 )
             };
+            let accepted_across_os = across_os.filter(|_| verdict.is_ok());
             if let Err(KnownRedUnconfirmed::Contradicted(reason)) = &verdict {
                 known_red
                     .contradicted
@@ -552,6 +647,7 @@ impl crate::OrbitRuntime {
                 command,
                 base_sha: base_sha.clone(),
                 verdict: verdict.map_err(|unconfirmed| unconfirmed.reason().to_string()),
+                accepted_across_os,
             });
         }
         Ok(known_red)
@@ -647,11 +743,19 @@ impl crate::OrbitRuntime {
                 }
                 _ => {}
             }
+            // Exclude unsatisfiable requirements before candidate bundle reads;
+            // the transaction checks newly added tasks again below.
+            // Owner-local activity admission keeps its existing authority.
+            if identity.is_remote()
+                && let Some(why) = claimed_required_tool_hold(task)
+            {
+                admission_holds.entry(task.id.clone()).or_insert(why);
+            }
             // [ORB-15573] A standing provider hold keeps the task from an
             // executor that would run it as an excluded crew: its own, or the
             // executor's default for a task naming none. Another executor, or
             // this owner's own draw, takes it on a crew the hold leaves.
-            if let Some(why) = self.pull_provider_hold(task, request) {
+            if let Some(why) = self.pull_provider_hold(task, request, machine_id) {
                 admission_holds.entry(task.id.clone()).or_insert(why);
             }
         }
@@ -669,39 +773,67 @@ impl crate::OrbitRuntime {
                 Default::default()
             }
         };
+        // The owner's own repair pull takes a stopped landing's repair and
+        // nothing from the backlog, which its local drain admits through the
+        // owner wave [ORB-17303].
+        let repairs_only = self.is_owner_repair_pull(identity, request)?;
+        // [ORB-17304] The backlog is ordered against the live executor
+        // census, the requester declaring itself by this request.
+        let census = (!repairs_only)
+            .then(|| {
+                self.executor_census(
+                    &identity.location().machine_id,
+                    ExecutorCapability::of_request(request),
+                )
+            })
+            .flatten();
         boundary.admit_task(
             identity,
             request,
             &AdmissionOrdering {
-                owner_os: self.host_os(),
+                affinity: self.admission_affinity(),
+                census,
                 expiring_tasks,
                 gates: Some(self.owner_validation_gates()),
+                tag_instructions: Some(self.captured_tag_instructions(&request.ship)),
+                executor_host_os: self.executor_host_os_limits()?,
+                repairs_only,
             },
             owner_binary_version(),
             &self.paths().repo_root,
             &self.data_root(),
             &admission_holds,
             &self.baseline_held_tasks(&backlog),
-            &|task, comments, history| match self.pilot_admission_hold_in(
-                task,
-                comments,
-                &|| Ok(history.to_vec()),
-            )? {
-                Some(PilotAdmissionHold::HostOperational(hold)) => Ok(Some(hold.detail())),
-                Some(PilotAdmissionHold::OperatorValidation(hold)) => Ok(Some(hold.detail())),
-                Some(PilotAdmissionHold::UnverifiedFinding(hold)) => Ok(Some(hold.detail())),
-                Some(PilotAdmissionHold::NativeOs(hold)) => {
-                    Ok(hold.wait_on(task, request.os, machine_id))
+            &|task, comments, history| {
+                if identity.is_remote()
+                    && let Some(why) = claimed_required_tool_hold(task)
+                {
+                    return Ok(Some(why));
                 }
-                _ => Ok(None),
+                match self.pilot_admission_hold_in(task, comments, &|| Ok(history.to_vec()))? {
+                    Some(PilotAdmissionHold::HostOperational(hold)) => Ok(Some(hold.detail())),
+                    Some(PilotAdmissionHold::OperatorValidation(hold)) => Ok(Some(hold.detail())),
+                    Some(PilotAdmissionHold::UnverifiedFinding(hold)) => Ok(Some(hold.detail())),
+                    Some(PilotAdmissionHold::NativeOs(hold)) => {
+                        Ok(hold.wait_on(task, request.os, machine_id))
+                    }
+                    _ => Ok(None),
+                }
             },
         )
     }
 
     /// Why a standing provider hold keeps `task` from the executor `request`
     /// comes from, or `None` when the crew it would run as is not excluded.
-    fn pull_provider_hold(&self, task: &Task, request: &AdmissionRequest) -> Option<String> {
-        let hold = self.admission_provider_hold(task)?;
+    /// [ORB-16379] The hold is read as the executor's `machine` sees it: an
+    /// unavailable hold placed on another host excludes nothing there.
+    fn pull_provider_hold(
+        &self,
+        task: &Task,
+        request: &AdmissionRequest,
+        machine: Option<&str>,
+    ) -> Option<String> {
+        let hold = self.provider_hold_on(task, machine)?;
         let crew = task
             .crew
             .as_deref()

@@ -85,6 +85,50 @@ impl Fixture {
 }
 
 #[test]
+fn removed_checkout_validation_preserves_each_command_persistence_policy() {
+    if crate::isolated_test::run_in_child(
+        "routine_root::removed_checkout_validation_preserves_each_command_persistence_policy",
+    ) {
+        return;
+    }
+    let fixture = Fixture::initialized();
+    let root = fixture.root.to_str().expect("root path");
+    let registry_path = fixture.root.join("workspaces.json");
+    let before = fs::read(&registry_path).expect("registry before checkout removal");
+    fs::rename(&fixture.repo, fixture.repo.with_extension("removed")).expect("move checkout");
+
+    let list = run_json(
+        &fixture.root,
+        &fixture.home,
+        &["--root", root, "routine", "list", "--json"],
+        None,
+    );
+    assert_eq!(list["routines"], serde_json::json!([]), "{list}");
+    assert_eq!(fs::read(&registry_path).unwrap(), before);
+
+    let listed = run_json(
+        &fixture.root,
+        &fixture.home,
+        &["--root", root, "workspace", "list", "--json"],
+        None,
+    );
+    assert_eq!(listed[0]["status"], "invalid", "{listed}");
+    let persisted: Value = serde_json::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
+    assert_eq!(persisted["workspaces"][0]["status"], "invalid");
+
+    // Clock discovery persists validation even when no workspace can be swept.
+    fs::write(&registry_path, &before).expect("restore recorded active status");
+    let sweep = run_json(
+        &fixture.root,
+        &fixture.home,
+        &["--root", root, "clock", "tick", "--dry-run", "--json"],
+        None,
+    );
+    assert_eq!(sweep["reports"], serde_json::json!([]), "{sweep}");
+    let persisted: Value = serde_json::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
+    assert_eq!(persisted["workspaces"][0]["status"], "invalid");
+}
+
 fn routine_list_preserves_unchanged_registry_modification_time() {
     let fixture = Fixture::initialized();
     let root_arg = fixture.root.to_string_lossy().into_owned();
@@ -133,7 +177,6 @@ fn routine_list_preserves_unchanged_registry_modification_time() {
 
 /// NEXT DUE is computed in the host zone while a fire is recorded in UTC; the
 /// table reads both in the host zone [ORB-14709].
-#[test]
 fn routine_list_prints_next_due_and_last_fire_in_one_zone() {
     let fixture = Fixture::initialized();
     let root_arg = fixture.root.to_string_lossy().into_owned();
@@ -200,7 +243,6 @@ fn routine_list_prints_next_due_and_last_fire_in_one_zone() {
     assert_home_empty(&fixture.home);
 }
 
-#[test]
 fn routine_list_honors_explicit_root_over_uninitialized_home_and_environment() {
     let fixture = Fixture::initialized();
     let root_arg = fixture.root.to_string_lossy().into_owned();
@@ -224,7 +266,6 @@ fn routine_list_honors_explicit_root_over_uninitialized_home_and_environment() {
     assert_home_empty(&fixture.home);
 }
 
-#[test]
 fn routine_list_workspace_selector_scopes_results_and_reports_empty_workspaces() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -342,7 +383,6 @@ fn routine_list_workspace_selector_scopes_results_and_reports_empty_workspaces()
     );
 }
 
-#[test]
 fn routine_commands_honor_orbit_root_and_mutate_only_the_selected_root() {
     let fixture = Fixture::initialized();
     let root_arg = fixture.root.to_string_lossy().into_owned();
@@ -405,7 +445,6 @@ fn routine_commands_honor_orbit_root_and_mutate_only_the_selected_root() {
     assert_home_empty(&fixture.home);
 }
 
-#[test]
 fn routine_pause_rejects_unknown_names_and_reports_json_for_known_ones() {
     let fixture = Fixture::initialized();
     let root_arg = fixture.root.to_string_lossy().into_owned();
@@ -574,7 +613,6 @@ fn assert_home_empty(home: &Path) {
 /// A routine and an auto-task seeded by a plugin this host never enabled are
 /// hidden from both listings (JSON and text), listed marked inactive on
 /// request, and still resolve through `show` with the reason.
-#[test]
 fn plugin_seeded_definitions_whose_plugin_is_off_are_hidden_but_still_shown_by_name() {
     let fixture = Fixture::initialized();
     let root_arg = fixture.root.to_string_lossy().into_owned();
@@ -703,4 +741,53 @@ fn plugin_seeded_definitions_whose_plugin_is_off_are_hidden_but_still_shown_by_n
         text(&["routine", "show", "ghost-refresh"]).contains("Inactive: seeded by plugin:ghost")
     );
     assert_home_empty(&fixture.home);
+}
+
+#[test]
+fn routine_command_contracts_0() {
+    for (name, check) in [
+        (
+            "routine_list_preserves_unchanged_registry_modification_time",
+            routine_list_preserves_unchanged_registry_modification_time as fn(),
+        ),
+        (
+            "routine_list_prints_next_due_and_last_fire_in_one_zone",
+            routine_list_prints_next_due_and_last_fire_in_one_zone as fn(),
+        ),
+        (
+            "routine_list_honors_explicit_root_over_uninitialized_home_and_environment",
+            routine_list_honors_explicit_root_over_uninitialized_home_and_environment as fn(),
+        ),
+        (
+            "routine_list_workspace_selector_scopes_results_and_reports_empty_workspaces",
+            routine_list_workspace_selector_scopes_results_and_reports_empty_workspaces as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
+}
+
+#[test]
+fn routine_command_contracts_1() {
+    for (name, check) in [
+        (
+            "routine_commands_honor_orbit_root_and_mutate_only_the_selected_root",
+            routine_commands_honor_orbit_root_and_mutate_only_the_selected_root as fn(),
+        ),
+        (
+            "routine_pause_rejects_unknown_names_and_reports_json_for_known_ones",
+            routine_pause_rejects_unknown_names_and_reports_json_for_known_ones as fn(),
+        ),
+        (
+            "plugin_seeded_definitions_whose_plugin_is_off_are_hidden_but_still_shown_by_name",
+            plugin_seeded_definitions_whose_plugin_is_off_are_hidden_but_still_shown_by_name
+                as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
 }

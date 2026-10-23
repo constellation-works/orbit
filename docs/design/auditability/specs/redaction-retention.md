@@ -1,7 +1,7 @@
 ---
 type: design
 summary: Spec: Redaction and Retention Boundaries
-last_validated: 2026-10-12
+last_validated: 2026-10-19
 ---
 
 # Spec: Redaction and Retention Boundaries
@@ -43,19 +43,59 @@ Command audit rows:
 - Are queryable, exportable, and prunable through `orbit audit`.
 - Are also pruned past `retention.audit_days` by `orbit gc audit --apply`, host-wide, in the same batches as the run audit.
 - Should remain compact and should not embed transcript bodies.
+- Past the audit cutoff, Health > Events, Incidents, Denials, `orbit audit` and the
+  diagnostics friction view lose raw history by design, with no rollups. Lock contention
+  instead reads `task_lock_denials`: durable workspace-scoped requester identities,
+  conflicting paths and timestamps. A transactional migration backfills existing
+  denials once; subsequent inserts capture the same facts independently of audit GC.
+  Unscoped legacy rows are not attributed to a workspace.
 
 Activity/job and loop traces:
 
 - Live under `.orbit/state/audit/` for workspace-local run reconstruction.
 - V2 envelope and loop events are persisted through the SQLite-backed v2 audit store.
 - Use content-addressed blobs for payload bodies.
-- Are bounded by `orbit gc audit`: it plans by default and, with `--apply`, deletes this workspace's v2 audit rows older than `retention.audit_days` (default 60) in batches of 1,000 rows, each its own write transaction, then sweeps the blobs under `.orbit/state/audit/blobs/` that no remaining run audit row, run step or pipeline state names. The opt-in `store-gc` routine runs it daily. `VACUUM` stays an operator action; each report shows the freed pages.
+- Are bounded by `orbit gc audit`: it plans by default and, with `--apply`, deletes this workspace's v2 audit rows, and rows whose workspace id is no longer registered, older than `retention.audit_days` (default 60) in batches of 1,000 rows, each its own write transaction, then sweeps the blobs under `.orbit/state/audit/blobs/` that no remaining run audit row, run step or pipeline state names. Another registered workspace keeps its own window. The opt-in `store-gc` routine runs it daily. `VACUUM` stays an operator action; each report shows the freed pages.
 - A blob is protected from the sweep while it is being published. The writer records `.orbit/state/audit/pending/<hash>` before it writes or reuses a blob and retires the marker after the row naming it commits; writing content that is already stored refreshes the blob's mtime. The sweep moves a candidate to `.orbit/state/audit/sweep/`, then rechecks the marker and the mtime (24-hour grace) and moves it back if either is fresh. A marker older than the audit cutoff belongs to a write that never published and is reclaimed with its blob.
 
 Run pipeline state:
 
 - Lives in `job_run_states`, beside the `job_runs` row.
 - Is dropped by `orbit gc runs --apply` for success, failed, timeout, cancelled and interrupted runs older than `retention.runs_days`, which also stamps `job_runs.archived_at`. Run rows, steps and summaries stay; held and non-terminal runs are never selected.
+- `retention.runs_days` and the command's `--older-than-days` override require at least
+  30 days. Reliability > Pipeline echo dedupe and forecast-accuracy per-drain limiter
+  shares still need `job_run_states` throughout their 30-day windows.
+- Commit decision and committed flag are projected onto `job_runs` on each checkpoint
+  write, in the same SQLite transaction, and backfilled once from existing state during
+  upgrade. The implement_one succeeded-candidate duration filter reads that retained
+  outcome and the retained successful step, so archival loses raw checkpoints without
+  changing duration analytics. State already pruned before upgrade cannot be backfilled.
+
+
+Per-minute resource history:
+
+- Lives in the host-wide `run_resource_minutes` (per run, with task id, work class and complexity; no payloads) and `host_resource_minutes` tables.
+- Is pruned by the same `orbit gc runs --apply` pass when older than 30 days, a fixed window independent of `retention.runs_days`.
+
+Admission forecasts:
+
+- Live in the host-wide `admission_forecasts` table (drain workspace and run, forecast time and mode, host size, forecast values, and the task ids the pass admitted and gap fit judged, or the pull request sent/no-headroom decisions; no payloads).
+- Are pruned with the per-minute resource history by `orbit gc runs --apply` when older than 30 days.
+
+Admission reservations:
+
+- Live in the host-wide `admission_reservations` table (workspace, task id, work class, complexity and time; no payloads).
+- Are deleted by the next admission once older than five minutes.
+
+Applied task commit journal:
+
+- `retention.journal_days` (default 14) removes older applied rows only, preserving each
+  task's newest applied row plus all prepared, committed and aborted rows. Published
+  task history and recovery inputs stay; older raw transition diagnostics are lost.
+- `retention.store_warn_bytes` controls a warning only and deletes nothing.
+- Cost, task-store Codebase rankings, `orbit task flow` and friction stats keep working
+  across audit, run and journal pruning. Auto-concurrency profiles and forecast accuracy
+  retain their supported 30-day resource/forecast window; older raw samples are lost.
 
 Invocation metrics:
 

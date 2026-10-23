@@ -276,6 +276,7 @@ pub(super) fn collect_at<Q: CiQueries + ?Sized>(
     partition_runs(&refs, &runs, &probes, &mut partition);
     let RunPartition {
         latest,
+        skipped,
         current,
         mut stale,
         in_flight,
@@ -523,6 +524,7 @@ pub(super) fn collect_at<Q: CiQueries + ?Sized>(
     let unverified_refs = probes.unverified.keys().cloned().collect::<Vec<_>>();
 
     let summary = json!({
+        "skipped_runs": skipped.len(),
         "latest_runs_discovered": latest_ids.len(),
         "latest_run_ids": latest_ids,
         "current_failures": current_ids.len(),
@@ -592,6 +594,7 @@ pub(super) fn collect_at<Q: CiQueries + ?Sized>(
         "repository": repository,
         "heads": refs.iter().map(head_json).collect::<Vec<_>>(),
         "latest_runs": latest,
+        "skipped_runs": skipped,
         "current_failures": current,
         "branch_failures": branch_failures,
         "stale_or_superseded": stale,

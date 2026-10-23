@@ -1,0 +1,47 @@
+Deprecated: use `orbit agents show --role orchestrators --crew <name>`
+
+Usage: orbit orchestrator show [OPTIONS] <ORCHESTRATOR>
+
+Arguments:
+  <ORCHESTRATOR>
+          The orchestrator name tasks record
+
+Options:
+      --model <MODEL>
+          The row's model; optional when the crew has one row
+
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --window <WINDOW>
+          Count work in this period ending now
+          
+          [default: 30d]
+          [possible values: 1h, 24h, 7d, 30d, 90d, all]
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --min-support <MIN_SUPPORT>
+          Units of work a row needs before it is ranked
+          
+          [default: 10]
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')

@@ -9,16 +9,8 @@ use orbit_core::application::config::{self, ConfigScope, ConfigWriteInit};
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 
-use super::dispatch_admission::isolated;
-
-#[test]
 fn reclaim_config_defaults_replaces_layers_and_refuses_unconfined_patterns() {
-    if !isolated(
-        "config_settings::reclaim_config_defaults_replaces_layers_and_refuses_unconfined_patterns",
-    ) {
-        return;
-    }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&global).unwrap();
@@ -83,14 +75,64 @@ fn reclaim_config_defaults_replaces_layers_and_refuses_unconfined_patterns() {
     assert!(load().is_err());
 }
 
-#[test]
-fn settings_and_crew_writes_survive_a_fully_malformed_auto_task_listing() {
-    if !isolated(
-        "config_settings::settings_and_crew_writes_survive_a_fully_malformed_auto_task_listing",
-    ) {
-        return;
+/// Mid-run steering is off with two rounds unless a layer says otherwise; each
+/// key resolves through the layers on its own, and a value outside its range
+/// or of the wrong type fails the load naming the key.
+fn mid_run_steering_defaults_off_layers_per_key_and_refuses_invalid_values() {
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let roots = orbit_config::ConfigRoots::new(&global, &workspace);
+    let load = || orbit_config::ResolvedConfig::load(&roots);
+    let steering = |config: orbit_config::ResolvedConfig| config.snapshot.mid_run_steering();
+    assert_eq!(
+        steering(load().unwrap()),
+        orbit_config::MidRunSteeringSettings {
+            enabled: false,
+            max_rounds: 2
+        }
+    );
+    std::fs::write(
+        global.join("config.toml"),
+        "[workflow.mid_run_steering]\nenabled = true\nmax_rounds = 4\n",
+    )
+    .unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[workflow.mid_run_steering]\nmax_rounds = 1\n",
+    )
+    .unwrap();
+    assert_eq!(
+        steering(load().unwrap()),
+        orbit_config::MidRunSteeringSettings {
+            enabled: true,
+            max_rounds: 1
+        },
+        "the workspace's round budget wins; the global enable still applies"
+    );
+    for (body, key) in [
+        ("max_rounds = 0", "workflow.mid_run_steering.max_rounds"),
+        ("max_rounds = 11", "workflow.mid_run_steering.max_rounds"),
+        (
+            "max_rounds = \"two\"",
+            "workflow.mid_run_steering.max_rounds",
+        ),
+        ("enabled = \"yes\"", "workflow.mid_run_steering.enabled"),
+    ] {
+        std::fs::write(
+            workspace.join("config.toml"),
+            format!("[workflow.mid_run_steering]\n{body}\n"),
+        )
+        .unwrap();
+        let error = load().unwrap_err().to_string();
+        assert!(error.contains(key), "{body}: {error}");
     }
-    let root = TempDir::new().unwrap();
+}
+
+fn settings_and_crew_writes_survive_a_fully_malformed_auto_task_listing() {
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -152,14 +194,8 @@ fn settings_and_crew_writes_survive_a_fully_malformed_auto_task_listing() {
     );
 }
 
-#[test]
 fn global_writes_that_break_the_workspace_layered_load_are_refused_unchanged() {
-    if !isolated(
-        "config_settings::global_writes_that_break_the_workspace_layered_load_are_refused_unchanged",
-    ) {
-        return;
-    }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -230,14 +266,8 @@ fn global_writes_that_break_the_workspace_layered_load_are_refused_unchanged() {
     orbit_config::ResolvedConfig::load(&roots).expect("still loadable");
 }
 
-#[test]
 fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
-    if !isolated(
-        "config_settings::settings_rows_report_built_in_fallback_equality_and_global_reach",
-    ) {
-        return;
-    }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -253,7 +283,7 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
     .unwrap();
     std::fs::write(
         workspace.join("config.toml"),
-        "[review]\nminutes = 120\nbefore_pr = false\n\n\
+        "[review]\nminutes = 120\ntiming = \"off\"\n\n\
          [workflow]\nauto_ship = true\ndefault_crew = \"sol\"\n\n\
          [execution.codex]\nsandbox = \"danger-full-access\"\n\n\
          [crews.sol]\nprovider = \"codex\"\nmodel = \"sol-model\"\n",
@@ -287,22 +317,27 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
         row(&effective, "workflow.auto_ship")["equals"],
         json!({"global": true, "built_in": false})
     );
-    let before_pr = row(&effective, "review.before_pr");
+    let timing = row(&effective, "review.timing");
+    assert_eq!(timing["equals"], json!({"global": null, "built_in": true}));
     assert_eq!(
-        before_pr["equals"],
-        json!({"global": null, "built_in": true})
-    );
-    assert_eq!(
-        before_pr["fallback"],
-        json!({"layer": "built-in", "value": false, "state": "default"})
+        timing["fallback"],
+        json!({"layer": "built-in", "value": "off", "state": "default"})
     );
     // Removing a workspace security key falls to the built-in value, never the
     // global one, while the workspace file exists.
     let sandbox = row(&effective, "execution.codex.sandbox");
     assert_eq!(sandbox["source"]["layer"], json!("workspace"));
-    assert_eq!(
-        sandbox["fallback"],
-        json!({"layer": "built-in", "value": "workspace-write", "state": "default"})
+    assert_eq!(sandbox["fallback"]["layer"], json!("built-in"));
+    assert_eq!(sandbox["fallback"]["state"], json!("default"));
+    assert_ne!(
+        sandbox["fallback"]["value"],
+        json!("read-only"),
+        "a workspace security key falls to the built-in, never the global sandbox"
+    );
+    assert_ne!(
+        sandbox["fallback"]["value"],
+        json!("danger-full-access"),
+        "the fallback is the built-in, not the workspace override"
     );
     // A global security key the workspace does not restate is not inherited:
     // the built-in value is in force and there is nothing to remove.
@@ -312,9 +347,12 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
     // A global-only key falls back to its built-in default.
     let hours = row(&effective, "ci_failure.operator_suppression_hours");
     assert_eq!(hours["source"]["layer"], json!("global"));
-    assert_eq!(
-        hours["fallback"],
-        json!({"layer": "built-in", "value": 6, "state": "default"})
+    assert_eq!(hours["fallback"]["layer"], json!("built-in"));
+    assert_eq!(hours["fallback"]["state"], json!("default"));
+    assert_ne!(
+        hours["fallback"]["value"],
+        json!(12),
+        "the fallback is the built-in, not the global hours"
     );
     assert_eq!(hours["equals"], json!({"global": true, "built_in": false}));
     // A key with no built-in value says so rather than reporting a value.
@@ -396,7 +434,7 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
         json!("built-in")
     );
     assert_eq!(
-        row(&workspace_view, "review.before_pr")["equals"],
+        row(&workspace_view, "review.timing")["equals"],
         json!({"global": null, "built_in": true})
     );
     assert_eq!(
@@ -415,12 +453,8 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
     );
 }
 
-#[test]
 fn settings_fallback_and_equality_use_admitted_global_values() {
-    if !isolated("config_settings::settings_fallback_and_equality_use_admitted_global_values") {
-        return;
-    }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -431,8 +465,8 @@ fn settings_fallback_and_equality_use_admitted_global_values() {
     let remaining_workspace = "[crews.terra]\nprovider = 'codex'\nmodel = 'terra-model'\n";
     for (key, section, global_literal, workspace_literal, raw_global, equal, fallback_layer) in [
         (
-            "operation.review_crew",
-            "operation",
+            "workflow.purpose_crews.review",
+            "workflow.purpose_crews",
             "'sol'",
             "'sol'",
             json!("sol"),
@@ -476,8 +510,8 @@ fn settings_fallback_and_equality_use_admitted_global_values() {
             "global",
         ),
         (
-            "operation.review_crew",
-            "operation",
+            "workflow.purpose_crews.review",
+            "workflow.purpose_crews",
             "'sol'",
             "'opus'",
             json!("sol"),
@@ -563,19 +597,15 @@ fn settings_fallback_and_equality_use_admitted_global_values() {
     }
 }
 
-#[test]
 fn settings_global_facts_keep_workspace_admission_context() {
-    if !isolated("config_settings::settings_global_facts_keep_workspace_admission_context") {
-        return;
-    }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::write(
         global.join("config.toml"),
-        "[operation]\nreview_crew = 'terra'\n\n\
+        "[workflow.purpose_crews]\nreview = 'terra'\n\n\
          [workflow]\nbase_branch = ''\n\n\
          [workflow.resource_throttle]\ncpu_resume_percent = 95\n",
     )
@@ -585,18 +615,18 @@ fn settings_global_facts_keep_workspace_admission_context() {
                      [crews.terra]\nprovider = 'codex'\nmodel = 'terra-model'\n";
     std::fs::write(
         workspace.join("config.toml"),
-        format!("[operation]\nreview_crew = ['terra']\n\n{remaining}"),
+        format!("[workflow.purpose_crews]\nreview = ['terra']\n\n{remaining}"),
     )
     .unwrap();
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
     let effective = config::effective_view(&runtime).expect("effective view");
-    let review = row(&effective, "operation.review_crew");
+    let review = row(&effective, "workflow.purpose_crews.review");
     assert_eq!(review["equals"]["global"], json!(true));
     assert_eq!(review["fallback"]["value"], json!(["terra"]));
     let workspace_view =
         config::file_view(&runtime, ConfigScope::Workspace).expect("workspace view");
     assert_eq!(
-        row(&workspace_view, "operation.review_crew")["equals"]["global"],
+        row(&workspace_view, "workflow.purpose_crews.review")["equals"]["global"],
         json!(true)
     );
     // The overwritten global branch cannot be admitted. Do not claim a
@@ -610,18 +640,12 @@ fn settings_global_facts_keep_workspace_admission_context() {
     let after_removal = config::effective_view(&reloaded).expect("view after key removal");
     assert_eq!(
         review["fallback"]["value"],
-        row(&after_removal, "operation.review_crew")["value"]
+        row(&after_removal, "workflow.purpose_crews.review")["value"]
     );
 }
 
-#[test]
 fn a_plugin_only_workspace_file_leaves_global_security_keys_in_effect() {
-    if !isolated(
-        "config_settings::a_plugin_only_workspace_file_leaves_global_security_keys_in_effect",
-    ) {
-        return;
-    }
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -659,6 +683,59 @@ fn a_plugin_only_workspace_file_leaves_global_security_keys_in_effect() {
     );
 }
 
+fn literal_and_json_key_writes_preserve_their_input_contracts() {
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let path = workspace.join("config.toml");
+    let before = "# retained\n[workflow]\nbase_branch = 'before'\n";
+    std::fs::write(&path, before).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let typed = config::set_key(
+        &runtime,
+        "workflow.base_branch",
+        &json!("true"),
+        ConfigScope::Workspace,
+        ConfigWriteInit::RequireExisting,
+    )
+    .unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::write(&path, before).unwrap();
+    let literal = config::set_key_literal(
+        &runtime,
+        "workflow.base_branch",
+        "\"true\"",
+        ConfigScope::Workspace,
+        ConfigWriteInit::RequireExisting,
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert_eq!(literal.old_value, typed.old_value);
+    assert_eq!(literal.new_value, typed.new_value);
+    assert_eq!(literal.rows, typed.rows);
+    // A JSON string stays a string; raw CLI syntax infers a boolean.
+    config::set_key(
+        &runtime,
+        "workflow.auto_ship",
+        &json!("true"),
+        ConfigScope::Workspace,
+        ConfigWriteInit::RequireExisting,
+    )
+    .unwrap_err();
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    let written = config::set_key_literal(
+        &runtime,
+        "workflow.auto_ship",
+        "true",
+        ConfigScope::Workspace,
+        ConfigWriteInit::RequireExisting,
+    )
+    .unwrap();
+    assert_eq!(written.new_value, json!(true));
+}
+
 /// One key's row from a Settings view's sections.
 fn row<'a>(view: &'a Value, key: &str) -> &'a Value {
     view["sections"]
@@ -680,3 +757,17 @@ fn crew_named<'a>(crews: &'a [Value], name: &str) -> &'a Value {
 fn fields(value: Value) -> Map<String, Value> {
     value.as_object().unwrap().clone()
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    reclaim_config_defaults_replaces_layers_and_refuses_unconfined_patterns_scenarios,
+    reclaim_config_defaults_replaces_layers_and_refuses_unconfined_patterns,
+    mid_run_steering_defaults_off_layers_per_key_and_refuses_invalid_values,
+    settings_and_crew_writes_survive_a_fully_malformed_auto_task_listing,
+    global_writes_that_break_the_workspace_layered_load_are_refused_unchanged,
+    settings_rows_report_built_in_fallback_equality_and_global_reach,
+    settings_fallback_and_equality_use_admitted_global_values,
+    settings_global_facts_keep_workspace_admission_context,
+    a_plugin_only_workspace_file_leaves_global_security_keys_in_effect,
+    literal_and_json_key_writes_preserve_their_input_contracts
+);

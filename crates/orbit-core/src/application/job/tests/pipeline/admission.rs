@@ -222,12 +222,12 @@ fn trigger_recording_preserves_a_competing_checkpoint_and_drain_controls() {
     let mut expected = runtime.read_run_state(&run.run_id).unwrap().unwrap();
     expected.next_step_index = 1;
     expected.step_outputs.insert(0, json!({"checkpoint": true}));
-    expected.drain_admissions_stop = Some(DrainAdmissionsStop {
+    expected.pull_drain.drain_admissions_stop = Some(DrainAdmissionsStop {
         actor: "operator".into(),
         reason: Some("stop admissions".into()),
         stopped_at: Utc::now(),
     });
-    expected.drain_cancel = Some(DrainCancelRequest {
+    expected.pull_drain.drain_cancel = Some(DrainCancelRequest {
         actor: "operator".into(),
         source: "fixture".into(),
         reason: None,

@@ -10,6 +10,11 @@ pub(crate) struct Pinned {
 }
 
 impl Pinned {
+    /// Whether another request has published a different registry generation.
+    pub(crate) fn same_generation(&self, other: &Self) -> bool {
+        self.snapshot.generation == other.snapshot.generation
+    }
+
     /// The pinned generation's servable workspace entries.
     pub(crate) fn entries(&self) -> &[WsEntry] {
         &self.snapshot.entries

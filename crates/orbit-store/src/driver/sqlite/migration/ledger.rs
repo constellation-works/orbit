@@ -26,6 +26,13 @@
 //!   adopt the ledger transparently: the v1 baseline is the same
 //!   idempotent schema code, so running it on an existing database is a
 //!   no-op that then records version 1.
+//!
+//! The engine is not specific to the store database. Each SQLite file that
+//! keeps authority describes itself with a [`LedgeredDatabase`] and owns a
+//! registry of its own: the store ([`STORE_DATABASE`], [`MIGRATIONS`]), the
+//! task registry (`task_registry::ledger`), and the recovery authority in
+//! `orbit-core`. Each file carries its own
+//! `schema_meta` ledger rows and `migration.compat` record.
 
 use std::path::Path;
 
@@ -38,18 +45,56 @@ use crate::contracts::{
     StateComponent, evaluate_newer_state,
 };
 
+/// One SQLite database file that evolves through its own migration registry.
+pub struct LedgeredDatabase {
+    /// Which versioned state its compatibility decisions are about.
+    pub component: StateComponent,
+    /// How diagnostics name the database ("store database").
+    pub noun: &'static str,
+    /// Run each migration with foreign-key enforcement off. SQLite ignores
+    /// `PRAGMA foreign_keys` inside a transaction, so a body that rebuilds a
+    /// parent table (create, copy, drop, rename) cannot turn it off itself,
+    /// and with enforcement on the drop would cascade into the children.
+    pub foreign_keys_off: bool,
+    /// Written inside each migration's transaction after its ledger row and
+    /// compatibility record, from the registry and the version just applied.
+    pub stamp: Option<LedgerStamp>,
+}
+
+/// A database-specific marker a [`LedgeredDatabase`] keeps in step with its
+/// ledger, such as the task registry's `user_version` fence.
+pub type LedgerStamp = fn(&Connection, &[Migration], u32) -> Result<(), OrbitError>;
+
+/// The store database (`orbit.db`) and its [`MIGRATIONS`].
+pub(crate) const STORE_DATABASE: LedgeredDatabase = LedgeredDatabase {
+    component: StateComponent::StoreSchema,
+    noun: "store database",
+    foreign_keys_off: false,
+    stamp: None,
+};
+
 /// One entry in the migration registry.
-pub(crate) struct Migration {
-    pub(crate) version: u32,
-    pub(crate) name: &'static str,
+pub struct Migration {
+    /// Positive schema version, strictly increasing within the registry.
+    pub version: u32,
+    /// Stable name recorded beside this version in the ledger.
+    pub name: &'static str,
     /// What this migration means for a binary that does not have it. See
     /// [`MigrationCompatibility`]; declare `Breaking` when in doubt.
-    pub(crate) compat: MigrationCompatibility,
-    pub(crate) apply: fn(&Connection) -> Result<(), OrbitError>,
+    pub compat: MigrationCompatibility,
+    /// Frozen migration body, run inside the engine's transaction.
+    pub apply: fn(&Connection) -> Result<(), OrbitError>,
 }
 
 /// Stable ordered registry of store-database migrations. Append-only:
-/// never renumber or edit an entry that has shipped.
+/// never renumber or edit an entry that has shipped. Its body and shape-defining
+/// helpers are frozen too: use only version-private code and the schema-neutral
+/// primitives in `introspect`. Later shapes require later ledger entries.
+/// A version-stamped data backfill may use current domain code so a later entry
+/// can re-derive it (v16/v18 actor identity). The freeze-in-place extraction of
+/// private helper copies preserves shipped behavior, including v13/v15 defensive
+/// recreation; removing those compatibility paths requires separate approval.
+/// Every prefix is guarded by the store schema golden (`make goldens`).
 // L-0083: Preserve every shipped migration entry across reverts and history rewrites.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -426,12 +471,128 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_v2_audit_event_type_ts_index,
     },
+    // Per-minute CPU and memory of each delivery run's worker scope, for
+    // auto-concurrency profiles. A new table only, which an older binary never
+    // names, so drains on older binaries keep writing.
+    Migration {
+        version: 44,
+        name: "run_resource_minutes",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_run_resource_minutes,
+    },
+    // The host's CPU and memory per wall-clock minute, the ground truth for
+    // the forecast. A new table only, as v44.
+    Migration {
+        version: 45,
+        name: "host_resource_minutes",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_host_resource_minutes,
+    },
+    Migration {
+        version: 46,
+        name: "job_run_step_lock_wait",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_job_run_step_lock_wait,
+    },
+    // Admissions decided under the host admission lock whose runs may not
+    // exist yet, so every drain's forecast counts them. A new table only, as
+    // v44.
+    Migration {
+        version: 47,
+        name: "admission_reservations",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_admission_reservations,
+    },
+    // Each drain admission pass's forecast and decisions, checked against
+    // `host_resource_minutes` by the forecast accuracy report. A new table
+    // only, as v44.
+    Migration {
+        version: 48,
+        name: "admission_forecasts",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_admission_forecasts,
+    },
+    // The automation, review and local-pull feature ledgers, which features
+    // applied lazily on first open, run to completion here and freeze; later
+    // changes to their tables are store entries. Each feature keeps its
+    // `feature_schema_meta` rows and `feature.compat.<feature>` record, from
+    // which a binary without this entry decides the feature as before.
+    Migration {
+        version: 49,
+        name: "absorb_feature_ledgers",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_absorb_feature_ledgers,
+    },
+    Migration {
+        version: 50,
+        name: "pull_forecast_decisions",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_pull_forecast_decisions,
+    },
+    Migration {
+        version: 51,
+        name: "worker_cpu_accounting",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_worker_cpu_accounting,
+    },
+    // ORB-16379: the crews this host's provider was unavailable for. A new
+    // table only, which an older binary never reads, so drains on older
+    // binaries keep writing.
+    Migration {
+        version: 52,
+        name: "provider_crew_outages",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_provider_crew_outages,
+    },
+    Migration {
+        version: 53,
+        name: "forecast_attribution",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_forecast_attribution,
+    },
+    Migration {
+        version: 54,
+        name: "retention_analytics",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_retention_analytics,
+    },
+    // ORB-17304: each executor's latest declared capability per workspace,
+    // which admission orders against. A new table only, which an older
+    // binary never reads, so drains on older binaries keep writing.
+    Migration {
+        version: 55,
+        name: "executor_census",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_executor_census,
+    },
+    // ORB-17288: a crew that sets `env` is its own provider account. A new
+    // table for its usage readings and a nullable `invocations.account`
+    // column; an older binary never reads the table and keeps inserting
+    // invocations without the column, so drains on older binaries keep
+    // writing.
+    Migration {
+        version: 56,
+        name: "provider_crew_accounts",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_provider_crew_accounts,
+    },
+    // Restore older lifecycle readers without reinterpreting a handoff as
+    // fail/release. Only attribution moves to a row family they never touch;
+    // authority, receipts and bundle recovery intents keep their bytes.
+    // A write guard also fences already-open pre-repair handoff writers;
+    // that restriction makes the migration read-compatible, not additive.
+    Migration {
+        version: 57,
+        name: "handoff_settlement_sidecars",
+        compat: MigrationCompatibility::ReadCompatible,
+        apply: super::apply_handoff_settlement_sidecars,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 43;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 57;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 
@@ -459,7 +620,7 @@ pub(crate) fn run_migrations(
     conn: &Connection,
     migrations: &[Migration],
 ) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
-    run_migrations_inner(conn, migrations, None)
+    run_database_migrations(conn, &STORE_DATABASE, migrations, None)
 }
 
 pub(crate) fn run_migrations_at_path(
@@ -467,11 +628,19 @@ pub(crate) fn run_migrations_at_path(
     migrations: &[Migration],
     path: &Path,
 ) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
-    run_migrations_inner(conn, migrations, Some(path))
+    run_database_migrations(conn, &STORE_DATABASE, migrations, Some(path))
 }
 
-fn run_migrations_inner(
+/// Apply a database's ordered registry through its own transactional ledger.
+/// `path`, when known, names the file in a contention error.
+///
+/// Returns `None` for a current or migrated database. For a newer database,
+/// returns its compatibility decision without migrating: the caller must hold
+/// the connection read-only unless [`ForwardCompatibleOpen::writable`] is true.
+/// An incompatible or unclassified newer schema is refused before any write.
+pub fn run_database_migrations(
     conn: &Connection,
+    database: &LedgeredDatabase,
     migrations: &[Migration],
     path: Option<&Path>,
 ) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
@@ -479,9 +648,9 @@ fn run_migrations_inner(
     let current = current_schema_version(conn)?;
     let supported = migrations.last().map(|m| m.version).unwrap_or(0);
     if current > supported {
-        return evaluate_newer_database(conn, current, supported).map(Some);
+        return evaluate_newer_database(conn, database, current, supported).map(Some);
     }
-    // A current store needs no write transaction. Return before the
+    // A current database needs no write transaction. Return before the
     // idempotent CREATE TABLE so read-only mounts remain genuinely readable.
     if current == supported {
         return Ok(None);
@@ -491,7 +660,7 @@ fn run_migrations_inner(
     // re-reads the ledger under BEGIN IMMEDIATE and skips anything another
     // opener already committed while this connection waited.
     for migration in migrations.iter().filter(|m| m.version > current) {
-        if let Some(forward) = apply_one(conn, migrations, migration, supported, path)? {
+        if let Some(forward) = apply_one(conn, database, migrations, migration, supported, path)? {
             // Another opener advanced the database past this binary while we
             // were applying; the rest of the registry is moot and the caller
             // must hold the connection read-only.
@@ -504,41 +673,38 @@ fn run_migrations_inner(
 
 /// Decide a database recorded newer than this binary supports. Reads only
 /// the compatibility record a newer binary left behind; never writes.
-fn evaluate_newer_database(
+pub fn evaluate_newer_database(
     conn: &Connection,
+    database: &LedgeredDatabase,
     current: u32,
     supported: u32,
 ) -> Result<ForwardCompatibleOpen, OrbitError> {
     let record = match read_compat_record(conn) {
-        Ok(record) => evaluate_newer_state(
-            StateComponent::StoreSchema,
-            current,
-            supported,
-            record,
-            true,
-        ),
+        Ok(record) => evaluate_newer_state(database.component, current, supported, record, true),
         Err(refusal) => Err(refusal),
     };
     match record {
         Ok(forward) if forward.writable => {
             orbit_common::tracing::info!(
                 target: "orbit.store.sqlite",
+                database = database.noun,
                 schema_version = current,
                 supported_version = supported,
-                "opening a newer store database whose newer migrations keep older writers safe; this binary applies no schema migration to it",
+                "opening a newer database whose newer migrations keep older writers safe; this binary applies no schema migration to it",
             );
             Ok(forward)
         }
         Ok(forward) => {
             orbit_common::tracing::warn!(
                 target: "orbit.store.sqlite",
+                database = database.noun,
                 schema_version = current,
                 supported_version = supported,
-                "opening a newer store database read-only; this binary applies no schema migration to it",
+                "opening a newer database read-only; this binary applies no schema migration to it",
             );
             Ok(forward)
         }
-        Err(refusal) => Err(newer_than_supported(current, supported, &refusal)),
+        Err(refusal) => Err(newer_than_supported(database, current, supported, &refusal)),
     }
 }
 
@@ -589,7 +755,7 @@ fn write_compat_record(
 
 /// Current schema version recorded in the ledger; 0 when no versioned
 /// migration has been applied (fresh or pre-ledger legacy database).
-pub(crate) fn current_schema_version(conn: &Connection) -> Result<u32, OrbitError> {
+pub fn current_schema_version(conn: &Connection) -> Result<u32, OrbitError> {
     Ok(applied_migrations(conn)?
         .last()
         .map(|m| m.version)
@@ -607,7 +773,7 @@ pub(crate) fn applied_migrations(conn: &Connection) -> Result<Vec<AppliedMigrati
             "SELECT key, value, updated_at FROM schema_meta
              WHERE key LIKE ?1 ORDER BY key",
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     let rows = stmt
         .query_map([format!("{LEDGER_KEY_PREFIX}%")], |row| {
             Ok((
@@ -616,11 +782,11 @@ pub(crate) fn applied_migrations(conn: &Connection) -> Result<Vec<AppliedMigrati
                 row.get::<_, String>(2)?,
             ))
         })
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
 
     let mut applied = Vec::new();
     for row in rows {
-        let (key, name, applied_at) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
+        let (key, name, applied_at) = row.map_err(sqlite_store_error)?;
         let version = parse_ledger_key(&key)?;
         applied.push(AppliedMigration {
             version,
@@ -637,11 +803,18 @@ pub(crate) fn applied_migrations(conn: &Connection) -> Result<Vec<AppliedMigrati
 /// instead (or raised as a refusal).
 fn apply_one(
     conn: &Connection,
+    database: &LedgeredDatabase,
     migrations: &[Migration],
     migration: &Migration,
     supported: u32,
     path: Option<&Path>,
 ) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
+    // Declared before the transaction so it is restored after the
+    // transaction commits or rolls back.
+    let _foreign_keys = database
+        .foreign_keys_off
+        .then(|| ForeignKeysOff::new(conn))
+        .transpose()?;
     // BEGIN IMMEDIATE takes the reserved lock before any read so a WAL
     // snapshot cannot be pinned under DEFERRED while another opener
     // commits. `new_unchecked` is the `&Connection` form of
@@ -656,7 +829,7 @@ fn apply_one(
         // Another opener advanced the database past this binary while we
         // waited for the write lock. Re-decide from its record rather than
         // continuing to apply migrations to a newer database.
-        return evaluate_newer_database(&tx, current, supported).map(Some);
+        return evaluate_newer_database(&tx, database, current, supported).map(Some);
     }
     if current >= migration.version {
         return Ok(None);
@@ -695,15 +868,19 @@ fn apply_one(
         )
     })?;
     write_compat_record(&tx, migrations, migration.version)?;
+    if let Some(stamp) = database.stamp {
+        stamp(&tx, migrations, migration.version)?;
+    }
 
     tx.commit()
         .map_err(|error| commit_migration_error(migration, error))?;
 
     orbit_common::tracing::info!(
         target: "orbit.store.sqlite",
+        database = database.noun,
         version = migration.version,
         name = migration.name,
-        "applied store schema migration",
+        "applied schema migration",
     );
     Ok(None)
 }
@@ -739,14 +916,47 @@ fn migration_begin_error(
 }
 
 fn newer_than_supported(
+    database: &LedgeredDatabase,
     current: u32,
     supported: u32,
     refusal: &CompatibilityRefusal,
 ) -> OrbitError {
+    let noun = database.noun;
     OrbitError::Migration(format!(
-        "store database schema version {current} is newer than the newest version this \
+        "{noun} schema version {current} is newer than the newest version this \
         orbit binary supports ({supported}); {refusal}; upgrade orbit to open this database"
     ))
+}
+
+/// Foreign-key enforcement turned off on one connection until dropped.
+struct ForeignKeysOff<'a> {
+    conn: &'a Connection,
+}
+
+impl<'a> ForeignKeysOff<'a> {
+    fn new(conn: &'a Connection) -> Result<Self, OrbitError> {
+        conn.pragma_update(None, "foreign_keys", "OFF")
+            .map_err(|error| {
+                sqlite_error(
+                    StorageLayer::Migration,
+                    &error,
+                    format!("failed to turn off foreign keys for a migration: {error}"),
+                )
+            })?;
+        Ok(Self { conn })
+    }
+}
+
+impl Drop for ForeignKeysOff<'_> {
+    fn drop(&mut self) {
+        if let Err(error) = self.conn.pragma_update(None, "foreign_keys", "ON") {
+            orbit_common::tracing::warn!(
+                target: "orbit.store.sqlite",
+                error = %error,
+                "could not turn foreign keys back on after a migration",
+            );
+        }
+    }
 }
 
 pub(super) fn commit_migration_error(migration: &Migration, error: rusqlite::Error) -> OrbitError {
@@ -755,10 +965,14 @@ pub(super) fn commit_migration_error(migration: &Migration, error: rusqlite::Err
         rusqlite::Error::SqliteFailure(sqlite_error, _)
             if sqlite_error.code == ErrorCode::DiskFull
     ) {
-        return OrbitError::Store(format!(
-            "SQLITE_FULL / ENOSPC while committing migration v{} ({}): {error}",
-            migration.version, migration.name
-        ));
+        return sqlite_error(
+            StorageLayer::Store,
+            &error,
+            format!(
+                "SQLITE_FULL / ENOSPC while committing migration v{} ({}): {error}",
+                migration.version, migration.name
+            ),
+        );
     }
 
     sqlite_error(

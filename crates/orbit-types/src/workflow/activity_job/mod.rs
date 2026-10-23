@@ -6,6 +6,7 @@ pub const ACTIVITY_REF_PREFIX: &str = "activity:";
 pub mod activity_roles;
 pub mod activity_v2;
 pub mod audit_envelope;
+pub mod explore;
 pub mod job_v2;
 pub mod provider_sandbox;
 pub mod retired;
@@ -13,6 +14,10 @@ pub mod schema_header;
 pub mod tool_allowlist;
 pub mod trusted_host;
 
+pub use explore::{
+    EXPLORE_ACTIVITY, EXPLORE_CALLER_ACTIVITIES, EXPLORE_JOB, EXPLORE_PARENT_RUN_KEY,
+    EXPLORE_PROVIDER_SANDBOX_MODE,
+};
 pub use provider_sandbox::{
     CODEX_LEAST_RESTRICTIVE_SANDBOX, CODEX_PROVIDER_SANDBOX_MODES, DEFAULT_PROVIDER_SANDBOX,
     admit_provider_sandbox_mode, format_provider_sandbox, is_least_restrictive_provider_sandbox,
@@ -27,6 +32,7 @@ macro_rules! deterministic_action_catalog {
     ($declare:ident) => {
         $declare! {
             core {
+                AdoptOrphanedDeliveries => "adopt_orphaned_deliveries",
                 ApplyBlockedTaskRecovery => "apply_blocked_task_recovery",
                 ApplyFindingVerification => "apply_finding_verification",
                 ApplyTaskPilotResults => "apply_task_pilot_results",
@@ -160,6 +166,7 @@ pub use activity_v2::{
     ProviderAlias, ProviderDeprecation, ProviderDiagnostic, ProviderEntryPoint, ProviderIdentity,
     ProviderParseError, ProviderResolution, ProviderResolveRequest, ProviderSource,
     RETIRED_BACKEND_MIGRATION, RetiredAgentBackend, check_retired_backend_value,
+    requires_native_inspection,
 };
 pub use audit_envelope::{
     AUDIT_ENVELOPE_SCHEMA_VERSION, BranchOutcome, StepRecoveryDecisionRecord,
@@ -168,8 +175,8 @@ pub use audit_envelope::{
 };
 pub use job_v2::{
     BackoffStrategy, FanInSpec, FanOutBlock, JobKind, JobTaskDelivery, JobV2, JobV2Step,
-    JobV2StepBody, JoinMode, LoopBlock, ParallelBlock, PipelineRef, RetrySpec, TargetRef,
-    TargetStep,
+    JobV2StepBody, JoinMode, LoopBlock, ParallelBlock, PipelineRef, RetrySpec, SteeringGateSpec,
+    TargetRef, TargetStep,
 };
 pub use retired::{RetiredFeatureError, validate_job_retired_sessions};
 pub use schema_header::SchemaHeader;
@@ -185,6 +192,3 @@ pub use trusted_host::{
     TrustedHostAdmission, run_input_declares_trusted_host, strip_trusted_host_admission,
     validate_trusted_host_activity,
 };
-
-#[cfg(test)]
-mod tests;

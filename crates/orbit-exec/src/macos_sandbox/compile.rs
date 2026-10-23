@@ -10,7 +10,7 @@ use crate::credential_paths::{
 };
 
 /// Compile a [`ResolvedFsProfile`] into SBPL text suitable for
-/// `sandbox-exec -f`.
+/// `sandbox-exec -p`.
 ///
 /// `provider` is the canonical provider name of the CLI this profile will
 /// confine (`claude`, `codex`, ...). It only selects the credential-store
@@ -92,25 +92,25 @@ pub fn compile_macos_sandbox_profile(
 }
 
 /// Env inputs that influence per-provider state-directory allowances in the
-/// compiled SBPL profile. Threaded through a struct so tests can pin every
-/// override without juggling a long parameter list.
+/// compiled SBPL profile. Captured once by the public compiler and passed
+/// together to the internal profile renderer.
 #[derive(Default, Clone, Copy)]
-pub(super) struct SandboxCompileEnv<'a> {
-    pub(super) home: Option<&'a OsStr>,
-    pub(super) codex_home: Option<&'a OsStr>,
-    pub(super) claude_config_dir: Option<&'a OsStr>,
-    pub(super) grok_home: Option<&'a OsStr>,
-    pub(super) copilot_home: Option<&'a OsStr>,
-    pub(super) xdg_cache_home: Option<&'a OsStr>,
-    pub(super) pi_coding_agent_dir: Option<&'a OsStr>,
-    pub(super) xdg_data_home: Option<&'a OsStr>,
-    pub(super) xdg_config_home: Option<&'a OsStr>,
-    pub(super) xdg_state_home: Option<&'a OsStr>,
-    pub(super) opencode_config_dir: Option<&'a OsStr>,
-    pub(super) cargo_home: Option<&'a OsStr>,
+struct SandboxCompileEnv<'a> {
+    home: Option<&'a OsStr>,
+    codex_home: Option<&'a OsStr>,
+    claude_config_dir: Option<&'a OsStr>,
+    grok_home: Option<&'a OsStr>,
+    copilot_home: Option<&'a OsStr>,
+    xdg_cache_home: Option<&'a OsStr>,
+    pi_coding_agent_dir: Option<&'a OsStr>,
+    xdg_data_home: Option<&'a OsStr>,
+    xdg_config_home: Option<&'a OsStr>,
+    xdg_state_home: Option<&'a OsStr>,
+    opencode_config_dir: Option<&'a OsStr>,
+    cargo_home: Option<&'a OsStr>,
 }
 
-pub(super) fn compile_macos_sandbox_profile_with_env(
+fn compile_macos_sandbox_profile_with_env(
     rules: &ResolvedFsProfile,
     provider: &str,
     env: SandboxCompileEnv<'_>,
@@ -135,6 +135,10 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
 
     out.push_str("(allow file-read*)\n");
     out.push_str("(allow process*)\n");
+    // setpriority(2) uses system-sched, outside process*. Only the calling
+    // process may change its scheduling; normal unprivileged OS checks still
+    // forbid lowering niceness (raising priority).
+    out.push_str("(allow system-sched (target self))\n");
     out.push_str("(allow signal)\n");
     out.push_str("(allow ipc-posix*)\n");
     out.push_str("(allow mach*)\n");
@@ -267,6 +271,21 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
             ));
         }
     }
+    // Muse Code keeps its settings and `auth.json` login under its XDG config
+    // root, tracing/plugins/skills under its XDG data root, and its session
+    // name authority under Application Support. Granted only to the active
+    // Muse executor; `META_API_KEY` is an explicit environment opt-in and
+    // needs no additional path. Its login-keychain read is the carve-out in
+    // `provider_reads_macos_login_keychain`. [ORB-16577] [ORB-16612]
+    if Provider::parse(provider).ok() == Some(Provider::Muse) {
+        for state_dir in super::provider_dirs::muse_state_dirs(home, xdg_config_home, xdg_data_home)
+        {
+            out.push_str(&format!(
+                "(allow file-write* (subpath \"{}\"))\n",
+                super::sbpl_filter::sbpl_escape(&state_dir.display().to_string())
+            ));
+        }
+    }
     super::provider_dirs::emit_claude_home_json_allows(home, claude_config_dir, &mut out);
     super::provider_dirs::emit_grok_state_file_allows(home, grok_home, &mut out);
 
@@ -313,6 +332,9 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
 /// `github-copilot-app`, `cursor-access-token` / `cursor-refresh-token`). The
 /// Antigravity CLI (`agy`) also stores its OAuth token in the login keychain
 /// and does not persist a readable token under its state directory by default.
+/// Muse Code's `muse exec` needs the login keychain too, although `muse login`
+/// also writes `auth.json` under its config root: with the keychain hidden it
+/// reports `missing meta credentials` for a valid login. [ORB-16612]
 /// Codex, Gemini, and Grok keep credentials in plain files under their own
 /// state directories, which are already granted, so they keep the deny. Names
 /// that do not resolve to a canonical [`Provider`] keep the deny too — the
@@ -323,7 +345,13 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
 fn provider_reads_macos_login_keychain(provider: &str) -> bool {
     matches!(
         Provider::parse(provider).ok(),
-        Some(Provider::Claude | Provider::Copilot | Provider::Cursor | Provider::Antigravity)
+        Some(
+            Provider::Claude
+                | Provider::Copilot
+                | Provider::Cursor
+                | Provider::Antigravity
+                | Provider::Muse
+        )
     )
 }
 
@@ -730,7 +758,8 @@ pub fn append_macos_network_access(profile: &mut String, access: MacosNetworkAcc
     }
 }
 
-/// Deny every read and write beneath `subpaths` in a compiled profile.
+/// Deny every read, write and outbound Unix socket connection beneath
+/// `subpaths` in a compiled profile.
 ///
 /// Appended after everything else the profile allows, so under SBPL's
 /// last-match-wins the denial is final: no earlier `modify` grant, runtime
@@ -741,7 +770,8 @@ pub fn append_macos_subpath_mask(profile: &mut String, subpaths: &[PathBuf]) {
     for path in subpaths {
         let physical = crate::physical_with_missing_tail(path);
         profile.push_str(&format!(
-            "(deny file-read* file-write* (subpath \"{}\"))\n",
+            "(deny file-read* file-write* (subpath \"{0}\"))\n\
+             (deny network-outbound (remote unix-socket (subpath \"{0}\")))\n",
             super::sbpl_filter::sbpl_escape(&physical.display().to_string())
         ));
     }

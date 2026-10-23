@@ -4,18 +4,50 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+use crate::identity::CrewEnvVar;
 use serde_json::Value;
 
 use crate::workflow::JobRunState;
 use crate::workflow::JobRunTrigger;
+use crate::workflow::ReviewGateAdmissionOutput;
 use crate::workflow::child_dispatch::{ChildCancellation, ChildDispatch, ChildDispatchPhase};
 
 use super::{
-    ActivityCrewDraw, DrainAdmissionPass, DrainAdmissionsStop, DrainApprovalReport,
-    DrainCancelRequest, DrainWindowExtension, DrainWorkerLimit, FailureActivityCheckpoint,
-    FinalRecoveryCheckpoint, PullAuthRecovery, PullBreaker, PullCrewPreflight, PullSinglePass,
-    PullWindowClose, TaskCancellationPolicy,
+    ActivityCrewDraw, CommentLogMark, DrainAdmissionsStop, DrainCancelRequest,
+    DrainWindowExtension, DrainWorkerLimit, FailureActivityCheckpoint, FinalRecoveryCheckpoint,
+    PullDrainState, SteeringRound, SteeringWatermark, TaskCancellationPolicy,
 };
+
+/// A crew whose `[crews.<name>] env` entries read sources the launching
+/// environment does not hold. Names only, never values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrewEnvUnset {
+    /// The crew name.
+    pub crew: String,
+    /// Its entries whose source is unset or empty.
+    pub env: Vec<CrewEnvVar>,
+}
+
+impl CrewEnvUnset {
+    /// One clause naming the crew and each unset source with the variable it
+    /// feeds, for warnings and run detail. Names only.
+    pub fn describe(&self) -> String {
+        let sources = self
+            .env
+            .iter()
+            .map(|entry| {
+                if entry.is_mapped() {
+                    format!("{} (for {})", entry.source, entry.name)
+                } else {
+                    entry.source.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("crew `{}` env source {sources}", self.crew)
+    }
+}
 
 /// The PR leaf step that admits the before-landing review of its open pull
 /// request [ORB-14849]; its output's `applies` says whether that review runs.
@@ -26,7 +58,7 @@ const LANDING_REVIEW_ADMIT_STEP: &str = "landing_review_gate_admit";
 /// Stored as `state.json` in the run bundle directory. Steps read accumulated
 /// state from `pipeline` and write their recovery metadata back so retry and
 /// reconcile can resume from the persisted snapshot.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct PipelineState {
     pub run_id: String,
     pub job_id: String,
@@ -91,64 +123,13 @@ pub struct PipelineState {
     /// behind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub child_dispatches: Vec<ChildDispatch>,
-    /// Live worker ceiling for a bounded auto drain, when an operator has
-    /// adjusted it [ORB-11253]. Absent means the submitted input still
-    /// governs. Like `child_dispatches` this survives terminalization: it is
-    /// the evidence of what the run was actually admitting under.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drain_worker_limit: Option<DrainWorkerLimit>,
-    /// Operator stop of *new* admissions on a bounded auto drain [ORB-11283].
-    /// Absent means the drain is still admitting under its window and ceiling.
-    /// Like `drain_worker_limit` this survives terminalization: it is how a
-    /// finished coordinator is distinguished from cancellation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drain_admissions_stop: Option<DrainAdmissionsStop>,
-    /// Operator extension of this drain's window [ORB-15383]. Absent means the
-    /// deadline its `open_window` step stamped still governs. Survives
-    /// terminalization like `drain_worker_limit`, as evidence of the window
-    /// the run actually admitted under.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drain_window_extension: Option<DrainWindowExtension>,
-    /// A graceful cancel this pull drain is carrying out: present while it
-    /// waits for its launched leaves, and kept once it ends `cancelled`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drain_cancel: Option<DrainCancelRequest>,
+    /// Typed drain and pull checkpoints, flattened into the persisted state.
+    #[serde(flatten)]
+    pub pull_drain: PullDrainState,
     /// Operator-selected task disposition for this run's cancellation. Missing
     /// on older or non-operator terminalizations, which retain failure blocking.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_cancellation_policy: Option<TaskCancellationPolicy>,
-    /// The provider preflight a pull drain took when its window opened.
-    /// Survives terminalization: it is how `run show` reports which crews
-    /// the drain could not run.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pull_crew_preflight: Option<PullCrewPreflight>,
-    /// Recovery per released auth incident; old incidents stay acknowledged on resume.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub pull_auth_recovery: BTreeMap<String, PullAuthRecovery>,
-    /// The single admission pass of a pull drain submitted without a window,
-    /// once it has started. Survives terminalization and resume, so the pass
-    /// is never taken twice.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pull_single_pass: Option<PullSinglePass>,
-    /// The pass that closed this timed pull drain's window [ORB-15417]: once
-    /// present, no extension reopens it. Survives terminalization and resume,
-    /// so a retried pass never admits past it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pull_window_close: Option<PullWindowClose>,
-    /// This pull drain's failure breaker while it is open or half-open
-    /// [ORB-15639]; absent while closed. Survives terminalization, so `run
-    /// show` reports the breaker a drain ended with.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pull_breaker: Option<PullBreaker>,
-    /// What this drain's last admission pass left waiting. Survives
-    /// terminalization: it is how `run show` reports the backlog a finished
-    /// drain never started.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drain_last_pass: Option<DrainAdmissionPass>,
-    /// What this `--approve-proposed` drain approved and held. Survives
-    /// terminalization like `drain_last_pass`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drain_approvals: Option<DrainApprovalReport>,
     /// Successful terminal failure activity output, when one ran.
     ///
     /// This remains distinct from the successful-step maps: the original step
@@ -174,21 +155,14 @@ pub struct PipelineState {
     /// with the rest of the state so a resumed run keeps the same crew.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub activity_crew_draws: BTreeMap<String, ActivityCrewDraw>,
+    /// Absolute completion observation deadlines, keyed by PR. Retries and
+    /// checkpoint resumes retain the original budget instead of renewing it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub completion_deadlines: BTreeMap<String, u64>,
     /// This run's final recovery [ORB-13907]; present once it was admitted.
     /// Resume clones it, so a resumed run never invokes final recovery again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_recovery: Option<FinalRecoveryCheckpoint>,
-    /// The push this run held at because the forge kept refusing it
-    /// [ORB-14617]. Present only while the run's last outcome is that hold:
-    /// finalization replaces it with the run's own result, and a resume
-    /// seeded from a held run reads it to keep the lineage's `held_since`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub forge_hold: Option<crate::workflow::ForgeUnavailableHold>,
-    /// When the clock finished expiring this run's forge hold. A recorded
-    /// expiry stops later ticks from acting again; manual resume retains the
-    /// hold and checkpoints, but clears this run-local acknowledgement.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub forge_hold_expired_at: Option<DateTime<Utc>>,
     /// How this run was submitted [ORB-12255]. Absent on runs recorded before
     /// trigger provenance existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -199,11 +173,31 @@ pub struct PipelineState {
     /// and on runs recorded before this existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env_pass_unset: Vec<String>,
+    /// Crews whose `[crews.<name>] env` sources the submitting process held
+    /// no value for: drains excluded them and their activities are refused.
+    /// Names only, never values. Absent when none were unset.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub crew_env_unset: Vec<CrewEnvUnset>,
     /// The leaf failure this run's own failure echoes, when it failed only
     /// because a child it waited on failed [ORB-15202]. Absent for a run that
     /// failed on its own, and on runs recorded before this existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_cause: Option<crate::workflow::RunRootCause>,
+    /// Mid-run steering's snapshot watermarks, keyed by task id: the newest
+    /// comment of each task that this run's task-context prompts included.
+    /// Only the host writes them, when it builds such a prompt with
+    /// `workflow.mid_run_steering.enabled`; absent otherwise and on runs
+    /// recorded before steering existed.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub steering_watermarks: BTreeMap<String, SteeringWatermark>,
+    /// Mid-run steering's promotion-gate rounds, keyed by task id, oldest
+    /// first. Only the host writes them, when the gate before `commit`
+    /// admits a round; they are this run's budget against
+    /// `workflow.mid_run_steering.max_rounds`, so a resumed run starts
+    /// without them. Absent otherwise and on runs recorded before the gate
+    /// existed.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub steering_rounds: BTreeMap<String, Vec<SteeringRound>>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -226,35 +220,64 @@ impl PipelineState {
             waiting_on_deps: None,
             waiting_on_locks: None,
             child_dispatches: Vec::new(),
-            drain_worker_limit: None,
-            drain_admissions_stop: None,
-            drain_window_extension: None,
-            drain_cancel: None,
+            pull_drain: PullDrainState::default(),
             task_cancellation_policy: None,
-            pull_crew_preflight: None,
-            pull_auth_recovery: BTreeMap::new(),
-            pull_single_pass: None,
-            pull_window_close: None,
-            pull_breaker: None,
-            drain_last_pass: None,
-            drain_approvals: None,
             failure_activity_checkpoint: None,
             rebase_recovery_checkpoints: BTreeMap::new(),
             activity_crew_draws: BTreeMap::new(),
+            completion_deadlines: BTreeMap::new(),
             final_recovery: None,
-            forge_hold: None,
-            forge_hold_expired_at: None,
             trigger: None,
             env_pass_unset: Vec::new(),
+            crew_env_unset: Vec::new(),
             root_cause: None,
+            steering_watermarks: BTreeMap::new(),
+            steering_rounds: BTreeMap::new(),
             updated_at: Utc::now(),
         }
     }
 
-    /// The compare-and-set handle for [`Self::drain_worker_limit`]. Zero means
+    /// Record that `step_id` of this run built a task-context prompt for
+    /// `task_id` whose newest comment is `newest`. The task's watermark and
+    /// the step's snapshot only advance: an older or missing `newest` leaves
+    /// each recorded mark in place.
+    pub fn record_steering_snapshot(
+        &mut self,
+        task_id: &str,
+        step_id: &str,
+        newest: Option<CommentLogMark>,
+    ) {
+        let now = Utc::now();
+        self.steering_watermarks
+            .entry(task_id.to_string())
+            .or_default()
+            .record(step_id, newest, now);
+        self.updated_at = now;
+    }
+
+    /// Record that `step_id` of this run built a task-context prompt whose
+    /// steering block carried `delivered` in full for `task_id`; see
+    /// [`SteeringWatermark::record_delivery`].
+    pub fn record_steering_delivery(
+        &mut self,
+        task_id: &str,
+        step_id: &str,
+        through: Option<CommentLogMark>,
+        delivered: &[CommentLogMark],
+    ) {
+        let now = Utc::now();
+        self.steering_watermarks
+            .entry(task_id.to_string())
+            .or_default()
+            .record_delivery(step_id, through, delivered, now);
+        self.updated_at = now;
+    }
+
+    /// The compare-and-set handle for [`PullDrainState::drain_worker_limit`]. Zero means
     /// no operator adjustment has been accepted yet.
     pub fn drain_worker_limit_revision(&self) -> u32 {
-        self.drain_worker_limit
+        self.pull_drain
+            .drain_worker_limit
             .as_ref()
             .map_or(0, |limit| limit.revision)
     }
@@ -263,7 +286,8 @@ impl PipelineState {
     /// with. An operator adjustment always wins over the submitted input:
     /// it is the more recent statement of the same decision.
     pub fn effective_max_active_leaf_runs(&self, submitted: u32) -> u32 {
-        self.drain_worker_limit
+        self.pull_drain
+            .drain_worker_limit
             .as_ref()
             .map_or(submitted, |limit| limit.max_active_leaf_runs)
     }
@@ -287,7 +311,7 @@ impl PipelineState {
         if expected_revision.is_some_and(|expected| expected != revision) {
             return false;
         }
-        self.drain_worker_limit = Some(DrainWorkerLimit {
+        self.pull_drain.drain_worker_limit = Some(DrainWorkerLimit {
             max_active_leaf_runs,
             previous_max_active_leaf_runs: self.effective_max_active_leaf_runs(submitted),
             revision: revision.saturating_add(1),
@@ -302,7 +326,8 @@ impl PipelineState {
     /// The deadline in force for a drain that stamped `stamped`: the later of
     /// the stamp and any operator extension. An extension never shortens.
     pub fn effective_drain_deadline(&self, stamped: DateTime<Utc>) -> DateTime<Utc> {
-        self.drain_window_extension
+        self.pull_drain
+            .drain_window_extension
             .as_ref()
             .map_or(stamped, |extension| extension.deadline.max(stamped))
     }
@@ -324,10 +349,11 @@ impl PipelineState {
             return false;
         }
         let revision = self
+            .pull_drain
             .drain_window_extension
             .as_ref()
             .map_or(0, |extension| extension.revision);
-        self.drain_window_extension = Some(DrainWindowExtension {
+        self.pull_drain.drain_window_extension = Some(DrainWindowExtension {
             deadline,
             previous_deadline,
             revision: revision.saturating_add(1),
@@ -341,16 +367,16 @@ impl PipelineState {
 
     /// Whether this drain has been told to stop offering new work.
     pub fn admissions_stopped(&self) -> bool {
-        self.drain_admissions_stop.is_some()
+        self.pull_drain.drain_admissions_stop.is_some()
     }
 
     /// Record an admissions stop. Idempotent: a drain that is already stopped
     /// keeps the original actor and timestamp and returns `false`.
     pub fn set_drain_admissions_stop(&mut self, actor: String, reason: Option<String>) -> bool {
-        if self.drain_admissions_stop.is_some() {
+        if self.pull_drain.drain_admissions_stop.is_some() {
             return false;
         }
-        self.drain_admissions_stop = Some(DrainAdmissionsStop {
+        self.pull_drain.drain_admissions_stop = Some(DrainAdmissionsStop {
             actor,
             reason,
             stopped_at: Utc::now(),
@@ -361,7 +387,7 @@ impl PipelineState {
 
     /// Whether a graceful cancel is waiting for this drain's leaves.
     pub fn drain_cancelling(&self) -> bool {
-        self.drain_cancel.is_some()
+        self.pull_drain.drain_cancel.is_some()
     }
 
     /// Record a graceful cancel, stopping new admissions with it. Idempotent:
@@ -372,11 +398,11 @@ impl PipelineState {
         source: String,
         reason: Option<String>,
     ) -> bool {
-        if self.drain_cancel.is_some() {
+        if self.pull_drain.drain_cancel.is_some() {
             return false;
         }
         self.set_drain_admissions_stop(actor.clone(), reason.clone());
-        self.drain_cancel = Some(DrainCancelRequest {
+        self.pull_drain.drain_cancel = Some(DrainCancelRequest {
             actor,
             source,
             reason,
@@ -442,8 +468,8 @@ impl PipelineState {
     /// Unlike [`Self::step_output`] this needs no step index, so a reader that
     /// only knows the step's id (the audit trail names steps by id and numbers
     /// them in first-started order, not by YAML position) cannot land on
-    /// another step's checkpoint. A step that was skipped, or has not
-    /// completed, has no entry.
+    /// another step's checkpoint. An incomplete step may carry diagnostic
+    /// output; that entry never marks the step completed for resume.
     pub fn pipeline_step_output(&self, step_id: &str) -> Option<&Value> {
         self.pipeline.get(step_id)
     }
@@ -454,9 +480,8 @@ impl PipelineState {
     /// that follow, so a reader pairs it with a live run state.
     pub fn in_landing_review(&self) -> bool {
         self.pipeline_step_output(LANDING_REVIEW_ADMIT_STEP)
-            .and_then(|output| output.get("applies"))
-            .and_then(Value::as_bool)
-            == Some(true)
+            .and_then(|output| ReviewGateAdmissionOutput::from_value(output).ok())
+            .is_some_and(|admission| admission.applies())
     }
 
     /// Every recorded step output in step order, compacted or not.

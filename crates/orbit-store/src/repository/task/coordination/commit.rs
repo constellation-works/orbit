@@ -1,6 +1,7 @@
 //! The commit protocol itself: prepare, decide, apply, compensation and
 //! journal replay on recovery.
 
+use super::apply::DeferredApply;
 use super::{
     BoundaryDepth, COMMIT_INTENT_SCHEMA_VERSION, PENDING_MARKER_FILE, Section, TaskCommitBoundary,
     TaskCommitIntent,
@@ -15,7 +16,7 @@ use crate::repository::task::v2::sequencing::next_sequence;
 use crate::repository::task::v2_bundle::TaskBundleV2;
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_common::fs::io::atomic_write_text;
+use orbit_common::fs::io::{FileLockProbe, hold_step, probe_file_lock};
 use orbit_types::task::{
     CONTEXT_CREATION_AUTHORIZED_EVENT, ContextCreationState, TASK_ARTIFACT_SCHEMA_VERSION,
     TASK_EVENTS_FILE_NAME, TaskEventRowV2,
@@ -24,6 +25,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static JOURNAL_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Steps of a commit, so a long admission hold's report names which part of
+/// the protocol it spent its time in.
+const INTENT_STEP: &str = "commit intent";
+const PREPARE_STEP: &str = "commit prepare";
+const DECIDE_STEP: &str = "commit decision";
+const PUBLISH_STEP: &str = "commit envelope publish";
 
 fn remove_file_if_present(path: &Path) -> Result<(), OrbitError> {
     match std::fs::remove_file(path) {
@@ -61,12 +69,24 @@ impl TaskCommitBoundary {
         })
     }
 
-    /// Replay the journal when a marker says a commit may be unfinished.
+    /// Replay the journal when a commit may be unfinished.
     ///
-    /// Cheap on the common path: one existence check.
+    /// Cheap on the common path: a listing of the partition's commit leases
+    /// and one existence check.
     #[track_caller]
     pub fn recover_if_pending(&self) -> Result<(), OrbitError> {
         self.recover_pending_in(Section::here("recovery"))
+    }
+
+    /// Whether nothing in this partition awaits recovery: no commit lease
+    /// outlived its committer and no older version's commit marker is
+    /// present. The check [`Self::recover_if_pending`] makes first, taking no
+    /// lock and creating nothing, for a read that may then skip the
+    /// partition's sections. A commit that dies after this answer leaves its
+    /// own bundle's lease dead, which that bundle's readers check under its
+    /// lock.
+    pub(crate) fn has_nothing_to_recover(&self) -> Result<bool, OrbitError> {
+        Ok(!self.interrupted_commit()?)
     }
 
     pub(super) fn recover_pending_in(&self, section: Section) -> Result<(), OrbitError> {
@@ -75,14 +95,18 @@ impl TaskCommitBoundary {
             // unsettled on purpose.
             return Ok(());
         }
+        // A lease outlives its committer's lock only if that committer died.
+        if self.dead_commit_lease()? {
+            return self.recover_in(section);
+        }
         if !self.pending_marker_path().try_exists()? {
             return Ok(());
         }
-        // A live commit shows the same marker for as long as its admission
-        // section holds the partition exclusively. Wait that commit out as a
-        // reader: only a marker still present once the partition admits a
-        // reader belongs to an interrupted commit that needs exclusive
-        // replay. Queueing every read that saw a live commit as a writer
+        // An older version's live commit shows the same marker for as long
+        // as its admission section holds the partition exclusively. Wait that
+        // commit out as a reader: only a marker still present once the
+        // partition admits a reader belongs to an interrupted commit that
+        // needs exclusive replay. Queueing every read that saw a live commit as a writer
         // instead starved those reads behind the partition's ordinary
         // sections past the 30 s deadline under drain load (ORB-15088).
         let interrupted = self.shared(&self.host_lock_target(), section, || {
@@ -116,6 +140,11 @@ impl TaskCommitBoundary {
                 .store
                 .unsettled_task_commit_journal(&self.workspace_id)?
             {
+                // A committer that still holds its lease is applying after
+                // its own section, and settles its row itself.
+                if probe_file_lock(&self.commit_lease(&record.task_id)?)? == FileLockProbe::Held {
+                    continue;
+                }
                 match record.state {
                     TaskCommitJournalState::Prepared => {
                         self.store.abort_task_commit_journal(&record.journal_id)?;
@@ -128,14 +157,23 @@ impl TaskCommitBoundary {
                                     record.journal_id
                                 ))
                             })?;
+                        // A committer that released its lease after this
+                        // listing has applied its row; replay only one still
+                        // committed under the bundle lock.
                         self.bundle_store
-                            .with_bundle_write_lock(&intent.task_id, || {
-                                self.apply_committed(&record.journal_id, &intent)
+                            .with_bundle_replay_lock(&intent.task_id, || {
+                                match self.store.task_commit_journal_state(&record.journal_id)? {
+                                    Some(TaskCommitJournalState::Committed) => {
+                                        self.apply_committed(&record.journal_id, &intent)
+                                    }
+                                    _ => Ok(()),
+                                }
                             })?;
                     }
                     TaskCommitJournalState::Applied | TaskCommitJournalState::Aborted => {}
                 }
             }
+            self.clear_dead_commit_leases()?;
             self.clear_pending_marker()
         })
     }
@@ -182,82 +220,113 @@ impl TaskCommitBoundary {
             ));
         }
 
-        self.bundle_store
-            .with_bundle_write_lock(&params.task_id, || {
-                // The intent needs the envelope and the event log, not artifact
-                // payload bytes; task-field corruption still fails this read.
-                let bundle = self.bundle_store.read_bundle_lightweight(&params.task_id)?;
-                let current_status = bundle.envelope.status;
-                if !params.expected_status.is_empty()
-                    && !params.expected_status.contains(&current_status)
-                {
-                    return Ok(TaskCoordinationCommitOutcome::Stale { current_status });
+        // A commit this section already decided for the task lands first, so
+        // this one builds on its bundle.
+        self.flush_deferred_apply(&params.task_id)?;
+        // Held past this section until the decision has been applied: a
+        // bundle reader or writer waits for the apply, and one that finds
+        // the lease dead instead is refused until recovery replays it.
+        let bundle_hold = self.bundle_store.hold_bundle_write_lock(&params.task_id)?;
+        // The intent needs the envelope and the event log, not artifact
+        // payload bytes; task-field corruption still fails this read.
+        let bundle = self.bundle_store.read_bundle_lightweight(&params.task_id)?;
+        let current_status = bundle.envelope.status;
+        if !params.expected_status.is_empty() && !params.expected_status.contains(&current_status) {
+            return Ok(TaskCoordinationCommitOutcome::Stale { current_status });
+        }
+
+        let (intent, intent_json) = hold_step(INTENT_STEP, || {
+            let mut intent = self.build_intent(&bundle, params)?;
+            self.prepare_claim_evidence(
+                &mut intent,
+                &bundle,
+                evidence,
+                binding,
+                &params.actor,
+                effects,
+            )?;
+            self.append_creation_grant_to_intent(&mut intent, &bundle, &params.actor)?;
+            let intent_json = serde_json::to_string(&intent)
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            Ok::<_, OrbitError>((intent, intent_json))
+        })?;
+        let journal_id = unique_journal_id();
+
+        let lease = hold_step(PREPARE_STEP, || {
+            let lease = self.take_commit_lease(&params.task_id)?;
+            match self.store.prepare_task_commit_journal(
+                &journal_id,
+                &self.workspace_id,
+                &params.task_id,
+                &intent_json,
+            ) {
+                Ok(()) => Ok(lease),
+                Err(error) => {
+                    // A lease this fails to remove is free, and the next
+                    // recovery clears it; the prepare failure is the error.
+                    let _ = Self::release_commit_lease(lease);
+                    Err(error)
                 }
+            }
+        })?;
 
-                let mut intent = self.build_intent(&bundle, params)?;
-                self.prepare_claim_evidence(
-                    &mut intent,
-                    &bundle,
-                    evidence,
-                    binding,
-                    &params.actor,
-                    effects,
-                )?;
-                self.append_creation_grant_to_intent(&mut intent, &bundle, &params.actor)?;
-                let intent_json = serde_json::to_string(&intent)
-                    .map_err(|error| OrbitError::Store(error.to_string()))?;
-                let journal_id = unique_journal_id();
+        let decided = match hold_step(DECIDE_STEP, || {
+            self.store.commit_task_commit_journal_effects(
+                &journal_id,
+                params.reservation.as_ref(),
+                &params.rows,
+                make_rows,
+                effects,
+            )
+        }) {
+            Ok(decided) => decided,
+            Err(error) => {
+                self.compensate_prepared(&journal_id, lease)?;
+                return Err(error);
+            }
+        };
 
-                self.write_pending_marker(&journal_id)?;
-                self.store.prepare_task_commit_journal(
-                    &journal_id,
-                    &self.workspace_id,
-                    &params.task_id,
-                    &intent_json,
-                )?;
-
-                let decided = match self.store.commit_task_commit_journal_effects(
-                    &journal_id,
-                    params.reservation.as_ref(),
-                    &params.rows,
-                    make_rows,
-                    effects,
-                ) {
-                    Ok(decided) => decided,
-                    Err(error) => {
-                        self.compensate_prepared(&journal_id)?;
-                        return Err(error);
-                    }
-                };
-
-                match decided {
-                    JournalCommitOutcome::Conflicted(result) => {
-                        self.compensate_prepared(&journal_id)?;
-                        Ok(TaskCoordinationCommitOutcome::Conflicted {
-                            conflicts: result.conflicts,
-                            expired_reservations: result.expired_reservations,
-                        })
-                    }
-                    JournalCommitOutcome::RowExists { kind, row_id } => {
-                        self.compensate_prepared(&journal_id)?;
-                        Ok(TaskCoordinationCommitOutcome::RowExists { kind, row_id })
-                    }
-                    JournalCommitOutcome::Committed(reservation) => {
-                        // Past the commit point: the decision is durable and the
-                        // bundle apply is a replay obligation, never a rollback.
-                        self.apply_committed(&journal_id, &intent)?;
-                        Ok(TaskCoordinationCommitOutcome::Committed(
-                            TaskCoordinationCommit {
-                                journal_id,
-                                task_id: params.task_id.clone(),
-                                status: intent.envelope.status,
-                                reservation,
-                                rows: params.rows.clone(),
-                            },
-                        ))
-                    }
-                }
-            })
+        match decided {
+            JournalCommitOutcome::Conflicted(result) => {
+                self.compensate_prepared(&journal_id, lease)?;
+                Ok(TaskCoordinationCommitOutcome::Conflicted {
+                    conflicts: result.conflicts,
+                    expired_reservations: result.expired_reservations,
+                })
+            }
+            JournalCommitOutcome::RowExists { kind, row_id } => {
+                self.compensate_prepared(&journal_id, lease)?;
+                Ok(TaskCoordinationCommitOutcome::RowExists { kind, row_id })
+            }
+            JournalCommitOutcome::Committed(reservation) => {
+                // Past the commit point: the decision is durable and the
+                // bundle apply is a replay obligation, never a rollback.
+                // Lock-free envelope readers see the decided status from
+                // here; the rest of the apply runs once the section has
+                // released the partition. A failure from here drops the
+                // lease before the bundle hold, leaving the lease dead.
+                hold_step(PUBLISH_STEP, || {
+                    self.bundle_store
+                        .publish_envelope_volatile(&params.task_id, &intent.envelope)
+                })?;
+                let status = intent.envelope.status;
+                self.defer_apply(DeferredApply {
+                    journal_id: journal_id.clone(),
+                    intent,
+                    lease,
+                    bundle: bundle_hold,
+                })?;
+                Ok(TaskCoordinationCommitOutcome::Committed(
+                    TaskCoordinationCommit {
+                        journal_id,
+                        task_id: params.task_id.clone(),
+                        status,
+                        reservation,
+                        rows: params.rows.clone(),
+                    },
+                ))
+            }
+        }
     }
 
     /// Derive the bundle-side half of the commit from the state read under
@@ -285,6 +354,8 @@ impl TaskCommitBoundary {
                 note: entry.note.clone(),
                 from_status: entry.from_status,
                 to_status: entry.to_status,
+                operation_id: None,
+                decision: entry.decision.clone(),
             });
             next_event += 1;
         }
@@ -302,6 +373,8 @@ impl TaskCommitBoundary {
                 note: params.status_note.clone(),
                 from_status: transition.map(|(from, _)| from),
                 to_status: transition.map(|(_, to)| to),
+                operation_id: None,
+                decision: None,
             });
         }
         for event in &events {
@@ -366,6 +439,8 @@ impl TaskCommitBoundary {
             note: Some(grant.to_note()),
             from_status: None,
             to_status: None,
+            operation_id: None,
+            decision: None,
         });
         Ok(())
     }
@@ -373,8 +448,8 @@ impl TaskCommitBoundary {
     /// Roll a committed decision onto the bundle. Idempotent: the recorded
     /// pre-apply length makes a repeat run produce the same bytes as the
     /// first, whether the first appended nothing, part of a row, or all of
-    /// them.
-    fn apply_committed(
+    /// them. Caller holds the task's bundle lock.
+    pub(super) fn apply_committed(
         &self,
         journal_id: &str,
         intent: &TaskCommitIntent,
@@ -385,16 +460,11 @@ impl TaskCommitBoundary {
                 intent.schema_version
             )));
         }
-        let bundle_dir = self.bundle_store.bundle_path(&intent.task_id)?;
-        truncate_jsonl_file(&bundle_dir.join(TASK_EVENTS_FILE_NAME), intent.events_len)?;
-        for event in &intent.events {
-            self.bundle_store.append_event(&intent.task_id, event)?;
-        }
+        self.apply_events(intent)?;
         self.apply_claim_evidence(intent)?;
         self.bundle_store
             .rewrite_envelope(&intent.task_id, &intent.envelope)?;
         self.store.finish_task_commit_journal(journal_id)?;
-        self.clear_pending_marker()?;
         if let Err(error) = self
             .registry
             .replace_task_index(&self.workspace_id, &intent.envelope)
@@ -410,12 +480,25 @@ impl TaskCommitBoundary {
         Ok(())
     }
 
+    /// Truncate the history to its pre-apply length and append the intent's
+    /// rows.
+    pub(super) fn apply_events(&self, intent: &TaskCommitIntent) -> Result<(), OrbitError> {
+        let bundle_dir = self.bundle_store.bundle_path(&intent.task_id)?;
+        truncate_jsonl_file(&bundle_dir.join(TASK_EVENTS_FILE_NAME), intent.events_len)?;
+        self.bundle_store
+            .append_events(&intent.task_id, &intent.events)
+    }
+
     /// Abandon an undecided commit. Nothing on the bundle changed, so this
-    /// only has to retire the journal row and the marker; failing here leaves
-    /// both in place and the partition closed until recovery succeeds.
-    fn compensate_prepared(&self, journal_id: &str) -> Result<(), OrbitError> {
+    /// only has to retire the journal row and the lease; failing here leaves
+    /// the lease dead and the bundle closed until recovery succeeds.
+    fn compensate_prepared(
+        &self,
+        journal_id: &str,
+        lease: orbit_common::fs::io::LeaseFile,
+    ) -> Result<(), OrbitError> {
         self.store.abort_task_commit_journal(journal_id)?;
-        self.clear_pending_marker()
+        Self::release_commit_lease(lease)
     }
 
     fn events_len(&self, task_id: &str) -> Result<u64, OrbitError> {
@@ -432,12 +515,6 @@ impl TaskCommitBoundary {
 
     pub(super) fn pending_marker_path(&self) -> PathBuf {
         self.partition_dir.join(PENDING_MARKER_FILE)
-    }
-
-    fn write_pending_marker(&self, journal_id: &str) -> Result<(), OrbitError> {
-        let path = self.pending_marker_path();
-        atomic_write_text(&path, journal_id)
-            .map_err(|error| OrbitError::from_write_io(&path, error))
     }
 
     fn clear_pending_marker(&self) -> Result<(), OrbitError> {

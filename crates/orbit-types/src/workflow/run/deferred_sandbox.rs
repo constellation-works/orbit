@@ -16,13 +16,17 @@
 //! the gate wrote ([`deferral_handoff`]). Orbit builds the
 //! [`DeferredSandboxValidation`] itself [ORB-15516]: the gate's command, exit
 //! status, executed tests, base and notices come from the summary
-//! ([`DeferralHandoff::derive`]), and the probe is one Orbit runs in the
-//! implementer's lane ([`PendingDeferral::complete`]). Orbit enforces the
-//! record at two points:
+//! ([`DeferralHandoff::derive`]), and the probes are ones Orbit runs in the
+//! implementer's lane ([`PendingDeferral::complete`]). A gate's notices may
+//! be of several kinds, as a macOS claimed leaf's broad gate prints Seatbelt
+//! and ps-denied ones together; the record then defers each kind, and Orbit
+//! runs one probe per kind, every one of which must refuse [ORB-15692].
+//! Orbit enforces the record at two points:
 //!
 //! - the implement step boundary derives it and fails the step, before
-//!   anything is committed, unless it is exactly one sandbox's case: its
-//!   notices and its refused probe. The derived record replaces the handoff
+//!   anything is committed, unless it is the sanctioned case: only deferral
+//!   notices, each of a kind the lane may defer and whose probe the lane
+//!   refused. The derived record replaces the handoff
 //!   in the step's output, and an owner run keeps it on the task as
 //!   [`DEFERRED_SANDBOX_ARTIFACT`], so a resumed candidate still carries it;
 //! - the validation step that runs the owner's required commands outside any
@@ -57,8 +61,9 @@ pub const SEATBELT_APPLY_PROBE: &str =
 /// The probe that shows the lane refuses to exec `ps` [ORB-15587].
 pub const PS_EXEC_PROBE: &str = "/bin/ps -o pid= -p 1";
 
-/// An affected-test gate that passed with only one sandbox's deferrals, as
-/// Orbit derived it from the gate's summary and its own probe.
+/// An affected-test gate that passed with only deferrals of sandboxes the
+/// implementer's lane refuses, as Orbit derived it from the gate's summary
+/// and its own probes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeferredSandboxValidation {
@@ -75,8 +80,14 @@ pub struct DeferredSandboxValidation {
     pub notices: Vec<String>,
     /// The deferring sandbox's probe ([`BUBBLEWRAP_NAMESPACE_PROBE`],
     /// [`SEATBELT_APPLY_PROBE`] or [`PS_EXEC_PROBE`]) as Orbit ran it in the
-    /// implementer's lane.
+    /// implementer's lane. When the notices defer several sandboxes, the
+    /// first one's in Bubblewrap, Seatbelt, ps-denied order.
     pub probe: NamespaceProbe,
+    /// The probes of the other sandboxes the notices defer, in that order
+    /// [ORB-15692]. Empty, and left out of the encoded record, when they
+    /// defer one sandbox, so a single-sandbox record keeps its shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub other_probes: Vec<NamespaceProbe>,
 }
 
 /// One run of a sandbox probe: [`BUBBLEWRAP_NAMESPACE_PROBE`],
@@ -133,9 +144,10 @@ pub struct DeferralLane {
     pub os: Option<EvidenceHostOs>,
 }
 
-/// The sandbox whose refusal a record defers. A record defers one sandbox:
-/// every notice and the probe are that sandbox's.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A sandbox whose refusal a record defers. Every notice is one of the
+/// record's sandboxes', and each of them has its own probe. Declaration order
+/// is the order of the record's probes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum DeferringSandbox {
     /// Linux: Bubblewrap cannot create a nested user namespace.
     Bubblewrap,
@@ -151,14 +163,6 @@ impl DeferringSandbox {
         [Self::Bubblewrap, Self::Seatbelt, Self::PsDenied]
             .into_iter()
             .find(|sandbox| notice.starts_with(sandbox.prefix()))
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::Bubblewrap => "Bubblewrap",
-            Self::Seatbelt => "Seatbelt",
-            Self::PsDenied => "ps-denied",
-        }
     }
 
     fn prefix(self) -> &'static str {
@@ -376,28 +380,27 @@ impl DeferralHandoff {
             .iter()
             .map(|notice| notice.trim().to_string())
             .collect::<Vec<_>>();
-        let Some(first) = notices.first() else {
+        if notices.is_empty() {
             return Err("lists no deferral notice".to_string());
-        };
-        let Some(sandbox) = DeferringSandbox::of_notice(first) else {
-            return Err(format!(
-                "lists `{first}`, which is not a Bubblewrap, Seatbelt or ps-denied deferral; \
-                 only `{BUBBLEWRAP_DEFERRAL_PREFIX}`, `{SEATBELT_DEFERRAL_PREFIX}` or \
-                 `{PS_DENIED_DEFERRAL_PREFIX}` notices are deferrable"
-            ));
-        };
-        if let Some(notice) = notices
-            .iter()
-            .find(|notice| DeferringSandbox::of_notice(notice) != Some(sandbox))
-        {
-            return Err(format!(
-                "lists `{notice}`, which is not a {} deferral; a record defers only `{}` \
-                 notices, one sandbox's",
-                sandbox.name(),
-                sandbox.prefix()
-            ));
         }
-        if let Some(refusal) = sandbox.refuses_lane(lane) {
+        let mut sandboxes = Vec::new();
+        for notice in &notices {
+            let Some(sandbox) = DeferringSandbox::of_notice(notice) else {
+                return Err(format!(
+                    "lists `{notice}`, which is not a Bubblewrap, Seatbelt or ps-denied \
+                     deferral; only `{BUBBLEWRAP_DEFERRAL_PREFIX}`, \
+                     `{SEATBELT_DEFERRAL_PREFIX}` or `{PS_DENIED_DEFERRAL_PREFIX}` notices are \
+                     deferrable"
+                ));
+            };
+            sandboxes.push(sandbox);
+        }
+        sandboxes.sort_unstable();
+        sandboxes.dedup();
+        if let Some(refusal) = sandboxes
+            .iter()
+            .find_map(|sandbox| sandbox.refuses_lane(lane))
+        {
             return Err(refusal);
         }
         Ok(PendingDeferral {
@@ -406,14 +409,14 @@ impl DeferralHandoff {
             tests_run,
             base,
             notices,
-            sandbox,
+            sandboxes,
             handed: self.handed.clone(),
         })
     }
 }
 
-/// A deferrable gate run, waiting for the probe that shows its sandbox's
-/// refusal in the implementer's lane.
+/// A deferrable gate run, waiting for the probes that show each of its
+/// sandboxes' refusal in the implementer's lane.
 #[derive(Debug, Clone)]
 pub struct PendingDeferral {
     command: String,
@@ -421,31 +424,60 @@ pub struct PendingDeferral {
     tests_run: u64,
     base: String,
     notices: Vec<String>,
-    sandbox: DeferringSandbox,
+    /// The sandboxes the notices defer: at least one, sorted and distinct.
+    sandboxes: Vec<DeferringSandbox>,
     handed: Map<String, Value>,
 }
 
 impl PendingDeferral {
-    /// The probe of the sandbox the notices defer.
+    /// The probes of the sandboxes the notices defer, one per sandbox, in
+    /// the order [`PendingDeferral::complete`] takes their answers.
     #[must_use]
-    pub fn probe(&self) -> DeferralProbe {
-        self.sandbox.probe()
+    pub fn probes(&self) -> Vec<DeferralProbe> {
+        self.sandboxes
+            .iter()
+            .map(|sandbox| sandbox.probe())
+            .collect()
     }
 
-    /// The record, once `probe` shows the sandbox's refusal. `Err` when the
-    /// probe is another one or did not refuse, or when a hand-written field
-    /// differs from the derivation.
-    pub fn complete(self, probe: NamespaceProbe) -> Result<DeferredSandboxValidation, String> {
-        let expected = self.sandbox.probe().command;
-        if probe.command != expected {
+    /// The record, once `probes`, answered in [`PendingDeferral::probes`]
+    /// order, show every sandbox's refusal. `Err` when one is missing, is
+    /// another probe or did not refuse, or when a hand-written field differs
+    /// from the derivation.
+    pub fn complete(
+        self,
+        probes: Vec<NamespaceProbe>,
+    ) -> Result<DeferredSandboxValidation, String> {
+        let mut answers = probes.into_iter();
+        let mut refused = Vec::with_capacity(self.sandboxes.len());
+        for sandbox in &self.sandboxes {
+            let expected = sandbox.probe().command;
+            let Some(probe) = answers.next() else {
+                return Err(format!(
+                    "has no `{expected}` probe; every sandbox the notices defer needs its own"
+                ));
+            };
+            if probe.command != expected {
+                return Err(format!(
+                    "names the probe `{}`, not `{expected}`",
+                    probe.command
+                ));
+            }
+            if !sandbox.refused(&probe) {
+                return Err(sandbox.probe_requirement());
+            }
+            refused.push(probe);
+        }
+        if let Some(extra) = answers.next() {
             return Err(format!(
-                "names the probe `{}`, not `{expected}`",
-                probe.command
+                "names the probe `{}`, which no notice defers",
+                extra.command
             ));
         }
-        if !self.sandbox.refused(&probe) {
-            return Err(self.sandbox.probe_requirement());
-        }
+        let mut refused = refused.into_iter();
+        let Some(probe) = refused.next() else {
+            return Err("lists no deferral notice".to_string());
+        };
         let record = DeferredSandboxValidation {
             command: self.command,
             exit_code: self.exit_code,
@@ -453,6 +485,7 @@ impl PendingDeferral {
             base: self.base,
             notices: self.notices,
             probe,
+            other_probes: refused.collect(),
         };
         let derived =
             serde_json::to_value(&record).map_err(|error| format!("cannot be encoded: {error}"))?;

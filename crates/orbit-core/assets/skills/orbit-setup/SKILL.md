@@ -24,7 +24,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | Linux execution prerequisites or sandbox failure | [Linux sandbox](references/linux-sandbox.md) |
 | Windows host (Orbit runs inside WSL2) | [Windows through WSL2](references/windows-wsl2.md) |
 | macOS: Claude worker token and the clock env file | [macOS](references/macos.md) |
-| Headless browser kit so workers can render and screenshot UI changes | [Browser kit](references/browser-checks.md) |
+| Headless browser kit (`orbit browser-kit`) so workers can render and screenshot UI changes | [Browser kit](references/browser-checks.md) |
 | Scheduled execution | [Automation](references/automation.md) |
 | Recurring QA and other task templates | [Auto-tasks](references/auto-tasks.md) |
 | MCP clients, SSH federation or remote dashboard | [Remote access](references/remote-access.md) |

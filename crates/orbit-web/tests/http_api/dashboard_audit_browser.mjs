@@ -59,6 +59,11 @@ const analytics = {
     { path: 'docs/README.md', ...rate(1, 18) },
     { path: 'src/blocked.rs', ...rate(1, 16) },
   ] },
+  overlap: { ranked_paths: 28, rows: [
+    { path: 'crates/orbit-core/src/application/task/mod.rs', rankings: ['regressions', 'footprint_misses', 'blocked'], top_rate: 0.4 },
+    { path: 'docs/README.md', rankings: ['footprint_misses', 'rejected'], top_rate: 6 / 18 },
+    { path: 'src/blocked.rs', rankings: ['blocked', 'rejected'], top_rate: 5 / 16 },
+  ] },
 };
 const analyticsRequests = [];
 // When set, /api/audit pages through it like the real endpoint: newest first,
@@ -107,7 +112,8 @@ function answerAudit(url, res) {
   const before = url.searchParams.get('before');
   const rows = pagedEvents
     .filter(event => before === null || event.id < Number(before))
-    .filter(event => !url.searchParams.has('status') || event.status === url.searchParams.get('status'))
+    .filter(event => !url.searchParams.has('status') || event.status === url.searchParams.get('status')
+      || (url.searchParams.get('status') === 'non_success' && event.status !== 'success'))
     .filter(event => url.searchParams.get('hide_unverified') !== 'true' || !(event.role === 'unverified' && event.status === 'success'))
     .slice(0, limit);
   const capped = before === null && cappedHead;
@@ -129,19 +135,25 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 let page;
 const measurements = [];
+const toolsColumns = [];
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
   page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
-  await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture&window=24h#audit`);
+  await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture&window=24h#diagnostics/incidents/events`);
   await page.evaluate(() => document.fonts.ready);
   await page.evaluate(async (summary) => {
-    for (const pane of document.querySelectorAll('.tab-pane')) pane.classList.toggle('active', pane.dataset.tab === 'audit');
+    // app.js is stripped here, so show a view the way the router does: its
+    // pane, and only its <main>.
+    globalThis.showView = (tab, main) => {
+      for (const pane of document.querySelectorAll('.tab-pane')) pane.classList.toggle('active', pane.dataset.tab === tab);
+      for (const node of document.querySelectorAll(`.tab-pane[data-tab="${tab}"] > main`)) node.style.display = node.id === main ? 'grid' : 'none';
+    };
+    showView('diagnostics', 'diagnostics-events-main');
     const audit = await import('/js/audit.js');
     globalThis.auditFixture = audit;
     globalThis.auditContext = { fmtTimestamp: () => '09:32:04', fmtDuration: value => `${(value / 1000).toFixed(1)}s` };
-    audit.setAuditSubtab('events');
     await audit.fetchAndRenderAudit(auditContext);
     audit.renderAuditSummary(summary, auditContext);
   }, summary);
@@ -154,19 +166,28 @@ try {
       await document.fonts.ready;
       await new Promise(requestAnimationFrame);
     });
-    const layout = await page.evaluate(() => {
+    // Events (Health › Incidents › Events) and the summary (Analytics ›
+    // Reliability › Tools) are separate views; each is measured on screen.
+    const eventsView = await page.evaluate(() => {
+      showView('diagnostics', 'diagnostics-events-main');
       const body = document.getElementById('audit-body');
       body.scrollLeft = 0;
       const box = body.getBoundingClientRect();
       return {
         width: innerWidth, panel: { left: box.left, right: box.right }, scrollLeft: body.scrollLeft,
-        cardKeys: [...document.querySelectorAll('#audit-summary-body .audit-summary-card')].map(card => card.dataset.key),
-        eventsPanelBottom: document.getElementById('audit-pane').getBoundingClientRect().bottom,
-        summaryPanelBottom: document.getElementById('audit-summary-panel').getBoundingClientRect().bottom,
+        pageOverflow: document.documentElement.scrollWidth > innerWidth,
         statuses: [...body.querySelectorAll('.c-status')].map(node => {
           const rect = node.getBoundingClientRect();
           return { text: node.textContent, left: rect.left, right: rect.right, width: rect.width };
         }),
+      };
+    });
+    await page.screenshot({ path: path.join(evidence, `events-${width}.png`), fullPage: true, animations: 'disabled' });
+    const tools = await page.evaluate(() => {
+      showView('analytics', 'analytics-tools-main');
+      return {
+        pageOverflow: document.documentElement.scrollWidth > innerWidth,
+        cardKeys: [...document.querySelectorAll('#audit-summary-body .audit-summary-card')].map(card => card.dataset.key),
         tables: [...document.querySelectorAll('#audit-summary-body .summary-table')].map(table => {
           const card = table.closest('.audit-summary-card');
           const rect = card.getBoundingClientRect();
@@ -180,15 +201,13 @@ try {
         }),
       };
     });
+    const layout = { ...eventsView, ...tools, pageOverflow: eventsView.pageOverflow || tools.pageOverflow };
     assert.equal(layout.scrollLeft, 0);
+    assert.equal(layout.pageOverflow, false, `neither view widens the page at ${width}`);
     assert.equal(layout.statuses.length, events.length);
     assert.ok(!layout.cardKeys.includes('denials') && !layout.cardKeys.includes('role-split'),
       `the Denials and Role split cards are gone at ${width}: ${layout.cardKeys}`);
     assert.ok(layout.cardKeys.includes('mcp-vs-cli'), `MCP vs CLI stays at ${width}: ${layout.cardKeys}`);
-    if (width >= 1280) {
-      assert.ok(Math.abs(layout.eventsPanelBottom - layout.summaryPanelBottom) <= 2,
-        `events and summary panels align at ${width}: ${layout.eventsPanelBottom} vs ${layout.summaryPanelBottom}`);
-    }
     for (const status of layout.statuses) {
       assert.ok(status.width > 0 && status.left >= layout.panel.left && status.right <= Math.min(layout.panel.right, width) + 1, `status visible at ${width}: ${JSON.stringify(status)}`);
     }
@@ -202,8 +221,91 @@ try {
       }
     }
     measurements.push(layout);
-    await page.screenshot({ path: path.join(evidence, `events-${width}.png`), fullPage: true, animations: 'disabled' });
+    await page.screenshot({ path: path.join(evidence, `tools-${width}.png`), fullPage: true, animations: 'disabled' });
   }
+  // The shipped Tools view must finish both columns at the same border edge,
+  // whichever content is taller. Exercise every nonempty subset of side cards:
+  // omitted cards must neither leave tracks behind nor stretch earlier cards.
+  const sideKeys = ['failures-by-tool', 'failure-categories', 'lifecycle-diagnostics', 'duration-by-tool', 'mcp-vs-cli'];
+  const columnFailures = [];
+  for (const width of [1500, 1600, 1920, 1499, 375]) {
+    await page.setViewportSize({ width, height: 1800 });
+    for (const tableLonger of [false, true]) {
+      for (let mask = 1; mask < 32; mask += 1) {
+        const fixture = {
+          ...summary, window: '7d',
+          tool_call_failures_by_tool: Array.from({ length: tableLonger ? 48 : 1 }, (_, index) => ({
+            ...summary.tool_call_failures_by_tool[0], tool: `orbit.fixture.tool_${index}`,
+          })),
+          failure_rate_by_tool: mask & 1 ? [{ tool: 'orbit.workflow.run.list', failed: 3, total: 10, rate: 0.3 }] : [],
+          failure_categories: mask & 2 ? summary.failure_categories : {},
+          lifecycle_diagnostic_events: mask & 4 ? 3 : 0,
+          lifecycle_diagnostic_incidents: mask & 4 ? 1 : 0,
+          duration_by_tool: mask & 8 ? summary.duration_by_tool : null,
+          mcp_vs_cli_split: mask & 16 ? summary.mcp_vs_cli_split : null,
+        };
+        const layout = await page.evaluate(({ fixture, sideKeys }) => {
+          showView('analytics', 'analytics-tools-main');
+          history.replaceState(null, '', '?workspace=ws_fixture&window=7d#analytics/reliability/tools');
+          auditFixture.renderAuditSummary(fixture, auditContext);
+          const container = document.getElementById('audit-summary-body');
+          const box = node => {
+            const rect = node.getBoundingClientRect();
+            const originalStyle = node.getAttribute('style');
+            node.style.alignSelf = 'start';
+            node.style.width = `${rect.width}px`;
+            const naturalHeight = node.getBoundingClientRect().height;
+            if (originalStyle === null) node.removeAttribute('style');
+            else node.setAttribute('style', originalStyle);
+            return { key: node.dataset.key, top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right,
+              height: rect.height, naturalHeight };
+          };
+          return {
+            display: getComputedStyle(container).display,
+            table: box(container.querySelector('[data-key="tool-call-failures-by-tool"]')),
+            sides: [...container.children].filter(node => sideKeys.includes(node.dataset.key)).map(box),
+            cards: [...container.children].map(box),
+          };
+        }, { fixture, sideKeys });
+        const label = `${width}px / ${tableLonger ? 'table-longer' : 'side-longer'} / mask ${mask}`;
+        assert.deepEqual(layout.sides.map(card => card.key), sideKeys.filter((_, index) => mask & (1 << index)), label);
+        const close = (actual, expected, guarantee) => {
+          if (Math.abs(actual - expected) > 1) columnFailures.push(`${label}: ${guarantee}: ${actual} vs ${expected}`);
+        };
+        if (width >= 1500) {
+          close(layout.table.bottom, layout.sides.at(-1).bottom, 'column bottom borders align');
+          close(layout.table.top, layout.sides[0].top, 'no empty track above side cards');
+          for (let index = 0; index < layout.sides.length - 1; index += 1) {
+            close(layout.sides[index].height, layout.sides[index].naturalHeight, 'only the last side card stretches');
+            close(layout.sides[index + 1].top, layout.sides[index].bottom + 16, 'no gap from absent side cards');
+          }
+          if (mask === 31) {
+            const naturalSides = layout.sides.reduce((sum, card) => sum + card.naturalHeight, 0) + 16 * (layout.sides.length - 1);
+            assert.equal(layout.table.naturalHeight > naturalSides, tableLonger, `fixture exercises the intended taller column: ${label}`);
+          }
+        } else {
+          assert.equal(layout.display, 'flex', `single column at ${width}`);
+          for (let index = 0; index < layout.cards.length - 1; index += 1) {
+            close(layout.cards[index + 1].top, layout.cards[index].bottom + 16, 'single-column card spacing stays natural');
+            close(layout.cards[index + 1].left, layout.cards[index].left, 'single-column left edges align');
+            close(layout.cards[index + 1].right, layout.cards[index].right, 'single-column right edges align');
+          }
+          for (const card of layout.sides) close(card.height, card.naturalHeight, 'single-column side cards do not stretch');
+        }
+        toolsColumns.push({ width, tableLonger, mask, ...layout });
+        if ((width === 1600 && [31, 9].includes(mask)) || (width === 375 && mask === 31 && !tableLonger)) {
+          await page.locator('#audit-summary-panel').screenshot({
+            path: path.join(evidence, `tools-columns-${tableLonger ? 'table-longer' : 'side-longer'}-${mask}-${width}.png`),
+            animations: 'disabled',
+          });
+        }
+      }
+    }
+  }
+  fs.writeFileSync(path.join(evidence, 'tools-columns.json'), JSON.stringify({ measurements: toolsColumns, failures: columnFailures }, null, 2));
+  assert.deepEqual(columnFailures, [], 'Tools column borders align without empty tracks or stretching earlier side cards');
+  await page.evaluate(summary => auditFixture.renderAuditSummary(summary, auditContext), summary);
+  await page.evaluate(() => showView('diagnostics', 'diagnostics-events-main'));
   await page.setViewportSize({ width: 1440, height: 900 });
   const shortEventCount = events.length;
   events = [...events, ...Array.from({ length: 60 }, (_, index) => ({
@@ -216,17 +318,20 @@ try {
   });
   const longListLayout = await page.evaluate(() => {
     const body = document.getElementById('audit-body');
+    const pane = document.querySelector('.tab-pane[data-tab="diagnostics"]');
     return {
-      eventsBottom: document.getElementById('audit-pane').getBoundingClientRect().bottom,
-      summaryBottom: document.getElementById('audit-summary-panel').getBoundingClientRect().bottom,
       bodyClientHeight: body.clientHeight,
       bodyScrollHeight: body.scrollHeight,
+      paneClientHeight: pane.clientHeight,
+      paneScrollHeight: pane.scrollHeight,
     };
   });
-  assert.ok(longListLayout.bodyScrollHeight > longListLayout.bodyClientHeight,
-    'extra audit events scroll inside the events panel');
-  assert.ok(Math.abs(longListLayout.eventsBottom - longListLayout.summaryBottom) <= 2,
-    `a long events list does not grow the panel past the summary: ${JSON.stringify(longListLayout)}`);
+  // Events has the full width to itself, so a long list grows the panel and
+  // the tab pane scrolls; there is no second scroller inside the panel.
+  assert.ok(longListLayout.bodyScrollHeight <= longListLayout.bodyClientHeight + 1,
+    `a long events list does not scroll inside the panel: ${JSON.stringify(longListLayout)}`);
+  assert.ok(longListLayout.paneScrollHeight > longListLayout.paneClientHeight,
+    `the tab pane scrolls a long events list: ${JSON.stringify(longListLayout)}`);
   const rows = page.locator('.audit-row');
   assert.equal(await rows.nth(0).locator('.c-command').textContent(), events[0].tool_name);
   assert.equal(await rows.nth(0).locator('.c-target').textContent(), '');
@@ -249,7 +354,7 @@ try {
   }));
   const countText = () => page.locator('#audit-count').textContent();
   await page.evaluate(async (summary) => {
-    auditFixture.applyAuditHashQuery(new URLSearchParams(''));
+    auditFixture.applyAuditHashQuery(new URLSearchParams('status=all'));
     await auditFixture.fetchAndRenderAudit(auditContext);
     auditFixture.renderAuditSummary({ ...summary, events: 120 }, auditContext);
   }, summary);
@@ -275,7 +380,7 @@ try {
     auditFixture.buildAuditChips(auditContext);
     await auditFixture.fetchAndRenderAudit(auditContext);
   });
-  assert.equal(await page.evaluate(() => auditFixture.buildAuditHash()), '#audit?since=24h&status=success&hide_unverified=1', 'the hide choice is part of the URL');
+  assert.equal(await page.evaluate(() => auditFixture.buildAuditHash()), '#diagnostics/incidents/events?since=24h&status=success&hide_unverified=1', 'the hide choice is part of the URL');
   assert.equal(auditRequests.at(-1).get('hide_unverified'), 'true');
   assert.equal(await page.locator('.chip[data-toggle="hide_unverified"]').getAttribute('aria-pressed'), 'true');
   assert.equal(await page.locator('.audit-row .c-role', { hasText: 'Unconfirmed caller' }).count(), 0, 'unconfirmed successes are hidden');
@@ -346,7 +451,7 @@ try {
   const isOlder = params => params.has('before');
   const isDeniedHead = params => !params.has('before') && params.get('status') === 'denied';
   const showUnfiltered = () => page.evaluate(async () => {
-    auditFixture.applyAuditHashQuery(new URLSearchParams(''));
+    auditFixture.applyAuditHashQuery(new URLSearchParams('status=all'));
     await auditFixture.fetchAndRenderAudit(auditContext);
   });
   const holdOlderThenFilter = async () => {
@@ -403,35 +508,26 @@ try {
     globalThis.codebaseFixture = codebase;
     // app.js is stripped here, so wire the controls the way it does.
     globalThis.codebaseHashes = [];
-    codebase.wireCodebaseControls(() => { globalThis.codebaseHashes.push(auditFixture.buildAuditHash()); });
-    auditFixture.setActiveAuditSubtabFromButton('codebase');
+    codebase.wireCodebaseControls(() => { globalThis.codebaseHashes.push(codebase.buildCodebaseHash()); });
+    showView('analytics', 'analytics-codebase-main');
     await codebase.fetchAndRenderCodebase();
   });
   const refreshCodebase = () => page.evaluate(() => codebaseFixture.fetchAndRenderCodebase());
-  assert.equal(await page.locator('#audit-title').textContent(), 'Codebase');
-  assert.equal(await page.locator('#audit-body').isVisible(), false, 'Codebase hides the Events listing');
-  assert.equal(await page.locator('#audit-codebase-controls').isVisible(), true);
-  assert.equal(await page.locator('#audit-summary-panel').isVisible(), false, 'Codebase hides the audit summary');
+  assert.equal(await page.locator('#codebase-controls').isVisible(), true);
   assert.equal(analyticsRequests.at(-1).get('min_support'), '15', 'minimum support defaults to 15');
-  const widths = () => page.evaluate(() => {
-    const main = document.getElementById('audit-main');
+  const fullWidth = await page.evaluate(() => {
+    const main = document.getElementById('analytics-codebase-main');
     const style = getComputedStyle(main);
     return {
       main: main.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
-      pane: document.getElementById('audit-pane').getBoundingClientRect().width,
+      panel: document.getElementById('codebase-panel').getBoundingClientRect().width,
     };
   });
-  const fullWidth = await widths();
-  assert.ok(fullWidth.pane >= fullWidth.main - 2, `Codebase takes the full width: ${JSON.stringify(fullWidth)}`);
-  await page.evaluate(() => auditFixture.setActiveAuditSubtabFromButton('events'));
-  assert.equal(await page.locator('#audit-summary-panel').isVisible(), true, 'Events keeps the audit summary');
-  const eventsWidth = await widths();
-  assert.ok(eventsWidth.pane < eventsWidth.main * 0.75, `Events shares the width with the summary: ${JSON.stringify(eventsWidth)}`);
-  await page.evaluate(() => auditFixture.setActiveAuditSubtabFromButton('codebase'));
+  assert.ok(fullWidth.panel >= fullWidth.main - 2, `Codebase takes the full width: ${JSON.stringify(fullWidth)}`);
 
   // Seven tiles are toggle buttons; the overlap list is open by default and
   // holds exactly the paths in two or more of the four path rankings.
-  const tiles = page.locator('#audit-codebase-body .codebase-tile');
+  const tiles = page.locator('#codebase-body .codebase-tile');
   assert.equal(await tiles.count(), 7);
   assert.deepEqual(await tiles.evaluateAll(nodes => nodes.map(node => [node.tagName, node.getAttribute('aria-pressed')])),
     [['BUTTON', 'true'], ...Array.from({ length: 6 }, () => ['BUTTON', 'false'])]);
@@ -445,15 +541,15 @@ try {
   assert.match(await page.locator('#codebase-detail [data-ranking="regressions"] .codebase-standing-rank').textContent(), /^not in the top 25$/);
 
   // A poll with the same payload keeps the tile, the row and the scroll.
-  await page.locator('#audit-codebase-body .codebase-tile[data-tile="footprint_misses"]').click();
-  assert.equal(await page.locator('#audit-codebase-body .codebase-tile[data-tile="footprint_misses"]').getAttribute('aria-pressed'), 'true');
-  const scroller = page.locator('.tab-pane[data-tab="audit"]');
+  await page.locator('#codebase-body .codebase-tile[data-tile="footprint_misses"]').click();
+  assert.equal(await page.locator('#codebase-body .codebase-tile[data-tile="footprint_misses"]').getAttribute('aria-pressed'), 'true');
+  const scroller = page.locator('.tab-pane[data-tab="analytics"]');
   await page.setViewportSize({ width: 1440, height: 600 });
   const scrolled = await scroller.evaluate(node => { node.scrollTop = 200; return node.scrollTop; });
   assert.ok(scrolled > 0, 'the fixture page is tall enough to scroll');
   await refreshCodebase();
   assert.equal(await scroller.evaluate(node => node.scrollTop), scrolled, 'a poll keeps the scroll position');
-  assert.equal(await page.locator('#audit-codebase-body .codebase-tile[data-tile="footprint_misses"]').getAttribute('aria-pressed'), 'true', 'a poll keeps the tile');
+  assert.equal(await page.locator('#codebase-body .codebase-tile[data-tile="footprint_misses"]').getAttribute('aria-pressed'), 'true', 'a poll keeps the tile');
   assert.equal(await selectedPath(), 'docs/README.md', 'a poll keeps the row');
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.screenshot({ path: path.join(evidence, 'codebase-1440.png'), fullPage: true, animations: 'disabled' });
@@ -461,25 +557,25 @@ try {
   // The segments and the empty-coupling action rewrite the hash and the request.
   await page.locator('#codebase-rollup .codebase-seg[data-value="crate"]').click();
   assert.equal(await page.locator('#codebase-rollup .codebase-seg[data-value="crate"]').getAttribute('aria-pressed'), 'true');
-  assert.deepEqual(await page.evaluate(() => globalThis.codebaseHashes), ['#audit/codebase?rollup=crate']);
+  assert.deepEqual(await page.evaluate(() => globalThis.codebaseHashes), ['#analytics/codebase?rollup=crate']);
   await refreshCodebase();
   assert.equal(analyticsRequests.at(-1).get('rollup'), 'crate', 'the rollup segment changes the request');
-  await page.locator('#audit-codebase-body .codebase-tile[data-tile="change_coupling"]').click();
+  await page.locator('#codebase-body .codebase-tile[data-tile="change_coupling"]').click();
   await page.getByRole('button', { name: 'Group by directory' }).click();
-  assert.equal(await page.evaluate(() => globalThis.codebaseHashes.at(-1)), '#audit/codebase?rollup=dir');
+  assert.equal(await page.evaluate(() => globalThis.codebaseHashes.at(-1)), '#analytics/codebase?rollup=dir');
   await refreshCodebase();
   assert.equal(analyticsRequests.at(-1).get('rollup'), 'dir');
 
   // 375 px: no horizontal page scroll, every tile and row inside the body,
   // the detail stacked under the list, and readable text.
-  await page.locator('#audit-codebase-body .codebase-tile[data-tile="overlap"]').click();
+  await page.locator('#codebase-body .codebase-tile[data-tile="overlap"]').click();
   for (const width of [375, 1280]) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(() => new Promise(requestAnimationFrame));
     const fit = await page.evaluate(() => {
-      const body = document.getElementById('audit-codebase-body').getBoundingClientRect();
-      const pane = document.querySelector('.tab-pane[data-tab="audit"]');
-      const outside = [...document.querySelectorAll('#audit-codebase-body .codebase-tile, #audit-codebase-body .codebase-row, #audit-codebase-body .codebase-metric, #audit-codebase-controls .codebase-seg')]
+      const body = document.getElementById('codebase-body').getBoundingClientRect();
+      const pane = document.querySelector('.tab-pane[data-tab="analytics"]');
+      const outside = [...document.querySelectorAll('#codebase-body .codebase-tile, #codebase-body .codebase-row, #codebase-body .codebase-metric, #codebase-controls .codebase-seg')]
         .map(node => node.getBoundingClientRect())
         .filter(box => box.left < body.left - 1 || box.right > body.right + 1);
       const list = document.getElementById('codebase-list').getBoundingClientRect();
@@ -499,7 +595,7 @@ try {
   }
   // Text contrast against the composited background, through the alpha
   // washes of selected rows and hints.
-  const lowContrast = await page.evaluate(() => {
+  const contrastFailures = () => page.evaluate(() => {
     const parse = value => (value.match(/[\d.]+/g) || []).map(Number);
     const blend = (top, under) => {
       const alpha = top[3] ?? 1;
@@ -522,7 +618,7 @@ try {
       return 0.2126 * r + 0.7152 * g + 0.0722 * b;
     };
     const failures = [];
-    for (const node of document.querySelectorAll('#audit-codebase-controls *, #audit-codebase-body *')) {
+    for (const node of document.querySelectorAll('#codebase-controls *, #codebase-body *')) {
       const own = [...node.childNodes].some(child => child.nodeType === 3 && child.textContent.trim());
       if (!own || !node.getClientRects().length) continue;
       const style = getComputedStyle(node);
@@ -535,11 +631,12 @@ try {
     }
     return failures;
   });
-  assert.deepEqual(lowContrast, [], 'codebase text meets 4.5:1');
+  assert.deepEqual(await contrastFailures(), [], 'codebase text meets 4.5:1');
+
   await page.setViewportSize({ width: 1440, height: 900 });
   assert.deepEqual(errors, []);
-  fs.writeFileSync(path.join(evidence, 'measurements.json'), JSON.stringify({ events: measurements, codebase: { fullWidth, eventsWidth }, errors }, null, 2));
-  console.log('Audit browser: visible statuses at 1440/1024/1920/375, duplicate targets, summary columns, duration buckets, keyboard expansion, paging order across a filter change, and the full-width codebase view (tiles, overlap list, detail, poll stability, hash, 375 px and contrast) passed');
+  fs.writeFileSync(path.join(evidence, 'measurements.json'), JSON.stringify({ events: measurements, codebase: { fullWidth }, errors }, null, 2));
+  console.log('Audit browser: Tools flush column bottoms (both height cases, every side-card subset, 1500/1600/1920 and single-column 1499/375), Events statuses and Tools summary columns at 1440/1024/1920/375, duplicate targets, duration buckets, keyboard expansion, paging order across a filter change, and the full-width Analytics › Codebase view (tiles, overlap list, detail, poll stability, hash, 375 px and contrast) passed');
 } catch (error) {
   if (page) await page.screenshot({ path: path.join(evidence, 'failure.png'), fullPage: true }).catch(() => {});
   throw error;

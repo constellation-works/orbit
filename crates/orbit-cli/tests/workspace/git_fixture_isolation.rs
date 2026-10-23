@@ -1,4 +1,4 @@
-//! Workspace fixture Git setup and reads must stay off an inherited repository.
+//! Shared fixture Git setup and reads must stay off an inherited repository.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -11,63 +11,140 @@ use tempfile::tempdir;
 use crate::git_repo;
 
 #[test]
-fn workspace_git_fixtures_preserve_an_inherited_repository() {
+fn git_fixtures_preserve_inherited_authority_decoy() {
+    const TEST: &str = "git_fixture_isolation::git_fixtures_preserve_inherited_authority_decoy";
+    const CHILD_ROOT: &str = "ORBIT_TEST_GIT_AUTHORITY_ROOT";
+    if let Some(root) = std::env::var_os(CHILD_ROOT) {
+        exercise_shared_fixture(&PathBuf::from(root));
+        return;
+    }
+
     let temp = tempdir().expect("fixture tempdir");
     let decoy = temp.path().join("decoy");
-    git_repo::init(&decoy);
-    git(&decoy, &["config", "user.name", "Decoy Owner"]);
-    git(&decoy, &["config", "user.email", "decoy@example.invalid"]);
-    git(&decoy, &["config", "commit.gpgsign", "false"]);
-    fs::write(decoy.join("sentinel"), "preserve the decoy\n").expect("write decoy file");
-    git(&decoy, &["add", "sentinel"]);
-    git(&decoy, &["commit", "--quiet", "-m", "decoy"]);
-
+    git_repo::SeededRepo::new(&decoy)
+        .readme("preserve the decoy\n")
+        .identity("Decoy Owner", "decoy@example.invalid")
+        .build();
+    git(&decoy, &["config", "core.hooksPath", "/dev/null"]);
+    let remote = temp.path().join("decoy-origin.git");
+    fs::create_dir(&remote).expect("decoy remote directory");
+    git(&remote, &["init", "--bare", "--quiet"]);
+    git(
+        &decoy,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git(&decoy, &["push", "origin", "HEAD:refs/heads/main"]);
     let before = snapshot(&decoy);
-    // Each exact child executes an existing CLI boundary fixture. Together
-    // these cover every repaired setup helper, worktree creation, check-ignore,
-    // and status reads without altering the parallel harness's environment.
-    for test_name in [
-        "config_set_root::config_set_under_root_refuses_without_workspace_layer_and_names_global",
-        "replica_routines::replica_fires_only_its_worktree_gc_routine_and_owner_scheduling_is_unchanged",
-        "routine_root::routine_list_honors_explicit_root_over_uninitialized_home_and_environment",
-        "routine_state_seed::workspace_init_seeds_a_loadable_state_task_pilot_bound_to_this_host",
-        "ship_sweep_root::ship_sweep_selects_explicit_environment_and_default_registries",
-        "sweep_root::sweep_honors_explicit_root_over_uninitialized_home",
-        "sweep_workspace::dry_run_sweep_evaluates_only_the_selected_workspace",
-        "worktree_gc_routing::direct_gc_cli_previews_refuses_dirty_and_reclaims_only_the_selected_worktree",
-        "workspace_selector::global_workspace_flag_selects_by_name_and_id_from_a_foreign_checkout",
-        "workspace_sync::workspace_init_migrates_legacy_gitignore_and_reinit_is_byte_idempotent",
-        "workspace_sync::relocated_root_checkout_ignores_its_delivery_worktrees",
-    ] {
+    let remote_before = git(&remote, &["for-each-ref"]);
+
+    // The same helper serves every CLI suite. Exercise both locator forms
+    // directly instead of re-running their complete Orbit boundary fixtures.
+    for common_only in [false, true] {
+        let root = temp
+            .path()
+            .join(if common_only { "common-only" } else { "all" });
+        let home = root.join("home");
+        fs::create_dir_all(&home).expect("child home");
         let mut child = Command::new(std::env::current_exe().expect("workspace test binary"));
         test_env::clear_inherited_authority(|name| {
             child.env_remove(name);
         });
+        let git_dir = decoy.join(".git");
+        child.env("GIT_COMMON_DIR", &git_dir);
+        if !common_only {
+            child
+                .env("GIT_DIR", &git_dir)
+                .env("GIT_WORK_TREE", &decoy)
+                .env("GIT_INDEX_FILE", git_dir.join("index"))
+                .env("GIT_OBJECT_DIRECTORY", git_dir.join("objects"))
+                .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", git_dir.join("objects"));
+        }
         child
-            .args(["--exact", test_name, "--nocapture"])
-            .env("GIT_DIR", decoy.join(".git"))
-            .env("GIT_WORK_TREE", &decoy)
-            .env("GIT_COMMON_DIR", decoy.join(".git"))
-            .env("GIT_INDEX_FILE", decoy.join(".git/index"))
-            .env("GIT_OBJECT_DIRECTORY", decoy.join(".git/objects"))
-            .env(
-                "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-                decoy.join(".git/objects"),
-            )
+            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+            .env(CHILD_ROOT, &root)
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            // Keep the deliberate locators if a pre-main scrub is added.
             .env(test_env::SCRUBBED_MARKER_ENV, "1");
-        let output = test_env::run_child_test(&mut child, test_name, temp.path());
+        let output = test_env::run_child_test(&mut child, TEST, &root);
         assert_eq!(
             snapshot(&decoy),
             before,
-            "{test_name} changed the inherited repository's config, refs, index, or worktrees"
+            "shared fixture changed decoy config, HEAD, refs, index, worktrees or sentinel (common_only={common_only})"
         );
-        test_env::assert_child_test_passed(
-            test_name,
-            output.status,
-            &output.stdout,
-            &output.stderr,
+        assert_eq!(
+            git(&remote, &["for-each-ref"]),
+            remote_before,
+            "shared fixture pushed to the decoy origin (common_only={common_only})"
         );
+        test_env::assert_child_test_passed(TEST, output.status, &output.stdout, &output.stderr);
     }
+}
+
+fn exercise_shared_fixture(root: &Path) {
+    assert!(std::env::var_os("GIT_COMMON_DIR").is_some());
+    let repo = root.join("repo");
+    git_repo::SeededRepo::new(&repo).build();
+    assert_eq!(git_repo::run(&repo, &["branch", "--show-current"]), "main");
+    assert_eq!(
+        git_repo::run(&repo, &["rev-parse", "--show-toplevel"]),
+        repo.canonicalize().unwrap().to_str().unwrap()
+    );
+    fs::write(repo.join("sentinel"), "fixture commit\n").expect("fixture sentinel");
+    git_repo::run(&repo, &["add", "sentinel"]);
+    git_repo::run(&repo, &["commit", "--quiet", "-m", "fixture"]);
+    assert_eq!(git_repo::run(&repo, &["status", "--porcelain"]), "");
+    fs::write(repo.join(".gitignore"), "ignored\n").expect("fixture ignore rule");
+    assert_eq!(
+        git_repo::run(&repo, &["check-ignore", "ignored"]),
+        "ignored"
+    );
+
+    let remote = root.join("origin.git");
+    fs::create_dir(&remote).expect("fixture remote directory");
+    git_repo::run(&remote, &["init", "--bare", "--quiet"]);
+    git_repo::run(
+        &repo,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git_repo::run(&repo, &["push", "origin", "HEAD:refs/heads/main"]);
+    assert_eq!(
+        git_repo::run(&remote, &["rev-parse", "refs/heads/main"]),
+        git_repo::run(&repo, &["rev-parse", "HEAD"])
+    );
+    let worktree = root.join("linked");
+    git_repo::run(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "linked",
+            worktree.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        git_repo::run(&worktree, &["branch", "--show-current"]),
+        "linked"
+    );
+    assert_eq!(git_repo::run(&worktree, &["status", "--porcelain"]), "");
+    git_repo::run(&repo, &["worktree", "remove", worktree.to_str().unwrap()]);
+    assert!(!worktree.exists());
+
+    let sealed = root.join("sealed");
+    git_repo::seal_lookup_boundary(&sealed);
+    assert!(sealed.join(".orbit/config.toml").is_file());
+    assert_eq!(
+        git_repo::run(&sealed, &["branch", "--show-current"]),
+        "main"
+    );
+    let checkout = git_repo::WorkCheckout::new_in(root);
+    assert!(checkout.home.is_dir());
+    assert!(checkout.work.join(".orbit/config.toml").is_file());
+    assert_eq!(
+        git_repo::run(&checkout.work, &["branch", "--show-current"]),
+        "main"
+    );
 }
 
 fn git(repo: &Path, args: &[&str]) -> Vec<u8> {
@@ -106,7 +183,7 @@ fn snapshot(repo: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
         ),
         (
             PathBuf::from("sentinel"),
-            fs::read(repo.join("sentinel")).expect("decoy file"),
+            fs::read(repo.join("README.md")).expect("decoy sentinel"),
         ),
     ]);
     collect_files(&git_dir, &git_dir.join("refs"), &mut snapshot);

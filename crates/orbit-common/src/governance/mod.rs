@@ -1,6 +1,12 @@
+pub mod agents;
 pub mod authorization;
+pub mod auto_task;
+pub mod codebase;
+pub mod drain;
 pub mod friction;
 pub mod operation;
-
-#[cfg(test)]
-mod tests;
+pub mod orchestrator;
+pub mod search;
+pub mod task;
+pub mod workflow;
+pub mod workspace_claim;

@@ -2,7 +2,7 @@
 title: Routines — Vision
 owner: claude
 last_updated: 2026-10-11
-last_validated: 2026-10-11
+last_validated: 2026-10-19
 status: Draft
 feature: routines
 doc_role: vision
@@ -105,7 +105,7 @@ and validation evidence, not by drifting in.
 - **Git-versioned, PR-reviewed schedules over a knowledge-integrated runtime.** Fires are
   ordinary Orbit runs with audit envelopes, linkable to tasks — the scheduler
   and the knowledge system share one substrate.
-- **Agent-invoking targets.** A routine can fire an `agent_loop` activity: scheduled agent
+- **Agent-invoking targets.** A routine can fire an `agent_loop` activity through a one-step wrapper job (v1 routine targets are jobs): scheduled agent
   work (nightly triage, periodic research) with the same policy and audit surface as any
   other run — most schedulers fire commands; this one fires accountable agent runs.
 - **Definitions-shared / state-local as a stance.** Hosts converge on *what* to schedule

@@ -4,6 +4,15 @@ on:
   push:
     tags:
       - "v*"
+  # Desktop-only backfill for a release that already exists: builds the
+  # desktop bundles from the tag's source with this workflow and attaches the
+  # missing ones under the same publication rules. It runs no CLI job.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to attach missing desktop bundles to, like v0.29.0
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -14,6 +23,9 @@ env:
 jobs:
   build-release:
     name: Build ${{ matrix.slug }}
+    # Only a tag push releases the CLI. A desktop backfill skips this job, and
+    # with it every job that needs publish-release.
+    if: ${{ github.event_name == 'push' }}
     runs-on: ${{ matrix.runs_on }}
     permissions:
       contents: read
@@ -85,7 +97,7 @@ jobs:
           ls -lh dist
 
       - name: Upload packaged artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-${{ matrix.slug }}
           path: dist/*
@@ -99,6 +111,7 @@ jobs:
     # build runs through `docker run` rather than a job container because
     # JavaScript actions cannot run inside an Alpine container on arm64.
     name: Build bundled Bubblewrap ${{ matrix.arch }}
+    if: ${{ github.event_name == 'push' }}
     runs-on: ${{ matrix.runs_on }}
     permissions:
       contents: read
@@ -140,9 +153,257 @@ jobs:
           ls -lh dist
 
       - name: Upload bundled Bubblewrap
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-bwrap-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  desktop-preflight:
+    # Plans the desktop build. Secrets can't be read in a job-level `if:`, so
+    # this job checks the six Apple Developer ID secrets and builds the
+    # build-desktop matrix: the Linux legs always, the macOS leg only when
+    # every secret is present, so a release never ships an unsigned or
+    # unnotarized macOS app and never holds back Linux for want of one.
+    # ORBIT_DESKTOP_RELEASE = false turns the desktop jobs off for tag pushes.
+    name: Plan desktop bundles
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      enabled: ${{ steps.plan.outputs.enabled }}
+      tag: ${{ steps.plan.outputs.tag }}
+      macos: ${{ steps.plan.outputs.macos }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Plan desktop legs
+        id: plan
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TAG: ${{ inputs.tag }}
+          DESKTOP_RELEASE: ${{ vars.ORBIT_DESKTOP_RELEASE }}
+          GH_TOKEN: ${{ github.token }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            tag="$DISPATCH_TAG"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+          # The tag reaches checkout refs and asset names; never echo it
+          # before it is known to be a plain release tag.
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "desktop bundles need a vMAJOR.MINOR.PATCH release tag with an optional prerelease suffix" >&2
+            exit 1
+          fi
+
+          enabled=true
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            # A backfill only adds assets to a release that already exists.
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName >/dev/null || {
+              echo "no GitHub Release exists for $tag; cut the release with a tag push instead" >&2
+              exit 1
+            }
+          elif [ "${DESKTOP_RELEASE:-}" = false ]; then
+            enabled=false
+            echo "::notice title=Desktop bundles off::ORBIT_DESKTOP_RELEASE is false, so $tag attaches no desktop bundles"
+            echo "Desktop bundles are off: ORBIT_DESKTOP_RELEASE is false." >> "$summary"
+          fi
+
+          missing=()
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+            APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            [ -n "${!name:-}" ] || missing+=("$name")
+          done
+          # ubuntu-22.04 keeps the Linux bundles' glibc floor at 2.35, as for the CLI.
+          # desktop.yml's release-bundles job runs these Linux legs on manual runs.
+          legs='{"slug":"linux-x86_64","target":"x86_64-unknown-linux-gnu","rust_targets":"x86_64-unknown-linux-gnu","runs_on":"ubuntu-22.04","bundles":"deb,appimage"}'
+          legs+=',{"slug":"linux-arm64","target":"aarch64-unknown-linux-gnu","rust_targets":"aarch64-unknown-linux-gnu","runs_on":"ubuntu-22.04-arm","bundles":"deb,appimage"}'
+          if [ "${#missing[@]}" -eq 0 ]; then
+            macos=true
+            legs='{"slug":"macos-universal","target":"universal-apple-darwin","rust_targets":"aarch64-apple-darwin,x86_64-apple-darwin","runs_on":"macos-15","bundles":"app,dmg"},'"$legs"
+          else
+            macos=false
+            if [ "$enabled" = true ]; then
+              message="macOS desktop bundle skipped: missing Apple signing secrets ${missing[*]} (see desktop/README.md#one-time-setup). The Linux bundles still ship."
+              echo "::warning title=macOS desktop bundle skipped::$message"
+              echo "$message" >> "$summary"
+            fi
+          fi
+          {
+            echo "enabled=$enabled"
+            echo "tag=$tag"
+            echo "macos=$macos"
+            echo "matrix={\"include\":[$legs]}"
+          } >> "$GITHUB_OUTPUT"
+
+  build-desktop:
+    # Desktop app bundles (desktop/, a separate Cargo workspace), built from
+    # the release tag's source. desktop-preflight picks the legs. The CLI
+    # release never waits on these jobs; publish-desktop attaches the bundles
+    # to the release afterwards.
+    name: Build desktop ${{ matrix.slug }}
+    needs: desktop-preflight
+    if: ${{ needs.desktop-preflight.outputs.enabled == 'true' }}
+    runs-on: ${{ matrix.runs_on }}
+    # First-time notarization of a new app can take hours on Apple's side.
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.desktop-preflight.outputs.matrix) }}
+    env:
+      TARGET: ${{ matrix.target }}
+      BUNDLES: ${{ matrix.bundles }}
+      RELEASE_TAG: ${{ needs.desktop-preflight.outputs.tag }}
+      # Keep in step with desktop.yml.
+      TAURI_CLI_VERSION: 2.12.3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ needs.desktop-preflight.outputs.tag }}
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
+        with:
+          toolchain: "1.98.1"
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Install webview build dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev \
+            libxdo-dev libssl-dev patchelf file
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: desktop
+          key: release-${{ matrix.slug }}
+          cache-bin: "false"
+
+      - name: Check desktop version matches the tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          desktop_version="$(awk -F'"' '/^version[[:space:]]*=/ { print $2; exit }' desktop/Cargo.toml)"
+          if [ "v$desktop_version" != "$RELEASE_TAG" ]; then
+            echo "desktop/Cargo.toml version $desktop_version does not match tag $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+      - name: Check Apple signing secrets
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          # desktop-preflight adds this leg only with every secret present;
+          # check again so a release never ships an unsigned or unnotarized
+          # macOS app.
+          missing=0
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+            APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "missing Actions secret: $name (see desktop/README.md#one-time-setup)" >&2
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Install Tauri CLI
+        shell: bash
+        run: cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+
+      - name: Build signed and notarized macOS bundle
+        if: runner.os == 'macOS'
+        working-directory: desktop
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: cargo tauri build --ci --target "$TARGET" --bundles "$BUNDLES" -- --locked
+
+      - name: Build Linux bundles
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        shell: bash
+        run: cargo tauri build --ci --target "$TARGET" --bundles "$BUNDLES" -- --locked
+
+      - name: Verify macOS signature and notarization
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="desktop/target/$TARGET/release/bundle/macos/Orbit.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          find "$app/Contents/MacOS" -type f -perm -u+x -print0 |
+            while IFS= read -r -d '' binary; do
+              archs="$(lipo -archs "$binary")"
+              echo "$binary: $archs"
+              case " $archs " in *" x86_64 "*) ;; *) exit 1 ;; esac
+              case " $archs " in *" arm64 "*) ;; *) exit 1 ;; esac
+            done
+
+      - name: Package desktop assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="desktop/target/$TARGET/release/bundle"
+          # Exactly one bundle per format, renamed to a stable,
+          # version-free name like the CLI tarballs.
+          take() {
+            local pattern="$1" asset="$2" matches
+            shopt -s nullglob
+            # shellcheck disable=SC2206
+            matches=($pattern)
+            shopt -u nullglob
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "expected exactly one $pattern, found ${#matches[@]}" >&2
+              exit 1
+            fi
+            cp "${matches[0]}" "dist/$asset"
+          }
+          mkdir -p dist
+          if [ "$RUNNER_OS" = macOS ]; then
+            take "$bundle/dmg/*.dmg" "orbit-desktop-$TARGET.dmg"
+          else
+            take "$bundle/deb/*.deb" "orbit-desktop-$TARGET.deb"
+            take "$bundle/appimage/*.AppImage" "orbit-desktop-$TARGET.AppImage"
+            dpkg-deb --info "dist/orbit-desktop-$TARGET.deb"
+          fi
+          ls -lh dist
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-${{ matrix.slug }}
           path: dist/*
           if-no-files-found: error
 
@@ -164,7 +425,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download packaged artifacts
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: release-*
           path: dist
@@ -282,6 +543,151 @@ jobs:
             dist/orbit-checksums.txt
             dist/orbit-checksums.txt.sig
           generate_release_notes: true
+
+  publish-desktop:
+    # Attaches the desktop bundles to the release publish-release created (or,
+    # for a backfill, the existing release), with their own signed checksum
+    # manifest, so a desktop failure never holds back the CLI assets. It runs
+    # only when every planned leg succeeded: a failed Linux leg stops it, and
+    # a macOS leg the preflight left out does not. Re-running it after a fix
+    # adds the missing assets, retaining published bytes when a retry
+    # rebuilds different bundles.
+    #
+    # Tag pushes, manual backfills and reruns for one release share the group
+    # below, keyed by the tag desktop-preflight validated. The publisher
+    # already uploading finishes, and later attempts wait, so a full plan sees
+    # a finished Linux-only manifest and stops before uploading the disk
+    # image. Another tag has its own group. The key is the preflight tag, so a
+    # backfill dispatched from a branch shares the tag push's queue.
+    name: Attach desktop bundles
+    needs: [desktop-preflight, publish-release, build-desktop]
+    if: >-
+      ${{ !cancelled()
+        && needs.desktop-preflight.outputs.enabled == 'true'
+        && needs.build-desktop.result == 'success'
+        && (needs.publish-release.result == 'success' || github.event_name == 'workflow_dispatch') }}
+    concurrency:
+      group: ${{ github.workflow }}-publish-desktop-${{ needs.desktop-preflight.outputs.tag }}
+      cancel-in-progress: false
+      queue: max
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: desktop-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish desktop assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORBIT_RELEASE_SIGNING_KEY_PEM: ${{ secrets.ORBIT_RELEASE_SIGNING_KEY_PEM }}
+          RELEASE_TAG: ${{ needs.desktop-preflight.outputs.tag }}
+          DESKTOP_MACOS: ${{ needs.desktop-preflight.outputs.macos }}
+        run: |
+          set -euo pipefail
+          macos_bundle=orbit-desktop-universal-apple-darwin.dmg
+          bundles=(
+            orbit-desktop-x86_64-unknown-linux-gnu.deb
+            orbit-desktop-x86_64-unknown-linux-gnu.AppImage
+            orbit-desktop-aarch64-unknown-linux-gnu.deb
+            orbit-desktop-aarch64-unknown-linux-gnu.AppImage
+          )
+          case "$DESKTOP_MACOS" in
+            true) bundles+=("$macos_bundle") ;;
+            false) ;;
+            *)
+              echo "desktop-preflight did not say whether macOS was built" >&2
+              exit 1
+              ;;
+          esac
+          # The signed set is exactly what this run built, plus the version file.
+          expected_assets=("${bundles[@]}" orbit-desktop-version.txt)
+          manifest=orbit-desktop-checksums.txt
+          signature="$manifest.sig"
+          published_assets="$(mktemp)"
+          candidate_manifest="$(mktemp)"
+          signing_key="$(mktemp)"
+          trap 'rm -f "$published_assets" "$candidate_manifest" "$signing_key"' EXIT
+
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[].name' > "$published_assets"
+          has_asset() { grep -Fxq -- "$1" "$published_assets"; }
+          if [ "$DESKTOP_MACOS" = false ] && has_asset "$macos_bundle"; then
+            # A manifest without it would leave a published bundle unsigned.
+            echo "the release already has $macos_bundle, but this run built no macOS bundle; add the Apple signing secrets and re-run" >&2
+            exit 1
+          fi
+
+          # Published bytes are authoritative. Replace only LOCAL copies before
+          # hashing, including metadata left by an interrupted upload. Never
+          # clobber a release asset, even if this run rebuilt different bytes.
+          for asset in "${expected_assets[@]}" "$manifest" "$signature"; do
+            if has_asset "$asset"; then
+              gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+                --pattern "$asset" --dir dist --clobber
+            fi
+          done
+          if ! has_asset orbit-desktop-version.txt; then
+            # The update check uses this signed file to tie bundles to the tag.
+            printf '%s\n' "${RELEASE_TAG#v}" > dist/orbit-desktop-version.txt
+          fi
+          [ "$(cat dist/orbit-desktop-version.txt)" = "${RELEASE_TAG#v}" ] || {
+            echo "published desktop version does not match the release tag" >&2
+            exit 1
+          }
+          for asset in "${expected_assets[@]}"; do
+            [ -f "dist/$asset" ] || {
+              echo "missing desktop asset: $asset" >&2
+              exit 1
+            }
+          done
+          (cd dist && sha256sum "${expected_assets[@]}" | sort -k 2) > "$candidate_manifest"
+          if has_asset "$manifest"; then
+            # Older partial uploads may already have a manifest. Preserve it
+            # only if it describes exactly the bytes we can publish now. A
+            # Linux-only manifest never gains a macOS bundle later.
+            cmp "$candidate_manifest" "dist/$manifest" || {
+              echo "published desktop checksums conflict with available bundles; fix forward in a new release" >&2
+              exit 1
+            }
+          else
+            cp "$candidate_manifest" "dist/$manifest"
+          fi
+          cat "dist/$manifest"
+
+          if ! has_asset "$signature"; then
+            if [ -z "${ORBIT_RELEASE_SIGNING_KEY_PEM:-}" ]; then
+              echo "ORBIT_RELEASE_SIGNING_KEY_PEM must contain the private key matching npm/release-signing.pub" >&2
+              exit 1
+            fi
+            printf '%s\n' "$ORBIT_RELEASE_SIGNING_KEY_PEM" > "$signing_key"
+            chmod 600 "$signing_key"
+            openssl dgst -sha256 -sign "$signing_key" \
+              -out "dist/$signature" "dist/$manifest"
+          fi
+          # Also verify an existing signature before any uploads. A retry may
+          # have inherited an orphan signature from the old publication order.
+          openssl dgst -sha256 \
+            -verify npm/release-signing.pub \
+            -signature "dist/$signature" "dist/$manifest"
+
+          # Metadata goes last: a new manifest never precedes missing bundles,
+          # and a manifest uploaded without its signature is safe to resume.
+          for asset in "${expected_assets[@]}" "$manifest" "$signature"; do
+            if ! has_asset "$asset"; then
+              gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" "dist/$asset"
+            fi
+          done
 
   bump-homebrew-tap:
     name: Update Homebrew tap

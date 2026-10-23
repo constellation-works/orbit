@@ -2,59 +2,26 @@
 
 use std::collections::BTreeMap;
 
-use orbit_common::fs::generation::{CompatibilityIdentity, FeatureFloor};
+use orbit_common::fs::generation::CompatibilityIdentity;
 
-use crate::driver::sqlite::migration::FeatureMigration;
-use crate::driver::sqlite::{automation, job_run_store, migration, review};
+use crate::driver::sqlite::{migration, task_registry};
 
 /// What upgrade admission compares against the live participants: the store
-/// schema and workspace layout ledgers, and every feature schema this binary
-/// migrates the host store to with its newest breaking migration.
+/// schema, task registry and workspace layout ledgers, and every feature
+/// schema store migration v49 froze, with its newest breaking migration.
+/// Binaries from before v49 still compare the feature versions and floors.
 pub fn compiled_compatibility() -> CompatibilityIdentity {
-    let registries = [
-        (automation::FEATURE, automation::MIGRATIONS),
-        (review::FEATURE, review::MIGRATIONS),
-        (
-            job_run_store::pull::FEATURE,
-            job_run_store::pull::MIGRATIONS,
-        ),
-    ];
     let mut features = BTreeMap::new();
     let mut feature_floors = BTreeMap::new();
-    for (feature, migrations) in registries {
-        features.insert(feature.to_string(), newest(migrations));
-        feature_floors.insert(feature.to_string(), floor(migrations));
+    for (feature, newest, floor) in migration::feature_compatibility() {
+        features.insert(feature.to_string(), newest);
+        feature_floors.insert(feature.to_string(), floor);
     }
     CompatibilityIdentity {
         store_schema: migration::schema_compatibility(),
+        task_registry: task_registry::registry_compatibility(),
         workspace_layout: crate::workflow::layout::layout_compatibility(),
         features,
         feature_floors,
     }
-}
-
-fn newest(migrations: &[FeatureMigration]) -> u32 {
-    migrations
-        .iter()
-        .map(|migration| migration.version())
-        .max()
-        .unwrap_or(0)
-}
-
-/// The newest migration older binaries cannot run beside.
-fn floor(migrations: &[FeatureMigration]) -> FeatureFloor {
-    migrations
-        .iter()
-        .filter(|migration| migration.is_breaking())
-        .max_by_key(|migration| migration.version())
-        .map_or(
-            FeatureFloor {
-                version: 0,
-                name: None,
-            },
-            |migration| FeatureFloor {
-                version: migration.version(),
-                name: Some(migration.name().to_string()),
-            },
-        )
 }

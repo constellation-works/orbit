@@ -84,6 +84,21 @@ const withoutLimits = () => ({
   readiness: (({ provider_limits: _limits, ...rest }) => ({ ...rest, tasks: [{ task_id: 'ORB-101', status: 'backlog', eligible: false, reason: 'provider_limit' }] }))(READINESS),
 });
 
+// Hold only this page's next readiness response. Other pages keep receiving
+// their responses even if they reach the server after this hold is armed.
+const holdReadiness = async (page) => {
+  const hold = {};
+  hold.arrived = new Promise((resolve) => { hold.signal = resolve; });
+  hold.released = new Promise((resolve) => { hold.release = resolve; });
+  await page.route((url) => url.pathname === '/api/workflows/auto/readiness', async (route) => {
+    const response = await route.fetch();
+    hold.signal();
+    await hold.released;
+    await route.fulfill({ response });
+  }, { times: 1 });
+  return hold;
+};
+
 let routeLog = [];
 function api(req, rest, res) {
   const json = (body, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
@@ -145,6 +160,18 @@ const settled = (page) => page.waitForFunction(() => [...document.querySelectorA
 let browser;
 const pageErrors = [];
 const evidenceLog = { schemes: {} };
+
+// The Drain card has rendered a readiness response: the phase is stamped on the
+// card, the body is no longer busy, and neither the static "Loading…" skeleton
+// nor an error note is showing. Page-side source, run by `evaluate` and
+// `waitForFunction`.
+const DRAIN_RENDERED = `(() => {
+  const card = document.getElementById('auto-drain-panel');
+  const body = document.getElementById('auto-drain-body');
+  const rendered = Boolean(card?.dataset.drainState) && body?.getAttribute('aria-busy') !== 'true'
+    && !body.querySelector('.skeleton-state, .action-error');
+  return { rendered, body: body?.textContent ?? '' };
+})()`;
 
 // The contrast ratio of two `rgb(...)` colours, by WCAG relative luminance.
 const contrast = (fg, bg) => {
@@ -215,33 +242,41 @@ try {
     //    carries the wait on its readiness dot in the Tasks list.
     await page.goto(`${origin}/#auto-drain`);
     await page.locator('#auto-drain-body .drain-provider-limit-note').waitFor({ state: 'visible' });
-    await page.locator('#tasks-body .ready-dot[data-pool]').first().waitFor({ state: 'attached' });
     await settled(page);
     const drain = await page.evaluate(() => {
       const card = document.getElementById('auto-drain-panel');
       const note = card.querySelector('.drain-provider-limit-note');
-      const dot = document.querySelector('#tasks-body [data-key="task-ORB-101"] .ready-dot');
       const box = card.getBoundingClientRect();
       return {
         note: note.textContent,
         noteColor: getComputedStyle(note).color,
         background: getComputedStyle(card).backgroundColor,
-        pool: dot?.dataset.pool,
-        label: dot?.getAttribute('aria-label'),
-        title: dot?.title,
         overflowing: [...card.querySelectorAll('*')]
           .filter((node) => node.getClientRects().length > 0 && node.getBoundingClientRect().right > box.right + 1)
           .map((node) => node.className || node.tagName),
       };
     });
-    log.drain = drain;
     assert(/^Provider limits: claude five_hour 93% ≥ 90% until .+: opus skipped\.$/.test(drain.note), `the note names the gated provider: ${drain.note}`);
     assert(!drain.note.includes('codex'), `a provider below its threshold holds nothing: ${drain.note}`);
-    assert(drain.pool === 'other' && drain.label.includes('provider limit'), `the waiting task's dot names its wait: ${JSON.stringify(drain)}`);
-    assert(drain.title.includes(DETAIL), `the waiting task's dot carries the detail: ${drain.title}`);
     assert(drain.overflowing.length === 0, `the Drain card content fits: ${JSON.stringify(drain.overflowing)}`);
     assert(contrast(drain.noteColor, drain.background) >= 4.5, `the note is legible: ${drain.noteColor} on ${drain.background}`);
     await page.screenshot({ path: path.join(evidence, `provider-limits-drain-${scheme}.png`), fullPage: true });
+
+    await page.goto(`${origin}/#tasks`);
+    await page.locator('#tasks-body .ready-dot[data-pool]').first().waitFor({ state: 'attached' });
+    await settled(page);
+    const tasks = await page.evaluate(() => {
+      const dot = document.querySelector('#tasks-body [data-key="task-ORB-101"] .ready-dot');
+      return {
+        pool: dot?.dataset.pool,
+        label: dot?.getAttribute('aria-label'),
+        title: dot?.title,
+      };
+    });
+    assert(tasks.pool === 'other' && tasks.label.includes('provider limit'), `the waiting task's dot names its wait: ${JSON.stringify(tasks)}`);
+    assert(tasks.title.includes(DETAIL), `the waiting task's dot carries the detail: ${tasks.title}`);
+    log.drain = { ...drain, ...tasks };
+    log.tasks = tasks;
 
     log.colorScheme = await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
     evidenceLog.schemes[scheme] = log;
@@ -256,19 +291,57 @@ try {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, timezoneId: 'America/Los_Angeles' });
     const page = await context.newPage();
     page.on('pageerror', (error) => pageErrors.push(`legacy: ${error.message}`));
+    // Keep Settings' independent readiness request out of the server until the
+    // Drain control is armed, while allowing config/effective to render.
+    let releaseSettings;
+    let settingsArrived;
+    const settingsReleased = new Promise((resolve) => { releaseSettings = resolve; });
+    const settingsRequest = new Promise((resolve) => { settingsArrived = resolve; });
+    await page.route((url) => url.pathname === '/api/workflows/auto/readiness', async (route) => {
+      settingsArrived();
+      await settingsReleased;
+      await route.continue();
+    }, { times: 1 });
     await page.goto(`${origin}/#config/crews`);
     await page.locator('[data-key="crews.opus"] .config-crew-limit').waitFor({ state: 'visible' });
     const cells = await page.evaluate(() => [...document.querySelectorAll('.config-crew-limit')].map((cell) => cell.textContent));
     assert(cells.length === 3 && cells.every((text) => text === '—'), `without limits every crew shows the placeholder: ${JSON.stringify(cells)}`);
-    await page.goto(`${origin}/#auto-drain`);
-    await page.locator('#tasks-body [data-key="task-ORB-101"] .ready-dot[data-pool]').waitFor({ state: 'attached' });
-    const legacyDrain = await page.evaluate(() => ({
+    // The card starts as a static "Loading…" placeholder, so absence of the
+    // note only means something once the readiness response has rendered. Hold
+    // that response on a fresh page: the card must read as not rendered while
+    // it is pending, and only the released legacy response completes it.
+    const drainPage = await context.newPage();
+    drainPage.on('pageerror', (error) => pageErrors.push(`legacy drain: ${error.message}`));
+    await settingsRequest;
+    const hold = await holdReadiness(drainPage);
+    releaseSettings();
+    // This competing response must finish while Drain's hold remains armed.
+    // A global one-shot hold would be stolen here by the Settings page.
+    await page.waitForFunction(`${DRAIN_RENDERED}.rendered`);
+    const competingSettings = await page.evaluate(DRAIN_RENDERED);
+    await drainPage.goto(`${origin}/#auto-drain`);
+    await hold.arrived;
+    const pending = await drainPage.evaluate(DRAIN_RENDERED);
+    assert(!pending.rendered && pending.body.includes('Loading…'), `a held readiness response leaves the Drain card loading: ${JSON.stringify(pending)}`);
+    hold.release();
+    await drainPage.waitForFunction(`${DRAIN_RENDERED}.rendered`);
+    await settled(drainPage);
+    const legacyDrain = await drainPage.evaluate(() => ({
       note: Boolean(document.querySelector('.drain-provider-limit-note')),
+      ...(document.getElementById('auto-drain-body').textContent.includes('Loading…') ? { loading: true } : {}),
+    }));
+    assert(!legacyDrain.loading, 'the legacy readiness card finished loading before the absence check');
+    assert(!legacyDrain.note, 'no provider-limit note without readings');
+    await drainPage.close();
+
+    await page.goto(`${origin}/#tasks`);
+    await page.locator('#tasks-body [data-key="task-ORB-101"] .ready-dot[data-pool]').waitFor({ state: 'attached' });
+    await settled(page);
+    const legacyTask = await page.evaluate(() => ({
       label: document.querySelector('#tasks-body [data-key="task-ORB-101"] .ready-dot').getAttribute('aria-label'),
     }));
-    evidenceLog.legacy = { cells, ...legacyDrain };
-    assert(!legacyDrain.note, 'no provider-limit note without readings');
-    assert(legacyDrain.label.includes('provider limit'), `a task with no detail names its wait: ${legacyDrain.label}`);
+    assert(legacyTask.label.includes('provider limit'), `a task with no detail names its wait: ${legacyTask.label}`);
+    evidenceLog.legacy = { cells, competingSettings, pending, ...legacyDrain, ...legacyTask };
     await context.close();
   }
 
@@ -283,6 +356,7 @@ try {
       'browser-task-dot-names-provider-limit-wait-with-detail',
       'browser-provider-limits-legible-in-light-and-dark-schemes',
       'browser-provider-limits-absent-on-older-server',
+      'browser-legacy-drain-hold-isolated-from-competing-settings-readiness',
     ],
     ...evidenceLog,
   }, null, 2)}\n`);

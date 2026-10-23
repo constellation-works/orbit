@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use orbit_types::workflow::ReviewLedger;
+
 use super::{
     AdmissionRunContext, ClaimFinalRecovery, ExecutionLocation, HandoffObservation,
     ProviderUnavailable,
@@ -95,6 +97,27 @@ pub struct ClaimInvocation {
     pub(crate) operator: bool,
     pub(crate) handoff_observation: Option<HandoffObservation>,
     pub(crate) provider_hold: Option<orbit_types::workflow::ProviderFailureHold>,
+    pub(crate) attribution: ClaimAttribution,
+}
+
+/// The crew and model a claimed leaf ran as, as its follower reports them.
+/// Attribution only: the owner keeps them on the claim's settlement record
+/// for the scorecards and never consults them for validation, a settlement's
+/// outcome or review-crew selection.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimAttribution {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_model: Option<String>,
+}
+
+impl ClaimAttribution {
+    /// Whether neither field is reported.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.crew.is_none() && self.crew_model.is_none()
+    }
 }
 
 impl ClaimInvocation {
@@ -113,6 +136,7 @@ impl ClaimInvocation {
             operator: false,
             handoff_observation: None,
             provider_hold: None,
+            attribution: ClaimAttribution::default(),
         }
     }
 
@@ -126,6 +150,7 @@ impl ClaimInvocation {
             operator: true,
             handoff_observation: None,
             provider_hold: None,
+            attribution: ClaimAttribution::default(),
         }
     }
 }
@@ -142,6 +167,16 @@ impl ClaimInvocation {
     /// latest status decision; never fill it from a worker payload.
     pub fn with_provider_hold(mut self, hold: orbit_types::workflow::ProviderFailureHold) -> Self {
         self.provider_hold = Some(hold);
+        self
+    }
+
+    /// The crew and model the follower reported beside its settlement, on
+    /// the settle call rather than inside it. A typed handoff carries no
+    /// [`ClaimEvidence`], so this is how its leaf's attribution reaches the
+    /// owner. It is not part of the mutation's identity, so a retry that
+    /// reports it differently still replays the recorded outcome.
+    pub fn with_attribution(mut self, attribution: ClaimAttribution) -> Self {
+        self.attribution = attribution;
         self
     }
 }
@@ -193,6 +228,44 @@ pub struct ClaimEvidence {
     /// predates the field keeps the task from that drain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forge_hold: Option<orbit_types::workflow::ForgeUnavailableHold>,
+    /// [ORB-16699] Review ledgers the executing host held for this claim.
+    /// Settlement copies them onto the owner so `review-reset` can reach the
+    /// lineage a claimed leaf exhausted. An owner that predates the field
+    /// ignores it. Absent when the leaf held no ledger for the claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_review: Option<ClaimedReviewCarry>,
+    /// The crew the leaf ran as, from its run's resolved crew. The follower
+    /// fills it on a failure or release; the owner keeps it on the claim's
+    /// settlement record as attribution only. An owner that predates the
+    /// field ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew: Option<String>,
+    /// The model that crew resolved to on the leaf's run, beside
+    /// [`Self::crew`]. An owner that predates the field ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_model: Option<String>,
+}
+
+/// Review ledgers a claimed leaf carried home [ORB-16699].
+///
+/// The lineage key stays the string the follower wrote. The owner stores
+/// that same key in its own workspace partition, which is what
+/// `review-reset` looks up. `executor_data_root` is that host's Orbit global
+/// directory and `executor_workspace_id` is the workspace `--workspace`
+/// selects there, so the resume command can name both from any directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ClaimedReviewCarry {
+    /// Machine that executed the leaf and holds the follower ledger partition.
+    pub executor_machine_id: String,
+    /// That machine's Orbit global data directory.
+    pub executor_data_root: String,
+    /// Logical workspace id `--workspace` resolves on that machine. Empty on
+    /// a carry written before the field existed; the lineage-key prefix is
+    /// the fallback, and it matches this id for a workspace `workspace init`
+    /// bound.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub executor_workspace_id: String,
+    pub ledgers: Vec<ReviewLedger>,
 }
 
 /// [ORB-15570] A pull request a claimed leaf opened, by number and head
@@ -229,23 +302,36 @@ pub struct ClaimFailure {
     /// releases the task unheld.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub provider_refusal: bool,
+    /// Set on a `transient` failure whose owner call lost to the owner's own
+    /// lock-wait deadline ([`orbit_types::workflow::OWNER_BUSY_MARKER`]): the
+    /// owner was reached and decided nothing. Neither the executing host nor
+    /// its crew is at fault, so the release excludes neither for the drain's
+    /// window, and the drain backs its claims off for a bounded time instead.
+    /// The owner honours the mark only on a `transient` release and only for
+    /// the task's first few such releases within its release-budget window:
+    /// those neither count against the task's release budget nor hold the
+    /// task from the drain, and later ones are ordinary `transient` releases.
+    /// An owner that predates the field drops it and records an ordinary
+    /// `transient` release.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub owner_busy: bool,
 }
 
 impl ClaimFailure {
     /// Whether the executing drain stops running the leaf's crew for the rest
     /// of its window: its class [says so](orbit_types::workflow::ClaimFailureClass::excludes_crew)
-    /// and it is not a provider's content refusal.
+    /// and it is neither a provider's content refusal nor a busy owner.
     #[must_use]
     pub fn excludes_crew(&self) -> bool {
-        self.class.excludes_crew() && !self.provider_refusal
+        self.class.excludes_crew() && !self.provider_refusal && !self.owner_busy
     }
 
     /// Whether a release for this failure counts against the task's release
     /// budget: its class is [budgeted](orbit_types::workflow::ClaimFailureClass::budgeted)
-    /// and it is not a provider usage limit.
+    /// and it is neither a provider usage limit nor a busy owner.
     #[must_use]
     pub fn budgeted(&self) -> bool {
-        self.class.budgeted() && !self.provider_limit
+        self.class.budgeted() && !self.provider_limit && !self.owner_busy
     }
 
     /// Whether a failed claim with this failure counts toward its pull
@@ -300,6 +386,13 @@ pub struct ClaimCandidateRef {
     /// and the findings its report held.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interrupted_review: Option<InterruptedReview>,
+    /// [ORB-16890] Why the owner's landing of this handed-off candidate
+    /// stopped: a required check the candidate itself fails, with the
+    /// failed job, its signature and a log excerpt. The next run repairs the
+    /// candidate from it and publishes its own pull request, which replaces
+    /// `pull_request`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landing_stop: Option<String>,
 }
 
 /// [ORB-15314] A review a leaf was cancelled or interrupted inside, before

@@ -1,5 +1,34 @@
 //! Embedded activity definitions available to the runtime and bootstrap layers.
 
+use orbit_types::workflow::TagInstructionRole;
+
+/// Orbit's shipped tag instructions: the tag (normalized), the role it
+/// addresses and its text. A `[workflow.tag_instructions]` file for the same
+/// tag and role replaces one, and `false` there disables it. Embedded, not
+/// seeded, so every host of one Orbit version ships the same text.
+pub(crate) const DEFAULT_TAG_INSTRUCTIONS: &[(&str, TagInstructionRole, &str)] = &[
+    (
+        "no-diff-expected",
+        TagInstructionRole::Implement,
+        include_str!("../../assets/tag_instructions/no-diff-expected/implement.md"),
+    ),
+    (
+        "skip-validation",
+        TagInstructionRole::Implement,
+        include_str!("../../assets/tag_instructions/skip-validation/implement.md"),
+    ),
+    (
+        "ui",
+        TagInstructionRole::Implement,
+        include_str!("../../assets/tag_instructions/ui/implement.md"),
+    ),
+    (
+        "ui",
+        TagInstructionRole::Review,
+        include_str!("../../assets/tag_instructions/ui/review.md"),
+    ),
+];
+
 /// Shippable default activity assets, seeded under
 /// `<orbit_root>/resources/activities/<name>.yaml` on `orbit init`. Keep this
 /// list in sync with the workflow YAMLs under `crates/orbit-core/assets/jobs/`:
@@ -62,6 +91,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/consolidate_code_scanning_tasks.yaml"),
     ),
     (
+        "adopt_orphaned_deliveries",
+        include_str!("../../assets/activities/adopt_orphaned_deliveries.yaml"),
+    ),
+    (
         "drain_window",
         include_str!("../../assets/activities/drain_window.yaml"),
     ),
@@ -96,6 +129,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
     (
         "agent_invoke",
         include_str!("../../assets/activities/agent_invoke.yaml"),
+    ),
+    (
+        "agent_explore",
+        include_str!("../../assets/activities/agent_explore.yaml"),
     ),
     (
         "gate_starvation_defer",
@@ -281,6 +318,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
 /// they exist for `crates/orbit-engine/examples/v2_job_runtime_smoke.rs`
 /// only.
 pub(crate) const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
+    (
+        "agent_explore_pipeline",
+        include_str!("../../assets/jobs/agent_explore_pipeline.yaml"),
+    ),
     (
         "agent_invoke_pipeline",
         include_str!("../../assets/jobs/agent_invoke_pipeline.yaml"),

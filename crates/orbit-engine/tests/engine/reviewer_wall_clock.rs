@@ -9,8 +9,7 @@ use std::sync::Mutex;
 
 use orbit_common::OrbitError;
 use orbit_engine::{
-    DispatchError, ResolvedCliExecutor, ReviewerInvocationRequest, RuntimeHost,
-    execute_job_with_resume,
+    DispatchError, ResolvedCliExecutor, ReviewerInvocationRequest, execute_job_with_resume,
 };
 use orbit_types::workflow::JobScheduleState;
 use orbit_types::workflow::ReviewerInvocationEvent;
@@ -41,7 +40,7 @@ impl BoundingHost {
     }
 }
 
-impl RuntimeHost for BoundingHost {
+impl orbit_engine::test_support::NullRuntimeHost for BoundingHost {
     fn run_deterministic(
         &self,
         _action: &str,
@@ -98,6 +97,7 @@ fn single_step_job(activity: &str) -> JobV2 {
         resolved_failure_activity: None,
         final_recovery_activity: None,
         resolved_final_recovery_activity: None,
+        steering_gate: None,
         max_active_runs: 1,
         kind: JobKind::Workflow,
         steps: vec![JobV2Step {
@@ -156,7 +156,6 @@ fn run(activity: &str, bound: Option<u64>) -> (u64, Vec<ReviewerInvocationEvent>
     (wall_clock_ms / 1000, invocations)
 }
 
-#[test]
 fn a_reviewer_runs_under_the_hosts_deadline_above_or_below_the_activity_wall_clock() {
     for bound in [
         ACTIVITY_WALL_CLOCK_SECONDS * 2,
@@ -179,13 +178,11 @@ fn a_reviewer_runs_under_the_hosts_deadline_above_or_below_the_activity_wall_clo
     }
 }
 
-#[test]
 fn a_reviewer_keeps_the_activity_wall_clock_when_the_host_does_not_bound_reviews() {
     let (wall_clock, _) = run("agent_review_repair", None);
     assert_eq!(wall_clock, ACTIVITY_WALL_CLOCK_SECONDS);
 }
 
-#[test]
 fn other_activities_keep_their_own_wall_clock() {
     let (wall_clock, invocations) = run("agent_implement", Some(ACTIVITY_WALL_CLOCK_SECONDS * 2));
     assert_eq!(wall_clock, ACTIVITY_WALL_CLOCK_SECONDS);
@@ -193,4 +190,25 @@ fn other_activities_keep_their_own_wall_clock() {
         invocations.is_empty(),
         "only the reviewer activity reports invocations"
     );
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn review_deadline_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "review_deadline_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_reviewer_runs_under_the_hosts_deadline_above_or_below_the_activity_wall_clock",
+                a_reviewer_runs_under_the_hosts_deadline_above_or_below_the_activity_wall_clock,
+            ),
+            (
+                "a_reviewer_keeps_the_activity_wall_clock_when_the_host_does_not_bound_reviews",
+                a_reviewer_keeps_the_activity_wall_clock_when_the_host_does_not_bound_reviews,
+            ),
+            (
+                "other_activities_keep_their_own_wall_clock",
+                other_activities_keep_their_own_wall_clock,
+            ),
+        ]);
+    });
 }

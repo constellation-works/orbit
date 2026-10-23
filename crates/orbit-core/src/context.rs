@@ -361,6 +361,8 @@ pub(crate) struct OrbitPolicyContext {
     execution_env_policy: ExecutionEnvPolicy,
     codex_execution_policy: CodexExecutionPolicy,
     proc_spawn_max_timeout_ms: u64,
+    /// `execution.agent_stall_minutes`. Zero disables the provider stall watch.
+    agent_stall_minutes: u32,
 }
 
 impl OrbitPolicyContext {
@@ -369,12 +371,14 @@ impl OrbitPolicyContext {
         execution_env_policy: ExecutionEnvPolicy,
         codex_execution_policy: CodexExecutionPolicy,
         proc_spawn_max_timeout_ms: u64,
+        agent_stall_minutes: u32,
     ) -> Self {
         Self {
             policy,
             execution_env_policy,
             codex_execution_policy,
             proc_spawn_max_timeout_ms,
+            agent_stall_minutes,
         }
     }
 }
@@ -383,7 +387,6 @@ impl OrbitPolicyContext {
 pub(crate) struct OrbitRuntimeSettings {
     persistence: PersistenceConfig,
     actor: ActorIdentity,
-    scoring_enabled: bool,
     /// Minutes a deferred delivery-automation reason may persist before the
     /// evaluator escalates it (`[automation] stall_window_minutes`).
     automation_stall_window_minutes: u32,
@@ -397,6 +400,9 @@ pub(crate) struct OrbitRuntimeSettings {
     /// (`[workflow] auto_ship` in `config.toml`, default `false`).
     workflow_auto_ship: bool,
     resource_throttle: orbit_config::ResourceThrottleSettings,
+    /// Initial global `[machine.auto_concurrency]` policy, used as the
+    /// admission cache's last-known-good fallback before its first refresh.
+    auto_concurrency: orbit_config::AutoConcurrencySettings,
     /// Commands this owner requires a distributed execution claim to pass on
     /// its exact candidate before the delivery handoff is accepted
     /// (`[workflow] required_validation_commands`, default empty).
@@ -410,16 +416,21 @@ pub(crate) struct OrbitRuntimeSettings {
     /// How far this owner takes an accepted distributed handoff: `review` or
     /// `done` (`[workflow] distributed_completion`, default `review`).
     workflow_distributed_completion: String,
+    /// How far admission lets work only the requesting executor can run
+    /// lead (`[workflow] admission_affinity`, default `band`).
+    admission_affinity: orbit_types::task::AdmissionAffinityReach,
     /// `[workflow.task_pilot_freshness]`: the global layer a task-pilot
     /// routine's `trigger.state.freshness` overrides [ORB-13638].
     task_pilot_freshness: orbit_types::workflow::automation::members::PreparationFreshness,
     crews: std::collections::BTreeMap<String, Crew>,
     default_crew: Option<String>,
     complexity_crews: orbit_config::ComplexityCrewPools,
-    /// Admitted `workflow.final_recovery_crews`; empty disables final recovery.
+    /// Admitted `workflow.purpose_crews.final_recovery`; empty disables final recovery.
     final_recovery_crews: Vec<String>,
-    /// Admitted `workflow.provider_limit_*`: how close to a usage limit a
-    /// provider's crews stay admissible.
+    /// Admitted `workflow.purpose_crews.<purpose>` pools; empty is unset.
+    purpose_crews: orbit_config::PurposeCrewPools,
+    /// Initial `workflow.provider_limit_*` policy for the admission cache's
+    /// last-known-good fallback before its first refresh.
     provider_limit: orbit_config::ProviderLimitPolicy,
     /// Resolved `[operation]` review preferences with provenance [ORB-11333].
     operation: orbit_config::OperationPolicy,
@@ -427,8 +438,35 @@ pub(crate) struct OrbitRuntimeSettings {
     worker_containment: orbit_config::WorkerContainmentSettings,
     /// Existing machine identity's task namespace; ORB for legacy runtimes.
     machine_task_prefix: String,
+    /// `machine.host_shutdown_hold_minutes`: how close a scheduled shutdown
+    /// must be before unattended admission holds.
+    host_shutdown_hold_minutes: u32,
     worktree_reclaim: Vec<String>,
     worktree_reclaim_below_free_mib: Option<u64>,
+    worktree_parked_reclaim_after_hours: u64,
+    /// `[workflow.mid_run_steering]`: whether task-context prompts record
+    /// the run's steering watermark (default off).
+    mid_run_steering: orbit_config::MidRunSteeringSettings,
+    /// `[workflow.tag_instructions]`: the files that replace or disable
+    /// Orbit's shipped per-tag instructions.
+    tag_instructions: orbit_config::TagInstructionSettings,
+    /// `workflow.unlocked_context_paths`: declared context that takes no
+    /// context lock.
+    unlocked_context_paths: crate::runtime::task::locks::UnlockedContextPaths,
+    /// `workflow.unlocked_path_validation_commands`: what a candidate that
+    /// changed only unlocked paths since its run's last full validation runs.
+    unlocked_path_validation_commands: Vec<String>,
+    /// `workflow.generated_paths`: path glob to regenerate command.
+    generated_paths: std::collections::BTreeMap<String, String>,
+    /// `workflow.light_delivery_paths`: the paths a `skip-review` or
+    /// `skip-validation` candidate may change [ORB-16855].
+    light_delivery_paths: Vec<String>,
+    /// `[workflow.regression_risk]`: whether implement and review prompts
+    /// mark regression-prone context files, and the gates for a mark.
+    regression_risk: orbit_config::RegressionRiskSettings,
+    /// `[workflow.explore]`: whether implement and review-repair runs may
+    /// delegate read-only exploration, and its per-run budgets.
+    explore: orbit_config::ExploreSettings,
 }
 
 impl OrbitRuntimeSettings {
@@ -436,55 +474,121 @@ impl OrbitRuntimeSettings {
     pub(crate) fn new(
         persistence: PersistenceConfig,
         actor: ActorIdentity,
-        scoring_enabled: bool,
         automation_stall_window_minutes: u32,
         pr_config: PrConfig,
         pr_settings: orbit_config::PrSettings,
         workflow_base_branch: String,
         workflow_auto_ship: bool,
         resource_throttle: orbit_config::ResourceThrottleSettings,
+        auto_concurrency: orbit_config::AutoConcurrencySettings,
         workflow_required_validation_commands: Vec<String>,
         review_baseline_commands: Vec<String>,
         validation_env: orbit_exec::ValidationEnvPolicy,
         workflow_distributed_completion: String,
+        admission_affinity: orbit_types::task::AdmissionAffinityReach,
         task_pilot_freshness: orbit_types::workflow::automation::members::PreparationFreshness,
         crews: std::collections::BTreeMap<String, Crew>,
         default_crew: Option<String>,
         complexity_crews: orbit_config::ComplexityCrewPools,
         final_recovery_crews: Vec<String>,
+        purpose_crews: orbit_config::PurposeCrewPools,
         provider_limit: orbit_config::ProviderLimitPolicy,
         operation: orbit_config::OperationPolicy,
         worker_containment: orbit_config::WorkerContainmentSettings,
         machine_task_prefix: String,
+        host_shutdown_hold_minutes: u32,
         worktree_reclaim: Vec<String>,
         worktree_reclaim_below_free_mib: Option<u64>,
+        worktree_parked_reclaim_after_hours: u64,
+        mid_run_steering: orbit_config::MidRunSteeringSettings,
+        tag_instructions: orbit_config::TagInstructionSettings,
+        unlocked_context_paths: crate::runtime::task::locks::UnlockedContextPaths,
+        unlocked_path_validation_commands: Vec<String>,
+        generated_paths: std::collections::BTreeMap<String, String>,
+        light_delivery_paths: Vec<String>,
+        regression_risk: orbit_config::RegressionRiskSettings,
+        explore: orbit_config::ExploreSettings,
     ) -> Self {
         Self {
             persistence,
             actor,
-            scoring_enabled,
             automation_stall_window_minutes,
             pr_config,
             pr_settings,
             workflow_base_branch,
             workflow_auto_ship,
             resource_throttle,
+            auto_concurrency,
             workflow_required_validation_commands,
             review_baseline_commands,
             validation_env,
             workflow_distributed_completion,
+            admission_affinity,
             task_pilot_freshness,
             crews,
             default_crew,
             complexity_crews,
             final_recovery_crews,
+            purpose_crews,
             provider_limit,
             operation,
             worker_containment,
             machine_task_prefix,
+            host_shutdown_hold_minutes,
             worktree_reclaim,
             worktree_reclaim_below_free_mib,
+            worktree_parked_reclaim_after_hours,
+            mid_run_steering,
+            tag_instructions,
+            unlocked_context_paths,
+            unlocked_path_validation_commands,
+            generated_paths,
+            light_delivery_paths,
+            regression_risk,
+            explore,
         }
+    }
+
+    pub(crate) fn explore(&self) -> orbit_config::ExploreSettings {
+        self.explore
+    }
+
+    pub(crate) fn regression_risk(&self) -> orbit_config::RegressionRiskSettings {
+        self.regression_risk
+    }
+
+    pub(crate) fn mid_run_steering(&self) -> orbit_config::MidRunSteeringSettings {
+        self.mid_run_steering
+    }
+
+    pub(crate) fn tag_instructions(&self) -> &orbit_config::TagInstructionSettings {
+        &self.tag_instructions
+    }
+
+    pub(crate) fn unlocked_context_paths(
+        &self,
+    ) -> &crate::runtime::task::locks::UnlockedContextPaths {
+        &self.unlocked_context_paths
+    }
+
+    pub(crate) fn unlocked_path_validation_commands(&self) -> &[String] {
+        &self.unlocked_path_validation_commands
+    }
+
+    pub(crate) fn generated_paths(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.generated_paths
+    }
+
+    pub(crate) fn light_delivery_paths(&self) -> &[String] {
+        &self.light_delivery_paths
+    }
+
+    pub(crate) fn set_host_shutdown_hold_minutes(&mut self, minutes: u32) {
+        self.host_shutdown_hold_minutes = minutes;
+    }
+
+    pub(crate) fn host_shutdown_hold_minutes(&self) -> u32 {
+        self.host_shutdown_hold_minutes
     }
 
     pub(crate) fn worktree_reclaim(&self) -> &[String] {
@@ -493,6 +597,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn worktree_reclaim_below_free_mib(&self) -> Option<u64> {
         self.worktree_reclaim_below_free_mib
+    }
+
+    pub(crate) fn worktree_parked_reclaim_after_hours(&self) -> u64 {
+        self.worktree_parked_reclaim_after_hours
     }
 
     pub(crate) fn operation(&self) -> &orbit_config::OperationPolicy {
@@ -527,6 +635,10 @@ impl OrbitRuntimeSettings {
         &self.resource_throttle
     }
 
+    pub(crate) fn auto_concurrency(&self) -> &orbit_config::AutoConcurrencySettings {
+        &self.auto_concurrency
+    }
+
     pub(crate) fn workflow_auto_ship(&self) -> bool {
         self.workflow_auto_ship
     }
@@ -547,6 +659,10 @@ impl OrbitRuntimeSettings {
         &self.workflow_distributed_completion
     }
 
+    pub(crate) fn admission_affinity(&self) -> orbit_types::task::AdmissionAffinityReach {
+        self.admission_affinity
+    }
+
     pub(crate) fn task_pilot_freshness(
         &self,
     ) -> &orbit_types::workflow::automation::members::PreparationFreshness {
@@ -563,6 +679,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn final_recovery_crews(&self) -> &[String] {
         &self.final_recovery_crews
+    }
+
+    pub(crate) fn purpose_crews(&self) -> &orbit_config::PurposeCrewPools {
+        &self.purpose_crews
     }
 
     pub(crate) fn provider_limit(&self) -> &orbit_config::ProviderLimitPolicy {
@@ -661,6 +781,10 @@ impl OrbitContext {
         self.policy.proc_spawn_max_timeout_ms
     }
 
+    pub(crate) fn agent_stall_minutes(&self) -> u32 {
+        self.policy.agent_stall_minutes
+    }
+
     pub(crate) fn persistence(&self) -> &PersistenceConfig {
         &self.runtime.persistence
     }
@@ -673,8 +797,8 @@ impl OrbitContext {
         self.runtime.actor = actor;
     }
 
-    pub(crate) fn scoring_enabled(&self) -> bool {
-        self.runtime.scoring_enabled
+    pub(crate) fn set_host_shutdown_hold_minutes(&mut self, minutes: u32) {
+        self.runtime.set_host_shutdown_hold_minutes(minutes);
     }
 
     pub(crate) fn settings(&self) -> &OrbitRuntimeSettings {

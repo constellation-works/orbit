@@ -10,6 +10,7 @@ use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 use orbit_types::identity::validate_machine_id;
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceStatus,
+    validate_source_remote_credentials,
 };
 use serde::Serialize;
 
@@ -22,6 +23,7 @@ use super::super::support::{
 };
 use super::WorkspaceInitArgs;
 use super::WorkspaceInitResult;
+use super::browser_kit::offer_browser_kit;
 use super::report::{collect_init_report, format_workspace_init, workspace_init_json};
 use super::validate::{
     canonical_workspace_id, preserve_corrupt_workspace_identity, read_workspace_identity,
@@ -50,12 +52,27 @@ impl WorkspaceInitArgs {
         let mcp = self.mcp;
         let inject_rules = self.inject_agent_rules;
         let task_id_start = self.task_id_start;
+        let install_browser_kit = self.install_browser_kit;
 
         let init_result = self.execute_at_path(&cwd, &orbit_dir, &global_root, &registry_path)?;
-        let report =
-            collect_init_report(init_result, &global_root, task_id_start, mcp, inject_rules)?;
+        // Offered after registration, so a declined or failed install never
+        // undoes the workspace.
+        let browser_kit = offer_browser_kit(&init_result.root, install_browser_kit);
+        let exit_code = i32::from(browser_kit.failed());
+        let report = collect_init_report(
+            init_result,
+            &global_root,
+            task_id_start,
+            mcp,
+            inject_rules,
+            browser_kit,
+        )?;
 
-        Ok(Payload::detail(workspace_init_json(&report), format_workspace_init(&report)).into())
+        Ok(
+            Payload::detail(workspace_init_json(&report), format_workspace_init(&report))
+                .with_exit_code(exit_code)
+                .into(),
+        )
     }
 
     fn execute_at_path(
@@ -167,6 +184,11 @@ impl WorkspaceInitArgs {
                         id,
                         cwd.display()
                     )));
+                }
+
+                if !reconciling_existing && let Some(remote) = git_remote.as_deref() {
+                    validate_source_remote_credentials(remote)
+                        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
                 }
 
                 let mut identity_recovery = None;

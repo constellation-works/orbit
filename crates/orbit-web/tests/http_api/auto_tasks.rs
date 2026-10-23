@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::time::Instant;
 
 use chrono::{Duration, Utc};
@@ -8,7 +9,7 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::{AutoTaskAddParams, Task};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok, write_json};
 
@@ -273,6 +274,321 @@ fn instance_projection_preserves_status_order_cursor_and_scheduler_dedupe() {
                 );
                 assert_eq!(report.reason.as_deref(), open.then_some("dedupe_open"));
             }
+        },
+    );
+}
+
+/// The panel reads the listing every surface shares: the effective enabled
+/// state, which a legacy-enabled consumer no longer shows as disabled, and the
+/// ownership skip, which no longer looks like a live delivery trigger.
+#[test]
+fn list_reports_effective_enabled_and_the_ownership_skip() {
+    isolated(
+        "auto_tasks::list_reports_effective_enabled_and_the_ownership_skip",
+        || {
+            let fixture = Fixture::new();
+            for (name, owner) in [
+                ("delivery-code-review", None),
+                ("elsewhere", Some("hm_elsewhere")),
+            ] {
+                let schedule = serde_json::from_value(json!({"deliveries_landed": {
+                    "owner_machine": owner, "branch": "agent-main", "threshold": 1,
+                    "max_wait_minutes": 10, "coverage": "landed_code_review_v1",
+                    "max_items": 50, "retries": 0,
+                }}))
+                .unwrap();
+                definition_with_schedule(&fixture, name, schedule);
+            }
+            fixture.runtime.auto_task_toggle("elsewhere", true).unwrap();
+            // Leave the consumer as the seed does: added disabled and written
+            // by no operator, so the deprecated policy still enables it.
+            let consumer = fixture.work.join("auto_tasks/delivery-code-review.yaml");
+            let body = fs::read_to_string(&consumer).unwrap();
+            let seeded = body
+                .lines()
+                .filter(|line| !line.starts_with("updated_by:"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_ne!(seeded, body.trim_end(), "{body}");
+            fs::write(&consumer, seeded).unwrap();
+            let config = fixture.global.join("config.toml");
+            let mut global = fs::read_to_string(&config).unwrap_or_default();
+            global.push_str("\n[operation]\nreview_policy = \"after-landing\"\n");
+            fs::write(&config, global).unwrap();
+
+            let server = fixture.server(false);
+            let listed = json_ok(server.get(URL));
+            let rows = listed["definitions"].as_array().unwrap();
+            let row = |name: &str| rows.iter().find(|row| row["name"] == name).unwrap();
+
+            let consumer = row("delivery-code-review");
+            assert_eq!(consumer["enabled"], false, "{consumer}");
+            assert_eq!(consumer["effective_enabled"], true, "{consumer}");
+            assert_ne!(
+                consumer["next_evaluation"]["state"], "disabled",
+                "the schedule state reads the effective value: {consumer}"
+            );
+            assert!(consumer["skipped_reason"].is_null(), "{consumer}");
+
+            let elsewhere = row("elsewhere");
+            assert_eq!(elsewhere["effective_enabled"], true, "{elsewhere}");
+            assert_eq!(elsewhere["plugin_inactive"], false, "{elsewhere}");
+            assert!(
+                elsewhere["skipped_reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("hm_elsewhere")),
+                "{elsewhere}"
+            );
+            assert_eq!(
+                elsewhere["next_evaluation"]["state"], "unavailable",
+                "{elsewhere}"
+            );
+            assert!(elsewhere["next_evaluation"]["at"].is_null(), "{elsewhere}");
+        },
+    );
+}
+
+fn deliveries(owner: Option<&str>) -> AutoTaskSchedule {
+    serde_json::from_value(json!({"deliveries_landed": {
+        "owner_machine": owner, "branch": "agent-main", "threshold": 1,
+        "max_wait_minutes": 10, "coverage": "landed_code_review_v1",
+        "max_items": 50, "retries": 0,
+    }}))
+    .unwrap()
+}
+
+/// Time cursor failures affect only time schedules. Delivery inspection still
+/// fails closed on its own state, with disabled and plugin skip precedence.
+#[test]
+fn list_keeps_delivery_schedules_independent_of_corrupt_time_cursors() {
+    isolated(
+        "auto_tasks::list_keeps_delivery_schedules_independent_of_corrupt_time_cursors",
+        || {
+            let fixture = Fixture::new();
+            for (name, owner, enabled) in [
+                ("delivery", None, true),
+                ("elsewhere", Some("hm_elsewhere"), true),
+                ("disabled", Some("hm_elsewhere"), false),
+                ("inactive", Some("hm_elsewhere"), true),
+            ] {
+                definition_with_schedule(&fixture, name, deliveries(owner));
+                fixture.runtime.auto_task_toggle(name, enabled).unwrap();
+            }
+            definition(&fixture, "interval");
+            definition_with_schedule(
+                &fixture,
+                "cron",
+                AutoTaskSchedule::Cron {
+                    cron: "* * * * *".into(),
+                },
+            );
+            // The missing seeding plugin makes the enabled definition inactive.
+            let inactive = fixture.work.join("auto_tasks/inactive.yaml");
+            let body = fs::read_to_string(&inactive).unwrap();
+            fs::write(
+                &inactive,
+                format!("# provenance: plugin:fixture-missing@1.0.0\n{body}"),
+            )
+            .unwrap();
+            let cursor = orbit_core::application::auto_tasks::cursor_state_path(
+                &fixture.runtime.paths().state_dir,
+            );
+            fs::create_dir_all(cursor.parent().unwrap()).unwrap();
+            fs::write(&cursor, "{broken").unwrap();
+
+            let server = fixture.server(false);
+            let listed = json_ok(server.get(URL));
+            assert_eq!(listed["inactive_plugin_count"], 1, "{listed}");
+            assert!(
+                listed["definitions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|row| row["name"] != "inactive")
+            );
+            let url = format!("{URL}&include_inactive_plugins=true");
+            let listed = json_ok(server.get(&url));
+            let row = |listed: &Value, name: &str| {
+                listed["definitions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["name"] == name)
+                    .unwrap()
+                    .clone()
+            };
+            assert!(listed["cursor_state_error"].is_string(), "{listed}");
+            for (name, state) in [
+                ("delivery", "waiting"),
+                ("interval", "unavailable"),
+                ("cron", "unavailable"),
+                ("elsewhere", "unavailable"),
+                ("disabled", "disabled"),
+                ("inactive", "waiting"),
+            ] {
+                let item = row(&listed, name);
+                assert_eq!(item["next_evaluation"]["state"], state, "{item}");
+                assert!(item["next_evaluation"]["at"].is_null(), "{item}");
+            }
+            let delivery = row(&listed, "delivery");
+            assert!(delivery["skipped_reason"].is_null(), "{delivery}");
+            assert_ne!(
+                delivery["automation"]["reason"], "state_unavailable",
+                "{delivery}"
+            );
+            let inactive = row(&listed, "inactive");
+            assert_eq!(inactive["plugin_inactive"], true, "{inactive}");
+            assert!(
+                inactive["skipped_reason"]
+                    .as_str()
+                    .unwrap()
+                    .contains("fixture-missing"),
+                "{inactive}"
+            );
+
+            // Malformed trigger state is independent of malformed time cursors.
+            for name in ["delivery", "disabled"] {
+                let consumer = orbit_core::application::automation::consumer_key(
+                    &fixture.runtime,
+                    "auto-task",
+                    name,
+                )
+                .unwrap();
+                fixture.runtime.sqlite_store().unwrap().with_transaction(|tx| {
+                    tx.connection().execute(
+                        "INSERT INTO automation_consumers (consumer, generation, state_json) VALUES (?1, 1, ?2)",
+                        [consumer.as_str(), "{broken-trigger"],
+                    ).map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                    Ok(())
+                }).unwrap();
+            }
+            let listed = json_ok(server.get(&url));
+            assert!(listed["cursor_state_error"].is_string(), "{listed}");
+            let delivery = row(&listed, "delivery");
+            assert_eq!(
+                delivery["automation"]["reason"], "state_unavailable",
+                "{delivery}"
+            );
+            assert_eq!(
+                delivery["next_evaluation"]["state"], "unavailable",
+                "{delivery}"
+            );
+            assert_eq!(
+                row(&listed, "disabled")["next_evaluation"]["state"],
+                "disabled"
+            );
+            assert_eq!(
+                fs::read_to_string(&cursor).unwrap(),
+                "{broken",
+                "listing must preserve corrupt cursor evidence"
+            );
+        },
+    );
+}
+
+fn strip_operator_stamp(fixture: &Fixture, name: &str) {
+    let path = fixture.work.join(format!("auto_tasks/{name}.yaml"));
+    let body = fs::read_to_string(&path).unwrap();
+    let seeded = body
+        .lines()
+        .filter(|line| !line.starts_with("updated_by:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_ne!(seeded, body.trim_end(), "{body}");
+    fs::write(&path, seeded).unwrap();
+}
+
+/// Disable on a legacy-enabled consumer must stamp the operator. The raw flag
+/// is already false, so compare-and-set still sends `expected_enabled: false`,
+/// and the write is what makes the next read effectively disabled. An ordinary
+/// raw-off definition stays a no-op, and a stale raw token is still a conflict.
+#[test]
+fn disable_legacy_enabled_consumer_stamps_the_operator_and_keeps_raw_cas() {
+    isolated(
+        "auto_tasks::disable_legacy_enabled_consumer_stamps_the_operator_and_keeps_raw_cas",
+        || {
+            let fixture = Fixture::new();
+            definition_with_schedule(&fixture, "delivery-code-review", deliveries(None));
+            definition_with_schedule(&fixture, "parked", deliveries(None));
+            definition(&fixture, "nightly");
+            strip_operator_stamp(&fixture, "delivery-code-review");
+            let config = fixture.global.join("config.toml");
+            let mut global = fs::read_to_string(&config).unwrap_or_default();
+            global.push_str("\n[operation]\nreview_policy = \"after-landing\"\n");
+            fs::write(&config, global).unwrap();
+
+            let server = fixture.server(true);
+            let toggle = "/api/auto-tasks/toggle?workspace=ws_http_fixture";
+            let row = |listed: &Value, name: &str| {
+                listed["definitions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["name"] == name)
+                    .unwrap()
+                    .clone()
+            };
+            let listed = json_ok(server.get(URL));
+            let consumer = row(&listed, "delivery-code-review");
+            assert_eq!(consumer["enabled"], false, "{consumer}");
+            assert_eq!(consumer["effective_enabled"], true, "{consumer}");
+            let parked = row(&listed, "parked");
+            assert_eq!(parked["enabled"], false, "{parked}");
+            assert_eq!(parked["effective_enabled"], false, "{parked}");
+            let nightly = row(&listed, "nightly");
+            assert_eq!(nightly["enabled"], true, "{nightly}");
+            assert_eq!(nightly["effective_enabled"], true, "{nightly}");
+
+            let unchanged = json_ok(server.send(
+                "POST",
+                toggle,
+                json!({"name":"parked","expected_enabled":false,"enabled":false}),
+            ));
+            assert_eq!(unchanged["changed"], false, "{unchanged}");
+            let listed = json_ok(server.get(URL));
+            assert_eq!(row(&listed, "parked")["effective_enabled"], false);
+
+            let conflict = server.send(
+                "POST",
+                toggle,
+                json!({"name":"nightly","expected_enabled":false,"enabled":false}),
+            );
+            assert_eq!(conflict.status().as_u16(), 409);
+            let conflict: Value = conflict.json().unwrap();
+            assert_eq!(conflict["code"], "stale_auto_task_state");
+            assert_eq!(conflict["actual_enabled"], true, "{conflict}");
+            let listed = json_ok(server.get(URL));
+            assert_eq!(row(&listed, "nightly")["enabled"], true, "{listed}");
+
+            let disabled = json_ok(server.send(
+                "POST",
+                toggle,
+                json!({"name":"delivery-code-review","expected_enabled":false,"enabled":false}),
+            ));
+            assert_eq!(disabled["changed"], true, "{disabled}");
+            assert_eq!(disabled["enabled"], false, "{disabled}");
+            let listed = json_ok(server.get(URL));
+            let consumer = row(&listed, "delivery-code-review");
+            assert_eq!(consumer["enabled"], false, "{consumer}");
+            assert_eq!(consumer["effective_enabled"], false, "{consumer}");
+
+            let second = json_ok(server.send(
+                "POST",
+                toggle,
+                json!({"name":"delivery-code-review","expected_enabled":false,"enabled":false}),
+            ));
+            assert_eq!(second["changed"], false, "{second}");
+
+            let ordinary = json_ok(server.send(
+                "POST",
+                toggle,
+                json!({"name":"nightly","expected_enabled":true,"enabled":false}),
+            ));
+            assert_eq!(ordinary["changed"], true, "{ordinary}");
+            let listed = json_ok(server.get(URL));
+            let nightly = row(&listed, "nightly");
+            assert_eq!(nightly["enabled"], false, "{nightly}");
+            assert_eq!(nightly["effective_enabled"], false, "{nightly}");
         },
     );
 }

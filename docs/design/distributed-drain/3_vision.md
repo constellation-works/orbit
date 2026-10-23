@@ -2,7 +2,7 @@
 title: Distributed Drain — Vision
 owner: claude
 last_updated: 2026-10-06
-last_validated: 2026-10-11
+last_validated: 2026-10-19
 status: Draft
 feature: distributed-drain
 doc_role: vision
@@ -22,8 +22,8 @@ requests. Its required scope includes idempotent admission, attempt ownership, m
 routed task reads/writes, and durable landing handoff. The questions below extend that contract;
 they are not prerequisites hidden as future work.
 
-Claimed PR leaves can run the owner's captured `review.before_pr` gate when the executor declares
-`review_gate`; the executor's own switch is diagnostic.
+Claimed PR leaves can run the owner's captured before-PR (`review.timing = "before_pr"`) gate
+when the executor declares `review_gate`; the executor's own switch is diagnostic.
 
 ## 1. Open Questions
 

@@ -1,6 +1,124 @@
 use super::*;
 use std::collections::HashSet;
 
+/// Rebase steps with a resolved, later host validator on the same candidate.
+/// This is deliberately conservative: compound continuations and additional
+/// guards cannot prove that validation runs whenever conflict recovery resumes.
+pub(super) fn recovery_validation_continuations(
+    job: &JobV2,
+    resume: Option<&orbit_types::workflow::PipelineState>,
+    worker: Option<&orbit_types::tool::WorkerInvocation>,
+    run_id: &str,
+) -> HashSet<String> {
+    let mut proven = HashSet::new();
+    for (index, step) in job.steps.iter().enumerate() {
+        let Some((rebase, "git_rebase")) = deterministic_target(step) else {
+            continue;
+        };
+        let Some(sync_input) = rebase.default_input.as_ref() else {
+            continue;
+        };
+        for (offset, validator) in job.steps[index + 1..].iter().enumerate() {
+            if !matches!(validator.body, JobV2StepBody::Target(_)) {
+                // A compound body can overwrite inherited outputs through
+                // collect aliases, or validate only one branch/iteration.
+                break;
+            }
+            let Some((target, action)) = deterministic_target(validator) else {
+                // A resolved agent target may repair the head; the validator
+                // still observes that final head and cannot be bypassed by it.
+                continue;
+            };
+            if !matches!(action, "candidate_validate" | "claim_validate") {
+                continue;
+            }
+            if resume.is_some_and(|state| {
+                state.step_states.get(&((index + 1 + offset) as u32))
+                    == Some(&orbit_types::workflow::JobRunState::Success)
+            }) {
+                // A checkpointed validator will be skipped, not rerun on the
+                // head produced by this continuation.
+                continue;
+            }
+            if validator.when.is_some()
+                && (validator.when != step.when
+                    || validator
+                        .when
+                        .as_deref()
+                        .is_some_and(|guard| guard.contains("input.final_recovery_resume")))
+            {
+                continue;
+            }
+            let Some(validation_input) = target.default_input.as_ref() else {
+                continue;
+            };
+            let same_binding = |key: &str| {
+                sync_input.get(key).is_some_and(|binding| {
+                    let nonempty = match binding {
+                        Value::String(value) => !value.trim().is_empty(),
+                        Value::Array(values) => !values.is_empty(),
+                        _ => false,
+                    };
+                    nonempty
+                        && !binding.to_string().contains("input.final_recovery_resume")
+                        && validation_input.get(key) == Some(binding)
+                })
+            };
+            let output_binding = |key: &str| {
+                validation_input.get(key).and_then(Value::as_str)
+                    == Some(format!("{{{{ steps.{}.output.{key} }}}}", step.id).as_str())
+            };
+            if !same_binding("workspace_path")
+                || !output_binding("base_sha")
+                || (validation_input.get("base_ref").is_some() && !output_binding("base_ref"))
+            {
+                continue;
+            }
+            let bound = if action == "candidate_validate" {
+                same_binding("job_run_id") && same_binding("completed_task_ids")
+            } else {
+                // Claim identity/run authority comes from the worker binding.
+                // The publication-pinning and no-diff skip invocations do not
+                // execute commands and cannot own conflict recovery's gates.
+                worker.is_some_and(|worker| worker.bound_run_id == run_id)
+                    && ["prevalidated", "pull_request", "skipped_no_diff_expected"]
+                    .iter()
+                    .all(|key| validation_input.get(key).is_none())
+                    // A carried claim_validate result bypasses observing the
+                    // recovered candidate unless revalidation is statically
+                    // guaranteed. Dynamic expressions cannot prove that here.
+                    && (validation_input.get("carry").is_none_or(Value::is_null)
+                        || validation_input.get("revalidate").and_then(Value::as_bool)
+                            == Some(true))
+                    && ["job_run_id", "completed_task_ids", "task_id"]
+                        .iter()
+                        .all(|key| validation_input.get(key).is_none() || same_binding(key))
+                    // Rebase consumes its prepared base_ref, while claims
+                    // independently resolve the sync mode and compare the
+                    // observed merge-base to sync_base's exact base_sha.
+                    && (sync_input.get("base_sync").is_none()
+                        || validation_input.get("base_sync").is_none()
+                        || same_binding("base_sync"))
+            };
+            if bound {
+                proven.insert(step.id.clone());
+                break;
+            }
+        }
+    }
+    proven
+}
+
+fn deterministic_target(step: &JobV2Step) -> Option<(&TargetStep, &str)> {
+    let JobV2StepBody::Target(target) = &step.body else {
+        return None;
+    };
+    let ActivityV2Spec::Deterministic(spec) = &target.spec else {
+        return None;
+    };
+    Some((target, &spec.action))
+}
+
 pub fn validate_job(job: &JobV2) -> Result<(), DispatchError> {
     if let Some(name) = &job.recovery_activity
         && job.resolved_recovery_activity.is_none()
@@ -25,6 +143,31 @@ pub fn validate_job(job: &JobV2) -> Result<(), DispatchError> {
             "job final_recovery_activity `{name}` was not resolved — caller must run \
              `resolve_job_catalog_refs_for_execution` at load time before dispatch"
         )));
+    }
+    if let Some(gate) = &job.steering_gate {
+        let position = |id: &str| job.steps.iter().position(|step| step.id == id);
+        if !matches!(
+            (position(&gate.round), position(&gate.before)),
+            (Some(round), Some(before)) if round < before
+        ) {
+            return Err(DispatchError::JobValidation(format!(
+                "job steering_gate: `round` (`{}`) must name a top-level step before the \
+                 top-level step `before` names (`{}`)",
+                gate.round, gate.before
+            )));
+        }
+        if let Some(candidate) = &gate.candidate
+            && !matches!(
+                (position(candidate), position(&gate.round)),
+                (Some(candidate), Some(round)) if candidate < round
+            )
+        {
+            return Err(DispatchError::JobValidation(format!(
+                "job steering_gate: `candidate` (`{candidate}`) must name a top-level step \
+                 before the top-level step `round` names (`{}`)",
+                gate.round
+            )));
+        }
     }
     for step in &job.steps {
         validate_step(step)?;

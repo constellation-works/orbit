@@ -162,8 +162,8 @@ pub fn run_build_phase(
     }
     #[cfg(target_os = "macos")]
     {
-        let (command, guard) = macos::command(request)?;
-        supervise::run(command, guard, request, log)
+        let command = macos::command(request)?;
+        supervise::run(command, (), request, log)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {

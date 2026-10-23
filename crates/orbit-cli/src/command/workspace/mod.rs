@@ -14,6 +14,3 @@ mod teardown;
 pub use command::{WorkspaceCommand, WorkspaceSubcommand};
 pub use publication::WorkspacePublicationSubcommand;
 pub use source_remote::WorkspaceSourceRemoteSubcommand;
-
-#[cfg(test)]
-mod tests;

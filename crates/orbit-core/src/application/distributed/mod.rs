@@ -39,16 +39,21 @@
 //! [design §4.1]: ../../../../../docs/design/distributed-drain/2_design.md
 //! [spec]: ../../../../../docs/design/distributed-drain/specs/task-pull.md
 
+mod auth_failures;
 mod auth_recovery;
+mod claimed_review;
 mod contract;
 mod entry;
 mod final_recovery;
 mod follower;
+mod host_provider_hold;
 mod leaf_settlements;
+mod owner_repair;
 mod probe;
 mod pull_waiting;
 mod serve;
 mod settlement;
+mod work_fit;
 
 pub use contract::{
     DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED, DeclaredCallerContract, OWNER_COMPLETION_POLICY,
@@ -57,16 +62,20 @@ pub use contract::{
 pub(crate) use contract::{owner_protocol_error, probe_pull_contract};
 pub use entry::{DrainEntryAdmission, DrainEntryPoint, DrainEntryRefusal, RESOURCE_THROTTLED};
 pub use follower::{PULL_DRAIN_JOB, WorkspacePullRequest};
+pub(crate) use host_provider_hold::HostProviderHold;
 pub use leaf_settlements::LeafSettlement;
+pub(crate) use owner_repair::OwnerRepairDrain;
 pub use probe::{
     AdmissionReceiptLookup, AdmissionReceiptLookupOutcome, DrainProbeReport, DrainProbeSession,
 };
 pub(crate) use pull_waiting::OwnerAnswer;
 pub use serve::TaskPullResponse;
 pub use settlement::{
-    ClaimedLeafStage, DrainClaimedLeaf, PendingPullSettlements, PullCrewWindow, PullLeafClaim,
-    PullSettlementEntry, PullSettlementOutcome, RefusedPullSettlement,
+    ClaimedLeafStage, DrainClaimedLeaf, OwnerBusyBackoff, PendingPullSettlements, PullCrewWindow,
+    PullLeafClaim, PullSettlementEntry, PullSettlementOutcome, RefusedPullSettlement,
 };
 pub(crate) use settlement::{
-    is_owner_refusal, is_owner_transport_failure, settlement_refusal_backoff,
+    OWNER_BUSY_EPISODE_LIMIT, is_owner_refusal, is_owner_transport_failure,
+    settlement_refusal_backoff,
 };
+pub(crate) use work_fit::PullWorkFit;

@@ -1,10 +1,199 @@
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::{ACTOR_ALIAS_MAP_VERSION, canonical_actor_for_role_label};
 use rusqlite::Connection;
 
 use super::introspect::{add_column_if_missing, table_exists, table_has_column};
 
-pub(super) fn ensure_audit_events_schema(conn: &Connection) -> Result<(), OrbitError> {
+/// v7 `trusted_mcp_audit_provenance` migration (ORB-10228): additive trusted
+/// workspace, caller/process, transport, capability-set, session/call, and
+/// lease correlation for command-audit rows. Existing rows remain untouched
+/// and therefore read with NULL/empty additions.
+pub(super) fn apply_trusted_mcp_audit_provenance(conn: &Connection) -> Result<(), OrbitError> {
+    for (column, definition) in [
+        ("workspace_id", "TEXT"),
+        ("caller_machine_id", "TEXT"),
+        ("caller_host_id", "TEXT"),
+        ("process_machine_id", "TEXT"),
+        ("process_host_id", "TEXT"),
+        ("transport", "TEXT"),
+        ("capabilities_json", "TEXT"),
+        ("origin_session_id", "TEXT"),
+        ("mcp_call_id", "TEXT"),
+        ("lease_id", "TEXT"),
+    ] {
+        add_column_if_missing(conn, "audit_events", column, definition)?;
+    }
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_audit_events_workspace_id
+            ON audit_events(workspace_id);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_caller_machine_id
+            ON audit_events(caller_machine_id);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_process_machine_id
+            ON audit_events(process_machine_id);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_transport
+            ON audit_events(transport);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_origin_session_id
+            ON audit_events(origin_session_id);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_mcp_call_id
+            ON audit_events(mcp_call_id);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_lease_id
+            ON audit_events(lease_id);
+        "#,
+    )
+    .map_err(sqlite_store_error)
+}
+
+/// Add transport-neutral invocation correlation to command-audit rows.
+/// Existing rows and non-invocation producers remain NULL-compatible.
+pub(super) fn apply_invocation_audit_context(conn: &Connection) -> Result<(), OrbitError> {
+    // A ledger may outlive an incomplete pre-ledger schema (for example, an
+    // invocation-only fixture). Re-establish the canonical audit table and
+    // its existing provenance projection before extending it.
+    ensure_audit_events_schema_v15(conn)?;
+    ensure_trusted_mcp_audit_provenance_v15(conn)?;
+
+    add_column_if_missing(conn, "audit_events", "trace_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "caller_ip", "TEXT")?;
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_audit_events_trace_id
+            ON audit_events(trace_id);
+        "#,
+    )
+    .map_err(sqlite_store_error)
+}
+
+/// v16 `audit_actor_identity` migration (ORB-10888): materialize the canonical
+/// actor identity beside the overloaded `role` label, then backfill it for
+/// every existing row so a 30d/90d window stays comparable across the change.
+///
+/// `role` itself is never read back into, rewritten, or reinterpreted here —
+/// trust classification keeps reading exactly the bytes it read before.
+pub(super) fn apply_audit_actor_identity(conn: &Connection) -> Result<(), OrbitError> {
+    ensure_audit_events_schema_v16(conn)?;
+
+    for (column, definition) in [
+        ("actor_kind", "TEXT"),
+        ("actor_id", "TEXT"),
+        ("actor_vendor", "TEXT"),
+        ("actor_family", "TEXT"),
+        ("actor_model", "TEXT"),
+        ("actor_alias_version", "INTEGER"),
+    ] {
+        add_column_if_missing(conn, "audit_events", column, definition)?;
+    }
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_audit_events_actor
+            ON audit_events(actor_kind, actor_id);
+        "#,
+    )
+    .map_err(sqlite_store_error)?;
+
+    backfill_audit_actor_identity_v16(conn)
+}
+
+/// v17 `audit_self_reported_actor` migration (ORB-10890): record the identity
+/// an unauthenticated caller claims for itself in a column of its own.
+///
+/// Strictly additive and deliberately **not** backfilled. Every existing row
+/// was written before any claim was collected, so there is no claim to recover;
+/// deriving one from `role` would retroactively attribute traffic Orbit never
+/// authenticated. Existing `unverified` rows therefore stay valid and read as
+/// anonymous.
+pub(super) fn apply_audit_self_reported_actor(conn: &Connection) -> Result<(), OrbitError> {
+    ensure_audit_events_schema_v17(conn)?;
+
+    add_column_if_missing(conn, "audit_events", "self_reported_actor", "TEXT")?;
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_audit_events_self_reported_actor
+            ON audit_events(self_reported_actor);
+        "#,
+    )
+    .map_err(sqlite_store_error)
+}
+
+/// v18 `audit_actor_alias_v2` migration: the alias map moved `fable` from a
+/// shorthand entry to a family rule, so versioned Fable labels (`fable-5.1`)
+/// now resolve to `claude` instead of an unrecognized family. Re-derive every
+/// row stamped with the previous map; rows already at the current version are
+/// untouched, and `role` is never rewritten.
+pub(super) fn apply_audit_actor_alias_v2(conn: &Connection) -> Result<(), OrbitError> {
+    ensure_audit_events_schema_v18(conn)?;
+    backfill_audit_actor_identity_v18(conn)
+}
+
+/// v25 `audit_plugin_grants` migration: the grant set (JSON array of grant
+/// names) a plugin-backed tool call ran under, beside the three provenance
+/// columns (design `docs/design/plugins/1_scope.md` §4.4). Additive.
+pub(super) fn apply_audit_plugin_grants(conn: &Connection) -> Result<(), OrbitError> {
+    ensure_audit_events_schema_v25(conn)?;
+    add_column_if_missing(conn, "audit_events", "plugin_grants", "TEXT")
+}
+
+/// v23 `audit_machine_name_columns` migration (ORB-12725): *host* is reserved
+/// for the MCP-host/process sense, so the two audit columns that carry a
+/// machine's display name are renamed to say so. A rename rather than an
+/// additive column plus backfill, because one column is one fact and two
+/// spellings of it would drift.
+pub(super) fn apply_audit_machine_name_columns(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "audit_events")? {
+        return Ok(());
+    }
+    for (old, new) in [
+        ("caller_host_id", "caller_machine_name"),
+        ("process_host_id", "process_machine_name"),
+    ] {
+        if !table_has_column(conn, "audit_events", old)?
+            || table_has_column(conn, "audit_events", new)?
+        {
+            continue;
+        }
+        conn.execute(
+            &format!("ALTER TABLE audit_events RENAME COLUMN {old} TO {new}"),
+            [],
+        )
+        .map_err(sqlite_store_error)?;
+    }
+    Ok(())
+}
+
+/// Index the invocation population before grouping tool-call aggregates.
+pub(super) fn apply_audit_tool_call_index(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_audit_events_command_subcommand_timestamp
+         ON audit_events(command, subcommand, timestamp);",
+    )
+    .map_err(sqlite_store_error)
+}
+
+/// Extend the v2 event-type index with `ts`, so one index serves a read of one
+/// event type over a window (the audit summary's policy denials). The old
+/// two-column index is a prefix of the new one.
+pub(super) fn apply_v2_audit_event_type_ts_index(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_v2_audit_events_ws_event_type_ts
+         ON v2_audit_events(workspace_id, event_type, ts);
+         DROP INDEX IF EXISTS idx_v2_audit_events_ws_event_type;",
+    )
+    .map_err(sqlite_store_error)
+}
+
+// Frozen private copy for v15. Do not share with another migration.
+fn ensure_audit_events_schema_v15(conn: &Connection) -> Result<(), OrbitError> {
     conn.execute_batch(
         r#"
             CREATE TABLE IF NOT EXISTS audit_events (
@@ -53,7 +242,7 @@ pub(super) fn ensure_audit_events_schema(conn: &Connection) -> Result<(), OrbitE
             ON audit_events(execution_id);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     add_column_if_missing(conn, "audit_events", "task_id", "TEXT")?;
     add_column_if_missing(conn, "audit_events", "job_run_id", "TEXT")?;
@@ -69,16 +258,297 @@ pub(super) fn ensure_audit_events_schema(conn: &Connection) -> Result<(), OrbitE
             ON audit_events(job_run_id);
         "#,
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    .map_err(sqlite_store_error)?;
 
     Ok(())
 }
 
-/// v7 `trusted_mcp_audit_provenance` migration (ORB-10228): additive trusted
-/// workspace, caller/process, transport, capability-set, session/call, and
-/// lease correlation for command-audit rows. Existing rows remain untouched
-/// and therefore read with NULL/empty additions.
-pub(super) fn apply_trusted_mcp_audit_provenance(conn: &Connection) -> Result<(), OrbitError> {
+// Frozen private copy for v16. Do not share with another migration.
+fn ensure_audit_events_schema_v16(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                command TEXT NOT NULL,
+                subcommand TEXT,
+                tool_name TEXT,
+                target_type TEXT,
+                target_id TEXT,
+                role TEXT NOT NULL,
+                status TEXT NOT NULL,
+                exit_code INTEGER NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                working_directory TEXT NOT NULL,
+                arguments_json TEXT,
+                stdout_truncated TEXT,
+                stderr_truncated TEXT,
+                error_message TEXT,
+                host TEXT,
+                pid INTEGER NOT NULL,
+                session_id TEXT,
+                task_id TEXT,
+                job_run_id TEXT,
+                activity_id TEXT,
+                step_index INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp
+            ON audit_events(timestamp);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_tool_name
+            ON audit_events(tool_name);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_status
+            ON audit_events(status);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_role
+            ON audit_events(role);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_target
+            ON audit_events(target_type, target_id);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_events_execution_id
+            ON audit_events(execution_id);
+        "#,
+    )
+    .map_err(sqlite_store_error)?;
+
+    add_column_if_missing(conn, "audit_events", "task_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "job_run_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "activity_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "step_index", "INTEGER")?;
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_audit_events_task_id
+            ON audit_events(task_id);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_job_run_id
+            ON audit_events(job_run_id);
+        "#,
+    )
+    .map_err(sqlite_store_error)?;
+
+    Ok(())
+}
+
+// Frozen private copy for v17. Do not share with another migration.
+fn ensure_audit_events_schema_v17(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                command TEXT NOT NULL,
+                subcommand TEXT,
+                tool_name TEXT,
+                target_type TEXT,
+                target_id TEXT,
+                role TEXT NOT NULL,
+                status TEXT NOT NULL,
+                exit_code INTEGER NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                working_directory TEXT NOT NULL,
+                arguments_json TEXT,
+                stdout_truncated TEXT,
+                stderr_truncated TEXT,
+                error_message TEXT,
+                host TEXT,
+                pid INTEGER NOT NULL,
+                session_id TEXT,
+                task_id TEXT,
+                job_run_id TEXT,
+                activity_id TEXT,
+                step_index INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp
+            ON audit_events(timestamp);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_tool_name
+            ON audit_events(tool_name);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_status
+            ON audit_events(status);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_role
+            ON audit_events(role);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_target
+            ON audit_events(target_type, target_id);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_events_execution_id
+            ON audit_events(execution_id);
+        "#,
+    )
+    .map_err(sqlite_store_error)?;
+
+    add_column_if_missing(conn, "audit_events", "task_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "job_run_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "activity_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "step_index", "INTEGER")?;
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_audit_events_task_id
+            ON audit_events(task_id);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_job_run_id
+            ON audit_events(job_run_id);
+        "#,
+    )
+    .map_err(sqlite_store_error)?;
+
+    Ok(())
+}
+
+// Frozen private copy for v18. Do not share with another migration.
+fn ensure_audit_events_schema_v18(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                command TEXT NOT NULL,
+                subcommand TEXT,
+                tool_name TEXT,
+                target_type TEXT,
+                target_id TEXT,
+                role TEXT NOT NULL,
+                status TEXT NOT NULL,
+                exit_code INTEGER NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                working_directory TEXT NOT NULL,
+                arguments_json TEXT,
+                stdout_truncated TEXT,
+                stderr_truncated TEXT,
+                error_message TEXT,
+                host TEXT,
+                pid INTEGER NOT NULL,
+                session_id TEXT,
+                task_id TEXT,
+                job_run_id TEXT,
+                activity_id TEXT,
+                step_index INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp
+            ON audit_events(timestamp);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_tool_name
+            ON audit_events(tool_name);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_status
+            ON audit_events(status);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_role
+            ON audit_events(role);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_target
+            ON audit_events(target_type, target_id);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_events_execution_id
+            ON audit_events(execution_id);
+        "#,
+    )
+    .map_err(sqlite_store_error)?;
+
+    add_column_if_missing(conn, "audit_events", "task_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "job_run_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "activity_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "step_index", "INTEGER")?;
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_audit_events_task_id
+            ON audit_events(task_id);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_job_run_id
+            ON audit_events(job_run_id);
+        "#,
+    )
+    .map_err(sqlite_store_error)?;
+
+    Ok(())
+}
+
+// Frozen private copy for v25. Do not share with another migration.
+fn ensure_audit_events_schema_v25(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                command TEXT NOT NULL,
+                subcommand TEXT,
+                tool_name TEXT,
+                target_type TEXT,
+                target_id TEXT,
+                role TEXT NOT NULL,
+                status TEXT NOT NULL,
+                exit_code INTEGER NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                working_directory TEXT NOT NULL,
+                arguments_json TEXT,
+                stdout_truncated TEXT,
+                stderr_truncated TEXT,
+                error_message TEXT,
+                host TEXT,
+                pid INTEGER NOT NULL,
+                session_id TEXT,
+                task_id TEXT,
+                job_run_id TEXT,
+                activity_id TEXT,
+                step_index INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp
+            ON audit_events(timestamp);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_tool_name
+            ON audit_events(tool_name);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_status
+            ON audit_events(status);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_role
+            ON audit_events(role);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_target
+            ON audit_events(target_type, target_id);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_events_execution_id
+            ON audit_events(execution_id);
+        "#,
+    )
+    .map_err(sqlite_store_error)?;
+
+    add_column_if_missing(conn, "audit_events", "task_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "job_run_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "activity_id", "TEXT")?;
+    add_column_if_missing(conn, "audit_events", "step_index", "INTEGER")?;
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_audit_events_task_id
+            ON audit_events(task_id);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_job_run_id
+            ON audit_events(job_run_id);
+        "#,
+    )
+    .map_err(sqlite_store_error)?;
+
+    Ok(())
+}
+
+// Frozen v7 provenance projection, private to v15 defensive recreation.
+fn ensure_trusted_mcp_audit_provenance_v15(conn: &Connection) -> Result<(), OrbitError> {
     for (column, definition) in [
         ("workspace_id", "TEXT"),
         ("caller_machine_id", "TEXT"),
@@ -118,113 +588,23 @@ pub(super) fn apply_trusted_mcp_audit_provenance(conn: &Connection) -> Result<()
             ON audit_events(lease_id);
         "#,
     )
-    .map_err(|error| OrbitError::Store(error.to_string()))
+    .map_err(sqlite_store_error)
 }
 
-/// Add transport-neutral invocation correlation to command-audit rows.
-/// Existing rows and non-invocation producers remain NULL-compatible.
-pub(super) fn apply_invocation_audit_context(conn: &Connection) -> Result<(), OrbitError> {
-    // A ledger may outlive an incomplete pre-ledger schema (for example, an
-    // invocation-only fixture). Re-establish the canonical audit table and
-    // its existing provenance projection before extending it.
-    ensure_audit_events_schema(conn)?;
-    apply_trusted_mcp_audit_provenance(conn)?;
-
-    add_column_if_missing(conn, "audit_events", "trace_id", "TEXT")?;
-    add_column_if_missing(conn, "audit_events", "caller_ip", "TEXT")?;
-
-    conn.execute_batch(
-        r#"
-            CREATE INDEX IF NOT EXISTS idx_audit_events_trace_id
-            ON audit_events(trace_id);
-        "#,
-    )
-    .map_err(|error| OrbitError::Store(error.to_string()))
-}
-
-/// v16 `audit_actor_identity` migration (ORB-10888): materialize the canonical
-/// actor identity beside the overloaded `role` label, then backfill it for
-/// every existing row so a 30d/90d window stays comparable across the change.
-///
-/// `role` itself is never read back into, rewritten, or reinterpreted here —
-/// trust classification keeps reading exactly the bytes it read before.
-pub(super) fn apply_audit_actor_identity(conn: &Connection) -> Result<(), OrbitError> {
-    ensure_audit_events_schema(conn)?;
-
-    for (column, definition) in [
-        ("actor_kind", "TEXT"),
-        ("actor_id", "TEXT"),
-        ("actor_vendor", "TEXT"),
-        ("actor_family", "TEXT"),
-        ("actor_model", "TEXT"),
-        ("actor_alias_version", "INTEGER"),
-    ] {
-        add_column_if_missing(conn, "audit_events", column, definition)?;
-    }
-
-    conn.execute_batch(
-        r#"
-            CREATE INDEX IF NOT EXISTS idx_audit_events_actor
-            ON audit_events(actor_kind, actor_id);
-        "#,
-    )
-    .map_err(|error| OrbitError::Store(error.to_string()))?;
-
-    backfill_audit_actor_identity(conn)
-}
-
-/// v17 `audit_self_reported_actor` migration (ORB-10890): record the identity
-/// an unauthenticated caller claims for itself in a column of its own.
-///
-/// Strictly additive and deliberately **not** backfilled. Every existing row
-/// was written before any claim was collected, so there is no claim to recover;
-/// deriving one from `role` would retroactively attribute traffic Orbit never
-/// authenticated. Existing `unverified` rows therefore stay valid and read as
-/// anonymous.
-pub(super) fn apply_audit_self_reported_actor(conn: &Connection) -> Result<(), OrbitError> {
-    ensure_audit_events_schema(conn)?;
-
-    add_column_if_missing(conn, "audit_events", "self_reported_actor", "TEXT")?;
-
-    conn.execute_batch(
-        r#"
-            CREATE INDEX IF NOT EXISTS idx_audit_events_self_reported_actor
-            ON audit_events(self_reported_actor);
-        "#,
-    )
-    .map_err(|error| OrbitError::Store(error.to_string()))
-}
-
-/// v18 `audit_actor_alias_v2` migration: the alias map moved `fable` from a
-/// shorthand entry to a family rule, so versioned Fable labels (`fable-5.1`)
-/// now resolve to `claude` instead of an unrecognized family. Re-derive every
-/// row stamped with the previous map; rows already at the current version are
-/// untouched, and `role` is never rewritten.
-pub(super) fn apply_audit_actor_alias_v2(conn: &Connection) -> Result<(), OrbitError> {
-    ensure_audit_events_schema(conn)?;
-    backfill_audit_actor_identity(conn)
-}
-
-/// Derive the actor columns for every row whose stamped alias version is not
-/// the current one.
-///
-/// The mapping runs through the same Rust alias map the insert path uses, keyed
-/// on `SELECT DISTINCT role` — a handful of labels, not a row-by-row pass — so
-/// a new model never requires an SQL edit here. A later alias-map version bump
-/// re-runs this from its own append-only ledger entry.
-pub(crate) fn backfill_audit_actor_identity(conn: &Connection) -> Result<(), OrbitError> {
+// Private to v16: domain mapping may evolve because each row stamps its derivation version.
+fn backfill_audit_actor_identity_v16(conn: &Connection) -> Result<(), OrbitError> {
     let labels = {
         let mut stmt = conn
             .prepare(
                 "SELECT DISTINCT role FROM audit_events \
                  WHERE actor_alias_version IS NULL OR actor_alias_version != ?1",
             )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map([ACTOR_ALIAS_MAP_VERSION], |row| row.get::<_, String>(0))
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(sqlite_store_error)?;
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|error| OrbitError::Store(error.to_string()))?
+            .map_err(sqlite_store_error)?
     };
 
     for label in labels {
@@ -243,64 +623,46 @@ pub(crate) fn backfill_audit_actor_identity(conn: &Connection) -> Result<(), Orb
                 label,
             ],
         )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
 
     Ok(())
 }
 
-/// v25 `audit_plugin_grants` migration: the grant set (JSON array of grant
-/// names) a plugin-backed tool call ran under, beside the three provenance
-/// columns (design `docs/design/plugins/1_scope.md` §4.4). Additive.
-pub(super) fn apply_audit_plugin_grants(conn: &Connection) -> Result<(), OrbitError> {
-    ensure_audit_events_schema(conn)?;
-    add_column_if_missing(conn, "audit_events", "plugin_grants", "TEXT")
-}
+// Private to v18: domain mapping may evolve because each row stamps its derivation version.
+fn backfill_audit_actor_identity_v18(conn: &Connection) -> Result<(), OrbitError> {
+    let labels = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT role FROM audit_events \
+                 WHERE actor_alias_version IS NULL OR actor_alias_version != ?1",
+            )
+            .map_err(sqlite_store_error)?;
+        let rows = stmt
+            .query_map([ACTOR_ALIAS_MAP_VERSION], |row| row.get::<_, String>(0))
+            .map_err(sqlite_store_error)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_store_error)?
+    };
 
-/// v23 `audit_machine_name_columns` migration (ORB-12725): *host* is reserved
-/// for the MCP-host/process sense, so the two audit columns that carry a
-/// machine's display name are renamed to say so. A rename rather than an
-/// additive column plus backfill, because one column is one fact and two
-/// spellings of it would drift.
-pub(super) fn apply_audit_machine_name_columns(conn: &Connection) -> Result<(), OrbitError> {
-    if !table_exists(conn, "audit_events")? {
-        return Ok(());
-    }
-    for (old, new) in [
-        ("caller_host_id", "caller_machine_name"),
-        ("process_host_id", "process_machine_name"),
-    ] {
-        if !table_has_column(conn, "audit_events", old)?
-            || table_has_column(conn, "audit_events", new)?
-        {
-            continue;
-        }
+    for label in labels {
+        let actor = canonical_actor_for_role_label(&label);
         conn.execute(
-            &format!("ALTER TABLE audit_events RENAME COLUMN {old} TO {new}"),
-            [],
+            "UPDATE audit_events SET actor_kind = ?1, actor_id = ?2, actor_vendor = ?3, \
+             actor_family = ?4, actor_model = ?5, actor_alias_version = ?6 \
+             WHERE role = ?7 AND (actor_alias_version IS NULL OR actor_alias_version != ?6)",
+            rusqlite::params![
+                actor.kind.as_str(),
+                actor.id,
+                actor.vendor,
+                actor.family,
+                actor.model,
+                actor.alias_version,
+                label,
+            ],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
     }
+
     Ok(())
-}
-
-/// Index the invocation population before grouping tool-call aggregates.
-pub(super) fn apply_audit_tool_call_index(conn: &Connection) -> Result<(), OrbitError> {
-    conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_audit_events_command_subcommand_timestamp
-         ON audit_events(command, subcommand, timestamp);",
-    )
-    .map_err(|error| OrbitError::Store(error.to_string()))
-}
-
-/// Extend the v2 event-type index with `ts`, so one index serves a read of one
-/// event type over a window (the audit summary's policy denials). The old
-/// two-column index is a prefix of the new one.
-pub(super) fn apply_v2_audit_event_type_ts_index(conn: &Connection) -> Result<(), OrbitError> {
-    conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_v2_audit_events_ws_event_type_ts
-         ON v2_audit_events(workspace_id, event_type, ts);
-         DROP INDEX IF EXISTS idx_v2_audit_events_ws_event_type;",
-    )
-    .map_err(|error| OrbitError::Store(error.to_string()))
 }

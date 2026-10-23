@@ -6,13 +6,13 @@
 //! degrade gracefully: `/api/workspaces` reports the one synthetic entry and
 //! `/api/tasks/all` returns that workspace's tasks.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use axum::extract::{RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
-use orbit_core::application::job::{JobRunListParams, JobRunOrder, job_run_to_json};
+use orbit_core::application::job::{JobRunListParams, JobRunOrder};
 use orbit_core::application::task::{TaskCandidateKey, TaskCandidateKeys};
 use orbit_core::{JobRun, JobRunState, OrbitRuntime};
 use serde::Deserialize;
@@ -49,6 +49,7 @@ fn list_workspaces_json(state: &DashboardState) -> Vec<Value> {
         .map(|entry| {
             json!({
                 "id": entry.id,
+                "creation_binding": super::task_create::binding_token(entry),
                 "name": entry.name,
                 "root": abbreviate_home(&entry.repo_root, home.as_deref()),
                 "orbit_dir": abbreviate_home(&entry.orbit_dir, home.as_deref()),
@@ -59,16 +60,152 @@ fn list_workspaces_json(state: &DashboardState) -> Vec<Value> {
         .collect()
 }
 
+/// `GET /api/fleet/drains` — one observational readiness row per registered
+/// workspace on this host. Unavailable workspaces remain explicit rows. Remote
+/// hosts expose the same endpoint through the existing single-hop forward.
+pub(super) async fn list_fleet_drains(State(state): State<DashboardState>) -> Response {
+    match blocking("fleet drains", move || {
+        let pinned = state.pin();
+        let items = pinned
+            .entries()
+            .iter()
+            .map(|entry| fleet_drain_row(&pinned, entry))
+            .collect::<Vec<_>>();
+        Ok::<_, orbit_core::OrbitError>(json!({"items": items}))
+    })
+    .await
+    {
+        Ok(value) => Json(value).into_response(),
+        Err(response) => *response,
+    }
+}
+
+fn fleet_drain_row(pinned: &Pinned, entry: &crate::state::WsEntry) -> Value {
+    let mut row = json!({
+        "workspace_id": entry.id,
+        "workspace_name": entry.name,
+        "phase": "unavailable",
+        "slots_used": null,
+        "slots_ceiling": null,
+        "eligible_count": null,
+        "top_wait_reason": null,
+        "holds": [],
+        "queued_drains": [],
+        "task_pilot_warning": null,
+    });
+    let readiness = if entry.active {
+        pinned
+            .runtime_for(&entry.id)
+            .map_err(|error| orbit_core::OrbitError::Execution(format!("{error:?}")))
+            .and_then(|runtime| runtime.workspace_auto_readiness(&[], None, 500, &[]))
+    } else {
+        row["error"] = json!("workspace is unavailable");
+        return row;
+    };
+    match readiness {
+        Ok(payload) => {
+            let tasks = payload["tasks"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let eligible = tasks.iter().filter(|task| task["eligible"] == true).count();
+            let mut waits = BTreeMap::<&str, usize>::new();
+            for task in tasks.iter().filter(|task| task["eligible"] != true) {
+                if let Some(reason) = task["reason"].as_str() {
+                    *waits.entry(reason).or_default() += 1;
+                }
+            }
+            // Stable alphabetical tie-break; never return task-specific
+            // detail (which can contain internal task identifiers).
+            let top = waits
+                .iter()
+                .max_by(|(a, ac), (b, bc)| ac.cmp(bc).then_with(|| b.cmp(a)))
+                .map(|(reason, _)| *reason);
+            let capacity = &payload["capacity"];
+            let mut holds = Vec::new();
+            if capacity["admissions_stopped"] == true
+                || capacity["pull_drain_admissions_stopped"] == true
+            {
+                holds.push(json!("admissions stopped"));
+            }
+            if capacity["host_shutdown_holding"] == true {
+                holds.push(json!("host shutdown scheduled"));
+            }
+            if let Some(resources) = capacity["resource_throttle"]["resources"].as_array() {
+                for resource in resources {
+                    if let Some(name) = resource["resource"].as_str() {
+                        holds.push(json!(format!("{name} throttled")));
+                    }
+                }
+            }
+            // A crew that sets `env` is its own account, `provider/crew`.
+            let account = |entry: &Value| {
+                let provider = entry["provider"].as_str()?;
+                Some(orbit_types::workflow::provider_account_label(
+                    provider,
+                    entry["account"].as_str(),
+                ))
+            };
+            for limit in payload["provider_limits"].as_array().into_iter().flatten() {
+                if limit["gated"] == true
+                    && let Some(account) = account(limit)
+                {
+                    holds.push(json!(format!("{account} usage limit")));
+                }
+            }
+            for failure in payload["provider_auth_failures"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                if let Some(account) = account(failure) {
+                    holds.push(json!(format!("{account} authentication failed")));
+                }
+            }
+            let phase =
+                if capacity["drain_phase"] == "idle" && capacity["pull_drain_run_id"].is_string() {
+                    "pulling"
+                } else {
+                    capacity["drain_phase"].as_str().unwrap_or("idle")
+                };
+            row["phase"] = json!(phase);
+            row["slots_used"] = capacity["active_leaf_runs"].clone();
+            row["slots_ceiling"] = capacity["max_active_leaf_runs"].clone();
+            row["eligible_count"] = json!(eligible);
+            row["counts_truncated"] =
+                json!(payload["total"].as_u64().unwrap_or(0) > tasks.len() as u64);
+            row["top_wait_reason"] = json!(top);
+            row["holds"] = json!(holds);
+            // Windows waiting for the live one's slot, as readiness reports
+            // them: run ids, policy and crew names, never env values.
+            row["queued_drains"] = capacity["queued_drains"].clone();
+            // The live drain's own record that no task pilot runs here.
+            row["task_pilot_warning"] = capacity["task_pilot_warning"].clone();
+        }
+        Err(error) => {
+            tracing::warn!(workspace = %entry.id, %error, "fleet readiness unavailable");
+            row["error"] = json!("readiness unavailable");
+        }
+    }
+    row
+}
+
 /// `GET /api/tasks/all` — dashboard tasks aggregated across active workspaces.
 ///
 /// Each task object is tagged with its owning workspace (`workspace_id` /
 /// `workspace_name`, plus the home-abbreviated `workspace_root` path added in
 /// ORB-00037) so the frontend can badge the row and show the full location in
-/// the task's Details box. Inactive (stale-path) workspaces are skipped, as are
-/// any that fail to open — the aggregate view stays available even when one
-/// workspace is broken. Status/tag/type/search filters, limit, and cursor have
-/// the same semantics as `/api/tasks`; selection happens independently in each
-/// workspace before one global `created_at DESC, id ASC` merge.
+/// the task's Details box. Inactive workspaces, workspaces that fail to open,
+/// and workspaces whose task read fails stay out of `items` and are named in
+/// `unavailable` (`workspace_id`, `workspace_name`, `error`), the same object
+/// `/api/job-runs/all` uses. One unreadable task row marks that workspace
+/// unavailable for the response while rows that did read stay in `items`. The
+/// aggregate stays available when one workspace is broken. `unavailable` is an
+/// empty array when every source answered. Status/tag/type/search filters,
+/// limit, and cursor have the same semantics as `/api/tasks`; selection happens
+/// independently in each available workspace before one global
+/// `created_at DESC, id ASC` merge. `total` still sums only workspaces that
+/// answered.
 pub(super) async fn list_all_tasks(
     State(state): State<DashboardState>,
     RawQuery(raw_query): RawQuery,
@@ -151,7 +288,9 @@ impl AllJobRunsState {
 /// Run ids are workspace-local, so every item carries its workspace identity.
 /// Unavailable sources remain in the response instead of being represented as
 /// an empty workspace, allowing the dashboard to distinguish partial data from
-/// a genuine zero-run result.
+/// a genuine zero-run result. `total` sums every available workspace's
+/// matching runs, independent of `limit`, so a count (the Jobs rail) can ask
+/// for a one-item page.
 ///
 /// Each per-workspace query already asks the store to order and truncate by
 /// [`JobRunOrder::Recency`] — the same `run_timestamp` this handler later
@@ -199,7 +338,7 @@ pub(super) fn all_job_runs_json(
     let pinned = state.pin();
     let mut candidates = Vec::new();
     let mut unavailable = Vec::new();
-    let mut source_truncated = false;
+    let mut total = 0_u64;
 
     for entry in pinned.entries() {
         if !entry.active {
@@ -221,9 +360,15 @@ pub(super) fn all_job_runs_json(
                 continue;
             }
         };
-        match workspace_job_runs(&runtime, limit, state_filter, scope) {
-            Ok(runs) => {
-                let titles = match super::run_tasks::task_titles(&runtime, &runs) {
+        let page = workspace_job_runs(&runtime, limit, state_filter, scope).and_then(|runs| {
+            Ok((
+                runs,
+                workspace_job_run_count(&runtime, state_filter, scope)?,
+            ))
+        });
+        match page {
+            Ok((runs, count)) => {
+                let titles = match super::runs::task_titles(&runtime, &runs) {
                     Ok(titles) => titles,
                     Err(error) => {
                         unavailable.push(json!({
@@ -234,12 +379,13 @@ pub(super) fn all_job_runs_json(
                         continue;
                     }
                 };
-                source_truncated |= runs.len() == limit;
-                candidates.extend(runs.into_iter().map(|run| {
-                    let mut value = job_run_to_json(&run, None);
-                    super::run_tasks::add_tasks(&mut value, &run, &titles);
-                    (run, entry.id.clone(), entry.name.clone(), value)
-                }));
+                total = total.saturating_add(count);
+                let values = super::runs::run_list_rows(&runtime, &runs, &titles);
+                candidates.extend(
+                    runs.into_iter()
+                        .zip(values)
+                        .map(|(run, value)| (run, entry.id.clone(), entry.name.clone(), value)),
+                );
             }
             Err(error) => unavailable.push(json!({
                 "workspace_id": entry.id,
@@ -257,8 +403,19 @@ pub(super) fn all_job_runs_json(
                 .then_with(|| left.run_id.cmp(&right.run_id))
         },
     );
-    let truncated = source_truncated || candidates.len() > limit;
     candidates.truncate(limit);
+    let present: HashSet<(String, String)> = candidates
+        .iter()
+        .map(|(run, workspace_id, _, _)| (workspace_id.clone(), run.run_id.clone()))
+        .collect();
+    for (_, workspace_id, _, value) in &mut candidates {
+        if let Some(parent) = value.get("parent_run_id").and_then(Value::as_str)
+            && !present.contains(&(workspace_id.clone(), parent.to_string()))
+        {
+            value["parent_run_id"] = Value::Null;
+        }
+    }
+    let truncated = total > candidates.len() as u64;
     let items = candidates
         .into_iter()
         .map(|(_, workspace_id, workspace_name, mut value)| {
@@ -274,6 +431,7 @@ pub(super) fn all_job_runs_json(
         "items": items,
         "limit": limit,
         "state": state_filter.label(),
+        "total": total,
         "truncated": truncated,
         "unavailable": unavailable,
     })
@@ -285,27 +443,37 @@ fn workspace_job_runs(
     state_filter: AllJobRunsState,
     scope: &JobRunScope,
 ) -> Result<Vec<JobRun>, orbit_core::OrbitError> {
-    let list = |state| {
-        runtime.list_job_runs_observed(JobRunListParams {
-            job_id: scope.job_id.clone(),
-            task_id: scope.task_id.clone(),
-            state,
-            since: scope.since,
-            limit: Some(limit),
-            order_by: JobRunOrder::Recency,
-            ..Default::default()
-        })
+    runtime.list_job_runs_observed(workspace_job_run_params(scope, state_filter, Some(limit)))
+}
+
+/// How many runs in one workspace match the filter, independent of `limit`.
+fn workspace_job_run_count(
+    runtime: &OrbitRuntime,
+    state_filter: AllJobRunsState,
+    scope: &JobRunScope,
+) -> Result<u64, orbit_core::OrbitError> {
+    runtime.count_job_runs_observed(workspace_job_run_params(scope, state_filter, None))
+}
+
+fn workspace_job_run_params(
+    scope: &JobRunScope,
+    state_filter: AllJobRunsState,
+    limit: Option<usize>,
+) -> JobRunListParams {
+    let states = match state_filter {
+        AllJobRunsState::All => Vec::new(),
+        AllJobRunsState::Failed => FAILED_RUN_STATES.to_vec(),
+        AllJobRunsState::Active => vec![JobRunState::Pending, JobRunState::Running],
     };
-    let states: &[JobRunState] = match state_filter {
-        AllJobRunsState::All => return list(None),
-        AllJobRunsState::Failed => &FAILED_RUN_STATES,
-        AllJobRunsState::Active => &[JobRunState::Pending, JobRunState::Running],
-    };
-    let mut runs = Vec::new();
-    for &run_state in states {
-        runs.extend(list(Some(run_state))?);
+    JobRunListParams {
+        job_id: scope.job_id.clone(),
+        task_id: scope.task_id.clone(),
+        states,
+        since: scope.since,
+        limit,
+        order_by: JobRunOrder::Recency,
+        ..Default::default()
     }
-    Ok(runs)
 }
 
 fn run_timestamp(run: &JobRun) -> DateTime<Utc> {
@@ -321,15 +489,42 @@ fn all_tasks_json(
     let mut candidates = Vec::new();
     let mut total = 0;
     let mut remaining = 0;
-    for entry in pinned.entries().iter().filter(|entry| entry.active) {
-        let Ok(runtime) = pinned.runtime_for(&entry.id) else {
+    let mut unavailable = Vec::new();
+    let mut unavailable_ids = HashSet::new();
+    for entry in pinned.entries() {
+        if !entry.active {
+            record_unavailable(
+                &mut unavailable,
+                &mut unavailable_ids,
+                entry,
+                "workspace is unavailable",
+            );
             continue;
+        }
+        let runtime = match pinned.runtime_for(&entry.id) {
+            Ok(runtime) => runtime,
+            Err(_) => {
+                tracing::warn!(workspace = %entry.id, "fleet task list could not open a workspace");
+                record_unavailable(
+                    &mut unavailable,
+                    &mut unavailable_ids,
+                    entry,
+                    "failed to open workspace",
+                );
+                continue;
+            }
         };
         // One broken workspace must not take down the fleet-wide list.
         let page = match workspace_task_keys(&runtime, query) {
             Ok(page) => page,
             Err(error) => {
                 tracing::warn!(workspace = %entry.id, %error, "fleet task list skipped a workspace");
+                record_unavailable(
+                    &mut unavailable,
+                    &mut unavailable_ids,
+                    entry,
+                    &error.to_string(),
+                );
                 continue;
             }
         };
@@ -374,6 +569,14 @@ fn all_tasks_json(
                     %error,
                     "fleet task list skipped an unreadable task row"
                 );
+                // The dropped row would look like a new review task when it
+                // returns, unless this read says the workspace was incomplete.
+                record_unavailable(
+                    &mut unavailable,
+                    &mut unavailable_ids,
+                    entry,
+                    &error.to_string(),
+                );
             }
         }
     }
@@ -412,7 +615,25 @@ fn all_tasks_json(
         "truncated": total > values.len(),
         "offset": offset,
         "next_cursor": next_cursor,
+        "unavailable": unavailable,
     }))
+}
+
+/// One source `/api/tasks/all` could not read. The first recording wins so a
+/// workspace with several unreadable rows is named once.
+fn record_unavailable(
+    unavailable: &mut Vec<Value>,
+    recorded: &mut HashSet<String>,
+    entry: &crate::state::WsEntry,
+    error: &str,
+) {
+    if recorded.insert(entry.id.clone()) {
+        unavailable.push(json!({
+            "workspace_id": entry.id,
+            "workspace_name": entry.name,
+            "error": error,
+        }));
+    }
 }
 
 /// One workspace's candidates for the merge, as ids and creation times. A
@@ -424,6 +645,26 @@ fn workspace_task_keys(
     query: &TaskPageQuery,
 ) -> Result<TaskCandidateKeys, orbit_core::OrbitError> {
     let filter = query.filter();
+    if query.pilot_warnings() {
+        let page = runtime.query_task_rows(&orbit_core::application::task::TaskListQuery {
+            filter,
+            pilot_warnings: true,
+            limit: query.limit(),
+            ..Default::default()
+        })?;
+        return Ok(TaskCandidateKeys {
+            items: page
+                .items
+                .into_iter()
+                .map(|row| TaskCandidateKey {
+                    id: row.task.id,
+                    created_at: row.task.created_at,
+                })
+                .collect(),
+            total: page.total,
+            total_without_cursor: page.total_without_cursor,
+        });
+    }
     if let Some(keys) = runtime.task_candidate_keys(&filter, query.limit())? {
         return Ok(keys);
     }

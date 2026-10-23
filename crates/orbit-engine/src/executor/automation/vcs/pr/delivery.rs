@@ -25,6 +25,10 @@ use serde_json::{Value, json};
 use super::super::super::input::input_string_field;
 use super::super::freshness::{branch_freshness_against_ref, commit_sha};
 use super::super::git::{base_sync_mode_from_input, resolve_worktree_start_point};
+use super::super::operations;
+use super::answers::{CheckState, PullRequestStatus, RequiredChecks, ReviewDecision, StatusCheck};
+use super::auto_fix::UNSETTLED_BLOCKED_POLLS;
+use crate::context::RuntimeHost;
 
 /// The candidate identity a completion-authorized run is allowed to deliver.
 ///
@@ -86,7 +90,7 @@ impl DeliveryPin {
     }
 
     /// The task branch this run published, if recorded.
-    pub(super) fn head(&self) -> Option<&str> {
+    pub(in crate::executor::automation::vcs) fn head(&self) -> Option<&str> {
         self.head.as_deref()
     }
 
@@ -116,11 +120,21 @@ impl DeliveryPin {
     /// run waited never receives a merge request in the first place.
     pub(in crate::executor::automation::vcs) fn ensure_candidate_identity(
         &self,
-        status: &Value,
+        status: &PullRequestStatus,
         pr_number: &str,
     ) -> Result<(), OrbitError> {
-        self.ensure_matches(status, pr_number, "headRefName", self.head.as_deref())?;
-        self.ensure_matches(status, pr_number, "baseRefName", self.base.as_deref())
+        ensure_matches(
+            pr_number,
+            "headRefName",
+            status.head_branch.as_deref(),
+            self.head.as_deref(),
+        )?;
+        ensure_matches(
+            pr_number,
+            "baseRefName",
+            status.base_branch.as_deref(),
+            self.base.as_deref(),
+        )
     }
 
     /// The full pinned identity, including the head commit.
@@ -132,14 +146,14 @@ impl DeliveryPin {
     /// identity on every poll [ORB-12499].
     pub(in crate::executor::automation::vcs) fn ensure_pinned_candidate(
         &self,
-        status: &Value,
+        status: &PullRequestStatus,
         pr_number: &str,
     ) -> Result<(), OrbitError> {
         self.ensure_candidate_identity(status, pr_number)?;
-        self.ensure_matches(
-            status,
+        ensure_matches(
             pr_number,
             "headRefOid",
+            status.head_sha.as_deref(),
             self.candidate_sha.as_deref(),
         )
     }
@@ -150,18 +164,12 @@ impl DeliveryPin {
     /// commit and the head it merged is the candidate this run authorized.
     pub(in crate::executor::automation::vcs) fn ensure_delivered(
         &self,
-        status: &Value,
+        status: &PullRequestStatus,
         pr_number: &str,
     ) -> Result<DeliveryEvidence, OrbitError> {
-        self.ensure_candidate_identity(status, pr_number)?;
-        self.ensure_matches(
-            status,
-            pr_number,
-            "headRefOid",
-            self.candidate_sha.as_deref(),
-        )?;
+        self.ensure_pinned_candidate(status, pr_number)?;
 
-        let merge_commit = reported(status.pointer("/mergeCommit/oid")).ok_or_else(|| {
+        let merge_commit = status.merge_commit.clone().ok_or_else(|| {
             OrbitError::Execution(format!(
                 "pr_complete: pull request #{pr_number} reports a merged state without a merge \
                  commit, so this run has no evidence of what landed; the task stays in review"
@@ -170,43 +178,12 @@ impl DeliveryPin {
 
         Ok(DeliveryEvidence {
             pr_number: pr_number.to_string(),
-            merged_at: reported(status.get("mergedAt")).unwrap_or_default(),
-            head_ref: reported(status.get("headRefName")),
-            base_ref: reported(status.get("baseRefName")),
-            head_sha: reported(status.get("headRefOid")),
+            merged_at: status.merged_at.clone().unwrap_or_default(),
+            head_ref: status.head_branch.clone(),
+            base_ref: status.base_branch.clone(),
+            head_sha: status.head_sha.clone(),
             merge_commit,
         })
-    }
-
-    /// Compare one reported identity field against its pin.
-    ///
-    /// An unpinned field is not checked. A pinned field the provider does not
-    /// report is a refusal rather than a pass, because completion cannot claim
-    /// an identity it was unable to read.
-    fn ensure_matches(
-        &self,
-        status: &Value,
-        pr_number: &str,
-        field: &str,
-        pinned: Option<&str>,
-    ) -> Result<(), OrbitError> {
-        let Some(pinned) = pinned else {
-            return Ok(());
-        };
-        let Some(reported) = reported(status.get(field)) else {
-            return Err(OrbitError::Execution(format!(
-                "delivery_evidence_stale: pull request #{pr_number} did not report {field}, so \
-                 the authorized candidate '{pinned}' cannot be confirmed; the task stays in review"
-            )));
-        };
-        if reported != pinned {
-            return Err(OrbitError::Execution(format!(
-                "delivery_evidence_stale: pull request #{pr_number} reports {field} '{reported}' \
-                 but this run published '{pinned}'; completion delivers only the candidate it \
-                 published, so the task stays in review"
-            )));
-        }
-        Ok(())
     }
 
     /// Explain whether red required checks describe the current candidate/base.
@@ -271,12 +248,34 @@ impl DeliveryEvidence {
     }
 }
 
-fn reported(value: Option<&Value>) -> Option<String> {
-    value
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+/// Compare one reported identity field against its pin.
+///
+/// An unpinned field is not checked. A pinned field the provider does not
+/// report is a refusal rather than a pass, because completion cannot claim
+/// an identity it was unable to read.
+fn ensure_matches(
+    pr_number: &str,
+    field: &str,
+    reported: Option<&str>,
+    pinned: Option<&str>,
+) -> Result<(), OrbitError> {
+    let Some(pinned) = pinned else {
+        return Ok(());
+    };
+    let Some(reported) = reported else {
+        return Err(OrbitError::Execution(format!(
+            "delivery_evidence_stale: pull request #{pr_number} did not report {field}, so \
+             the authorized candidate '{pinned}' cannot be confirmed; the task stays in review"
+        )));
+    };
+    if reported != pinned {
+        return Err(OrbitError::Execution(format!(
+            "delivery_evidence_stale: pull request #{pr_number} reports {field} '{reported}' \
+             but this run published '{pinned}'; completion delivers only the candidate it \
+             published, so the task stays in review"
+        )));
+    }
+    Ok(())
 }
 
 /// What GitHub's reported PR state means for a completion or landing attempt.
@@ -298,11 +297,11 @@ pub(in crate::executor::automation::vcs) enum PrMergeState {
 }
 
 pub(in crate::executor::automation::vcs) fn classify_pr_state(
-    pull_request: &Value,
+    pull_request: &PullRequestStatus,
 ) -> PrMergeState {
     let state = pull_request
-        .get("state")
-        .and_then(Value::as_str)
+        .state
+        .as_deref()
         .unwrap_or_default()
         .to_ascii_uppercase();
     if state == "MERGED" {
@@ -312,12 +311,7 @@ pub(in crate::executor::automation::vcs) fn classify_pr_state(
     // report as merged is the shape F2026-09-102 recorded: an open PR that
     // nonetheless looks delivered. Only the authoritative `state` may close a
     // run, so the disagreement itself becomes the refusal.
-    let merged_at = pull_request
-        .get("mergedAt")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if let Some(merged_at) = merged_at {
+    if let Some(merged_at) = &pull_request.merged_at {
         return PrMergeState::Contradictory(format!(
             "state '{state}' alongside merge timestamp {merged_at}"
         ));
@@ -326,9 +320,18 @@ pub(in crate::executor::automation::vcs) fn classify_pr_state(
         return PrMergeState::Closed;
     }
 
+    // [ORB-16342] GitHub can report a draft with a merge state other than
+    // DRAFT, including BLOCKED, UNKNOWN and CLEAN. Completion used to request
+    // a merge from those states and spend recovery on HTTP 405. An explicit
+    // draft is refused before that match. The DRAFT arm below still covers an
+    // answer that omits `isDraft`.
+    if pull_request.is_draft {
+        return PrMergeState::Blocked("the pull request is still a draft".into());
+    }
+
     let merge_state = pull_request
-        .get("mergeStateStatus")
-        .and_then(Value::as_str)
+        .merge_state_status
+        .as_deref()
         .unwrap_or_default()
         .to_ascii_uppercase();
     match merge_state.as_str() {
@@ -348,76 +351,340 @@ pub(in crate::executor::automation::vcs) fn classify_pr_state(
     }
 }
 
-/// GitHub also reports BLOCKED while required checks are still running. Wait
-/// only when the rollup proves that a check is in flight and no review gate or
-/// failed check is visible. An absent or unfamiliar provider shape refuses.
-fn classify_blocked_pr(pull_request: &Value) -> PrMergeState {
-    match pull_request.get("reviewDecision") {
-        Some(Value::String(decision))
+/// Review and readable-rollup guards shared by landing and auto-fix. They
+/// precede any pending-check or source-repair authority.
+pub(super) fn blocked_checks(pull_request: &PullRequestStatus) -> Result<&[StatusCheck], String> {
+    match &pull_request.review_decision {
+        ReviewDecision::Reported(decision)
             if matches!(decision.as_str(), "REVIEW_REQUIRED" | "CHANGES_REQUESTED") =>
         {
-            return PrMergeState::Blocked(format!("review is required ({decision})"));
+            return Err(format!("review is required ({decision})"));
         }
-        // No review decision applies: the GraphQL API reports null, and
-        // `gh pr view --json` serializes that same null as an empty string
-        // [ORB-13759]. Either only permits waiting on in-flight checks below;
-        // a field that is absent altogether stays unavailable.
-        Some(Value::Null) => {}
-        Some(Value::String(decision)) if decision.is_empty() => {}
-        Some(Value::String(decision)) if decision == "APPROVED" => {}
-        _ => return PrMergeState::Blocked("review decision is unavailable".into()),
+        ReviewDecision::NotApplicable => {}
+        ReviewDecision::Reported(decision) if decision == "APPROVED" => {}
+        _ => return Err("review decision is unavailable".into()),
     }
-
-    let Some(checks) = pull_request
-        .get("statusCheckRollup")
-        .and_then(Value::as_array)
-    else {
-        return PrMergeState::Blocked("status check rollup is unreadable".into());
-    };
-    let mut pending = false;
+    let checks = pull_request
+        .status_checks
+        .as_deref()
+        .ok_or_else(|| "status check rollup is unreadable".to_string())?;
     for check in checks {
         let name = check
-            .get("name")
-            .or_else(|| check.get("context"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|name| !name.is_empty());
-        let Some(name) = name else {
-            return PrMergeState::Blocked("status check rollup is unreadable".into());
-        };
-        match classify_check(check) {
-            Some(CheckState::Failed) => {
-                return PrMergeState::Blocked(format!("status check '{name}' failed"));
-            }
-            Some(CheckState::Pending) => pending = true,
-            Some(CheckState::Passed) => {}
-            None => {
-                return PrMergeState::Blocked(format!(
-                    "status check rollup is unreadable for '{name}'"
-                ));
-            }
+            .name
+            .as_deref()
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| "status check rollup is unreadable".to_string())?;
+        if check.state.is_none() {
+            return Err(format!("status check rollup is unreadable for '{name}'"));
+        }
+    }
+    Ok(checks)
+}
+
+fn classify_blocked_pr(pull_request: &PullRequestStatus) -> PrMergeState {
+    let checks = match blocked_checks(pull_request) {
+        Ok(checks) => checks,
+        Err(reason) => return PrMergeState::Blocked(reason),
+    };
+    for check in checks {
+        if check.state == Some(CheckState::Failed) {
+            return PrMergeState::Blocked(format!(
+                "status check '{}' failed",
+                check.name.as_deref().unwrap_or_default()
+            ));
+        }
+    }
+    // A rollup alone cannot say which pending checks protection requires.
+    PrMergeState::Blocked("required reviews or checks are not satisfied".into())
+}
+
+/// Which consumer may refine a failed rollup into a bounded required-check wait.
+#[derive(Clone, Copy)]
+pub(in crate::executor::automation::vcs) enum BlockedCheckWait<'a> {
+    /// Owner landing retains its failed-rollup refusal and captured owed checks.
+    Owner(&'a [String]),
+    /// Auto-fix classifies failures against policy before deciding to recover.
+    AutoFix,
+}
+
+/// [ORB-16339] Why the last observation of a BLOCKED head waited although the
+/// head reported nothing pending and nothing failed.
+enum UnreportedWait {
+    None,
+    /// Current branch policy names these checks, and the head has not
+    /// reported them yet.
+    Missing(Vec<String>),
+    /// Branch policy could not be read, so a bounded grace stands in for it.
+    Unsettled(String),
+}
+
+/// Required checks a freshly published head has not reported yet, tracked
+/// across one completion or landing wait. A head can read BLOCKED for a few
+/// seconds before the provider queues its first check run.
+pub(in crate::executor::automation::vcs) struct UnreportedChecks {
+    last: UnreportedWait,
+    /// Latest required-check observation; diagnostic only, never authority.
+    pub(in crate::executor::automation::vcs) required_observation: Value,
+    policy_observation: Value,
+    /// Observations waited on while branch policy was unreadable.
+    unsettled_polls: u32,
+}
+
+impl UnreportedChecks {
+    pub(in crate::executor::automation::vcs) fn new() -> Self {
+        Self {
+            last: UnreportedWait::None,
+            required_observation: json!({"state":"not_collected"}),
+            policy_observation: json!({"state":"not_collected"}),
+            unsettled_polls: 0,
         }
     }
 
-    if pending {
-        PrMergeState::Pending
-    } else {
-        PrMergeState::Blocked("required reviews or checks are not satisfied".into())
+    /// Whether the last observation waits for checks readable policy names.
+    /// Absent-context recovery may still diagnose such a head.
+    pub(in crate::executor::automation::vcs) fn awaiting_policy_checks(&self) -> bool {
+        matches!(self.last, UnreportedWait::Missing(_))
+    }
+
+    /// The existing branch-policy refinement, if it ran. This retains only
+    /// what this wait already parsed; it is not a policy payload or emission proof.
+    pub(in crate::executor::automation::vcs) fn diagnostic(&self) -> Value {
+        json!({"awaiting_policy_checks":self.awaiting_policy_checks(),
+            "policy_read":self.policy_observation})
+    }
+
+    /// What a wait that ends here was still waiting for, for its stop reason.
+    pub(in crate::executor::automation::vcs) fn timeout_note(&self) -> String {
+        match &self.last {
+            UnreportedWait::None => String::new(),
+            UnreportedWait::Missing(names) => format!(
+                " (required checks the head has not reported: {})",
+                names.join(", ")
+            ),
+            UnreportedWait::Unsettled(why) => format!(
+                " (the head reported no pending required check and branch policy is \
+                 unreadable: {why})"
+            ),
+        }
     }
 }
 
-enum CheckState {
-    Pending,
-    Passed,
-    Failed,
+/// Why a BLOCKED head's check wait could not be refined. Displays as its
+/// reason; `cause` is the provider read that failed, when one did, so a stop
+/// built from the reason keeps that failure's class.
+pub(in crate::executor::automation::vcs) struct CheckWaitRefusal {
+    reason: String,
+    cause: Option<Box<OrbitError>>,
+}
+
+impl CheckWaitRefusal {
+    /// The error `wrap` renders from the reason, carrying the class of the
+    /// failed provider read behind it.
+    pub(in crate::executor::automation::vcs) fn into_error(
+        self,
+        wrap: impl FnOnce(&str) -> OrbitError,
+    ) -> OrbitError {
+        let wrapper = wrap(&self.reason);
+        match &self.cause {
+            Some(cause) => operations::carry_class(cause, wrapper),
+            None => wrapper,
+        }
+    }
+}
+
+impl From<String> for CheckWaitRefusal {
+    fn from(reason: String) -> Self {
+        Self {
+            reason,
+            cause: None,
+        }
+    }
+}
+
+impl From<&str> for CheckWaitRefusal {
+    fn from(reason: &str) -> Self {
+        reason.to_string().into()
+    }
+}
+
+impl std::fmt::Display for CheckWaitRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
+/// Refine BLOCKED only from authenticated current policy on the observed head,
+/// or an actually running check captured as owner-owed. A completed
+/// neutral/skipped result is never pending. An absent check is pending only
+/// while current branch policy names it as required [ORB-16339]; when that
+/// policy is unreadable, owner consumers get the bounded unsettled-poll grace
+/// auto-fix already applies. This grants only another bounded observation
+/// within the caller's deadline; only the provider's mergeable state can merge.
+pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    pr: &str,
+    status: &PullRequestStatus,
+    wait: BlockedCheckWait<'_>,
+    unreported: &mut UnreportedChecks,
+    deadline_ms: u64,
+) -> Result<PrMergeState, CheckWaitRefusal> {
+    unreported.last = UnreportedWait::None;
+    unreported.required_observation = json!({"state":"not_collected"});
+    unreported.policy_observation = json!({"state":"not_collected"});
+    let state = classify_pr_state(status);
+    // A draft is already refused. Refining BLOCKED into a check wait would
+    // hand it to auto-merge or repair [ORB-16342].
+    if status.is_draft
+        || status.merge_state_status.as_deref() != Some("BLOCKED")
+        || !matches!(state, PrMergeState::Blocked(_))
+    {
+        return Ok(state);
+    }
+    if status.state.as_deref() != Some("OPEN") {
+        return Err("pull request state is unavailable for a blocked check wait".into());
+    }
+    let checks = blocked_checks(status)?;
+    let owed = match wait {
+        BlockedCheckWait::Owner(owed) => {
+            if checks
+                .iter()
+                .any(|check| check.state == Some(CheckState::Failed))
+            {
+                return Ok(state);
+            }
+            owed
+        }
+        BlockedCheckWait::AutoFix => &[],
+    };
+    let response = host.run_private_vcs_operation(
+        operations::PR_REQUIRED_CHECKS,
+        json!({
+            "pr":pr,"workspace_path":workspace.to_string_lossy(),"deadline_ms":deadline_ms,
+        }),
+    );
+    let required = RequiredChecks::observe_response(response, &mut unreported.required_observation)
+        .map_err(|error| CheckWaitRefusal {
+            reason: format!("required-check evidence is unavailable: {error}"),
+            cause: Some(Box::new(error)),
+        })?;
+    if status.head_sha.as_deref() != Some(required.head_sha.as_str())
+        || required.reported_head_sha.as_deref() != Some(required.head_sha.as_str())
+    {
+        unreported.required_observation["outcome"] = json!("head_mismatch");
+        return Err("required-check evidence does not identify the current head".into());
+    }
+    unreported.required_observation["head_matches"] = json!(true);
+    let mut pending = false;
+    for check in &required.checks {
+        match check.state {
+            Some(CheckState::Pending) => pending = true,
+            Some(CheckState::Passed) => {}
+            Some(CheckState::Failed) => {
+                return Ok(PrMergeState::Blocked(format!(
+                    "required check '{}' failed",
+                    check.name.as_deref().unwrap_or_default()
+                )));
+            }
+            None => {
+                unreported.required_observation["outcome"] = json!("unreadable_state");
+                return Err("required-check evidence is unreadable".into());
+            }
+        }
+    }
+    pending |= checks.iter().any(|check| {
+        check.state == Some(CheckState::Pending)
+            && owed.iter().any(|name| {
+                check.name.as_deref() == Some(name.as_str())
+                    || check
+                        .workflow_name
+                        .as_ref()
+                        .zip(check.name.as_ref())
+                        .is_some_and(|(workflow, own)| name == &format!("{workflow} / {own}"))
+            })
+    });
+    if pending {
+        return Ok(PrMergeState::Pending);
+    }
+    // A failed check keeps its existing recovery or stop.
+    if checks
+        .iter()
+        .any(|check| check.state == Some(CheckState::Failed))
+    {
+        return Ok(state);
+    }
+    let missing = unreported_required_checks(host, workspace, pr, status, deadline_ms);
+    unreported.policy_observation = match &missing {
+        Ok(names) => json!({"state":"collected", "missing_checks":
+            super::diagnostics::collection(names, |name| super::diagnostics::text(name))}),
+        Err(why) => json!({"state":"unreadable", "reason":super::diagnostics::text(why)}),
+    };
+    match missing {
+        Ok(missing) if missing.is_empty() => Ok(state),
+        Ok(missing) => {
+            unreported.last = UnreportedWait::Missing(missing);
+            Ok(PrMergeState::Pending)
+        }
+        // Auto-fix applies the same grace in its own BLOCKED verdict.
+        Err(why) => match wait {
+            BlockedCheckWait::Owner(_) if unreported.unsettled_polls < UNSETTLED_BLOCKED_POLLS => {
+                unreported.unsettled_polls += 1;
+                unreported.last = UnreportedWait::Unsettled(why);
+                Ok(PrMergeState::Pending)
+            }
+            _ => Ok(state),
+        },
+    }
+}
+
+/// The checks current branch policy requires that the observed head has not
+/// reported at all, from the same authenticated current-gates read a base
+/// update is held to. A check the head reported, in any state, is not here.
+fn unreported_required_checks<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    pr: &str,
+    status: &PullRequestStatus,
+    deadline_ms: u64,
+) -> Result<Vec<String>, String> {
+    let (Some(head), Some(branch), Some(base)) = (
+        status.head_sha.as_deref(),
+        status.head_branch.as_deref(),
+        status.base_branch.as_deref(),
+    ) else {
+        return Err("the pull request did not report its head and base".into());
+    };
+    let gates = host
+        .run_private_vcs_operation(
+            operations::CI_CURRENT_GATES,
+            json!({
+                "workspace_path":workspace.to_string_lossy(),"pr":pr,"head_sha":head,
+                "head_branch":branch,"base_branch":base,"deadline_ms":deadline_ms,
+            }),
+        )
+        .map_err(|error| error.to_string())?;
+    gates["missing"]
+        .as_array()
+        .ok_or_else(|| "the current-gates answer named no missing checks".to_string())?
+        .iter()
+        .map(|gate| {
+            gate["context"]
+                .as_str()
+                .filter(|context| !context.is_empty())
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| "the current-gates answer named an unreadable check".to_string())
+        })
+        .collect()
 }
 
 /// [ORB-15677] Where the owner-owed hosted checks stand on a pull request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::executor::automation::vcs) enum OwedHostedChecks {
-    /// Every named check reported a pass, and none is still running.
+    /// Every named check reported an explicit success, and none is still
+    /// running or finished without one.
     Passed,
-    /// A named check has not reported yet or is still running.
+    /// A named check has not reported yet, is still running, or completed
+    /// without an explicit success (skipped or neutral).
     Waiting(Vec<String>),
     /// A named check failed, or its state is unreadable.
     Failed(String),
@@ -426,38 +693,35 @@ pub(in crate::executor::automation::vcs) enum OwedHostedChecks {
 /// Judge the hosted checks `names` against the pull request's status rollup.
 /// A rollup entry answers a name by its own name or as `<workflow> / <job>`,
 /// as the forge displays it. A name no entry answers has not reported yet.
+///
+/// Only an explicit success satisfies a name: a CheckRun conclusion of
+/// `SUCCESS`, or a StatusContext state of `SUCCESS`. A completed `SKIPPED`
+/// or `NEUTRAL` conclusion is not that analysis, so the owner keeps waiting
+/// [ORB-15812]. Branch protection still classifies those conclusions as
+/// satisfied.
 pub(in crate::executor::automation::vcs) fn owed_hosted_checks(
-    pull_request: &Value,
+    pull_request: &PullRequestStatus,
     names: &[String],
 ) -> OwedHostedChecks {
     if names.is_empty() {
         return OwedHostedChecks::Passed;
     }
-    let checks = pull_request
-        .get("statusCheckRollup")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
+    let checks = pull_request.status_checks.as_deref().unwrap_or_default();
     let mut waiting = Vec::new();
     for name in names {
         let mut answered = false;
         let mut pending = false;
         for check in checks {
-            let own = check
-                .get("name")
-                .or_else(|| check.get("context"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .unwrap_or_default();
+            let own = check.name.as_deref().unwrap_or_default();
             let qualified = check
-                .get("workflowName")
-                .and_then(Value::as_str)
-                .map(|workflow| format!("{} / {own}", workflow.trim()));
+                .workflow_name
+                .as_deref()
+                .map(|workflow| format!("{workflow} / {own}"));
             if own != name && qualified.as_deref() != Some(name.as_str()) {
                 continue;
             }
             answered = true;
-            match classify_check(check) {
+            match check.owed_state {
                 Some(CheckState::Passed) => {}
                 Some(CheckState::Pending) => pending = true,
                 Some(CheckState::Failed) => {
@@ -478,28 +742,5 @@ pub(in crate::executor::automation::vcs) fn owed_hosted_checks(
         OwedHostedChecks::Passed
     } else {
         OwedHostedChecks::Waiting(waiting)
-    }
-}
-
-/// `statusCheckRollup` contains both CheckRun (`status`/`conclusion`) and
-/// StatusContext (`state`) entries. Unknown values cannot authorize waiting.
-fn classify_check(check: &Value) -> Option<CheckState> {
-    if let Some(state) = check.get("state").and_then(Value::as_str) {
-        return match state {
-            "PENDING" | "EXPECTED" => Some(CheckState::Pending),
-            "SUCCESS" => Some(CheckState::Passed),
-            "FAILURE" | "ERROR" => Some(CheckState::Failed),
-            _ => None,
-        };
-    }
-    match check.get("status").and_then(Value::as_str)? {
-        "QUEUED" | "IN_PROGRESS" | "PENDING" | "REQUESTED" | "WAITING" => Some(CheckState::Pending),
-        "COMPLETED" => match check.get("conclusion").and_then(Value::as_str)? {
-            "SUCCESS" | "NEUTRAL" | "SKIPPED" => Some(CheckState::Passed),
-            "FAILURE" | "CANCELLED" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE"
-            | "STALE" => Some(CheckState::Failed),
-            _ => None,
-        },
-        _ => None,
     }
 }

@@ -13,9 +13,9 @@ The connected tool schema is authoritative for supported fields.
   alone (`awaiting_exclusive_slot`). Declared selectors keep their existing
   conflict checks; undeclared edit conflicts surface at landing.
 - `dependencies: ["<task-id>", ...]` — prerequisites must reach a satisfying
-  status first. Not an `orbit.task.add` input: it is refused with the other
-  `RETIRED_TASK_ADD_INPUT_FIELDS`, so set it with `orbit.task.update` after
-  creation. Unlike `resolves`, task IDs are global: a prerequisite owned by
+  status first. Not an `orbit.task.add` input: it is refused as an unknown
+  field, like the other creation-time fields below, so set it with
+  `orbit.task.update` after creation. Unlike `resolves`, task IDs are global: a prerequisite owned by
   another workspace registered on this machine is read from its owner, and
   completing it there satisfies the dependency here. A prerequisite this
   machine has never registered stays explicitly unverifiable — it is never
@@ -36,8 +36,28 @@ The connected tool schema is authoritative for supported fields.
   also accepts GitHub PR external keys as described below. The remaining
   relation types require a task ID. A dangling target (unknown in every
   workspace this host can see) succeeds but emits a `TaskRelationDangling` audit event.
-- `parent_id` is a retired `orbit.task.add` input and is refused with the
-  other entries in `RETIRED_TASK_ADD_INPUT_FIELDS`; use a `child_of` relation
+- A `regression_from` relation may carry
+  `"regression": {"nature": "<nature>", "escape": "<escape>"}` (both required;
+  no other type accepts it). Choose `unclassified` rather than guess; an
+  omitted payload reads back as absent, not as `unclassified`. Unknown values
+  are refused with the allowed list.
+  - `nature` — what kind of regression the link records:
+    - `broke_existing`: the culprit broke behavior that worked before it landed.
+    - `defect_in_new`: the defect is in code the culprit itself introduced.
+    - `incomplete`: the culprit shipped without part of what its task required.
+    - `merge_reintroduced`: a merge restored code or assets an earlier change had removed.
+    - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
+    - `unclassified`: the evidence does not settle the nature.
+  - `escape` — why the delivery gates missed it:
+    - `no_test`: no test covered the broken behavior.
+    - `test_not_selected`: a covering test existed but the delivery's gates did not run it.
+    - `platform_only`: it shows only on a platform or host the gates did not exercise.
+    - `review_missed`: it was visible in the diff and review did not flag it.
+    - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
+    - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
+    - `unclassified`: the evidence does not settle the escape.
+- `parent_id` is not an `orbit.task.add` input and is refused as an unknown
+  field, like `plan`, `status` and `dependencies`; use a `child_of` relation
   in `relations` when creating a subtask. `source_task_id` is also retired
   from `orbit.task.add`; for bug tasks, set it after creation with
   `orbit.task.update` (which accepts the field), and use an empty string there
@@ -63,6 +83,18 @@ The connected tool schema is authoritative for supported fields.
   `github.auth.status` can still yield a structured `available: false` or
   `authenticated: false` capability-unavailable result when the lane has no
   GitHub client or credentials; that is not a clean CI pass.
+- `origin` records why the task was filed, from a closed set:
+  `operator_request` (a human operator asked for the work),
+  `orchestrator_initiative` (the orchestrator judged it necessary on its own)
+  or `automation` (a system filer). Orchestrators set it on every filing; the
+  operator's request usually reaches you in chat, so Orbit cannot infer it.
+  Tasks minted by auto-task definitions, routines and other system filers, and
+  sweep findings tagged `auto-task:*`, `qa-sweep`, `code-review`,
+  `security-review` or `friction-curation`, record `automation` when no origin
+  is given. Any other filing without one stays unset, which never reads as a
+  value. `orbit.task.update` can correct an origin but not clear it, an unknown
+  value is refused with the allowed list, and `orbit task list --origin`
+  (`origin` on `orbit.task.list`) filters by it.
 - `covered_by` names a task or GitHub PR covering an archived/rejected CI
   sweep finding. Its target is a task ID or an external key such as
   `github-pr:NUMBER` (this checkout's repository) or
@@ -105,7 +137,14 @@ another OS (see [Native host evidence](#native-host-evidence)).
 - **Activity tools.** For an allowlist activity, a tool outside its baseline
   has to be in `required_tools`. A deny-list activity exposes registered
   agent-facing tools except its disallowed names; `required_tools` cannot
-  override a denial, and such a requirement refuses dispatch.
+  override a denial, and such a requirement refuses dispatch. Screenshot and
+  task-artifact attachment is part of the implement lane. Owner mode attaches
+  with `orbit.task.artifact.put`. Claimed mode attaches declared files through
+  the `task_artifacts` handoff even without that tool. A criterion that only
+  requires those screenshots is feasible; task-pilot does not warn that
+  artifact attachment is unavailable because `required_tools` is empty. A
+  criterion that names a tool the lane does not grant, and that
+  `required_tools` does not declare, is still reported.
 - **Operator capability.** Governed operations — workflow run observation and
   resume, `orbit.command.exec`, `orbit.agent.invoke`,
   and the other destructive surfaces — are reserved for an operator.
@@ -150,7 +189,11 @@ other warning kinds stay advisory.
 When a criterion needs execution or evidence that only a native host of one OS
 can produce (a real macOS `sandbox-exec` launch, a Linux Bubblewrap result), the
 pilot records a typed `required_os` finding naming the one-based criterion and
-the OS, and commits it as `native_os_hold` in its assessment audit. When every
+the OS, and commits it as `native_os_hold` in its assessment audit. Apply
+rejects an entry whose criterion text names no OS or native facility (mac,
+macos, darwin, seatbelt, sandbox-exec, linux, bwrap, bubblewrap, windows,
+launchd, systemd, keychain, cgroup) and tells the pilot to leave `required_os`
+empty for a portable criterion. When every
 finding names one OS and the task carries no `os:` tag, the same atomic write
 adds that tag (`os:linux`), so admission routes the task by its tags and a host
 of another OS waits as `host_os_mismatch`. The pilot never removes or replaces
@@ -167,6 +210,33 @@ owner then refuses a pull claim from any other machine with a reason naming
 the machine; its own drain may start the task. A requirement on any other
 machine stays a `utility_warnings` finding for an operator to arrange.
 
+A claimed leaf that finds its base already resolves such a task hands off
+`NoDiff` with an `already_resolved` outcome naming `cargo test -p <crate>
+--test <target> [<filter>]` selectors. Its claim host replays each on the base
+outside the agent sandbox and pins the passing logs for the owner, so the task
+settles without a PR; a failing replay fails the claim with its output, and an
+empty list or a selector that runs no test is refused.
+
+When only the deployed build on a named host can evidence a criterion, after
+the change merges and is deployed there (that host's live service latency, the
+installed binary against its live store), the pilot records a `post_deploy`
+finding naming the criterion, the host and the exact measurement command,
+committed as `post_deploy` in its assessment audit. It is separate from
+`required_machine` and holds no admission: running on that host would still
+measure the deployed build, not the candidate. A criterion is typed in one of
+the two, never both. The finding only lets the implementer hand the criterion
+off as owed after deploy (see the task-execution reference); measurements the
+candidate can repeat, such as timing the worktree's own binary, are ordinary
+criteria.
+
+Write such work as two kinds of criteria. Candidate criteria are measured by
+the implementer with its own build: execve or request counts, payload size,
+CLI timing of the worktree build, a test server started from the candidate.
+Post-deploy targets are stated as such and name the host and the exact
+measurement command, for example "After deploy, on `<host>`: `<command>`
+reports p95 <= 150 ms over 20 paced samples". Only the second kind can be
+owed.
+
 Only typed findings route work: a host requirement stated in warning prose does
 not. Platform mentions, cross-compilation targets, mocked checks, negative
 tests and measurements any host could repeat are not findings.
@@ -182,6 +252,13 @@ Requirement order does not matter. Changed criteria or requirements supersede
 the decision. Operator-validation and host-operational decisions remain scoped
 to the assessment they answered; a new assessment supersedes them.
 
+### User-facing UI
+
+When a task's criteria or context files are UI a user sees, the pilot records
+`user_facing_ui: true`, and the same atomic write adds the `ui` tag to a task
+that lacks it. `false`, null or an absent field adds nothing, and the pilot
+never removes a `ui` tag; any other value is refused for repair. The
+task-authoring reference (UI tag) defines the tag.
 
 ## Duplicate recovery
 

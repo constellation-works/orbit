@@ -33,9 +33,8 @@ class Node {
 }
 const container = new Node('div'); container.id = 'audit-summary-body';
 const title = new Node('h3');
-const scoreboardBody = new Node('div'); scoreboardBody.id = 'scoreboard-body';
-const scoreboardCount = new Node('span');
-const scoreboardAgentStrip = new Node('div');
+const costHost = new Node('div'); costHost.id = 'scoreboard-orchestration';
+const costCount = new Node('span');
 const diagnosticsBody = new Node('div'); diagnosticsBody.id = 'diag-body';
 const diagnosticsCount = new Node('span');
 const auditScopeChips = new Node('div');
@@ -44,7 +43,7 @@ const document = {
   activeElement: null,
   createElement: tag => new Node(tag),
   createTextNode: text => { const node = new Node('#text'); node.textContent = text; return node; },
-  getElementById: id => ({ 'audit-summary-body': container, 'audit-summary-title': title, 'scoreboard-body': scoreboardBody, 'scoreboard-count': scoreboardCount, 'scoreboard-agent-strip': scoreboardAgentStrip, 'diag-body': diagnosticsBody, 'diag-count': diagnosticsCount, 'audit-scope-chips': auditScopeChips, 'audit-filter': auditFilterChips })[id] || null,
+  getElementById: id => ({ 'audit-summary-body': container, 'audit-summary-title': title, 'scoreboard-orchestration': costHost, 'scoreboard-orchestration-count': costCount, 'diag-body': diagnosticsBody, 'diag-count': diagnosticsCount, 'audit-scope-chips': auditScopeChips, 'audit-filter': auditFilterChips })[id] || null,
   querySelectorAll: () => [],
 };
 const window = {
@@ -106,12 +105,20 @@ const rateCard = container.children.find(node => node.dataset.key === 'tool-call
 assert.match(rateCard.textContent, /22\.2%.*2 failed \/ 9 tool calls/);
 assert.match(rateCard.textContent, /4 denied calls excluded/);
 rows[0].listeners.get('click')();
+assert.match(window.location.hash, /^#diagnostics\/incidents\/events\?/, 'a Tools row opens Health › Incidents › Events');
 const route = new URLSearchParams(window.location.hash.split('?')[1]);
 assert.equal(common.namespace.getWorkspace(), 'ws_fixture', 'drill-down keeps the selected workspace');
 assert.equal(audit.namespace.effectiveAuditWindow(), '24h', 'drill-down keeps the selected window');
 assert.equal(route.get('tool'), 'orbit.workflow.run.list');
 audit.namespace.renderAuditSummary(payload);
 assert.equal(container.children.find(node => node.dataset.key === 'tool-call-failures-by-tool'), card, 'unchanged refresh keeps the rendered card');
+audit.namespace.applyAuditHashQuery(new URLSearchParams('since=1h&status=denied'));
+audit.namespace.renderAuditSummary({ ...payload, window: '7d' });
+container.children.find(node => node.dataset.key === 'tool-call-failures-by-tool').children[1].children[0].children[1].children[0].listeners.get('click')();
+const toolRoute = new URLSearchParams(window.location.hash.split('?')[1]);
+assert.equal(toolRoute.get('since'), '7d', 'a Tools row carries its displayed window rather than the prior Events cutoff');
+assert.equal(toolRoute.get('status'), 'denied', 'a Tools row keeps the prior Events status filter');
+audit.namespace.renderAuditSummary(payload);
 audit.namespace.renderAuditSummary({ ...payload, tool_call_failures_by_tool: [] });
 assert.equal(container.children.some(node => node.dataset.key === 'tool-call-failures-by-tool'), false, 'empty refresh removes the stale table');
 const categoryPayload = {
@@ -161,68 +168,67 @@ assert.match(toolFailuresCard().textContent, /5,000/, 'per-tool card refreshes w
 assert.match(lifecycleCard().textContent, /5,000/, 'lifecycle card refreshes when the scan limit changes');
 
 const scoreboard = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/scoreboard.js', import.meta.url), 'utf8'), { context });
-await scoreboard.link(name => ({ './common.js': common, './audit.js': audit })[name]);
+await scoreboard.link(name => ({ './common.js': common })[name]);
 await scoreboard.evaluate();
 const descendants = node => [node, ...node.children.flatMap(descendants)];
-const incidentRow = () => descendants(scoreboardBody).find(node => node.dataset.key === 'scoreboard-Operations-failure_incidents');
-const scoreboardPayload = {
-  window: '24h', failure_incidents_scan_limit: 10000,
-  agents: { codex: { tasks_created: 1, tool_calls: 5, failed_tool_calls: 1, failure_incidents: 2, failure_incident_events: 3 } },
+const removedCostChrome = () => descendants(costHost).some(node => {
+  const names = String(node.className).split(' ');
+  return ['scoreboard-narrative', 'scoreboard-agent-strip', 'scoreboard-body', 'scoreboard-insights', 'scoreboard-insights-panel'].includes(node.id)
+    || ['scoreboard-narrative', 'scoreboard-agent-card', 'sb2-matrix', 'scoreboard-insights'].some(name => names.includes(name));
+});
+const costBucket = {
+  kind: 'orchestrator', orchestrator: 'claude', invocation_count: 2, linked_task_count: 1,
+  provider_cost_usd: 1.25, provider_cost_count: 2, missing_provider_count: 0,
+  derived_cost_usd: 1.5, derived_cost_count: 2, unpriced_derived_count: 0,
+  comparable_cost_count: 2, comparable_provider_cost_usd: 1.25, comparable_derived_cost_usd: 1.5,
+  comparable_cost_delta_usd: 0.25,
+  models: [{ model: 'claude-sonnet', tokens: { normalized_token_total: 1500 } }],
 };
+const costOrchestration = {
+  since: '2026-10-12T00:00:00Z', until: '2026-10-13T00:00:00Z', as_of: '2026-10-13T00:00:00Z',
+  normalized_tokens: {
+    normalized_token_total: 1500, invocation_count: 2, linked_task_count: 1,
+    uncached_input_tokens: 100, cache_read_tokens: 200, cache_create_tokens: 0,
+    cache_create_1h_tokens: 0, output_tokens: 50, covered_invocation_count: 2,
+    unknown_input_basis_or_model_count: 0,
+  },
+  buckets: [costBucket],
+};
+scoreboard.namespace.renderScoreboard({ window: '24h', agents: {}, orchestration: costOrchestration });
+assert.match(costHost.textContent, /\$1\.2500/, 'provider-reported dollars keep four decimal places');
+assert.match(costHost.textContent, /\$1\.5000/, 'derived estimate keeps four decimal places');
+assert.match(costHost.textContent, /1\.5K/, 'normalized tokens stay compact');
+assert.match(costHost.textContent, /named orchestrator: claude/);
+assert.match(costHost.textContent, /claude-sonnet 1\.5K/, 'model attribution stays on the same population');
+assert.equal(costCount.textContent, '1 buckets');
+assert.equal(removedCostChrome(), false, 'cost render has no leaderboard, narrative, agent strip or insights');
 scoreboard.namespace.renderScoreboard({
-  ...scoreboardPayload, failure_incidents_truncated: true,
-  coverage: { failure_incidents: { availability: 'partial', detail: 'Only the newest 10000 failure rows were scanned.' } },
+  window: '7d', agents: { codex: { tasks_created: 4 } },
+  orchestration: { ...costOrchestration, buckets: [{ ...costBucket, provider_cost_usd: 9.5 }] },
 });
-assert.match(incidentRow().children[0].textContent, /capped/i, 'scoreboard incident column visibly qualifies capped counts');
-assert.match(incidentRow().children[1].title, /10,000/);
-assert.match(scoreboardBody.textContent, /Only the newest 10000/, 'partial coverage remains visible alongside populated rows');
-scoreboard.namespace.renderScoreboard({
-  ...scoreboardPayload, agents: { codex: { failure_incidents: 0, failure_incident_events: 0 } },
-  failure_incidents_truncated: true,
-  coverage: { failure_incidents: { availability: 'partial', detail: 'Capped sample.' } },
-});
-assert.ok(incidentRow(), 'a zero in a capped sample keeps the partial row visible');
-assert.match(incidentRow().children[0].textContent, /capped/i);
-scoreboard.namespace.renderScoreboard({
-  ...scoreboardPayload, failure_incidents_truncated: false,
-  coverage: { failure_incidents: { availability: 'observed' } },
-});
-assert.doesNotMatch(incidentRow().textContent, /capped/i, 'complete scoreboard refresh clears the qualifier');
-assert.doesNotMatch(scoreboardBody.textContent, /Only the newest|Capped sample/);
+assert.match(costHost.textContent, /\$1\.2500/, 'a 7d body is not painted under the 24h window');
+assert.doesNotMatch(costHost.textContent, /\$9\.5000/);
+scoreboard.namespace.renderScoreboard({ window: '24h', agents: {}, orchestration: null });
+assert.match(costHost.textContent, /No managed execution cost data yet/);
+assert.equal(costCount.textContent, '—');
 
-// Drive the actual card/header/cell listeners, then reload the route and fetch
-// Audit. This catches losing family or non-success filters at any UI boundary.
-const familyTargets = [...descendants(scoreboardAgentStrip), ...descendants(scoreboardBody)].filter(node =>
-  node.className.split(' ').includes('scoreboard-agent-card')
-  || node.className.split(' ').includes('col-agent')
-  || node.dataset.agent === 'codex');
-assert.ok(familyTargets.some(node => node.tagName === 'button'), 'agent card is exercised');
-assert.ok(familyTargets.some(node => node.tagName === 'th'), 'column header is exercised');
-assert.ok(familyTargets.some(node => node.dataset.metric === 'failure_incidents'), 'incident cell is exercised');
-for (const target of familyTargets) {
-  const family = target.dataset.agent || (target.tagName === 'th'
-    ? target.children[0].textContent
-    : descendants(target).find(node => node.className === 'scoreboard-agent-name').textContent);
-  target.listeners.get('click')();
-  const familyRoute = new URLSearchParams(window.location.hash.split('?')[1]);
-  assert.equal(familyRoute.get('agent_family'), family);
-  assert.equal(familyRoute.has('role'), false, 'scoreboard uses the family predicate');
-  if (target.dataset.metric === 'failure_incidents') {
-    assert.equal(familyRoute.get('status'), 'non_success', 'incidents include failed and denied rows');
-  } else if (['tools', 'failed_tool_calls'].includes(target.dataset.metric)) {
-    assert.equal(familyRoute.get('status'), 'failure', 'raw failed calls retain their exact status');
-  } else {
-    assert.equal(familyRoute.has('status'), false, 'other metrics and agent views include all statuses');
-  }
-  audit.namespace.applyAuditHashQuery(familyRoute);
-  assert.equal(audit.namespace.buildAuditHash(), window.location.hash, 'route survives reload');
-  await audit.namespace.fetchAndRenderAudit();
-  const request = new URLSearchParams(requestedPaths.at(-1).split('?')[1]);
-  assert.equal(request.get('agent_family'), family, 'family reaches the Events API');
-  assert.equal(request.get('workspace'), 'ws_fixture');
-  assert.equal(request.get('since'), '24h');
-  assert.equal(request.get('status'), familyRoute.get('status'));
-}
+// The family leaderboard is gone. Incidents still open Events through the
+// same drill-down, and the landing chips must keep family and non-success.
+audit.namespace.navigateToDrilldown({
+  agent_family: 'codex', metric: 'failure_incidents', status: 'non_success',
+});
+const familyRoute = new URLSearchParams(window.location.hash.split('?')[1]);
+assert.equal(familyRoute.get('agent_family'), 'codex');
+assert.equal(familyRoute.has('role'), false, 'family drill-down uses the family predicate');
+assert.equal(familyRoute.get('status'), 'non_success', 'incidents include failed and denied rows');
+audit.namespace.applyAuditHashQuery(familyRoute);
+assert.equal(audit.namespace.buildAuditHash(), window.location.hash, 'route survives reload');
+await audit.namespace.fetchAndRenderAudit();
+const familyRequest = new URLSearchParams(requestedPaths.at(-1).split('?')[1]);
+assert.equal(familyRequest.get('agent_family'), 'codex', 'family reaches the Events API');
+assert.equal(familyRequest.get('workspace'), 'ws_fixture');
+assert.equal(familyRequest.get('since'), '24h');
+assert.equal(familyRequest.get('status'), 'non_success');
 const familyChip = auditScopeChips.children.find(node => node.dataset.chip === 'agent family');
 assert.ok(familyChip, 'family filter can be removed');
 familyChip.listeners.get('click')({ preventDefault() {} });
@@ -231,18 +237,11 @@ audit.namespace.buildAuditChips();
 const nonSuccessChip = auditFilterChips.children.find(node => node.dataset.status === 'non_success');
 assert.ok(nonSuccessChip, 'combined status filter is available in Events');
 nonSuccessChip.listeners.get('click')();
-assert.equal(new URLSearchParams(window.location.hash.split('?')[1]).has('status'), false, 'combined status can be cleared');
+assert.equal(new URLSearchParams(window.location.hash.split('?')[1]).get('status'), 'all', 'combined status can be cleared to every status');
 audit.namespace.navigateToRole('gpt-6.1-sol');
 const exactRoleRoute = new URLSearchParams(window.location.hash.split('?')[1]);
 assert.equal(exactRoleRoute.get('role'), 'gpt-6.1-sol');
 assert.equal(exactRoleRoute.has('agent_family'), false, 'exact-role navigation resets the family');
-scoreboard.namespace.renderScoreboard({
-  ...scoreboardPayload, failure_incidents_truncated: null,
-  agents: { codex: { failure_incidents: null, failure_incident_events: null } },
-  coverage: { failure_incidents: { availability: 'unavailable' } },
-});
-assert.match(incidentRow().children[1].textContent, /unavailable/i, 'read failure still renders missing coverage rather than a zero');
-assert.doesNotMatch(incidentRow().children[0].textContent, /capped/i);
 
 const findNode = (root, predicate) => descendants(root).find(predicate);
 const plainClick = (node) => node.listeners.get('click')({
@@ -474,4 +473,4 @@ const loadOlder = findNode(diagnosticsBody, node => node.tagName === 'button' &&
 assert.equal(typeof loadOlder?.listeners.get('click'), 'function', 'a capped list offers older incidents');
 loadOlder.listeners.get('click')();
 assert.deepEqual(loaded, [100], 'Load older asks for the next page');
-console.log('audit, scoreboard and incident renderers: counts, exact incident drill-down, class tiles, recurrence rollup, detail panel and refresh passed');
+console.log('audit, cost and incident renderers: counts, exact incident drill-down, class tiles, recurrence rollup, detail panel and refresh passed');

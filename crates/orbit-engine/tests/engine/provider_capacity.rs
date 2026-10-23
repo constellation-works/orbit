@@ -23,7 +23,7 @@ use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, JobOutcome,
-    ResolvedCliExecutor, RuntimeHost, V2AuditWriter, V2DispatchInput, dispatch_v2_activity,
+    ResolvedCliExecutor, V2AuditWriter, V2DispatchInput, dispatch_v2_activity,
     execute_job_with_resume,
 };
 use orbit_store::Store;
@@ -114,6 +114,9 @@ pub(super) fn agent_spec(provider: Provider) -> AgentLoopSpec {
     AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "implement the task".to_string(),
+        steering_instruction: None,
+        regression_risk_instruction: None,
+        explore_instruction: None,
         tools: vec![],
         on_denial: OnDenial::Terminate,
         model: None,
@@ -127,6 +130,8 @@ pub(super) fn agent_spec(provider: Provider) -> AgentLoopSpec {
         proc_allowed_programs: None,
         proc_disallowed_programs: None,
         trusted_host_execution: false,
+        crew_env: Vec::new(),
+        crew_account: None,
     }
 }
 
@@ -142,6 +147,16 @@ pub(super) fn writer(root: &Path, run_id: &str) -> Arc<V2AuditWriter> {
         None,
     )
     .unwrap()
+}
+
+/// Classification and host telemetry rows do not observe audit persistence.
+/// Job rows keep `writer` for their durable envelope/readback assertions.
+pub(super) fn outcome_writer(run_id: &str) -> Arc<V2AuditWriter> {
+    Arc::new(V2AuditWriter::new(
+        run_id,
+        "capacity",
+        Arc::new(orbit_agent::loop_engine::audit::NullSink),
+    ))
 }
 
 /// Stands in for Core: resolves the fake provider, records deterministic
@@ -189,7 +204,7 @@ impl CapacityHost {
     }
 }
 
-impl RuntimeHost for CapacityHost {
+impl orbit_engine::test_support::NullRuntimeHost for CapacityHost {
     fn run_deterministic(
         &self,
         action: &str,
@@ -349,7 +364,6 @@ pub(super) fn failure_message(outcome: &Result<JobOutcome, DispatchError>) -> St
 
 /// Capacity is typed only from the provider's own failure, never from the
 /// agent's transcript or an Orbit envelope, and never on a turn that finished.
-#[test]
 fn capacity_is_typed_only_from_text_the_failed_provider_wrote() {
     let envelope_answer = format!(
         r#"{{"type":"item.completed","item":{{"type":"agent_message","text":{}}}}}"#,
@@ -433,7 +447,7 @@ fn capacity_is_typed_only_from_text_the_failed_provider_wrote() {
             spec: &ActivityV2Spec::AgentLoop(agent_spec(provider)),
             fs_profile: None,
             input: json!({ "prompt": "implement" }),
-            audit: writer(audit.path(), &run_id),
+            audit: outcome_writer(&run_id),
             run_id: &run_id,
             host: Some(&host),
         })
@@ -467,7 +481,6 @@ fn capacity_is_typed_only_from_text_the_failed_provider_wrote() {
 /// The incident run: recovery cannot change capacity and the rerun used the
 /// same model. Now the provider is invoked once, neither recovery runs, and
 /// the worktree still holds the partial candidate for the failure handoff.
-#[test]
 fn a_capacity_failure_skips_recovery_and_keeps_the_candidate() {
     let worktree = tempfile::tempdir().unwrap();
     let candidate = worktree.path().join("candidate.rs");
@@ -537,7 +550,6 @@ fn a_capacity_failure_skips_recovery_and_keeps_the_candidate() {
 /// failure: Codex's content-filter frames on a failed exit, or Claude's
 /// terminal result stopping for a refusal, which fails the turn even on exit
 /// 0. It is a provider failure, but not an unavailability.
-#[test]
 fn refusal_is_typed_only_from_text_the_failed_provider_wrote() {
     let envelope_answer = format!(
         r#"{{"type":"item.completed","item":{{"type":"agent_message","text":{}}}}}"#,
@@ -622,7 +634,7 @@ fn refusal_is_typed_only_from_text_the_failed_provider_wrote() {
             spec: &ActivityV2Spec::AgentLoop(agent_spec(provider)),
             fs_profile: None,
             input: json!({ "prompt": "implement" }),
-            audit: writer(audit.path(), &run_id),
+            audit: outcome_writer(&run_id),
             run_id: &run_id,
             host: Some(&host),
         })
@@ -651,7 +663,6 @@ fn refusal_is_typed_only_from_text_the_failed_provider_wrote() {
 /// The incident runs: final recovery escalated a content-filter refusal it
 /// could not change. Now neither recovery runs, the provider is invoked once,
 /// and the failure handoff gets the typed code with the candidate intact.
-#[test]
 fn a_content_filter_refusal_skips_recovery_and_keeps_the_candidate() {
     let worktree = tempfile::tempdir().unwrap();
     let candidate = worktree.path().join("candidate.rs");
@@ -695,7 +706,6 @@ fn a_content_filter_refusal_skips_recovery_and_keeps_the_candidate() {
 /// A declared `owner_route_unavailable` envelope is typed for the pull drain
 /// and skips both recoveries; the same envelope with any other code reaches
 /// step recovery (the last case of the test below).
-#[test]
 fn a_declared_owner_route_failure_skips_recovery() {
     let worktree = tempfile::tempdir().unwrap();
     let fake = FakeProvider::new(
@@ -741,7 +751,6 @@ fn a_declared_owner_route_failure_skips_recovery() {
 /// its post-recovery attempt: a failed exit (whose answer may even quote the
 /// capacity text) and a declared `status: "failed"` envelope. A timeout takes
 /// the same path; see `a_timed_out_attempt_reaches_recovery_and_the_post_recovery_attempt`.
-#[test]
 fn other_provider_failures_still_reach_recovery_and_the_post_recovery_attempt() {
     let failed_envelope = r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"red","message":"tests failed"}}"#;
     let cases: Vec<(&str, Provider, String, &str, i32)> = vec![
@@ -800,7 +809,6 @@ fn other_provider_failures_still_reach_recovery_and_the_post_recovery_attempt() 
 /// attempt times out. The rerun is counted at dispatch, not by the fake's
 /// invocation log, because a loaded host can spend the whole budget before the
 /// fake writes its first line.
-#[test]
 fn a_timed_out_attempt_reaches_recovery_and_the_post_recovery_attempt() {
     let worktree = tempfile::tempdir().unwrap();
     let fake = FakeProvider::new("claude", "", "", 0, "sleep 10");
@@ -834,7 +842,6 @@ fn a_timed_out_attempt_reaches_recovery_and_the_post_recovery_attempt() {
 
 /// A required validation failure remains a candidate defect, so it still
 /// spends step recovery and reruns validation on the repaired candidate.
-#[test]
 fn a_required_validation_failure_still_reaches_step_recovery_and_post_recovery_attempt() {
     let worktree = tempfile::tempdir().unwrap();
     let fake = FakeProvider::new("codex", "", "", 0, "");
@@ -872,7 +879,6 @@ fn a_required_validation_failure_still_reaches_step_recovery_and_post_recovery_a
 /// [ORB-14258] A required validation failure the base shares is not the
 /// candidate's: no step or final recovery is dispatched, so the provider is
 /// not invoked again, and the failure handoff receives the typed failure.
-#[test]
 fn a_red_base_validation_failure_dispatches_no_recovery() {
     let worktree = tempfile::tempdir().unwrap();
     let answer = format!(
@@ -931,4 +937,121 @@ fn a_red_base_validation_failure_dispatches_no_recovery() {
             .is_some(),
         "the handoff can read the hold: {handoff:?}"
     );
+}
+
+/// A provider failure in a later worker must survive an earlier work failure.
+fn fan_out_prefers_a_provider_failure_over_an_ordinary_failure() {
+    let fake = FakeProvider::new("codex", "", "", 1, "");
+    fs::write(&fake.path, r#"#!/bin/sh
+prompt=$(cat)
+case "$prompt" in
+  *provider-worker*)
+    echo '{"type":"turn.failed","error":{"message":"Selected model is at capacity. Please try a different model."}}'
+    exit 1
+    ;;
+  *)
+    echo '{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"work_failed","message":"ordinary work failure"}}'
+    exit 0
+    ;;
+esac
+"#).unwrap();
+    let worktree = tempfile::tempdir().unwrap();
+    let host = CapacityHost::new(&fake.path, worktree.path());
+    let mut spec = agent_spec(Provider::Codex);
+    spec.instruction = "{{ input.label }}".into();
+    for labels in [
+        vec!["ordinary-worker", "provider-worker"],
+        vec!["provider-worker", "ordinary-worker"],
+    ] {
+        let job = load_job_asset(&json!({
+            "schemaVersion": 2, "kind": "Job", "metadata": {"name": "fanout_failure"},
+            "spec": {"state": "enabled", "kind": "workflow", "steps": [{
+                "id": "workers",
+                "fan_out": {"items": serde_json::to_string(&labels).unwrap(), "max_workers": 2, "worker": {
+                    "id": "worker", "spec": ActivityV2Spec::AgentLoop(spec.clone()),
+                    "default_input": {"label": "{{ item }}"},
+                }},
+                "fan_in": {"join": {"mode": "all"}, "errors": "worker_errors"},
+            }]},
+        }).to_string()).unwrap().spec;
+        let run = run_job(&job, &host, "mixed-failure");
+        let message = failure_message(&run.outcome);
+        assert!(
+            is_provider_capacity_exhausted(None, Some(&message)),
+            "a later provider failure must form a hold despite an earlier work failure: {message}"
+        );
+        let outcome = run.outcome.unwrap();
+        assert!(!outcome.success);
+        assert_eq!(
+            outcome.pipeline["worker_errors"].as_array().unwrap().len(),
+            2
+        );
+    }
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn provider_failure_contracts_1() {
+    crate::git_fixture::isolated(module_path!(), "provider_failure_contracts_1", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "fan_out_prefers_a_provider_failure_over_an_ordinary_failure",
+                fan_out_prefers_a_provider_failure_over_an_ordinary_failure,
+            ),
+            (
+                "capacity_is_typed_only_from_text_the_failed_provider_wrote",
+                capacity_is_typed_only_from_text_the_failed_provider_wrote,
+            ),
+            (
+                "a_capacity_failure_skips_recovery_and_keeps_the_candidate",
+                a_capacity_failure_skips_recovery_and_keeps_the_candidate,
+            ),
+            (
+                "refusal_is_typed_only_from_text_the_failed_provider_wrote",
+                refusal_is_typed_only_from_text_the_failed_provider_wrote,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn provider_failure_contracts_2() {
+    crate::git_fixture::isolated(module_path!(), "provider_failure_contracts_2", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_content_filter_refusal_skips_recovery_and_keeps_the_candidate",
+                a_content_filter_refusal_skips_recovery_and_keeps_the_candidate,
+            ),
+            (
+                "a_declared_owner_route_failure_skips_recovery",
+                a_declared_owner_route_failure_skips_recovery,
+            ),
+            (
+                "other_provider_failures_still_reach_recovery_and_the_post_recovery_attempt",
+                other_provider_failures_still_reach_recovery_and_the_post_recovery_attempt,
+            ),
+        ]);
+    });
+}
+
+/// Behavior-distinct rows share one bounded family process.
+#[test]
+fn provider_failure_contracts_3() {
+    crate::git_fixture::isolated(module_path!(), "provider_failure_contracts_3", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_timed_out_attempt_reaches_recovery_and_the_post_recovery_attempt",
+                a_timed_out_attempt_reaches_recovery_and_the_post_recovery_attempt,
+            ),
+            (
+                "a_required_validation_failure_still_reaches_step_recovery_and_post_recovery_attempt",
+                a_required_validation_failure_still_reaches_step_recovery_and_post_recovery_attempt,
+            ),
+            (
+                "a_red_base_validation_failure_dispatches_no_recovery",
+                a_red_base_validation_failure_dispatches_no_recovery,
+            ),
+        ]);
+    });
 }

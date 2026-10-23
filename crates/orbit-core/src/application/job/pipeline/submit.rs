@@ -182,12 +182,19 @@ impl OrbitRuntime {
             claim_token,
             trigger,
             false,
+            None,
         )
     }
 
     /// Submit a ship run with a CLI-only strict containment override.
     /// The marker is persisted with this run's input; its worker passes the
     /// policy through the environment to any child workers it starts.
+    ///
+    /// [ORB-16572] `review` is the run's `--review` request: a review layer
+    /// before landing this run adds where workspace policy applies none. It is
+    /// refused here, before any run exists, on the local route, against the
+    /// other workspace layer, or without a reviewer crew; the layer workspace
+    /// policy already applies is accepted unchanged.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_ship_run_with_containment(
         &self,
@@ -200,6 +207,7 @@ impl OrbitRuntime {
         claim_token: Option<&str>,
         trigger: JobRunTrigger,
         strict_containment: bool,
+        review: Option<orbit_types::workflow::ReviewLayer>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
         self.validate_strict_worker_containment(strict_containment)?;
         self.require_workspace_claim("orbit.workflow.ship", claim_token)?;
@@ -232,6 +240,12 @@ impl OrbitRuntime {
         if strict_containment {
             input["__worker_containment_strict"] = json!(true);
         }
+        crate::application::review::admit_review_request(
+            self,
+            &mut input,
+            review,
+            mode == crate::application::workflow::ShipMode::Local,
+        )?;
         // Validate explicit selections before inspecting runs or creating a
         // pipeline record. Auto mode intentionally carries no task ids: the
         // worker discovers eligible backlog tasks after it starts.
@@ -246,17 +260,29 @@ impl OrbitRuntime {
                 task_id,
                 crate::application::workflow::SHIP_WORKFLOW_ALIAS,
             )?;
-            // A task whose `os:` tags this host cannot satisfy is never started
-            // here; it would only fail on a platform it cannot run on.
-            if let Some(wait) = orbit_types::task::TaskOsRequirement::from_tags(&task.tags)
-                .unsatisfied_reason(self.host_os())
-            {
+            // A task whose effective OS requirement this host cannot satisfy is
+            // never started here; it would only fail on a platform it cannot
+            // run on. Check its tags and assigned crew, and the actual
+            // default fallback when its automatic route has no usable pool.
+            let limits = self.executor_host_os_limits()?;
+            let pools = self.auto_crew_pools_for_input(&input)?;
+            let wait = self.task_host_os_wait(&task, &pools, &limits);
+            if let Some(wait) = wait {
                 return Err(OrbitError::PolicyDenied(format!(
                     "explicit ship task '{task_id}' {wait}, and this host runs {}; ship it on \
                      a host of that OS (a pull-drain follower on one claims it from the \
                      backlog) or change its `os:` tags",
                     self.host_os()
                         .map_or(std::env::consts::OS, orbit_types::task::HostOs::as_str)
+                )));
+            }
+            // Nor a `ui` task on a host whose browser kit is not verified: its
+            // worker could not render the change it must screenshot.
+            if orbit_types::task::requires_browser_kit(&task.tags) && !self.browser_kit_verified() {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "explicit ship task '{task_id}' {}; this host has no verified kit (a pull-drain \
+                     follower with one claims it from the backlog)",
+                    orbit_types::task::browser_kit_wait()
                 )));
             }
             if let Some(allowlist) = allowlist.as_ref() {
@@ -270,19 +296,31 @@ impl OrbitRuntime {
                     &format!("explicit ship task '{task_id}'"),
                 )?;
             }
-            self.resolve_admitted_delivery_route(std::slice::from_ref(&task), mode, &forge)?;
+            let route =
+                self.resolve_admitted_delivery_route(std::slice::from_ref(&task), mode, &forge)?;
+            if let Some(layer) = review
+                && route.delivers_locally()
+            {
+                return Err(OrbitError::InvalidInput(format!(
+                    "explicit ship task '{task_id}' is routed to local-only delivery: {}",
+                    crate::application::review::local_route_run_option_refusal(layer)
+                )));
+            }
         }
         if let Some(conflict) = self.in_flight_ship_run_for_tasks(task_ids)? {
             return Err(conflict);
         }
         self.submit_pipeline_run_with_trigger(workflow.job_id, input, None, actor, trigger)
     }
-    /// Submit one workspace drain (`workspace_auto_pipeline`).
+    /// Submit a local drain with a run-scoped forecast mode. Omission captures
+    /// the host setting; explicit modes never edit configuration. All surfaces
+    /// use this submission and the existing admission controller.
     ///
     /// [ORB-10819] `for_seconds` is the drain window: the run keeps re-listing
     /// admissible work and shipping it until the window expires. `None` (or
     /// zero) means one tick, which is what every caller predating the window
-    /// gets. The window bounds only the *start* of new work — a child run
+    /// gets. Windows over 24 hours are refused before submission. The window
+    /// bounds only the *start* of new work — a child run
     /// already in flight when the deadline passes finishes normally.
     /// `max_active_leaf_runs` is the drain's concurrency ceiling: how many
     /// `task_auto_pipeline` children may be live at once. Omitted, the job's
@@ -299,40 +337,22 @@ impl OrbitRuntime {
     /// a task's crew, or cancel work another invocation already has in flight.
     ///
     /// [ORB-13016] `trigger` is the submitting surface's provenance.
-    #[allow(clippy::too_many_arguments)]
-    pub fn submit_workspace_auto_run(
-        &self,
-        for_seconds: Option<u64>,
-        max_active_leaf_runs: Option<u32>,
-        completion: crate::application::workflow::CompletionPolicy,
-        allowed_crews: &[String],
-        complexity_crews: &orbit_config::ComplexityCrewPools,
-        actor: Option<&str>,
-        claim_token: Option<&str>,
-        trigger: JobRunTrigger,
-    ) -> Result<PipelineInvokeResult, OrbitError> {
-        self.submit_workspace_auto_run_with_containment(
-            for_seconds,
-            max_active_leaf_runs,
-            completion,
-            allowed_crews,
-            complexity_crews,
-            actor,
-            claim_token,
-            trigger,
-            false,
-            false,
-        )
-    }
-
-    /// Submit a drain with a strict policy inherited by its leaf workers.
     ///
     /// [ORB-14117] `approve_proposed` lets every pass of this drain approve
     /// qualifying `proposed` tasks into the backlog through the task-pilot
     /// promotion boundary. Like `completion`, it is only ever raised by a
     /// per-invocation operator flag.
+    ///
+    /// `auto_fix` (`--auto-fix`) authorizes the drain's PR leaves to repair
+    /// failed required checks and merge conflicts on their pull requests. It
+    /// is repair authority only; `completion` alone authorizes merging.
+    ///
+    /// [ORB-16572] `review` (`--review`) adds a review layer before landing to
+    /// the window where workspace policy applies none; every child it admits
+    /// inherits the captured layer. It is refused before submission when the
+    /// workspace delivers locally, and as on ship otherwise.
     #[allow(clippy::too_many_arguments)]
-    pub fn submit_workspace_auto_run_with_containment(
+    pub fn submit_workspace_auto_run_with_mode(
         &self,
         for_seconds: Option<u64>,
         max_active_leaf_runs: Option<u32>,
@@ -344,7 +364,11 @@ impl OrbitRuntime {
         trigger: JobRunTrigger,
         strict_containment: bool,
         approve_proposed: bool,
+        auto_fix: bool,
+        auto_concurrency: Option<orbit_types::workflow::AutoConcurrencyMode>,
+        review: Option<orbit_types::workflow::ReviewLayer>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
+        crate::application::workflow::validate_drain_window(for_seconds)?;
         self.validate_strict_worker_containment(strict_containment)?;
         self.require_workspace_claim("orbit.workflow.auto", claim_token)?;
         // [ORB-12500] An explicit owner drain is owner coordination work; a
@@ -356,6 +380,7 @@ impl OrbitRuntime {
         )?
         .into_result()?;
         self.preflight_git_protection()?;
+        let crews = self.drain_crews_runnable_here(self.canonical_allowed_crews(allowed_crews)?)?;
         let workflow = crate::application::workflow::find_workflow(
             crate::application::workflow::AUTO_WORKFLOW_ALIAS,
         )
@@ -364,20 +389,30 @@ impl OrbitRuntime {
             for_seconds,
             max_active_leaf_runs,
             completion,
-            &self.canonical_allowed_crews(allowed_crews)?,
+            &crews,
             approve_proposed,
+            auto_fix,
         )?;
+        if let Some(mode) = auto_concurrency {
+            input["auto_concurrency"] = json!(mode);
+        }
         Self::set_auto_crew_overrides(&mut input, complexity_crews);
         if strict_containment {
             input["__worker_containment_strict"] = json!(true);
         }
+        crate::application::review::admit_review_request(
+            self,
+            &mut input,
+            review,
+            self.automatic_delivery_ship_mode() == crate::application::workflow::ShipMode::Local,
+        )?;
         self.submit_pipeline_run_with_trigger(workflow.job_id, input, None, actor, trigger)
     }
 
     fn validate_strict_worker_containment(&self, strict: bool) -> Result<(), OrbitError> {
         if strict && !self.context.settings().worker_containment().enabled {
             return Err(OrbitError::InvalidInput(
-                "--strict-worker-containment requires machine.worker_containment=true".into(),
+                "--strict-worker-containment requires machine.worker_containment to be warn or strict, not off".into(),
             ));
         }
         Ok(())

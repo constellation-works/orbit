@@ -1,4 +1,5 @@
 mod activity_tool_requirements;
+pub(crate) mod agent_explore;
 pub(crate) mod agent_invoke;
 pub(crate) mod catalog;
 pub(crate) mod catalog_layers;
@@ -6,9 +7,14 @@ pub(crate) mod claimed;
 pub(crate) mod crew_pools;
 pub(crate) mod delivery;
 mod exec;
+mod explore_analytics;
 mod final_recovery;
 mod forge_hold_resume;
+mod orphan_adoption;
 pub(crate) mod pipeline;
+pub(crate) mod pipeline_actions;
+mod pr_auto_fix;
+mod pr_repair_adoption;
 mod resume;
 mod run;
 mod upgrade_resume;
@@ -37,28 +43,38 @@ pub(crate) fn log_best_effort<T>(
 }
 
 pub(crate) use activity_tool_requirements::drops_disallowed_requirements;
+pub use agent_explore::{
+    AgentInvocation, BoundedExploreAnswer, EXPLORE_JOB_ID, ExploreInvocationSummary,
+    ExploreSubmission,
+};
 pub use agent_invoke::{
     AGENT_INVOKE_JOB_ID, AgentInvokeRequest, AgentInvokeResult, AgentInvokeSubmission,
     DEFAULT_AGENT_INVOKE_TIMEOUT_SECONDS, MAX_AGENT_INVOKE_TIMEOUT_SECONDS, agent_invoke_result,
 };
 pub(crate) use catalog::{DEFAULT_JOB_FILES, seed_default_jobs};
-pub use catalog::{JobCatalogEntry, JobCatalogFilter};
+pub use catalog::{JobCatalogEntry, JobCatalogFilter, job_catalog_to_json_with_last_run};
 pub use catalog_layers::CatalogReferenceLayer;
 pub use exec::V2JobRunResult;
+pub use explore_analytics::{
+    EXPLORE_COMPARISON_SCHEMA_VERSION, ExploreCohort, ExploreComparison, ExploreCrewComparison,
+};
+pub(crate) use orphan_adoption::AdoptionAuthority;
 pub use pipeline::{
     PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult, PipelineWorkerLogSnapshot,
+    SubmissionKind, SubmissionNotices,
 };
-#[cfg(test)]
-pub(crate) use run::TERMINAL_OUTCOME_CONFLICT_CODE;
+pub(crate) use resume::PublishedResume;
+pub(crate) use run::CodebaseDeliveryScan;
 pub(crate) use run::running_run_has_verified_owner;
 pub use run::{
     ActivityInvocationEvidence, DrainAdmissionsStopChange, DrainAdmissionsStopOutcome,
     DrainAdmissionsStopRequest, DrainAdmissionsStopResult, DrainWindowExtensionChange,
     DrainWindowExtensionOutcome, DrainWindowExtensionRequest, DrainWorkerLimitChange,
     DrainWorkerLimitOutcome, DrainWorkerLimitRequest, JobRunCancelOutcome, JobRunCancelResult,
-    JobRunListParams, JobRunOrder, RemainingDrainChild, RunIncident, UnstoppedChild, UnstoppedLeaf,
-    fold_run_incidents, job_run_task_ids, job_run_to_json,
-    job_run_to_json_with_activity_provenance, run_error_step,
+    JobRunListParams, JobRunListStates, JobRunOrder, RemainingDrainChild, RunDisplayStep,
+    RunDisplaySteps, RunIncident, RunStepSource, UnstoppedChild, UnstoppedLeaf, fold_run_incidents,
+    job_run_task_ids, job_run_to_json, job_run_to_json_with_activity_provenance, run_display_steps,
+    run_error_step,
 };
 pub(crate) use run::{RunOwnerLiveness, drain_deadline, pull_window_closed, run_owner_liveness};
 pub(crate) use run::{kept_candidate, kept_clause};

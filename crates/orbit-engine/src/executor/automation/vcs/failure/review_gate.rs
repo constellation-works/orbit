@@ -3,17 +3,16 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskComment, TaskStatus};
-use orbit_types::workflow::REVIEW_ABANDONED_MARKER;
+use orbit_types::workflow::{ReviewGateAdmissionOutput, ReviewGateHistoryNote, ReviewGateRefusal};
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
-use crate::executor::automation::input::input_string_field;
 
 use super::super::freshness::remote_branch_sha;
 use super::super::git::{git_output, git_output_raw};
 use super::super::push::push_batch_changes_inner;
 use super::super::review_gate::{PARTIAL_REPAIR_RUN_TRAILER, PARTIAL_REPAIR_SUBJECT};
-use super::conflict::pipeline_checkpoint_string;
+use super::conflict::{pipeline_checkpoint_string, pipeline_step};
 use super::preserve::recorded_spec_digest;
 use super::{REVIEW_GATE_EVENT, REVIEW_VALIDATION_STEP};
 
@@ -39,19 +38,16 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     error_message: &str,
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
-    let reviewer = input
-        .get("pipeline")
-        .and_then(|pipeline| pipeline.get("review_gate_admit"))
-        .and_then(|admit| admit.get("reviewer"));
-    let reviewer_model = reviewer.and_then(|reviewer| {
-        let provider = reviewer.get("provider")?.as_str()?.trim();
-        let model = reviewer.get("model")?.as_str()?.trim();
-        (!provider.is_empty() && !model.is_empty()).then(|| format!("{provider} / {model}"))
-    });
-    let attempt_id = input
-        .get("pipeline")
-        .and_then(|pipeline| pipeline.get("review_gate_admit"))
-        .and_then(|admit| input_string_field(admit, "attempt_id"));
+    let admission = pipeline_step(input, "review_gate_admit")
+        .ok()
+        .and_then(|output| ReviewGateAdmissionOutput::from_value(output).ok());
+    let admitted = admission
+        .as_ref()
+        .and_then(ReviewGateAdmissionOutput::admitted);
+    let reviewer_model = admitted.and_then(|admitted| admitted.reviewer.model_label());
+    let attempt_id = admitted
+        .map(|admitted| admitted.attempt_id.trim())
+        .filter(|attempt_id| !attempt_id.is_empty());
     let attempt_trailer = attempt_id
         .map(|id| format!("\nOrbit-Review-Attempt: {id}"))
         .unwrap_or_default();
@@ -91,9 +87,11 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     // admitted by a later run. Its refusal already proved that the held
     // candidate's tree and task meaning still match and that the evidence has
     // not arrived, so the admission path checks only the candidate commit.
+    // [ORB-15714] Each decision reads the step's typed code, never its text.
+    let refusal = ReviewGateRefusal::from_error_code(error_code);
     let evidence_hold = task.status == TaskStatus::InProgress
         && failed_step_id == "review_gate_admit"
-        && error_message.contains("review_awaiting_evidence:")
+        && refusal == Some(ReviewGateRefusal::AwaitingEvidence)
         && host.get_task_artifacts(&task.id)?.iter().any(|artifact| {
             artifact.path == orbit_types::workflow::REVIEW_EVIDENCE_HOLD_ARTIFACT
                 && artifact.created_by.as_deref() == Some("system")
@@ -106,14 +104,18 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         });
     let timed_out = task.status == TaskStatus::InProgress
         && failed_step_id == "review"
-        && error_message.contains("review_timeout_incomplete:");
+        && refusal == Some(ReviewGateRefusal::TimeoutIncomplete);
     let timeout_requeues = if timed_out {
         host.get_task_history(&task.id)?
             .iter()
             .filter(|entry| {
                 entry.event == "review_timeout_incomplete"
                     && entry.note.as_deref().is_some_and(|note| {
-                        recorded_implementation_tree(note) == Some(implementation_tree.as_str())
+                        let parsed = ReviewGateHistoryNote::from_text(note);
+                        parsed
+                            .as_ref()
+                            .and_then(ReviewGateHistoryNote::recorded_tree)
+                            == Some(implementation_tree.as_str())
                     })
             })
             .count()
@@ -124,7 +126,7 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     // [ORB-15130] Settlement released an attempt whose reviewer ended with only
     // its initial placeholder report: no verdict, so no escalation to decide.
     let abandoned =
-        failed_step_id == "review_gate_settle" && error_message.contains(REVIEW_ABANDONED_MARKER);
+        failed_step_id == "review_gate_settle" && refusal == Some(ReviewGateRefusal::Abandoned);
     let (status, event, decision) = if evidence_hold {
         (
             TaskStatus::InProgress,
@@ -167,9 +169,14 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     } else {
         "A substantive review escalation requires a recorded repair or scope decision.".to_string()
     };
-    let note = format!(
-        "before-PR review gate stopped delivery: run={run_id}, failed_step={failed_step_id}, \
-         candidate={head_sha}, candidate_tree={candidate_tree}, implementation_tree={implementation_tree}, branch={head}; no PR was opened; {continuation}"
+    let note = ReviewGateHistoryNote::preservation_text(
+        run_id,
+        failed_step_id,
+        &head_sha,
+        &candidate_tree,
+        &implementation_tree,
+        &head,
+        &continuation,
     );
     let verdict = if failed_step_id == REVIEW_VALIDATION_STEP {
         "Verdict: `reject`. The reviewer's fixes did not pass owner revalidation (required \
@@ -212,6 +219,7 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
                 at: Utc::now(),
                 by: "system".to_string(),
                 message: format!("{note}\n\n{body}"),
+                operation_id: None,
             }],
             ..TaskAutomationUpdate::default()
         },
@@ -272,13 +280,6 @@ fn implementation_tree(workspace_path: &Path) -> Result<String, OrbitError> {
         workspace_path,
         &["rev-parse", "--verify", &format!("{commit}^{{tree}}")],
     )
-}
-
-/// The tree a recorded timeout counted against. Rows written before the
-/// implementation tree was recorded carry only `candidate_tree=`.
-fn recorded_implementation_tree(note: &str) -> Option<&str> {
-    let field = |key: &str| note.split(", ").find_map(|field| field.strip_prefix(key));
-    field("implementation_tree=").or_else(|| field("candidate_tree="))
 }
 
 /// Push input for a review-gate preservation.

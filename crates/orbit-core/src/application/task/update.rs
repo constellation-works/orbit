@@ -2,9 +2,13 @@ use orbit_common::OrbitError;
 use orbit_common::governance::authorization::agent_context_declared;
 use orbit_common::security::redaction::redact_all;
 use orbit_engine::TaskActivityUpdate;
+use orbit_types::identity::{
+    all_agent_families, infer_agent_family_from_model, normalize_attribution_label,
+};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, Task, TaskArtifact, TaskHistoryEntry, TaskStatus,
+    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, FINAL_RECOVERY_DECIDED_EVENT, LIGHT_DELIVERY_TAGS,
+    RecordedFinalRecovery, Task, TaskArtifact, TaskDecision, TaskHistoryEntry, TaskStatus,
     canonical_artifact_path, is_system_identity_tag, is_valid_orb_task_id,
     normalize_task_dependencies, normalize_task_tags, validate_os_tags,
     validate_task_dependencies_with,
@@ -20,17 +24,31 @@ use super::helpers::{
     describe_optional_field_value,
 };
 use super::lifecycle::{
-    FORCED_STATUS_EVENT, ensure_completion_run_stopped, ensure_status_change_allowed,
+    FORCED_STATUS_EVENT, ensure_completion_run_stopped, ensure_post_deploy_criteria_met,
+    ensure_status_change_allowed, ensure_status_change_not_run_owned,
 };
 use super::params::TaskUpdateParams;
 use super::paths::{
     canonicalize_context_files_for_read, context_workspace_root, normalize_context_files_for_write,
 };
 
+/// Admit only review decisions understood by the merge gate. Keep the caller's
+/// case and alias, trimming only the surrounding whitespace; empty clears.
+fn validate_pr_status(value: &str) -> Result<Option<String>, OrbitError> {
+    let value = value.trim();
+    match orbit_engine::normalize_review_decision(value).as_str() {
+        "" => Ok(None),
+        "APPROVED" | "CHANGES_REQUESTED" => Ok(Some(value.to_string())),
+        _ => Err(OrbitError::InvalidInput(format!(
+            "unknown PR status '{value}': expected `approve` or `request-changes` (empty string clears)"
+        ))),
+    }
+}
+
 /// Canonicalize an artifact a caller other than the review gate's system
 /// writer supplies, and refuse it in the reserved review namespace. Gate
 /// records are certificates and authority, not agent claims, so every
-/// agent-originated write applies this one rule: the ordinary task update and
+/// agent-originated write applies this one rule: task updates, task starts and
 /// a claimed worker's claim evidence, which a remote owner's broker also
 /// reaches. The only exception is the live reviewer's schema-checked report;
 /// the store retains its revisions and settlement certifies it.
@@ -64,9 +82,9 @@ enum StatusAuthority {
     Internal,
     /// Attributed operator and agent surfaces — the CLI `task update`, the
     /// dashboard, and the registered `orbit.task.update` tool. The lifecycle
-    /// table decides.
+    /// table and local run ownership decide.
     Lifecycle,
-    /// A human overriding the table from the bare CLI or the dashboard,
+    /// A human overriding the table or local run ownership from the bare CLI or the dashboard,
     /// recorded in task history as [`FORCED_STATUS_EVENT`].
     Forced,
 }
@@ -108,6 +126,57 @@ pub(super) struct ValidatedTaskFieldEdits {
     pub(super) crew_assignment: Option<CreationCrewAssignment>,
     pub(super) crew_source: Option<Option<String>>,
     pub(super) crew_redraw_history: Option<TaskHistoryEntry>,
+}
+
+/// Who is editing an existing task's fields [ORB-16872].
+///
+/// Built from the same signals as `operator_write` in `update_task_locked`:
+/// decision authority, canonical agent and model, the automation-actor label,
+/// and whether this process declares an agent envelope. An attributed agent
+/// or model is an agent writer even when that envelope is absent, which is
+/// how a user-launched MCP server calls tools.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TaskFieldWriter {
+    /// May add `skip-review` and `skip-validation`.
+    Operator,
+    /// Attributed agent or tool writer, or any writer inside an agent envelope.
+    Agent,
+    /// In-process machinery that is neither an operator nor an agent.
+    Machinery,
+}
+
+/// Classify `writer` for shared field admission.
+///
+/// A non-empty canonical agent, or a model that names or infers an agent
+/// family, is an agent writer. A bare label such as `human` is not: trusted
+/// in-process callers store that label in the model slot without attributing
+/// an agent.
+pub(super) fn task_field_writer(
+    operator_decision_authority: bool,
+    canonical_agent: Option<&str>,
+    canonical_model: Option<&str>,
+    actor_label: &str,
+) -> TaskFieldWriter {
+    if agent_context_declared() || attributed_agent_identity(canonical_agent, canonical_model) {
+        TaskFieldWriter::Agent
+    } else if operator_decision_authority && !super::helpers::is_automation_actor(actor_label) {
+        TaskFieldWriter::Operator
+    } else {
+        TaskFieldWriter::Machinery
+    }
+}
+
+/// Whether this identity is an agent family or a model string that infers one.
+fn attributed_agent_identity(agent: Option<&str>, model: Option<&str>) -> bool {
+    let names_agent = |value: &str| {
+        let value = value.trim();
+        !value.is_empty()
+            && (all_agent_families()
+                .iter()
+                .any(|family| value.eq_ignore_ascii_case(family))
+                || infer_agent_family_from_model(value).is_some())
+    };
+    agent.is_some_and(names_agent) || model.is_some_and(names_agent)
 }
 
 impl OrbitRuntime {
@@ -171,8 +240,8 @@ impl OrbitRuntime {
     }
 
     /// The human escape hatch behind `orbit task update --force`: apply the
-    /// update even when the lifecycle table refuses the status change, and
-    /// record the override in task history.
+    /// update even when the lifecycle table or local run ownership refuses
+    /// the status change, and record the override in task history.
     ///
     /// Only the two human surfaces reach this — the bare CLI and the
     /// dashboard's `PATCH /api/tasks/:id` with `force: true` (ORB-12445). The
@@ -248,11 +317,14 @@ impl OrbitRuntime {
         )
     }
 
+    /// Apply an activity update on the coordination owner. Claimed workers
+    /// must use the engine host's owner route; replica runtimes cannot write locally.
     pub fn update_task_from_activity(
         &self,
         id: &str,
         update: TaskActivityUpdate,
     ) -> Result<Task, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
         let TaskActivityUpdate {
             status,
             expected_status,
@@ -302,15 +374,37 @@ impl OrbitRuntime {
         // The lock hook takes `FnMut` because it is a trait object, but the
         // body must run exactly once and consumes its inputs; `take()` makes
         // both facts explicit rather than forcing the params to be cloneable.
+        // An operator's or agent's own move back to backlog or someday may
+        // also close the task's undelivered PRs; Orbit's own holds and
+        // requeues keep them for the run that continues the candidate.
+        let attributed_requeue = matches!(
+            context.status_authority,
+            StatusAuthority::Lifecycle | StatusAuthority::Forced
+        ) && !context.system_writer;
+        let discarded = params.discard_candidate;
+        // [ORB-16723] An operator's comment-only update may land under an
+        // execution claim. Its lock admits the claim; the write itself is
+        // re-classified below and by the store, which refuses anything more.
+        let operator_comment = context.operator_decision_authority
+            && !context.system_writer
+            && context.agent.is_none()
+            && context.model.is_none()
+            && params.is_comment_only();
         let mut inputs = Some((params, context));
         let mut updated: Option<LockedTaskUpdate> = None;
-        self.stores().tasks().with_task_write_lock(id, &mut || {
+        let mut body = || {
             let (params, context) = inputs.take().ok_or_else(|| {
                 OrbitError::Execution("task update body was invoked more than once".to_string())
             })?;
             updated = Some(self.update_task_locked(id, params, context)?);
             Ok(())
-        })?;
+        };
+        let tasks = self.stores().tasks();
+        if operator_comment {
+            tasks.with_task_comment_write_lock(id, &mut body)?;
+        } else {
+            tasks.with_task_write_lock(id, &mut body)?;
+        }
         let LockedTaskUpdate {
             task: updated,
             previous_status,
@@ -324,6 +418,14 @@ impl OrbitRuntime {
         self.record_resolves_side_effects(previous_status, &updated);
         // So does the forge round trip that closes the task's PRs.
         self.close_task_prs_after_transition(previous_status, &updated, status_note.as_deref());
+        if attributed_requeue {
+            self.close_task_prs_after_requeue(
+                previous_status,
+                &updated,
+                status_note.as_deref(),
+                discarded,
+            );
+        }
         Ok(updated)
     }
 
@@ -351,6 +453,7 @@ impl OrbitRuntime {
             None => self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?,
         };
         let task = self.get_task(id)?;
+        let comment_only = params.is_comment_only();
         // Gate records are certificates and authority, not agent claims.
         // Only the trusted system entry point may write them; an actor label
         // or artifact/tool field cannot opt into that authority. Normalize
@@ -371,6 +474,12 @@ impl OrbitRuntime {
             )));
         }
         let requested_status = params.status.filter(|status| *status != task.status);
+        if requested_status.is_some()
+            && status_authority == StatusAuthority::Lifecycle
+            && !system_writer
+        {
+            ensure_status_change_not_run_owned(self, id)?;
+        }
         if requested_status == Some(TaskStatus::Done)
             && status_authority != StatusAuthority::Lifecycle
         {
@@ -380,6 +489,14 @@ impl OrbitRuntime {
                 params.job_run_id.as_ref().and_then(|id| id.as_deref()),
                 calling_run_id.as_deref(),
             )?;
+            let human_force = status_authority == StatusAuthority::Forced
+                && operator_decision_authority
+                && canonical_agent.is_none()
+                && canonical_model.is_none()
+                && !agent_context_declared();
+            if !human_force {
+                ensure_post_deploy_criteria_met(self, &task)?;
+            }
         }
         let status_note = status_note
             .as_deref()
@@ -402,11 +519,81 @@ impl OrbitRuntime {
                 "task {id} is in-progress; discard a preserved candidate after its run stops"
             )));
         }
-        let validated = self.validate_and_normalize_task_field_edits(id, &task, params)?;
+        // The label matches the one `operator_write` derives below. An agent
+        // identity does not consult it, and resolving it would repeat work
+        // the canonical pair already settled.
+        let classification_label = if let Some(label) = actor_override.as_deref() {
+            normalize_attribution_label(label, None)
+        } else if canonical_agent.is_none() && canonical_model.is_none() {
+            super::helpers::effective_actor_label(&self.actor().label, None, None)?
+        } else {
+            String::new()
+        };
+        let writer = task_field_writer(
+            operator_decision_authority,
+            canonical_agent.as_deref(),
+            canonical_model.as_deref(),
+            &classification_label,
+        );
+        let validated = self.validate_and_normalize_task_field_edits(id, &task, params, writer)?;
         let crew_assignment = validated.crew_assignment;
         let crew_source = validated.crew_source;
         let crew_redraw_history = validated.crew_redraw_history;
         params = validated.params;
+        // A plain blocked-to-backlog move on an attributed surface applies
+        // the same publication authentication as `orbit task requeue`:
+        // refuse before writing what the next run would refuse, and record
+        // the preservation a requeue would record for what it accepts.
+        // Internal machinery and a discard keep their own contracts.
+        let backlog_preservation = if requested_status == Some(TaskStatus::Backlog)
+            && task.status == TaskStatus::Blocked
+            && matches!(
+                status_authority,
+                StatusAuthority::Lifecycle | StatusAuthority::Forced
+            )
+            && !system_writer
+            && !params.discard_candidate
+        {
+            let mut preview = task.clone();
+            if let Some(title) = &params.title {
+                preview.title = title.clone();
+            }
+            if let Some(description) = &params.description {
+                preview.description = description.clone();
+            }
+            if let Some(criteria) = &params.acceptance_criteria {
+                preview.acceptance_criteria = criteria.clone();
+            }
+            if let Some(plan) = &params.plan {
+                preview.plan = plan.clone();
+            }
+            if let Some(context_files) = &params.context_files {
+                preview.context_files = context_files.clone();
+            }
+            if let Some(tags) = &params.tags {
+                preview.tags = tags.clone();
+            }
+            if let Some(relations) = &params.relations {
+                preview.relations = relations.clone();
+            }
+            if let Some(task_type) = params.task_type {
+                preview.task_type = task_type;
+            }
+            if let Some(crew) = &params.crew {
+                preview.crew = crew.clone();
+            }
+            // The write applies the provenance resolved with the crew, and the
+            // publication digest covers it, so the preview carries it too.
+            if let Some(source) = &crew_source {
+                preview.crew_source = source.clone();
+            }
+            if let Some(complexity) = params.complexity {
+                preview.complexity = Some(complexity);
+            }
+            self.authenticate_blocked_to_backlog(&preview)?
+        } else {
+            None
+        };
 
         let actor = self.actor().clone();
         let attribution = assemble_task_attribution(
@@ -457,11 +644,40 @@ impl OrbitRuntime {
             None
         };
         let mut append_history: Vec<TaskHistoryEntry> = Vec::new();
+        if let Some(preserved) = backlog_preservation {
+            // The `requeued` decision is written only with its preservation
+            // record, exactly as `write_candidate_requeue` writes it.
+            if let Some(run_id) = task.job_run_id.clone() {
+                append_history.push(TaskHistoryEntry {
+                    at: chrono::Utc::now(),
+                    by: SYSTEM_ACTOR_LABEL.to_string(),
+                    event: FINAL_RECOVERY_DECIDED_EVENT.to_string(),
+                    note: Some(format!(
+                        "operator_requeue (run_id={run_id}): outcome=requeued"
+                    )),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: Some(TaskDecision::FinalRecovery {
+                        run_id,
+                        decision: "operator_requeue".to_string(),
+                        outcome: RecordedFinalRecovery::Requeued,
+                    }),
+                });
+            }
+            append_history.push(preserved);
+        }
         if operator_write
             && let Some(resolution) =
                 self.pilot_hold_resolution(&task, &params, &effective_label)?
         {
             append_history.push(resolution);
+        }
+        if operator_write
+            && let Some(result) =
+                self.post_deploy_resolution(&task, params.comment.as_deref(), &effective_label)?
+        {
+            append_history.push(result);
         }
         if let Some(history) = crew_redraw_history {
             append_history.push(history);
@@ -488,6 +704,8 @@ impl OrbitRuntime {
                 )),
                 from_status: None,
                 to_status: None,
+                operation_id: None,
+                decision: None,
             });
         }
         if params.discard_candidate {
@@ -506,6 +724,8 @@ impl OrbitRuntime {
                 }),
                 from_status: None,
                 to_status: None,
+                operation_id: None,
+                decision: None,
             });
         }
         if let Some(replacement) = source_task_id_replacement {
@@ -523,6 +743,8 @@ impl OrbitRuntime {
                 )),
                 from_status: None,
                 to_status: None,
+                operation_id: None,
+                decision: None,
             });
         }
         // A forced transition is still a transition: naming it in history is
@@ -560,6 +782,7 @@ impl OrbitRuntime {
                     append_comments: append_comments.clone(),
                     append_history: append_history.clone(),
                     expected_status: expected_status.map(|status| vec![status]),
+                    operator_comment: comment_only && operator_write && !agent_context_declared(),
                     ..TaskRecordUpdateParams::from(params)
                 },
             )?;
@@ -623,11 +846,15 @@ impl OrbitRuntime {
 
     /// Apply the validation and canonicalization shared by ordinary updates
     /// and the guarded start body before either path reaches the record layer.
+    ///
+    /// `writer` is this caller's trusted class. Light-delivery tag additions
+    /// consult it, not the process environment alone [ORB-16872].
     pub(super) fn validate_and_normalize_task_field_edits(
         &self,
         id: &str,
         task: &Task,
         mut params: TaskUpdateParams,
+        writer: TaskFieldWriter,
     ) -> Result<ValidatedTaskFieldEdits, OrbitError> {
         // Both ordinary updates and guarded starts reach this application
         // boundary, including CLI/dashboard callers that bypass tool-host
@@ -648,6 +875,9 @@ impl OrbitRuntime {
             for criterion in criteria {
                 *criterion = redact_all(criterion);
             }
+        }
+        if let Some(Some(value)) = &params.pr_status {
+            params.pr_status = Some(validate_pr_status(value)?);
         }
         let context_root = context_workspace_root(&self.paths().repo_root, None);
         if let Some(candidates) = params.context_files.take() {
@@ -699,6 +929,21 @@ impl OrbitRuntime {
                     }
                 }
             }
+            // [ORB-16855] [ORB-16872] A light-delivery tag skips review or
+            // validation, so only filing or an operator may add it. An
+            // attributed agent or tool writer is refused even when this
+            // process has no agent envelope — the normal shape of a
+            // user-launched MCP server. Removing a tag stays allowed.
+            if writer == TaskFieldWriter::Agent
+                && let Some(added) = LIGHT_DELIVERY_TAGS.iter().find(|tag| {
+                    tags.iter().any(|new| new == *tag) && !task.tags.iter().any(|old| old == *tag)
+                })
+            {
+                return Err(OrbitError::CapabilityDenied(format!(
+                    "an agent cannot add `{added}` to an existing task; only filing the task \
+                     or an operator update sets it"
+                )));
+            }
             params.tags = Some(tags);
         }
         // [ORB-12717] Clearing the crew is "no crew supplied", so the pools
@@ -714,6 +959,7 @@ impl OrbitRuntime {
                 crew_assignment = self.creation_crew_assignment(
                     params.complexity.or(task.complexity),
                     None,
+                    params.tags.as_deref().unwrap_or(&task.tags),
                     &mut random_crew_ticket,
                 )?;
                 *crew = crew_assignment
@@ -738,6 +984,9 @@ impl OrbitRuntime {
             && Some(complexity) != task.complexity
         {
             let mut rerated = task.clone();
+            if let Some(tags) = &params.tags {
+                rerated.tags.clone_from(tags);
+            }
             crew_redraw_history = self.rerate_task_crew(&mut rerated, Some(complexity))?;
             if crew_redraw_history.is_some() {
                 params.crew = Some(rerated.crew);
@@ -751,6 +1000,16 @@ impl OrbitRuntime {
                     "task {id} is {}; orchestrator can only be changed while proposed or backlog",
                     task.status
                 )));
+            }
+        }
+        if params.crew.is_some() || params.tags.is_some() {
+            let tags = params.tags.as_deref().unwrap_or(&task.tags);
+            let crew = match &params.crew {
+                Some(crew) => crew.clone(),
+                None => task.crew.clone(),
+            };
+            if let Some(crew) = crew.as_deref() {
+                self.refuse_unsatisfiable_os_crew(tags, crew)?;
             }
         }
         if params.status == Some(TaskStatus::Done) && task.status != TaskStatus::Done {

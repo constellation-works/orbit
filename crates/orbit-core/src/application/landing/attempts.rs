@@ -12,10 +12,22 @@ use crate::OrbitRuntime;
 const LANDING_ACTOR: &str = "owner-landing";
 
 impl OrbitRuntime {
-    /// Every recorded landing attempt, for inspection.
+    /// The latest landing attempt for each handoff, for inspection.
     pub fn landing_attempts(&self) -> Result<Vec<LandingAttempt>, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         self.stores().tasks().landing_attempts()
+    }
+
+    /// Inspect an exact attempt, retaining stopped evidence after a retry.
+    pub fn landing_attempt_record(
+        &self,
+        handoff_id: &str,
+        attempt: u32,
+    ) -> Result<Option<LandingAttempt>, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        self.stores()
+            .tasks()
+            .landing_attempt_record(handoff_id, attempt)
     }
 
     pub(super) fn landing_attempt(
@@ -77,7 +89,7 @@ impl OrbitRuntime {
     /// Resolve a handoff to the claim that owns it. Claims are few and the
     /// handoff identity is a digest of the accepted record, so this is an exact
     /// match rather than a search over task state.
-    pub(super) fn landing_claim(
+    pub(crate) fn landing_claim(
         &self,
         handoff_id: &str,
     ) -> Result<(ClaimInspection, AcceptedHandoff), OrbitError> {

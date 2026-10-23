@@ -4,7 +4,7 @@ type: design
 title: "Activity / Job — Overview"
 owner: codex
 last_updated: 2026-10-06
-last_validated: 2026-10-10
+last_validated: 2026-10-19
 status: Draft
 feature: activity-job
 doc_role: overview
@@ -26,7 +26,7 @@ Orbit needs a runtime layer that humans can inspect and code can execute. Activi
 1. **Typed execution.** Agent loops and deterministic actions share one schema family after [T20260418-2010].
 2. **Durable local control flow.** Retry, parallelism, fan-out, and loops survive outside one model turn via `JobV2` DAG constructs from [T20260418-2018].
 3. **Clean runtime boundaries.** orbit-core coordinates runs without naming `orbit-agent` internals through the unified `RuntimeHost` boundary in [T20260418-2143] and [T20260418-2210].
-4. **One canonical schema.** `schemaVersion: 1` assets fail load-time parsing after [T20260419-2156].
+4. **One canonical schema.** `schemaVersion: 1` assets fail load-time parsing after [T20260419-2156]; a lower-precedence layer skips them instead.
 
 ---
 
@@ -67,7 +67,7 @@ Name resolution arrived in [T20260418-2019]; `run-v2` entrypoints in [T20260418-
 
 ### 2.4 Provider is the only agent runtime choice
 
-For `agent_loop`, the asset declares a **provider** — `claude`, `codex`, `gemini`, `grok`, `copilot`, `ollama`, `openai_compat`, `cursor`, `pi`, `antigravity`, or `opencode`. Orbit's CLI entry point uses the registered direct-agent executors for the supported provider lanes; `openai_compat` and providers without a supported executor fail structurally instead of falling back.
+For `agent_loop`, the asset declares a **provider** — `claude`, `codex`, `gemini`, `grok`, `copilot`, `ollama`, `openai_compat`, `cursor`, `pi`, `antigravity`, `opencode`, or `muse`. Orbit's CLI entry point uses the registered direct-agent executors for the supported provider lanes; `openai_compat` and providers without a supported executor fail structurally instead of falling back.
 
 ### 2.5 Audit, policy, and seeded assets make the runtime inspectable
 

@@ -52,12 +52,22 @@ impl RecoveryAuthority {
         let connection = Connection::open(root.join(AUTHORITY_DB))
             .map_err(|error| authority_error("open recovery authority database", error))?;
 
-        // WAL keeps the sidecars inside the protected root rather than beside
-        // the shared store, and matches how every other Orbit database runs.
-        connection
-            .pragma_update(None, "journal_mode", "WAL")
-            .map_err(|error| authority_error("enable WAL on recovery authority", error))?;
+        // This is a connection-local flag, not a schema write. Set it before
+        // compatibility evaluation so a query-only open or a refused newer
+        // schema cannot delete the sidecars on close and strand sandboxed readers.
         persist_wal_sidecars(&connection)?;
+        let forward = super::schema::migrate(&connection, &root.join(AUTHORITY_DB))?;
+        if forward.is_some_and(|open| !open.writable) {
+            connection
+                .pragma_update(None, "query_only", true)
+                .map_err(|error| authority_error("hold recovery authority read-only", error))?;
+        } else {
+            // WAL keeps the sidecars inside the protected root rather than beside
+            // the shared store, and matches how every other Orbit database runs.
+            connection
+                .pragma_update(None, "journal_mode", "WAL")
+                .map_err(|error| authority_error("enable WAL on recovery authority", error))?;
+        }
         connection
             .pragma_update(
                 None,
@@ -65,45 +75,6 @@ impl RecoveryAuthority {
                 orbit_common::fs::io::sqlite_synchronous("FULL"),
             )
             .map_err(|error| authority_error("harden recovery authority durability", error))?;
-        // `rebase_recovery_certificate` is the pre-attempt shape, one row per
-        // run and step. It stays exactly as older binaries create and read it:
-        // this code never writes it, and only consults it for payloads that
-        // carry no attempt.
-        connection
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS rebase_recovery_certificate (
-                     run_id         TEXT NOT NULL,
-                     step_id        TEXT NOT NULL,
-                     workspace_path TEXT NOT NULL,
-                     head_sha       TEXT NOT NULL,
-                     base_sha       TEXT NOT NULL,
-                     payload_digest TEXT NOT NULL,
-                     issued_at      TEXT NOT NULL,
-                     PRIMARY KEY (run_id, step_id)
-                 ) WITHOUT ROWID;
-                 CREATE TABLE IF NOT EXISTS rebase_recovery_attempt (
-                     run_id          TEXT NOT NULL,
-                     step_id         TEXT NOT NULL,
-                     attempt         INTEGER NOT NULL,
-                     workspace_path  TEXT NOT NULL,
-                     head_sha_before TEXT NOT NULL,
-                     target_base_sha TEXT NOT NULL,
-                     reserved_at     TEXT NOT NULL,
-                     PRIMARY KEY (run_id, step_id, attempt)
-                 ) WITHOUT ROWID;
-                 CREATE TABLE IF NOT EXISTS rebase_recovery_attempt_certificate (
-                     run_id         TEXT NOT NULL,
-                     step_id        TEXT NOT NULL,
-                     attempt        INTEGER NOT NULL,
-                     workspace_path TEXT NOT NULL,
-                     head_sha       TEXT NOT NULL,
-                     base_sha       TEXT NOT NULL,
-                     payload_digest TEXT NOT NULL,
-                     issued_at      TEXT NOT NULL,
-                     PRIMARY KEY (run_id, step_id, attempt)
-                 ) WITHOUT ROWID;",
-            )
-            .map_err(|error| authority_error("create recovery authority schema", error))?;
         restrict_permissions(&root)?;
 
         Ok(Self { connection })

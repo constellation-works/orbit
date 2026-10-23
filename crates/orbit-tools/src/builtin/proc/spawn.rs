@@ -330,7 +330,3 @@ pub(crate) fn enforce_program_allowlist(
 
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "tests/spawn.rs"]
-mod tests;

@@ -129,13 +129,7 @@ fn origin_ahead(workspace: &Workspace) -> (String, String) {
     (local, origin)
 }
 
-#[test]
 fn a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::source_moves::a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let (task, _) = disjoint_tasks(&workspace);
@@ -164,7 +158,7 @@ fn a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags() {
     assert_eq!(output["status"], "succeeded", "{output}");
     assert_eq!(output["applied_count"], 1, "{output}");
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-    let audit = comments.last().unwrap().message.lines().nth(1).unwrap();
+    let audit = comments.last().unwrap().receipt().unwrap().body;
     let audit: Value = serde_json::from_str(audit).unwrap();
     assert_eq!(
         audit["assessment"]["assessment_rationale"],
@@ -180,13 +174,7 @@ fn a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags() {
     );
 }
 
-#[test]
 fn a_failed_state_pilot_fetch_prepares_the_local_head_even_with_a_stale_tracking_ref() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::source_moves::a_failed_state_pilot_fetch_prepares_the_local_head_even_with_a_stale_tracking_ref",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let (task, _) = disjoint_tasks(&workspace);
@@ -218,13 +206,7 @@ fn a_failed_state_pilot_fetch_prepares_the_local_head_even_with_a_stale_tracking
     assert_eq!(head(&workspace), local);
 }
 
-#[test]
 fn a_head_move_supersedes_the_overlapping_task_and_reclaims_it_at_the_head() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::source_moves::a_head_move_supersedes_the_overlapping_task_and_reclaims_it_at_the_head",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let (overlapping, disjoint) = disjoint_tasks(&workspace);
@@ -307,13 +289,7 @@ fn a_head_move_supersedes_the_overlapping_task_and_reclaims_it_at_the_head() {
     assert!(pilot_applied(&workspace, &overlapping));
 }
 
-#[test]
 fn a_run_stopped_after_a_head_move_settles_superseded_without_spending_its_retry() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::source_moves::a_run_stopped_after_a_head_move_settles_superseded_without_spending_its_retry",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let (overlapping, disjoint) = disjoint_tasks(&workspace);
@@ -372,13 +348,7 @@ fn a_run_stopped_after_a_head_move_settles_superseded_without_spending_its_retry
     assert_eq!(due.batch.len(), 2, "{due:?}");
 }
 
-#[test]
 fn editing_one_claimed_task_before_prepare_pilots_its_siblings_and_reclaims_it() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::source_moves::editing_one_claimed_task_before_prepare_pilots_its_siblings_and_reclaims_it",
-    ) {
-        return;
-    }
     let workspace = Workspace::new();
     workspace.install_pilot_job();
     let tasks = (0..5)
@@ -475,13 +445,7 @@ fn editing_one_claimed_task_before_prepare_pilots_its_siblings_and_reclaims_it()
     assert!(pilot_applied(&workspace, edited));
 }
 
-#[test]
 fn context_and_instruction_edits_skip_stale_partitions_and_requeue_without_failures() {
-    if !super::super::dispatch_admission::isolated(
-        "task_pilot::source_moves::context_and_instruction_edits_skip_stale_partitions_and_requeue_without_failures",
-    ) {
-        return;
-    }
     for instructions in [false, true] {
         let workspace = Workspace::new();
         workspace.install_pilot_job();
@@ -677,3 +641,114 @@ fn an_instruction_edit_off_every_selector_path_is_ignored_by_default() {
     assert_eq!(output["superseded_count"], 1, "{output}");
     assert_eq!(output["task_outcomes"][0]["reason"], "superseded_by_source");
 }
+
+/// Deletion during debounce must retire the oldest member without blocking
+/// either a status preview or admission of the next eligible task.
+fn deleting_a_pending_pilot_task_does_not_block_its_successor() {
+    // Exercise real submission without running a pilot; wait for the
+    // substitute worker to be reaped before dropping the workspace.
+    orbit_core::test_support::install_substitute_pipeline_worker([
+        std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        "--list".into(),
+    ]);
+    let (exited, exit) = std::sync::mpsc::sync_channel(1);
+    orbit_core::test_support::install_worker_reap_hook(
+        orbit_core::test_support::WorkerReapPhase::AfterExitRecorded,
+        move |run| exited.send(run.to_owned()).unwrap(),
+    );
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let deleted = workspace.task("deleted during debounce");
+    let routine = pilot_routine();
+    let now = Utc::now();
+    let observed = evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+    assert!(
+        observed
+            .state
+            .unwrap()
+            .members
+            .unwrap()
+            .pending
+            .contains_key(&deleted.id)
+    );
+
+    let successor = workspace.task("next eligible task");
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(1),
+    )
+    .unwrap();
+    workspace
+        .runtime
+        .delete_task_guarded(&deleted.id, false)
+        .unwrap();
+
+    let due = now + Duration::minutes(3);
+    let preview = evaluate_routine(&workspace.runtime, &routine, true, due).unwrap();
+    assert_eq!(preview.reason, "would_fire", "{preview:?}");
+    assert_eq!(preview.batch.len(), 1);
+    assert_eq!(
+        preview.batch[0].task_ids,
+        std::slice::from_ref(&successor.id)
+    );
+    assert!(
+        !preview
+            .state
+            .unwrap()
+            .members
+            .unwrap()
+            .pending
+            .contains_key(&deleted.id)
+    );
+    assert!(
+        workspace
+            .routine_state()
+            .members
+            .unwrap()
+            .pending
+            .contains_key(&deleted.id),
+        "a dry run must leave retirement for the real evaluation"
+    );
+
+    let admitted = evaluate_routine(&workspace.runtime, &routine, false, due).unwrap();
+    assert_eq!(admitted.reason, "fired", "{admitted:?}");
+    assert_eq!(admitted.batch.len(), 1);
+    assert_eq!(
+        admitted.batch[0].task_ids,
+        std::slice::from_ref(&successor.id)
+    );
+    let members = workspace.routine_state().members.unwrap();
+    assert!(!members.pending.contains_key(&deleted.id));
+    let active = members.active.unwrap();
+    assert_eq!(active.task_ids(), vec![successor.id]);
+    assert!(
+        active.action_id.is_some(),
+        "the successor has a submitted run"
+    );
+    assert_eq!(
+        exit.recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap(),
+        active.action_id.unwrap()
+    );
+}
+
+crate::scenario_table!(
+    deleted_pending_member_scenarios,
+    deleting_a_pending_pilot_task_does_not_block_its_successor
+);
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags_scenarios,
+    a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags,
+    a_failed_state_pilot_fetch_prepares_the_local_head_even_with_a_stale_tracking_ref,
+    a_head_move_supersedes_the_overlapping_task_and_reclaims_it_at_the_head,
+    a_run_stopped_after_a_head_move_settles_superseded_without_spending_its_retry,
+    editing_one_claimed_task_before_prepare_pilots_its_siblings_and_reclaims_it,
+    context_and_instruction_edits_skip_stale_partitions_and_requeue_without_failures
+);

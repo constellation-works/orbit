@@ -1,26 +1,61 @@
-//! The owner-served surface of the distributed drain.
+//! The drain noun's MCP guarded-mode table.
 //!
-//! Two halves:
-//!
-//! - **Read-only:** a preflight probe, receipt reconciliation, and claim
-//!   inspection.
-//! - **Mutating** [ORB-13625]: pull admission, run binding, and claim
-//!   settlement — exactly what a follower's drain needs to carry one attempt
-//!   from admission to handoff. Completion approval, revocation and recovery
-//!   are not here: they stay owner-operator actions on the dashboard.
-//!
-//! Placement follows the same rule as the rest of the registry: everything a
-//! follower must reach over federated MCP is advertised, while claim
-//! inspection stays off the MCP surface as an operator surface. Unadvertised
-//! is not unreachable: claim inspection is registered active so
-//! `orbit tool run orbit.drain.claims` resolves, which is the invocation the
-//! shipped skill reference names and the only entry point it has [ORB-12581].
-//! Its operator requirement comes from the governed-operation registry, not
-//! from placement.
+//! The generic operation tool serves every verb from the shared registry.
 
-pub mod claim_bind;
-pub mod claim_settle;
-pub mod claims;
-pub mod probe;
-pub mod pull;
-pub mod receipt_lookup;
+use orbit_common::OrbitError;
+use orbit_common::governance::drain::DrainVerb;
+use orbit_common::governance::operation::OperationInput;
+use serde_json::Value;
+
+use super::operation::GuardedModes;
+use crate::ToolContext;
+
+impl GuardedModes for DrainVerb {
+    fn preempt(self, _ctx: &ToolContext, _input: &Value) -> Option<Result<Value, OrbitError>> {
+        match self {
+            DrainVerb::Probe
+            | DrainVerb::ReceiptLookup
+            | DrainVerb::Pull
+            | DrainVerb::ClaimBind
+            | DrainVerb::ClaimSettle
+            | DrainVerb::Claims => None,
+        }
+    }
+
+    fn guarded_mode(
+        self,
+        _ctx: &ToolContext,
+        _input: &OperationInput,
+    ) -> Option<Result<Value, OrbitError>> {
+        match self {
+            DrainVerb::Probe
+            | DrainVerb::ReceiptLookup
+            | DrainVerb::Pull
+            | DrainVerb::ClaimBind
+            | DrainVerb::ClaimSettle
+            | DrainVerb::Claims => None,
+        }
+    }
+
+    fn shape_input(self, _ctx: &ToolContext, _input: &mut Value) -> Result<(), OrbitError> {
+        match self {
+            DrainVerb::Probe
+            | DrainVerb::ReceiptLookup
+            | DrainVerb::Pull
+            | DrainVerb::ClaimBind
+            | DrainVerb::ClaimSettle
+            | DrainVerb::Claims => Ok(()),
+        }
+    }
+
+    fn schema_extension(self) -> Option<fn(&mut Value)> {
+        match self {
+            DrainVerb::Probe
+            | DrainVerb::ReceiptLookup
+            | DrainVerb::Pull
+            | DrainVerb::ClaimBind
+            | DrainVerb::ClaimSettle
+            | DrainVerb::Claims => None,
+        }
+    }
+}

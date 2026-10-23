@@ -24,7 +24,9 @@
 //! task and the pull request record those tests as known red
 //! ([`KnownRedValidation`]).
 
+use super::failure_classification_text;
 use crate::identity::lower_hex;
+use crate::task::{TaskDecision, TaskHistoryEntry};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -39,8 +41,8 @@ pub const BASELINE_RED_MARKER: &str = "[baseline_red]";
 pub const BASELINE_RED_HOLD_EVENT: &str = "baseline_red_hold";
 
 /// Task history event recording a required command a candidate failed only
-/// with tests its base fails too [ORB-15375]. The note is a
-/// [`KnownRedValidation`] text.
+/// with tests its base fails too [ORB-15375]. Its decision is the
+/// [`KnownRedValidation`]; its note is the record's text.
 pub const KNOWN_RED_VALIDATION_EVENT: &str = "known_red_validation";
 
 /// The marker a [`KnownRedValidation`] note starts with.
@@ -50,7 +52,9 @@ pub const KNOWN_RED_MARKER: &str = "[known_red]";
 #[must_use]
 pub fn is_baseline_red_failure(error_code: Option<&str>, message: Option<&str>) -> bool {
     error_code == Some(BASELINE_RED_ERROR_CODE)
-        || message.is_some_and(|message| message.contains(BASELINE_RED_MARKER))
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(BASELINE_RED_MARKER)
+        })
 }
 
 /// Which base a required command failed on, and the command.
@@ -273,6 +277,7 @@ impl BaselineRedHold {
     /// The hold a failure message or history note carries, if any.
     #[must_use]
     pub fn from_text(text: &str) -> Option<Self> {
+        let text = failure_classification_text(text);
         let (_, rest) = text.split_once(BASELINE_RED_MARKER)?;
         serde_json::Deserializer::from_str(rest.trim_start())
             .into_iter::<Self>()
@@ -309,15 +314,27 @@ impl KnownRedValidation {
         format!("{KNOWN_RED_MARKER} {record} {}", detail.trim())
     }
 
-    /// The record a history note carries, if any.
+    /// The record a history entry carries: its decision, or for an entry
+    /// written before typed decisions, its note.
     #[must_use]
-    pub fn from_text(text: &str) -> Option<Self> {
+    pub fn from_entry(entry: &TaskHistoryEntry) -> Option<Self> {
+        match &entry.decision {
+            Some(TaskDecision::KnownRedValidation(record)) => Some(record.clone()),
+            Some(_) => None,
+            None => Self::from_legacy_note(entry.note.as_deref()?),
+        }
+        .filter(|record| !record.command.trim().is_empty())
+    }
+
+    /// Legacy reader: the record a note written before typed decisions
+    /// carries after the marker.
+    fn from_legacy_note(text: &str) -> Option<Self> {
+        let text = failure_classification_text(text);
         let (_, rest) = text.split_once(KNOWN_RED_MARKER)?;
         serde_json::Deserializer::from_str(rest.trim_start())
             .into_iter::<Self>()
             .next()?
             .ok()
-            .filter(|record| !record.command.trim().is_empty())
     }
 
     /// Every failure kept, as a markdown list item each, then a count of

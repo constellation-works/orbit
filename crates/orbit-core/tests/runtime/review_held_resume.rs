@@ -21,10 +21,7 @@ use super::review_continuation::{
 use super::review_gate_audit::Fixture;
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let mut command = std::process::Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command.args(args).current_dir(repo).output().unwrap();
     assert!(output.status.success(), "git {args:?}: {output:?}");
     String::from_utf8(output.stdout).unwrap().trim().to_string()
@@ -40,6 +37,134 @@ fn artifact<T: serde::de::DeserializeOwned>(fixture: &Fixture, path: &str) -> T 
             .content,
     )
     .unwrap()
+}
+
+#[test]
+fn evidence_arriving_after_a_checkpoint_resume_requeues_the_original_owners_task() {
+    if !super::dispatch_admission::isolated(
+        "review_held_resume::evidence_arriving_after_a_checkpoint_resume_requeues_the_original_owners_task",
+    ) {
+        return;
+    }
+    let mut fixture = Fixture::new();
+    let owner = fixture.input["job_run_id"].as_str().unwrap().to_string();
+    let record = fixture.runtime.get_job_run(&owner).unwrap().unwrap();
+    fixture
+        .runtime
+        .mark_job_run_running(&owner, Utc::now(), std::process::id())
+        .unwrap();
+    fixture
+        .runtime
+        .finalize_job_run(&owner, JobRunState::Interrupted, Utc::now(), None)
+        .unwrap();
+    // Resume admission restores in-progress without changing the reused
+    // worktree's checkpoint-owner binding.
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &fixture.task_id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    let resumed = fixture
+        .runtime
+        .insert_job_run(
+            &record.job_id,
+            2,
+            Utc::now(),
+            record.input.clone(),
+            Some(owner.clone()),
+        )
+        .unwrap()
+        .run_id;
+    fixture.input["run_id"] = json!(resumed);
+    fixture.admit();
+    let mut report = interrupted_report(&fixture);
+    report["external_evidence"] = json!([{
+        "kind": "native_os", "name": "Native check", "command": "native check",
+        "artifact": "evidence/native.json",
+    }]);
+    report["validation"].as_array_mut().unwrap().push(json!({
+        "id": "V2", "command": "native check", "outcome": "not_run", "role": "required",
+    }));
+    fixture.put_report(&report);
+    assert!(
+        fixture.settle().is_err(),
+        "unavailable evidence holds delivery"
+    );
+    let hold: ReviewEvidenceHold = artifact(&fixture, REVIEW_EVIDENCE_HOLD_ARTIFACT);
+    assert_eq!(hold.run_id, resumed, "the hold names the settling run");
+    let task = fixture.runtime.get_task(&fixture.task_id).unwrap();
+    assert_eq!(task.status, TaskStatus::InProgress);
+    assert_eq!(task.job_run_id.as_deref(), Some(owner.as_str()));
+
+    // A later unrelated delivery cannot be requeued by this hold, even if
+    // it uses the same job and the original evidence subsequently arrives.
+    let unrelated = fixture
+        .runtime
+        .insert_job_run(&record.job_id, 1, Utc::now(), record.input, None)
+        .unwrap()
+        .run_id;
+    let bind = |run: &str| {
+        fixture
+            .runtime
+            .update_task_with_identity(
+                &fixture.task_id,
+                TaskUpdateParams {
+                    job_run_id: Some(Some(run.into())),
+                    ..Default::default()
+                },
+                Some("codex".into()),
+                None,
+            )
+            .unwrap();
+    };
+    bind(&unrelated);
+    attach_as_operator(
+        &fixture,
+        "evidence/native.json",
+        &json!({
+            "schema_version": 1, "attempt_id": hold.attempt_id, "candidate": hold.candidate,
+            "kind": "native_os", "name": "Native check", "command": "native check",
+            "outcome": "passed", "log_artifact": "evidence/native-log.json",
+        }),
+    );
+    let log = json!({"output": "passed"});
+    attach_as_operator(&fixture, "evidence/native-log.json", &log);
+    assert_eq!(
+        fixture.runtime.get_task(&fixture.task_id).unwrap().status,
+        TaskStatus::InProgress,
+        "a hold cannot release an unrelated delivery"
+    );
+
+    bind(&owner);
+    attach_as_operator(&fixture, "evidence/native-log.json", &log);
+    let task = fixture.runtime.get_task(&fixture.task_id).unwrap();
+    assert_eq!(
+        task.status,
+        TaskStatus::Backlog,
+        "ORB-16407: evidence from a resumed review must requeue its checkpoint owner's task"
+    );
+    assert_eq!(task.job_run_id.as_deref(), Some(owner.as_str()));
+    let history = fixture.runtime.get_task_history(&fixture.task_id).unwrap();
+    assert_eq!(history.last().unwrap().event, "review_evidence_received");
+    attach_as_operator(&fixture, "evidence/native-log.json", &log);
+    assert_eq!(
+        fixture
+            .runtime
+            .get_task_history(&fixture.task_id)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.event == "review_evidence_received")
+            .count(),
+        1,
+        "repeated evidence does not requeue the task again"
+    );
 }
 
 /// Hold the fixture's candidate on one native check, then attach a passing
@@ -89,15 +214,13 @@ fn next_run(fixture: &mut Fixture, hold: &ReviewEvidenceHold) -> String {
         .unwrap();
     fixture
         .runtime
-        .update_task_with_identity(
+        .apply_task_automation_update(
             &fixture.task_id,
-            TaskUpdateParams {
+            orbit_engine::TaskAutomationUpdate {
                 status: Some(TaskStatus::InProgress),
-                job_run_id: Some(Some(next.run_id.clone())),
+                job_run_id: Some(next.run_id.clone()),
                 ..Default::default()
             },
-            Some("codex".into()),
-            None,
         )
         .unwrap();
     fixture.input["job_run_id"] = json!(next.run_id);
@@ -165,13 +288,7 @@ fn review(fixture: &Fixture, report: &mut Value) {
     run_review_pipeline(fixture);
 }
 
-#[test]
 fn an_evidence_receipt_resumes_the_held_candidate_and_its_review_finds_the_evidence() {
-    if !super::dispatch_admission::isolated(
-        "review_held_resume::an_evidence_receipt_resumes_the_held_candidate_and_its_review_finds_the_evidence",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new_with_required_commands(&["native macos"]);
     let (hold, mut report) = hold_and_receive(&mut fixture);
     // A task pilot widens the selectors while the task waits in backlog.
@@ -235,13 +352,7 @@ fn an_evidence_receipt_resumes_the_held_candidate_and_its_review_finds_the_evide
     assert_eq!(certificate.evidence_carried, None);
 }
 
-#[test]
 fn evidence_carries_across_a_rebase_only_while_the_patch_is_unchanged() {
-    if !super::dispatch_admission::isolated(
-        "review_held_resume::evidence_carries_across_a_rebase_only_while_the_patch_is_unchanged",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new_with_required_commands(&["native macos"]);
     let (hold, mut report) = hold_and_receive(&mut fixture);
     commit_on_main(&fixture, "base.txt");
@@ -346,13 +457,7 @@ fn evidence_carries_across_a_rebase_only_while_the_patch_is_unchanged() {
     assert!(manifest(&fixture).satisfied_external_evidence.is_empty());
 }
 
-#[test]
 fn evidence_an_agent_rewrote_does_not_carry_across_a_rebase() {
-    if !super::dispatch_admission::isolated(
-        "review_held_resume::evidence_an_agent_rewrote_does_not_carry_across_a_rebase",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new_with_required_commands(&["native macos"]);
     let (hold, _) = hold_and_receive(&mut fixture);
     commit_on_main(&fixture, "base.txt");
@@ -372,13 +477,7 @@ fn evidence_an_agent_rewrote_does_not_carry_across_a_rebase() {
     assert!(manifest(&fixture).satisfied_external_evidence.is_empty());
 }
 
-#[test]
 fn a_resumed_candidate_whose_patch_changed_is_held_again_for_its_own_evidence() {
-    if !super::dispatch_admission::isolated(
-        "review_held_resume::a_resumed_candidate_whose_patch_changed_is_held_again_for_its_own_evidence",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::new_with_required_commands(&["native macos"]);
     let (hold, mut report) = hold_and_receive(&mut fixture);
     let next = next_run(&mut fixture, &hold);
@@ -409,3 +508,12 @@ fn a_resumed_candidate_whose_patch_changed_is_held_again_for_its_own_evidence() 
     assert_eq!(again.run_id, next);
     assert_eq!(again.candidate.tree, changed_tree);
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    an_evidence_receipt_resumes_the_held_candidate_and_its_review_finds_the_evidence_scenarios,
+    an_evidence_receipt_resumes_the_held_candidate_and_its_review_finds_the_evidence,
+    evidence_carries_across_a_rebase_only_while_the_patch_is_unchanged,
+    evidence_an_agent_rewrote_does_not_carry_across_a_rebase,
+    a_resumed_candidate_whose_patch_changed_is_held_again_for_its_own_evidence
+);

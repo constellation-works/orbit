@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Per-Module Sibling tests/ Directory"
-last_validated: 2026-10-09
+last_validated: 2026-10-19
 ---
 # Per-Module Sibling tests/ Directory
 
@@ -49,7 +49,7 @@ use super::super::skill::install_skill;            // up two: tests/ -> command 
 fn installs_skill_into_workspace() { ... }
 ```
 
-The principle: keep production directory listings free of `#[cfg(test)]` artefacts, and let the file structure itself enforce that tests only exercise public seams. If you find you need access to a private item, that's a signal — widen the visibility deliberately (with a comment) or restructure the seam, don't reach around the convention.
+The principle: keep production directory listings free of `#[cfg(test)]` artefacts, and let the file structure itself enforce that tests only exercise public seams. A private item is a signal to reassess the test's admission and boundary. Use an existing exported helper or runtime entry point when it proves the same guarantee economically; keep a qualifying private seam beside its source. Do not widen production visibility solely for test access.
 
 ## When to reach for it
 
@@ -61,7 +61,35 @@ The principle: keep production directory listings free of `#[cfg(test)]` artefac
 
 - **You're tempted to "fix" a test failure by widening a private to `pub(crate)` purely for test access.** That's the smell the structural enforcement is meant to catch. Either restructure so the seam is at a deliberate public boundary, or accept that the helper is covered transitively through its caller. Visibility widening that exists *only* for tests is debt.
 - **You're writing an integration test that exercises the crate's public API end-to-end.** Add a module to the crate's integration binary for that area, `tests/<area>/main.rs` ([Integration-test cost](test_strategy.md#integration-test-cost)). It compiles against the crate's public surface, which is exactly what integration tests want.
+- Persistence and index lifecycle behavior that can use exported store and query helpers belongs in that area binary too; `crates/orbit-search/tests/lexical/main.rs` covers its SQLite migration and synchronous FTS updates through `LexicalIndex`.
 - **The module has zero non-trivial logic worth a unit test.** Don't scaffold an empty `tests/` for the sake of uniformity.
+
+After relocating a suite to a crate-root integration binary, remove its empty
+source test module and unused private test support. In `orbit-exec`, sandbox
+compiler/spawn fixtures are modules of `tests/sandbox/main.rs`; only admitted
+private injection and security seams retain sibling source tests. The
+[applied audit](../reviews/unit-test-audit-orbit-exec-applied-2026-10-12.md)
+records the per-identity coverage and the qualifying seams.
+
+Where a crate had grown one integration binary per file, those files now share
+one area binary. A file stays its own binary only when its header says why:
+it installs signal handlers, or it mutates the process environment outside
+`orbit_common::test_env`. Former roots are included at the area crate root, so
+in-binary test paths do not change; only the Cargo binary name does.
+
+- `orbit-common` cases are `tests/common/main.rs`, with one
+  `isolate_test_process!()` for that binary.
+- `orbit-store` cases are `tests/store/main.rs`. `support` and
+  `git_test_support` are declared once, and the unit-test path includes
+  `tests/store/support/git.rs`.
+- `orbit-config` cases are `tests/config/main.rs`.
+- `orbit-types` plugin, task, tool, workflow, workspace publication, digest
+  and deferred-sandbox cases share `tests/contracts/main.rs`.
+- `orbit-exec` streaming-stdout and validation-env cases are included in
+  `tests/sandbox/main.rs`. `tests/signal_fanout.rs` stays separate because it
+  installs `sigaction` handlers and raises SIGINT and SIGTERM.
+  `tests/sandbox_profile_goldens.rs` stays separate so the golden gate selects
+  that binary without linking the enforcement suite.
 
 ## Edge case: standalone top-level files
 
@@ -91,7 +119,16 @@ This nests the test module as a *child* of the source module. Children can read 
 
 ## Reference: `orbit-mcp::adapter`
 
-The MCP `adapter` module declares `dispatch`, `name_map`, `presentation`, `schema`, and `structured`, plus `#[cfg(test)] mod tests;`. Its current sibling unit test, `adapter/tests/name_map.rs`, mirrors the `name_map` source module. MCP proxy/discovery tests live beside their implementations under `orbit-mcp/src/remote/tests/`; Registry's crate-level tests live under `orbit-registry/src/tests/`, including the workspace-registry persistence tests in `tests/workspace_registry.rs`. Each test file accesses its sibling source through the narrowest deliberate visibility.
+The MCP `adapter` module declares `dispatch`, `name_map`, `presentation`, `schema`, and `structured`, plus `#[cfg(test)] mod tests;`. Its current sibling unit test, `adapter/tests/name_map.rs`, mirrors the `name_map` source module. The private SSH proxy argv case stays in `orbit-mcp/src/remote/tests/proxy.rs`. Destination-session fault injection stays in `orbit-mcp/src/federated/probe/tests/session.rs`, beside `probe/session.rs`, because that reader is not a public seam. Listener bind policy, capability classes, server identity, and federated routing run through the crate-root `tests/boundary/` binary. Registry's public identity, publication and persistence cases share the crate-root `orbit-registry/tests/registry/main.rs` binary. Only the two admitted migration writer-fault and read/lock-interleaving harnesses remain in `orbit-registry/src/tests/workspace_registry.rs`, with their private callbacks and exact child entry point intact. Each test file accesses its sibling source through the narrowest deliberate visibility.
+
+## Public contract tests in orbit-types
+
+The audit's plugin, task, tool and workflow cases use the crate's exported API
+from `crates/orbit-types/tests/contracts/main.rs`, grouped into surface modules
+under that one binary. Workspace publication, digest and deferred-sandbox cases
+are included in the same binary. These public helper checks need no sibling unit
+module; the emptied source test declarations and their scaffolding are removed.
+The later review gate-note unit admission retains its existing sibling layout.
 
 ## Migration recipe
 
@@ -102,7 +139,7 @@ For each source file with an inline `#[cfg(test)] mod tests { ... }`:
 3. Move the test body into `<parent>/tests/<source_filename>.rs`. Replace `use super::*;` with `use super::super::<source_module_name>::<item>;` — these must go through `pub` / `pub(crate)` / `pub(super)`.
 4. Append `mod <source_filename_stem>;` to `<parent>/tests/mod.rs`.
 5. Delete the inline block from the source file.
-6. If any test required a truly private item, widen the item's visibility deliberately (with a comment explaining why) or restructure the test against a public seam — *don't* fall back to the nested anti-pattern above.
+6. If a test requires a truly private item, check its admission and use an existing public boundary when possible. Preserve a qualifying private fault, security or platform harness without widening production visibility solely for tests; do not fall back to the nested anti-pattern above.
 7. `cargo test -p <crate>` must pass.
 
 For each sibling `*_tests.rs` file:
@@ -123,3 +160,76 @@ For modules already migrated to the *nested* anti-pattern (`<file>/tests/<topic>
 ## What tests assert (invariants vs. policy)
 
 Tests assert what the code guarantees (parses, required fields present, ships disabled, structural safeguards, tool reachability). Crew, model, schedule, complexity and prompt wording are policy owned by config and prompts; a test may not pin them unless it cites the incident it guards.
+
+## Admission fixture construction
+
+The cancellation and claimed-recovery fixtures share the test-only
+`application::test_support::{admission_request, admission_receipt}` constructors.
+These deserialize the required wire fields and use the contract's serde defaults
+for unrelated optional capability and evidence metadata. The request helper uses
+the fixture caller version and current protocol schema; callers explicitly set
+`caller_before_pr` and `review_gate` with struct update syntax. Keep request/run
+identity, the ship contract, claim identity and phase, task, lineage and local
+admission transitions at the scenario call site.
+
+An additive optional wire field with a neutral serde default should require no
+edits to these call sites or helpers. A scenario exercising that field must set
+it explicitly. Do not add production `Default` implementations, change wire
+defaults, or hide scenario-specific authority and cancellation setup to simplify
+fixtures. Existing behavioral scenarios cover the helpers; source-text checks
+and speculative fixture-only tests add no behavioral guarantee.
+
+## Audit migrations
+
+Orbit-core's existing behavioral cases now share the runtime integration binary's
+`admission_audit/` modules. They use exported helper APIs, public runtime dispatch
+and public store constructors for hostile fixture state. Each mutable case runs
+in an exact child with inherited authority cleared and a disposable home. A moved
+case carries its platform `cfg` from both the original function and declaring
+module; native macOS cases remain macOS coverage.
+
+The [per-identity reconciliation](../reviews/unit-test-admission-orbit-core-2026-10-13.json)
+records relocations, retirements and corrected admissions. Private broker scope,
+worker scope/counters, keyed admission, injected stop/clock/probe behavior and raw
+confined writers retain their required child fixtures and seams. Copying a private
+implementation into an integration fixture or widening its visibility is not a
+public-boundary migration.
+
+The engine reconciliation uses the existing `tests/engine/main.rs` binary's
+`admission_audit/` modules for exported provider/job helpers, deterministic commit
+and shell actions, host push/PR operations, and public worktree collection. Empty
+source modules and unused resume/commit/collector fixture support are removed.
+Private inspection leases, CI query/clock injection, raw process observers and
+final-removal safety seams keep their sibling layout, as recorded in the
+[engine per-identity reconciliation](../reviews/unit-test-admission-orbit-engine-2026-10-13.json).
+
+## Public API integration suites
+
+Tests of an exported crate API belong in the crate-root integration suite even
+when they use only an in-memory definition or a temporary directory. For
+example, `orbit-policy`'s validation, precedence and symlink checks exercise
+`PolicyEngine` and `PolicyDef` through `tests/policy/admission.rs`; putting
+those cases under `src/tests/` would not expose a private seam that the public
+boundary needs. Keep `src/<module>/tests/` for admitted private logic,
+deterministic interleavings, fault injection and platform behavior that the
+crate-root boundary cannot reach economically.
+
+
+Orbit-store's public persistence cases share `tests/store/main.rs`. The included
+roots group the boundaries: `file_store.rs`, `task_mutations.rs`,
+`migration_freeze.rs`, `task_registry_ledger.rs` and `publication.rs`, with
+supporting modules under matching directories. `tests/store/support/mod.rs`
+supplies isolated child execution and the shared task-creation fixture. Disk
+snapshots used as fixture
+evidence deserialize exported persisted types; they do not copy the private
+bundle reader. Private builders, ledger prefixes, counters and publication stage
+hooks remain beside their source as documented in the
+[per-identity reconciliation](../reviews/unit-test-admission-orbit-store-2026-10-13.json).
+
+Orbit-web's HTTP, log-rendering and dashboard Node cases share the existing
+`tests/http_api.rs` binary, with fixtures under `tests/http_api/`. Empty API
+`auto_tasks`, `distributed`, `origin`, `tasks` and `runs` source test modules are
+removed, together with unused request/seeding support and the gate's test-only
+permit getter. The [per-identity reconciliation](../reviews/unit-test-admission-orbit-web-2026-10-13.json)
+records 32 relocations and the two corrected private SSH budget/probe admissions.
+The original 24 admitted cases and their child fixtures retain their sibling layout.

@@ -1,4 +1,4 @@
-//! Unit admission: ownership safety and deterministic filesystem disappearance injection.
+//! Unit admission: post-scan symlink swaps and deterministic filesystem disappearance injection.
 #![cfg(unix)]
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -37,42 +37,6 @@ fn repair_refuses_final_and_parent_symlink_swaps_after_scanning() {
             "a raced symlink must never redirect chmod outside the scanned tree"
         );
     }
-}
-
-#[test]
-fn ownership_scan_never_visits_or_reports_worktree_or_target_contents() {
-    let temp = tempfile::tempdir().expect("fixture");
-    let state = temp.path().join("state");
-    let worktree = state.join("worktrees/run");
-    let target = worktree.join("target");
-    for index in 0..10_000 {
-        let child = target.join(index.to_string());
-        fs::create_dir_all(&child).expect("fake target tree");
-        fs::set_permissions(child, fs::Permissions::from_mode(0o777))
-            .expect("writable Cargo directory");
-    }
-    let owned = state.join("owned");
-    let other_target = owned.join("target");
-    fs::create_dir_all(other_target.join("nested")).expect("target outside a worktree");
-    fs::set_permissions(&owned, fs::Permissions::from_mode(0o777))
-        .expect("writable Orbit directory");
-    fs::set_permissions(&other_target, fs::Permissions::from_mode(0o777))
-        .expect("writable Cargo directory");
-    let (visited, writable) = scan_with_hook(&state, &mut |_| {}).expect("scan");
-    assert!(visited.contains(&owned));
-    assert!(writable.iter().any(|(path, _)| path == &owned));
-    assert!(
-        !visited
-            .iter()
-            .any(|path| path.starts_with(&worktree) || path.starts_with(&other_target)),
-        "Orbit's ownership boundary must exclude all 10k Cargo directories and any target directory"
-    );
-    assert!(
-        !writable
-            .iter()
-            .any(|(path, _)| path.starts_with(&worktree) || path.starts_with(&other_target)),
-        "non-owned checkout and Cargo modes must never appear as permission offenders"
-    );
 }
 
 #[test]

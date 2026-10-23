@@ -1,9 +1,6 @@
-//! Task-update requests and unavailable-capability errors.
+//! Task-update requests.
 
-use orbit_common::OrbitError;
 use orbit_types::task::{ExternalRef, TaskComment, TaskHistoryEntry, TaskStatus};
-
-use crate::activity_job::DispatchError;
 
 #[derive(Debug, Clone, Default)]
 pub struct TaskAutomationUpdate {
@@ -57,16 +54,4 @@ pub struct ResolvedActivityTools {
     /// disallow list covers them. Empty when nothing was dropped.
     /// [ORB-15162]
     pub omitted_requirement_notes: Vec<String>,
-}
-
-pub(super) fn unsupported_runtime_capability(capability: &str) -> OrbitError {
-    OrbitError::Execution(format!(
-        "runtime host capability '{capability}' is unavailable"
-    ))
-}
-
-pub(super) fn unsupported_dispatch_capability(capability: &str) -> DispatchError {
-    DispatchError::JobExecution(format!(
-        "runtime host capability '{capability}' is unavailable"
-    ))
 }

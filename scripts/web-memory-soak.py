@@ -5,7 +5,7 @@ Builds a disposable Orbit store sized like a busy workspace, then measures the
 resident memory of `orbit web serve` while it answers the dashboard's polling
 mix:
 
-1. Fresh-server growth: a new server answers one `/api/scoreboard` request,
+1. Fresh-server growth: a new server answers one `/api/cost` request,
    and another new server answers one `/api/routines` request. Each delta is
    VmRSS after the request minus VmRSS after a warm-up request.
 2. Soak: one server answers every endpoint in the dashboard GET mix
@@ -73,7 +73,7 @@ GET_MIX = [
     "/api/tasks/all",
     "/api/routines",
     "/api/auto-tasks?workspace={ws}",
-    "/api/scoreboard?window=24h&workspace={ws}",
+    "/api/cost?window=24h&workspace={ws}",
     "/api/diagnostics/errors?since=24h&limit=50&workspace={ws}",
     "/api/diagnostics/friction?limit=50&workspace={ws}",
     "/api/frictions?workspace={ws}",
@@ -775,7 +775,7 @@ def main() -> int:
 
         print("Fresh-server single requests:", flush=True)
         fresh = [
-            fresh_request_growth(fixture, f"/api/scoreboard?window=24h&workspace={WORKSPACE_ID}", extra_env),
+            fresh_request_growth(fixture, f"/api/cost?window=24h&workspace={WORKSPACE_ID}", extra_env),
             fresh_request_growth(fixture, "/api/routines", extra_env),
         ]
         for item in fresh:

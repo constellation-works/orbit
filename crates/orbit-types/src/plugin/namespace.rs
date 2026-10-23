@@ -40,7 +40,6 @@ pub const RESERVED_CLI_COMMANDS: &[&str] = &[
     "mcp",
     "web",
     "skill",
-    "logs",
     "artifacts",
     "help",
 ];

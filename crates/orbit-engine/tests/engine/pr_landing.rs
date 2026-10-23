@@ -36,7 +36,8 @@ use std::time::Duration;
 
 use chrono::Utc;
 use orbit_common::{
-    NotFoundKind, OrbitError, RecoverableVcsConflict, process::run_bounded_capped, test_env,
+    NotFoundKind, OrbitError, PrivateVcsFailureClass, RecoverableVcsConflict,
+    process::run_bounded_capped, test_env,
 };
 use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_job_asset};
 use orbit_engine::{
@@ -44,12 +45,12 @@ use orbit_engine::{
     RebaseRecoveryAttemptScope, ReviewLandingRequest, ReviewReleaseRequest, RuntimeHost,
     TaskActivityUpdate, TaskAutomationUpdate, baseline_hold_status, execute_deterministic_action,
     execute_job_with_resume, resolve_job_catalog_refs_for_execution, review_gate,
-    verify_claimed_known_red,
+    run_private_vcs_operation, verify_claimed_known_red,
 };
 use orbit_exec::{LoginShell, ValidationEnvPolicy, ValidationEnvironment};
 use orbit_types::task::{
     ContextWideningStep, ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskArtifact,
-    TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
+    TaskComment, TaskDecision, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
     push_external_ref_if_missing,
 };
 use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, DeterministicSpec};
@@ -58,14 +59,26 @@ use orbit_types::workflow::handoff::{
 };
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BUBBLEWRAP_NAMESPACE_PROBE, BaselineRedHold, ClaimFailureClass,
-    DEFERRED_SANDBOX_ARTIFACT, DeferralProbe, EvidenceHostOs, JobV2StepBody,
-    KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, NamespaceProbe, PS_EXEC_PROBE, PipelineState,
-    ReviewTiming, ReviewVerdict, SEATBELT_APPLY_PROBE, is_baseline_red_failure,
+    DEFERRED_SANDBOX_ARTIFACT, DeferralProbe, EvidenceHostOs, JobRun, JobV2StepBody,
+    KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, NamespaceProbe, PR_AUTO_FIX_ADMITTED_EVENT,
+    PR_AUTO_FIX_BUDGET, PR_AUTO_FIX_PUSHED_EVENT, PS_EXEC_PROBE, PipelineState, PrAutoFixAttempt,
+    PrAutoFixBlocker, PrAutoFixPush, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT,
+    ReviewBudget, ReviewConsumption, ReviewGateAdmissionOutput, ReviewGateAdmitted,
+    ReviewGateDecision, ReviewGateRefusal, ReviewGateReviewer, ReviewTiming, ReviewVerdict,
+    SEATBELT_APPLY_PROBE, is_baseline_red_failure, pr_auto_fix_attempts,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod absent_context;
+pub(super) use absent_context::adopted_policy_cases;
+mod auto_fix;
+mod check_annotations;
 mod flaky;
+mod infrastructure;
+mod landing_transport;
+#[cfg(target_os = "linux")]
+mod stable_build_mount;
 
 use super::git_fixture;
 use super::v2_runtime::{build_writer_and_sinks, job_asset, workspace_root};
@@ -97,52 +110,51 @@ fn scripted_heads(old: &str, new: &str, old_reads: usize) -> Vec<String> {
 
 /// Regression for ORB-14315: provider metadata may lag a verified lease-push,
 /// but both the merge mutation and review landing must keep the new exact SHA.
-#[test]
 fn previous_published_head_metadata_lag_keeps_exact_delivery_and_review_pins() {
     isolated(
         "previous_published_head_metadata_lag_keeps_exact_delivery_and_review_pins",
         |sandbox| {
-            for reviewed in [true, false] {
-                for stale_reads in [1, 2] {
-                    let fx = Fixture::new(sandbox);
-                    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
-                    action(
-                        &host,
-                        "pr_open",
-                        &fx.open_input(&fx.candidate, &fx.base_sha),
-                    )
-                    .unwrap();
-                    host.set_status(TASK_ID, TaskStatus::Review);
-                    let mut input = fx.republished_completion_input(&host);
-                    let candidate = input["published_head_sha"].as_str().unwrap().to_string();
-                    if !reviewed {
-                        input.as_object_mut().unwrap().remove("reviewed_head_sha");
-                    }
-                    let mut heads = vec![fx.candidate.as_str(); stale_reads];
-                    heads.push(&candidate);
-                    fx.script_heads(&heads, Some(&candidate));
-                    let before = fx.status_reads();
+            // Review presence and bounded reread count are independent: retain
+            // both routes and both counts without their Cartesian product.
+            for (reviewed, stale_reads) in [(true, 2), (false, 1)] {
+                let fx = Fixture::new(sandbox);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .unwrap();
+                host.set_status(TASK_ID, TaskStatus::Review);
+                let mut input = fx.republished_completion_input(&host);
+                let candidate = input["published_head_sha"].as_str().unwrap().to_string();
+                if !reviewed {
+                    input.as_object_mut().unwrap().remove("reviewed_head_sha");
+                }
+                let mut heads = vec![fx.candidate.as_str(); stale_reads];
+                heads.push(&candidate);
+                fx.script_heads(&heads, Some(&candidate));
+                let before = fx.status_reads();
 
-                    let completed = action(&host, "pr_complete", &input)
-                        .expect("known previous-head metadata catches up within the bound");
+                let completed = action(&host, "pr_complete", &input)
+                    .expect("known previous-head metadata catches up within the bound");
 
-                    assert_eq!(completed["merge"]["stale_head_observations"], stale_reads);
-                    assert_eq!(completed["merge"]["waited_seconds"], stale_reads * 5);
-                    assert_eq!(fx.status_reads() - before, stale_reads + 2);
-                    assert_eq!(
-                        fx.merge_requests(),
-                        vec![format!("sha={candidate} merge_method=squash")]
-                    );
-                    assert_eq!(
-                        completed["merge"]["delivery_evidence"]["head_sha"],
-                        candidate
-                    );
-                    assert_eq!(host.status(TASK_ID), TaskStatus::Done);
-                    if reviewed {
-                        assert_eq!(host.landings()[0].reviewed_head_sha, candidate);
-                    } else {
-                        assert!(host.landings().is_empty());
-                    }
+                assert_eq!(completed["merge"]["stale_head_observations"], stale_reads);
+                assert_eq!(completed["merge"]["waited_seconds"], stale_reads * 5);
+                assert_eq!(fx.status_reads() - before, stale_reads + 2);
+                assert_eq!(
+                    fx.merge_requests(),
+                    vec![format!("sha={candidate} merge_method=squash")]
+                );
+                assert_eq!(
+                    completed["merge"]["delivery_evidence"]["head_sha"],
+                    candidate
+                );
+                assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+                if reviewed {
+                    assert_eq!(host.landings()[0].reviewed_head_sha, candidate);
+                } else {
+                    assert!(host.landings().is_empty());
                 }
             }
         },
@@ -260,7 +272,6 @@ fn previous_published_head_metadata_lag_refuses_unverified_or_persistent_heads()
 /// may briefly name the previous head too. Completion waits inside the same
 /// bound while the task branch on origin already names the candidate, and
 /// still merges only that exact SHA.
-#[test]
 fn previous_published_head_pull_ref_lag_settles_with_exact_merge_pin() {
     isolated(
         "previous_published_head_pull_ref_lag_settles_with_exact_merge_pin",
@@ -310,150 +321,148 @@ fn previous_published_head_pull_ref_lag_settles_with_exact_merge_pin() {
 /// The pull-ref wait is fail-closed: anything but the known previous head with
 /// the task branch at the candidate, inside the bound, refuses and leaves the
 /// task in review without a merge request.
-#[test]
-fn previous_published_head_pull_ref_lag_refuses_unverified_or_persistent_refs() {
-    isolated(
-        "previous_published_head_pull_ref_lag_refuses_unverified_or_persistent_refs",
-        |sandbox| {
-            for case in [
-                "pull_ref_third",
-                "pull_ref_third_after_old",
-                "branch_missing",
-                "branch_at_previous",
-                "previous_unknown",
-                "previous_empty",
-                "previous_is_candidate",
-                "persistent",
-                "persistent_after_metadata",
-                "time_cap",
-                "review_mismatch",
-                "ls_remote_fails",
-            ] {
-                let fx = Fixture::new(sandbox);
-                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
-                action(
-                    &host,
-                    "pr_open",
-                    &fx.open_input(&fx.candidate, &fx.base_sha),
-                )
-                .unwrap();
-                host.set_status(TASK_ID, TaskStatus::Review);
-                let mut input = fx.republished_completion_input(&host);
-                let candidate = input["published_head_sha"].as_str().unwrap().to_string();
-                let remote_git_dir = fx.forge.join("remote.git");
-                let mut metadata = vec![fx.candidate.clone()];
-                let mut pull_ref = vec![fx.candidate.clone()];
-                let (expected_reads, error_code) = match case {
-                    "pull_ref_third" => {
-                        pull_ref = vec![fx.base_sha.clone()];
-                        (1, "delivery_evidence_stale")
-                    }
-                    "pull_ref_third_after_old" => {
-                        pull_ref.push(fx.base_sha.clone());
-                        metadata.push(fx.candidate.clone());
-                        (2, "delivery_evidence_stale")
-                    }
-                    "branch_missing" => {
-                        git(
-                            &fx.repo,
-                            &[
-                                "--git-dir",
-                                path_str(&remote_git_dir),
-                                "update-ref",
-                                "-d",
-                                &format!("refs/heads/{BRANCH}"),
-                            ],
-                        );
-                        (1, "delivery_evidence_stale")
-                    }
-                    "branch_at_previous" => {
-                        git(
-                            &fx.repo,
-                            &[
-                                "--git-dir",
-                                path_str(&remote_git_dir),
-                                "update-ref",
-                                &format!("refs/heads/{BRANCH}"),
-                                &fx.candidate,
-                            ],
-                        );
-                        (1, "delivery_evidence_stale")
-                    }
-                    "previous_unknown" => {
-                        input
-                            .as_object_mut()
-                            .unwrap()
-                            .remove("previous_published_head_sha");
-                        (1, "delivery_evidence_stale")
-                    }
-                    "previous_empty" => {
-                        input["previous_published_head_sha"] = json!("");
-                        (1, "delivery_evidence_stale")
-                    }
-                    "previous_is_candidate" => {
-                        input["previous_published_head_sha"] = json!(candidate);
-                        (1, "delivery_evidence_stale")
-                    }
-                    "persistent" => {
-                        input["max_wait_seconds"] = json!(240);
-                        (4, "delivery_evidence_stale")
-                    }
-                    "persistent_after_metadata" => {
-                        input["max_wait_seconds"] = json!(240);
-                        metadata.push(candidate.clone());
-                        (4, "delivery_evidence_stale")
-                    }
-                    "time_cap" => {
-                        input["max_wait_seconds"] = json!(8);
-                        (2, "delivery_evidence_stale")
-                    }
-                    "review_mismatch" => {
-                        metadata = vec![candidate.clone()];
-                        input["reviewed_head_sha"] = json!(fx.candidate);
-                        (1, "review_gate_stale")
-                    }
-                    "ls_remote_fails" => {
-                        git(
-                            &fx.repo,
-                            &[
-                                "remote",
-                                "set-url",
-                                "origin",
-                                "/nonexistent/orbit-remote.git",
-                            ],
-                        );
-                        (1, "delivery_evidence_stale")
-                    }
-                    _ => unreachable!(),
-                };
-                fx.script_heads(
-                    &metadata.iter().map(String::as_str).collect::<Vec<_>>(),
-                    Some(&fx.candidate),
-                );
-                fs::write(fx.forge.join("remote-heads"), pull_ref.join("\n") + "\n").unwrap();
-                let before = fx.status_reads();
+fn pull_ref_refusal_rows(test: &str, selected: &[&str]) {
+    isolated(test, |sandbox| {
+        for case in [
+            "pull_ref_third",
+            "pull_ref_third_after_old",
+            "branch_missing",
+            "branch_at_previous",
+            "previous_unknown",
+            "previous_empty",
+            "previous_is_candidate",
+            "persistent",
+            "persistent_after_metadata",
+            "time_cap",
+            "review_mismatch",
+            "ls_remote_fails",
+        ]
+        .into_iter()
+        .filter(|case| selected.contains(case))
+        {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            action(
+                &host,
+                "pr_open",
+                &fx.open_input(&fx.candidate, &fx.base_sha),
+            )
+            .unwrap();
+            host.set_status(TASK_ID, TaskStatus::Review);
+            let mut input = fx.republished_completion_input(&host);
+            let candidate = input["published_head_sha"].as_str().unwrap().to_string();
+            let remote_git_dir = fx.forge.join("remote.git");
+            let mut metadata = vec![fx.candidate.clone()];
+            let mut pull_ref = vec![fx.candidate.clone()];
+            let (expected_reads, error_code) = match case {
+                "pull_ref_third" => {
+                    pull_ref = vec![fx.base_sha.clone()];
+                    (1, "delivery_evidence_stale")
+                }
+                "pull_ref_third_after_old" => {
+                    pull_ref.push(fx.base_sha.clone());
+                    metadata.push(fx.candidate.clone());
+                    (2, "delivery_evidence_stale")
+                }
+                "branch_missing" => {
+                    git(
+                        &fx.repo,
+                        &[
+                            "--git-dir",
+                            path_str(&remote_git_dir),
+                            "update-ref",
+                            "-d",
+                            &format!("refs/heads/{BRANCH}"),
+                        ],
+                    );
+                    (1, "delivery_evidence_stale")
+                }
+                "branch_at_previous" => {
+                    git(
+                        &fx.repo,
+                        &[
+                            "--git-dir",
+                            path_str(&remote_git_dir),
+                            "update-ref",
+                            &format!("refs/heads/{BRANCH}"),
+                            &fx.candidate,
+                        ],
+                    );
+                    (1, "delivery_evidence_stale")
+                }
+                "previous_unknown" => {
+                    input
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("previous_published_head_sha");
+                    (1, "delivery_evidence_stale")
+                }
+                "previous_empty" => {
+                    input["previous_published_head_sha"] = json!("");
+                    (1, "delivery_evidence_stale")
+                }
+                "previous_is_candidate" => {
+                    input["previous_published_head_sha"] = json!(candidate);
+                    (1, "delivery_evidence_stale")
+                }
+                "persistent" => {
+                    input["max_wait_seconds"] = json!(240);
+                    (4, "delivery_evidence_stale")
+                }
+                "persistent_after_metadata" => {
+                    input["max_wait_seconds"] = json!(240);
+                    metadata.push(candidate.clone());
+                    (4, "delivery_evidence_stale")
+                }
+                "time_cap" => {
+                    input["max_wait_seconds"] = json!(8);
+                    (2, "delivery_evidence_stale")
+                }
+                "review_mismatch" => {
+                    metadata = vec![candidate.clone()];
+                    input["reviewed_head_sha"] = json!(fx.candidate);
+                    (1, "review_gate_stale")
+                }
+                "ls_remote_fails" => {
+                    git(
+                        &fx.repo,
+                        &[
+                            "remote",
+                            "set-url",
+                            "origin",
+                            "/nonexistent/orbit-remote.git",
+                        ],
+                    );
+                    (1, "delivery_evidence_stale")
+                }
+                _ => unreachable!(),
+            };
+            fx.script_heads(
+                &metadata.iter().map(String::as_str).collect::<Vec<_>>(),
+                Some(&fx.candidate),
+            );
+            fs::write(fx.forge.join("remote-heads"), pull_ref.join("\n") + "\n").unwrap();
+            let before = fx.status_reads();
 
-                let error = action(&host, "pr_complete", &input)
-                    .expect_err("an unverified pull ref cannot authorize delivery");
+            let error = action(&host, "pr_complete", &input)
+                .expect_err("an unverified pull ref cannot authorize delivery");
 
-                assert!(error.to_string().contains(error_code), "{case}: {error}");
-                assert_eq!(
-                    fx.status_reads() - before,
-                    expected_reads,
-                    "{case}: bounded reads"
-                );
-                assert!(fx.merge_requests().is_empty(), "{case}: no merge request");
-                assert!(host.landings().is_empty(), "{case}: no review landing");
-                assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{case}");
-                assert_eq!(fx.remote_tip(BASE), fx.base_sha, "{case}: base unchanged");
-            }
-        },
-    );
+            assert!(error.to_string().contains(error_code), "{case}: {error}");
+            assert_eq!(
+                fx.status_reads() - before,
+                expected_reads,
+                "{case}: bounded reads"
+            );
+            assert!(fx.merge_requests().is_empty(), "{case}: no merge request");
+            assert!(host.landings().is_empty(), "{case}: no review landing");
+            assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{case}");
+            assert_eq!(fx.remote_tip(BASE), fx.base_sha, "{case}: base unchanged");
+        }
+    });
 }
 
 /// An in-run conflict repair retains the head it replaces even without an
 /// upstream previous-head checkpoint, so its verified push can settle too.
-#[test]
 fn previous_published_head_metadata_lag_after_in_run_conflict_repair() {
     isolated(
         "previous_published_head_metadata_lag_after_in_run_conflict_repair",
@@ -496,7 +505,6 @@ fn previous_published_head_metadata_lag_after_in_run_conflict_repair() {
     );
 }
 
-#[test]
 fn pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr() {
     isolated(
         "pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr",
@@ -540,7 +548,154 @@ fn pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr() {
     );
 }
 
-#[test]
+fn pr_open_retries_http_499_pr_views_and_stops_at_the_existing_attempt_ceiling() {
+    isolated(
+        "pr_open_retries_http_499_pr_views_and_stops_at_the_existing_attempt_ceiling",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            fx.script_pr_views(&["HTTP 499: 499 (https://api.github.com/graphql)", "success"]);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let opened = action(
+                &host,
+                "pr_open",
+                &fx.open_input(&fx.candidate, &fx.base_sha),
+            )
+            .expect("a read-only PR view retries one HTTP 499 and completes");
+
+            assert_eq!(opened["pr_created"], true);
+            assert_eq!(
+                fx.forge_calls(),
+                ["pr list", "pr create", "pr view", "pr view"]
+            );
+            assert_eq!(fx.pr_view_reads(), 2);
+
+            let fx = Fixture::new(sandbox);
+            fx.script_pr_views(&["HTTP 499: 499 (https://api.github.com/graphql)"]);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let error = action(
+                &host,
+                "pr_open",
+                &fx.open_input(&fx.candidate, &fx.base_sha),
+            )
+            .expect_err("a persistent HTTP 499 still fails the PR open step");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("HTTP 499: 499 (https://api.github.com/graphql)"),
+                "the provider diagnostic is preserved: {error}"
+            );
+            assert_eq!(
+                error.private_vcs_failure().map(|failure| failure.class),
+                Some(PrivateVcsFailureClass::TransientObservation)
+            );
+            assert_eq!(
+                fx.forge_calls(),
+                ["pr list", "pr create"]
+                    .into_iter()
+                    .chain(["pr view"].repeat(3))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(fx.pr_view_reads(), 3, "the existing three-attempt bound");
+        },
+    );
+}
+
+fn pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens() {
+    isolated(
+        "pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let input = json!({"pr": "42", "workspace_path": path_str(&fx.repo)});
+            for message in [
+                "HTTP 400: Bad Request",
+                "HTTP 401: Unauthorized",
+                "HTTP 403: Forbidden",
+                "HTTP 404: Not Found",
+                "HTTP 409: Conflict",
+                "HTTP 410: Gone",
+                "HTTP 422: Unprocessable Entity",
+                "HTTP 429: Too Many Requests",
+                "bad credentials",
+                "permission denied",
+                "not accessible by integration",
+                "authentication required",
+                "SAML authorization required",
+                "rate limit exceeded",
+                "HTTP 418: I'm a teapot",
+                "HTTP 4990: Not a 499 status token",
+                "https://api.github.com/graphql?status=499",
+            ] {
+                fx.script_pr_views(&[message]);
+                let error = run_private_vcs_operation("pr.status", &input)
+                    .expect_err("permanent and nonmatching diagnostics fail immediately");
+                let failure = error
+                    .private_vcs_failure()
+                    .expect("provider failures retain their classification");
+                assert_eq!(
+                    failure.class,
+                    PrivateVcsFailureClass::Other,
+                    "{message}: permanent failures are not observation retries"
+                );
+                assert_eq!(fx.pr_view_reads(), 1, "{message}: no retry");
+            }
+
+            fx.script_pr_views(&["HTTP 499: Bad credentials"]);
+            let error = run_private_vcs_operation("pr.status", &input)
+                .expect_err("a 499 carrying an auth refusal remains transient");
+            let failure = error
+                .private_vcs_failure()
+                .expect("the provider failure keeps its classification");
+            assert_eq!(failure.class, PrivateVcsFailureClass::Transient);
+            assert_eq!(
+                fx.pr_view_reads(),
+                3,
+                "a transient refusal uses the existing bound"
+            );
+
+            fx.script_pr_views(&["invalid_json"]);
+            let error = run_private_vcs_operation("pr.status", &input)
+                .expect_err("Orbit rejects malformed successful provider output");
+            assert!(matches!(&error, OrbitError::Execution(_)));
+            assert!(error.private_vcs_failure().is_none());
+            assert_eq!(fx.pr_view_reads(), 1, "an Orbit refusal is never retried");
+
+            fx.script_merges(&["http_499"]);
+            let error = run_private_vcs_operation(
+                "pr.merge",
+                &json!({
+                    "pr": "42",
+                    "workspace_path": path_str(&fx.repo),
+                    "reviewed_head_sha": fx.candidate,
+                }),
+            )
+            .expect_err("merge remains a single-shot mutation");
+            assert!(error.to_string().contains("HTTP 499"));
+            assert_eq!(fx.merge_requests().len(), 1, "merge is not retried");
+
+            fx.script_pr_close_failure("HTTP 499: 499 (https://api.github.com/graphql)");
+            let error = run_private_vcs_operation(
+                "pr.close",
+                &json!({
+                    "pr": "42",
+                    "comment": "superseded",
+                    "workspace_path": path_str(&fx.repo),
+                }),
+            )
+            .expect_err("close remains a single-shot mutation");
+            assert!(error.to_string().contains("HTTP 499"));
+            assert_eq!(
+                fx.forge_calls()
+                    .into_iter()
+                    .filter(|call| call == "pr close")
+                    .count(),
+                1,
+                "close is not retried"
+            );
+        },
+    );
+}
+
 fn pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase() {
     isolated(
         "pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase",
@@ -565,7 +720,6 @@ fn pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase()
     );
 }
 
-#[test]
 fn pr_open_permanent_create_failures_never_retry_or_look_up_again() {
     isolated(
         "pr_open_permanent_create_failures_never_retry_or_look_up_again",
@@ -603,9 +757,10 @@ fn pr_open_permanent_create_failures_never_retry_or_look_up_again() {
 
 fn assert_create_failure(host: &DeliveryHost, error: &OrbitError, diagnostic: &str) {
     let expected = format!("private automation VCS PR create failed: {diagnostic}");
-    assert!(
-        matches!(error, OrbitError::Execution(message) if message == &expected),
-        "create must preserve the underlying diagnostic: {error}"
+    assert_eq!(
+        error.to_string(),
+        format!("execution failed: {expected}"),
+        "create must preserve the underlying diagnostic"
     );
     let comments = host.comments(TASK_ID);
     assert_eq!(comments.len(), 1);
@@ -624,7 +779,6 @@ fn assert_create_failure(host: &DeliveryHost, error: &OrbitError, diagnostic: &s
 /// reviewed candidate is merged with a request conditional on its head SHA.
 /// The merge is read back from the forge, the landing is recorded for review
 /// coverage, and only then does the task reach `done`.
-#[test]
 fn passing_checks_merge_the_reviewed_candidate_and_record_its_delivery() {
     isolated(
         "passing_checks_merge_the_reviewed_candidate_and_record_its_delivery",
@@ -722,7 +876,6 @@ fn passing_checks_merge_the_reviewed_candidate_and_record_its_delivery() {
 /// fix reaches the PR branch only under a lease on the published head the
 /// review settled on, and completion merges exactly the head that review
 /// settled, never a head pushed after it.
-#[test]
 fn a_before_landing_fix_lands_under_its_lease_and_an_unreviewed_head_never_merges() {
     isolated(
         "a_before_landing_fix_lands_under_its_lease_and_an_unreviewed_head_never_merges",
@@ -796,7 +949,6 @@ fn a_before_landing_fix_lands_under_its_lease_and_an_unreviewed_head_never_merge
 /// lose the before-landing repair. Both shipped pipelines preserve it and
 /// block with the operator recipe. A branch that moved somewhere else, or
 /// that moved and was then merged, still loses the lease and preserves nothing.
-#[test]
 fn a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease() {
     isolated(
         "a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease",
@@ -1035,7 +1187,7 @@ fn commit_tree(fx: &Fixture, tree: &str, parents: &[&str], message: &str) -> Str
 }
 
 fn remote_ref(fx: &Fixture, reference: &str) -> Option<String> {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args([
             "--git-dir",
             "remote.git",
@@ -1142,10 +1294,138 @@ fn run_shipped_landing_push(
     }
 }
 
+/// Both creation's view and reuse's list/view retain the provider number
+/// representations the private PR reader already accepted.
+fn pr_open_preserves_provider_number_representations() {
+    isolated(
+        "pr_open_preserves_provider_number_representations",
+        |sandbox| {
+            for reuse in [false, true] {
+                for (number, expected) in [
+                    (json!(42), "42"),
+                    (json!(-1), "-1"),
+                    (json!("0042"), "0042"),
+                    (json!(u64::MAX), "18446744073709551615"),
+                ] {
+                    let fx = Fixture::new(sandbox);
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                    let input = fx.open_input(&fx.candidate, &fx.base_sha);
+                    if reuse {
+                        action(&host, "pr_open", &input).unwrap();
+                    }
+                    fs::write(fx.forge.join("pr-number-json"), number.to_string()).unwrap();
+                    let opened = action(&host, "pr_open", &input);
+                    if reuse && expected == "-1" {
+                        let error = opened.expect_err(
+                            "negative selectors remain invalid at the provider input boundary",
+                        );
+                        assert!(
+                            matches!(error, OrbitError::InvalidInput(ref message) if message.contains("invalid private automation VCS PR selector '-1'"))
+                        );
+                        continue;
+                    }
+                    let opened =
+                        opened.expect("the existing number representations remain readable");
+                    assert_eq!(opened["pr_number"], expected);
+                    assert_eq!(opened["pr_reused"], reuse);
+                }
+            }
+        },
+    );
+}
+
+/// [ORB-16342] A draft pull request stops completion before any merge
+/// request, even when GitHub reports `BLOCKED` or `UNKNOWN` instead of
+/// `DRAFT`. A ready pull request (`isDraft` false) still merges.
+#[test]
+#[allow(clippy::print_stderr)] // Name the draft or ready case in isolated child failure output.
+fn a_draft_pull_request_stops_completion_before_any_merge_request() {
+    isolated(
+        "a_draft_pull_request_stops_completion_before_any_merge_request",
+        |sandbox| {
+            for merge_state in ["BLOCKED", "UNKNOWN"] {
+                eprintln!("scenario: draft {merge_state}");
+                let fx = Fixture::new(sandbox);
+                fx.script_checks(&["success"]);
+                fs::write(fx.forge.join("draft-merge-state"), merge_state).unwrap();
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .unwrap_or_else(|error| panic!("{merge_state}: open: {error}"));
+                host.set_status(TASK_ID, TaskStatus::Review);
+                let mut input = fx.complete_input();
+                input["max_wait_seconds"] = json!(0);
+
+                let error = action(&host, "pr_complete", &input)
+                    .expect_err("a draft pull request must not be merged");
+
+                let error = error.to_string();
+                assert!(
+                    error.contains("still a draft"),
+                    "{merge_state}: completion must name the draft: {error}"
+                );
+                assert!(
+                    !error.contains("could not request"),
+                    "{merge_state}: completion must stop before the merge request: {error}"
+                );
+                assert!(
+                    fx.merge_requests().is_empty(),
+                    "{merge_state}: no merge request"
+                );
+                assert_eq!(
+                    fx.status_reads(),
+                    1,
+                    "{merge_state}: refused on the first status read"
+                );
+                assert_eq!(
+                    fx.forge_state("merged"),
+                    None,
+                    "{merge_state}: PR stays open"
+                );
+                assert_eq!(
+                    fx.remote_tip(BASE),
+                    fx.base_sha,
+                    "{merge_state}: the remote base is untouched"
+                );
+                assert!(
+                    host.landings().is_empty(),
+                    "{merge_state}: no landing recorded"
+                );
+                assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{merge_state}");
+            }
+
+            eprintln!("scenario: ready");
+            let fx = Fixture::new(sandbox);
+            fx.script_checks(&["success"]);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            action(
+                &host,
+                "pr_open",
+                &fx.open_input(&fx.candidate, &fx.base_sha),
+            )
+            .expect("open the ready pull request");
+            host.set_status(TASK_ID, TaskStatus::Review);
+
+            let completed = action(&host, "pr_complete", &fx.complete_input())
+                .expect("a ready pull request still completes");
+
+            assert_eq!(completed["merge"]["merged"], true);
+            assert_eq!(
+                fx.merge_requests(),
+                vec![format!("sha={} merge_method=squash", fx.candidate)],
+                "exactly one merge of the ready pull request"
+            );
+            assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+        },
+    );
+}
+
 /// A required check that fails, before or after a wait, or an outstanding
 /// required review, refuses completion before any merge request. The PR stays
 /// open, the remote base does not move, and the task stays in `review`.
-#[test]
 fn a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review() {
     isolated(
         "a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review",
@@ -1208,6 +1488,86 @@ fn a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review() {
     );
 }
 
+/// [ORB-16339] Completion without auto-fix reads a freshly pushed head as
+/// BLOCKED before the provider has queued any check. While current branch
+/// policy names the required `test` check and the head has not reported it,
+/// completion waits within its budget and merges the candidate once `test`
+/// passes. A check that never appears times out at the budget and is named;
+/// unreadable policy earns only the bounded unsettled-poll grace before the
+/// ordinary BLOCKED refusal. None of them requests a merge early.
+fn required_checks_the_head_has_not_reported_are_awaited_before_completion() {
+    isolated(
+        "required_checks_the_head_has_not_reported_are_awaited_before_completion",
+        |sandbox| {
+            for (case, checks, policy, max_wait, reads, refusal) in [
+                (
+                    "appears",
+                    &["unreported", "unreported", "success"][..],
+                    true,
+                    30,
+                    4,
+                    None,
+                ),
+                (
+                    "never",
+                    &["unreported"][..],
+                    true,
+                    10,
+                    2,
+                    Some("timed out after 10s"),
+                ),
+                (
+                    "unreadable",
+                    &["unreported"][..],
+                    false,
+                    60,
+                    5,
+                    Some("required reviews or checks are not satisfied"),
+                ),
+            ] {
+                let fx = Fixture::new(sandbox);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                open_for_completion(&fx, &host);
+                fx.script_checks(checks);
+                if policy {
+                    fs::write(fx.forge.join("gates"), "test").unwrap();
+                }
+                let mut input = fx.complete_input();
+                input["max_wait_seconds"] = json!(max_wait);
+
+                let result = action(&host, "pr_complete", &input);
+
+                assert_eq!(fx.status_reads(), reads, "{case}: {result:?}");
+                match refusal {
+                    None => {
+                        let completed = result.unwrap_or_else(|error| panic!("{case}: {error}"));
+                        assert_eq!(completed["merge"]["waited_seconds"], 10, "{case}");
+                        assert_eq!(
+                            fx.merge_requests(),
+                            [format!("sha={} merge_method=squash", fx.candidate)],
+                            "{case}: one merge, once the required check passed"
+                        );
+                        assert_eq!(host.status(TASK_ID), TaskStatus::Done, "{case}");
+                    }
+                    Some(refusal) => {
+                        let error = result.expect_err(case).to_string();
+                        assert!(error.contains(refusal), "{case}: {error}");
+                        if case == "never" {
+                            assert!(
+                                error.contains("required checks the head has not reported: test"),
+                                "{case}: the stop names the missing check: {error}"
+                            );
+                        }
+                        assert!(fx.merge_requests().is_empty(), "{case}: no merge");
+                        assert_eq!(fx.remote_tip(BASE), fx.base_sha, "{case}");
+                        assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{case}");
+                    }
+                }
+            }
+        },
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Batch merge of the checked head [ORB-15701]
 // ---------------------------------------------------------------------------
@@ -1237,7 +1597,6 @@ fn approve_batch(fx: &Fixture, host: &DeliveryHost) {
         .pr_status = Some("APPROVED".into());
 }
 
-#[test]
 fn a_pr_merge_batch_lands_the_checked_head_at_its_pin() {
     isolated(
         "a_pr_merge_batch_lands_the_checked_head_at_its_pin",
@@ -1263,7 +1622,6 @@ fn a_pr_merge_batch_lands_the_checked_head_at_its_pin() {
 
 /// A PR head that moves after the freshness check must not merge: the batch
 /// pins the commit it checked, and the provider refuses the moved head.
-#[test]
 fn a_pr_merge_batch_refuses_a_head_that_moved_after_its_freshness_check() {
     isolated(
         "a_pr_merge_batch_refuses_a_head_that_moved_after_its_freshness_check",
@@ -1319,13 +1677,40 @@ fn open_for_completion(fx: &Fixture, host: &DeliveryHost) -> usize {
     fx.forge_calls().len()
 }
 
+/// Drive `pr_complete` on one prerequisite clock.
+///
+/// Each read advances one millisecond, the gap that used to make a fresh
+/// budget look one second already spent. Each logical wait advances that
+/// same clock by the full delay. Wall time cannot change `waited_seconds`.
+fn complete_with_logical_clock(host: &DeliveryHost, input: &Value) -> Result<Value, OrbitError> {
+    let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_000_u64));
+    let now = std::rc::Rc::clone(&clock);
+    let waited = std::rc::Rc::clone(&clock);
+    orbit_engine::test_support::with_prerequisite_clock(
+        move || {
+            let current = now.get();
+            now.set(current.saturating_add(1));
+            current
+        },
+        |_, _| {},
+        || {
+            orbit_engine::test_support::with_vcs_retry_wait(
+                move |duration| {
+                    let millis = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+                    waited.set(waited.get().saturating_add(millis));
+                },
+                || action(host, "pr_complete", input),
+            )
+        },
+    )
+}
+
 /// The refusal F2026-10-071 recorded: GitHub refuses the SHA-conditioned
 /// merge because another PR landed on the base first. Completion waits one
 /// poll, re-reads the PR, re-resolves the merge policy and asks again with the
 /// same authorized SHA, so the unchanged candidate lands without a provider
 /// recovery activity. Pending checks on that fresh read are waited out as
 /// before. A reviewed and an ungated-but-published candidate behave alike.
-#[test]
 fn a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence() {
     isolated(
         "a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence",
@@ -1350,7 +1735,7 @@ fn a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence() 
                     fx.complete_ungated_input()
                 };
 
-                let completed = action(&host, "pr_complete", &input)
+                let completed = complete_with_logical_clock(&host, &input)
                     .unwrap_or_else(|error| panic!("{case}: {error}"));
 
                 let condition = format!("sha={} merge_method=squash", fx.candidate);
@@ -1363,7 +1748,15 @@ fn a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence() 
                 // the retry.
                 let fresh_reads = checks.len().max(2) - 1;
                 let mut expected = vec!["pr view", "repo view", "api graphql", MERGE_CALL];
-                expected.extend(std::iter::repeat_n("pr view", fresh_reads));
+                for check in checks.iter().skip(1) {
+                    expected.push("pr view");
+                    if *check == "pending" {
+                        expected.push("api graphql");
+                    }
+                }
+                if checks.len() == 1 {
+                    expected.push("pr view");
+                }
                 expected.extend(["repo view", "api graphql", MERGE_CALL, "pr view"]);
                 assert_eq!(
                     fx.forge_calls()[published..],
@@ -1414,7 +1807,6 @@ fn a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence() 
 /// another status, a body that disagrees or is not JSON, extra diagnostics, a
 /// transport timeout and a server error each fail on the one request, with the
 /// provider's message, and the task stays in review.
-#[test]
 fn other_merge_refusals_fail_on_the_first_request() {
     isolated(
         "other_merge_refusals_fail_on_the_first_request",
@@ -1485,7 +1877,7 @@ fn assert_refresh_refuses(sandbox: &Path, cases: &[(&str, bool, &str, &str, &str
             fx.complete_ungated_input()
         };
 
-        let error = action(&host, "pr_complete", &input)
+        let error = complete_with_logical_clock(&host, &input)
             .expect_err("changed evidence after a base race must not complete");
 
         assert!(error.to_string().contains(refusal), "{case}: {error}");
@@ -1501,7 +1893,6 @@ fn assert_refresh_refuses(sandbox: &Path, cases: &[(&str, bool, &str, &str, &str
 /// The read after a base-modification refusal still pins the candidate: a
 /// moved head or repointed base, a closed or contradictory PR, or a merge of
 /// some other head refuses without a second merge request.
-#[test]
 fn a_base_race_refresh_refuses_a_changed_candidate_without_another_merge() {
     isolated(
         "a_base_race_refresh_refuses_a_changed_candidate_without_another_merge",
@@ -1568,7 +1959,6 @@ fn a_base_race_refresh_refuses_a_changed_candidate_without_another_merge() {
 /// checks, an outstanding review, a merge policy that no longer permits a
 /// method, or a real conflict on a reviewed head refuses without a second
 /// merge request.
-#[test]
 fn a_base_race_refresh_refuses_unmet_gates_without_another_merge() {
     isolated(
         "a_base_race_refresh_refuses_unmet_gates_without_another_merge",
@@ -1614,7 +2004,6 @@ fn a_base_race_refresh_refuses_unmet_gates_without_another_merge() {
 /// through the pinned delivery check without another merge request. The
 /// refused request produced no merge commit, so the landing is not
 /// attributed to this run as a managed merge.
-#[test]
 fn an_already_merged_refresh_reconciles_without_another_merge_request() {
     isolated(
         "an_already_merged_refresh_reconciles_without_another_merge_request",
@@ -1650,7 +2039,6 @@ fn an_already_merged_refresh_reconciles_without_another_merge_request() {
 /// is zero or runs out first stops sooner; the refusal never resets the wait.
 /// Each exit names the provider refusal and the attempts made, and leaves the
 /// task in review.
-#[test]
 fn repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget() {
     isolated(
         "repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget",
@@ -1694,7 +2082,6 @@ fn repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget() {
 
 /// A freshly created stacked base shares the landing tip but has not landed
 /// any work yet. Its first candidate can open a PR and enter review.
-#[test]
 fn pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip() {
     isolated(
         "pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip",
@@ -1725,7 +2112,6 @@ fn pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip() {
 /// Promotion records the published PR's page with its number, so the task
 /// links the pull request a reviewer must read. A provider URL that is not an
 /// https page is dropped rather than failing the promotion.
-#[test]
 fn pr_promote_records_the_pull_request_page_with_its_number() {
     isolated(
         "pr_promote_records_the_pull_request_page_with_its_number",
@@ -1765,7 +2151,6 @@ fn pr_promote_records_the_pull_request_page_with_its_number() {
 /// A base with its own work merged into the landing branch remains obsolete
 /// at publication and on a resumed promotion, before any forge call or status
 /// transition.
-#[test]
 fn pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch() {
     isolated(
         "pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch",
@@ -1814,7 +2199,6 @@ fn pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch() {
 /// anything. The refusal is recorded on the task. Opening the same fixture with
 /// the current head and base as the reviewed pair then succeeds, so each
 /// refusal is caused by the mismatch alone.
-#[test]
 fn pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate() {
     isolated(
         "pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate",
@@ -1870,7 +2254,6 @@ fn pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate() {
 /// [ORB-13989] The settled review's "Review fixes" section is published with
 /// the PR it explains: appended to a body the run supplied, and to the body
 /// Orbit generates when none was supplied.
-#[test]
 fn pr_open_appends_the_review_fixes_section_to_the_published_body() {
     isolated(
         "pr_open_appends_the_review_fixes_section_to_the_published_body",
@@ -1919,17 +2302,17 @@ fn pr_open_appends_the_review_fixes_section_to_the_published_body() {
 /// uncommitted is refused, because the result would not describe the committed
 /// candidate. Once the repair is committed, as step recovery does, the retry
 /// passes on the new head and replaces the logs.
-#[test]
 fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes() {
     isolated(
         "required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes",
         |sandbox| {
             let fx = Fixture::new(sandbox);
             let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
-            // The base has no src/feature.txt, so it passes: the failure is
-            // the candidate's to repair.
-            let format_check = "test ! -e src/feature.txt || grep -qx formatted src/feature.txt || \
-                 { echo 'src/feature.txt: not formatted' >&2; exit 3; }";
+            // Comparable base-pass control: both executions declare the same
+            // selection and a counted check; candidate validation still fails.
+            let format_check = r#"printf '%s' '{"schema_version":1,"selection":{"packages":["fixture"]},"tests_run":1}' > "$ORBIT_VALIDATION_SUMMARY";
+                 test ! -e src/feature.txt || grep -qx formatted src/feature.txt ||
+                 { echo 'src/feature.txt: not formatted' >&2; exit 3; }"#;
             host.require_commands(&["echo suite-ok", format_check]);
             let remote_before = fx.remote_tip(BRANCH);
 
@@ -1946,7 +2329,8 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
             );
             assert!(
                 !is_baseline_red_failure(None, Some(&message))
-                    && message.contains("passes this command, so the candidate introduced"),
+                    && message.contains("failure was not reproduced")
+                    && !message.contains("candidate introduced"),
                 "a failure the base does not share stays the candidate's: {message}"
             );
             let passed = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
@@ -1961,6 +2345,12 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
             let base_log =
                 host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/1.baseline.json"));
             assert_eq!(base_log["exit_code"], 0, "the base ran the same command");
+            assert_eq!(
+                base_log["summary"]["selection"],
+                failed["summary"]["selection"]
+            );
+            assert_eq!(base_log["summary"]["tests_run"], 1);
+            assert_eq!(failed["failure_kind"], "candidate");
             assert_eq!(
                 failed["output"],
                 format!(
@@ -1995,12 +2385,458 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
             let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/1.json"));
             assert_eq!(log["exit_code"], 0, "the retry replaces the failing log");
             assert_eq!(log["tested_head"], repaired.as_str());
+            let attempt = &log["timing"]["attempts"][0];
+            assert!(
+                attempt["process_ms"].is_u64(),
+                "command elapsed evidence survives capture"
+            );
+            assert_eq!(attempt["admission_waits"]["deadline_extension_ms"], 0);
+            assert_eq!(
+                attempt["phase_timings"],
+                json!({"compile_ms": null, "test_ms": null, "package_timings": null}),
+                "a counted check without phase measurements must not fabricate timings"
+            );
+            assert!(host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"))
+                ["timing"]["attempts"][0]["phase_timings"].is_null());
+
+            let measured = r#"printf '%s' '{"schema_version":1,"selection":{"packages":["fixture"]},"tests_run":1,"compile_ms":11,"test_ms":22,"package_timings":[{"package":"fixture","compile_ms":11,"test_ms":22}]}' > "$ORBIT_VALIDATION_SUMMARY""#;
+            host.require_commands(&[measured]);
+            action(&host, "candidate_validate", &fx.validate_input()).unwrap();
+            let measured_log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+            assert_eq!(
+                measured_log["timing"]["attempts"][0]["phase_timings"]["compile_ms"], 11,
+                "gate-reported compile units must survive the required-command boundary"
+            );
+            assert_eq!(
+                measured_log["timing"]["attempts"][0]["phase_timings"]["test_ms"],
+                22
+            );
+            let original_bytes = serde_json::to_vec(&failed).unwrap();
+            let archive = format!(
+                "validation/{RUN_ID}/attempts/{}.json",
+                orbit_common::security::release::sha256_hex(&original_bytes)
+            );
+            assert_eq!(
+                host.validation_log(TASK_ID, &archive),
+                failed,
+                "recovery must retain the original failure after the canonical log passes"
+            );
+        },
+    );
+}
+
+/// A failed public command retains its reported middle diagnostic beyond the
+/// host-assigned scratch lifetime; refused/unknown evidence never repairs it.
+fn required_validation_retains_reported_evidence_after_scratch_lifetime() {
+    isolated(
+        "required_validation_retains_reported_evidence_after_scratch_lifetime",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let script = sandbox.join("report-evidence.py");
+            let source = sandbox.join("raw-failure.log");
+            let observed = sandbox.join("evidence-directory");
+            let raw = format!(
+                "{}        FAIL [0.001s] fixture::suite broken\n  scenario: middle-failure\n  assertion: durable-detail\n{}",
+                "héád noise\n".repeat(20000),
+                "tail noise\n".repeat(20000)
+            );
+            fs::write(&source, &raw).unwrap();
+            fs::write(&script, r#"import hashlib, json, os, sys
+from pathlib import Path
+mode, source, observed = sys.argv[1:]
+if not Path('src/feature.txt').exists() and mode not in ('both', 'partial-both'):
+    sys.exit(0)
+if 'ORBIT_COMMAND_EVIDENCE_DIR' not in os.environ:
+    Path(observed).write_text('unavailable-evidence-directory')
+    sys.stdout.write(Path(source).read_text())
+    sys.exit(3)
+directory = Path(os.environ['ORBIT_COMMAND_EVIDENCE_DIR'])
+Path(observed).write_text(str(directory))
+raw = Path(source).read_bytes()
+if mode == 'oversized': raw = b'x' * (1048576 + 1)
+if mode == 'invalid-utf8': raw = b'\xff\xfe'
+if mode == 'redacted': raw = b'Authorization: Bearer fixture-secret-token\n'
+name = 'runner.log'
+path = directory / name
+path.write_bytes(raw)
+if mode == 'symlink':
+    path.unlink()
+    path.symlink_to(source)
+if mode == 'fifo':
+    path.unlink()
+    os.mkfifo(path)
+entry = dict(name=name, source='logs/runner.log', bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(), complete=not mode.startswith('partial'))
+manifest = dict(schema_version=1, invocation=os.environ['ORBIT_COMMAND_EVIDENCE_INVOCATION'], files=[entry])
+if mode == 'foreign': manifest['invocation'] = 'another-command'
+if mode == 'outside': entry['name'] = source
+if mode == 'outside-source': entry['source'] = '../runner.log'
+if mode == 'digest': entry['sha256'] = '0' * 64
+if mode == 'size': entry['bytes'] += 1
+if mode == 'malformed': manifest['unexpected'] = True
+if mode == 'malformed-secret': manifest['ghp_' + 'Q' * 34] = True
+if mode == 'missing-complete': del entry['complete']
+if mode == 'total-oversized':
+    raw = b'x' * 600000
+    path.write_bytes(raw)
+    entry.update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+    (directory / 'another.log').write_bytes(raw)
+    manifest['files'].append(dict(entry, name='another.log'))
+(directory / 'manifest.json').write_text(json.dumps(manifest))
+if mode == 'manifest-oversized':
+    (directory / 'manifest.json').write_text(' ' * (16384 + 1))
+if mode == 'parent-swap':
+    directory.rename(directory.with_name('anchored-renamed'))
+    directory.symlink_to(Path(source).parent, target_is_directory=True)
+if mode == 'manifest-symlink':
+    (directory / 'manifest.json').unlink()
+    (directory / 'manifest.json').symlink_to(source)
+if mode == 'both' or mode.startswith(('partial-', 'secret-')):
+    print('test broken ... FAILED')
+else:
+    sys.stdout.write(Path(source).read_text())
+sys.exit(3)
+"#).unwrap();
+            let mut measurements = Vec::new();
+            for route in ["candidate_validate", "claim_validate"] {
+                for mode in [
+                    "complete",
+                    "both",
+                    "partial-ghp",
+                    "partial",
+                    "redacted",
+                    "partial-token",
+                    "partial-key",
+                    "partial-assignment",
+                    "partial-bearer",
+                    "partial-utf8",
+                    "partial-both",
+                    "secret-complete",
+                    "malformed",
+                    "malformed-secret",
+                    "missing-complete",
+                    "foreign",
+                    "outside",
+                    "outside-source",
+                    "symlink",
+                    "fifo",
+                    "manifest-symlink",
+                    "manifest-oversized",
+                    "total-oversized",
+                    "invalid-utf8",
+                    "parent-swap",
+                    "oversized",
+                    "digest",
+                    "size",
+                    "unknown-write",
+                    "foreign-owner",
+                ] {
+                    // Synthetic bytes only: incomplete source payloads are withheld
+                    // regardless of credential shape or where UTF-8 was cut.
+                    let reported: Vec<u8> = match mode {
+                        "partial-ghp" | "partial-both" => {
+                            format!("{}ghp_{}", " ".repeat(1048576 - 38), "Q".repeat(34))
+                                .into_bytes()
+                        }
+                        "partial-token" => b"github_pat_QQQQQQQ".to_vec(),
+                        "partial-key" => {
+                            b"sk-QQQQQQQ\nglpat-QQQQQQQ\nAIzaQQQQQQQ\nAKIAQQQQQQQ\nnpm_QQQQQQQ\nxoxb-QQQQ".to_vec()
+                        }
+                        "partial-assignment" => {
+                            b"aws_secret_access_key=QQQQ\n{\"api_key\":\"QQQQ\nQQQQ".to_vec()
+                        }
+                        "partial-bearer" => {
+                            b"Authorization: Bearer QQQQ\nBearer [REDACTED_AUTH]".to_vec()
+                        }
+                        "partial-utf8" => b"{\"api_key\":\"QQQQ\nQQQQ\xf0\x9f".to_vec(),
+                        "secret-complete" => {
+                            format!(
+                                "{}ghp_{}\nsk-{}\nglpat-{}\ngithub_pat_{}\nAIza{}\nAKIA{}\nnpm_{}\nxoxb-{}\naws_secret_access_key=QQQQ\n{{\"api_key\":\"QQQQ\"}}\nBearer QQQQ\nBearer [REDACTED_AUTH]\n",
+                                " ".repeat(16384 - 38), "Q".repeat(36),
+                                "Q".repeat(20), "Q".repeat(20), "Q".repeat(22),
+                                "Q".repeat(35), "Q".repeat(16), "Q".repeat(36), "Q".repeat(10),
+                            ).into_bytes()
+                        }
+                        "redacted" => b"Authorization: Bearer fixture-secret-token\n".to_vec(),
+                        _ => raw.as_bytes().to_vec(),
+                    };
+                    let boundary_case = mode.starts_with("partial-")
+                        || matches!(mode, "secret-complete" | "malformed-secret");
+                    let boundary_source = sandbox.join("boundary-source.log");
+                    fs::write(&boundary_source, &reported).unwrap();
+                    let command_source = if boundary_case {
+                        &boundary_source
+                    } else {
+                        &source
+                    };
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                    *host.fail_evidence_writes.lock().unwrap() = mode == "unknown-write";
+                    if mode == "foreign-owner" {
+                        host.tasks
+                            .lock()
+                            .unwrap()
+                            .get_mut(TASK_ID)
+                            .unwrap()
+                            .job_run_id = Some("foreign-run".into());
+                    }
+                    let command = format!(
+                        "python3 '{}' {mode} '{}' '{}'",
+                        script.display(),
+                        command_source.display(),
+                        observed.display()
+                    );
+                    host.require_commands(&[&command]);
+                    let input = if route == "candidate_validate" {
+                        fx.validate_input()
+                    } else {
+                        json!({"workspace_path": fx.repo, "base_sync": "local", "base_sha": fx.base_sha})
+                    };
+                    let outcome = action(&host, route, &input);
+                    if mode == "foreign-owner" && route == "candidate_validate" {
+                        assert!(outcome.unwrap_err().to_string().contains("does not own"));
+                        assert!(
+                            host.artifacts.lock().unwrap().is_empty(),
+                            "foreign ownership cannot store bytes"
+                        );
+                        continue;
+                    }
+                    if matches!(mode, "both" | "partial-both") {
+                        assert_eq!(
+                            outcome.unwrap()["decision"],
+                            "passed_with_known_red",
+                            "original shared failure qualification survives"
+                        );
+                    } else {
+                        let failure = outcome.unwrap_err().to_string();
+                        assert!(
+                            failure.contains("exit 3"),
+                            "{route}/{mode}: original failure remains: {failure}"
+                        );
+                    }
+                    if mode == "partial-both" {
+                        let replay = action(&host, route, &input).unwrap();
+                        assert_eq!(replay["decision"], "passed_with_known_red");
+                    }
+                    let ephemeral = fs::read_to_string(&observed).unwrap();
+                    assert!(
+                        !Path::new(&ephemeral).exists(),
+                        "supported TempDir lifetime removed disposable scratch before readback"
+                    );
+                    let read = |path: &str| -> Value {
+                        if route == "candidate_validate" {
+                            host.validation_log(TASK_ID, path)
+                        } else {
+                            serde_json::from_slice(&host.claim_log_contents.lock().unwrap()[path])
+                                .unwrap()
+                        }
+                    };
+                    let log_path = if route == "candidate_validate" {
+                        format!("validation/{RUN_ID}/0.json")
+                    } else {
+                        "validation/claim-landing/0.failed.json".into()
+                    };
+                    let log = read(&log_path);
+                    assert_eq!(log["exit_code"], 3);
+                    if mode == "partial-both" {
+                        assert_eq!(
+                            log["baseline"]["cached"], true,
+                            "safe partial evidence survives cached-base replay"
+                        );
+                    }
+                    let evidence = &log["timing"]["attempts"][0]["command_evidence"];
+                    assert!(log["timing"]["attempts"][0]["evidence_capture_ms"].is_u64());
+                    measurements.push(json!({"route": route, "mode": mode,
+                        "raw_bytes": reported.len(), "bounded_bytes": log["output"].as_str().unwrap().len(),
+                        "capture_ms": log["timing"]["attempts"][0]["evidence_capture_ms"],
+                        "retention_ms": log["timing"]["evidence_retention_ms"],
+                        "status": evidence["status"]}));
+                    match mode {
+                        "complete" | "both" | "partial" | "redacted" | "foreign-owner"
+                        | "parent-swap" | "partial-ghp" | "partial-token" | "partial-key"
+                        | "partial-assignment" | "partial-bearer" | "partial-utf8"
+                        | "partial-both" | "secret-complete" => {
+                            assert_eq!(
+                                evidence["status"], "captured",
+                                "{route}/{mode}: {evidence}"
+                            );
+                            let file = &evidence["files"][0];
+                            let reference = &file["manifests"][0];
+                            let manifest = read(reference["path"].as_str().unwrap());
+                            assert_eq!(manifest["task_id"], TASK_ID);
+                            assert_eq!(
+                                manifest["source_workspace"],
+                                fx.repo.to_string_lossy().as_ref()
+                            );
+                            assert_eq!(manifest["provenance"]["command"], command);
+                            assert_eq!(
+                                manifest["provenance"]["command_sha256"],
+                                orbit_common::security::release::sha256_hex(command.as_bytes())
+                            );
+                            assert_eq!(manifest["provenance"]["run_id"], RUN_ID);
+                            assert_eq!(manifest["provenance"]["tested_head"], fx.candidate);
+                            assert_eq!(manifest["provenance"]["role"], "candidate");
+                            assert_eq!(manifest["file"]["source"], "logs/runner.log");
+                            let mut retained = String::new();
+                            for chunk in manifest["file"]["chunks"].as_array().unwrap() {
+                                let stored = read(chunk["path"].as_str().unwrap());
+                                let data = stored["content"].as_str().unwrap();
+                                assert_eq!(chunk["offset"], retained.len());
+                                assert_eq!(
+                                    chunk["sha256"],
+                                    orbit_common::security::release::sha256_hex(data.as_bytes())
+                                );
+                                assert_eq!(
+                                    chunk["artifact_sha256"],
+                                    orbit_common::security::release::sha256_hex(
+                                        &serde_json::to_vec(&stored).unwrap()
+                                    )
+                                );
+                                retained.push_str(data);
+                            }
+                            assert_eq!(
+                                file["retained_sha256"],
+                                orbit_common::security::release::sha256_hex(retained.as_bytes())
+                            );
+                            assert_eq!(file["retained_bytes"], retained.len());
+                            assert_eq!(file["source_bytes"], reported.len());
+                            assert_eq!(
+                                file["source_sha256"],
+                                orbit_common::security::release::sha256_hex(&reported)
+                            );
+                            let partial = mode.starts_with("partial");
+                            assert_eq!(file["complete"], !partial);
+                            assert_eq!(evidence["complete"], !partial);
+                            assert_eq!(
+                                file["raw_complete"],
+                                !partial && !matches!(mode, "redacted" | "secret-complete")
+                            );
+                            if partial {
+                                assert!(
+                                    retained.is_empty(),
+                                    "{route}/{mode}: incomplete credentials cannot enter chunks"
+                                );
+                                assert_eq!(file["partial_source_withheld"], true);
+                                assert_eq!(file["redacted"], true);
+                            } else if matches!(mode, "redacted" | "secret-complete") {
+                                assert!(
+                                    !retained.contains("fixture-secret-token"),
+                                    "secrets cannot bypass validation redaction"
+                                );
+                                assert_eq!(file["redacted"], true);
+                            } else {
+                                assert_eq!(
+                                    retained, raw,
+                                    "all raw middle failure bytes survive scratch cleanup"
+                                );
+                            }
+                            if matches!(mode, "both" | "partial-both") {
+                                let base_path = if route == "candidate_validate" {
+                                    format!("validation/{RUN_ID}/0.baseline.json")
+                                } else {
+                                    "validation/claim-landing/0.baseline.json".into()
+                                };
+                                let base = read(&base_path);
+                                let base_ref = &base["timing"]["attempts"][0]["command_evidence"]["files"]
+                                    [0]["manifests"][0];
+                                let base_manifest = read(base_ref["path"].as_str().unwrap());
+                                assert_eq!(base_manifest["provenance"]["tested_head"], fx.base_sha);
+                                assert_eq!(base_manifest["provenance"]["role"], "baseline");
+                                if partial {
+                                    assert_eq!(base_manifest["file"]["retained_bytes"], 0);
+                                    let cache_dir = fx.repo.join(".git/orbit-baseline");
+                                    for entry in fs::read_dir(cache_dir).unwrap().flatten() {
+                                        if entry.path().extension().is_some_and(|ext| ext == "json")
+                                        {
+                                            let cached = fs::read_to_string(entry.path()).unwrap();
+                                            assert!(
+                                                !cached.contains("ghp_Q"),
+                                                "incomplete credentials cannot enter base caches"
+                                            );
+                                        }
+                                    }
+                                }
+                            } else if !boundary_case {
+                                assert!(log["output"].as_str().unwrap().contains("durable-detail"));
+                            }
+                        }
+                        "unknown-write" => {
+                            assert_eq!(evidence["status"], "attachment_unknown");
+                            assert_eq!(evidence["complete"], false);
+                            assert_eq!(evidence["captured_files"][0]["source"], "logs/runner.log");
+                            assert_eq!(evidence["captured_files"][0]["complete"], false);
+                            let paths: Vec<_> = if route == "candidate_validate" {
+                                host.artifacts
+                                    .lock()
+                                    .unwrap()
+                                    .keys()
+                                    .map(|(_, path)| path.clone())
+                                    .collect()
+                            } else {
+                                host.claim_logs.lock().unwrap().clone()
+                            };
+                            assert_eq!(
+                                paths
+                                    .iter()
+                                    .filter(|path| path.contains("/evidence/"))
+                                    .count(),
+                                1,
+                                "unknown write is never retried"
+                            );
+                            assert!(
+                                !paths.iter().any(|path| path.ends_with(".manifest.json")),
+                                "no complete manifest follows an unknown chunk write"
+                            );
+                        }
+                        _ => {
+                            assert_eq!(evidence["status"], "refused", "{route}/{mode}: {evidence}");
+                            assert_eq!(evidence["complete"], false);
+                            assert!(
+                                evidence.get("files").is_none(),
+                                "refused bytes cannot be passed off as complete"
+                            );
+                        }
+                    }
+                    if boundary_case {
+                        let contents: Vec<Vec<u8>> = if route == "candidate_validate" {
+                            host.artifacts.lock().unwrap().values().cloned().collect()
+                        } else {
+                            host.claim_log_contents
+                                .lock()
+                                .unwrap()
+                                .values()
+                                .cloned()
+                                .collect()
+                        };
+                        for bytes in contents {
+                            let persisted = String::from_utf8(bytes).unwrap();
+                            for fragment in [
+                                "ghp_Q",
+                                "github_pat_Q",
+                                "sk-QQ",
+                                "glpat-QQ",
+                                "AIzaQQ",
+                                "AKIAQQ",
+                                "npm_QQ",
+                                "xoxb-QQ",
+                                "fixture-secret-token",
+                                "QQQQ",
+                            ] {
+                                assert!(
+                                    !persisted.contains(fragment),
+                                    "{route}/{mode}: credentials cannot enter durable evidence"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(path) = std::env::var_os("EVIDENCE_SCENARIO_REPORT") {
+                fs::write(path, serde_json::to_vec_pretty(&measurements).unwrap()).unwrap();
+            }
         },
     );
 }
 
 /// Large captured output belongs only to artifacts, on both delivery routes.
-#[test]
 fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs() {
     isolated(
         "required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs",
@@ -2033,7 +2869,7 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs() 
                 "exit 3",
                 "actual_failure",
                 "Base verdict:",
-                "passes this command",
+                "failure was not reproduced",
                 &candidate_path,
                 &base_path,
             ] {
@@ -2043,13 +2879,26 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs() 
                 );
             }
             assert!(
+                message.contains("Neither run declared a selection")
+                    && message.contains("source causation is unconfirmed")
+                    && !message.contains("candidate introduced"),
+                "[F2026-10-378] a no-summary base that skips the failing guard proves no source causation: {message}"
+            );
+            assert!(
                 !message.contains("foo_bar:"),
                 "passing output must stay in artifacts"
             );
             let log = host.validation_log(TASK_ID, &candidate_path);
             assert!(log["output"].as_str().unwrap().starts_with(&output));
             assert_eq!(log["baseline"]["log"], base_path);
-            assert_eq!(host.validation_log(TASK_ID, &base_path)["exit_code"], 0);
+            let base = host.validation_log(TASK_ID, &base_path);
+            assert_eq!(base["exit_code"], 0);
+            assert_eq!(base["command"], log["command"]);
+            assert_eq!(base["base_sha"], fx.base_sha);
+            assert_eq!(log["tested_head"], fx.candidate);
+            assert_eq!(log["failure_kind"], "candidate");
+            assert!(log["summary"].is_null() && base["summary"].is_null());
+            assert_eq!(base["output"], "", "the base skipped the failing guard");
 
             let input =
                 json!({"workspace_path": fx.repo, "base_sync": "local", "base_sha": fx.base_sha});
@@ -2057,7 +2906,16 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs() 
                 .unwrap_err()
                 .to_string();
             assert!(message.len() <= 16 * 1024);
+            assert!(
+                message.contains("failure was not reproduced")
+                    && message.contains("Neither run declared a selection")
+                    && message.contains("source causation is unconfirmed")
+                    && !message.contains("candidate introduced"),
+                "[F2026-10-378] claimed validation retains uncertainty about the skipped guard: {message}"
+            );
             for field in [
+                &fx.candidate,
+                &fx.base_sha,
                 "actual_failure",
                 "exit 3",
                 "validation/claim-landing/0.failed.json",
@@ -2072,10 +2930,18 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs() 
             let log: Value =
                 serde_json::from_slice(&logs["validation/claim-landing/0.failed.json"]).unwrap();
             assert!(log["output"].as_str().unwrap().starts_with(&output));
+            assert_eq!(log["failure_kind"], "candidate");
+            assert_eq!(log["tested_head"], fx.candidate);
+            let base: Value =
+                serde_json::from_slice(&logs["validation/claim-landing/0.baseline.json"]).unwrap();
+            assert_eq!(base["base_sha"], fx.base_sha);
+            assert_eq!(base["command"], log["command"]);
+            assert_eq!(base["exit_code"], 0);
+            assert_eq!(base["output"], "");
             drop(logs);
 
-            // With no failed test identities, a shared nonzero result holds
-            // rather than continuing as known red. Its hold must remain parseable.
+            // Shared exit status without failure identities proves no shared
+            // failure, even when the output looks the same on both sides.
             let output = format!("{}\nbase failure evidence\n", "é evidence\n".repeat(12000));
             fs::write(&output_path, &output).unwrap();
             let command = format!("cat '{}'; exit 3", output_path.display());
@@ -2086,12 +2952,33 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs() 
             ] {
                 let message = action(&host, action_name, &input).unwrap_err().to_string();
                 assert!(message.len() <= 16 * 1024);
-                let hold =
-                    BaselineRedHold::from_text(&message).expect("bounded hold remains readable");
-                assert_eq!(hold.command, command);
-                assert_eq!(hold.base_sha, fx.base_sha);
-                assert!(message.contains("Base verdict: failed identically"));
+                assert!(!is_baseline_red_failure(None, Some(&message)), "{message}");
+                assert!(
+                    message.contains("failure identities are missing"),
+                    "{message}"
+                );
+                assert!(!message.contains("failed identically"), "{message}");
                 assert!(!message.contains(&output));
+            }
+
+            host.require_commands(&[
+                "if test -e src/feature.txt; then exit 3; else orbit-missing-base-tool; fi",
+            ]);
+            for (route, input) in [
+                ("candidate_validate", fx.validate_input()),
+                (
+                    "claim_validate",
+                    json!({"workspace_path": fx.repo, "base_sync": "local", "base_sha": fx.base_sha}),
+                ),
+            ] {
+                let message = action(&host, route, &input).unwrap_err().to_string();
+                assert!(
+                    message.contains("could not be judged")
+                        && message.contains("source causation is unconfirmed")
+                        && !message.contains("candidate introduced"),
+                    "an inconclusive base cannot establish source causation: {message}"
+                );
+                assert!(!is_baseline_red_failure(None, Some(&message)), "{message}");
             }
         },
     );
@@ -2100,7 +2987,6 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs() 
 /// A missing validation tool is refused with the full searched PATH,
 /// both in the action error and the durable command log [ORB-13963], even
 /// when the resolved PATH differs from the launcher or exceeds 1024 bytes.
-#[test]
 fn missing_required_validation_tool_reports_its_search_path() {
     isolated(
         "missing_required_validation_tool_reports_its_search_path",
@@ -2141,7 +3027,6 @@ const PROFILE_TOOL: &str = "orbit-profile-lint-13987";
 /// A drain launched from a minimal PATH still validates with the owner's
 /// login-shell toolchain, and the log records that the login shell decided
 /// PATH [ORB-13987].
-#[test]
 fn validation_from_a_minimal_launcher_path_uses_the_login_shell_toolchain() {
     isolated(
         "validation_from_a_minimal_launcher_path_uses_the_login_shell_toolchain",
@@ -2185,7 +3070,6 @@ fn validation_from_a_minimal_launcher_path_uses_the_login_shell_toolchain() {
 /// Without the login shell's PATH the same tool is missing. That failure is
 /// the environment's, not the candidate's: the typed marker carries the PATH
 /// and the tool, the log classifies it, and nothing is published.
-#[test]
 fn a_missing_validation_tool_is_an_environment_failure() {
     isolated(
         "a_missing_validation_tool_is_an_environment_failure",
@@ -2268,7 +3152,6 @@ fn a_missing_validation_tool_is_an_environment_failure() {
 /// environment's failure, which no recovery repairs, and keep the notice in the
 /// log. The refusal is narrow: a real failure stays the candidate's, and a
 /// `DEFERRED:` that does not lead a line is ordinary output [ORB-15287].
-#[test]
 fn a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure() {
     isolated(
         "a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure",
@@ -2322,7 +3205,8 @@ fn a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure() {
             let failed = failed.to_string();
             assert!(
                 !orbit_types::workflow::is_validation_environment_failure(None, Some(&failed))
-                    && failed.contains("passes this command, so the candidate introduced"),
+                    && failed.contains("failure was not reproduced")
+                    && !failed.contains("candidate introduced"),
                 "a failing gate with a notice is the candidate's failure: {failed}"
             );
             let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
@@ -2350,7 +3234,6 @@ fn a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure() {
 /// that reports no executed tests (a lint or golden gate) replays nothing and
 /// is refused, and a replay red on the base too is held as `baseline_red`. A
 /// later implementation that deferred nothing clears the obligation.
-#[test]
 fn a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery() {
     isolated(
         "a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery",
@@ -2416,7 +3299,8 @@ fn a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery() {
             gate.fails();
             let red = run_implementation(&fx, &host, None)
                 .expect_err("a replay red on the base too is not a pass");
-            assert!(is_baseline_red_failure(None, Some(&red)), "{red}");
+            assert!(!is_baseline_red_failure(None, Some(&red)), "{red}");
+            assert!(red.contains("failure identities are missing"), "{red}");
 
             gate.executes();
             let runs = gate.runs();
@@ -2431,15 +3315,15 @@ fn a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery() {
     );
 }
 
-/// Every handoff whose derivation is not exactly one sandbox's case, the
-/// Bubblewrap one [ORB-15287] or the Seatbelt one [ORB-15409], fails the
-/// implement step before commit: nothing is validated, replayed or kept, and
-/// the failure names what is wrong. The gate summary, Orbit's own probe and
-/// any hand-written field each decide [ORB-15516].
-#[test]
-fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
+/// Every handoff whose derivation is not the sanctioned case, only notices
+/// of sandboxes whose probe the lane refuses (Bubblewrap [ORB-15287],
+/// Seatbelt [ORB-15409], or both [ORB-15692]), fails the implement step
+/// before commit: nothing is validated, replayed or kept, and the failure
+/// names what is wrong. The gate summary, Orbit's own probes and any
+/// hand-written field each decide [ORB-15516].
+fn a_deferral_that_is_not_the_sanctioned_case_fails_the_implement_step() {
     isolated(
-        "a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step",
+        "a_deferral_that_is_not_the_sanctioned_case_fails_the_implement_step",
         |sandbox| {
             let fx = Fixture::new(sandbox);
             let gate = Gate::new(sandbox);
@@ -2459,9 +3343,9 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
             let probe = |exit_code: i32, output: &str| json!({ "command": BUBBLEWRAP_NAMESPACE_PROBE, "exit_code": exit_code, "output": output });
             let seatbelt_probe = |exit_code: i32, output: &str| json!({ "command": SEATBELT_APPLY_PROBE, "exit_code": exit_code, "output": output });
             let none = Value::Null;
-            // (case, the run the gate summary reports, Orbit's probe in the
-            // lane when not the sandbox's refusal, hand-written fields beside
-            // `summary`, reason)
+            // (case, the run the gate summary reports, the lane's answer to
+            // the record's `probe` when not the sandbox's refusal,
+            // hand-written fields beside `summary`, reason)
             let cases = [
                 (
                     "a SKIP line",
@@ -2471,7 +3355,7 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
                     ),
                     none.clone(),
                     none.clone(),
-                    "is not a Bubblewrap deferral",
+                    "is not a Bubblewrap, Seatbelt or ps-denied deferral",
                 ),
                 (
                     "a notice of neither sandbox",
@@ -2494,18 +3378,18 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
                     "is not a Bubblewrap, Seatbelt or ps-denied deferral",
                 ),
                 (
-                    "a Seatbelt notice beside a Bubblewrap one",
-                    with("notices", alongside(&seatbelt_notice())),
+                    "a Seatbelt notice beside a Bubblewrap one, in a lane that applies Seatbelt",
+                    seatbelt_with("notices", alongside(&seatbelt_notice())),
+                    seatbelt_probe(0, ""),
                     none.clone(),
-                    none.clone(),
-                    "is not a Bubblewrap deferral",
+                    "no refused Seatbelt apply probe",
                 ),
                 (
-                    "a Bubblewrap notice beside a Seatbelt one",
-                    seatbelt_with("notices", json!([seatbelt_notice(), bwrap_notice()])),
+                    "a Bubblewrap notice beside a Seatbelt one, in a lane that creates namespaces",
+                    with("notices", json!([seatbelt_notice(), bwrap_notice()])),
+                    probe(0, ""),
                     none.clone(),
-                    none.clone(),
-                    "is not a Seatbelt deferral",
+                    "no failing namespace probe",
                 ),
                 (
                     "a non-Seatbelt skip beside a Seatbelt notice",
@@ -2518,7 +3402,7 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
                     ),
                     none.clone(),
                     none.clone(),
-                    "is not a Seatbelt deferral",
+                    "is not a Bubblewrap, Seatbelt or ps-denied deferral",
                 ),
                 (
                     "a ps-denied notice in an owner run",
@@ -2654,51 +3538,59 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
                     "unknown field `coverage`",
                 ),
             ];
-            let refuse = |case: &str, deferral: Value, probe: Value, reason: &str| {
-                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
-                host.require_commands(&["true"]);
-                host.baseline_commands(&[&gate.command()]);
-                if !probe.is_null() {
-                    *host.deferral_probe.lock().unwrap() =
-                        Some(serde_json::from_value(probe).unwrap());
-                }
-                let handoff = json!({ "summary": "done", "deferred_sandbox_validation": deferral });
-                let refusal = run_implementation(&fx, &host, Some(handoff)).expect_err(case);
-                assert!(
-                    refusal.contains("`deferred_sandbox_validation`") && refusal.contains(reason),
-                    "{case}: {refusal}"
-                );
-                assert!(
-                    !host.has_artifact(TASK_ID, &format!("validation/{RUN_ID}/0.json")),
-                    "{case}: no validation ran"
-                );
-                assert!(
-                    !host.has_artifact(TASK_ID, DEFERRED_SANDBOX_ARTIFACT),
-                    "{case}: nothing is kept"
-                );
-            };
+            let refuse =
+                |case: &str, deferral: Value, answered: &Value, probe: Value, reason: &str| {
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                    host.require_commands(&["true"]);
+                    host.baseline_commands(&[&gate.command()]);
+                    if !probe.is_null() {
+                        host.deferral_answers.lock().unwrap().insert(
+                            answered.as_str().unwrap().to_string(),
+                            serde_json::from_value(probe).unwrap(),
+                        );
+                    }
+                    let handoff =
+                        json!({ "summary": "done", "deferred_sandbox_validation": deferral });
+                    let refusal = run_implementation(&fx, &host, Some(handoff)).expect_err(case);
+                    assert!(
+                        refusal.contains("`deferred_sandbox_validation`")
+                            && refusal.contains(reason),
+                        "{case}: {refusal}"
+                    );
+                    assert!(
+                        !host.has_artifact(TASK_ID, &format!("validation/{RUN_ID}/0.json")),
+                        "{case}: no validation ran"
+                    );
+                    assert!(
+                        !host.has_artifact(TASK_ID, DEFERRED_SANDBOX_ARTIFACT),
+                        "{case}: nothing is kept"
+                    );
+                };
             for (case, record, probe, handed, reason) in cases {
                 let mut handoff = handoff_for(&fx, &record);
                 if let Some(handed) = handed.as_object() {
                     handoff.as_object_mut().unwrap().extend(handed.clone());
                 }
-                refuse(case, handoff, probe, reason);
+                refuse(case, handoff, &record["probe"]["command"], probe, reason);
             }
             refuse(
                 "a hand-written record that names no summary",
                 valid.clone(),
+                &none,
                 none.clone(),
                 "names no gate summary",
             );
             refuse(
                 "a summary outside the scratch directory",
                 json!({ "summary": "src/feature.txt" }),
+                &none,
                 none.clone(),
                 "is not a file in the checkout's `.orbit/tmp`",
             );
             refuse(
                 "a summary that escapes the checkout",
                 json!({ "summary": format!(".orbit/tmp/../../../{}", fx.repo.file_name().unwrap().to_string_lossy()) }),
+                &none,
                 none.clone(),
                 "is not a file in the checkout's `.orbit/tmp`",
             );
@@ -2712,7 +3604,6 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
 /// the replay among the results [ORB-15287]. A replay that defers again is
 /// the validation environment's failure, and a record whose command this
 /// host does not name as a gate is refused.
-#[test]
 fn a_claimed_leaf_replays_its_implementers_deferral_before_publication() {
     isolated(
         "a_claimed_leaf_replays_its_implementers_deferral_before_publication",
@@ -2778,7 +3669,6 @@ fn a_claimed_leaf_replays_its_implementers_deferral_before_publication() {
 /// gate and records the native pass as the gate's evidence. A replay that
 /// still skips is the validation environment's failure, and a replay that
 /// fails is not a pass.
-#[test]
 fn a_documented_seatbelt_deferral_is_accepted_and_replayed_before_publication() {
     isolated(
         "a_documented_seatbelt_deferral_is_accepted_and_replayed_before_publication",
@@ -2863,7 +3753,6 @@ fn a_documented_seatbelt_deferral_is_accepted_and_replayed_before_publication() 
 /// fails the step, and a replay that still cannot run `ps` holds the
 /// candidate. The same notices from a claimed leaf on Linux are refused
 /// before commit.
-#[test]
 fn a_macos_claimed_leafs_ps_denied_deferral_is_replayed_before_publication() {
     isolated(
         "a_macos_claimed_leafs_ps_denied_deferral_is_replayed_before_publication",
@@ -2941,6 +3830,118 @@ fn a_macos_claimed_leafs_ps_denied_deferral_is_replayed_before_publication() {
                 "{refused}"
             );
             assert_eq!(gate.runs(), runs, "a refused handoff reaches no replay");
+        },
+    );
+}
+
+/// A macOS claimed leaf's broad gate prints Seatbelt skips and ps-denied
+/// deferrals together, and one record defers both once Orbit's probe of each
+/// refuses in the lane [ORB-15692]. The claim host's replay, and an owner's
+/// replay of a kept record, judge it as they judge a single sandbox's: a
+/// native pass with no deferral line is pinned as the gate's evidence, and a
+/// replay that still skips Seatbelt or still cannot run `ps` holds the
+/// candidate.
+fn a_seatbelt_and_ps_denied_deferral_is_replayed_like_a_single_sandboxs() {
+    isolated(
+        "a_seatbelt_and_ps_denied_deferral_is_replayed_like_a_single_sandboxs",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            *host.ship_mode.lock().unwrap() = "pr".to_string();
+            *host.os.lock().unwrap() = Some(EvidenceHostOs::Macos);
+            let gate = Gate::new(sandbox);
+            host.require_commands(&["true"]);
+            host.baseline_commands(&[&gate.command()]);
+            let record = mixed_deferral(&fx, &gate.command());
+            let handoff = json!({
+                "summary": "done",
+                "deferred_sandbox_validation": handoff_for(&fx, &record),
+            });
+
+            run_claimed_implementation(&fx, &host, handoff)
+                .expect("the claim host's native replay passes");
+            assert_eq!(
+                host.scripted_input("test_stub_commit")["implementation"]["deferred_sandbox_validation"],
+                record,
+                "Orbit derived one record naming both sandboxes' probes"
+            );
+            assert_eq!(
+                host.probes
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|probe| probe.0.as_str())
+                    .collect::<Vec<_>>(),
+                vec![SEATBELT_APPLY_PROBE, PS_EXEC_PROBE],
+                "Orbit ran each sandbox's probe in the implementer's lane"
+            );
+            assert_eq!(gate.runs(), 1, "the claim host replayed the gate once");
+
+            let mut input = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+                "implementation": { "deferred_sandbox_validation": record },
+            });
+            let pending =
+                action(&host, "claim_validate", &input).expect("replay before publication");
+            assert_eq!(pending["replayed"], json!([gate.command()]));
+            input["pull_request"] = json!(PR_NUMBER);
+            input["prevalidated"] = pending;
+            let pinned = action(&host, "claim_validate", &input)
+                .expect("the native replay is pinned as the gate's evidence");
+            assert_eq!(pinned["validation"].as_array().unwrap().len(), 2);
+            let fields = input.as_object_mut().unwrap();
+            fields.remove("pull_request");
+            fields.remove("prevalidated");
+
+            for (still, notice) in [
+                (Gate::skips_seatbelt as fn(&Gate), seatbelt_notice()),
+                (Gate::denies_ps, ps_notice()),
+            ] {
+                still(&gate);
+                let held = action(&host, "claim_validate", &input)
+                    .expect_err("a replay that still defers is not a pass")
+                    .to_string();
+                assert!(
+                    orbit_types::workflow::is_validation_environment_failure(None, Some(&held))
+                        && held.contains(&notice),
+                    "the claim host that still defers holds the candidate: {held}"
+                );
+            }
+
+            let owner = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            owner.require_commands(&["true"]);
+            owner.baseline_commands(&[&gate.command()]);
+            RuntimeHost::attach_task_validation_log(
+                &owner,
+                TASK_ID,
+                RUN_ID,
+                DEFERRED_SANDBOX_ARTIFACT,
+                serde_json::to_vec(&json!({
+                    "schema_version": 1,
+                    "run_id": RUN_ID,
+                    "deferred": mixed_deferral(&fx, &gate.command()),
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            gate.executes();
+            let runs = gate.runs();
+            run_implementation(&fx, &owner, None)
+                .expect("an owner replays a kept record of both sandboxes and delivers");
+            assert_eq!(
+                gate.runs(),
+                runs + 1,
+                "the owner ran the deferred gate itself"
+            );
+            gate.skips_seatbelt();
+            let held = run_implementation(&fx, &owner, None)
+                .expect_err("an owner replay that still skips is not a pass");
+            assert!(
+                orbit_types::workflow::is_validation_environment_failure(None, Some(&held)),
+                "{held}"
+            );
         },
     );
 }
@@ -3068,6 +4069,7 @@ fn handoff_for(fx: &Fixture, record: &Value) -> Value {
     let mut summary = record.clone();
     let fields = summary.as_object_mut().unwrap();
     fields.remove("probe");
+    fields.remove("other_probes");
     fields.insert("schema_version".to_string(), json!(1));
     fields.insert("selection".to_string(), json!({ "packages": ["fixture"] }));
     let path = fx.repo.join(GATE_SUMMARY);
@@ -3113,6 +4115,23 @@ fn ps_deferral(fx: &Fixture, command: &str) -> Value {
             "exit_code": 71,
             "output": "sandbox-exec: execvp() of '/bin/ps' failed: Operation not permitted",
         },
+    })
+}
+
+/// The accepted macOS claimed-leaf record of a broad gate that printed
+/// Seatbelt skips and ps-denied deferrals, with the gate and base substituted
+/// for this run's values [ORB-15692].
+fn mixed_deferral(fx: &Fixture, command: &str) -> Value {
+    let seatbelt = seatbelt_deferral(fx, command);
+    let ps = ps_deferral(fx, command);
+    json!({
+        "command": command,
+        "exit_code": 0,
+        "tests_run": 1650,
+        "base": fx.base_sha,
+        "notices": [seatbelt_notice(), ps_notice(), seatbelt_notice()],
+        "probe": seatbelt["probe"],
+        "other_probes": [ps["probe"]],
     })
 }
 
@@ -3266,7 +4285,6 @@ fn run_shipped_implementation(
 /// An implementer blocker arrives before commit, so the worktree may be dirty.
 /// The handoff blocks the task with the kind, leaves the uncommitted file and
 /// the head where they are, and opens no `[BLOCKED]` PR.
-#[test]
 fn an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr() {
     isolated(
         "an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr",
@@ -3335,7 +4353,6 @@ fn an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr() {
 /// handoff commits what the agent left, so the next run can resume it, but
 /// pushes nothing, opens no `[BLOCKED]` PR and leaves the status alone: run
 /// finalization holds the task in the backlog for another crew.
-#[test]
 fn a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write() {
     isolated(
         "a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write",
@@ -3404,7 +4421,6 @@ fn a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write() {
 /// left is committed and carried to its durable ref, no PR is opened, the
 /// task is not blocked, and `candidate_resume` resumes the decision. Run
 /// finalization returns the task to the backlog.
-#[test]
 fn an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task() {
     isolated(
         "an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task",
@@ -3467,7 +4483,6 @@ fn an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task() {
 /// mid-validation. Nothing judged its candidate: the handoff commits what it
 /// left, carries it to its durable ref and opens no PR. The cancellation, not
 /// the handoff, returns the task to the backlog.
-#[test]
 fn a_child_its_parent_stopped_waiting_for_holds_its_candidate() {
     isolated(
         "a_child_its_parent_stopped_waiting_for_holds_its_candidate",
@@ -3529,7 +4544,6 @@ const RED_LINT: &str = "make ci-lint";
 
 /// Normal child output cannot impersonate a supervisor stop [ORB-15507].
 /// The synchronized base prints the same note but passes the command.
-#[test]
 fn printed_supervisor_notes_remain_candidate_failures_on_both_streams() {
     isolated(
         "printed_supervisor_notes_remain_candidate_failures_on_both_streams",
@@ -3601,7 +4615,6 @@ fn printed_supervisor_notes_remain_candidate_failures_on_both_streams() {
     );
 }
 
-#[test]
 fn supervisor_stops_are_environment_failures_and_never_poison_the_base_cache() {
     isolated(
         "supervisor_stops_are_environment_failures_and_never_poison_the_base_cache",
@@ -3625,9 +4638,14 @@ fn supervisor_stops_are_environment_failures_and_never_poison_the_base_cache() {
             // Pin the supervisor, not just the command's environment: the drain
             // may have raised this ceiling as an operational mitigation.
             unsafe { std::env::set_var("ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES", "4096") };
+            // A capture stop still names the first failure before it, so a
+            // flood of one spawn failure says what failed [ORB-15870].
+            let first_failure = "spawn /tmp/orbit-build/debug/orbit: No such file or directory";
             for (index, (stop, cause)) in [
                 (
-                    "printf '%8192s' '' >&2",
+                    "printf '%s\\n' \"thread 'spawns_orbit' (7) panicked at tests/cli.rs:4:29:\" \
+                     'spawn /tmp/orbit-build/debug/orbit: No such file or directory (os error 2)' >&2\n\
+                     printf '%8192s' '' >&2",
                     "process output capture limit exceeded on stderr",
                 ),
                 ("kill -KILL $$", "process terminated with"),
@@ -3673,6 +4691,11 @@ fn supervisor_stops_are_environment_failures_and_never_poison_the_base_cache() {
                             message.contains("[validation_environment]") && message.contains(cause),
                             "the infrastructure cause must be named: {message}"
                         );
+                        assert_eq!(
+                            message.contains(first_failure),
+                            index == 0 && !base_only,
+                            "only the candidate's capture stop printed a failure first: {message}"
+                        );
                         assert!(!is_baseline_red_failure(None, Some(&message)), "{message}");
                         let log =
                             host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
@@ -3706,7 +4729,6 @@ fn supervisor_stops_are_environment_failures_and_never_poison_the_base_cache() {
 /// pushed, no PR is opened, and the candidate is kept. The hold stands while
 /// the base ref points at the red commit and lifts once it moves to a commit
 /// that passes.
-#[test]
 fn a_required_command_red_on_the_base_holds_the_task_without_a_pr() {
     isolated(
         "a_required_command_red_on_the_base_holds_the_task_without_a_pr",
@@ -3742,16 +4764,10 @@ fn a_required_command_red_on_the_base_holds_the_task_without_a_pr() {
             );
             let hold =
                 BaselineRedHold::from_text(&messages[0]).expect("the failure names its hold");
-            // [ORB-15374] The lint names no failing test, so the hold keeps
-            // the tail of the base run's output, without the PATH line Orbit
-            // appends to a failed run.
-            assert!(hold.failures.identities.is_empty(), "{hold:?}");
-            assert!(
-                hold.failures
-                    .tail
-                    .iter()
-                    .any(|line| line == "README.md: lint is red"),
-                "the hold keeps the base output's tail: {hold:?}"
+            assert_eq!(
+                hold.failures.identities,
+                ["README.md:1:1: error: lint is red"],
+                "a hold requires an identified inherited error"
             );
             assert!(
                 hold.failures
@@ -3761,7 +4777,7 @@ fn a_required_command_red_on_the_base_holds_the_task_without_a_pr() {
                 "{hold:?}"
             );
             assert!(
-                messages[0].contains("output ends") && messages[0].contains("lint is red"),
+                messages[0].contains("failing:") && messages[0].contains("lint is red"),
                 "the failure names what fails on the base: {}",
                 messages[0]
             );
@@ -3788,7 +4804,7 @@ fn a_required_command_red_on_the_base_holds_the_task_without_a_pr() {
             assert!(
                 base_log["output"]
                     .as_str()
-                    .is_some_and(|output| output.contains("README.md: lint is red")),
+                    .is_some_and(|output| output.contains("error: lint is red")),
                 "{base_log}"
             );
 
@@ -3844,10 +4860,54 @@ fn a_required_command_red_on_the_base_holds_the_task_without_a_pr() {
 /// The command a red-test fixture requires ([`Fixture::with_red_tests`]).
 const RED_TESTS: &str = "make ci-test";
 
-/// A known-red case: its name, the candidate's own failing tests (`None`
+/// A known-red case: its name, the base's tests, the candidate's tests (`None`
 /// fails exactly as the base), and the tests it proceeds with as known red
-/// (`None` is held).
-type KnownRedCase<'a> = (&'a str, Option<&'a [&'a str]>, Option<&'a [&'a str]>);
+/// (`None` requires candidate repair).
+type KnownRedCase<'a> = (
+    &'a str,
+    &'a [&'a str],
+    Option<&'a [&'a str]>,
+    Option<&'a [&'a str]>,
+);
+
+// Reuse the existing runner and suite identities for the observed six-vs-one
+// shape and mixed failures. Both delivery routes must make the same decision.
+const KNOWN_RED_CASES: &[KnownRedCase<'_>] = &[
+    (
+        "equal",
+        &["suite::broken", "suite::flaky"],
+        None,
+        Some(&["suite::broken", "suite::flaky"]),
+    ),
+    (
+        "subset",
+        &["suite::broken", "suite::flaky"],
+        Some(&["suite::flaky"]),
+        Some(&["suite::flaky"]),
+    ),
+    (
+        "shared-plus-new",
+        &["suite::broken", "suite::flaky"],
+        Some(&["suite::broken", "suite::flaky", "suite::added"]),
+        None,
+    ),
+    (
+        "disjoint-six-vs-one",
+        &["suite::broken"],
+        Some(&[
+            "orbit-core suite::broken",
+            "orbit-core suite::flaky",
+            "orbit-core suite::added",
+            "orbit-engine suite::broken",
+            "orbit-engine suite::flaky",
+            "orbit-engine suite::added",
+        ]),
+        None,
+    ),
+    ("candidate-unknown", &["suite::broken"], Some(&[]), None),
+    ("base-unknown", &[], Some(&["suite::added"]), None),
+    ("both-unknown", &[], None, None),
+];
 
 /// nextest's `FAIL` summary line for each of `tests`.
 fn nextest_failures(tests: &[&str]) -> String {
@@ -3868,34 +4928,23 @@ fn nextest_failures(tests: &[&str]) -> String {
 /// same tests, or some of them — introduced none of them: validation passes
 /// as `passed_with_known_red`, and the run's output, the log, the task's
 /// history and the pull request name the known-red tests. A candidate that
-/// fails a test the base does not, beside the base's or instead of them, is
-/// held as before, and the hold names what fails on the base (one identity
-/// per nextest `FAIL` line, without libtest's echo of the same test)
-/// [ORB-15374].
-#[test]
+/// fails a test the base does not, beside the base's or instead of them,
+/// requires repair, retaining both complete failure sets in durable logs.
 fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them() {
     isolated(
         "a_candidate_failing_only_known_red_tests_proceeds_and_records_them",
         |sandbox| {
-            let base = ["suite::broken", "suite::flaky"];
             let named = |tests: &[&str]| {
                 tests
                     .iter()
                     .map(|test| format!("test orbit-core::runtime {test}"))
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
                     .collect::<Vec<_>>()
             };
-            let cases: [KnownRedCase<'_>; 4] = [
-                ("equal", None, Some(&base)),
-                ("subset", Some(&["suite::flaky"]), Some(&["suite::flaky"])),
-                (
-                    "superset",
-                    Some(&["suite::broken", "suite::flaky", "suite::added"]),
-                    None,
-                ),
-                ("disjoint", Some(&["suite::added"]), None),
-            ];
-            for (case, candidate_tests, known_red) in cases {
-                let fx = Fixture::with_red_tests(sandbox, &base, candidate_tests);
+            let mut legacy_history = false;
+            for &(case, base, candidate_tests, known_red) in KNOWN_RED_CASES {
+                let fx = Fixture::with_red_tests(sandbox, base, candidate_tests);
                 let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
                 host.require_commands(&[RED_TESTS]);
                 let mut input = fx.validate_input();
@@ -3907,30 +4956,55 @@ fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them() {
                     .history(TASK_ID)
                     .into_iter()
                     .filter(|entry| entry.event == KNOWN_RED_VALIDATION_EVENT)
-                    .map(|entry| {
-                        KnownRedValidation::from_text(entry.note.as_deref().unwrap_or_default())
-                            .expect("the note carries its record")
+                    .map(|entry| match entry.decision {
+                        Some(TaskDecision::KnownRedValidation(known)) => {
+                            assert!(
+                                entry
+                                    .note
+                                    .as_deref()
+                                    .is_some_and(|note| note.starts_with(&known.text(""))),
+                                "{case}: the note still carries the record: {:?}",
+                                entry.note
+                            );
+                            known
+                        }
+                        other => panic!("{case}: the known red is a typed decision: {other:?}"),
                     })
                     .collect::<Vec<_>>();
 
                 let Some(known_red) = known_red else {
                     let message = outcome
-                        .expect_err(&format!("{case}: a failure the base lacks is held"))
+                        .expect_err(&format!("{case}: candidate failures need repair"))
                         .to_string();
                     assert!(
-                        is_baseline_red_failure(None, Some(&message)),
-                        "{case}: {message}"
+                        !is_baseline_red_failure(None, Some(&message))
+                            && !message.contains("failed identically"),
+                        "different or unknown failures cannot hold for a red base: {case}: {message}"
                     );
-                    let hold = BaselineRedHold::from_text(&message).expect("the hold");
-                    assert_eq!(hold.failures.identities, named(&base), "{case}: {hold:?}");
-                    assert!(
-                        message.contains(
-                            "failing: `orbit-core::runtime suite::broken`, \
-                             `orbit-core::runtime suite::flaky`"
+                    assert_eq!(log["failure_kind"], "candidate", "{case}");
+                    assert_eq!(log["baseline_reproduces"], false, "{case}");
+                    assert_eq!(
+                        log["failures"],
+                        json!(named(candidate_tests.unwrap_or(base))),
+                        "{case}"
+                    );
+                    let baseline = host
+                        .validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.baseline.json"));
+                    assert_eq!(
+                        baseline["failures"],
+                        json!(
+                            named(base)
+                                .into_iter()
+                                .chain(base.first().map(|test| format!("test {test}")))
+                                .collect::<Vec<_>>()
                         ),
-                        "{case}: the failure names the tests failing on the base: {message}"
+                        "{case}"
                     );
-                    assert_eq!(log["failure_kind"], "baseline_red", "{case}");
+                    assert_eq!(
+                        log["baseline"]["log"],
+                        format!("validation/{RUN_ID}/0.baseline.json"),
+                        "{case}"
+                    );
                     assert!(recorded.is_empty(), "{case}: {recorded:?}");
                     continue;
                 };
@@ -3966,6 +5040,14 @@ fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them() {
                     vec![record],
                     "{case}: the task's history records it"
                 );
+                // Every other case reads history an older binary wrote: the
+                // record in the note alone, which `pr_open` still lists.
+                legacy_history = !legacy_history;
+                if legacy_history {
+                    for entry in host.history.lock().unwrap().values_mut().flatten() {
+                        entry.decision = None;
+                    }
+                }
 
                 action(
                     &host,
@@ -3995,268 +5077,272 @@ fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them() {
 /// [ORB-15548] Shared failed tests do not waive unexecuted host coverage.
 /// Both delivery paths retain complete-output notices even when the bounded
 /// log drops them, and check declared replay counts before known-red admission.
-#[test]
-fn known_red_failures_cannot_waive_host_notices_or_replay_coverage() {
-    isolated(
-        "known_red_failures_cannot_waive_host_notices_or_replay_coverage",
-        |sandbox| {
-            let base = ["suite::broken", "suite::flaky"];
-            let cases = [
-                (
-                    "bubblewrap",
-                    Some(bwrap_notice()),
-                    false,
-                    false,
-                    Some(3),
-                    Some("sandbox_unavailable"),
-                ),
-                (
-                    "seatbelt",
-                    Some(seatbelt_notice()),
-                    false,
-                    false,
-                    Some(3),
-                    Some("sandbox_unavailable"),
-                ),
-                (
-                    "deferred",
-                    Some("DEFERRED: sandbox fixture did not run".to_string()),
-                    false,
-                    false,
-                    Some(3),
-                    Some("self_skipped"),
-                ),
-                (
-                    "skip",
-                    Some("SKIP: sandbox fixture did not run".to_string()),
-                    false,
-                    false,
-                    Some(3),
-                    Some("self_skipped"),
-                ),
-                (
-                    "skipping-colon",
-                    Some("skipping: sandbox fixture".to_string()),
-                    false,
-                    false,
-                    Some(3),
-                    Some("self_skipped"),
-                ),
-                (
-                    "skipping-space",
-                    Some("skipping sandbox fixture".to_string()),
-                    false,
-                    false,
-                    Some(3),
-                    Some("self_skipped"),
-                ),
-                (
-                    "raw-refusal",
-                    Some("bwrap: No permissions to create new namespace".to_string()),
-                    false,
-                    false,
-                    Some(3),
-                    Some("sandbox_unavailable"),
-                ),
-                (
-                    "dropped-deferral",
-                    Some(bwrap_notice()),
-                    true,
-                    false,
-                    Some(3),
-                    Some("sandbox_unavailable"),
-                ),
-                (
-                    "dropped-skip",
-                    Some("SKIP: sandbox fixture did not run".to_string()),
-                    true,
-                    false,
-                    Some(3),
-                    Some("self_skipped"),
-                ),
-                (
-                    "replay-with-notice",
-                    Some(bwrap_notice()),
-                    false,
-                    true,
-                    Some(3),
-                    Some("sandbox_unavailable"),
-                ),
-                ("replay-zero-tests", None, false, true, Some(0), None),
-                ("replay-missing-count", None, false, true, None, None),
-                ("replay-missing-tool", None, false, true, None, None),
-                ("replay-executed", None, false, true, Some(3), None),
-            ];
-            for (case, notice, dropped, replay, tests_run, reason) in cases {
-                let fx = Fixture::with_red_tests(sandbox, &base, Some(&base));
-                let padding = if dropped {
-                    "padding line that names no failure\n".repeat(8 * 1024)
-                } else {
-                    String::new()
-                };
-                // Alternate complete stdout and stderr, including notices in
-                // the dropped middle, without depending on sandbox availability.
-                let stream = if case == "skip" || dropped {
-                    ""
-                } else {
-                    " >&2"
-                };
-                let notice_script = if dropped {
-                    "cat failing.txt\n".to_string()
-                } else {
-                    notice.as_ref().map_or_else(String::new, |notice| {
-                        format!("printf '%s\\n' '{notice}'{stream}\n")
-                    })
-                };
-                if dropped {
-                    fx.commit(
-                        "failing.txt",
-                        &format!("{padding}{}\n{padding}", notice.as_ref().unwrap()),
-                    );
-                }
-                let gate = Gate::new(sandbox);
-                gate.set(&format!(
-                    "{notice_script}{}\n{}\nexit 2",
-                    nextest_failures(&base)
-                        .lines()
-                        .map(|line| format!("echo '{line}'\n"))
-                        .collect::<String>(),
-                    tests_run.map_or_else(String::new, reported_tests),
-                ));
-                if case == "replay-missing-tool" {
-                    gate.set(&format!(
-                        "'{}'",
-                        sandbox.join("missing-required-tool").display()
-                    ));
-                }
-                let command = gate.command();
-                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
-                host.require_commands(&[&command]);
-                let record = deferral(&fx, &command);
-                if replay {
-                    host.attach_task_validation_log(
-                        TASK_ID,
-                        RUN_ID,
-                        DEFERRED_SANDBOX_ARTIFACT,
-                        serde_json::to_vec(&json!({
-                            "schema_version": 1,
-                            "run_id": RUN_ID,
-                            "deferred": record,
-                        }))
-                        .unwrap(),
-                    )
-                    .unwrap();
-                }
-                let outcome = action(&host, "candidate_validate", &fx.validate_input());
-                let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
-                assert_eq!(
-                    log["exit_code"],
-                    if case == "replay-missing-tool" {
-                        127
+fn known_red_coverage_rows(test: &str, selected: &[&str]) {
+    isolated(test, |sandbox| {
+        let base = ["suite::broken", "suite::flaky"];
+        let cases = [
+            (
+                "bubblewrap",
+                Some(bwrap_notice()),
+                false,
+                false,
+                Some(3),
+                Some("sandbox_unavailable"),
+            ),
+            (
+                "seatbelt",
+                Some(seatbelt_notice()),
+                false,
+                false,
+                Some(3),
+                Some("sandbox_unavailable"),
+            ),
+            (
+                "deferred",
+                Some("DEFERRED: sandbox fixture did not run".to_string()),
+                false,
+                false,
+                Some(3),
+                Some("self_skipped"),
+            ),
+            (
+                "skip",
+                Some("SKIP: sandbox fixture did not run".to_string()),
+                false,
+                false,
+                Some(3),
+                Some("self_skipped"),
+            ),
+            (
+                "skipping-colon",
+                Some("skipping: sandbox fixture".to_string()),
+                false,
+                false,
+                Some(3),
+                Some("self_skipped"),
+            ),
+            (
+                "skipping-space",
+                Some("skipping sandbox fixture".to_string()),
+                false,
+                false,
+                Some(3),
+                Some("self_skipped"),
+            ),
+            (
+                "raw-refusal",
+                Some("bwrap: No permissions to create new namespace".to_string()),
+                false,
+                false,
+                Some(3),
+                Some("sandbox_unavailable"),
+            ),
+            (
+                "dropped-deferral",
+                Some(bwrap_notice()),
+                true,
+                false,
+                Some(3),
+                Some("sandbox_unavailable"),
+            ),
+            (
+                "dropped-skip",
+                Some("SKIP: sandbox fixture did not run".to_string()),
+                true,
+                false,
+                Some(3),
+                Some("self_skipped"),
+            ),
+            (
+                "replay-with-notice",
+                Some(bwrap_notice()),
+                false,
+                true,
+                Some(3),
+                Some("sandbox_unavailable"),
+            ),
+            ("replay-zero-tests", None, false, true, Some(0), None),
+            ("replay-missing-count", None, false, true, None, None),
+            ("replay-missing-tool", None, false, true, None, None),
+            ("replay-executed", None, false, true, Some(3), None),
+        ];
+        for (case, notice, dropped, replay, tests_run, reason) in
+            cases.into_iter().filter(|row| selected.contains(&row.0))
+        {
+            let fx = Fixture::with_red_tests(sandbox, &base, Some(&base));
+            let padding = if dropped {
+                "padding line that names no failure\n".repeat(8 * 1024)
+            } else {
+                String::new()
+            };
+            // Alternate complete stdout and stderr, including notices in
+            // the dropped middle, without depending on sandbox availability.
+            let stream = if case == "skip" || dropped {
+                ""
+            } else {
+                " >&2"
+            };
+            let notice_script = if dropped {
+                "cat failing.txt\n".to_string()
+            } else {
+                notice.as_ref().map_or_else(String::new, |notice| {
+                    format!("printf '%s\\n' '{notice}'{stream}\n")
+                })
+            };
+            if dropped {
+                fx.commit(
+                    "failing.txt",
+                    &format!("{padding}{}\n{padding}", notice.as_ref().unwrap()),
+                );
+            }
+            let gate = Gate::new(sandbox);
+            gate.set(&format!(
+                "{notice_script}{}\n{}\nexit 2",
+                nextest_failures(&base)
+                    .lines()
+                    .map(|line| format!("echo '{line}'\n"))
+                    .collect::<String>(),
+                tests_run.map_or_else(String::new, |count| {
+                    if case == "replay-executed" {
+                        format!(
+                            "selection=\"$ORBIT_VALIDATION_SELECTION\"; [ -n \"$selection\" ] || selection='{{\"packages\":[\"fixture\"]}}'; \
+                             printf '{{\"schema_version\":1,\"selection\":%s,\"tests_run\":{count},\"executed_tests\":[\"orbit-core::runtime suite::broken\",\"orbit-core::runtime suite::flaky\"]}}' \
+                             \"$selection\" > \"$ORBIT_VALIDATION_SUMMARY\""
+                        )
                     } else {
-                        2
-                    },
+                        reported_tests(count)
+                    }
+                }),
+            ));
+            if case == "replay-missing-tool" {
+                gate.set(&format!(
+                    "'{}'",
+                    sandbox.join("missing-required-tool").display()
+                ));
+            }
+            let command = gate.command();
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            host.require_commands(&[&command]);
+            let record = deferral(&fx, &command);
+            if replay {
+                host.attach_task_validation_log(
+                    TASK_ID,
+                    RUN_ID,
+                    DEFERRED_SANDBOX_ARTIFACT,
+                    serde_json::to_vec(&json!({
+                        "schema_version": 1,
+                        "run_id": RUN_ID,
+                        "deferred": record,
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            }
+            let outcome = action(&host, "candidate_validate", &fx.validate_input());
+            let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+            assert_eq!(
+                log["exit_code"],
+                if case == "replay-missing-tool" {
+                    127
+                } else {
+                    2
+                },
+                "{case}"
+            );
+            assert_eq!(log["deferred_sandbox_replay"], replay, "{case}");
+            let mut claim_input = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+            });
+            if replay {
+                claim_input["implementation"] = json!({ "deferred_sandbox_validation": record });
+            }
+            let claim = action(&host, "claim_validate", &claim_input);
+            if notice.is_none() && tests_run == Some(3) {
+                assert_eq!(
+                    outcome.unwrap()["decision"],
+                    "passed_with_known_red",
                     "{case}"
                 );
-                assert_eq!(log["deferred_sandbox_replay"], replay, "{case}");
-                let mut claim_input = json!({
-                    "workspace_path": fx.repo,
-                    "base_sync": "local",
-                    "base_sha": fx.base_sha,
-                });
-                if replay {
-                    claim_input["implementation"] =
-                        json!({ "deferred_sandbox_validation": record });
-                }
-                let claim = action(&host, "claim_validate", &claim_input);
-                if notice.is_none() && tests_run == Some(3) {
-                    assert_eq!(
-                        outcome.unwrap()["decision"],
-                        "passed_with_known_red",
-                        "{case}"
-                    );
-                    assert_eq!(
-                        claim.unwrap()["decision"],
-                        "passed_with_known_red",
-                        "{case}"
-                    );
-                    continue;
-                }
-                let failure = outcome
-                    .expect_err(&format!("{case}: unresolved coverage is refused"))
-                    .to_string();
-                let claim_failure = claim
-                    .expect_err(&format!("{case}: claimed coverage is refused"))
-                    .to_string();
-                if let Some(reason) = reason {
-                    assert!(
-                        is_baseline_red_failure(None, Some(&failure)),
-                        "{case}: {failure}"
-                    );
-                    assert!(
-                        is_baseline_red_failure(None, Some(&claim_failure)),
-                        "{case}: {claim_failure}"
-                    );
-                    assert_eq!(log["host_output_refusal"]["reason"], reason, "{case}");
-                    assert_eq!(
-                        log["host_output_refusal"]["detail"],
-                        notice.as_deref().unwrap(),
-                        "{case}"
-                    );
-                    let claim_log: Value = serde_json::from_slice(
+                assert_eq!(
+                    claim.unwrap()["decision"],
+                    "passed_with_known_red",
+                    "{case}"
+                );
+                continue;
+            }
+            let failure = outcome
+                .expect_err(&format!("{case}: unresolved coverage is refused"))
+                .to_string();
+            let claim_failure = claim
+                .expect_err(&format!("{case}: claimed coverage is refused"))
+                .to_string();
+            if let Some(reason) = reason {
+                assert!(
+                    is_baseline_red_failure(None, Some(&failure)),
+                    "{case}: {failure}"
+                );
+                assert!(
+                    is_baseline_red_failure(None, Some(&claim_failure)),
+                    "{case}: {claim_failure}"
+                );
+                assert_eq!(log["host_output_refusal"]["reason"], reason, "{case}");
+                assert_eq!(
+                    log["host_output_refusal"]["detail"],
+                    notice.as_deref().unwrap(),
+                    "{case}"
+                );
+                let claim_log: Value = serde_json::from_slice(
                         &host.claim_log_contents.lock().unwrap()
                             ["validation/claim-landing/0.failed.json"],
                     )
                     .unwrap();
-                    assert_eq!(
-                        claim_log["host_output_refusal"], log["host_output_refusal"],
-                        "{case}"
-                    );
-                    if dropped {
-                        let captured = log["output"].as_str().unwrap();
-                        assert!(
-                            captured.contains("truncated")
-                                && !captured.contains(notice.as_deref().unwrap()),
-                            "{case}: the retained refusal comes from the dropped middle"
-                        );
-                    }
-                } else if case == "replay-missing-tool" {
+                assert_eq!(
+                    claim_log["host_output_refusal"], log["host_output_refusal"],
+                    "{case}"
+                );
+                if dropped {
+                    let captured = log["output"].as_str().unwrap();
                     assert!(
-                        orbit_types::workflow::is_validation_environment_failure(
-                            None,
-                            Some(&failure)
-                        ),
-                        "{case}: {failure}"
-                    );
-                    assert!(
-                        orbit_types::workflow::is_validation_environment_failure(
-                            None,
-                            Some(&claim_failure)
-                        ),
-                        "{case}: {claim_failure}"
-                    );
-                    assert_eq!(log["failure_kind"], "environment", "{case}");
-                } else {
-                    assert!(failure.contains("replayed nothing"), "{case}: {failure}");
-                    assert!(
-                        claim_failure.contains("replayed nothing"),
-                        "{case}: {claim_failure}"
+                        captured.contains("truncated")
+                            && !captured.contains(notice.as_deref().unwrap()),
+                        "{case}: the retained refusal comes from the dropped middle"
                     );
                 }
-                assert!(log["known_red"].is_null(), "{case}: no known-red admission");
+            } else if case == "replay-missing-tool" {
                 assert!(
-                    host.history(TASK_ID)
-                        .iter()
-                        .all(|entry| entry.event != KNOWN_RED_VALIDATION_EVENT),
-                    "{case}: no known-red history"
+                    orbit_types::workflow::is_validation_environment_failure(None, Some(&failure)),
+                    "{case}: {failure}"
                 );
                 assert!(
-                    host.handoffs.lock().unwrap().is_empty(),
-                    "{case}: no publication"
+                    orbit_types::workflow::is_validation_environment_failure(
+                        None,
+                        Some(&claim_failure)
+                    ),
+                    "{case}: {claim_failure}"
+                );
+                assert_eq!(log["failure_kind"], "environment", "{case}");
+            } else {
+                assert!(failure.contains("replayed nothing"), "{case}: {failure}");
+                assert!(
+                    claim_failure.contains("replayed nothing"),
+                    "{case}: {claim_failure}"
                 );
             }
-        },
-    );
+            assert!(log["known_red"].is_null(), "{case}: no known-red admission");
+            assert!(
+                host.history(TASK_ID)
+                    .iter()
+                    .all(|entry| entry.event != KNOWN_RED_VALIDATION_EVENT),
+                "{case}: no known-red history"
+            );
+            assert!(
+                host.handoffs.lock().unwrap().is_empty(),
+                "{case}: no publication"
+            );
+        }
+    });
 }
 
 /// [ORB-15427] A claimed leaf applies the owner's known-red rule. A
@@ -4267,183 +5353,215 @@ fn known_red_failures_cannot_waive_host_notices_or_replay_coverage() {
 /// trusts none of that: its own check of the base
 /// (`verify_claimed_known_red`), here with the base result cache cleared so
 /// it reruns the base, confirms the report. A candidate failing a test the
-/// base does not is released as `baseline_red` as before, and the owner's
-/// check refuses the same report if a leaf made it anyway.
-#[test]
-fn a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner_rechecks() {
-    isolated(
-        "a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner_rechecks",
-        |sandbox| {
-            let base = ["suite::broken", "suite::flaky"];
-            let named = |tests: &[&str]| {
-                tests
-                    .iter()
-                    .map(|test| format!("test orbit-core::runtime {test}"))
-                    .collect::<Vec<_>>()
+/// base does not requires candidate repair, and the owner's check refuses
+/// the same report if a leaf made it anyway.
+fn claimed_known_red_rows(test: &str, selected: &[&str]) {
+    isolated(test, |sandbox| {
+        let named = |tests: &[&str]| {
+            tests
+                .iter()
+                .map(|test| format!("test orbit-core::runtime {test}"))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
+        for &(case, base, candidate_tests, known_red) in KNOWN_RED_CASES
+            .iter()
+            .filter(|row| selected.contains(&row.0))
+        {
+            let fx = Fixture::with_red_tests(sandbox, base, candidate_tests);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            host.require_commands(&[RED_TESTS]);
+            let mut input = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+            });
+            let outcome = action(&host, "claim_validate", &input);
+            // The owner's own base run, not the one the leaf cached.
+            let cache = PathBuf::from(git(&fx.repo, &["rev-parse", "--git-common-dir"]))
+                .join("orbit-baseline");
+            let owner_check = |base_sha: &str, failures: &BTreeSet<String>| {
+                if cache.exists() {
+                    fs::remove_dir_all(&cache).unwrap();
+                }
+                verify_claimed_known_red(
+                    &host,
+                    &fx.repo,
+                    &ClaimedKnownRed {
+                        base_branch: BASE,
+                        base_sync: orbit_engine::BaseSyncMode::Local,
+                        base_sha,
+                        command: RED_TESTS,
+                        selection: None,
+                        // make's status for the recipe's failure
+                        exit_code: 2,
+                        failures,
+                    },
+                    std::time::Instant::now() + Duration::from_secs(120),
+                )
             };
-            let cases: [KnownRedCase<'_>; 4] = [
-                ("equal", None, Some(&base)),
-                ("subset", Some(&["suite::flaky"]), Some(&["suite::flaky"])),
-                (
-                    "superset",
-                    Some(&["suite::broken", "suite::flaky", "suite::added"]),
-                    None,
-                ),
-                ("disjoint", Some(&["suite::added"]), None),
-            ];
-            for (case, candidate_tests, known_red) in cases {
-                let fx = Fixture::with_red_tests(sandbox, &base, candidate_tests);
-                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
-                host.require_commands(&[RED_TESTS]);
-                let mut input = json!({
-                    "workspace_path": fx.repo,
-                    "base_sync": "local",
-                    "base_sha": fx.base_sha,
-                });
-                let outcome = action(&host, "claim_validate", &input);
-                // The owner's own base run, not the one the leaf cached.
-                let cache = PathBuf::from(git(&fx.repo, &["rev-parse", "--git-common-dir"]))
-                    .join("orbit-baseline");
-                let owner_check = |base_sha: &str, failures: &BTreeSet<String>| {
-                    if cache.exists() {
-                        fs::remove_dir_all(&cache).unwrap();
-                    }
-                    verify_claimed_known_red(
-                        &host,
-                        &fx.repo,
-                        &ClaimedKnownRed {
-                            base_branch: BASE,
-                            base_sync: "local",
-                            base_sha,
-                            command: RED_TESTS,
-                            selection: None,
-                            // make's status for the recipe's failure
-                            exit_code: 2,
-                            failures,
-                        },
-                        std::time::Instant::now() + Duration::from_secs(120),
-                    )
-                };
 
-                let Some(known_red) = known_red else {
-                    let message = outcome
-                        .expect_err(&format!("{case}: a failure the base lacks is released"))
-                        .to_string();
-                    let hold = BaselineRedHold::from_text(&message)
-                        .unwrap_or_else(|| panic!("{case}: typed baseline_red: {message}"));
-                    assert_eq!(hold.failures.identities, named(&base), "{case}");
-                    assert!(host.handoffs.lock().unwrap().is_empty(), "{case}");
-                    let claimed = named(candidate_tests.unwrap()).into_iter().collect();
-                    let refusal = owner_check(&fx.base_sha, &claimed)
-                        .expect_err(&format!("{case}: the owner refuses the report"));
-                    assert!(
-                        matches!(&refusal, KnownRedUnconfirmed::Contradicted(reason)
-                            if reason.contains("does not fail `test orbit-core::runtime suite::added`")),
-                        "{case}: the owner's base run contradicts it: {refusal:?}"
-                    );
-                    continue;
-                };
-
-                let output = outcome.unwrap_or_else(|error| panic!("{case}: {error}"));
-                assert_eq!(output["decision"], "passed_with_known_red", "{case}");
-                assert_eq!(output["commands"], json!([]), "{case}");
-                let records: Vec<KnownRedValidation> =
-                    serde_json::from_value(output["known_red"].clone()).unwrap();
-                assert_eq!(records.len(), 1, "{case}: {records:?}");
-                assert_eq!(records[0].command, RED_TESTS, "{case}");
-                assert_eq!(records[0].base_sha, fx.base_sha, "{case}");
-                assert_eq!(records[0].tested_head, fx.candidate, "{case}");
-                assert_eq!(records[0].failures.identities, named(known_red), "{case}");
-                let path = "validation/claim-landing/0.json";
-                let log: HandoffValidationLog =
-                    serde_json::from_slice(&host.claim_log_contents.lock().unwrap()[path]).unwrap();
-                assert_eq!(log.exit_code, 2, "{case}: the log keeps the exit status");
-                let report = log.known_red.expect("the log reports known red");
-                assert_eq!(report.base_sha, fx.base_sha, "{case}");
+            let Some(known_red) = known_red else {
+                let message = outcome
+                    .expect_err(&format!("{case}: candidate failures need repair"))
+                    .to_string();
                 assert!(
-                    named(known_red)
-                        .iter()
-                        .all(|test| report.failures.contains(test)),
-                    "{case}: {report:?}"
+                    !is_baseline_red_failure(None, Some(&message))
+                        && !message.contains("failed identically"),
+                    "different or unknown failures cannot hold for a red base: {case}: {message}"
+                );
+                assert!(host.handoffs.lock().unwrap().is_empty(), "{case}");
+                let logs = host.claim_log_contents.lock().unwrap();
+                let log: Value =
+                    serde_json::from_slice(&logs["validation/claim-landing/0.failed.json"])
+                        .unwrap();
+                let baseline: Value =
+                    serde_json::from_slice(&logs["validation/claim-landing/0.baseline.json"])
+                        .unwrap();
+                assert_eq!(log["failure_kind"], "candidate", "{case}");
+                assert_eq!(log["baseline_reproduces"], false, "{case}");
+                assert_eq!(
+                    log["failures"],
+                    json!(named(candidate_tests.unwrap_or(base))),
+                    "{case}"
                 );
                 assert_eq!(
-                    owner_check(&fx.base_sha, &report.failures),
-                    Ok(report.failures.clone()),
-                    "{case}: the owner's base run fails every reported test"
+                    baseline["failures"],
+                    json!(
+                        named(base)
+                            .into_iter()
+                            .chain(base.first().map(|test| format!("test {test}")))
+                            .collect::<Vec<_>>()
+                    ),
+                    "{case}"
                 );
-                // A base off the owner's own base branch is no base: here the
-                // candidate itself, which fails the same tests. Nothing runs.
-                let off_base = owner_check(&fx.candidate, &report.failures)
-                    .expect_err(&format!("{case}: a base off the owner's branch is refused"));
-                assert!(
-                    matches!(&off_base, KnownRedUnconfirmed::Inconclusive(reason)
-                    if reason.contains(&format!(
-                        "base {} is not in the history of this owner's {BASE}",
-                        fx.candidate
-                    ))),
-                    "{case}: nothing ran, so nothing is contradicted: {off_base:?}"
+                assert_eq!(
+                    log["baseline"]["log"], "validation/claim-landing/0.baseline.json",
+                    "{case}"
                 );
-                assert!(!cache.exists(), "{case}: the owner ran nothing");
-
-                // Before publication the results carry the report, and the
-                // pin attaches the same log for the published candidate.
-                *host.ship_mode.lock().unwrap() = "pr".to_string();
-                host.claim_log_contents.lock().unwrap().clear();
-                let pending = action(&host, "claim_validate", &input)
-                    .unwrap_or_else(|error| panic!("{case}: validate before push: {error}"));
-                assert_eq!(pending["publication"], "pending", "{case}");
-                assert_eq!(pending["decision"], "passed_with_known_red", "{case}");
-                assert_eq!(pending["known_red"], output["known_red"], "{case}");
-                action(&host, "pr_open", &{
-                    let mut open = fx.open_input(&fx.candidate, &fx.base_sha);
-                    open["claim_validation"] = pending.clone();
-                    open
-                })
-                .unwrap_or_else(|error| panic!("{case}: open the PR: {error}"));
-                let body = fx
-                    .forge_state("pr-body")
-                    .expect("the forge received a body");
-                assert!(body.contains("## Known-red validation"), "{case}: {body}");
-                for test in known_red {
-                    assert!(
-                        body.contains(&format!("`orbit-core::runtime {test}`")),
-                        "{case}: the PR names {test}: {body}"
-                    );
+                drop(logs);
+                if base.is_empty() || candidate_tests.is_some_and(|tests| tests.is_empty()) {
+                    continue;
                 }
-                input["pull_request"] = json!(PR_NUMBER);
-                input["prevalidated"] = pending;
-                let pinned = action(&host, "claim_validate", &input)
-                    .unwrap_or_else(|error| panic!("{case}: pin: {error}"));
-                assert_eq!(pinned["decision"], "passed_with_known_red", "{case}");
-                let pinned_log: HandoffValidationLog =
-                    serde_json::from_slice(&host.claim_log_contents.lock().unwrap()[path]).unwrap();
-                assert_eq!(pinned_log.exit_code, 2, "{case}");
-                assert_eq!(pinned_log.known_red, Some(report), "{case}");
+                let claimed = named(candidate_tests.unwrap()).into_iter().collect();
+                let refusal = owner_check(&fx.base_sha, &claimed)
+                    .expect_err(&format!("{case}: the owner refuses the report"));
+                assert!(
+                    matches!(&refusal, KnownRedUnconfirmed::Contradicted(reason)
+                            if reason.contains("does not fail `test orbit-core::runtime")),
+                    "{case}: the owner's base run contradicts it: {refusal:?}"
+                );
+                continue;
+            };
+
+            let output = outcome.unwrap_or_else(|error| panic!("{case}: {error}"));
+            assert_eq!(output["decision"], "passed_with_known_red", "{case}");
+            assert_eq!(output["commands"], json!([]), "{case}");
+            let records: Vec<KnownRedValidation> =
+                serde_json::from_value(output["known_red"].clone()).unwrap();
+            assert_eq!(records.len(), 1, "{case}: {records:?}");
+            assert_eq!(records[0].command, RED_TESTS, "{case}");
+            assert_eq!(records[0].base_sha, fx.base_sha, "{case}");
+            assert_eq!(records[0].tested_head, fx.candidate, "{case}");
+            assert_eq!(records[0].failures.identities, named(known_red), "{case}");
+            let path = "validation/claim-landing/0.json";
+            let log: HandoffValidationLog =
+                serde_json::from_slice(&host.claim_log_contents.lock().unwrap()[path]).unwrap();
+            assert_eq!(log.exit_code, 2, "{case}: the log keeps the exit status");
+            let report = log.known_red.expect("the log reports known red");
+            assert_eq!(report.base_sha, fx.base_sha, "{case}");
+            assert!(
+                named(known_red)
+                    .iter()
+                    .all(|test| report.failures.contains(test)),
+                "{case}: {report:?}"
+            );
+            assert_eq!(
+                owner_check(&fx.base_sha, &report.failures),
+                Ok(report.failures.clone()),
+                "{case}: the owner's base run fails every reported test"
+            );
+            // A base off the owner's own base branch is no base: here the
+            // candidate itself, which fails the same tests. Nothing runs.
+            let off_base = owner_check(&fx.candidate, &report.failures)
+                .expect_err(&format!("{case}: a base off the owner's branch is refused"));
+            assert!(
+                matches!(&off_base, KnownRedUnconfirmed::Inconclusive(reason)
+                if reason.contains(&format!(
+                    "base {} is not in the history of this owner's {BASE}",
+                    fx.candidate
+                ))),
+                "{case}: nothing ran, so nothing is contradicted: {off_base:?}"
+            );
+            assert!(!cache.exists(), "{case}: the owner ran nothing");
+
+            // Before publication the results carry the report, and the
+            // pin attaches the same log for the published candidate.
+            *host.ship_mode.lock().unwrap() = "pr".to_string();
+            host.claim_log_contents.lock().unwrap().clear();
+            let pending = action(&host, "claim_validate", &input)
+                .unwrap_or_else(|error| panic!("{case}: validate before push: {error}"));
+            assert_eq!(pending["publication"], "pending", "{case}");
+            assert_eq!(pending["decision"], "passed_with_known_red", "{case}");
+            assert_eq!(pending["known_red"], output["known_red"], "{case}");
+            action(&host, "pr_open", &{
+                let mut open = fx.open_input(&fx.candidate, &fx.base_sha);
+                open["claim_validation"] = pending.clone();
+                open
+            })
+            .unwrap_or_else(|error| panic!("{case}: open the PR: {error}"));
+            let body = fx
+                .forge_state("pr-body")
+                .expect("the forge received a body");
+            assert!(body.contains("## Known-red validation"), "{case}: {body}");
+            for test in known_red {
+                assert!(
+                    body.contains(&format!("`orbit-core::runtime {test}`")),
+                    "{case}: the PR names {test}: {body}"
+                );
             }
-        },
-    );
+            input["pull_request"] = json!(PR_NUMBER);
+            input["prevalidated"] = pending;
+            let pinned = action(&host, "claim_validate", &input)
+                .unwrap_or_else(|error| panic!("{case}: pin: {error}"));
+            assert_eq!(pinned["decision"], "passed_with_known_red", "{case}");
+            let pinned_log: HandoffValidationLog =
+                serde_json::from_slice(&host.claim_log_contents.lock().unwrap()[path]).unwrap();
+            assert_eq!(pinned_log.exit_code, 2, "{case}");
+            assert_eq!(pinned_log.known_red, Some(report), "{case}");
+        }
+    });
 }
 
 /// [ORB-15375] Captured output keeps only a head and a tail, so a failure in
 /// the middle of a long run never reaches the log. The failing-test set is
 /// read from the complete output: a candidate whose extra failure only the
-/// dropped middle names is held, not passed as known red.
-#[test]
-fn a_failure_only_the_truncated_middle_names_still_holds_the_candidate() {
+/// dropped middle names requires repair, retaining that identity in its log.
+fn a_failure_only_the_truncated_middle_names_still_requires_candidate_repair() {
     isolated(
-        "a_failure_only_the_truncated_middle_names_still_holds_the_candidate",
+        "a_failure_only_the_truncated_middle_names_still_requires_candidate_repair",
         |sandbox| {
             let base = ["suite::broken", "suite::flaky"];
             let fx = Fixture::with_red_tests(sandbox, &base, Some(&base));
             // About 590 KB: past the 256 KiB recorded budget, under the 1 MiB
             // supervisor capture limit that stops a run as an environment failure.
             let padding = "padding line that names no failure\n".repeat(8 * 1024);
+            let middle_failure = format!(
+                "{}--- STDOUT: orbit-core::runtime suite::added ---\n\
+                 scenario completion1335: cancellation during nested execution\n\
+                 --- STDERR: orbit-core::runtime suite::added ---\n\
+                 thread 'suite::added' panicked at fixture.rs:1335:9:\n\
+                 nested assertion failed: child completion must retain its cause\n\
+                 left: cancelled\nright: completed\n\
+                 PASS [   0.001s] orbit-core::runtime unrelated\n",
+                nextest_failures(&["suite::added"])
+            );
             let candidate = fx.commit(
                 "failing.txt",
                 &format!(
-                    "{}{padding}{}{padding}{}",
+                    "{}{padding}{middle_failure}{padding}{}",
                     nextest_failures(&base[..1]),
-                    nextest_failures(&["suite::added"]),
                     nextest_failures(&base[1..]),
                 ),
             );
@@ -4451,18 +5569,56 @@ fn a_failure_only_the_truncated_middle_names_still_holds_the_candidate() {
             host.require_commands(&[RED_TESTS]);
 
             let message = action(&host, "candidate_validate", &fx.validate_input())
-                .expect_err("a failure the base lacks is held")
+                .expect_err("a failure the base lacks requires candidate repair")
                 .to_string();
 
-            assert!(is_baseline_red_failure(None, Some(&message)), "{message}");
+            assert!(!is_baseline_red_failure(None, Some(&message)), "{message}");
             let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
             assert_eq!(log["tested_head"], candidate.as_str());
             let captured = log["output"].as_str().unwrap_or_default();
             assert!(
-                captured.contains("truncated") && !captured.contains("suite::added"),
-                "the extra failure is only in the dropped middle"
+                captured.contains("truncated") && captured.len() <= 256 * 1024 + 1024,
+                "bounded evidence must disclose omitted output"
             );
-            assert_eq!(log["failure_kind"], "baseline_red");
+            for detail in [
+                "suite::added",
+                "scenario completion1335",
+                "nested assertion failed: child completion must retain its cause",
+                "left: cancelled",
+                "right: completed",
+            ] {
+                assert!(captured.contains(detail), "middle failure lost {detail}");
+            }
+            assert_eq!(log["base_sha"], fx.base_sha);
+            let claim_input = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+            });
+            let message = action(&host, "claim_validate", &claim_input)
+                .expect_err("the claimed middle failure also requires repair")
+                .to_string();
+            assert!(!is_baseline_red_failure(None, Some(&message)), "{message}");
+            let logs = host.claim_log_contents.lock().unwrap();
+            let claim: Value =
+                serde_json::from_slice(&logs["validation/claim-landing/0.failed.json"]).unwrap();
+            assert_eq!(claim["tested_head"], candidate.as_str());
+            assert_eq!(claim["base_sha"], fx.base_sha);
+            assert_eq!(claim["failure_kind"], log["failure_kind"]);
+            assert_eq!(claim["failures"], log["failures"]);
+            assert_eq!(claim["output"], log["output"]);
+            drop(logs);
+            assert!(
+                log["baseline"]["log"].as_str().is_some(),
+                "the candidate comparison retains its base evidence"
+            );
+            assert_eq!(log["failure_kind"], "candidate");
+            assert!(
+                log["failures"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("test orbit-core::runtime suite::added"))
+            );
             assert!(
                 host.history(TASK_ID)
                     .iter()
@@ -4476,7 +5632,6 @@ fn a_failure_only_the_truncated_middle_names_still_holds_the_candidate() {
 /// A red base discovered while revalidating a rebased, already-published PR
 /// still holds the task. The earlier completion-failure path used to preserve
 /// every PR failure in `review`, bypassing the baseline hold.
-#[test]
 fn a_red_base_during_pr_revalidation_holds_the_task() {
     isolated(
         "a_red_base_during_pr_revalidation_holds_the_task",
@@ -4548,7 +5703,6 @@ fn a_red_base_during_pr_revalidation_holds_the_task() {
 /// A failure that looks network-inconclusive is rerun after a backoff. One
 /// that clears passes, with the rerun recorded. One that persists stops after
 /// two reruns and is judged as any failure is.
-#[test]
 fn a_network_flake_is_rerun_before_the_candidate_is_judged() {
     isolated(
         "a_network_flake_is_rerun_before_the_candidate_is_judged",
@@ -4598,7 +5752,6 @@ fn a_network_flake_is_rerun_before_the_candidate_is_judged() {
 /// A claimed leaf's required command that fails the same way on its base is
 /// typed `baseline_red`. The hold names the claim's base ref, the owner is
 /// sent the candidate's and the base's logs, and nothing is handed off.
-#[test]
 fn a_claimed_candidate_on_a_red_base_fails_typed_with_both_logs() {
     isolated(
         "a_claimed_candidate_on_a_red_base_fails_typed_with_both_logs",
@@ -4635,7 +5788,6 @@ fn a_claimed_candidate_on_a_red_base_fails_typed_with_both_logs() {
 /// network after its reruns, on a base that passes, says nothing about the
 /// candidate: it fails typed `transient`, so the leaf releases its claim
 /// instead of blocking the task, and the owner is still sent both logs.
-#[test]
 fn a_claimed_candidate_that_cannot_reach_the_network_fails_transient() {
     isolated(
         "a_claimed_candidate_that_cannot_reach_the_network_fails_transient",
@@ -4677,7 +5829,6 @@ fn a_claimed_candidate_that_cannot_reach_the_network_fails_transient() {
 /// no log and pins no candidate. After `pr_open`, the pin step attaches the
 /// logs for the published candidate without running a command again, and the
 /// owner's handoff accepts them. A pin for a different commit is refused.
-#[test]
 fn a_pr_claim_validates_before_publication_and_pins_after_it() {
     isolated(
         "a_pr_claim_validates_before_publication_and_pins_after_it",
@@ -4780,7 +5931,6 @@ fn login_shell_toolchain(sandbox: &Path) -> (Vec<(String, String)>, PathBuf, Pat
 /// rebase checkpoint. Once that head is (re)reviewed and republished under
 /// the rebase lease, completing it with the new reviewed head merges exactly
 /// that head and reaches `done`.
-#[test]
 fn a_conflicting_reviewed_pr_is_rebased_for_re_review_then_completes() {
     isolated(
         "a_conflicting_reviewed_pr_is_rebased_for_re_review_then_completes",
@@ -4879,7 +6029,6 @@ const FEATURE: &str = "src/feature.txt";
 /// the retry used to refuse the provenance and block. The provenance guard
 /// still refuses a recovered HEAD whose checkpoint is not the one this
 /// attempt prepared.
-#[test]
 fn a_recovered_completion_rebase_follows_a_clean_base_advance_and_lands() {
     isolated(
         "a_recovered_completion_rebase_follows_a_clean_base_advance_and_lands",
@@ -4959,7 +6108,6 @@ fn a_recovered_completion_rebase_follows_a_clean_base_advance_and_lands() {
 /// until the step has followed its base as often as allowed. The next advance
 /// blocks as `base_chase_exhausted`, keeping the last certified recovery and
 /// requesting no merge.
-#[test]
 fn conflicting_base_advances_after_recovery_are_chased_until_the_bound() {
     isolated(
         "conflicting_base_advances_after_recovery_are_chased_until_the_bound",
@@ -5087,7 +6235,7 @@ fn rebase_state(checkout: &Path, name: &str) -> String {
 }
 
 fn is_ancestor(repo: &Path, ancestor: &str, descendant: &str) -> bool {
-    Command::new("git")
+    crate::git_test_support::command()
         .args(["merge-base", "--is-ancestor", ancestor, descendant])
         .current_dir(repo)
         .status()
@@ -5098,7 +6246,6 @@ fn is_ancestor(repo: &Path, ancestor: &str, descendant: &str) -> bool {
 /// Without `workflow.required_validation_commands` the step changes nothing:
 /// no command runs, no evidence is attached, and even a checkout that would be
 /// refused is passed through as today.
-#[test]
 fn required_validation_without_commands_is_a_no_op() {
     isolated(
         "required_validation_without_commands_is_a_no_op",
@@ -5121,7 +6268,6 @@ fn required_validation_without_commands_is_a_no_op() {
 /// hands off: `claim_validate` pins the candidate and records the no-op, and
 /// `claim_handoff` records a handoff with no validation logs whose summary
 /// does not claim a check passed.
-#[test]
 fn claimed_validation_without_commands_is_a_recorded_no_op() {
     isolated(
         "claimed_validation_without_commands_is_a_recorded_no_op",
@@ -5173,7 +6319,6 @@ fn claimed_validation_without_commands_is_a_recorded_no_op() {
 /// for the exact candidate, and a leaf without it reports `not_required`
 /// rather than inventing a review. Evidence for another head is refused
 /// before anything is recorded [ORB-13895].
-#[test]
 fn claimed_handoff_carries_before_pr_evidence_only_for_its_candidate() {
     isolated(
         "claimed_handoff_carries_before_pr_evidence_only_for_its_candidate",
@@ -5229,7 +6374,6 @@ fn claimed_handoff_carries_before_pr_evidence_only_for_its_candidate() {
 
 /// The same leaf on an owner that does require a command still refuses a
 /// handoff that carries none of its logs.
-#[test]
 fn claimed_handoff_without_logs_is_refused_when_commands_are_required() {
     isolated(
         "claimed_handoff_without_logs_is_refused_when_commands_are_required",
@@ -5256,11 +6400,51 @@ fn claimed_handoff_without_logs_is_refused_when_commands_are_required() {
     );
 }
 
+/// A recorded admitted review gate's output for attempt `attempt_id` in
+/// lineage `lineage`, reviewed by `codex / review-model`.
+fn admitted_review(attempt_id: &str, lineage: &str) -> Value {
+    serde_json::to_value(ReviewGateAdmissionOutput::Admitted(Box::new(
+        ReviewGateAdmitted {
+            decision: ReviewGateDecision::Admitted,
+            held_attempt_id: None,
+            first_task_id: TASK_ID.into(),
+            attempt_id: attempt_id.into(),
+            attempt_index: 1,
+            lineage_key: lineage.into(),
+            timing: ReviewTiming::BeforePr,
+            timing_source: "workspace".into(),
+            reviewer: ReviewGateReviewer {
+                crew: "reviewers".into(),
+                crew_source: "workspace".into(),
+                provider: "codex".into(),
+                model: "review-model".into(),
+                reasoning_effort: None,
+            },
+            owed_evidence: Vec::new(),
+            owner_owed_evidence: Vec::new(),
+            host_validation: Vec::new(),
+            base_sha: "0".repeat(40),
+            base_tree: "0".repeat(40),
+            head_sha: "0".repeat(40),
+            head_tree: "0".repeat(40),
+            implementation_commit_count: 1,
+            task_meaning_digest: "digest".into(),
+            task_selectors: BTreeMap::new(),
+            evidence_carry: Value::Null,
+            manifest_artifact: REVIEW_MANIFEST_ARTIFACT.into(),
+            report_artifact: REVIEW_REPORT_ARTIFACT.into(),
+            budget: ReviewBudget::default(),
+            remaining: ReviewConsumption { seconds: 1800 },
+            started_at: Utc::now(),
+        },
+    )))
+    .unwrap()
+}
+
 /// A completion-stage failure — here the re-review of a rebased head — closes
 /// every review attempt the run admitted, so none stays open, and keeps the
 /// published PR and the task in review. A bundle's handoff, which refuses to
 /// reconcile more than one task, still closes its attempts first.
-#[test]
 fn a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle() {
     isolated(
         "a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle",
@@ -5268,13 +6452,8 @@ fn a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle() {
             let fx = Fixture::new(sandbox);
             let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
             host.publish_pr(TASK_ID);
-            let admission = |attempt: &str| {
-                json!({
-                    "applies": true,
-                    "lineage_key": "ws/T-LANDING/agent-main/jrun-landing",
-                    "attempt_id": attempt,
-                })
-            };
+            let admission =
+                |attempt: &str| admitted_review(attempt, "ws/T-LANDING/agent-main/jrun-landing");
 
             let handoff = action(
                 &host,
@@ -5376,7 +6555,6 @@ fn review_revalidation_widens_selectors_for_a_reviewer_change_outside_task_owner
 /// candidate. The handoff keeps the implementation commit and the reviewer
 /// commit exactly as they are, pushes them so they are recoverable, blocks the
 /// task, and opens no PR.
-#[test]
 fn a_failed_review_revalidation_rejects_and_preserves_both_commits() {
     isolated(
         "a_failed_review_revalidation_rejects_and_preserves_both_commits",
@@ -5397,12 +6575,10 @@ fn a_failed_review_revalidation_rejects_and_preserves_both_commits() {
                     "pipeline": {
                         "worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
                         "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE},
-                        "review_gate_admit": {
-                            "applies": true,
-                            "lineage_key": "ws/T-LANDING/agent-main/jrun-landing",
-                            "attempt_id": "rvw-fixes-1",
-                            "reviewer": {"provider": "codex", "model": "review-model"},
-                        },
+                        "review_gate_admit": admitted_review(
+                            "rvw-fixes-1",
+                            "ws/T-LANDING/agent-main/jrun-landing",
+                        ),
                         "review_gate_settle": {
                             "gate": "passed",
                             "verdict": "accept_with_fixes",
@@ -5434,7 +6610,6 @@ fn a_failed_review_revalidation_rejects_and_preserves_both_commits() {
     );
 }
 
-#[test]
 fn a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking() {
     isolated(
         "a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking",
@@ -5442,14 +6617,13 @@ fn a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking() {
             let fx = Fixture::new(sandbox);
             let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
             let handoff = action(&host, "pr_failure_handoff", &json!({
-            "failed_step_id": "review", "error_code": "deterministic_action_refused",
+            "failed_step_id": "review", "error_code": ReviewGateRefusal::TimeoutIncomplete.error_code(),
             "error_message": "review_timeout_incomplete: reviewer exceeded its wall clock",
             "run_id": RUN_ID, "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
             "pipeline": {
                 "worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
                 "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE},
-                "review_gate_admit": {"applies": true, "attempt_id": "rvw-partial", "lineage_key": "lineage",
-                    "reviewer": {"provider": "codex", "model": "review-model"}},
+                "review_gate_admit": admitted_review("rvw-partial", "lineage"),
             },
         })).unwrap();
             assert_eq!(handoff["decision"], "incomplete_review_timeout");
@@ -5460,7 +6634,6 @@ fn a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking() {
     );
 }
 
-#[test]
 fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks() {
     isolated(
         "an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks",
@@ -5484,7 +6657,7 @@ fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks() {
             // Settlement never reaches the handoff with a hold: it ends the run
             // held. The hold reaches the handoff only as an admission refusal.
             let mut input = json!({
-                "failed_step_id": "review_gate_admit", "error_code": "deterministic_action_refused",
+                "failed_step_id": "review_gate_admit", "error_code": ReviewGateRefusal::AwaitingEvidence.error_code(),
                 "error_message": "review_awaiting_evidence: native macOS run", "run_id": RUN_ID,
                 "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
                 "pipeline": {"worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
@@ -5495,6 +6668,7 @@ fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks() {
             assert_eq!(host.status(TASK_ID), TaskStatus::InProgress);
             assert_eq!(fx.forge_state("pr-head"), None);
             input["failed_step_id"] = json!("review_gate_settle");
+            input["error_code"] = json!(ReviewGateRefusal::Blocked.error_code());
             input["error_message"] = json!("review_gate_blocked: changes_required; wrong approach");
             let rejected = action(&host, "pr_failure_handoff", &input).unwrap();
             assert_eq!(
@@ -5516,7 +6690,7 @@ fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks() {
                 serde_json::to_vec(&forged_hold).unwrap(),
             );
             let forged = action(&forged_host, "pr_failure_handoff", &json!({
-                "failed_step_id": "review_gate_admit", "error_code": "deterministic_action_refused",
+                "failed_step_id": "review_gate_admit", "error_code": ReviewGateRefusal::AwaitingEvidence.error_code(),
                 "error_message": "review_awaiting_evidence: native macOS run", "run_id": RUN_ID,
                 "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
                 "pipeline": {"worktree": {"job_run_id": RUN_ID, "workspace_path": forged_fx.repo},
@@ -5534,7 +6708,6 @@ fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks() {
 /// ORB-14651: a requeued evidence-held task is admitted again by a later run.
 /// Admission refuses for the still-missing evidence before it reserves an
 /// attempt, so the handoff must keep the hold rather than escalate.
-#[test]
 fn an_admission_refusal_for_held_evidence_stays_held_not_escalated() {
     isolated(
         "an_admission_refusal_for_held_evidence_stays_held_not_escalated",
@@ -5568,7 +6741,7 @@ fn an_admission_refusal_for_held_evidence_stays_held_not_escalated() {
             // Admission refused before reserving an attempt, so no
             // `review_gate_admit` output reaches the handoff.
             let mut input = json!({
-                "failed_step_id": "review_gate_admit", "error_code": "deterministic_action_refused",
+                "failed_step_id": "review_gate_admit", "error_code": ReviewGateRefusal::AwaitingEvidence.error_code(),
                 "error_message": "review_awaiting_evidence: named external checks have not arrived for the held candidate",
                 "run_id": RERUN_ID,
                 "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
@@ -5599,6 +6772,15 @@ fn an_admission_refusal_for_held_evidence_stays_held_not_escalated() {
                 serde_json::to_vec(&hold).unwrap(),
             );
             host.set_status(TASK_ID, TaskStatus::InProgress);
+            input["error_code"] = json!("pipeline_step_failed");
+            let untyped = action(&host, "pr_failure_handoff", &input).unwrap();
+            assert_eq!(
+                untyped["decision"], "blocked_review_gate",
+                "ORB-15714: the handoff decides on the typed code, not on message text"
+            );
+            assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
+
+            host.set_status(TASK_ID, TaskStatus::InProgress);
             input["error_message"] = json!("review_gate_stale: completion rebased a reviewed head");
             let substantive = action(&host, "pr_failure_handoff", &input).unwrap();
             assert_eq!(substantive["decision"], "blocked_review_gate");
@@ -5613,7 +6795,6 @@ fn an_admission_refusal_for_held_evidence_stays_held_not_escalated() {
 
 /// Both the fixture guard and Git itself refuse HTTPS before opening a socket,
 /// including the engine's VCS child that clears GIT_ALLOW_PROTOCOL.
-#[test]
 fn fixture_push_refuses_non_file_transports_without_network() {
     isolated(
         "fixture_push_refuses_non_file_transports_without_network",
@@ -5634,7 +6815,7 @@ fn fixture_push_refuses_non_file_transports_without_network() {
             );
 
             for clear_policy_variable in [false, true] {
-                let mut command = Command::new("git");
+                let mut command = crate::git_test_support::command();
                 command
                     .args(["push", "origin", BRANCH])
                     .current_dir(&fx.repo);
@@ -5676,7 +6857,6 @@ fn fixture_push_refuses_non_file_transports_without_network() {
 
 /// Check effective push URLs, including a second pushurl and rewrite rules,
 /// rather than trusting a local fetch URL.
-#[test]
 fn fixture_push_guard_checks_all_effective_push_urls() {
     isolated(
         "fixture_push_guard_checks_all_effective_push_urls",
@@ -5735,7 +6915,6 @@ fn fixture_push_guard_checks_all_effective_push_urls() {
 
 /// ORB-14717: a silent origin must not turn reviewed work into a candidate
 /// failure. Only a cached ref sharing ancestry can complete the handoff.
-#[test]
 fn claimed_handoff_fetch_timeout_uses_only_a_related_cached_base() {
     isolated(
         "claimed_handoff_fetch_timeout_uses_only_a_related_cached_base",
@@ -5833,7 +7012,6 @@ fn claimed_handoff_missing_remote_ref_never_uses_the_cached_base() {
 
 /// Drive real Git's local upload-pack: temporary connection failures retry and
 /// can recover; access refusals stay untyped and never retry or use the cache.
-#[test]
 fn remote_base_transport_retries_preserve_access_refusals() {
     isolated(
         "remote_base_transport_retries_preserve_access_refusals",
@@ -5928,6 +7106,35 @@ struct Fixture {
 impl Fixture {
     /// A fresh repository and forge, made the active forge for `gh`.
     fn new(sandbox: &Path) -> Self {
+        thread_local! {
+            static TEMPLATE: std::cell::RefCell<Option<Fixture>> = const { std::cell::RefCell::new(None) };
+        }
+        TEMPLATE.with(|slot| {
+            let mut template = slot.borrow_mut();
+            let seed = template.get_or_insert_with(|| Self::fresh(sandbox));
+            seed.copy_to(sandbox)
+        })
+    }
+
+    /// Copy only pristine preparation, before any action or scripted response
+    /// mutates it. Objects, refs, index and forge files belong to this copy;
+    /// the template's local remote URL is rewritten by `copy_template`.
+    fn copy_to(&self, sandbox: &Path) -> Self {
+        let root = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
+        git_fixture::copy_template(self._root.path(), root.path());
+        let repo = root.path().join("repo").canonicalize().unwrap();
+        let forge = root.path().join("forge");
+        fs::write(sandbox.join("active-forge"), path_str(&forge)).unwrap();
+        Self {
+            _root: root,
+            repo,
+            forge,
+            base_sha: self.base_sha.clone(),
+            candidate: self.candidate.clone(),
+        }
+    }
+
+    fn fresh(sandbox: &Path) -> Self {
         let root = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
         let forge = root.path().join("forge");
         let remote = forge.join("remote.git");
@@ -5972,7 +7179,7 @@ impl Fixture {
         fixture.commit_on_base(
             "Makefile",
             &format!(
-                "ci-lint:\n\t@echo ran >> '{}'\n\t@echo 'README.md: lint is red' >&2; exit 2\n",
+                "ci-lint:\n\t@echo ran >> '{}'\n\t@printf 'error: lint is red\\n  --> README.md:1:1\\n' >&2; exit 2\n",
                 runs.display()
             ),
         );
@@ -6000,8 +7207,10 @@ impl Fixture {
             .map(|test| format!("test {test} ... FAILED\n"))
             .unwrap_or_default();
         base_output.push_str(&nextest_failures(base_tests));
-        fixture.commit_on_base("failing.txt", &base_output);
-        fixture.commit_on_base("Makefile", "ci-test:\n\t@cat failing.txt\n\t@exit 100\n");
+        fixture.commit_files_on_base(&[
+            ("failing.txt", &base_output),
+            ("Makefile", "ci-test:\n\t@cat failing.txt\n\t@exit 100\n"),
+        ]);
         git(&fixture.repo, &["rebase", BASE]);
         git(&fixture.repo, &["push", "--force", "origin", BRANCH]);
         let candidate = match candidate_tests {
@@ -6017,14 +7226,29 @@ impl Fixture {
 
     /// Commit `file` on the base and push it, leaving the candidate checked out.
     fn commit_on_base(&self, file: &str, contents: &str) {
+        self.commit_files_on_base(&[(file, contents)]);
+    }
+
+    /// Seed one final base tree when the fixture observes no intermediate write.
+    /// Separate base advances still use `commit_on_base` at each observation.
+    fn commit_files_on_base(&self, files: &[(&str, &str)]) {
         git(&self.repo, &["checkout", BASE]);
-        let path = self.repo.join(file);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, contents).unwrap();
-        git(&self.repo, &["add", file]);
+        for (file, contents) in files {
+            let path = self.repo.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+        }
+        let mut add = vec!["add", "--"];
+        add.extend(files.iter().map(|(file, _)| *file));
+        git(&self.repo, &add);
+        let names = files
+            .iter()
+            .map(|(file, _)| *file)
+            .collect::<Vec<_>>()
+            .join(", ");
         git(
             &self.repo,
-            &["commit", "-m", &format!("base writes {file}")],
+            &["commit", "-m", &format!("base writes {names}")],
         );
         git(&self.repo, &["push", "origin", BASE]);
         git(&self.repo, &["checkout", BRANCH]);
@@ -6056,6 +7280,29 @@ impl Fixture {
             format!("{}\n", outcomes.join("\n")),
         )
         .unwrap();
+    }
+
+    /// Answers to successive PR views; the final outcome repeats. `success`
+    /// lets the normal fixture response continue, while other lines fail as
+    /// the provider's stderr diagnostic. `invalid_json` succeeds at the
+    /// process boundary with malformed output to model an Orbit refusal.
+    fn script_pr_views(&self, outcomes: &[&str]) {
+        fs::write(
+            self.forge.join("pr-view-outcomes"),
+            format!("{}\n", outcomes.join("\n")),
+        )
+        .unwrap();
+        fs::write(self.forge.join("pr-view-reads"), "0\n").unwrap();
+    }
+
+    fn script_pr_close_failure(&self, diagnostic: &str) {
+        fs::write(self.forge.join("pr-close-failure"), diagnostic).unwrap();
+    }
+
+    fn pr_view_reads(&self) -> usize {
+        self.forge_state("pr-view-reads")
+            .map(|value| value.parse().unwrap())
+            .unwrap_or(0)
     }
 
     /// Script PR metadata independently of the real remote PR head ref.
@@ -6326,6 +7573,9 @@ fn task(status: TaskStatus) -> Task {
         crew: None,
         crew_source: None,
         orchestrator: None,
+        orchestrator_model: None,
+        orchestrator_model_source: None,
+        origin: None,
         created_at: now,
         updated_at: now,
     }
@@ -6335,6 +7585,7 @@ fn task(status: TaskStatus) -> Task {
 /// through, kept in memory. The provider boundary is left to the engine.
 struct DeliveryHost {
     repo: PathBuf,
+    runs: Mutex<BTreeMap<String, JobRun>>,
     tasks: Mutex<BTreeMap<String, Task>>,
     comments: Mutex<BTreeMap<String, Vec<TaskComment>>>,
     completion_notes: Mutex<Vec<String>>,
@@ -6345,6 +7596,8 @@ struct DeliveryHost {
     /// Outputs of the actions a job graph scripts, by action; every other
     /// action is the engine's own.
     scripted: Mutex<BTreeMap<String, Value>>,
+    /// Simulate a chunk stored with an unknown attachment response.
+    fail_evidence_writes: Mutex<bool>,
     /// Attached task artifacts, by task id and path.
     artifacts: Mutex<BTreeMap<(String, String), Vec<u8>>>,
     /// Trusted system artifacts, by task id and path.
@@ -6375,9 +7628,10 @@ struct DeliveryHost {
     run_states: Mutex<BTreeMap<String, PipelineState>>,
     /// Inputs the scripted actions last received, by action.
     scripted_inputs: Mutex<BTreeMap<String, Value>>,
-    /// What the implementer's lane answers a deferral probe with; `None`
-    /// answers with the probed sandbox's refusal.
-    deferral_probe: Mutex<Option<NamespaceProbe>>,
+    /// What the implementer's lane answers a deferral probe with, by the
+    /// probe's command; a probe with no scripted answer gets its sandbox's
+    /// refusal.
+    deferral_answers: Mutex<BTreeMap<String, NamespaceProbe>>,
     /// Deferral probes run, as (probe, provider, checkout).
     probes: Mutex<Vec<(String, Option<String>, PathBuf)>>,
     /// The OS this host runs implementers on [ORB-15587].
@@ -6392,6 +7646,7 @@ impl DeliveryHost {
     fn new(repo: &Path, status: TaskStatus) -> Self {
         Self {
             repo: repo.to_path_buf(),
+            runs: Mutex::default(),
             tasks: Mutex::new(BTreeMap::from([(TASK_ID.to_string(), task(status))])),
             comments: Mutex::default(),
             completion_notes: Mutex::default(),
@@ -6400,6 +7655,7 @@ impl DeliveryHost {
             baseline_commands: Mutex::default(),
             scripted: Mutex::default(),
             artifacts: Mutex::default(),
+            fail_evidence_writes: Mutex::default(),
             artifact_creators: Mutex::default(),
             releases: Mutex::default(),
             validation_env: Mutex::default(),
@@ -6414,7 +7670,7 @@ impl DeliveryHost {
             recovery_certificates: Mutex::default(),
             run_states: Mutex::default(),
             scripted_inputs: Mutex::default(),
-            deferral_probe: Mutex::default(),
+            deferral_answers: Mutex::default(),
             probes: Mutex::default(),
             os: Mutex::new(EvidenceHostOs::current()),
         }
@@ -6540,7 +7796,75 @@ impl DeliveryHost {
     }
 }
 
-impl RuntimeHost for DeliveryHost {
+impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
+    fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
+        Ok(self.runs.lock().unwrap().get(run_id).cloned())
+    }
+
+    fn admit_pr_auto_fix(
+        &self,
+        request: &orbit_engine::PrAutoFixRequest,
+    ) -> Result<orbit_engine::PrAutoFixAdmission, OrbitError> {
+        let attempts = pr_auto_fix_attempts(&self.history(TASK_ID), &request.pr_number);
+        let decision = orbit_types::workflow::decide_pr_auto_fix(
+            &attempts,
+            &orbit_types::workflow::PrAutoFixClaim {
+                pr_number: &request.pr_number,
+                head_sha: &request.head_sha,
+                blocker: request.blocker,
+                run_id: &request.run_id,
+            },
+            PR_AUTO_FIX_BUDGET,
+            "fixture",
+            "fixture",
+        );
+        if let orbit_types::workflow::PrAutoFixDecision::Admit(attempt) = &decision {
+            auto_fix::seed_auto_fix_history(self, PR_AUTO_FIX_ADMITTED_EVENT, attempt);
+        }
+        Ok(orbit_engine::PrAutoFixAdmission::Decided(decision))
+    }
+
+    fn admit_pr_base_update(
+        &self,
+        _tasks: &[String],
+        request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        use orbit_types::workflow::{
+            PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, decide_pr_base_update,
+        };
+        let decision = decide_pr_base_update(&self.history(TASK_ID), request);
+        if matches!(decision, PrBaseUpdateAdmission::Reserved) {
+            auto_fix::seed_auto_fix_history(self, PR_BASE_UPDATE_RESERVED_EVENT, request);
+            fs::write(
+                self.repo.parent().unwrap().join("forge/base-reserved"),
+                "reserved",
+            )
+            .unwrap();
+        }
+        Ok(decision)
+    }
+
+    fn admit_pr_infrastructure(
+        &self,
+        execution: &str,
+        _task_ids: &[String],
+        evidence: &orbit_types::workflow::PrInfrastructureEvidence,
+    ) -> Result<orbit_types::workflow::PrInfrastructureAdmission, OrbitError> {
+        use orbit_types::workflow::{
+            PR_INFRASTRUCTURE_RESERVED_EVENT, PrInfrastructureAdmission, decide_pr_infrastructure,
+        };
+        let decision = decide_pr_infrastructure(&self.history(TASK_ID), execution, evidence);
+        if let PrInfrastructureAdmission::Reserved(reservation) = &decision {
+            auto_fix::seed_auto_fix_history(self, PR_INFRASTRUCTURE_RESERVED_EVENT, reservation);
+            fs::write(
+                self.repo.parent().unwrap().join("forge/infra-reserved"),
+                "reserved",
+            )
+            .unwrap();
+        }
+        Ok(decision)
+    }
+
     fn begin_rebase_recovery_attempt(
         &self,
         run_id: &str,
@@ -6656,6 +7980,33 @@ impl RuntimeHost for DeliveryHost {
             task.context_files.extend(selectors.iter().cloned());
         }
         Ok(selectors)
+    }
+
+    fn get_task_artifact(
+        &self,
+        task_id: &str,
+        path: &str,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        let artifact = self
+            .artifacts
+            .lock()
+            .unwrap()
+            .get(&(task_id.to_string(), path.to_string()))
+            .map(|content| TaskArtifact {
+                path: path.into(),
+                content: content.clone(),
+                media_type: "application/json".into(),
+                created_by: self
+                    .artifact_creators
+                    .lock()
+                    .unwrap()
+                    .get(&(task_id.to_string(), path.to_string()))
+                    .cloned(),
+            });
+        if let Some(artifact) = &artifact {
+            artifact.validate_inline_size(task_id)?;
+        }
+        Ok(artifact)
     }
 
     fn get_task_artifacts(&self, task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
@@ -6787,6 +8138,10 @@ impl RuntimeHost for DeliveryHost {
         Ok(())
     }
 
+    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
+
     fn repo_root(&self) -> Result<String, OrbitError> {
         Ok(self.repo.to_string_lossy().into_owned())
     }
@@ -6817,8 +8172,8 @@ impl RuntimeHost for DeliveryHost {
             provider.map(str::to_string),
             cwd.to_path_buf(),
         ));
-        if let Some(answer) = self.deferral_probe.lock().unwrap().clone() {
-            return answer;
+        if let Some(answer) = self.deferral_answers.lock().unwrap().get(probe.command) {
+            return answer.clone();
         }
         let (exit_code, output) = if probe.command == SEATBELT_APPLY_PROBE {
             (71, "sandbox-exec: sandbox_apply: Operation not permitted")
@@ -6845,6 +8200,9 @@ impl RuntimeHost for DeliveryHost {
         input: &Value,
         _tool_context: orbit_tools::ToolContext,
     ) -> Result<Value, DispatchError> {
+        if action == "test_ci_repair" {
+            return auto_fix::perform_ci_repair(self, input);
+        }
         if let Some(output) = self.scripted.lock().unwrap().get(action).cloned() {
             self.scripted_inputs
                 .lock()
@@ -6857,6 +8215,35 @@ impl RuntimeHost for DeliveryHost {
                 action: action.to_string(),
                 message: error.to_string(),
             })
+    }
+
+    fn run_private_vcs_operation(
+        &self,
+        operation: &str,
+        input: Value,
+    ) -> Result<Value, OrbitError> {
+        if operation == "ci.commit_jobs"
+            && let Some(answer) = self.scripted.lock().unwrap().get(operation).cloned()
+        {
+            let commit = input.get("commit").and_then(Value::as_str).unwrap_or("");
+            // A head-only script does not describe the base tip. An inherited
+            // red base is planted through the substitute `gh`.
+            if commit == git(&self.repo, &["rev-parse", BASE]) {
+                return Ok(json!({"commit": commit, "jobs": []}));
+            }
+            return Ok(answer);
+        }
+        if matches!(operation, "ci.job_log" | "ci.prerequisite_evidence")
+            && let Some(answer) = self.scripted.lock().unwrap().get(operation).cloned()
+        {
+            return Ok(answer);
+        }
+        if self.scripted.lock().unwrap().contains_key("test_ci_repair")
+            && let Some(answer) = auto_fix::ci_answer(self, operation, &input)
+        {
+            return Ok(answer);
+        }
+        orbit_engine::run_private_vcs_operation(operation, &input)
     }
 
     /// One owner-local claim on the fixture's candidate branch, requiring
@@ -6872,7 +8259,7 @@ impl RuntimeHost for DeliveryHost {
             ship_mode: self.ship_mode.lock().unwrap().clone(),
             base_branch: BASE.to_string(),
             landing_branch: BASE.to_string(),
-            required_commands: self.required_validation_commands(),
+            required_commands: RuntimeHost::required_validation_commands(self),
         })
     }
 
@@ -6882,6 +8269,11 @@ impl RuntimeHost for DeliveryHost {
             .lock()
             .unwrap()
             .insert(path.to_string(), content);
+        if *self.fail_evidence_writes.lock().unwrap() && path.contains("/evidence/") {
+            return Err(OrbitError::Execution(
+                "attachment response unknown after write".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -6890,7 +8282,8 @@ impl RuntimeHost for DeliveryHost {
         task_id: &str,
         record: &orbit_types::workflow::FlakyValidation,
     ) -> Result<(), OrbitError> {
-        self.apply_task_automation_update(
+        RuntimeHost::apply_task_automation_update(
+            self,
             task_id,
             TaskAutomationUpdate {
                 append_history: vec![TaskHistoryEntry {
@@ -6900,6 +8293,8 @@ impl RuntimeHost for DeliveryHost {
                     note: Some(record.text()),
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
+                    decision: Some(TaskDecision::FlakyValidation(record.clone())),
                 }],
                 ..Default::default()
             },
@@ -6917,7 +8312,10 @@ impl RuntimeHost for DeliveryHost {
             .unwrap()
             .clone()
             .unwrap_or_else(|| {
-                ValidationEnvironment::launcher(self.agent_subprocess_environment(&[]))
+                ValidationEnvironment::launcher(RuntimeHost::agent_subprocess_environment(
+                    self,
+                    &[],
+                ))
             })
     }
 
@@ -6929,7 +8327,7 @@ impl RuntimeHost for DeliveryHost {
         path: &str,
         content: Vec<u8>,
     ) -> Result<(), OrbitError> {
-        if self.get_task(task_id)?.job_run_id.as_deref() != Some(run_id) {
+        if RuntimeHost::get_task(self, task_id)?.job_run_id.as_deref() != Some(run_id) {
             return Err(OrbitError::PolicyDenied(format!(
                 "run {run_id} does not own {task_id}"
             )));
@@ -6938,6 +8336,11 @@ impl RuntimeHost for DeliveryHost {
             .lock()
             .unwrap()
             .insert((task_id.to_string(), path.to_string()), content);
+        if *self.fail_evidence_writes.lock().unwrap() && path.contains("/evidence/") {
+            return Err(OrbitError::Execution(
+                "attachment response unknown after write".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -6962,6 +8365,8 @@ set -eu
 forge=$(cat '__SANDBOX__/active-forge')
 remote="$forge/remote.git"
 url="https://github.com/orbit/test/pull/42"
+number_json=42
+if [ -f "$forge/pr-number-json" ]; then number_json=$(cat "$forge/pr-number-json"); fi
 export GIT_AUTHOR_NAME=Forge GIT_AUTHOR_EMAIL=forge@example.invalid
 export GIT_COMMITTER_NAME=Forge GIT_COMMITTER_EMAIL=forge@example.invalid
 printf '%s %s\n' "$1" "${2:-}" >> "$forge/calls"
@@ -6973,13 +8378,31 @@ head_sha() {
 
 check() {
     case "$1" in
+        mixed_pending|mixed_success|mixed_failure)
+            test_state=IN_PROGRESS; conclusion=''
+            if [ "$1" = mixed_success ]; then test_state=COMPLETED; conclusion=SUCCESS; fi
+            if [ "$1" = mixed_failure ]; then test_state=COMPLETED; conclusion=FAILURE; fi
+            printf '{"__typename":"CheckRun","name":"test","status":"%s","conclusion":"%s","isRequired":true},{"__typename":"CheckRun","name":"coverage","status":"COMPLETED","conclusion":"FAILURE","isRequired":false}' "$test_state" "$conclusion" ;;
         pending) printf '{"__typename":"CheckRun","name":"test","status":"IN_PROGRESS","conclusion":""}' ;;
         success) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
         failure) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE"}' ;;
+        # Two required failures. `test` then `lint`, or the reverse. Both
+        # carry isRequired so the policy read does not tag only the last node.
+        paired_failure|paired_failure_reversed)
+            test_check='{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}'
+            lint_check='{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}'
+            if [ "$1" = paired_failure_reversed ]; then
+                printf '%s,%s' "$lint_check" "$test_check"
+            else
+                printf '%s,%s' "$test_check" "$lint_check"
+            fi ;;
     esac
 }
 
 status() {
+    # 1 when this `pr view` asked for isDraft. A draft fixture refuses to
+    # answer otherwise, so dropping the field fails the regression.
+    draft_field=${1:-0}
     pr_head=$(cat "$forge/pr-head")
     pr_base=$(cat "$forge/pr-base")
     if [ -f "$forge/merged" ]; then
@@ -6991,7 +8414,7 @@ status() {
         if [ -f "$forge/merged-head" ]; then
             merged_head=$(cat "$forge/merged-head")
         fi
-        printf '{"number":42,"state":"MERGED","mergedAt":"2026-10-03T00:00:00Z","mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","reviewDecision":"","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":{"oid":"%s"},"url":"%s"}\n' \
+        printf '{"number":42,"state":"MERGED","isDraft":false,"mergedAt":"2026-10-03T00:00:00Z","mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","reviewDecision":"","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":{"oid":"%s"},"url":"%s"}\n' \
             "$(check success)" "$pr_head" "$merged_head" "$pr_base" "$(cat "$forge/merged")" "$url"
         return
     fi
@@ -6999,6 +8422,22 @@ status() {
     printf '%s\n' "$reads" > "$forge/reads"
     observed=$(sed -n "${reads}p" "$forge/checks")
     [ -n "$observed" ] || observed=$(tail -n 1 "$forge/checks")
+    if [ "$observed" = source_contract ]; then
+        if [ "$(git --git-dir="$remote" show "$(head_sha):src/contract" )" = fixed ]; then
+            observed=success
+        else
+            observed=failure
+        fi
+    fi
+    # A provider app's required aggregate fails beside its passing analysis
+    # job; the mixed form also fails the workflow check `test`.
+    case "$observed" in source_aggregate|source_aggregate_mixed)
+        if [ "$(git --git-dir="$remote" show "$(head_sha):src/contract" )" = fixed ]; then
+            observed=success
+        else
+            observed="${observed#source_}_failure"
+        fi ;;
+    esac
     state=OPEN
     reported_head=$(head_sha)
     if [ -f "$forge/heads" ]; then
@@ -7016,17 +8455,51 @@ status() {
     merged_at=null
     review=""
     case "$observed" in
+        mixed_pending|mixed_failure) merge_state=BLOCKED; rollup=$(check "$observed") ;;
+        mixed_success) merge_state=CLEAN; rollup=$(check "$observed") ;;
         pending) merge_state=BLOCKED; rollup=$(check pending) ;;
         success) merge_state=CLEAN; rollup=$(check success) ;;
         failure) merge_state=BLOCKED; rollup=$(check failure) ;;
+        paired_failure|paired_failure_reversed) merge_state=BLOCKED; rollup=$(check "$observed") ;;
+        aggregate_failure|aggregate_mixed_failure)
+            merge_state=BLOCKED
+            rollup='{"__typename":"CheckRun","name":"CodeQL","workflowName":"","status":"COMPLETED","conclusion":"FAILURE"},{"__typename":"CheckRun","name":"Analyze (rust)","workflowName":"CodeQL","status":"COMPLETED","conclusion":"SUCCESS"}'
+            [ "$observed" = aggregate_failure ] || rollup="$rollup,$(check failure)" ;;
+        prerequisite)
+            merge_state=BLOCKED
+            rollup='{"__typename":"CheckRun","name":"Read state","workflowName":"Guarded CI","status":"COMPLETED","conclusion":"FAILURE"}'
+            if [ -f "$forge/rerun-applied" ]; then
+                case "$(cat "$forge/infrastructure")" in
+                    positive|merge|lost|moved|deleted|legacy_success) merge_state=CLEAN; rollup='{"__typename":"CheckRun","name":"Protected (rust)","workflowName":"Guarded CI","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
+                    clean_missing|legacy_substitute) merge_state=CLEAN; rollup=$(check success) ;;
+                esac
+            fi ;;
         review_required) merge_state=BLOCKED; review=REVIEW_REQUIRED; rollup=$(check success) ;;
+        # A freshly pushed head before the provider has queued any check.
+        unreported) merge_state=BLOCKED; rollup='' ;;
         dirty) merge_state=DIRTY; rollup=$(check success) ;;
         closed) state=CLOSED; merge_state=CLEAN; rollup=$(check success) ;;
         contradictory) merged_at='"2026-10-05T12:47:15Z"'; merge_state=CLEAN; rollup=$(check success) ;;
         *) echo "fake gh: unknown check state '$observed'" >&2; exit 2 ;;
     esac
-    printf '{"number":42,"state":"%s","mergedAt":%s,"mergeable":"MERGEABLE","mergeStateStatus":"%s","reviewDecision":"%s","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":null,"url":"%s"}\n' \
-        "$state" "$merged_at" "$merge_state" "$review" "$rollup" "$pr_head" "$reported_head" "$pr_base" "$url"
+    if [ -f "$forge/review-decision" ]; then review=$(cat "$forge/review-decision"); fi
+    # [ORB-16342] An explicit draft whose merge state is not DRAFT. The file
+    # names that merge state. Ready pull requests omit it and report false.
+    is_draft=false
+    if [ -f "$forge/draft-merge-state" ]; then
+        if [ "$draft_field" != 1 ]; then
+            echo "fake gh: isDraft was not requested" >&2
+            exit 2
+        fi
+        is_draft=true
+        merge_state=$(cat "$forge/draft-merge-state")
+        case "$merge_state" in
+            BLOCKED|UNKNOWN) ;;
+            *) echo "fake gh: unknown draft merge state '$merge_state'" >&2; exit 2 ;;
+        esac
+    fi
+    printf '{"number":42,"state":"%s","isDraft":%s,"mergedAt":%s,"mergeable":"MERGEABLE","mergeStateStatus":"%s","reviewDecision":"%s","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":null,"url":"%s"}\n' \
+        "$state" "$is_draft" "$merged_at" "$merge_state" "$review" "$rollup" "$pr_head" "$reported_head" "$pr_base" "$url"
 }
 
 create() {
@@ -7075,6 +8548,67 @@ refuse() {
     exit 1
 }
 
+# Jobs and logs planted per commit under `$forge/commit-ci/<sha>/`.
+commit_ci_api() {
+    if [ ! -d "$forge/commit-ci" ]; then
+        echo "fake gh: unsupported call: $*" >&2
+        exit 2
+    fi
+    path="${4:-}"
+    case "$path" in
+        repos/*/actions/runs)
+            sha=""
+            for arg in "$@"; do
+                case "$arg" in
+                    head_sha=*) sha=${arg#head_sha=} ;;
+                esac
+            done
+            if [ -n "$sha" ] && [ -f "$forge/commit-ci/$sha/runs.json" ]; then
+                cat "$forge/commit-ci/$sha/runs.json"
+            else
+                echo '{"workflow_runs":[]}'
+            fi
+            ;;
+        repos/*/actions/runs/*/jobs)
+            run=$(basename "$(dirname "$path")")
+            found=""
+            for dir in "$forge/commit-ci"/*; do
+                [ -f "$dir/run_id" ] || continue
+                if [ "$(cat "$dir/run_id")" = "$run" ]; then
+                    found=$dir
+                    break
+                fi
+            done
+            if [ -z "$found" ]; then
+                echo "fake gh: no jobs for run $run" >&2
+                exit 2
+            fi
+            cat "$found/jobs.json"
+            ;;
+        *)
+            echo "fake gh: unsupported call: $*" >&2
+            exit 2
+            ;;
+    esac
+}
+
+commit_ci_log() {
+    if [ ! -d "$forge/commit-ci" ]; then
+        echo "fake gh: unsupported call: $*" >&2
+        exit 2
+    fi
+    run="${3:-}"
+    for dir in "$forge/commit-ci"/*; do
+        [ -f "$dir/run_id" ] || continue
+        if [ "$(cat "$dir/run_id")" = "$run" ]; then
+            cat "$dir/log"
+            return
+        fi
+    done
+    echo "fake gh: no log for run $run" >&2
+    exit 2
+}
+
 # Advance a remote branch by one commit, as another writer would.
 advance() {
     ref="refs/heads/$1"
@@ -7116,6 +8650,7 @@ merge() {
     case "$outcome" in
         ""|merge) ;;
         base_modified_422) refuse 422 "$base_modified" ;;
+        http_499) refuse 499 "499 (https://api.github.com/graphql)" ;;
         base_modified*)
             # Another PR landed on the base between the provider's
             # mergeability check and this mutation.
@@ -7161,21 +8696,150 @@ merge() {
     printf '{"sha":"%s","merged":true,"message":"Pull Request successfully merged"}\n' "$(cat "$forge/merged")"
 }
 
+if [ -f "$forge/failed-command-log" ]; then
+    case "$1 ${2:-}" in
+        "run view") cat "$forge/failed-command-log"; exit ;;
+        "api --method")
+            case "${4:-}" in
+                'repos/{owner}/{repo}/actions/runs')
+                    sha=""
+                    for arg in "$@"; do
+                        case "$arg" in
+                            head_sha=*) sha=${arg#head_sha=} ;;
+                        esac
+                    done
+                    if [ "$sha" = "$(head_sha)" ]; then
+                        echo '{"workflow_runs":[{"id":10,"name":"CI"}]}'
+                    else
+                        echo '{"workflow_runs":[]}'
+                    fi
+                    exit ;;
+                'repos/{owner}/{repo}/actions/runs/10/jobs') cat "$forge/failed-command-jobs"; exit ;;
+            esac ;;
+    esac
+fi
+
+if [ -f "$forge/infrastructure" ]; then
+    phase=before
+    [ ! -f "$forge/rerun-applied" ] || phase=after
+    if [ -f "$forge/infra-auth403" ] && [ "$1" = api ]; then
+        echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1
+    fi
+    case "$1 ${2:-}" in
+        "api graphql")
+            case "$*" in
+                *requiredStatusChecks*) cat "$forge/infra-policy"; exit ;;
+                *statusCheckRollup*) cat "$forge/infra-rollup-policy"; exit ;;
+            esac ;;
+        "api repos/{owner}/{repo}") cat "$forge/infra-repo"; exit ;;
+        "api repos/{owner}/{repo}/pulls/42") cat "$forge/infra-pr"; exit ;;
+        "api repos/{owner}/{repo}/rules/branches/agent-main?per_page=100") cat "$forge/infra-rules"; exit ;;
+        "api repos/{owner}/{repo}/actions/runs/700") cat "$forge/infra-run-$phase"; exit ;;
+        "api repos/{owner}/{repo}/actions/runs/700/attempts/1/jobs?per_page=100") cat "$forge/infra-jobs"; exit ;;
+        "api repos/{owner}/{repo}/actions/workflows/600") cat "$forge/infra-workflow"; exit ;;
+        "api repos/{owner}/{repo}/check-suites/800") cat "$forge/infra-suite"; exit ;;
+        "run view") cat "$forge/infra-log"; exit ;;
+        "run rerun")
+            [ -f "$forge/infra-reserved" ] || { echo 'rerun without durable reservation' >&2; exit 2; }
+            mode=$(cat "$forge/infrastructure")
+            if [ "$mode" = auth ]; then echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1; fi
+            if [ "$mode" != no_apply ]; then touch "$forge/rerun-applied"; fi
+            if [ "$mode" = moved ]; then advance "$(cat "$forge/pr-head")" foreign; fi
+            if [ "$mode" = deleted ]; then git --git-dir="$remote" update-ref -d "refs/heads/$(cat "$forge/pr-head")"; fi
+            if [ "$mode" = lost ] || [ "$mode" = no_apply ]; then echo 'HTTP 503: lost mutation reply' >&2; exit 1; fi
+            exit ;;
+        "api "*)
+            case "$2" in
+                *'/commits/'*'/status?'*) cat "$forge/infra-statuses-$phase"; exit ;;
+                *'/commits/'*'/check-runs?'*) cat "$forge/infra-checks-$phase"; exit ;;
+                *'/actions/runs?head_sha='*) cat "$forge/infra-runs-$phase"; exit ;;
+                *'/contents/'*) cat "$forge/infra-contents"; exit ;;
+            esac ;;
+    esac
+fi
+
+# Current branch policy requires `test` [ORB-16339]. The head reports it
+# unless the latest status read scripted `unreported`.
+if [ -f "$forge/gates" ]; then
+    observed=$(sed -n "$(cat "$forge/reads")p" "$forge/checks")
+    [ -n "$observed" ] || observed=$(tail -n 1 "$forge/checks")
+    head=$(head_sha)
+    pr_base=$(cat "$forge/pr-base")
+    repo='{"id":500,"full_name":"orbit/test","url":"https://api.github.com/repos/orbit/test"}'
+    case "$1 ${2:-}" in
+        "api repos/{owner}/{repo}") printf '%s\n' "$repo"; exit ;;
+        "api repos/{owner}/{repo}/pulls/42")
+            printf '{"number":42,"state":"open","merged":false,"head":{"sha":"%s","ref":"%s","repo":%s},"base":{"sha":"%s","ref":"%s","repo":%s}}\n' \
+                "$head" "$(cat "$forge/pr-head")" "$repo" "$(git --git-dir="$remote" rev-parse "refs/heads/$pr_base")" "$pr_base" "$repo"
+            exit ;;
+        "api graphql")
+            case "$*" in
+                *requiredStatusChecks*)
+                    printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","baseRefName":"%s","reviewDecision":null,"baseRef":{"branchProtectionRule":{"id":"RULE-1","requiredStatusChecks":[{"context":"test","app":null}]}}}}}}\n' "$head" "$pr_base"
+                    exit ;;
+            esac ;;
+        "api "*)
+            case "$2" in
+                *'/rules/branches/'*) echo '[]'; exit ;;
+                *'/check-runs?'*)
+                    if [ "$observed" = unreported ]; then echo '{"total_count":0,"check_runs":[]}'; exit; fi
+                    printf '{"total_count":1,"check_runs":[{"id":1,"name":"test","head_sha":"%s","app":{"id":900},"status":"completed","conclusion":"success"}]}\n' "$head"
+                    exit ;;
+                *'/status?'*) printf '{"sha":"%s","repository":%s,"total_count":0,"statuses":[]}\n' "$head" "$repo"; exit ;;
+                *'/actions/runs?'*) echo '{"total_count":0,"workflow_runs":[]}'; exit ;;
+            esac ;;
+    esac
+fi
+
 case "$1 ${2:-}" in
     "pr list")
         if [ -f "$forge/pr-head" ]; then
-            printf '[{"number":42,"title":"Landing","headRefName":"%s","author":{"login":"orbit"}}]\n' "$(cat "$forge/pr-head")"
+            printf '[{"number":%s,"title":"Landing","headRefName":"%s","author":{"login":"orbit"}}]\n' "$number_json" "$(cat "$forge/pr-head")"
         else
             echo '[]'
         fi ;;
     "pr create") create "$@" ;;
+    "pr close")
+        if [ -f "$forge/pr-close-failure" ]; then
+            cat "$forge/pr-close-failure" >&2
+            exit 1
+        fi
+        printf 'Closed\n' ;;
     "pr view")
+        if [ -f "$forge/pr-view-outcomes" ]; then
+            view_attempt=$(( $(cat "$forge/pr-view-reads") + 1 ))
+            printf '%s\n' "$view_attempt" > "$forge/pr-view-reads"
+            view_outcome=$(sed -n "${view_attempt}p" "$forge/pr-view-outcomes")
+            [ -n "$view_outcome" ] || view_outcome=$(tail -n 1 "$forge/pr-view-outcomes")
+            if [ "$view_outcome" = invalid_json ]; then printf '{'; exit 0; fi
+            if [ "$view_outcome" != success ]; then
+                printf '%s\n' "$view_outcome" >&2
+                exit 1
+            fi
+        fi
         case "$*" in
-            *mergeStateStatus*) status ;;
-            *) printf '{"number":42,"title":"Landing","body":"","headRefName":"%s","files":[],"commits":[],"url":"%s"}\n' "$(cat "$forge/pr-head")" "$url" ;;
+            *mergeStateStatus*)
+                draft_field=0
+                case "$*" in *isDraft*) draft_field=1 ;; esac
+                status "$draft_field" ;;
+            *) printf '{"number":%s,"title":"Landing","body":"","headRefName":"%s","files":[],"commits":[],"url":"%s"}\n' "$number_json" "$(cat "$forge/pr-head")" "$url" ;;
         esac ;;
     "repo view") echo '{"nameWithOwner":"orbit/test"}' ;;
     "api graphql")
+        case "$*" in
+            *statusCheckRollup*)
+                observed=$(sed -n "$(cat "$forge/reads")p" "$forge/checks")
+                [ -n "$observed" ] || observed=$(tail -n 1 "$forge/checks")
+                if [ -f "$forge/required-auth" ]; then echo 'HTTP 401: Bad credentials' >&2; exit 1; fi
+                if [ -f "$forge/required-policy" ]; then cat "$forge/required-policy"; exit; fi
+                rollup=$(check "$observed")
+                case "$observed" in
+                    mixed_*|paired_failure|paired_failure_reversed) ;;
+                    *) rollup=$(printf '%s' "$rollup" | sed 's/}$/,"isRequired":true}/') ;;
+                esac
+                printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}}}]}}}}}\n' "$(head_sha)" "$(head_sha)" "$rollup"
+                exit ;;
+        esac
         # An unreviewed push that lands after the freshness check, while the
         # merge strategy is being resolved and before the merge request.
         if [ -f "$forge/push-before-merge" ] && [ ! -f "$forge/pushed" ]; then
@@ -7186,6 +8850,8 @@ case "$1 ${2:-}" in
         [ ! -f "$forge/merge-methods-disallowed" ] || allowed=false
         printf '{"data":{"repository":{"autoMergeAllowed":true,"mergeCommitAllowed":false,"rebaseMergeAllowed":%s,"squashMergeAllowed":%s,"pullRequest":{"baseRefName":"%s","baseRef":{"branchProtectionRule":{"requiresLinearHistory":true}}}}}}\n' "$allowed" "$allowed" "$(cat "$forge/pr-base")" ;;
     "api repos/{owner}/{repo}/pulls/42/merge") merge "$@" ;;
+    "api --method") commit_ci_api "$@" ;;
+    "run view") commit_ci_log "$@" ;;
     *) echo "fake gh: unsupported call: $*" >&2; exit 2 ;;
 esac
 "#;
@@ -7197,9 +8863,23 @@ esac
 /// Run `body` in a copy of this test binary whose `PATH` starts with the
 /// substitute `gh`, and fail if it fails or outlives [`CHILD_DEADLINE`].
 fn isolated(test: &str, body: impl FnOnce(&Path)) {
-    if std::env::var(CHILD_ENV).as_deref() == Ok(test) {
+    if std::env::var_os(CHILD_ENV).is_some() {
         let sandbox = PathBuf::from(std::env::var_os(SANDBOX_ENV).expect("sandbox path"));
-        body(&sandbox);
+        // Container-only wrappers do no fixture work themselves. Give each
+        // leaf row its own tool, home and sandbox-root counter files below.
+        let container = matches!(
+            test,
+            "validation_environment_contracts"
+                | "empty_validation_and_handoff_contracts"
+                | "failure_handoff_contracts"
+                | "implementation_handoff_contracts"
+                | "pr_body_and_promotion_contracts"
+        );
+        if std::env::var(CHILD_ENV).as_deref() == Ok(test) || container {
+            orbit_engine::test_support::with_vcs_retry_wait(|_| {}, || body(&sandbox));
+        } else {
+            in_fresh_row(&sandbox, body);
+        }
         return;
     }
     let sandbox = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
@@ -7252,11 +8932,437 @@ fn isolated(test: &str, body: impl FnOnce(&Path)) {
         .env("GIT_TERMINAL_PROMPT", "0");
     let output = run_bounded_capped(&mut command, CHILD_DEADLINE, 256 * 1024)
         .unwrap_or_else(|error| panic!("{test} did not finish in its isolated child: {error}"));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        output.status.success() && stdout.contains("1 passed; 0 failed"),
-        "{test} failed in its isolated child ({}):\n{stdout}\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
+    test_env::assert_child_test_passed(&qualified, output.status, &output.stdout, &output.stderr);
+}
+
+/// The bounded child runs exactly one libtest thread. Change its environment
+/// only between completed rows, and restore it and cwd on return or unwind.
+fn in_fresh_row(parent: &Path, body: impl FnOnce(&Path)) {
+    struct RestoreCwd(PathBuf);
+    impl Drop for RestoreCwd {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.0).expect("restore family cwd");
+        }
+    }
+    let row = tempfile::tempdir_in(parent).unwrap();
+    let home = row.path().join("home");
+    let bin = row.path().join("bin");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&bin).unwrap();
+    fs::write(home.join(".gitconfig"), git_fixture::ISOLATED_GIT_CONFIG).unwrap();
+    let gh = bin.join("gh");
+    fs::write(&gh, FAKE_GH.replace("__SANDBOX__", path_str(row.path()))).unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut path = vec![bin];
+    path.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let path = std::env::join_paths(path).unwrap();
+    let xdg = home.join(".config");
+    let _env = test_env::scoped([
+        (SANDBOX_ENV, Some(path_str(row.path()))),
+        ("HOME", Some(path_str(&home))),
+        ("XDG_CONFIG_HOME", Some(path_str(&xdg))),
+        ("PATH", Some(path.to_str().expect("fixture PATH"))),
+        // The capture-stop row deliberately lowers this process-global
+        // ceiling. Restore it before a truncated-but-bounded output row runs.
+        ("ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES", None),
+    ]);
+    let _cwd = RestoreCwd(std::env::current_dir().unwrap());
+    std::env::set_current_dir(row.path()).unwrap();
+    // TMPDIR stays at the parent-owned child root: a cached immutable Git
+    // seed must outlive the row. Each scenario still owns separate TempDirs.
+    orbit_engine::test_support::with_vcs_retry_wait(|_| {}, || body(row.path()));
+}
+
+fn validation_environment_contracts() {
+    isolated("validation_environment_contracts", |_| {
+        git_fixture::run_scenarios(&[
+            (
+                "missing_required_validation_tool_reports_its_search_path",
+                missing_required_validation_tool_reports_its_search_path,
+            ),
+            (
+                "validation_from_a_minimal_launcher_path_uses_the_login_shell_toolchain",
+                validation_from_a_minimal_launcher_path_uses_the_login_shell_toolchain,
+            ),
+            (
+                "a_missing_validation_tool_is_an_environment_failure",
+                a_missing_validation_tool_is_an_environment_failure,
+            ),
+        ]);
+    });
+}
+
+fn empty_validation_and_handoff_contracts() {
+    isolated("empty_validation_and_handoff_contracts", |_| {
+        git_fixture::run_scenarios(&[
+            (
+                "required_validation_without_commands_is_a_no_op",
+                required_validation_without_commands_is_a_no_op,
+            ),
+            (
+                "claimed_validation_without_commands_is_a_recorded_no_op",
+                claimed_validation_without_commands_is_a_recorded_no_op,
+            ),
+            (
+                "claimed_handoff_carries_before_pr_evidence_only_for_its_candidate",
+                claimed_handoff_carries_before_pr_evidence_only_for_its_candidate,
+            ),
+            (
+                "claimed_handoff_without_logs_is_refused_when_commands_are_required",
+                claimed_handoff_without_logs_is_refused_when_commands_are_required,
+            ),
+        ]);
+    });
+}
+
+fn failure_handoff_contracts() {
+    isolated("failure_handoff_contracts", |_| {
+        git_fixture::run_scenarios(&[
+            (
+                "a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle",
+                a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle,
+            ),
+            (
+                "a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking",
+                a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking,
+            ),
+            (
+                "an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks",
+                an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks,
+            ),
+            (
+                "an_admission_refusal_for_held_evidence_stays_held_not_escalated",
+                an_admission_refusal_for_held_evidence_stays_held_not_escalated,
+            ),
+        ]);
+    });
+}
+
+fn implementation_handoff_contracts() {
+    isolated("implementation_handoff_contracts", |_| {
+        git_fixture::run_scenarios(&[
+            (
+                "an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr",
+                an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr,
+            ),
+            (
+                "a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write",
+                a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write,
+            ),
+            (
+                "an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task",
+                an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task,
+            ),
+            (
+                "a_child_its_parent_stopped_waiting_for_holds_its_candidate",
+                a_child_its_parent_stopped_waiting_for_holds_its_candidate,
+            ),
+        ]);
+    });
+}
+
+#[test]
+fn pr_body_and_promotion_contracts() {
+    isolated("pr_body_and_promotion_contracts", |_| {
+        git_fixture::run_scenarios(&[
+            (
+                "pr_promote_records_the_pull_request_page_with_its_number",
+                pr_promote_records_the_pull_request_page_with_its_number,
+            ),
+            (
+                "pr_open_appends_the_review_fixes_section_to_the_published_body",
+                pr_open_appends_the_review_fixes_section_to_the_published_body,
+            ),
+        ]);
+    });
+}
+
+#[test]
+fn known_red_sandbox_notices() {
+    known_red_coverage_rows(
+        "known_red_sandbox_notices",
+        &[
+            "bubblewrap",
+            "seatbelt",
+            "deferred",
+            "skip",
+            "skipping-colon",
+        ],
     );
+}
+
+#[test]
+fn known_red_dropped_notices() {
+    known_red_coverage_rows(
+        "known_red_dropped_notices",
+        &[
+            "skipping-space",
+            "raw-refusal",
+            "dropped-deferral",
+            "dropped-skip",
+        ],
+    );
+}
+
+#[test]
+fn known_red_replay_coverage() {
+    known_red_coverage_rows(
+        "known_red_replay_coverage",
+        &[
+            "replay-with-notice",
+            "replay-zero-tests",
+            "replay-missing-count",
+            "replay-missing-tool",
+            "replay-executed",
+        ],
+    );
+}
+
+fn pull_ref_identity_refusals() {
+    pull_ref_refusal_rows(
+        "pull_ref_identity_refusals",
+        &[
+            "pull_ref_third",
+            "pull_ref_third_after_old",
+            "branch_missing",
+            "branch_at_previous",
+            "previous_unknown",
+            "previous_empty",
+        ],
+    );
+}
+
+#[test]
+fn pull_ref_wait_and_review_refusals() {
+    pull_ref_refusal_rows(
+        "pull_ref_wait_and_review_refusals",
+        &[
+            "previous_is_candidate",
+            "persistent",
+            "persistent_after_metadata",
+            "time_cap",
+            "review_mismatch",
+            "ls_remote_fails",
+        ],
+    );
+}
+
+fn claimed_known_red_equal_and_subset() {
+    claimed_known_red_rows("claimed_known_red_equal_and_subset", &["equal", "subset"]);
+}
+
+#[test]
+fn claimed_known_red_superset_and_disjoint() {
+    claimed_known_red_rows(
+        "claimed_known_red_superset_and_disjoint",
+        &["shared-plus-new", "disjoint-six-vs-one"],
+    );
+}
+
+#[test]
+fn metadata_lag_pins_and_repair() {
+    isolated("metadata_lag_pins_and_repair", |_| {
+        previous_published_head_metadata_lag_keeps_exact_delivery_and_review_pins();
+        previous_published_head_metadata_lag_after_in_run_conflict_repair();
+    });
+}
+
+#[test]
+fn pull_ref_pins_and_identity() {
+    isolated("pull_ref_pins_and_identity", |_| {
+        previous_published_head_pull_ref_lag_settles_with_exact_merge_pin();
+        pull_ref_identity_refusals();
+    });
+}
+
+#[test]
+fn pr_open_branch_identity() {
+    isolated("pr_open_branch_identity", |_| {
+        pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip();
+        pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch();
+        pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate();
+    });
+}
+
+#[test]
+fn pr_create_retry_contracts() {
+    isolated("pr_create_retry_contracts", |_| {
+        pr_open_permanent_create_failures_never_retry_or_look_up_again();
+        pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr();
+        pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase();
+    });
+}
+
+#[test]
+fn pr_lookup_retry_contracts() {
+    isolated("pr_lookup_retry_contracts", |_| {
+        pr_open_retries_http_499_pr_views_and_stops_at_the_existing_attempt_ceiling();
+        pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens();
+    });
+}
+
+#[test]
+fn pr_number_and_push_transports() {
+    isolated("pr_number_and_push_transports", |_| {
+        pr_open_preserves_provider_number_representations();
+        fixture_push_guard_checks_all_effective_push_urls();
+        fixture_push_refuses_non_file_transports_without_network();
+    });
+}
+
+#[test]
+fn base_race_fresh_gates() {
+    isolated("base_race_fresh_gates", |_| {
+        a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence();
+        a_base_race_refresh_refuses_unmet_gates_without_another_merge();
+    });
+}
+
+#[test]
+fn base_race_candidate_identity() {
+    isolated("base_race_candidate_identity", |_| {
+        a_base_race_refresh_refuses_a_changed_candidate_without_another_merge();
+        an_already_merged_refresh_reconciles_without_another_merge_request();
+    });
+}
+
+#[test]
+fn merge_refusal_bounds() {
+    isolated("merge_refusal_bounds", |_| {
+        other_merge_refusals_fail_on_the_first_request();
+        repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget();
+    });
+}
+
+#[test]
+fn recovered_base_advances() {
+    isolated("recovered_base_advances", |_| {
+        conflicting_base_advances_after_recovery_are_chased_until_the_bound();
+        a_recovered_completion_rebase_follows_a_clean_base_advance_and_lands();
+    });
+}
+
+#[test]
+fn review_checks_and_delivery() {
+    isolated("review_checks_and_delivery", |_| {
+        a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review();
+        passing_checks_merge_the_reviewed_candidate_and_record_its_delivery();
+        required_checks_the_head_has_not_reported_are_awaited_before_completion();
+    });
+}
+
+#[test]
+fn review_fix_revalidation() {
+    isolated("review_fix_revalidation", |_| {
+        a_before_landing_fix_lands_under_its_lease_and_an_unreviewed_head_never_merges();
+        a_failed_review_revalidation_rejects_and_preserves_both_commits();
+        a_red_base_during_pr_revalidation_holds_the_task();
+    });
+}
+
+#[test]
+fn review_repair_leases() {
+    isolated("review_repair_leases", |_| {
+        a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease();
+        a_conflicting_reviewed_pr_is_rebased_for_re_review_then_completes();
+    });
+}
+
+#[test]
+fn claimed_validation_failures() {
+    isolated("claimed_validation_failures", |_| {
+        a_claimed_candidate_on_a_red_base_fails_typed_with_both_logs();
+        a_claimed_candidate_that_cannot_reach_the_network_fails_transient();
+        a_required_command_red_on_the_base_holds_the_task_without_a_pr();
+    });
+}
+
+#[test]
+fn claimed_publication_and_merge_pins() {
+    isolated("claimed_publication_and_merge_pins", |_| {
+        a_pr_claim_validates_before_publication_and_pins_after_it();
+        a_pr_merge_batch_lands_the_checked_head_at_its_pin();
+        a_pr_merge_batch_refuses_a_head_that_moved_after_its_freshness_check();
+    });
+}
+
+#[test]
+fn validation_repairs_and_logs() {
+    isolated("validation_repairs_and_logs", |_| {
+        required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs();
+        test_env::record_scenario_pass(
+            "required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs",
+        );
+        required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes();
+        test_env::record_scenario_pass(
+            "required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes",
+        );
+        required_validation_retains_reported_evidence_after_scratch_lifetime();
+        printed_supervisor_notes_remain_candidate_failures_on_both_streams();
+        test_env::record_scenario_pass(
+            "printed_supervisor_notes_remain_candidate_failures_on_both_streams",
+        );
+    });
+}
+
+#[test]
+fn supervisor_and_truncated_failures() {
+    isolated("supervisor_and_truncated_failures", |_| {
+        supervisor_stops_are_environment_failures_and_never_poison_the_base_cache();
+        a_failure_only_the_truncated_middle_names_still_requires_candidate_repair();
+    });
+}
+
+#[test]
+fn network_retry_and_cached_base() {
+    isolated("network_retry_and_cached_base", |_| {
+        a_network_flake_is_rerun_before_the_candidate_is_judged();
+        remote_base_transport_retries_preserve_access_refusals();
+        claimed_handoff_fetch_timeout_uses_only_a_related_cached_base();
+    });
+}
+
+#[test]
+fn linux_deferral_contracts() {
+    isolated("linux_deferral_contracts", |_| {
+        a_claimed_leaf_replays_its_implementers_deferral_before_publication();
+        a_deferral_that_is_not_the_sanctioned_case_fails_the_implement_step();
+        a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery();
+    });
+}
+
+#[test]
+fn macos_deferral_contracts() {
+    isolated("macos_deferral_contracts", |_| {
+        a_documented_seatbelt_deferral_is_accepted_and_replayed_before_publication();
+        a_macos_claimed_leafs_ps_denied_deferral_is_replayed_before_publication();
+        a_seatbelt_and_ps_denied_deferral_is_replayed_like_a_single_sandboxs();
+        a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure();
+    });
+}
+
+#[test]
+fn validation_and_empty_handoffs() {
+    isolated("validation_and_empty_handoffs", |_| {
+        validation_environment_contracts();
+        empty_validation_and_handoff_contracts();
+    });
+}
+
+#[test]
+fn failure_and_implementation_handoffs() {
+    isolated("failure_and_implementation_handoffs", |_| {
+        failure_handoff_contracts();
+        implementation_handoff_contracts();
+    });
+}
+
+#[test]
+fn known_red_validation_and_subset() {
+    isolated("known_red_validation_and_subset", |_| {
+        a_candidate_failing_only_known_red_tests_proceeds_and_records_them();
+        claimed_known_red_equal_and_subset();
+    });
 }

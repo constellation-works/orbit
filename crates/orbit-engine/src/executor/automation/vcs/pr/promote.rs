@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
 use super::super::super::input::{input_string_field, required_input_string};
-use super::super::base_obsolescence::ensure_base_can_still_land;
+use super::super::base::obsolescence::ensure_base_can_still_land;
 use super::super::commit::{verified_clean_tree_checkpoint, verify_clean_tree_handoff};
 use super::super::freshness::commit_sha;
 use super::super::handoff::{

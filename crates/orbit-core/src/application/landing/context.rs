@@ -35,6 +35,13 @@ impl OrbitRuntime {
                     .collect()
             })
             .unwrap_or_default();
+        // [ORB-16890] A task that already returned to the backlog for a
+        // landing repair has spent its automatic repair too.
+        let requeued = orbit_types::workflow::handoff::landing_repairs_spent(
+            self.get_task_history(&accepted.handoff.task_id)?
+                .iter()
+                .map(|entry| entry.event.as_str()),
+        ) > 0;
         Ok(HandoffLandingContext {
             handoff_id: accepted.handoff_id,
             task_id: accepted.handoff.task_id,
@@ -43,6 +50,8 @@ impl OrbitRuntime {
             unresolved_merge_intent: claim.unresolved_merge_intent,
             workspace_path: self.paths().repo_root.clone(),
             owed_hosted_checks,
+            // [ORB-15956] A repair claim has spent the one automatic repair.
+            automatic_repair_spent: claim.claim.repair.is_some() || requeued,
         })
     }
 
@@ -140,6 +149,16 @@ impl OrbitRuntime {
                     handoff_id: update.handoff_id.clone(),
                     reason: update.evidence.clone(),
                     repairable: *repairable,
+                    requeue: false,
+                },
+            ),
+            HandoffLandingStep::StopForRequeue => (
+                format!("landing-stop:{}:{attempt}", update.handoff_id),
+                ClaimMutation::StopLanding {
+                    handoff_id: update.handoff_id.clone(),
+                    reason: update.evidence.clone(),
+                    repairable: false,
+                    requeue: true,
                 },
             ),
         };
@@ -188,6 +207,8 @@ impl OrbitRuntime {
             review: None,
             // Acceptance ran the known-red bases; landing rechecks the logs.
             known_red: Vec::new(),
+            light_delivery: self
+                .owner_light_delivery(&accepted.handoff.task_id, &accepted.handoff.candidate)?,
         })
     }
 }

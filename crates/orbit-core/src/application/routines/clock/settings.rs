@@ -8,7 +8,11 @@ use orbit_common::fs::io::atomic_write_text;
 use orbit_common::fs::path::home_dir;
 use serde::{Deserialize, Serialize};
 
-use super::install::{ClockInstallReport, install_clock_with};
+use super::enable::observe_clock_enabled_for_pause;
+use super::install::{
+    ClockInstallReport, ensure_clock_env_file, install_clock_with, launchd_plist_path,
+    systemd_timer_path, write_launchd_unit, write_systemd_units,
+};
 use super::manager::{ClockCommandRunner, ClockPlatform, NativeClockCommandRunner};
 
 const CLOCK_SETTINGS_FILE: &str = "clock.toml";
@@ -121,6 +125,7 @@ fn validated_clock_settings_path(global_root: &Path) -> Result<PathBuf, OrbitErr
 
 /// Change cadence transactionally from the operator's perspective: the
 /// persisted setting is restored if the reloaded native unit cannot activate.
+/// A paused clock stays paused: its units are rewritten and nothing activates.
 pub fn set_clock_cadence(
     global_root: &Path,
     cadence_seconds: u64,
@@ -148,7 +153,26 @@ pub(super) fn set_clock_cadence_with(
     home: &Path,
 ) -> Result<ClockInstallReport, OrbitError> {
     let previous = load_clock_settings(global_root)?;
+    // Observe before saving: an unreadable manager must refuse the change
+    // rather than guess, because activating would resume a paused clock.
+    let paused = clock_is_paused(platform, runner, home)?;
     save_clock_settings(global_root, ClockSettings { cadence_seconds })?;
+    if paused {
+        return match rewrite_paused_units(
+            global_root,
+            orbit_bin,
+            ClockSettings { cadence_seconds },
+            platform,
+            home,
+        ) {
+            Ok(report) => Ok(report),
+            Err(error) => {
+                save_clock_settings(global_root, previous)?;
+                let _ = rewrite_paused_units(global_root, orbit_bin, previous, platform, home);
+                Err(error)
+            }
+        };
+    }
     match install_clock_with(
         global_root,
         orbit_bin,
@@ -194,4 +218,48 @@ pub(super) fn set_clock_cadence_with(
             }
         }
     }
+}
+
+/// Whether the installed clock is paused: its unit file exists but the manager
+/// has it disabled (systemd) or unloaded (launchd). A clock that was never
+/// installed is not paused; setting its cadence installs and activates it.
+fn clock_is_paused(
+    platform: ClockPlatform,
+    runner: &dyn ClockCommandRunner,
+    home: &Path,
+) -> Result<bool, OrbitError> {
+    let (enabled, _) = observe_clock_enabled_for_pause(platform, runner)?;
+    if enabled {
+        return Ok(false);
+    }
+    Ok(match platform {
+        ClockPlatform::Launchd => launchd_plist_path(home).exists(),
+        ClockPlatform::Systemd => systemd_timer_path(home).exists(),
+    })
+}
+
+/// Rewrite the units for a paused clock without touching the manager, so the
+/// new cadence takes effect on the next enable.
+fn rewrite_paused_units(
+    global_root: &Path,
+    orbit_bin: &str,
+    settings: ClockSettings,
+    platform: ClockPlatform,
+    home: &Path,
+) -> Result<ClockInstallReport, OrbitError> {
+    let files_written = match platform {
+        ClockPlatform::Launchd => {
+            vec![write_launchd_unit(global_root, orbit_bin, settings, home)?]
+        }
+        ClockPlatform::Systemd => write_systemd_units(orbit_bin, settings, home)?,
+    };
+    let (env_file, env_file_created) = ensure_clock_env_file(global_root)?;
+    Ok(ClockInstallReport {
+        files_written,
+        activated: false,
+        paused: true,
+        manual_steps: Vec::new(),
+        env_file,
+        env_file_created,
+    })
 }

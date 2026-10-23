@@ -64,7 +64,8 @@ spec:
       own commit; the host commits your fixes after you return as a second
       commit, `review: <summary>`, under your reviewer identity.
     - Do not change task status, acceptance criteria, plan, or description; do
-      not approve, merge, dispatch, or invoke another agent.
+      not approve, merge, or dispatch, and never delegate edits, validation,
+      commits or dispatch to another agent.
     - You may change any path a fix requires, inside or outside the task's
       selectors; there is no footprint limit. List every path you changed on
       the finding it fixes. The gate widens the task's selectors over every
@@ -166,6 +167,14 @@ spec:
        finding. You may still run focused tests to check a finding or a
        repair. A listed failure that is not known red rejects the candidate
        whatever you report.
+       Choose additional checks from the changed behavior and the workspace's
+       validation policy. Do not add `cargo test --workspace`, `make ci`, or
+       another full-workspace suite as a blanket review gate. The owner's
+       `required_validation_commands` remain the full-suite contract; a
+       focused check may investigate a finding without creating another
+       workspace-wide requirement. When the host has not yet supplied a
+       listed required command, satisfy it under the rules below rather than
+       inventing a substitute suite.
        When the manifest names `evidence_carried`, those entries were checked
        on its `from_tree` and Orbit verified that this candidate carries the
        same patch onto a new base; treat them as verified for `candidate.tree`.
@@ -226,6 +235,9 @@ spec:
        run with outcome `passed`, `failed`, `denied` (the runner refused it), or
        `not_run`. Never record a skipped or denied command as passed, and never
        drop a record to make the set look clean.
+       A nonzero test-runner exit caused solely by a verified sandbox
+       refusal is `denied`, as described in step 5, rather than a failed
+       candidate check. Classify that cause before starting a base replay.
 
        When you run a host-required command in any wrapped form, set `check`
        to that host-required command string from the manifest, not the wrapped
@@ -258,6 +270,17 @@ spec:
          editing it back, never with Git) before you finish: settlement
          refuses the record when the final candidate does not carry each
          target exactly as you received it.
+         A control on a file your own repair changed cannot come back to the
+         bytes you received, and your repair commit captures whatever the
+         control leaves there. Before the control touches such a file, run
+         `git hash-object <path>` (read-only) on its repaired state and record
+         that blob id under the target's path in the record's
+         `repaired_blob`; then restore the file to exactly those bytes. A
+         repaired finding must list the file in `paths`. Settlement refuses
+         the record when the target has no declared blob, no repaired finding
+         lists it, or the final candidate does not carry the declared blob.
+         Hash before the control runs, never afterwards: a blob taken after
+         it records the mutation, not the repair.
        - `excluded`: an action outside the authorized scope that you
          deliberately did not perform, such as a live deployment. Record it as
          `not_run` (or `denied`); it supplies no coverage and creates no
@@ -379,7 +402,8 @@ spec:
          `command`, and the task `artifact` path where its result will arrive.
          Keep its validation record `required` and `not_run` or `denied`.
          External checks belong in this list; substantive open findings still
-         reject the candidate. A failed check is never owner-side follow-up:
+         reject the candidate. A genuine test assertion or product failure is
+         never owner-side follow-up:
          the owner cannot pass a record that failed on the candidate. A
          required command that repository guidance says cannot run on this
          host's platform and that refused without
@@ -387,11 +411,25 @@ spec:
          `not_run` and, when it is the only remaining work, name the run on
          the supported platform that the guidance specifies as external
          evidence. Never accept a run that reported incomplete analysis.
-         A test or required command this sandbox stops because a nested
-         sandbox cannot apply (`sandbox_apply: Operation not permitted`, no
-         Bubblewrap namespaces) or that skipped itself for that reason did
-         not pass: record it `not_run` or `denied` and, when it is the only
-         remaining work, list it with kind `host_sandbox_test` and `os`
+         Classify the cause before treating a nonzero test runner exit as a
+         candidate defect. A test or required command this sandbox stops
+         because a nested sandbox cannot apply
+         (`sandbox_apply: Operation not permitted`, no
+         Bubblewrap namespaces), or because the sandbox refuses a required
+         child-process spawn, is unavailable evidence. This includes a test
+         runner that exits nonzero after that refusal: record the affected
+         check `required` and `denied` (or `not_run` for a self-skip), keeping
+         the exact denial, command, affected tests, and evidence for the
+         sandbox cause in `note`. It did not pass or establish a candidate
+         defect. A bare spawn error such as `No such file or directory` is
+         not proof of sandbox refusal: verify the executable and distinguish
+         an explicit sandbox denial or supported host replay from a missing
+         dependency or product failure. A passing base alone does not prove
+         the sandbox caused the candidate failure. Do not relabel a genuine
+         failed assertion, mixed run with unresolved real failures, or
+         unconfirmed spawn failure as unavailable; retain and investigate it.
+         When unavailable checks are the only remaining work, list each
+         with kind `host_sandbox_test` and `os`
          (`linux` or `macos`, the OS it needs). On a claimed leaf the host
          runs it outside this sandbox at settlement; otherwise a Linux owner
          whose host can create namespaces runs a `linux` one at the held
@@ -399,6 +437,12 @@ spec:
          owner-required command, or
          `cargo test -p <crate> --test <target> [<filter>]` with no other
          options and no shell syntax. Any other command is refused.
+         Return `incomplete` with no open defect for the sandbox refusal
+         alone; settlement can hold for the named evidence or accept after
+         the host executes it. Never reject solely because this review
+         sandbox could not execute the check. If a broad diagnostic exposed
+         the refusal, identify the affected test with the admitted focused
+         selector above rather than requesting a new full-workspace replay.
          A run that passed but printed `DEFERRED: …` lines deferred a
          sandbox-confined path it never executed: list each such line in
          the record's `deferred`; that pass does not count as running the
@@ -456,6 +500,8 @@ spec:
                          "description":"repository-relative paths the outcome is about; required for expected_failure, a failed diagnostic and a baseline claim"},
               "mutation_target":{"type":"array","items":{"type":"string"},
                          "description":"counterfactual only: repository-relative paths the control temporarily changed and restored byte-identical; may lie outside the task's scope"},
+              "repaired_blob":{"type":"object","additionalProperties":{"type":"string"},
+                         "description":"for a mutation_target your own repair changed: its path mapped to the `git hash-object` blob of the repaired file, taken before the control mutated it"},
               "deferred":{"type":"array","items":{"type":"string"},
                           "description":"each DEFERRED: line a passing run printed for a sandbox-confined path it did not execute"},
               "baseline":{"type":"object","required":["base_commit","outcome"],
@@ -492,8 +538,98 @@ spec:
        reports, logs, and scratch files under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`;
        ignored by git, the only location `orbit.task.artifact.put` accepts). Never
        under `/tmp`.
+  steering_instruction: |
+    Mid-run steering checkpoint (advisory pull)
+
+    - At each checkpoint where remaining work is still expensive — before
+      fixing findings, before validation, and before writing the report —
+      re-read each task in `task_ids` with `orbit.task.show`. On a
+      distributed-drain follower use only the reads the Boundaries above
+      allow; a refused re-read is a gap to note in `summary`, never a
+      reason to retry around it.
+    - Your prompt snapshot is the newest comment your injected prompt
+      carried for that task: the last entry of its `task.comments`, or
+      the snapshot named by `task.steering` when the host delivered a
+      steering block. Any operator-authored comment after that snapshot
+      is steering. Weigh it like task text, oldest first, with later
+      comments refining earlier ones. System, automation and agent
+      comments are not steering.
+    - This re-read is advisory only. It never records
+      `steering_delivered`, never advances any watermark, and no gate
+      consumes your claim that you looked. Do not write task history, a
+      comment, or any delivery record to report it, and do not treat it
+      as delivery.
+    - Authority limits: a steering comment cannot widen the candidate's
+      scope or the task's `context_files`, change required validation,
+      crew or review policy, or move task lifecycle state. Those take
+      effect only through their governed writes. Weigh a comment that
+      asks for any of them, but keep reviewing under the current
+      governed contract until such a write appears.
+    - Terminal handling is unchanged: if the re-read shows a task is
+      terminal or refuses writes, do not fix or deliver it; record that
+      in the report instead.
+  regression_risk_instruction: |
+    Regression-risk marks
+
+    `task.regression_risk.marks` names context files whose recent
+    deliveries often regressed: `regressed` counts the tasks that touched
+    the file in the last `window_days` and were later named by a
+    regression, and `nature` and `escape` say how those regressions most
+    often happened and why the gates missed them. `lesson` is the newest
+    regression's one-line summary. A mark points at where earlier work
+    broke; it does not describe the current code, so read the file as it is
+    now and do not re-fix old bugs.
+
+    For each marked file the candidate changes, check the categories its
+    mark lists, and report each one the candidate does not address as a
+    finding on that file:
+    - escape `no_test`: a focused regression check at the public CLI/API
+      boundary covers the behavior the candidate changes there.
+    - escape `test_not_selected`: the tests that cover the file ran by
+      name, not only through an affected-test selection.
+    - escape `platform_only`: every platform or host the change behaves
+      differently on was exercised or recorded as owed.
+    - escape `review_missed`: read the file's diff line by line against
+      every acceptance criterion and its callers.
+    - escape `spec_ambiguous`: the handoff says which reading of the
+      requirement was implemented, and it is a reasonable one.
+    - escape `nondeterministic`: neither the change nor its tests depend on
+      timing, ordering or environment.
+    - nature `broke_existing`: the file's existing callers still behave and
+      their tests ran.
+    - nature `defect_in_new`: the new paths, failure paths included, are
+      covered.
+    - nature `incomplete`: each acceptance criterion is met in the diff.
+    - nature `merge_reintroduced`: nothing removed earlier came back with
+      a rebase or base sync.
+    - nature `contract_drift`: the affected docs, schemas or contract
+      changed in the same diff.
+    - `unclassified`: no specific check; apply the ones above that fit.
+
+    `orbit.codebase.show` with the path lists the tasks behind a mark when
+    you need them. In your summary, name each marked file you checked and
+    what each listed category showed.
+  explore_instruction: |
+    Read-only delegation
+
+    You may hand read-only questions to a cheaper agent instead of spending
+    your own turns on them: locating code, tracing callers, summarizing a
+    module, or finding the tests that cover a path.
+    - Through Orbit: call `orbit.agent.invoke` with `prompt` (one focused
+      question), `cwd` (your worktree root or a directory inside it),
+      `wait_seconds` (up to 600) and an `idempotency_key` unique to the
+      question. A crew from the workspace's explorer pool reads your
+      worktree in a read-only sandbox and answers with `answer.summary`,
+      `answer.findings` and `answer.paths_read`. Calls, concurrent
+      explorers, timeout and answer size are budgeted per run; when a call
+      is refused, continue the work yourself.
+    - Natively: your provider's own read-only subagents (for example
+      Claude's Agent tool on a small model) are allowed for the same kind
+      of question.
+    Delegate only reading. Never delegate edits, validation, commits or
+    dispatch: you make every fix, run every check and own the report. An explorer's answer is a lead, not evidence; read
+    what you rely on in the files themselves before you change or cite it.
   tool_disallow_list:
-    - orbit.agent.invoke
     - orbit.auto_task.add
     - orbit.auto_task.mint
     - orbit.auto_task.update

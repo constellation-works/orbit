@@ -176,6 +176,18 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             payload: redact_json_with(payload, redact),
         },
         OrbitError::Execution(m) => OrbitError::Execution(redact(&m)),
+        OrbitError::CandidateAbsorbed(mut candidate) => {
+            candidate.head = redact(&candidate.head);
+            candidate.base_sha = redact(&candidate.base_sha);
+            candidate.base_ref = redact(&candidate.base_ref);
+            candidate.covering_commit = redact(&candidate.covering_commit);
+            OrbitError::CandidateAbsorbed(candidate)
+        }
+        OrbitError::PrivateVcs(mut failure) => {
+            failure.operation = redact(&failure.operation);
+            failure.message = redact(&failure.message);
+            OrbitError::PrivateVcs(failure)
+        }
         OrbitError::ExecutionTimeout {
             timeout_ms,
             message,
@@ -246,6 +258,9 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
         OrbitError::PrForgeRemoteMissing { remotes } => OrbitError::PrForgeRemoteMissing {
             remotes: redact(&remotes),
         },
+        OrbitError::PullRequestMergeabilityUnknown { number } => {
+            OrbitError::PullRequestMergeabilityUnknown { number }
+        }
         OrbitError::TaskCompletionLiveRun { task_id, run_id } => {
             OrbitError::TaskCompletionLiveRun {
                 task_id: redact(&task_id),
@@ -361,6 +376,14 @@ fn redact_recoverable_vcs_conflict(
             .conflicting_paths
             .into_iter()
             .map(|path| redact(&path))
+            .collect(),
+        conflicting_files: conflict
+            .conflicting_files
+            .into_iter()
+            .map(|file| crate::ConflictedFile {
+                path: redact(&file.path),
+                deterministically_resolvable: file.deterministically_resolvable,
+            })
             .collect(),
         diagnostic: redact(&conflict.diagnostic),
     })

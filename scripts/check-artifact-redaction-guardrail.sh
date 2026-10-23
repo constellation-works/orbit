@@ -5,10 +5,10 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
 targets=(
-  "crates/orbit-core/src/adapter/tool_host/task_tools.rs"
+  "crates/orbit-core/src/adapter/tool_host/task"
   "crates/orbit-core/src/adapter/tool_host/friction_tools.rs"
   "crates/orbit-tools/src/builtin/orbit/task"
-  "crates/orbit-tools/src/builtin/orbit/friction"
+  "crates/orbit-tools/src/builtin/orbit/operation.rs"
   # [ORB-00417] Write-time redaction paths: task creation (dashboard + core
   # choke point) and provider CLI argv. Redaction must flow through
   # orbit_common::utility::redaction (redact_all / with_argv_secrets), never a

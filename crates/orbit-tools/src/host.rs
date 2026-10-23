@@ -3,7 +3,16 @@
 use std::path::PathBuf;
 
 use orbit_common::OrbitError;
+use orbit_common::governance::agents::AgentsVerb;
+use orbit_common::governance::auto_task::AutoTaskVerb;
+use orbit_common::governance::codebase::CodebaseVerb;
+use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
+use orbit_common::governance::orchestrator::OrchestratorVerb;
+use orbit_common::governance::search::SearchVerb;
+use orbit_common::governance::task::TaskVerb;
+use orbit_common::governance::workflow::WorkflowVerb;
+use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use serde_json::Value;
 
 use super::context::{ReservationOwnerContext, ToolContext};
@@ -67,14 +76,22 @@ pub trait DrainOwnerTransport: Send + Sync {
 ///
 /// `source_path` is resolved against `cwd` and must land inside
 /// `workspace_root` after symlink resolution. The hub never sees the path.
+/// `transport` comes from the trusted caller context, never the payload:
+/// MCP trims the source string; CLI and deterministic attachments (`None`)
+/// select the exact filesystem name.
 pub fn prepare_remote_task_artifact_put(
     input: Value,
     cwd: Option<&std::path::Path>,
     workspace_root: Option<&std::path::Path>,
+    transport: Option<orbit_types::tool::McpTransport>,
 ) -> Result<Value, OrbitError> {
     let ctx = ToolContext {
         cwd: cwd.map(|path| path.to_string_lossy().into_owned()),
         workspace_root: workspace_root.map(PathBuf::from),
+        session_context: orbit_types::tool::ToolSessionContext {
+            transport,
+            ..Default::default()
+        },
         ..ToolContext::default()
     };
     crate::builtin::orbit::task::artifact_put::prepare_remote_payload(input, &ctx)
@@ -82,51 +99,90 @@ pub fn prepare_remote_task_artifact_put(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrbitBuiltinAction {
-    AutoTaskAdd,
-    AutoTaskList,
-    AutoTaskMint,
-    AutoTaskShow,
-    AutoTaskUpdate,
+    /// Auto-task verbs are registry data, like friction's.
+    AutoTask(AutoTaskVerb),
     AgentInvoke,
+    /// Read-only agent scorecard verbs.
+    Agents(AgentsVerb),
+    /// Read-only codebase analytics verbs.
+    Codebase(CodebaseVerb),
     CommandExec,
     DesktopRead,
-    DesktopDrain,
     DesktopAutomation,
     DesktopTaskSnapshot,
     DesktopTaskWrite,
-    DrainClaimBind,
-    DrainClaimSettle,
-    DrainClaims,
-    DrainProbe,
-    DrainReceiptLookup,
+    /// Distributed-drain verbs, including the historical task pull tool.
+    Drain(DrainVerb),
     /// ADR-0209 bearing 1 [ORB-10358]: friction verbs are registry data, so one
     /// action variant carries the verb instead of one variant per verb.
     Friction(FrictionVerb),
+    /// The deprecated orchestrator scorecard aliases of [`Self::Agents`].
+    Orchestrator(OrchestratorVerb),
     PipelineInvoke,
     PipelineWait,
-    Search,
-    TaskAdd,
-    TaskArtifactGet,
-    TaskDelete,
-    TaskEligible,
-    TaskLint,
-    TaskList,
-    TaskLocks,
-    TaskLocksRelease,
-    TaskLocksReserve,
-    TaskPull,
-    TaskReject,
-    TaskReconcileReview,
-    TaskReviewReset,
-    TaskShow,
-    TaskUpdate,
-    WorkflowRunList,
-    WorkflowRunResume,
-    WorkflowRunShow,
-    WorkflowShip,
-    WorkspaceClaimAcquire,
-    WorkspaceClaimRelease,
-    WorkspaceClaimShow,
+    /// Shared lexical search operation.
+    Search(SearchVerb),
+    /// Task verbs, one per task tool.
+    Task(TaskVerb),
+    /// Workflow-run verbs: ship, run reads and resume, and the auto-drain
+    /// control.
+    Workflow(WorkflowVerb),
+    /// Workspace coordination-hold verbs.
+    WorkspaceClaim(WorkspaceClaimVerb),
+}
+
+impl From<CodebaseVerb> for OrbitBuiltinAction {
+    fn from(verb: CodebaseVerb) -> Self {
+        Self::Codebase(verb)
+    }
+}
+
+impl From<AgentsVerb> for OrbitBuiltinAction {
+    fn from(verb: AgentsVerb) -> Self {
+        Self::Agents(verb)
+    }
+}
+
+impl From<OrchestratorVerb> for OrbitBuiltinAction {
+    fn from(verb: OrchestratorVerb) -> Self {
+        Self::Orchestrator(verb)
+    }
+}
+
+impl From<DrainVerb> for OrbitBuiltinAction {
+    fn from(verb: DrainVerb) -> Self {
+        Self::Drain(verb)
+    }
+}
+
+impl From<WorkspaceClaimVerb> for OrbitBuiltinAction {
+    fn from(verb: WorkspaceClaimVerb) -> Self {
+        Self::WorkspaceClaim(verb)
+    }
+}
+
+impl From<AutoTaskVerb> for OrbitBuiltinAction {
+    fn from(verb: AutoTaskVerb) -> Self {
+        Self::AutoTask(verb)
+    }
+}
+
+impl From<TaskVerb> for OrbitBuiltinAction {
+    fn from(verb: TaskVerb) -> Self {
+        Self::Task(verb)
+    }
+}
+
+impl From<FrictionVerb> for OrbitBuiltinAction {
+    fn from(verb: FrictionVerb) -> Self {
+        Self::Friction(verb)
+    }
+}
+
+impl From<WorkflowVerb> for OrbitBuiltinAction {
+    fn from(verb: WorkflowVerb) -> Self {
+        Self::Workflow(verb)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -137,6 +193,18 @@ pub struct OrbitTaskScope {
 }
 
 pub trait OrbitToolHost: Send + Sync {
+    /// Prepare a versioned operation before shape validation: check wire
+    /// compatibility and apply historical wire defaults.
+    /// An incompatible protocol must be reported before a new request shape
+    /// can hide it as invalid input. Hosts without such a protocol do nothing.
+    fn prepare_operation_input(
+        &self,
+        _action: OrbitBuiltinAction,
+        _input: &mut Value,
+    ) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
     fn execute(
         &self,
         action: OrbitBuiltinAction,
@@ -158,5 +226,24 @@ pub trait OrbitToolHost: Send + Sync {
         self.execute(action, input, None, Some(actor_label), reservation_owner)
     }
 
+    /// Record that a call to `tool_name` carried input fields its operation
+    /// does not declare, one audit row per field. `actor` is the caller's
+    /// resolved attribution, when it has one. Hosts without an audit store
+    /// record nothing.
+    fn record_unknown_input_fields(
+        &self,
+        _tool_name: &str,
+        _fields: &[String],
+        _actor: Option<&str>,
+    ) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
     fn task_scope(&self) -> OrbitTaskScope;
+}
+
+impl From<SearchVerb> for OrbitBuiltinAction {
+    fn from(verb: SearchVerb) -> Self {
+        Self::Search(verb)
+    }
 }

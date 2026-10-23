@@ -245,9 +245,9 @@ fn canonical_destination_has_entries(workspace_root: &Path) -> Result<bool, Orbi
     Ok(false)
 }
 
-/// Coordinated composition writes markers and lock files into an otherwise
-/// empty partition (`.task-commit-required`, `.task-commit-pending`,
-/// `.task-commit.lock`). Restore staging uses a `.orbit-publication-restore-`
+/// Coordinated composition writes markers, lock files and commit leases into
+/// an otherwise empty partition (`.task-commit-required`,
+/// `.task-commit-pending`, `.task-commit.lock`, `.task-commit-applying/`). Restore staging uses a `.orbit-publication-restore-`
 /// prefix. EmptyDestination means "no leftover canonical task content", not
 /// "the directory is byte-empty".
 fn partition_infrastructure_name(name: &OsStr) -> bool {

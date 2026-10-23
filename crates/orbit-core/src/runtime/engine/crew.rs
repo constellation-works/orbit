@@ -66,21 +66,26 @@ pub(crate) const ALLOWED_CREWS_INPUT_KEY: &str = "allowed_crews";
 ///
 /// - by canonical registry name, the ordinary case; and
 /// - by effective configured identity — the `(provider, model)` the crew
-///   resolves to — so a differently-named alias of a permitted crew (for
-///   instance the `system` entry that mirrors `default_crew`) is permitted,
-///   while a permitted-looking wrapper that resolves to a *different* provider
-///   or model is not. Naming a run wrapper is not by itself provider usage.
+///   resolves to, and [ORB-17288] the provider account it runs on — so a
+///   differently-named alias of a permitted crew (for instance the `system`
+///   entry that mirrors `default_crew`) is permitted, while a
+///   permitted-looking wrapper that resolves to a *different* provider, model
+///   or account is not. A crew that sets `env` is its own account, so
+///   permitting the subscription's crew never permits a credits crew on the
+///   same model. Naming a run wrapper is not by itself provider usage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CrewAllowlist {
     names: BTreeSet<String>,
-    identities: BTreeSet<(String, String)>,
+    identities: BTreeSet<CrewIdentity>,
 }
+
+/// A crew's provider, model and provider account.
+type CrewIdentity = (String, String, Option<String>);
 
 impl CrewAllowlist {
     /// Whether `crew` — already resolved through the registry — may run.
     pub(crate) fn permits(&self, crew: &Crew) -> bool {
-        self.names.contains(crew.name.trim())
-            || self.identities.contains(&crew_identity(&crew.assignment))
+        self.names.contains(crew.name.trim()) || self.identities.contains(&crew_identity(crew))
     }
 
     /// The permitted names, for operator-facing messages.
@@ -124,10 +129,11 @@ pub(crate) fn enforce_crew_allowlist(
 /// The effective configured identity a crew dispatches as. Provider casing is
 /// normalized because it is matched against typed provider enums downstream;
 /// the model string is compared verbatim.
-fn crew_identity(assignment: &CrewAssignment) -> (String, String) {
+fn crew_identity(crew: &Crew) -> CrewIdentity {
     (
-        assignment.provider.trim().to_ascii_lowercase(),
-        assignment.model.trim().to_string(),
+        crew.assignment.provider.trim().to_ascii_lowercase(),
+        crew.assignment.model.trim().to_string(),
+        crew.account().map(ToOwned::to_owned),
     )
 }
 
@@ -328,7 +334,7 @@ impl OrbitRuntime {
         let mut identities = BTreeSet::new();
         for name in names {
             let crew = resolve_crew(name.trim(), self.context.settings().crews())?;
-            identities.insert(crew_identity(&crew.assignment));
+            identities.insert(crew_identity(&crew));
             allowed_names.insert(crew.name);
         }
         Ok((!allowed_names.is_empty()).then_some(CrewAllowlist {
@@ -368,15 +374,22 @@ impl OrbitRuntime {
         &self,
         crew: Option<&str>,
     ) -> Result<Option<String>, OrbitError> {
+        Ok(self.canonical_crew(crew)?.map(|crew| crew.name))
+    }
+
+    /// Resolve a user-supplied crew name to its entry in the active
+    /// named-crew registry. Blank optional values remain unset.
+    pub(crate) fn canonical_crew(&self, crew: Option<&str>) -> Result<Option<Crew>, OrbitError> {
         let Some(crew) = crew.map(str::trim).filter(|value| !value.is_empty()) else {
             return Ok(None);
         };
         resolve_crew(crew, self.context.settings().crews())
-            .map(|crew| Some(crew.name))
+            .map(Some)
             .map_err(Into::into)
     }
 
-    /// Resolve the crew a dispatch will run, refusing a disabled one.
+    /// Resolve the crew a dispatch will run, refusing a disabled one or a
+    /// workspace default whose executor cannot run on this host.
     ///
     /// Every path that launches a provider — task start, run and activity
     /// dispatch, pool candidates — resolves through here, so
@@ -390,6 +403,23 @@ impl OrbitRuntime {
     ) -> Result<Crew, OrbitError> {
         let (crew, source) = self.select_configured_crew(cli_override, task_crew)?;
         if crew.enabled {
+            // Explicit names are also used to enumerate pools before their OS
+            // filter runs. Keep those assignments intact; only the automatic
+            // default fallback is refused here, at the seam shared by task
+            // draws, activity draws and direct dispatch.
+            if source == ProviderSource::WorkspaceDefault {
+                let limits = self.executor_host_os_limits()?;
+                let requirement =
+                    orbit_types::task::TaskOsRequirement::for_crew(&[], Some(&crew.name), &limits)
+                        .map_err(OrbitError::InvalidInput)?;
+                if let Some(wait) = requirement.unsatisfied_reason(self.host_os()) {
+                    return Err(OrbitError::PolicyDenied(format!(
+                        "workflow.default_crew `{}` {wait}; configure a default or pool with an \
+                         executor that supports this host, or run on a supported host",
+                        crew.name,
+                    )));
+                }
+            }
             return Ok(crew);
         }
         let origin = match source {
@@ -463,10 +493,14 @@ impl OrbitRuntime {
         Ok((crew, source))
     }
 
-    pub(crate) fn resolve_crew_for_run_input(&self, input: &Value) -> Result<Crew, OrbitError> {
+    pub(crate) fn resolve_crew_for_run_input(
+        &self,
+        input: &Value,
+        bundle: BundleCrews,
+    ) -> Result<Crew, OrbitError> {
         let cli_override = run_input_crew_override(input);
         let claimed = claimed_task_from_input(input)?;
-        let task_crew = self.task_crew_from_run_input(input, claimed.as_ref())?;
+        let task_crew = self.task_crew_from_run_input(input, claimed.as_ref(), bundle)?;
         self.resolve_crew_for_task(cli_override, task_crew.as_deref())
             .map_err(|error| {
                 // A crew the owner chose but this host cannot run fails the
@@ -581,17 +615,21 @@ impl OrbitRuntime {
     /// work, and a crew drawn for it would read as an LLM that never ran. For
     /// the same reason a disabled crew does not refuse it: on a host with no
     /// enabled default crew, retention and reap jobs must still run.
+    ///
+    /// `bundle` is the caller's authenticated answer to whether this run may
+    /// name tasks whose crews differ; see [`BundleCrews`].
     pub(crate) fn record_run_crew_for_job(
         &self,
         run_id: &str,
         input: &Value,
         yaml_path: &Path,
+        bundle: BundleCrews,
     ) -> Result<(), OrbitError> {
         if self.job_definition_dispatches_agent(yaml_path) {
-            self.record_run_crew_from_input(run_id, input)?;
+            self.record_run_crew_from_input(run_id, input, bundle)?;
         } else {
             let claimed = claimed_task_from_input(input)?;
-            let task_crew = self.task_crew_from_run_input(input, claimed.as_ref())?;
+            let task_crew = self.task_crew_from_run_input(input, claimed.as_ref(), bundle)?;
             self.lookup_crew_for_task(run_input_crew_override(input), task_crew.as_deref())?;
         }
         Ok(())
@@ -611,8 +649,13 @@ impl OrbitRuntime {
         resolved.is_none_or(|job| job_dispatches_agent(&job))
     }
 
-    fn record_run_crew_from_input(&self, run_id: &str, input: &Value) -> Result<Crew, OrbitError> {
-        let crew = self.resolve_crew_for_run_input(input)?;
+    fn record_run_crew_from_input(
+        &self,
+        run_id: &str,
+        input: &Value,
+        bundle: BundleCrews,
+    ) -> Result<Crew, OrbitError> {
+        let crew = self.resolve_crew_for_run_input(input, bundle)?;
         tracing::info!(
             run_id,
             resolved_crew = %crew.name,
@@ -694,11 +737,15 @@ impl OrbitRuntime {
     /// same-id local record, if any, is not it. Other ids read the local store;
     /// missing fixture ids are skipped so fake implementer ids do not fail
     /// resolution. Distinct crews — including a mix of set and unset — fail
-    /// closed instead of inheriting `workflow.default_crew`.
+    /// closed instead of inheriting `workflow.default_crew`. An authenticated
+    /// preparation run ([`BundleCrews::PreparationPartitions`]) is the
+    /// exception: it keeps the first task's crew and prepare splits the rest
+    /// by crew.
     fn task_crew_from_run_input(
         &self,
         input: &Value,
         claimed: Option<&ClaimedTaskSnapshot>,
+        bundle: BundleCrews,
     ) -> Result<Option<String>, OrbitError> {
         let mut agreed: Option<Option<String>> = None;
         for task_id in task_ids_for_crew_resolution(input) {
@@ -715,6 +762,17 @@ impl OrbitRuntime {
             match &agreed {
                 None => agreed = Some(crew),
                 Some(existing) if existing == &crew => {}
+                // The live preparation attempt's own run is the pilot's own
+                // bundle. Tasks keep the crews they were drawn, and prepare
+                // splits the claim into one partition per crew before any
+                // pilot worker runs. The run records the first task's crew so
+                // startup still has a crew and does not inherit
+                // `workflow.default_crew`. Every other bundle, including one
+                // whose input merely carries a claim, fails closed below
+                // [ORB-16860].
+                Some(existing) if bundle == BundleCrews::PreparationPartitions => {
+                    return Ok(existing.clone());
+                }
                 Some(existing) => {
                     return Err(OrbitError::InvalidInput(mixed_bundle_crew_error(
                         existing.as_deref(),
@@ -815,6 +873,21 @@ pub(crate) fn normalized_task_crew(crew: Option<&str>) -> Option<String> {
     crew.map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// Whether a run's task bundle may name tasks whose stored crews differ.
+///
+/// The runtime cannot read automation claims, so the application layer that
+/// starts a run decides and hands the answer down. Run input alone is never
+/// enough: any caller can shape it [ORB-16860].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BundleCrews {
+    /// Every named task must agree on its crew; a mix fails closed.
+    Unanimous,
+    /// The run is the live task-pilot preparation attempt's own admitted run.
+    /// It keeps the first task's crew, and prepare partitions the rest by
+    /// crew before any pilot worker runs [ORB-16839].
+    PreparationPartitions,
 }
 
 fn mixed_bundle_crew_error(left: Option<&str>, right: Option<&str>) -> String {

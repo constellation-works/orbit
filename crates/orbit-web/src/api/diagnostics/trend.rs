@@ -1,4 +1,4 @@
-//! Clock-aligned trend windows shared by the Health › Metrics series.
+//! Clock-aligned trend windows shared by the Analytics › Metrics series.
 
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Value, json};
@@ -25,6 +25,7 @@ pub(super) fn trend_range(
     }
     DiagnosticsRange::from_query(
         &DiagnosticsQuery {
+            outcome: None,
             since: Some(DEFAULT_SINCE.to_string()),
             month: None,
             limit: None,

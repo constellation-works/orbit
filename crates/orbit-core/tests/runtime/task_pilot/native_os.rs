@@ -5,13 +5,15 @@
 //! operator decision or a newer assessment without it clears the wait. A
 //! `required_machine` finding holds every machine but the owner it names.
 
+use std::collections::BTreeSet;
+
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{Task, TaskComplexity, TaskStatus};
 use orbit_types::task::HostOs;
+use orbit_types::workflow::{ExecutorDef, ExecutorType};
 use serde_json::{Value, json};
 
-use super::Workspace;
-use crate::dispatch_admission::isolated;
+use super::{Workspace, runtime_at};
 
 const NATIVE_CRITERION: &str = "A real macOS `sandbox-exec` launch of the fixture succeeds.";
 
@@ -173,11 +175,7 @@ fn resolutions(workspace: &Workspace, task: &Task) -> Vec<String> {
         .collect()
 }
 
-#[test]
 fn a_native_os_finding_tags_an_untagged_task_for_that_os() {
-    if !isolated("task_pilot::native_os::a_native_os_finding_tags_an_untagged_task_for_that_os") {
-        return;
-    }
     let mut workspace = Workspace::new();
     on(&mut workspace, HostOs::Linux);
     let task = backlog_task(
@@ -189,7 +187,7 @@ fn a_native_os_finding_tags_an_untagged_task_for_that_os() {
     assess(&workspace, &task, Some(needs_macos(2)));
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
     let audit: Value =
-        serde_json::from_str(comments.last().unwrap().message.split_once('\n').unwrap().1).unwrap();
+        serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
     assert_eq!(
         audit["native_os_hold"]["requirements"],
         json!([{"criterion": 2, "os": "macos"}]),
@@ -231,13 +229,7 @@ fn a_native_os_finding_tags_an_untagged_task_for_that_os() {
     assert!(resolutions(&workspace, &task).is_empty());
 }
 
-#[test]
 fn a_native_os_wait_clears_on_a_decision_a_rescope_or_a_newer_assessment() {
-    if !isolated(
-        "task_pilot::native_os::a_native_os_wait_clears_on_a_decision_a_rescope_or_a_newer_assessment",
-    ) {
-        return;
-    }
     for clearing in ["approve-anyway", "clear", "rescope", "reassessed"] {
         let mut workspace = Workspace::new();
         on(&mut workspace, HostOs::Linux);
@@ -352,11 +344,7 @@ fn a_native_os_wait_clears_on_a_decision_a_rescope_or_a_newer_assessment() {
     }
 }
 
-#[test]
 fn a_native_os_decision_is_superseded_by_changed_findings() {
-    if !isolated("task_pilot::native_os::a_native_os_decision_is_superseded_by_changed_findings") {
-        return;
-    }
     for decision in ["approve-anyway", "clear"] {
         for change in ["criteria", "os", "criterion", "machine"] {
             let mut workspace = Workspace::new();
@@ -449,12 +437,7 @@ fn a_native_os_decision_is_superseded_by_changed_findings() {
     }
 }
 
-#[test]
 fn tagged_unfounded_and_other_os_tasks_keep_their_admission() {
-    if !isolated("task_pilot::native_os::tagged_unfounded_and_other_os_tasks_keep_their_admission")
-    {
-        return;
-    }
     // Each case has its own workspace: the fixture tasks share one file, and
     // the drain's wave would defer all but the first.
     let workspace_on = |os| {
@@ -527,11 +510,7 @@ fn tagged_unfounded_and_other_os_tasks_keep_their_admission() {
     }
 }
 
-#[test]
 fn a_malformed_native_os_finding_is_refused_at_apply() {
-    if !isolated("task_pilot::native_os::a_malformed_native_os_finding_is_refused_at_apply") {
-        return;
-    }
     let workspace = Workspace::new();
     let task = backlog_task(&workspace, &[NATIVE_CRITERION], &[]);
     for (required_os, expected) in [
@@ -559,11 +538,77 @@ fn a_malformed_native_os_finding_is_refused_at_apply() {
     assert_eq!(exclusion(&workspace, &task), None);
 }
 
-#[test]
-fn a_machine_finding_holds_every_machine_but_the_owner() {
-    if !isolated("task_pilot::native_os::a_machine_finding_holds_every_machine_but_the_owner") {
-        return;
+/// A portable criterion names no OS or native facility. Citing it in
+/// `required_os` is invalid at apply, and the rejection tells the repair
+/// pilot to leave the finding empty. macOS, Seatbelt and Bubblewrap still
+/// apply (ORB-16630, ORB-16384, ORB-16402).
+fn a_required_os_finding_on_a_portable_criterion_is_refused_at_apply() {
+    let workspace = Workspace::new();
+    let task = backlog_task(
+        &workspace,
+        &[
+            "The README fixture is repaired.",
+            "The owner's machine records the timing.",
+        ],
+        &[],
+    );
+    let applied = apply(
+        &workspace,
+        &task,
+        Some(json!([
+            {"criterion": 1, "os": "macos", "evidence": "Native macOS evidence."},
+            {"criterion": 2, "os": "linux", "evidence": "Native Linux evidence."},
+        ])),
+    );
+    assert_eq!(applied["applied_count"], 0, "{applied}");
+    assert_eq!(applied["repair_count"], 1, "{applied}");
+    let outcome = &applied["task_outcomes"][0];
+    assert_eq!(outcome["outcome"], "invalid", "{applied}");
+    let error = outcome["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("names no OS or native facility")
+            && error.contains("leave required_os empty for portable criteria"),
+        "a portable criterion must not hold a native host (ORB-16630): {applied}"
+    );
+    let repair_errors = applied["repair_partitions"][0]["validation_errors"]
+        .as_array()
+        .unwrap();
+    assert!(
+        repair_errors.iter().any(|entry| {
+            entry.as_str().is_some_and(|message| {
+                message.contains("leave required_os empty for portable criteria")
+            })
+        }),
+        "{applied}"
+    );
+    assert!(tags(&workspace, &task).is_empty(), "{applied}");
+    assert_eq!(exclusion(&workspace, &task), None);
+
+    for (criterion, os) in [
+        ("A macOS launch of the fixture succeeds.", "macos"),
+        ("A Seatbelt profile confines the fixture.", "macos"),
+        ("A Bubblewrap launch of the fixture succeeds.", "linux"),
+    ] {
+        let workspace = Workspace::new();
+        let task = backlog_task(&workspace, &[criterion], &[]);
+        assess(
+            &workspace,
+            &task,
+            Some(json!([{
+                "criterion": 1,
+                "os": os,
+                "evidence": "Only that native host can produce the evidence.",
+            }])),
+        );
+        assert_eq!(
+            tags(&workspace, &task),
+            vec![format!("os:{os}")],
+            "{criterion}"
+        );
     }
+}
+
+fn a_machine_finding_holds_every_machine_but_the_owner() {
     let mut workspace = Workspace::new();
     let task = backlog_task(
         &workspace,
@@ -608,7 +653,7 @@ fn a_machine_finding_holds_every_machine_but_the_owner() {
     assert_eq!(applied["applied_count"], 1, "{applied}");
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
     let audit: Value =
-        serde_json::from_str(comments.last().unwrap().message.split_once('\n').unwrap().1).unwrap();
+        serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
     assert_eq!(
         audit["native_os_hold"]["machine"],
         json!({"criteria": [1], "machine_id": "fixture-machine"}),
@@ -650,3 +695,230 @@ fn a_machine_finding_holds_every_machine_but_the_owner() {
     assert_eq!(exclusion(&workspace, &task), None);
     assert_eq!(resolutions(&workspace, &task), ["human:fixture"]);
 }
+
+/// A workspace whose `muse-wonder` crew is backed by the macOS-only `muse`
+/// executor, while `fixture` is unrestricted. The medium pool holds only
+/// `muse-wonder`, so a low-to-medium rerate redraws onto it.
+fn macos_only_workspace() -> Workspace {
+    let mut workspace = Workspace::new();
+    std::fs::write(
+        workspace.repo.join(".orbit/config.toml"),
+        r#"
+[workflow]
+default_crew = "fixture"
+low_complexity_crews = ["fixture"]
+medium_complexity_crews = ["muse-wonder"]
+[crews.fixture]
+provider = "codex"
+model = "fixture-model"
+[crews.muse-wonder]
+provider = "muse"
+model = "muse-spark-1.3"
+"#,
+    )
+    .unwrap();
+    workspace.runtime = runtime_at(
+        &workspace.runtime.global_root(),
+        &workspace.repo.join(".orbit"),
+    );
+    workspace
+        .runtime
+        .upsert_executor_def(&ExecutorDef {
+            name: "muse".to_string(),
+            executor_type: ExecutorType::DirectAgent,
+            command: Some("muse".to_string()),
+            args: Vec::new(),
+            stdout_format: None,
+            model_pair_override: None,
+            model_flag: None,
+            timeout_seconds: None,
+            auth_probe: None,
+            env: Default::default(),
+            sandbox: None,
+            allow_fallback: false,
+            host_os: Some(BTreeSet::from([HostOs::Macos])),
+            created_at: None,
+            updated_at: None,
+        })
+        .unwrap();
+    workspace
+}
+
+fn muse_task(workspace: &Workspace, tags: &[&str]) -> Task {
+    workspace
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Native host validation work".into(),
+            description: "Repair the README fixture.".into(),
+            acceptance_criteria: vec![
+                "A native Linux Bubblewrap launch succeeds.".into(),
+                "The README fixture is repaired.".into(),
+            ],
+            plan: "Inspect README.md.".into(),
+            tags: tags.iter().map(ToString::to_string).collect(),
+            status: Some(TaskStatus::Backlog),
+            complexity: TaskComplexity::Low,
+            context_files: vec!["file:README.md".into()],
+            crew: Some("muse-wonder".into()),
+            ..Default::default()
+        })
+        .unwrap()
+}
+
+fn needs_linux(criterion: usize) -> Value {
+    json!([{
+        "criterion": criterion, "os": "linux",
+        "evidence": "The criterion requires a native Linux Bubblewrap launch.",
+    }])
+}
+
+const OS_CREW_CONFLICT: &str = "crew `muse-wonder` (executor `muse`, host_os: macos) \
+    does not intersect the task's tags `os:linux`; no host can run it";
+
+fn assert_unapplied_conflict(workspace: &Workspace, task: &Task, before: &Task, applied: &Value) {
+    assert_eq!(applied["applied_count"], 0, "{applied}");
+    let outcome = &applied["task_outcomes"][0];
+    assert_eq!(outcome["outcome"], "invalid", "{applied}");
+    assert!(
+        outcome["error"]
+            .as_str()
+            .unwrap()
+            .contains(OS_CREW_CONFLICT),
+        "{applied}"
+    );
+    assert_eq!(
+        applied["tasks"],
+        json!([]),
+        "no assessment is recorded: {applied}"
+    );
+    assert_eq!(
+        workspace.runtime.get_task(&task.id).unwrap(),
+        *before,
+        "tags, crew, complexity and status are unchanged"
+    );
+    assert!(
+        workspace
+            .runtime
+            .get_task_history(&task.id)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.event != "task_pilot_applied"),
+        "the contradictory write is not marked applied"
+    );
+}
+
+fn a_pilot_os_tag_conflicting_with_the_explicit_crew_is_refused_unapplied() {
+    let mut workspace = macos_only_workspace();
+    on(&mut workspace, HostOs::Macos);
+    let task = muse_task(&workspace, &[]);
+    assert_eq!(task.crew.as_deref(), Some("muse-wonder"));
+    let before = workspace.runtime.get_task(&task.id).unwrap();
+    let history_len = workspace.runtime.get_task_history(&task.id).unwrap().len();
+    let comments_len = workspace.runtime.get_task_comments(&task.id).unwrap().len();
+
+    let applied = apply(&workspace, &task, Some(needs_linux(1)));
+
+    assert_unapplied_conflict(&workspace, &task, &before, &applied);
+    assert_eq!(
+        workspace.runtime.get_task_history(&task.id).unwrap().len(),
+        history_len
+    );
+    assert_eq!(
+        workspace.runtime.get_task_comments(&task.id).unwrap().len(),
+        comments_len,
+        "no pilot audit or approval comment is written"
+    );
+}
+
+fn a_pilot_complexity_rerate_falls_back_from_an_incompatible_crew() {
+    let mut workspace = macos_only_workspace();
+    on(&mut workspace, HostOs::Macos);
+    let task = workspace
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Native host validation work".into(),
+            description: "Repair the README fixture.".into(),
+            acceptance_criteria: vec!["A native Linux Bubblewrap launch succeeds.".into()],
+            plan: "Inspect README.md.".into(),
+            tags: vec!["os:linux".into()],
+            status: Some(TaskStatus::Backlog),
+            complexity: TaskComplexity::Low,
+            context_files: vec!["file:README.md".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(
+        task.crew.as_deref(),
+        Some("fixture"),
+        "the low pool draw assigns the unrestricted crew"
+    );
+    let before = workspace.runtime.get_task(&task.id).unwrap();
+
+    // A medium assessment redraws from the medium pool, whose only member
+    // is the macOS-only crew. The existing `os:linux` tag filters it before
+    // the draw, so the compatible default remains usable.
+    let applied = apply_findings(
+        &workspace,
+        &task,
+        Some(json!({"recommended_complexity": "medium"})),
+    );
+
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(applied["applied_count"], 1, "{applied}");
+    assert_eq!(
+        applied["task_outcomes"][0]["outcome"], "applied",
+        "{applied}"
+    );
+    let kept = workspace.runtime.get_task(&task.id).unwrap();
+    assert_eq!(kept.crew.as_deref(), Some("fixture"));
+    assert_eq!(kept.crew_source.as_deref(), Some("default"));
+    assert_eq!(kept.complexity, Some(TaskComplexity::Medium));
+    assert_eq!(kept.tags, ["os:linux"]);
+    assert_ne!(kept, before);
+}
+
+fn compatible_and_unrestricted_pilot_assignments_still_apply() {
+    let mut workspace = macos_only_workspace();
+    on(&mut workspace, HostOs::Macos);
+
+    // The macOS-only crew intersects the tag the finding adds.
+    let muse = muse_task(&workspace, &[]);
+    assess(&workspace, &muse, Some(needs_macos(1)));
+    let kept = workspace.runtime.get_task(&muse.id).unwrap();
+    assert_eq!(kept.tags, ["os:macos"]);
+    assert_eq!(kept.crew.as_deref(), Some("muse-wonder"));
+
+    // An unrestricted crew takes any native-OS tag.
+    let fixture = backlog_task(
+        &workspace,
+        &["A native Linux Bubblewrap launch succeeds."],
+        &[],
+    );
+    assess(&workspace, &fixture, Some(needs_linux(1)));
+    let kept = workspace.runtime.get_task(&fixture.id).unwrap();
+    assert_eq!(kept.tags, ["os:linux"]);
+    assert_eq!(kept.crew.as_deref(), Some("fixture"));
+}
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_native_os_finding_tags_an_untagged_task_for_that_os_scenarios,
+    a_native_os_finding_tags_an_untagged_task_for_that_os,
+    a_native_os_wait_clears_on_a_decision_a_rescope_or_a_newer_assessment,
+    a_native_os_decision_is_superseded_by_changed_findings
+);
+
+crate::scenario_table!(
+    tagged_unfounded_and_other_os_tasks_keep_their_admission_scenarios,
+    tagged_unfounded_and_other_os_tasks_keep_their_admission,
+    a_malformed_native_os_finding_is_refused_at_apply,
+    a_required_os_finding_on_a_portable_criterion_is_refused_at_apply,
+    a_machine_finding_holds_every_machine_but_the_owner
+);
+
+crate::scenario_table!(
+    pilot_os_crew_intersection_scenarios,
+    a_pilot_os_tag_conflicting_with_the_explicit_crew_is_refused_unapplied,
+    a_pilot_complexity_rerate_falls_back_from_an_incompatible_crew,
+    compatible_and_unrestricted_pilot_assignments_still_apply
+);

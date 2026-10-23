@@ -16,12 +16,23 @@ use super::crew::{IgnoredCrewProperty, crews_from_raw, default_crews};
 use super::execution_env::{CodexExecutionPolicy, ExecutionEnvPolicy};
 use crate::ConfigRoots;
 use crate::layering::load_layered_resolved;
-use crate::operation::{
-    OperationLayer, OperationLayerSource, OperationPolicy, translate_legacy_review_keys,
-};
+use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
 use crate::persistence::PersistenceConfig;
 use crate::raw::RawRuntimeConfig;
 use crate::registry::ConfigSnapshot;
+
+enum AutoConcurrencyMemoryThreshold {
+    EffectiveLayer,
+    Global(u8),
+    Skip,
+}
+
+struct DocumentAdmissionOptions {
+    emit_compatibility_warnings: bool,
+    scoped: bool,
+    operation_layer_source: OperationLayerSource,
+    auto_memory_threshold: AutoConcurrencyMemoryThreshold,
+}
 
 /// PR rendering and lifecycle settings owned by configuration.
 ///
@@ -53,8 +64,6 @@ pub struct ResolvedConfig {
     pub persistence: PersistenceConfig,
     /// Config-owned PR settings.
     pub pr: PrSettings,
-    /// Whether scoreboard metrics are recorded for task runs.
-    pub scoring_enabled: bool,
     /// Minutes a deferred delivery-automation reason may persist before it is
     /// escalated (`[automation] stall_window_minutes`; default 60).
     pub automation_stall_window_minutes: u32,
@@ -66,6 +75,8 @@ pub struct ResolvedConfig {
     pub workflow_auto_ship: bool,
     /// Host pressure thresholds and the throttle enable switch.
     pub resource_throttle: crate::registry::ResourceThrottleSettings,
+    /// Host-wide forecast thresholds and profile bounds; currently settings only.
+    pub auto_concurrency: crate::registry::AutoConcurrencySettings,
     /// Named provider-model assignments from `[crews.<name>]`, disabled crews
     /// included (see [`Crew::enabled`]).
     pub crews: BTreeMap<String, Crew>,
@@ -91,6 +102,9 @@ pub struct ResolvedConfig {
     /// inherits the host state. Always empty for the global layer, which
     /// refuses the table.
     pub plugin_enablement: BTreeMap<String, bool>,
+    /// `[workflow.tag_instructions.<tag>]`: which file, if any, replaces
+    /// Orbit's shipped default instruction for a tag and role.
+    pub tag_instructions: crate::TagInstructionSettings,
 }
 
 impl ResolvedConfig {
@@ -108,11 +122,11 @@ impl ResolvedConfig {
                 close_on_terminal: snapshot.pr_close_on_terminal,
                 delivery_authors: snapshot.pr_delivery_authors.clone(),
             },
-            scoring_enabled: snapshot.scoring_enabled,
             automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             workflow_auto_ship: snapshot.workflow_auto_ship,
             resource_throttle: snapshot.resource_throttle(),
+            auto_concurrency: snapshot.auto_concurrency(),
             crews: default_crews(),
             default_crew: snapshot.workflow_default_crew.clone(),
             complexity_crews: crate::ComplexityCrewPools {
@@ -126,6 +140,7 @@ impl ResolvedConfig {
             ignored_crew_properties: Vec::new(),
             plugins: BTreeMap::new(),
             plugin_enablement: BTreeMap::new(),
+            tag_instructions: crate::TagInstructionSettings::default(),
             snapshot,
         }
     }
@@ -166,15 +181,22 @@ impl ResolvedConfig {
                 redact_home_dir(&config_path.display().to_string())
             ))
         })?;
-        translate_legacy_review_keys(&mut document, config_path)?;
+        crate::aliases::translate_deprecated_keys(&mut document, None, config_path)?;
         let resolved = Self::from_document_with_warnings(
             document,
             config_path,
             &|_, _| config_path.to_path_buf(),
             persistence,
-            true,
-            false,
-            operation_layer_source,
+            DocumentAdmissionOptions {
+                emit_compatibility_warnings: true,
+                scoped: false,
+                operation_layer_source,
+                auto_memory_threshold: if operation_layer_source == OperationLayerSource::Global {
+                    AutoConcurrencyMemoryThreshold::EffectiveLayer
+                } else {
+                    AutoConcurrencyMemoryThreshold::Skip
+                },
+            },
         )?;
         // A merged layered document is checked once its layers resolve, with
         // each switch's real source; store validation uses the store's scope.
@@ -193,15 +215,21 @@ impl ResolvedConfig {
         config_path: &Path,
         crew_field_path: &dyn Fn(&str, &str) -> PathBuf,
         persistence: PersistenceConfig,
+        global_memory_high_percent: u8,
     ) -> Result<Self, OrbitError> {
         Self::from_document_with_warnings(
             document,
             config_path,
             crew_field_path,
             persistence,
-            false,
-            false,
-            OperationLayerSource::Workspace,
+            DocumentAdmissionOptions {
+                emit_compatibility_warnings: false,
+                scoped: false,
+                operation_layer_source: OperationLayerSource::Workspace,
+                auto_memory_threshold: AutoConcurrencyMemoryThreshold::Global(
+                    global_memory_high_percent,
+                ),
+            },
         )
     }
 
@@ -218,9 +246,12 @@ impl ResolvedConfig {
             config_path,
             crew_field_path,
             persistence,
-            false,
-            true,
-            OperationLayerSource::Workspace,
+            DocumentAdmissionOptions {
+                emit_compatibility_warnings: false,
+                scoped: true,
+                operation_layer_source: OperationLayerSource::Workspace,
+                auto_memory_threshold: AutoConcurrencyMemoryThreshold::Skip,
+            },
         )
     }
 
@@ -229,9 +260,7 @@ impl ResolvedConfig {
         config_path: &Path,
         crew_field_path: &dyn Fn(&str, &str) -> PathBuf,
         persistence: PersistenceConfig,
-        emit_compatibility_warnings: bool,
-        scoped: bool,
-        operation_layer_source: OperationLayerSource,
+        options: DocumentAdmissionOptions,
     ) -> Result<Self, OrbitError> {
         let parsed = document
             .clone()
@@ -258,17 +287,40 @@ impl ResolvedConfig {
         )?;
         let (crews, ignored_crew_properties) =
             crews_from_raw(parsed.crews.as_ref(), config_path, crew_field_path)?;
-        let snapshot = if scoped {
+        let snapshot = if options.scoped {
             ConfigSnapshot::admit_scoped(&document, config_path, &crews)?
         } else {
-            ConfigSnapshot::admit(&document, config_path, &crews)?
+            match options.auto_memory_threshold {
+                AutoConcurrencyMemoryThreshold::EffectiveLayer => {
+                    ConfigSnapshot::admit(&document, config_path, &crews)?
+                }
+                AutoConcurrencyMemoryThreshold::Global(memory_high) => {
+                    ConfigSnapshot::admit_with_global_memory_high(
+                        &document,
+                        config_path,
+                        &crews,
+                        memory_high,
+                    )?
+                }
+                AutoConcurrencyMemoryThreshold::Skip => {
+                    ConfigSnapshot::admit_workspace(&document, config_path, &crews)?
+                }
+            }
         };
         // One document is one layer. The layered loader replaces this with
         // the exact global/workspace resolution; a store passes the scope of
         // its file so pre-write validation reports accurate provenance.
         let operation_layer = OperationLayer::from_document(&document, config_path)?;
-        let mut operation = OperationPolicy::resolve(&[(operation_layer_source, &operation_layer)]);
-        operation.review_crew.value = snapshot.operation_review_crew.clone().unwrap_or_default();
+        let mut operation =
+            OperationPolicy::resolve(&[(options.operation_layer_source, &operation_layer)]);
+        operation.review_crew.value = snapshot
+            .workflow_purpose_crews_review
+            .clone()
+            .unwrap_or_default();
+        operation.pre_landing_review_crew.value = snapshot
+            .workflow_purpose_crews_pre_landing_review
+            .clone()
+            .unwrap_or_default();
 
         let compatibility_keys = CompatibilityKeys {
             deprecated_task_id_pattern: parsed
@@ -282,16 +334,19 @@ impl ResolvedConfig {
             removed_keys: removed_keys_present(&document),
             deprecated_keys: deprecated_keys_present(&document),
         };
-        if emit_compatibility_warnings {
+        if options.emit_compatibility_warnings {
             compatibility_keys.warn(config_path);
         }
 
         let plugins = plugin_sections_from_raw(parsed.plugins.as_ref(), config_path)?;
         let plugin_enablement =
             crate::plugin_enablement::plugin_enablement_from_document(&document, config_path)?;
+        let tag_instructions =
+            crate::tag_instructions::tag_instructions_from_document(&document, config_path)?;
 
         Ok(Self {
-            execution_env: ExecutionEnvPolicy::from_snapshot(&snapshot),
+            execution_env: ExecutionEnvPolicy::from_snapshot(&snapshot)
+                .with_crew_env_sources(crews.values().flat_map(|crew| &crew.env)),
             codex_execution: CodexExecutionPolicy::from_snapshot(&snapshot),
             persistence,
             pr: PrSettings {
@@ -299,11 +354,11 @@ impl ResolvedConfig {
                 close_on_terminal: snapshot.pr_close_on_terminal,
                 delivery_authors: snapshot.pr_delivery_authors.clone(),
             },
-            scoring_enabled: snapshot.scoring_enabled,
             automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             workflow_auto_ship: snapshot.workflow_auto_ship,
             resource_throttle: snapshot.resource_throttle(),
+            auto_concurrency: snapshot.auto_concurrency(),
             crews,
             default_crew: snapshot.workflow_default_crew.clone(),
             complexity_crews: crate::ComplexityCrewPools {
@@ -317,6 +372,7 @@ impl ResolvedConfig {
             ignored_crew_properties,
             plugins,
             plugin_enablement,
+            tag_instructions,
             snapshot,
         })
     }

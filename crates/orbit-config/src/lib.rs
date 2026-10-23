@@ -53,18 +53,21 @@
 //! - `memory_limit` — the typed worker memory limit ([`MemoryLimit`]) and
 //!   its one parser [ORB-12913].
 //! - `operation` — typed review preferences (`[review]` and
-//!   `operation.review_crew`, one crew or a pool), their layered resolution
-//!   and the translation of deprecated review keys [ORB-11333] [ORB-13992]
-//!   [ORB-15195].
+//!   `workflow.purpose_crews.review`, one crew or a pool) and their layered
+//!   resolution [ORB-11333] [ORB-13992] [ORB-15195].
+//! - `aliases` — read-time translation of deprecated spellings into their
+//!   replacement keys [ORB-16775].
 //! - `resolved` — the consumer-facing [`ResolvedConfig`] views, assembled in
 //!   `resolved/config.rs` with crew admission, compatibility checks and environment
 //!   projection in sibling named modules.
 //! - `persistence` — artifact path resolution from the two roots.
 //! - `plugin_enablement` — the workspace `[plugin_enablement]` toggles.
+//! - `tag_instructions` — the `[workflow.tag_instructions.<tag>]` file mapping.
 //! - `store` — comment-preserving [`ConfigStore`] edits and an atomic save that
 //!   refuses to replace a file changed since the store read it.
 //! - `seed` — rendering and writing a fresh default `config.toml`.
 
+mod aliases;
 mod crew_pools;
 mod layering;
 mod memory_limit;
@@ -80,6 +83,10 @@ mod resolved;
 mod roots;
 mod seed;
 mod store;
+mod tag_instructions;
+mod unknown;
+
+pub use unknown::{UnknownConfigKey, unknown_config_keys_at, unknown_config_keys_present};
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -88,8 +95,12 @@ use orbit_common::OrbitError;
 use orbit_common::fs::open_read_only_no_follow;
 use orbit_common::security::redaction::redact_home_dir;
 
+pub use aliases::{
+    ShellProbeMode, WorkerContainmentMode, deprecated_key_rewrites, translate_deprecated_keys,
+};
 pub use crew_pools::{
-    ComplexityCrewPools, CrewPoolEntry, canonical_crew_pool, canonical_crew_pool_entries,
+    ComplexityCrewPools, CrewPoolEntry, PurposeCrewPools, canonical_crew_pool,
+    canonical_crew_pool_entries,
 };
 pub use layering::{
     ConfigFallback, ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason,
@@ -98,7 +109,8 @@ pub use layering::{
 pub use memory_limit::{MemoryLimit, MemoryUnit};
 pub use operation::{
     OPERATION_POLICY_VERSION, OperationField, OperationLayerSource, OperationPolicy,
-    REVIEW_BEFORE_PR_KEY, REVIEW_CREW_KEY, REVIEW_MINUTES_KEY, ReviewCrewSetting,
+    PRE_LANDING_REVIEW_CREW_KEY, REVIEW_CREW_KEY, REVIEW_MINUTES_KEY, REVIEW_TIMING_KEY,
+    ReviewCrewPool, ReviewCrewSetting, ReviewTimingSetting,
 };
 pub use persistence::PersistenceConfig;
 pub use plugin_enablement::{
@@ -107,21 +119,26 @@ pub use plugin_enablement::{
 pub use plugins::{PluginConfigSchema, register_plugin_config_schemas};
 pub use provider_limit::{
     DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT, ProviderLimitExplicitCrews, ProviderLimitPolicy,
+    ProviderLimitTarget, ProviderLimitThreshold,
 };
 pub use provider_limit_budget::{ProviderLimitBudget, ProviderLimitBudgetUnit};
 pub use registry::{
-    CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigSection, ConfigSnapshot, MachineSettings,
-    ResourceThrottleSettings, WorkerContainmentSettings, admit_config_key,
+    AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigKeyTier,
+    ConfigSection, ConfigSnapshot, ExploreSettings, MachineSettings, MidRunSteeringSettings,
+    RegressionRiskSettings, ResourceThrottleSettings, WorkerContainmentSettings, admit_config_key,
     admit_settable_config_key, config_key_options, describe as describe_config_key,
     immutable_key_note, is_global_only_key,
 };
 pub use resolved::{
-    CodexExecutionPolicy, ExecutionEnvPolicy, PrSettings, RETIRED_SYSTEM_CREW,
-    RETIRED_SYSTEM_CREW_WARNING, ResolvedConfig, disabled_crew_message, names_retired_system_crew,
+    CodexExecutionPolicy, CompatibilityConfigKey, CompatibilityConfigKeyDisposition,
+    ExecutionEnvPolicy, PrSettings, RETIRED_SYSTEM_CREW, RETIRED_SYSTEM_CREW_WARNING,
+    ResolvedConfig, compatibility_config_keys_at, compatibility_config_keys_present,
+    disabled_crew_message, executor_host_os, names_retired_system_crew,
 };
 pub use roots::ConfigRoots;
 pub use seed::{ConfigSeed, seed_default_config};
 pub use store::{ConfigScope, ConfigStore, WorkspaceInitMode};
+pub use tag_instructions::{TAG_INSTRUCTIONS_KEY, TagInstructionSetting, TagInstructionSettings};
 
 const MACHINE_SETTINGS_FILE: &str = "config.toml";
 

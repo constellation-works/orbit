@@ -103,14 +103,67 @@ alloc_port() {
 
 WORKDIR="$(mktemp -d)"
 PIDS=()
+STAGE="fixture-setup"
+PARTICIPANTS=()
+LOGFILES=()
+STATUSES=()
+
+# Failure-only I/O: at most 4096 payload bytes per stream (head and tail so
+# compiler startup and final statistics survive), plus labels/byte counts.
+# Print while the fixture still exists; cleanup below then removes it.
+report_stream() {
+  local stream="$1" file="$2" bytes limit=4096 half=2048
+  if [[ ! -f "$file" ]]; then
+    printf '%s unavailable\n' "$stream" >&2
+    return
+  fi
+  bytes="$(wc -c <"$file")"
+  bytes="${bytes//[[:space:]]/}"
+  printf '%s bytes=%s limit=%s\n' "$stream" "$bytes" "$limit" >&2
+  if [[ "$bytes" -gt "$limit" ]]; then
+    head -c "$half" "$file" >&2
+    printf '\n[truncated: %s bytes omitted]\n' "$((bytes - limit))" >&2
+    tail -c "$half" "$file" >&2
+  else
+    cat "$file" >&2
+  fi
+  printf '\n' >&2
+}
+
+report_participants() {
+  local i
+  for ((i=0; i<${#PARTICIPANTS[@]}; i++)); do
+    printf 'test-compiler-cache-namespaces: stage=%s participant=%s exit_status=%s\n' \
+      "$STAGE" "${PARTICIPANTS[$i]}" "${STATUSES[$i]}" >&2
+    report_stream stdout "${LOGFILES[$i]}"
+    report_stream stderr "${LOGFILES[$i]}.err"
+  done
+}
+
+# Reap both peers even when the first fails; never collapse their statuses.
+wait_participants() {
+  local i status=0
+  for ((i=0; i<${#PIDS[@]}; i++)); do
+    STATUSES[$i]=0
+    wait "${PIDS[$i]}" || STATUSES[$i]=$?
+    [[ "${STATUSES[$i]}" -eq 0 ]] || status=1
+  done
+  PIDS=()
+  return "$status"
+}
+
 cleanup() {
-  local pid
+  local exit_status=$? pid i
   for pid in "${PIDS[@]:-}"; do
     kill "$pid" >/dev/null 2>&1 || true
   done
-  for pid in "${PIDS[@]:-}"; do
-    wait "$pid" >/dev/null 2>&1 || true
+  for ((i=0; i<${#PIDS[@]}; i++)); do
+    STATUSES[$i]=0
+    wait "${PIDS[$i]}" >/dev/null 2>&1 || STATUSES[$i]=$?
   done
+  if [[ "$exit_status" -ne 0 ]]; then
+    report_participants || true
+  fi
   rm -rf "$WORKDIR"
 }
 trap cleanup EXIT
@@ -273,49 +326,52 @@ has_rust_hit() {
 
 # Wrapper defaults: per-namespace daemon + client-side compile. Different
 # sources must each produce the expected binary while sharing SCCACHE_DIR.
+STAGE=isolated-daemon
+PARTICIPANTS=(C D)
+LOGFILES=("$WORKDIR/logs/ok-c" "$WORKDIR/logs/ok-d")
+STATUSES=(pending pending)
 run_ns "$WORKDIR/src-c" "$WORKDIR/tgt-c" "$WORKDIR/logs/ok-c" &
 PIDS+=($!)
-pid_c=$!
 run_ns "$WORKDIR/src-d" "$WORKDIR/tgt-d" "$WORKDIR/logs/ok-d" &
 PIDS+=($!)
-pid_d=$!
-status=0
-wait "$pid_c" || status=1
-wait "$pid_d" || status=1
-PIDS=()
-if [[ "$status" -ne 0 ]]; then
-  cat "$WORKDIR/logs/ok-c.err" "$WORKDIR/logs/ok-d.err" >&2 || true
-  fail "isolated-daemon concurrent namespaces failed"
-fi
+wait_participants || fail "isolated-daemon concurrent namespaces failed"
 assert_out_c="$(probe_out "$WORKDIR/logs/ok-c")"
 assert_out_d="$(probe_out "$WORKDIR/logs/ok-d")"
-[[ "$assert_out_c" == "3" ]] || fail "namespace C expected 3, got '$assert_out_c'"
-[[ "$assert_out_d" == "6" ]] || fail "namespace D expected 6, got '$assert_out_d'"
+[[ "$assert_out_c" == "3" ]] || fail "namespace C expected 3"
+[[ "$assert_out_d" == "6" ]] || fail "namespace D expected 6"
 [[ -x "$WORKDIR/tgt-c/debug/orbit_cache_probe" ]] || fail "namespace C missing private binary"
 [[ -x "$WORKDIR/tgt-d/debug/orbit_cache_probe" ]] || fail "namespace D missing private binary"
 if ! compgen -G "$WORKDIR/tgt-c/debug/deps/liborbit_cache_probe-*.rlib" >/dev/null; then
   fail "namespace C missing private rlib"
+fi
+if ! compgen -G "$WORKDIR/tgt-d/debug/deps/liborbit_cache_probe-*.rlib" >/dev/null; then
+  fail "namespace D missing private rlib"
 fi
 if compgen -G "$WORKDIR/src-d/target/debug/deps/liborbit_cache_probe-*.rlib" >/dev/null; then
   fail "namespace D wrote into the sibling source tree"
 fi
 
 # Cross-worktree warm reuse: identical source, private cleaned target, shared disk cache.
+STAGE=warm-identical-source
+PARTICIPANTS=(E)
+LOGFILES=("$WORKDIR/logs/ok-e")
+STATUSES=(0)
 rm -rf "$WORKDIR/tgt-e"
 mkdir -p "$WORKDIR/tgt-e"
 run_ns "$WORKDIR/src-e" "$WORKDIR/tgt-e" "$WORKDIR/logs/ok-e" \
-  || {
-    cat "$WORKDIR/logs/ok-e.err" >&2 || true
-    fail "warm identical-source namespace failed"
-  }
+  || STATUSES[0]=$?
+[[ "${STATUSES[0]}" -eq 0 ]] || fail "warm identical-source namespace failed"
 assert_out_e="$(probe_out "$WORKDIR/logs/ok-e")"
-[[ "$assert_out_e" == "3" ]] || fail "warm namespace E expected 3, got '$assert_out_e'"
+[[ "$assert_out_e" == "3" ]] || fail "warm namespace E expected 3"
 if ! has_rust_hit "$WORKDIR/logs/ok-e"; then
-  cat "$WORKDIR/logs/ok-e" >&2 || true
   fail "identical second worktree did not report Rust cache hits"
 fi
 
 # Shared TCP daemon + client-side compile: rustc runs in each namespace.
+STAGE=client-side-shared-tcp
+PARTICIPANTS=(C D)
+LOGFILES=("$WORKDIR/logs/cs-c" "$WORKDIR/logs/cs-d")
+STATUSES=(pending pending)
 cs_port="$(alloc_port)"
 rm -rf "$WORKDIR/tgt-c" "$WORKDIR/tgt-d"
 mkdir -p "$WORKDIR/tgt-c" "$WORKDIR/tgt-d"
@@ -323,25 +379,20 @@ run_ns "$WORKDIR/src-c" "$WORKDIR/tgt-c" "$WORKDIR/logs/cs-c" \
   --setenv SCCACHE_CLIENT_SIDE 1 \
   --setenv SCCACHE_SERVER_PORT "$cs_port" &
 PIDS+=($!)
-pid_c=$!
 run_ns "$WORKDIR/src-d" "$WORKDIR/tgt-d" "$WORKDIR/logs/cs-d" \
   --setenv SCCACHE_CLIENT_SIDE 1 \
   --setenv SCCACHE_SERVER_PORT "$cs_port" &
 PIDS+=($!)
-pid_d=$!
-status=0
-wait "$pid_c" || status=1
-wait "$pid_d" || status=1
-PIDS=()
-if [[ "$status" -ne 0 ]]; then
-  cat "$WORKDIR/logs/cs-c.err" "$WORKDIR/logs/cs-d.err" >&2 || true
-  fail "client-side shared TCP daemon concurrent namespaces failed"
-fi
+wait_participants || fail "client-side shared TCP daemon concurrent namespaces failed"
 [[ "$(probe_out "$WORKDIR/logs/cs-c")" == "3" ]] || fail "client-side namespace C expected 3"
 [[ "$(probe_out "$WORKDIR/logs/cs-d")" == "6" ]] || fail "client-side namespace D expected 6"
 
 # Shared TCP daemon, server-side compile: hold C's namespace (and daemon) until D
 # has finished, reproducing the missing-artifact failure.
+STAGE=server-side-shared-tcp
+PARTICIPANTS=(C D)
+LOGFILES=("$WORKDIR/logs/bad-c" "$WORKDIR/logs/bad-d")
+STATUSES=(pending pending)
 bad_port="$(alloc_port)"
 rm -rf "$WORKDIR/tgt-c" "$WORKDIR/tgt-d" "$WORKDIR/cache" "$WORKDIR/sync"
 mkdir -p "$WORKDIR/tgt-c" "$WORKDIR/tgt-d" "$WORKDIR/cache" "$WORKDIR/sync"
@@ -358,19 +409,18 @@ run_ns "$WORKDIR/src-d" "$WORKDIR/tgt-d" "$WORKDIR/logs/bad-d" \
   --setenv SCCACHE_SERVER_PORT "$bad_port" &
 PIDS+=($!)
 pid_d=$!
-set +e
-wait "$pid_d"
-d_status=$?
-set -e
+STATUSES[1]=0
+wait "$pid_d" || STATUSES[1]=$?
+d_status="${STATUSES[1]}"
 : >"$donef"
-wait "$pid_c" || true
+STATUSES[0]=0
+wait "$pid_c" || STATUSES[0]=$?
 PIDS=()
 if [[ "$d_status" -eq 0 ]]; then
   fail "shared TCP daemon should not succeed for a different-source namespace"
 fi
 if ! grep -E -q 'does not exist|extern location|/tmp/orbit-workspace' "$WORKDIR/logs/bad-d.err" \
   && ! grep -E -q 'does not exist|extern location|/tmp/orbit-workspace' "$WORKDIR/logs/bad-d"; then
-  cat "$WORKDIR/logs/bad-d.err" >&2 || true
   fail "shared-daemon failure did not look like the missing-artifact mismatch"
 fi
 

@@ -85,6 +85,12 @@ impl TaskRecordService<'_> {
         id: &str,
         params: TaskRecordUpdateParams,
     ) -> Result<Task, OrbitError> {
+        #[cfg(test)]
+        if FAIL_NEXT_UPDATE.with(|fail| fail.replace(false)) {
+            return Err(OrbitError::Execution(
+                "injected task record update failure".to_string(),
+            ));
+        }
         // Let the artifact store finish its rejection checks before publishing
         // document or status/history edits. Keeping those checks in the store
         // also covers reserved evidence paths and malformed coverage payloads.
@@ -129,6 +135,7 @@ impl TaskRecordService<'_> {
                     crew: params.crew.clone(),
                     crew_source: params.crew_source.clone(),
                     orchestrator: params.orchestrator.clone(),
+                    origin: params.origin,
                     context_creation: params.context_creation.clone(),
                 },
             )?;
@@ -145,6 +152,7 @@ impl TaskRecordService<'_> {
                     append_history: params.append_history.clone(),
                     append_comments: params.append_comments.clone(),
                     expected_status: params.expected_status.clone(),
+                    operator_comment: params.operator_comment,
                 },
             )?;
         }
@@ -184,6 +192,13 @@ impl TaskRecordService<'_> {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Fails this thread's next [`TaskRecordService::update`] before it writes
+    /// anything, as a store error would. Production builds do not have it.
+    pub(super) static FAIL_NEXT_UPDATE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 impl crate::OrbitRuntime {
     /// Internal trusted invocation seam. Transport adapters must supply managed context,
     /// never construct it from tool arguments or advisory environment labels.
@@ -206,6 +221,15 @@ impl crate::OrbitRuntime {
         context: &orbit_store::contracts::ClaimInvocation,
     ) -> Result<(), OrbitError> {
         self.stores().tasks().verify_worker_claim(context)
+    }
+
+    /// A claimed worker's mid-run steering records, behind the same fence
+    /// as [`Self::verify_worker_claim`].
+    pub(crate) fn worker_claim_steering(
+        &self,
+        context: &orbit_store::contracts::ClaimInvocation,
+    ) -> Result<orbit_store::contracts::ClaimSteeringReading, OrbitError> {
+        self.stores().tasks().worker_claim_steering(context)
     }
 
     pub fn inspect_execution_claims(

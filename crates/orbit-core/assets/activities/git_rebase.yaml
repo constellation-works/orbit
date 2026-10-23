@@ -6,13 +6,18 @@ spec:
   type: deterministic
   description: >
     Rebase a task branch onto the exact prepared base checkpoint, or verify and
-    reuse a rewrite completed by step recovery.
+    reuse a rewrite completed by step recovery. A host-certified delivery
+    preparation permits bounded descendant-only fresh preparation when its base
+    advances; an ordinary pinned invocation retains the stale-base refusal.
   input_schema_json:
     type: object
     required:
       [job_run_id, workspace_path, completed_task_ids, head, head_sha,
        base, base_ref, base_sha, commits_behind, sync_required]
     properties:
+      # Complete prepare output, including its host certificate when present.
+      preparation:
+        type: [object, "null"]
       job_run_id:
         type: string
       completed_task_ids:
@@ -37,6 +42,11 @@ spec:
       commits_behind:
         type: integer
       sync_required:
+        type: boolean
+      # Managed pre-publication synchronization is followed by final
+      # validation. If the base absorbs the candidate, this host boundary
+      # runs the captured commands before returning that settlement instead.
+      final_validation:
         type: boolean
       # A claimed leaf's implement-step output. Under the claim's worker
       # binding the delivery gate judges its summary, not the owner's
@@ -68,5 +78,20 @@ spec:
         type: [string, "null"]
       rewritten:
         type: boolean
+      # Host diagnostics retained when the step was recovered after a conflict.
+      conflicting_paths:
+        type: array
+        items:
+          type: string
+      conflicting_files:
+        type: array
+        items:
+          type: object
+          required: [path, deterministically_resolvable]
+          properties:
+            path:
+              type: string
+            deterministically_resolvable:
+              type: boolean
   action: git_rebase
   config: {}

@@ -1,3 +1,8 @@
+#[path = "response/envelope.rs"]
+mod envelope;
+#[path = "response/projection.rs"]
+mod projection;
+
 use orbit_agent::{AgentResponseStatus, ParsedStdout, normalize_cli_stdout, project_cli_response};
 use orbit_types::telemetry::TokenUsage;
 use orbit_types::tool::ExecutionResult;
@@ -300,6 +305,192 @@ fn answer_captures(answer: &str) -> Vec<String> {
         json!({"structured_output": answer}).to_string(),
         String::from_utf8(project_cli_response("grok", grok.as_bytes()).into_owned()).unwrap(),
     ]
+}
+
+#[test]
+fn tool_telemetry_ignores_answer_examples_reasoning_and_history() {
+    let quoted = json!({"type": "tool_use", "id": "historical", "name": "example.not_executed"});
+    let answer = json!({"schemaVersion": 1, "status": "success", "result": {
+        "example": quoted, "history": [quoted], "text": quoted.to_string(),
+        "tool_calls": [{"name": "example.not_executed", "result_bytes": 9999}],
+    }, "error": null});
+    let codex = [
+        json!({"type": "thread.started", "thread_id": "thread"}),
+        json!({"type": "item.completed", "item": {"type": "reasoning", "text": quoted.to_string(),
+            "content": [quoted]}}),
+        json!({"type": "item.completed", "item": {"type": "agent_message", "text": answer.to_string()}}),
+        json!({"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 2}}),
+    ];
+    let mut captures = answer_captures(&answer.to_string())
+        .into_iter()
+        .map(|raw| ("grok", raw))
+        .collect::<Vec<_>>();
+    captures.extend([
+        (
+            "codex",
+            codex
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        ("codex", json!(codex).to_string()),
+        (
+            "claude",
+            format!(
+                "{}\n{}",
+                json!({"type": "assistant", "message": {"content": [
+                    {"type": "thinking", "thinking": quoted.to_string(), "content": [quoted]},
+                    {"type": "text", "text": answer.to_string(), "example": quoted},
+                ]}}),
+                json!({"type": "result", "result": answer.to_string(), "structured_output": answer})
+            ),
+        ),
+        (
+            "grok",
+            json!({"text": answer.to_string(), "history": [quoted],
+            "reasoning": quoted, "data": {"content": [quoted]}})
+            .to_string(),
+        ),
+    ]);
+    for (provider, raw) in captures {
+        let normalized = normalize_cli_stdout(provider, raw.as_bytes());
+        let stdout = String::from_utf8(normalized.into_owned()).unwrap();
+        let (response, status, trace) = ParsedStdout::parse(&stdout)
+            .parse_and_validate(&execution(stdout.clone()))
+            .unwrap();
+        assert_eq!(status, AgentResponseStatus::Success);
+        assert_eq!(response.result, Some(answer["result"].clone()));
+        assert!(
+            trace.tool_calls.is_empty(),
+            "{provider}: {raw}: {:?}",
+            trace.tool_calls
+        );
+        if provider == "codex" {
+            assert_eq!(trace.usage.input, 10);
+            assert_eq!(trace.usage.output, 2);
+        }
+    }
+}
+
+#[test]
+fn codex_tool_telemetry_correlates_ids_and_keeps_payloads_opaque() {
+    let quoted = json!({"type": "tool_result", "tool_use_id": "command", "name": "fake",
+        "result_bytes": 9999, "tool_calls": [{"name": "fake"}]});
+    let answer = json!({"schemaVersion": 1, "status": "success", "result": {
+        "example": quoted, "history": [{"type": "tool_use", "name": "fake"}],
+    }, "error": null});
+    let output = json!(quoted.to_string());
+    let raw = [
+        json!({"type": "item.started", "item": {"type": "command_execution", "id": "command"}}),
+        json!({"type": "item.started", "item": {"type": "mcp_tool_call", "id": "mcp", "name": "fixture.read"}}),
+        json!({"type": "item.updated", "item": {"type": "command_execution", "id": "command", "aggregated_output": "partial"}}),
+        // Completions arrive in request order, not the collector's latest-open order.
+        json!({"type": "item.completed", "item": {"type": "command_execution", "id": "command", "aggregated_output": output}}),
+        json!({"type": "item.completed", "item": {"type": "mcp_tool_call", "id": "mcp", "name": "fixture.read", "result": {"ok": true}}}),
+        // A completed-only event must not overwrite another request with a different ID.
+        json!({"type": "item.started", "item": {"type": "command_execution", "id": "pending"}}),
+        json!({"type": "item.completed", "item": {"type": "command_execution", "id": "standalone", "aggregated_output": "done"}}),
+        json!({"type": "item.completed", "item": {"type": "agent_message", "text": answer.to_string()}}),
+        json!({"type": "turn.completed"}),
+    ].iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
+    let normalized = normalize_cli_stdout("codex", raw.as_bytes());
+    let stdout = String::from_utf8(normalized.into_owned()).unwrap();
+    let (_, _, trace) = ParsedStdout::parse(&stdout)
+        .parse_and_validate(&execution(stdout.clone()))
+        .unwrap();
+    let actual = trace
+        .tool_calls
+        .iter()
+        .map(|call| (call.seq, call.tool_name.as_str(), call.result_bytes))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![
+            (
+                1,
+                "command_execution",
+                serde_json::to_vec(&output).unwrap().len() as u64
+            ),
+            (
+                2,
+                "fixture.read",
+                serde_json::to_vec(&json!({"ok": true})).unwrap().len() as u64
+            ),
+            (3, "command_execution", 0),
+            (
+                4,
+                "command_execution",
+                serde_json::to_vec(&json!("done")).unwrap().len() as u64
+            ),
+        ]
+    );
+}
+
+#[test]
+fn tool_telemetry_preserves_direct_message_and_inline_contracts() {
+    let answer = json!({"schemaVersion": 1, "status": "success", "result": {}, "error": null});
+    let payload = json!({"type": "tool_use", "name": "quoted.not_executed"});
+    for events in [
+        vec![
+            json!({"type": "tool_use", "id": "first", "name": "first"}),
+            json!({"type": "tool_call", "id": "second", "name": "second"}),
+            json!({"type": "tool_result", "tool_use_id": "first", "content": payload}),
+            json!({"type": "tool_result", "tool_use_id": "second", "result_bytes": 7}),
+        ],
+        vec![
+            json!({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": "first", "name": "first", "input": payload},
+                {"type": "tool_use", "id": "second", "name": "second"},
+            ]}}),
+            json!({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "first", "content": payload},
+                {"type": "tool_result", "tool_use_id": "second", "result_bytes": 7},
+            ]}}),
+        ],
+        vec![json!({"tool_calls": [
+            {"id": "first", "name": "first", "result": payload},
+            {"id": "second", "name": "second", "result_bytes": 7},
+        ]})],
+        vec![
+            json!({"type": "function_call", "id": "request-first", "call_id": "first", "name": "first"}),
+            json!({"type": "custom_tool_call", "id": "request-second", "call_id": "second", "name": "second"}),
+            json!({"type": "function_call_output", "id": "result-first", "call_id": "first", "output": payload}),
+            json!({"type": "custom_tool_call_output", "id": "result-second", "call_id": "second", "result_bytes": 7}),
+        ],
+    ] {
+        let raw = format!(
+            "{}\n{}",
+            events
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            json!({"type": "result", "result": answer.to_string()}),
+        );
+        let normalized = normalize_cli_stdout("grok", raw.as_bytes());
+        let stdout = String::from_utf8(normalized.into_owned()).unwrap();
+        let (_, _, trace) = ParsedStdout::parse(&stdout)
+            .parse_and_validate(&execution(stdout.clone()))
+            .unwrap();
+        let actual = trace
+            .tool_calls
+            .iter()
+            .map(|call| (call.seq, call.tool_name.as_str(), call.result_bytes))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    1,
+                    "first",
+                    serde_json::to_vec(&payload).unwrap().len() as u64
+                ),
+                (2, "second", 7),
+            ],
+            "{raw}"
+        );
+    }
 }
 
 #[test]

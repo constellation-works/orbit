@@ -6,17 +6,20 @@ use orbit_common::OrbitError;
 use orbit_common::fs::path::home_dir;
 
 use super::converge::clear_clock_reload_pending;
+use super::inspect::probe_program_version;
 use super::install::{
     launchd_plist_path, migrate_stale_systemd_service, migrate_stale_systemd_timer,
-    systemd_daemon_reload_command, systemd_enable_command, systemd_restart_command,
+    reload_launchd_unit, systemd_daemon_reload_command, systemd_enable_command,
+    systemd_restart_command, write_launchd_unit,
 };
 use super::manager::{ClockCommandRunner, ClockPlatform, ManagerCommand, NativeClockCommandRunner};
 use super::settings::{SYSTEMD_UNIT, load_clock_settings};
 use super::status::{
-    ClockStatus, clock_manager_probe_error, clock_manager_unavailable_error, clock_status_from,
-    launchd_manager_probe_command, launchd_reports_not_loaded, manager_command_error,
-    manager_status_command, query_systemd_clock_details, systemd_reports_disabled_or_missing,
-    systemd_reports_missing, systemd_unschedulable_error,
+    ClockStatus, LaunchdHealthProbe, clock_manager_probe_error, clock_manager_unavailable_error,
+    clock_status_from, launchd_health_issue, launchd_manager_probe_command,
+    launchd_reports_not_loaded, manager_command_error, manager_status_command, monotonic_usec,
+    query_systemd_clock_details, systemd_reports_disabled_or_missing, systemd_reports_missing,
+    systemd_schedulability_with_health, systemd_unschedulable_error,
 };
 
 fn manager_set_enabled_command(
@@ -71,7 +74,27 @@ pub(super) fn set_clock_enabled_with(
     runner: &dyn ClockCommandRunner,
     home: &Path,
 ) -> Result<ClockStatus, OrbitError> {
-    let status = apply_clock_enabled(global_root, enabled, platform, runner, home)?;
+    set_clock_enabled_with_version_probe(
+        global_root,
+        enabled,
+        platform,
+        runner,
+        home,
+        probe_program_version,
+    )
+}
+
+/// Inject the same version-probe seam as clock inspection, so manager fixtures
+/// do not depend on executable startup time on the test host.
+pub(super) fn set_clock_enabled_with_version_probe(
+    global_root: &Path,
+    enabled: bool,
+    platform: ClockPlatform,
+    runner: &dyn ClockCommandRunner,
+    home: &Path,
+    version_probe: fn(&Path) -> Result<String, String>,
+) -> Result<ClockStatus, OrbitError> {
+    let status = apply_clock_enabled(global_root, enabled, platform, runner, home, version_probe)?;
     // The operator just said what state the clock should be in; a reload a
     // failed repair left pending must not re-arm a clock paused after it.
     clear_clock_reload_pending(global_root)?;
@@ -84,11 +107,12 @@ fn apply_clock_enabled(
     platform: ClockPlatform,
     runner: &dyn ClockCommandRunner,
     home: &Path,
+    version_probe: fn(&Path) -> Result<String, String>,
 ) -> Result<ClockStatus, OrbitError> {
     let settings = load_clock_settings(global_root)?;
     let (current, missing) = if enabled {
-        // Preserve the enable/rearm path: systemd always repairs and verifies
-        // the unit below, while launchd keeps its existing idempotent load.
+        // Systemd always repairs and verifies below. A loaded launchd agent
+        // also needs health inspection before enable can be an idempotent no-op.
         (
             runner
                 .run(&manager_status_command(platform))
@@ -117,7 +141,9 @@ fn apply_clock_enabled(
             return Err(manager_command_error(&restart));
         }
         let details = query_systemd_clock_details(runner)?;
-        if !details.is_schedulable() {
+        let (schedulable, _) =
+            systemd_schedulability_with_health(runner, Some(&details), monotonic_usec());
+        if !schedulable {
             return Err(systemd_unschedulable_error("enable completed"));
         }
         return Ok(clock_status_from(
@@ -172,6 +198,24 @@ fn apply_clock_enabled(
             Some(details),
         ));
     }
+    if enabled && current {
+        let mut probe = LaunchdHealthProbe::at(home)?;
+        probe.version_probe = version_probe;
+        if let Some(issue) = launchd_health_issue(&probe, runner, None) {
+            tracing::debug!(%issue, "reloading unhealthy launchd clock");
+            write_launchd_unit(
+                global_root,
+                &probe.running.path.to_string_lossy(),
+                settings,
+                home,
+            )?;
+            if !reload_launchd_unit(runner, home) {
+                return Err(manager_command_error(&manager_set_enabled_command(
+                    platform, true, home,
+                )));
+            }
+        }
+    }
     if current == enabled {
         return Ok(clock_status_from(
             settings, enabled, enabled, platform, None, None,
@@ -191,7 +235,7 @@ fn apply_clock_enabled(
 /// A failed status command is disabled or missing only when the manager's
 /// diagnostic names that state; transport and ambiguous failures
 /// must stop before the control path can mutate the manager.
-fn observe_clock_enabled_for_pause(
+pub(super) fn observe_clock_enabled_for_pause(
     platform: ClockPlatform,
     runner: &dyn ClockCommandRunner,
 ) -> Result<(bool, bool), OrbitError> {

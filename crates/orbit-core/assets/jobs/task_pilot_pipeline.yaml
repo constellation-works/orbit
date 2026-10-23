@@ -4,7 +4,12 @@
 # `prepare_task_pilot`: automatic mode (task_ids empty) discovers only
 # proposed/backlog tasks in the active workspace with empty context_files or
 # unassessed complexity, excluding no-diff tasks. Explicit mode audits named
-# tasks, including non-empty selectors.
+# proposed/backlog tasks, including non-empty selectors. Any unsupported
+# explicit status refuses the whole selection before agent work or task
+# reservation; the refusal names every unsupported task and its current status.
+# The CLI preflights before submission; prepare checks again for direct callers
+# and intervening status moves. Status races after valid preparation retain
+# the apply/supersession behavior below.
 # Preparation never promotes or dispatches a task. In a Git workspace it
 # fetches the landing branch and pins one source revision without changing
 # primary HEAD, index, or working files. An unfetchable remote fails before
@@ -54,17 +59,32 @@
 # qualifying, warning-free proposed task.
 #
 # Crew resolution
-# - The pilot steps name `workflow.low_complexity_crews` as their
-#   `crew_config_key`: piloting reads tasks and writes a bounded proposal, so it
-#   is low work. The run draws one crew from that pool on the first pilot
-#   dispatch, keeping the pool's weights and skipping disabled and
-#   provider-limited crews, and every pilot and repair pilot of the run reuses
-#   it; `orbit run show` records the draw. An empty pool falls back to
+# - The pilot steps name `workflow.purpose_crews.task_pilot` as their
+#   `crew_config_key`. The run draws one crew from that pool on the first pilot
+#   dispatch, keeping the pool's weights and only the crews that can inspect
+#   source natively, skipping disabled and provider-limited crews, and every
+#   pilot and repair pilot of the run reuses it; `orbit run show` records the
+#   draw and the pool it came from.
+# - While that purpose is unset, the pilot draws from
+#   `workflow.low_complexity_crews` instead: piloting reads tasks and writes a
+#   bounded proposal, so it is low work. An empty low pool falls back to
 #   `workflow.default_crew`, and the recorded draw says so.
-# - Change the model behind these pilots by editing that pool.
+# - Crews under a host `provider_unavailable` or `provider_capacity` hold are
+#   skipped while any other member remains. When that hold covers every crew
+#   the draw would use, the task-pilot routine does not start this job. See
+#   "Routines" under Provider failure holds in docs/CONFIG.md.
+# - Change the model behind these pilots by setting the task-pilot purpose
+#   pool, or by editing the low pool while it is unset.
 # - There is deliberately no per-run `crew` job input: the step-level pool key
 #   below already wins over run input during dispatch, so such an input could
 #   never take effect.
+# - A preparation claim may name tasks whose stored crews differ. Prepare
+#   partitions that claim by `task.crew` before the size cap, so each pilot
+#   worker sees one crew, and run start keeps the first task's crew instead
+#   of refusing the pass. Only the run the live claim admitted gets this:
+#   run start checks the claim against the routine's live attempt and its
+#   action key. Any other run whose task ids mix crews is still refused,
+#   including an explicit run and one whose input merely carries a claim.
 
 schemaVersion: 2
 kind: Job
@@ -122,11 +142,12 @@ spec:
             partition_index: "{{ item.partition_index }}"
             workspace_path: "{{ steps.prepare.output.workspace_path }}"
             owner_machine: "{{ steps.prepare.output.owner_machine }}"
+            implementation_lane: "{{ steps.prepare.output.implementation_lane }}"
             base_branch: "{{ steps.prepare.output.source.base_branch }}"
             source_revision: "{{ steps.prepare.output.source.source_revision }}"
             inspection_revision: "{{ steps.prepare.output.source.source_revision }}"
             # See the crew-resolution note at the top of this file.
-            crew_config_key: workflow.low_complexity_crews
+            crew_config_key: workflow.purpose_crews.task_pilot
       fan_in:
         join:
           mode: any
@@ -157,10 +178,11 @@ spec:
             repair_attempt: true
             workspace_path: "{{ steps.prepare.output.workspace_path }}"
             owner_machine: "{{ steps.prepare.output.owner_machine }}"
+            implementation_lane: "{{ steps.prepare.output.implementation_lane }}"
             base_branch: "{{ steps.prepare.output.source.base_branch }}"
             source_revision: "{{ steps.prepare.output.source.source_revision }}"
             inspection_revision: "{{ steps.prepare.output.source.source_revision }}"
-            crew_config_key: workflow.low_complexity_crews
+            crew_config_key: workflow.purpose_crews.task_pilot
       fan_in:
         join:
           mode: any

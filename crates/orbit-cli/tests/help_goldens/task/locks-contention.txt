@@ -1,0 +1,52 @@
+Show which files the pending backlog collides on (what caps parallelism)
+
+Usage: orbit task locks contention [OPTIONS]
+
+Options:
+      --limit <LIMIT>
+          Maximum hotspot rows to show. Default 10
+          
+          [default: 10]
+
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  orbit task locks contention
+  orbit task locks contention --limit 25
+  orbit task locks contention --json
+
+TASKS counts pending tasks whose lock surface overlaps that selector; a
+selector claimed by one task constrains nothing and is not listed.
+
+GROUPS counts clusters of pending tasks linked by overlapping surfaces.
+Tasks in different groups can never block each other, so the group count
+is a floor on how many dispatch can admit at once — not a ceiling, since
+two tasks inside one group are often compatible and merely linked through
+a third.
+
+Surfaces are the ones conflict admission reserves: declared selectors,
+pruned of paths that no longer exist. A task declaring nothing locks
+nothing and is counted apart.

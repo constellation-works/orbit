@@ -41,6 +41,11 @@ template:
       their IDs in the execution summary and finish.
     - Never repair what you find, dispatch agents or jobs, release, tag,
       publish or deploy.
+    - This coordinator, its area tasks and the roll-up are `no-diff-expected`,
+      in owner or claimed mode: run no workspace gates or required validation
+      commands and attach no `no-diff.json` or workspace validation logs.
+      Run only commands their own brief requires; the area's product build
+      and scenario commands remain required. Retain the brief's QA evidence.
 
     ## Pin the commit
 
@@ -143,11 +148,14 @@ template:
     > status.
     >
     > Prepare capabilities before marking a browser or website scenario unrun.
-    > When `~/.local/chromium-deps/env.sh` exists, source it in the worker
-    > shell and use its `PLAYWRIGHT_MODULE` and `PLAYWRIGHT_BROWSERS_PATH`.
-    > Also forward `LD_LIBRARY_PATH` and `FONTCONFIG_FILE` on Linux when
-    > provided; macOS needs no Linux loader or font inputs. Read the shared
-    > kit without modifying it. If it is absent, use the repository's
+    > When the host's browser kit is verified, your environment carries
+    > `ORBIT_BROWSER_KIT_ENV`: source it in the worker shell and use its
+    > `PLAYWRIGHT_MODULE` and `PLAYWRIGHT_BROWSERS_PATH`. Also forward
+    > `LD_LIBRARY_PATH` and `FONTCONFIG_FILE` on Linux when it sets them;
+    > macOS needs no Linux loader or font inputs. Read the shared kit without
+    > modifying it, and never run `orbit browser-kit` from the worker. When
+    > the variable is absent, record `orbit browser-kit install` as the host
+    > fix in the capability probe. If no kit is usable, use the repository's
     > disposable Playwright/Chromium recipe under `.orbit/tmp/` (for this
     > repository, docs/runbooks/website-validation.md), unpacking missing
     > Linux libraries without root. Do not install host packages or bypass
@@ -169,6 +177,16 @@ template:
     > docs/runbooks/website-validation.md, then builds and records `PASS`
     > or `FAIL`. It never deploys. For other repositories, use their own
     > isolated dependency preparation and build commands.
+    >
+    > `.orbit/tmp/` is cleared with the worktree, so attach the screenshots
+    > that evidence a UI scenario as task artifacts with
+    > `orbit tool run orbit.task.artifact.put --input '{"id":"<this area task ID>","source_path":".orbit/tmp/<file>","path":"screenshots/<view>-<theme>-<width>.png","model":"<agent-family>"}'`:
+    > each view in every theme it supports and, for a responsive layout, at
+    > 375px. Keep each under the 1 MiB artifact limit (a viewport capture
+    > rather than full-page, or JPEG or WebP when a PNG is too large), name
+    > the artifact paths in the scenario's `evidence`, and attach a finding's
+    > screenshot to its filed task too. When no browser can render the view,
+    > the scenario records that instead of a screenshot.
     >
     > Write `.orbit/tmp/qa-progress.json` with `schema_version: 1`,
     > `pinned_sha`, `area`, `candidate` (how the build was made and its
@@ -196,12 +214,36 @@ template:
     > `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["qa-full-sweep"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`.
     > Its description holds the exact reproducer, the pinned SHA, the
     > environment, expected and observed results and the evidence artifact.
+    > Add `ui` to its tags when the defect is in something a user sees
+    > (dashboard, web pages, docs site, desktop app UI).
     > Derive canonical `file:` selectors from the source that implements the
     > failing behaviour and add the matching regression-test location. Use
     > existing paths where possible; for a test file that must be created,
     > set `allow_missing_context: true` and identify that intended path.
     > Never file a finding without context selectors. Record each finding's
     > task ID on its scenario.
+    > When the finding is a regression a landed task introduced (squash-merge
+    > subjects carry its ID as `[<task-id>]`; confirm with `orbit.task.show`), add
+    > `{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}`
+    > to its `relations` and name the culprit commit in its description. A
+    > claimed run cannot record that relation: name the culprit, nature and escape
+    > in the description instead. Never blame a bystander task.
+    > Choose `unclassified` rather than guess. `nature` is what kind of regression
+    > the link records:
+    > - `broke_existing`: the culprit broke behavior that worked before it landed.
+    > - `defect_in_new`: the defect is in code the culprit itself introduced.
+    > - `incomplete`: the culprit shipped without part of what its task required.
+    > - `merge_reintroduced`: a merge restored code or assets an earlier change had removed.
+    > - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
+    > - `unclassified`: the evidence does not settle the nature.
+    > `escape` is why the delivery gates missed it:
+    > - `no_test`: no test covered the broken behavior.
+    > - `test_not_selected`: a covering test existed but the delivery's gates did not run it.
+    > - `platform_only`: it shows only on a platform or host the gates did not exercise.
+    > - `review_missed`: it was visible in the diff and review did not flag it.
+    > - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
+    > - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
+    > - `unclassified`: the evidence does not settle the escape.
     >
     > Finish only when every scenario has a recorded outcome; recording a
     > `FAIL`, `BLOCKED` or `NOT_RUN` honestly completes this task, and the
@@ -210,8 +252,11 @@ template:
     > `result.blocker` with `kind: qa_incomplete` and evidence naming each
     > unrecorded scenario. Put the same list in the task comment (return
     > `comment` in claimed mode) and leave lifecycle transitions to the
-    > pipeline. A completed area is a no-op on the repository; follow the
-    > workspace's no-diff artifact and validation requirements. Record the
+    > pipeline. This `no-diff-expected` area runs no workspace gates or required
+    > validation commands and attaches no `no-diff.json` or workspace
+    > validation logs, in owner or claimed mode. Run only commands this brief
+    > requires, including the product build and scenarios; retain their QA
+    > evidence. A completed area leaves the repository unchanged. Record the
     > SHA, candidate identity, per-scenario outcomes, the progress artifact
     > and each filed task ID in the execution summary.
 

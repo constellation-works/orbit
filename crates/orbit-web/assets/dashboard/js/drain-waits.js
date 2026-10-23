@@ -6,12 +6,12 @@
 // Readiness card asks for its own task's entry and words it with the same
 // `drainReadinessView`, so the dot and the card never disagree.
 
-import { onWorkspaceChange } from './common.js';
+import { el, onWorkspaceChange } from './common.js';
 
 // Readiness reasons that mean "waiting on another task or run": a context lock, a
-// grouped member, a same-wave deferral, a live child's claim, or a task with no
+// grouped member, a reserved surface, a same-wave deferral, a live child's claim, or a task with no
 // footprint waiting for the other leaves to finish so it can run alone.
-export const DRAIN_LOCK_REASONS = new Set(["context_lock_conflict", "group_member_conflict", "conflict_deferred", "claimed_by_live_child", "awaiting_exclusive_slot"]);
+export const DRAIN_LOCK_REASONS = new Set(["context_lock_conflict", "group_member_conflict", "surface_reserved", "conflict_deferred", "claimed_by_live_child", "awaiting_exclusive_slot"]);
 
 // Readiness reasons that mean "waiting on slots or host pressure": a full
 // workspace, a throttle, a scheduled shutdown or stopped admissions.
@@ -33,24 +33,14 @@ export function drainReason(task) {
 function drainHolders(task) {
   const holders = new Set();
   for (const conflict of Array.isArray(task.conflicts) ? task.conflicts : []) {
-    const holder = conflict?.locking_task_id || conflict?.blocking_task_id;
-    if (holder) holders.add(holder);
+    for (const holder of [conflict?.locking_task_id, conflict?.blocking_task_id]) {
+      if (typeof holder === "string" && holder) holders.add(holder);
+    }
   }
   for (const holder of Array.isArray(task.blocking_task_ids) ? task.blocking_task_ids : []) {
-    if (holder) holders.add(holder);
+    if (typeof holder === "string" && holder) holders.add(holder);
   }
   return [...holders].sort();
-}
-
-function drainConflictSelectors(task, holder) {
-  const selectors = [];
-  for (const conflict of Array.isArray(task.conflicts) ? task.conflicts : []) {
-    const conflictHolder = conflict?.locking_task_id || conflict?.blocking_task_id;
-    if (holder && conflictHolder && conflictHolder !== holder) continue;
-    const selector = conflict?.requested_file || conflict?.requested_selector || conflict?.blocking_selector;
-    if (selector && !selectors.includes(selector)) selectors.push(selector);
-  }
-  return selectors;
 }
 
 // Which pool group a readiness entry falls in. Every entry lands in exactly one.
@@ -73,6 +63,9 @@ const WAIT_LABELS = {
   task_pilot_preparation_required: "needs pilot",
   unmet_dependency: "waits on deps",
   baseline_red_hold: "base red",
+  // A `ui` task on a host without a verified browser kit; the badge's title
+  // carries the detail, which names the install command.
+  browser_kit_missing: "needs browser kit",
 };
 
 // Dependencies an `unmet_dependency` entry names, each with its status.
@@ -83,26 +76,24 @@ function drainDependencies(entry) {
 }
 
 // The compact badge for one waiting readiness entry: `text` fits a row, `title`
-// carries everything the entry reports. The parts `title` is built from come
-// back too (`holder`, `runId`, `selectors`, `dependencies`, `detail`,
-// `reason`), so a Readiness card can link them rather than re-derive them.
+// carries its cause without raw lock metadata. Structured task and run ids
+// let the Readiness card link every blocker without interpreting file names.
 export function drainWaitBadge(entry) {
   const reason = drainReason(entry);
   const detail = typeof entry.detail === "string" ? entry.detail.trim() : "";
   const lines = [];
   let text;
-  let holder = null;
-  let runId = null;
-  let selectors = [];
+  let holders = [];
+  let runIds = [];
   let dependencies = [];
+  let message = DRAIN_LOCK_REASONS.has(reason) ? "" : detail;
   if (DRAIN_LOCK_REASONS.has(reason)) {
-    holder = drainHolders(entry)[0] || null;
-    runId = Array.isArray(entry.run_ids) ? entry.run_ids[0] || null : null;
-    selectors = drainConflictSelectors(entry, holder);
-    text = holder ? `waits on ${holder}` : runId ? "waits on live run" : "waits on lock";
-    if (selectors.length > 0 || reason === "context_lock_conflict") text += " · lock";
-    lines.push(holder ? `Waits on ${holder}` : runId ? `Waits on live run ${runId}` : "Waits on a lock");
-    if (selectors.length > 0) lines.push(`Lock: ${selectors.join(", ")}`);
+    holders = drainHolders(entry);
+    runIds = [...new Set((Array.isArray(entry.run_ids) ? entry.run_ids : [])
+      .filter(id => typeof id === "string" && id))];
+    text = holders.length ? `waits on ${holders.join(", ")}` : runIds.length ? "waits on live run" : "waits on lock";
+    const blockers = [...holders, ...runIds];
+    lines.push(blockers.length ? `Waits on ${blockers.join(", ")}` : "Lock holder unavailable");
   } else if (DRAIN_HOST_WAIT_REASONS.has(reason)) {
     const os = /\bos:([a-z0-9_-]+)/i.exec(detail)?.[1] || /\b(macos|linux|windows)\b/i.exec(detail)?.[1];
     text = os ? `needs ${os.toLowerCase()} host` : "needs other host";
@@ -110,6 +101,14 @@ export function drainWaitBadge(entry) {
     // Only an explicit request names a task outside the backlog; a proposed
     // one waits for approval before any drain can take it.
     text = entry.status === "proposed" ? "awaits approval" : "not in backlog";
+  } else if (reason === "crew_not_allowed") {
+    // The live drain's `--allow-crew` set leaves out the crew this task
+    // would run as; another drain, or reassigning the task, takes it.
+    const crew = typeof entry.crew === "string" && entry.crew ? entry.crew : "";
+    const allowed = drainCrewNames(entry.allowed_crews);
+    text = crew ? `crew ${crew} not allowed` : "crew not allowed";
+    const refusal = crew ? `Runs as ${crew}, which this drain does not allow` : "Runs as a crew this drain does not allow";
+    message ||= `${refusal}${allowed.length ? `; it allows only ${allowed.join(", ")}` : ""}.`;
   } else {
     text = WAIT_LABELS[reason] || reason.replaceAll("_", " ");
     if (reason === "unmet_dependency") {
@@ -119,9 +118,42 @@ export function drainWaitBadge(entry) {
       }
     }
   }
-  if (detail) lines.push(detail);
-  lines.push(`Reason: ${reason}`);
-  return { text, title: lines.join("\n"), pool: drainPoolKey(entry), holder, runId, selectors, dependencies, detail, reason };
+  if (!lines.length) lines.push(text);
+  if (message && !lines.includes(message)) lines.push(message);
+  return { text, title: lines.join("\n"), pool: drainPoolKey(entry), holders, runIds, dependencies, detail: message, reason };
+}
+
+function drainCrewNames(crews) {
+  return (Array.isArray(crews) ? crews : []).filter(crew => typeof crew === "string" && crew);
+}
+
+// The Drain card's note on a crew-restricted window: the crews the live drain
+// allows and the backlog tasks it leaves out for running as another crew.
+// Null when no restriction applies.
+export function drainCrewNote(payload) {
+  const allowed = drainCrewNames(payload?.capacity?.allowed_crews);
+  if (allowed.length === 0) return null;
+  const excluded = (Array.isArray(payload.tasks) ? payload.tasks : [])
+    .filter(entry => entry?.eligible !== true && drainReason(entry) === "crew_not_allowed" && typeof entry.task_id === "string");
+  const shown = excluded.slice(0, 5).map(entry => (typeof entry.crew === "string" && entry.crew ? `${entry.task_id} (${entry.crew})` : entry.task_id));
+  const more = excluded.length > shown.length ? `, +${excluded.length - shown.length} more` : "";
+  const waiting = excluded.length === 0 ? ""
+    : ` ${excluded.length} backlog ${excluded.length === 1 ? "task runs" : "tasks run"} as another crew and ${excluded.length === 1 ? "waits" : "wait"}: ${shown.join(", ")}${more}.`;
+  const note = el("p", { class: "operation-control-note drain-crew-note", text: `Allowed crews: ${allowed.join(", ")}.${waiting}` });
+  note.setAttribute("role", "status");
+  return note;
+}
+
+// The Drain card's warning that the open drain's latest pass found no task
+// pilot enabled on this machine: tasks that need an assessment wait for one
+// that never comes. The sentence names the workspace, machine and fix. Null
+// when a pilot runs or no drain is open.
+export function drainPilotNote(payload) {
+  const warning = payload?.capacity?.task_pilot_warning;
+  if (typeof warning !== "string" || !warning) return null;
+  const note = el("p", { class: "operation-control-note drain-pilot-note", text: warning });
+  note.setAttribute("role", "status");
+  return note;
 }
 
 // The readiness pools in the order the Backlog card lists them, each with the
@@ -137,18 +169,36 @@ const POOL_LABELS = Object.fromEntries(DRAIN_POOLS.map(({ key, label }) => [key,
 
 // How one readiness entry reads, for the row dot and the Readiness card alike:
 // its pool, the pool's words (`poolLabel`), the badge text after them
-// (`label`), the full wait (`title`), and the badge parts for a waiting entry
-// (null when eligible).
+// (`label`), the full wait (`title`), the badge parts for a waiting entry
+// (null when eligible), and `published` for a task resuming its published
+// delivery (null otherwise), whose words follow the pool's when eligible.
 export function drainReadinessView(entry) {
   const pool = drainPoolKey(entry);
   const poolLabel = POOL_LABELS[pool];
   const badge = entry.eligible === true ? null : drainWaitBadge(entry);
+  const published = drainPublishedDelivery(entry);
+  const eligibleTitle = published ? published.title : "Nothing holds it: Ship it now, or the next drain window picks it up";
   return {
     pool,
     poolLabel,
-    label: badge ? `${poolLabel}: ${badge.text}` : poolLabel,
-    title: badge ? badge.title : "Nothing holds it: Ship it now, or the next drain window picks it up",
+    label: badge ? `${poolLabel}: ${badge.text}` : published ? `${poolLabel}: ${published.text}` : poolLabel,
+    title: badge ? (published ? `${badge.title}\n${published.title}` : badge.title) : eligibleTitle,
     badge,
+    published,
+  };
+}
+
+// A task whose next run resumes the delivery a requeue kept: it adopts the
+// existing branch and pull request before it edits, so no other task's
+// context lock holds it back. Null for any other entry.
+function drainPublishedDelivery(entry) {
+  const delivery = entry?.published_delivery;
+  if (!delivery || typeof delivery !== "object") return null;
+  const number = typeof delivery.pull_request === "string" && delivery.pull_request ? delivery.pull_request : "";
+  const pr = number ? ` (PR #${number})` : "";
+  return {
+    text: `resuming published delivery${pr}`,
+    title: `Resuming its published delivery${pr}: the next run adopts the existing pull request before it edits, so other tasks' context locks do not hold it back. It takes them before any edit.`,
   };
 }
 
@@ -175,7 +225,7 @@ export function setDrainReadiness(payload) {
     if (typeof entry?.task_id !== "string" || !entry.task_id) continue;
     next.set(entry.task_id, { entry, view: drainReadinessView(entry) });
   }
-  const nextSignature = [...next].map(([id, { view }]) => `${id}:${view.pool}:${view.badge ? `${view.badge.text}|${view.badge.title}` : ""}`).join("\n");
+  const nextSignature = [...next].map(([id, { view }]) => `${id}:${view.pool}:${view.label}|${view.title}`).join("\n");
   const changed = nextSignature !== signature;
   waits = next;
   signature = nextSignature;
@@ -192,7 +242,7 @@ export function drainWaitSignature(taskId) {
   const item = waits.get(taskId);
   if (!item) return "";
   const { view } = item;
-  return view.badge ? `${view.pool}|${view.badge.text}|${view.badge.title}` : view.pool;
+  return `${view.pool}|${view.label}|${view.title}`;
 }
 
 // The readiness dot for a backlog task: its `drainReadinessView`. Null when

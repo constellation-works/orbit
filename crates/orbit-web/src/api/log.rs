@@ -96,11 +96,6 @@ impl LogStreamGate {
     pub(super) fn try_acquire(&self) -> Option<OwnedSemaphorePermit> {
         Arc::clone(&self.sem).try_acquire_owned().ok()
     }
-
-    #[cfg(test)]
-    pub(super) fn available_permits(&self) -> usize {
-        self.sem.available_permits()
-    }
 }
 
 fn global_log_stream_gate() -> &'static LogStreamGate {

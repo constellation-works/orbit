@@ -215,8 +215,22 @@ pub fn read_run_log(
     bounds: LogReadBounds,
     cached_run_view: Option<&Value>,
 ) -> Result<RunLogRead, OrbitError> {
+    read_run_log_guarded(requests, bounds, cached_run_view, &|request| {
+        Ok(request.clone())
+    })
+}
+
+/// Read the same bounded log, with a caller guard before every subprocess,
+/// including metadata and per-job fallback reads. The guard may clamp the
+/// request timeout or refuse an exhausted absolute budget.
+pub fn read_run_log_guarded(
+    requests: &RunLogRequests,
+    bounds: LogReadBounds,
+    cached_run_view: Option<&Value>,
+    guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
+) -> Result<RunLogRead, OrbitError> {
     let log = match stream_bounded_log(
-        &requests.run_log,
+        &guard(&requests.run_log)?,
         bounds,
         ExcerptShape::EvenSplit,
         "gh run view --log",
@@ -231,6 +245,7 @@ pub fn read_run_log(
                 empty,
                 Some(&error.to_string()),
                 cached_run_view,
+                guard,
             ));
         }
         Err(error) => return Err(error),
@@ -249,6 +264,7 @@ pub fn read_run_log(
         log,
         None,
         cached_run_view,
+        guard,
     ))
 }
 
@@ -344,6 +360,7 @@ fn recover_from_job_logs(
     empty: StreamedLog,
     primary_error: Option<&str>,
     cached_run_view: Option<&Value>,
+    guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
 ) -> RunLogRead {
     let unrecovered = |reason: String| RunLogRead {
         log: empty,
@@ -356,14 +373,17 @@ fn recover_from_job_logs(
         Some(primary) => format!("{primary}; job log recovery failed: {reason}"),
         None => reason,
     };
-    let jobs = match fallback_jobs(requests, cached_run_view) {
+    let jobs = match fallback_jobs(requests, cached_run_view, guard) {
         Ok(jobs) => jobs,
         Err(reason) => return unrecovered(qualify(reason)),
     };
     let considered = jobs.len();
     let mut attempts: Vec<String> = Vec::new();
     for job in jobs.iter().take(bounds.max_fallback_jobs) {
-        let request = requests.job_log_request(job.id);
+        let request = match guard(&requests.job_log_request(job.id)) {
+            Ok(request) => request,
+            Err(error) => return unrecovered(qualify(error.to_string())),
+        };
         match stream_bounded_log(
             &request,
             bounds,
@@ -411,12 +431,14 @@ fn recover_from_job_logs(
 fn fallback_jobs(
     requests: &RunLogRequests,
     cached_run_view: Option<&Value>,
+    guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
 ) -> Result<Vec<FallbackJob>, String> {
     let owned;
     let view = match cached_run_view {
         Some(view) => view,
         None => {
-            let result = run_process(&requests.run_view, &NoSandbox)
+            let request = guard(&requests.run_view).map_err(|error| error.to_string())?;
+            let result = run_process(&request, &NoSandbox)
                 .map_err(|error| format!("gh run view could not run: {error}"))?;
             check_exec_result(&result, "gh run view").map_err(|error| error.to_string())?;
             owned = super::parse_gh_json(&result.stdout, "gh run view")

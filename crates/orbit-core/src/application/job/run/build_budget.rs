@@ -22,9 +22,11 @@ impl OrbitRuntime {
         let budget = BuildBudgetCapacity::read()?;
         // The wrapper counts only as a regular file inside the checkout, so a
         // link that resolves elsewhere is not a shipped wrapper. `Path::starts_with`
-        // after canonicalize is CodeQL's rust/path-injection barrier, and a helper
-        // wrapping the check does not count, so the check stays here and `is_file`
-        // runs on the canonical path.
+        // after canonicalize is a CodeQL rust/path-injection barrier when kept
+        // inline. An unmodeled helper wrapping the check does not count; a helper
+        // registered in `.github/codeql/extensions/orbit-rust-path-validation/path-validation.yaml`
+        // does, as `orbit_common::fs::file_lock::validated_lock_holder_parent`
+        // shows. `is_file` runs on the canonical path.
         let (Ok(repo_root), Ok(wrapper)) = (
             std::fs::canonicalize(&self.paths().repo_root),
             std::fs::canonicalize(self.paths().repo_root.join(ADMISSION_WRAPPER)),

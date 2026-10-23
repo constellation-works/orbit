@@ -1,3 +1,7 @@
+#[cfg(debug_assertions)]
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Condvar, Mutex, PoisonError};
+
 use super::*;
 
 const PIPELINE_WAIT_DEFAULT_TIMEOUT_SECONDS: u64 = 3600;
@@ -5,23 +9,135 @@ const PIPELINE_WAIT_MAX_TIMEOUT_SECONDS: u64 = 21600;
 const PIPELINE_WAIT_DEFAULT_POLL_SECONDS: u64 = 5;
 pub(super) const PIPELINE_WAIT_MIN_POLL_SECONDS: u64 = 1;
 
+/// Set to `1` in a debug build to make a pipeline wait add each poll to its
+/// elapsed time and return, instead of sleeping.
+///
+/// Release builds ignore it. The virtual clock does not wake when a worker is
+/// reaped, so set it only on a deadline that must expire while the run is
+/// still active. A wait that should observe completion keeps the real clock.
+#[cfg(debug_assertions)]
+pub(crate) const PIPELINE_WAIT_VIRTUAL_ENV: &str = "ORBIT_TEST_PIPELINE_WAIT_VIRTUAL";
+
 pub(crate) trait PipelineWaitClock {
     fn elapsed(&self) -> Duration;
-    fn sleep(&self, duration: Duration);
+    /// Sleep for up to `duration`, ending early once this process reaps a
+    /// worker after the `exits_seen` count of `worker_exits_seen`.
+    fn sleep(&self, duration: Duration, exits_seen: u64);
 }
 
 struct SystemPipelineWaitClock {
     started_at: Instant,
+    /// Milliseconds the virtual clock has advanced. Absent unless
+    /// [`PIPELINE_WAIT_VIRTUAL_ENV`] is `1` in a debug build.
+    #[cfg(debug_assertions)]
+    virtual_millis: Option<AtomicU64>,
 }
 
 impl PipelineWaitClock for SystemPipelineWaitClock {
     fn elapsed(&self) -> Duration {
+        #[cfg(debug_assertions)]
+        if let Some(virtual_millis) = &self.virtual_millis {
+            return Duration::from_millis(virtual_millis.load(Ordering::Relaxed));
+        }
         self.started_at.elapsed()
     }
 
-    fn sleep(&self, duration: Duration) {
-        thread::sleep(duration);
+    fn sleep(&self, duration: Duration, exits_seen: u64) {
+        #[cfg(feature = "test-support")]
+        if let Some(wait) = crate::runtime::pipeline_poll_wait_override() {
+            wait(duration);
+            return;
+        }
+        #[cfg(debug_assertions)]
+        if let Some(virtual_millis) = &self.virtual_millis {
+            let added = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+            virtual_millis.fetch_add(added, Ordering::Relaxed);
+            return;
+        }
+        sleep_until_worker_exit(exits_seen, duration);
     }
+}
+
+fn system_pipeline_wait_clock() -> SystemPipelineWaitClock {
+    SystemPipelineWaitClock {
+        started_at: Instant::now(),
+        #[cfg(debug_assertions)]
+        virtual_millis: match std::env::var(PIPELINE_WAIT_VIRTUAL_ENV).ok().as_deref() {
+            Some("1") => Some(AtomicU64::new(0)),
+            _ => None,
+        },
+    }
+}
+
+/// Worker processes this process's startup observers have reaped [ORB-16033].
+///
+/// A worker exits only after it has written its run's outcome, and the
+/// observer counts it only after reaping it and settling a run the exit left
+/// non-terminal (a cancelled run is the canceller's to settle, so its waits
+/// keep polling). The CLI or tool call that submitted a run owns that observer,
+/// so its wait sleeps here instead of on a bare timer and rereads durable
+/// state as soon as the worker is gone. A count change certifies nothing: the
+/// wait only rereads, and any exit wakes every wait in the process. A wait
+/// whose worker another process launched gets no wake and keeps its poll.
+static WORKER_EXITS: (Mutex<u64>, Condvar) = (Mutex::new(0), Condvar::new());
+
+/// The reaped-worker count. A wait reads it before each snapshot, so an exit
+/// announced after that read, even before the sleep starts, cuts the sleep short.
+pub(super) fn worker_exits_seen() -> u64 {
+    *WORKER_EXITS
+        .0
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Wake every wait in this process to reread durable run state.
+pub(super) fn announce_worker_exit() {
+    let (exits, changed) = &WORKER_EXITS;
+    let mut count = exits.lock().unwrap_or_else(PoisonError::into_inner);
+    *count = count.wrapping_add(1);
+    drop(count);
+    changed.notify_all();
+}
+
+#[cfg(feature = "test-support")]
+static OBSERVED_WORKER_EXITS: Mutex<Vec<(PathBuf, String, u32)>> = Mutex::new(Vec::new());
+
+/// Record that the startup observer for `run_id` finished all of its
+/// post-reap work (test support only; production builds keep no record).
+#[cfg(feature = "test-support")]
+pub(super) fn record_worker_exit(workspace: &Path, run_id: &str, worker_pid: u32) {
+    OBSERVED_WORKER_EXITS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((workspace.to_path_buf(), run_id.to_string(), worker_pid));
+}
+
+/// Whether this workspace's startup observer for `run_id` and `worker_pid`
+/// has finished all of its post-reap work in this process. Run IDs are
+/// workspace-local, and two observers of the same run can own different
+/// workers. Only recorded under `test-support`.
+#[cfg(feature = "test-support")]
+pub fn pipeline_worker_observer_completed(workspace: &Path, run_id: &str, worker_pid: u32) -> bool {
+    OBSERVED_WORKER_EXITS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .any(|(observed_workspace, observed_run, observed_pid)| {
+            observed_workspace == workspace && observed_run == run_id && *observed_pid == worker_pid
+        })
+}
+
+/// Sleep for up to `duration` while the count still equals `exits_seen`.
+/// Spurious condvar wakeups resume the sleep; only a count change or the
+/// timeout ends it, so a missed wake costs at most the poll interval.
+pub(super) fn sleep_until_worker_exit(exits_seen: u64, duration: Duration) {
+    let (exits, changed) = &WORKER_EXITS;
+    let count = exits.lock().unwrap_or_else(PoisonError::into_inner);
+    drop(
+        changed
+            .wait_timeout_while(count, duration, |count| *count == exits_seen)
+            .unwrap_or_else(PoisonError::into_inner),
+    );
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -75,9 +191,7 @@ impl OrbitRuntime {
             timeout_seconds,
             poll_interval_seconds,
             actor,
-            &SystemPipelineWaitClock {
-                started_at: Instant::now(),
-            },
+            &system_pipeline_wait_clock(),
         )
     }
 
@@ -107,6 +221,7 @@ impl OrbitRuntime {
         let poll = Duration::from_secs(poll_interval_seconds.max(PIPELINE_WAIT_MIN_POLL_SECONDS));
 
         loop {
+            let exits_seen = worker_exits_seen();
             // One stale-run pass per poll tick; collect then reads awaited
             // rows without repeating per-run owner probes.
             self.reconcile_stale_job_runs(None)?;
@@ -129,7 +244,7 @@ impl OrbitRuntime {
                 return Ok(result);
             }
 
-            clock.sleep(poll.min(timeout.saturating_sub(elapsed)));
+            clock.sleep(poll.min(timeout.saturating_sub(elapsed)), exits_seen);
         }
     }
     pub fn normalize_pipeline_wait_timeout(raw: Option<u64>) -> Result<u64, OrbitError> {

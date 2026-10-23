@@ -8,7 +8,10 @@ use orbit_common::OrbitError;
 use orbit_types::telemetry::InvocationTrace;
 
 const RUNTIME_KEY: &str = "codex";
-const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH"];
+/// `CODEX_HOME` is non-secret state-root context: the sandbox grants exactly
+/// the directory it names, so dropping it would make the CLI resolve
+/// `$HOME/.codex` while the profile granted the override.
+const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH", "CODEX_HOME"];
 
 pub(crate) struct CodexRuntime {
     command: String,

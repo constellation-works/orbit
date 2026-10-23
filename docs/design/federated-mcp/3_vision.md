@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Vision
 owner: grok
-last_updated: 2026-10-09
-last_validated: 2026-10-09
+last_updated: 2026-10-13
+last_validated: 2026-10-20
 status: Draft
 feature: federated-mcp
 doc_role: vision
@@ -38,7 +38,7 @@ Owner vs replica checkouts, `machine_id` vs `host_id`, and checkout-health as re
 
 ### mcp-bridge v1
 
-v1 is one chosen destination, byte-transparent direct SSH stdio, and no Orbit process relaying onward. Current behavior stays in [mcp-bridge 2_design.md](../mcp-bridge/2_design.md). [mcp-bridge 3_vision.md §5](../mcp-bridge/3_vision.md) now admits this mux as a federated-namespace-only exception and still excludes automatic owner discovery, replication, relays-as-product, and fleet placement.
+v1 is one chosen destination, byte-transparent direct SSH stdio, and no Orbit process relaying onward. Current behavior stays in [mcp-bridge 2_design.md](../mcp-bridge/2_design.md). [mcp-bridge 3_vision.md §5](../mcp-bridge/3_vision.md) now admits this mux as a federated-namespace-only exception. It routes workspace calls by copied selectors and id-only calls to id-routed task tools by the configured task-ID prefix ([ORB-14449]); it still excludes general workspace-owner discovery from repository identity, replication, relays-as-product, and fleet placement.
 
 ### Session authority is argv-asserted, on both sides of the wire
 

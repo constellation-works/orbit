@@ -1,26 +1,4 @@
-//! Admitted unit tests: platform-kernel disk reads and combinatorial pure CPU
-//! window selection with injected ticks/time/waits. No load generation.
-use super::super::platform::disk_percent;
-use std::path::Path;
-
-#[test]
-fn missing_descendant_reports_its_existing_ancestor_filesystem() {
-    let existing = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let missing = existing.join("no-such-dir-for-disk-probe/nested");
-    assert!(disk_percent(existing).is_some());
-    assert!(
-        disk_percent(&missing).is_some(),
-        "a worktrees directory that does not exist yet must use its nearest existing ancestor"
-    );
-}
-
-#[test]
-fn relative_path_is_refused_instead_of_resolved_against_the_working_directory() {
-    assert!(
-        disk_percent(Path::new("crates/orbit-core")).is_none(),
-        "a relative probe path must be refused, never resolved against the working directory"
-    );
-}
+//! Admitted CPU counter/time/wait matrices. Public disk observations live in runtime integration tests.
 
 fn ticks(millis: i64, counters: [u32; 4]) -> super::super::platform::CpuTickSample {
     super::super::platform::CpuTickSample {
@@ -33,6 +11,8 @@ fn ticks(millis: i64, counters: [u32; 4]) -> super::super::platform::CpuTickSamp
 fn cpu_window_reuses_advancing_or_repeated_ticks_without_refreshing_the_baseline() {
     use super::super::HostCpuTickHistory;
     let mut history = HostCpuTickHistory {
+        #[cfg(target_os = "linux")]
+        proc: None,
         previous: Some(ticks(0, [10, 10, 60, 10])),
         latest: Some(ticks(1100, [20, 20, 120, 20])),
     };
@@ -80,6 +60,8 @@ fn cpu_window_missing_stale_future_or_identical_baselines_take_a_real_window() {
         (Some(-100), [10, 10, 60, 10]),
     ] {
         let mut history = HostCpuTickHistory {
+            #[cfg(target_os = "linux")]
+            proc: None,
             previous: None,
             latest: baseline_at.map(|at| ticks(at, counters)),
         };
@@ -101,6 +83,8 @@ fn cpu_window_missing_stale_future_or_identical_baselines_take_a_real_window() {
     }
     // A fresh latest end cannot make the older end usable once it has expired.
     let mut history = HostCpuTickHistory {
+        #[cfg(target_os = "linux")]
+        proc: None,
         previous: Some(ticks(-15001, [1; 4])),
         latest: Some(ticks(-100, [10, 10, 60, 10])),
     };
@@ -132,6 +116,8 @@ fn cpu_window_native_failures_clock_reversal_and_stalls_remain_unknown() {
         assert_eq!(history.measure(|| reads.next().unwrap(), |_| {}), None);
     }
     let mut history = HostCpuTickHistory {
+        #[cfg(target_os = "linux")]
+        proc: None,
         previous: None,
         latest: Some(ticks(0, [10; 4])),
     };
@@ -147,6 +133,8 @@ fn cpu_window_handles_tick_wrap_and_the_freshness_boundary() {
     use super::super::HostCpuTickHistory;
     for age in [1, 15000] {
         let mut history = HostCpuTickHistory {
+            #[cfg(target_os = "linux")]
+            proc: None,
             previous: None,
             latest: Some(ticks(-age, [u32::MAX - 9; 4])),
         };

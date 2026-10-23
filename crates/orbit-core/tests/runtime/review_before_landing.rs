@@ -3,7 +3,6 @@
 //! open and unmerged with the task in review [ORB-14849].
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use chrono::Utc;
 use orbit_core::TaskStatus;
@@ -14,13 +13,7 @@ use serde_json::{Value, json};
 
 use super::review_gate_audit::Fixture;
 
-#[test]
 fn an_owner_before_landing_review_keeps_the_durable_task_summary() {
-    if !super::dispatch_admission::isolated(
-        "review_before_landing::an_owner_before_landing_review_keeps_the_durable_task_summary",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::before_landing();
     fixture
         .runtime
@@ -77,13 +70,7 @@ fn an_owner_before_landing_review_keeps_the_durable_task_summary() {
 /// failure handoff then keeps the published PR and the task in review under
 /// the failed step's typed reason — for a reject, an incomplete and a timed
 /// out reviewer alike — and finalizing the failed run does not block it.
-#[test]
 fn a_before_landing_review_that_does_not_approve_keeps_the_pr_open_in_review() {
-    if !super::dispatch_admission::isolated(
-        "review_before_landing::a_before_landing_review_that_does_not_approve_keeps_the_pr_open_in_review",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::before_landing();
     let pre_push = fixture
         .runtime
@@ -270,13 +257,7 @@ fn report(fixture: &Fixture, summary: &str, validation: Value, escalation: Value
 /// refusal, so the candidate's one review stays unspent and the same run can
 /// admit a fresh reviewer; the failure handoff states the open PR and the task
 /// status the store holds.
-#[test]
 fn a_reviewer_that_leaves_only_its_initial_report_does_not_spend_the_review() {
-    if !super::dispatch_admission::isolated(
-        "review_before_landing::a_reviewer_that_leaves_only_its_initial_report_does_not_spend_the_review",
-    ) {
-        return;
-    }
     let mut fixture = Fixture::before_landing();
     published(&fixture);
     fixture.input["before_landing"] = json!(true);
@@ -364,13 +345,7 @@ fn a_reviewer_that_leaves_only_its_initial_report_does_not_spend_the_review() {
 /// Anything the reviewer decided or revised is a real review, however
 /// incomplete: a reason, a recorded check or a revision past the first
 /// settles the attempt and spends the candidate's review as before.
-#[test]
 fn an_incomplete_review_with_a_reason_a_record_or_a_revision_still_counts() {
-    if !super::dispatch_admission::isolated(
-        "review_before_landing::an_incomplete_review_with_a_reason_a_record_or_a_revision_still_counts",
-    ) {
-        return;
-    }
     let record = json!([{
         "id": "V1", "command": "fixture check", "outcome": "passed", "role": "required",
     }]);
@@ -407,10 +382,7 @@ fn an_incomplete_review_with_a_reason_a_record_or_a_revision_still_counts() {
 }
 
 fn git(cwd: &Path, args: &[&str]) -> String {
-    let mut command = Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command.args(args).current_dir(cwd).output().unwrap();
     assert!(
         output.status.success(),
@@ -507,13 +479,7 @@ impl Stranded {
 /// The reviewer's fix commit settled `incomplete` is not left in the run's
 /// worktree: the failure handoff pushes it onto the published head under a
 /// lease, and the PR stays unmerged with the task in review [ORB-15329].
-#[test]
 fn an_incomplete_before_landing_review_pushes_its_reviewer_commit_and_merges_nothing() {
-    if !super::dispatch_admission::isolated(
-        "review_before_landing::an_incomplete_before_landing_review_pushes_its_reviewer_commit_and_merges_nothing",
-    ) {
-        return;
-    }
     let stranded = stranded("incomplete");
     let main_before = stranded.remote("refs/heads/main");
     let reviewer_commit = git(&stranded.fixture.repo, &["rev-parse", "HEAD"]);
@@ -562,13 +528,7 @@ fn an_incomplete_before_landing_review_pushes_its_reviewer_commit_and_merges_not
 /// The push is conditional on the head the review reviewed: a branch that moved
 /// since keeps its new head, the reviewer commit stays local, and the handoff
 /// still leaves the PR open in review.
-#[test]
 fn a_reviewer_commit_is_not_pushed_over_a_pr_branch_that_moved() {
-    if !super::dispatch_admission::isolated(
-        "review_before_landing::a_reviewer_commit_is_not_pushed_over_a_pr_branch_that_moved",
-    ) {
-        return;
-    }
     let stranded = stranded("incomplete");
     let other = stranded.fixture._root.path().join("other");
     git(
@@ -611,13 +571,7 @@ fn a_reviewer_commit_is_not_pushed_over_a_pr_branch_that_moved() {
 
 /// Only an `incomplete` settlement pushes: a `reject` leaves the reviewer
 /// commit local like any other non-approving outcome.
-#[test]
 fn a_rejected_before_landing_review_pushes_nothing() {
-    if !super::dispatch_admission::isolated(
-        "review_before_landing::a_rejected_before_landing_review_pushes_nothing",
-    ) {
-        return;
-    }
     let stranded = stranded("reject");
 
     let handoff = stranded.handoff();
@@ -627,3 +581,15 @@ fn a_rejected_before_landing_review_pushes_nothing() {
     assert_eq!(stranded.remote("refs/heads/candidate"), stranded.published);
     assert_eq!(status(&stranded.fixture), TaskStatus::Review);
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    an_owner_before_landing_review_keeps_the_durable_task_summary_scenarios,
+    an_owner_before_landing_review_keeps_the_durable_task_summary,
+    a_before_landing_review_that_does_not_approve_keeps_the_pr_open_in_review,
+    a_reviewer_that_leaves_only_its_initial_report_does_not_spend_the_review,
+    an_incomplete_review_with_a_reason_a_record_or_a_revision_still_counts,
+    an_incomplete_before_landing_review_pushes_its_reviewer_commit_and_merges_nothing,
+    a_reviewer_commit_is_not_pushed_over_a_pr_branch_that_moved,
+    a_rejected_before_landing_review_pushes_nothing
+);

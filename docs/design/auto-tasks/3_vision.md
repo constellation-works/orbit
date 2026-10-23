@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Vision
 owner: claude
-last_updated: 2026-10-04
-last_validated: 2026-10-09
+last_updated: 2026-10-20
+last_validated: 2026-10-20
 status: Accepted
 feature: auto-tasks
 doc_role: vision
@@ -57,21 +57,24 @@ contract and limits are in [automation-triggers/2_design.md](../automation-trigg
   clock; auto-tasks share its due-math and, after the consolidation, its tick.
 - **qa-sweep** (ORB-10039) — a bespoke periodic sweep that auto-tasks generalize;
   qa-sweep V1 (ORB-10148) is the first auto-task definition.
-- **Triage pipeline** (ORB-10129) — the closest existing "routine fires a job of
-  deterministic steps" shape.
+- **Former triage pipeline** (ORB-10129) — a historical "routine fires a job of
+  deterministic steps" shape; the failed-run triage target is now retired.
 
 ### External
 - Cron / systemd timers — the "schedule + command" baseline; auto-tasks add
   catch-up collapse, dedupe, and a task-shaped payload.
-- Temporal/Cadence schedules — durable, catch-up-aware recurring workflows; the
-  collapse semantics here echo their "skip overlapping" backfill policy.
+- [Temporal](https://docs.temporal.io/schedule) and
+  [Cadence](https://cadenceworkflow.io/docs/concepts/schedules) schedules —
+  durable recurring workflows with separate overlap, catch-up and backfill
+  controls. Skipping an overlapping run is distinct from collapsing missed
+  time slots into one make-up task.
 
 ## 3. What May Be Distinctive
 
 The payload is a **task**, not a command. A fire produces a first-class Orbit
 task that flows through the normal lifecycle (triage, crew routing, review), so
 the scheduler needs no privileged execution surface — the dedupe key is just the
-task's provenance tag, and observability is the existing task + routine surfaces.
+task's provenance tag, and observability is the task and Operations auto-task surfaces.
 
 ## 4. References
 
@@ -81,7 +84,8 @@ task's provenance tag, and observability is the existing task + routine surfaces
 - [Run budgets are provider-neutral: wall-clock timeouts, never turn caps](./4_decisions.md#run-budgets-are-provider-neutral-wall-clock-timeouts-never-turn-caps) — provider-neutral run budgets (no turn caps).
 
 ### External
-- POSIX cron; systemd timer `Persistent=` (catch-up analogue).
+- POSIX cron; [systemd timer `Persistent=`](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html#Persistent=)
+  (catch-up analogue).
 
 ## Task References
 

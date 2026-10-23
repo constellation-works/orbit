@@ -1,0 +1,48 @@
+Record an audited disposition of a failure the base already had
+
+Usage: orbit task reconcile-review accept-baseline [OPTIONS] --reconciliation <RECONCILIATION> --command <COMMAND> --remediation <REMEDIATION> --reason <REASON> <ID>
+
+Arguments:
+  <ID>
+          Task the reconciliation belongs to
+
+Options:
+      --host <HOST>
+          Host that `--workspace` names, by registered host name or `machine_id` (see `orbit host list`). Orbit reads that host's live workspace list and uses the selector it lists for the workspace. Without it, a task id goes to the host its prefix names
+
+      --reconciliation <RECONCILIATION>
+          Reconciliation waiting for a baseline disposition
+
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --command <COMMAND>
+          Required command whose failure reproduced at the base
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --remediation <REMEDIATION>
+          Commit on the landing branch, landed on top of the delivery's merge or squash commit, that remediates the failure
+
+      --reason <REASON>
+          Why the baseline failure is accepted; recorded with the disposition
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')

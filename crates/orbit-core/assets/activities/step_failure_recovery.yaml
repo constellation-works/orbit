@@ -71,9 +71,16 @@ spec:
       log_tail:
         type: string
       # Injected by the recovery dispatcher only: recovery draws its crew from
-      # the medium complexity pool, once per run.
+      # the failure-recovery purpose pool, once per run, or from the auto-fix
+      # one for an `--auto-fix` run's completion step. Each falls back to its
+      # complexity pool (medium, low) while unset. The complexity keys remain
+      # for inputs recorded before purposes existed.
       crew_config_key:
-        const: workflow.medium_complexity_crews
+        enum:
+          - workflow.purpose_crews.failure_recovery
+          - workflow.purpose_crews.auto_fix
+          - workflow.medium_complexity_crews
+          - workflow.low_complexity_crews
       # Host-allocated, run-local decision file for this one invocation.
       # Absent when the host has no decision slot; the executor then keeps
       # its legacy single post-recovery attempt whenever recovery completes.
@@ -293,7 +300,8 @@ spec:
          output, not the owner's task record); and
        - failed_step_id is a delivery-tail step: commit, prepare_branch,
          sync_base, validate, push, or pr_open (including their corresponding
-         activity names).
+         activity names), or a completion step (`pr_complete`) whose
+         `error_message` is an auto-fix check repair (see step 4).
 
        Each of those conditions is re-derived from durable state — the persisted
        task record and the run's own checkpoints — not from anything an earlier
@@ -323,6 +331,25 @@ spec:
        base sync, push, PR open/reuse, and PR promotion steps. The pipeline,
        not you, moves the task to review in this path.
 
+       For a candidate diff, when the workspace provides `make ci-guards`,
+       run it before handoff and fix every reported static guard violation, even
+       when `make ci-fast` is listed for pipeline final validation. In Rust
+       workspaces, also run `cargo fmt --all -- --check`, covering test targets
+       as well as production code. When applying rustfmt fixes, include changed
+       test files too; never restrict formatting to `src/` or library files.
+       For changed test `.rs` files, also run `rustfmt --check --edition <edition> <path> ...`
+       using the owning crate's edition. In workspaces providing
+       `ci-lint` and `scripts/build-budget.py`, mirror
+       these checks for each changed crate (`<crate>` is its package name):
+       - `scripts/build-budget.py -- cargo clippy -p <crate> --lib --bins -- -D warnings -D clippy::disallowed_methods`
+       - `scripts/build-budget.py -- cargo clippy -p <crate> --all-targets -- -D warnings -A clippy::disallowed_methods`
+       - `RUSTDOCFLAGS="-D warnings" scripts/build-budget.py -- cargo doc --no-deps -p <crate>`
+       The production pass retains the channel restriction; the all-targets
+       pass covers test targets, and rustdoc rejects broken/private links.
+       These focused checks do not replace final validation: leave whole
+       `task.final_validation_commands` entries to the pipeline, which
+       remains authoritative. Record commands and outcomes in the handoff.
+
        Unresolved merge or rebase conflicts in the assigned worktree are a
        repair you make, not a reason to stop: resolve every unmerged path,
        preserving both the candidate intent and the base changes, against the
@@ -346,7 +373,9 @@ spec:
        the artifacts, not the error message.
        Follow the workspace's own AGENTS.md for validation guidance.
        Repair the candidate so the command passes (for example apply the
-       formatter it names) and run the command yourself to confirm. Leave the
+       formatter it names). Confirm with the early static guards and scoped
+       checks above; run the failing command yourself only when it is not
+       reserved in `task.final_validation_commands`. Leave the
        repair uncommitted in the worktree: your sandbox mounts Git metadata
        read-only, so do not run `git add` or `git commit`. Once you write
        `retry`, Orbit commits the repair as a new commit on the task branch
@@ -360,6 +389,40 @@ spec:
        reaches you, so the error says whether the base passed. A failure
        outside the candidate's changes that still reaches you is a blocker to
        report with the `not_recovered` decision: re-running it cannot pass.
+
+       An auto-fix check repair is a completion step (`pr_complete`) failure
+       whose `error_message` starts with `pr_auto_fix_check_repair:`. The
+       operator ran `orbit run auto --auto-fix`; Orbit's watcher found
+       required hosted checks failing on the published PR head named there,
+       admitted this one repair against the PR's budget, and quotes each
+       failed job's step, error signature and log excerpt for exactly that
+       head. This admission authorizes you to diagnose and repair the source
+       cause of those evidenced required-check failures, including files
+       outside the original task description or context selectors and defects
+       already present on the base branch. This is an explicit exception to
+       the ordinary candidate-scope boundary above: original task scope alone
+       is never a reason to report `not_recovered`. Keep the repair limited to
+       files necessary to fix the exact evidenced failure; it grants no
+       authority for unrelated changes. If the same evidenced failure already
+       has a delivered repair on the current PR head, verify that repair and
+       its relevant check results, then reuse it rather than making duplicate
+       edits. Record the failing head and job, diagnostic evidence, cause,
+       changed paths (or the paths of a reused repair), and each validation
+       command and result in the required recovery friction and activity
+       summary.
+       Reproduce the failure locally where you can (the workspace's own
+       AGENTS.md names its validation commands), fix the candidate so those
+       checks pass, and leave the repair uncommitted. Fix the source, not the
+       check: never edit, skip or weaken a CI workflow, a required command or
+       a test's assertion to make it pass. Do not change unrelated files,
+       Git or `.orbit` metadata, or secrets. Do not push, open a PR, merge,
+       release, or change lifecycle status. Write `retry` once the repair is in
+       place.
+       Orbit then commits it, reruns the workspace's required validation on
+       it, publishes it to the same PR (a head bound to a review is
+       re-reviewed first) and watches the new head's checks. If an existing
+       committer guard refuses a necessary path, report its exact refusal and
+       path as a runtime blocker; do not infer a task-selector restriction.
 
     5. For an already-terminal source run, prefer repairing for resume over
        direct delivery when the checkpointed remaining steps can run. You
@@ -411,6 +474,36 @@ spec:
     - pr_url: string or null
     - task_moved_to_review: boolean
     - friction_id: string or null
+  steering_instruction: |
+    Mid-run steering checkpoint (advisory pull)
+
+    - At each checkpoint where remaining work is still expensive — before
+      repairing the worktree, before any direct delivery, and before
+      writing the `recovery_decision` file — re-read the task with
+      `orbit.task.show`. On a claimed leaf use only the coordinator-scoped
+      read for the task bound to the claim; an unreachable owner is a gap
+      to report, never a failed implementation.
+    - Your prompt snapshot is the newest comment your injected prompt
+      carried: the last entry of `task.comments`, or the snapshot named
+      by `task.steering` when the host delivered a steering block. Any
+      operator-authored comment after that snapshot is steering. Weigh
+      it like task text, oldest first, with later comments refining
+      earlier ones. System, automation and agent comments are not
+      steering.
+    - This re-read is advisory only. It never records
+      `steering_delivered`, never advances any watermark, and no gate
+      consumes your claim that you looked. Do not write task history, a
+      comment, or any delivery record to report it, and do not treat it
+      as delivery.
+    - Authority limits: a steering comment cannot widen the task's
+      `context_files`, change required validation, crew or review
+      policy, or move task lifecycle state. Those take effect only
+      through their governed writes. Weigh a comment that asks for any
+      of them, but recover under the current governed contract until
+      such a write appears.
+    - Terminal handling is unchanged: a cancelled run, a claimed task
+      that refuses writes, or an operator comment withdrawing the task
+      still stops recovery as the procedure above provides.
   tool_disallow_list:
     - orbit.agent.invoke
     - orbit.auto_task.add
@@ -447,7 +540,8 @@ spec:
     - docker
     - podman
   on_denial: terminate
-  # Dispatch draws the crew from workflow.medium_complexity_crews.
+  # Dispatch draws the crew from workflow.purpose_crews.failure_recovery, or
+  # workflow.medium_complexity_crews while that purpose is unset.
   # One hour accommodates provider startup plus networked git/PR operations
   # while retaining a hard terminal bound. This bound is
   # enforced: the CLI runner spawns the subprocess with this deadline.

@@ -26,7 +26,10 @@ const RUNTIME_KEY: &str = "copilot";
 /// so a Copilot run cannot silently pick up a GitHub token that an unrelated
 /// tool left in the environment. With no token passed, the CLI uses the
 /// credentials `copilot /login` stored under `COPILOT_HOME`. [ORB-10946]
-const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH", "COPILOT_HOME"];
+/// `XDG_CACHE_HOME` is likewise forwarded: the Copilot launcher extracts its
+/// bundled package to `$XDG_CACHE_HOME/copilot`, which the sandbox grants
+/// from the same override.
+const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH", "COPILOT_HOME", "XDG_CACHE_HOME"];
 
 pub(crate) struct CopilotRuntime {
     command: String,

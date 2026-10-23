@@ -1,7 +1,6 @@
 //! Plugin inspection uses the same workspace pins as sync and runtime loading.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use orbit_common::fs::io::create_dir_symlink;
 use orbit_core::application::health::artifact::{ArtifactCondition, ArtifactKind};
@@ -13,13 +12,8 @@ use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::plugin::PluginStatus;
 
-use super::dispatch_admission::isolated;
-
 fn git(repo: &Path, args: &[&str]) {
-    let mut command = Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command.current_dir(repo).args(args).output().unwrap();
     assert!(
         output.status.success(),
@@ -28,16 +22,9 @@ fn git(repo: &Path, args: &[&str]) {
     );
 }
 
-#[test]
 fn linked_worktree_doctor_validates_shared_pins_and_ignores_local_pins() {
-    if !isolated(
-        "plugin_inspection::linked_worktree_doctor_validates_shared_pins_and_ignores_local_pins",
-    ) {
-        return;
-    }
-
     let original_cwd = std::env::current_dir().unwrap();
-    let fixture = tempfile::tempdir().unwrap();
+    let fixture = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let fixture_root = fixture.path().canonicalize().unwrap();
     let main = fixture_root.join("main");
     let linked = fixture_root.join("linked");
@@ -112,16 +99,9 @@ fn linked_worktree_doctor_validates_shared_pins_and_ignores_local_pins() {
     std::env::set_current_dir(original_cwd).unwrap();
 }
 
-#[test]
 fn linked_worktree_doctor_reports_faulty_routine_in_shared_catalog() {
-    if !isolated(
-        "plugin_inspection::linked_worktree_doctor_reports_faulty_routine_in_shared_catalog",
-    ) {
-        return;
-    }
-
     let original_cwd = std::env::current_dir().unwrap();
-    let fixture = tempfile::tempdir().unwrap();
+    let fixture = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let fixture_root = fixture.path().canonicalize().unwrap();
     let main = fixture_root.join("main");
     let linked = fixture_root.join("linked");
@@ -212,7 +192,7 @@ struct SkillPluginFixture {
 
 impl SkillPluginFixture {
     fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let runtime = OrbitRuntime::from_roots(
             &root.path().join("global"),
             &root.path().join("repo/.orbit"),
@@ -270,11 +250,7 @@ impl SkillPluginFixture {
     }
 }
 
-#[test]
 fn enabled_upgrade_reconciles_dropped_and_renamed_skills() {
-    if !isolated("plugin_inspection::enabled_upgrade_reconciles_dropped_and_renamed_skills") {
-        return;
-    }
     let fixture = SkillPluginFixture::new();
     let source = fixture.source("1.0.0", &["keep", "drop", "rename"]);
     let installed = install_plugin(
@@ -349,12 +325,7 @@ fn enabled_upgrade_reconciles_dropped_and_renamed_skills() {
     }
 }
 
-#[test]
 fn doctor_reports_dangling_skill_links_across_namespace_versions() {
-    if !isolated("plugin_inspection::doctor_reports_dangling_skill_links_across_namespace_versions")
-    {
-        return;
-    }
     let fixture = SkillPluginFixture::new();
     let source = fixture.source("2.0.0", &["keep"]);
     let installed = install_plugin(
@@ -406,3 +377,12 @@ fn doctor_reports_dangling_skill_links_across_namespace_versions() {
         );
     }
 }
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    linked_worktree_doctor_validates_shared_pins_and_ignores_local_pins_scenarios,
+    linked_worktree_doctor_validates_shared_pins_and_ignores_local_pins,
+    linked_worktree_doctor_reports_faulty_routine_in_shared_catalog,
+    enabled_upgrade_reconciles_dropped_and_renamed_skills,
+    doctor_reports_dangling_skill_links_across_namespace_versions
+);

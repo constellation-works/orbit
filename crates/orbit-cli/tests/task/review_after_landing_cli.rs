@@ -16,7 +16,7 @@ use orbit_types::workflow::automation::{
 };
 use serde_json::{Value, json};
 
-use crate::auto_task_lifecycle_cli::git;
+use crate::auto_task_lifecycle_cli::{git, operator_json};
 use crate::isolated_cli_fixture::Fixture;
 
 const CONSUMER: &str = "delivery-code-review";
@@ -103,7 +103,7 @@ pub(super) fn set_policy(fixture: &Fixture, key: &str, value: &str) {
         .success();
 }
 
-/// Point `operation.review_crew` at a crew this host cannot run. A crew the
+/// Point `workflow.purpose_crews.review` at a crew this host cannot run. A crew the
 /// registry does not define is refused at the write, naming it [ORB-15195],
 /// so the crew that cannot resolve is a defined one that is disabled.
 fn set_unresolvable_review_crew(fixture: &Fixture) {
@@ -112,7 +112,7 @@ fn set_unresolvable_review_crew(fixture: &Fixture) {
             "config",
             "set",
             "--global",
-            "operation.review_crew",
+            "workflow.purpose_crews.review",
             "missing-crew",
         ])
         .assert()
@@ -120,7 +120,7 @@ fn set_unresolvable_review_crew(fixture: &Fixture) {
     let stderr = String::from_utf8_lossy(&refused.get_output().stderr).into_owned();
     assert!(stderr.contains("missing-crew"), "{stderr}");
     set_policy(fixture, "crews.haiku.enabled", "false");
-    set_policy(fixture, "operation.review_crew", "haiku");
+    set_policy(fixture, "workflow.purpose_crews.review", "haiku");
 }
 
 /// Provider discovery at `orbit init` is host-dependent; these tests need a
@@ -413,7 +413,7 @@ fn assert_doctor_fails(fixture: &Fixture, expected: &str) {
 
 /// [ORB-13992] The auto-task's own flag is the after-landing switch: a
 /// landed delivery mints a review batch exactly while it is enabled, whatever
-/// `review.before_pr` says, and the batch carries `operation.review_crew`.
+/// `review.timing` says, and the batch carries `workflow.purpose_crews.review`.
 #[test]
 fn after_landing_review_mints_exactly_when_the_auto_task_is_enabled() {
     const TEST: &str = "review_after_landing_cli::after_landing_review_mints_exactly_when_the_auto_task_is_enabled";
@@ -426,8 +426,8 @@ fn after_landing_review_mints_exactly_when_the_auto_task_is_enabled() {
     git(&fixture, &["checkout", "-b", "fixture-delivery"]);
     commit(&fixture, "baseline\n");
     retarget(&fixture, &trigger());
-    set_policy(&fixture, "operation.review_crew", REVIEW_CREW);
-    set_policy(&fixture, "review.before_pr", "true");
+    set_policy(&fixture, "workflow.purpose_crews.review", REVIEW_CREW);
+    set_policy(&fixture, "review.timing", "before_pr");
 
     let shown = fixture.json(&["auto-task", "show", CONSUMER, "--json"]);
     assert_eq!(shown["enabled"], false);
@@ -465,7 +465,7 @@ fn after_landing_review_mints_exactly_when_the_auto_task_is_enabled() {
     let task = fixture.json(&["task", "show", &task_id, "--json"]);
     assert_eq!(
         task["crew"], REVIEW_CREW,
-        "operation.review_crew reviews after-landing batches: {task}"
+        "workflow.purpose_crews.review reviews after-landing batches: {task}"
     );
     assert!(
         task["tags"]
@@ -488,6 +488,10 @@ fn after_landing_review_mints_exactly_when_the_auto_task_is_enabled() {
     );
     assert!(after_landing["next_batch_due"].is_string(), "{config}");
     assert_eq!(config["review"]["healthy"], true, "{config}");
+
+    crate::config_show_task_reads::assert_one_config_show_takes_the_task_commit_lock_once(
+        &open_runtime(&fixture),
+    );
 
     plant_retired_coverage(&fixture);
     assert_doctor_fails(&fixture, "instead of `landed_code_review_v1`");
@@ -632,14 +636,17 @@ fn doctor_fails_while_the_after_landing_consumer_cannot_review_landed_work() {
     ]);
     assert_doctor_fails(&fixture, "wedged");
 
-    fixture.json(&[
-        "auto-task",
-        "delete",
-        CONSUMER,
-        "--reason",
-        "Disposable opt-out",
-        "--json",
-    ]);
+    operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "delete",
+            CONSUMER,
+            "--reason",
+            "Disposable opt-out",
+            "--json",
+        ],
+    );
     let (row, _) = doctor_row(&fixture);
     assert_eq!(row["status"], "ok", "deleting the consumer opts out: {row}");
     // The deprecated policy still asks for after-landing review, which a
@@ -654,7 +661,7 @@ fn doctor_fails_while_the_after_landing_consumer_cannot_review_landed_work() {
     toggle(&fixture, "off");
     assert_eq!(doctor_row(&fixture).0["status"], "ok");
 
-    set_policy(&fixture, "review.before_pr", "true");
+    set_policy(&fixture, "review.timing", "before_pr");
     set_unresolvable_review_crew(&fixture);
     assert_doctor_fails(&fixture, "does not resolve");
 }
@@ -715,7 +722,7 @@ fn a_settings_only_edit_is_adopted_without_an_operator() {
         "{}",
         recoveries[0].reason
     );
-    let frictions = fixture.json(&["friction", "list", "--json"]);
+    let frictions = fixture.json(&["friction", "list", "--status", "all", "--json"]);
     let adoption = frictions
         .as_array()
         .unwrap()
@@ -775,7 +782,7 @@ fn a_settings_only_edit_is_adopted_without_an_operator() {
     assert_eq!(store.automation_recoveries(&consumer, 10).unwrap().len(), 1);
 }
 
-/// [ORB-14168] A local-only workspace with `review.before_pr` on is not a
+/// [ORB-14168] A local-only workspace with `review.timing = before_pr` is not a
 /// healthy review setup, and readiness holds the backlog before a drain
 /// would spawn a delivery that admission refuses. A PR workspace with the
 /// same switch stays healthy. This fixture's `--root` is a single config
@@ -795,8 +802,8 @@ fn doctor_and_readiness_hold_a_local_workspace_when_before_pr_is_on() {
         .expect("isolated test child selects a provider PATH mode");
     let doctor_path = provider_path(&path_mode, &provider_bin);
     enable_review_crew(&fixture);
-    set_policy(&fixture, "operation.review_crew", REVIEW_CREW);
-    set_policy(&fixture, "review.before_pr", "true");
+    set_policy(&fixture, "workflow.purpose_crews.review", REVIEW_CREW);
+    set_policy(&fixture, "review.timing", "before_pr");
 
     let doctor = doctor_with_fixture_provider(&fixture, &doctor_path, &provider_bin);
     let row = &doctor.review_row;
@@ -847,18 +854,19 @@ fn doctor_and_readiness_hold_a_local_workspace_when_before_pr_is_on() {
     );
     let message = row["message"].as_str().unwrap();
     assert!(
-        message.contains("review.before_pr (global)") && message.contains("local-only delivery"),
+        message.contains("review.timing = before_pr (global)")
+            && message.contains("local-only delivery"),
         "{}",
         doctor.diagnostics()
     );
     let remediation = row["remediation"].as_str().unwrap();
     assert!(
-        remediation.contains("`orbit config set review.before_pr false`"),
+        remediation.contains("`orbit config set review.timing off`"),
         "{}",
         doctor.diagnostics()
     );
 
-    set_policy(&fixture, "review.before_pr", "false");
+    set_policy(&fixture, "review.timing", "off");
     let doctor = doctor_with_fixture_provider(&fixture, &doctor_path, &provider_bin);
     let row = &doctor.review_row;
     assert_eq!(
@@ -869,7 +877,7 @@ fn doctor_and_readiness_hold_a_local_workspace_when_before_pr_is_on() {
     );
     assert!(doctor.success, "{}", doctor.diagnostics());
 
-    set_policy(&fixture, "review.before_pr", "true");
+    set_policy(&fixture, "review.timing", "before_pr");
     let doctor = doctor_with_fixture_provider(&fixture, &doctor_path, &provider_bin);
     let row = &doctor.review_row;
     assert_eq!(row["status"], "error", "{}", doctor.diagnostics());
@@ -877,7 +885,7 @@ fn doctor_and_readiness_hold_a_local_workspace_when_before_pr_is_on() {
         row["message"]
             .as_str()
             .unwrap()
-            .contains("review.before_pr (global)"),
+            .contains("review.timing = before_pr (global)"),
         "{}",
         doctor.diagnostics()
     );
@@ -916,7 +924,7 @@ fn doctor_and_readiness_hold_a_local_workspace_when_before_pr_is_on() {
     assert!(
         entry["detail"]
             .as_str()
-            .is_some_and(|detail| detail.contains("review.before_pr (global)")),
+            .is_some_and(|detail| detail.contains("review.timing = before_pr (global)")),
         "{entry}"
     );
     let text = fixture.command(&["run", "readiness"]).output().unwrap();
@@ -925,7 +933,7 @@ fn doctor_and_readiness_hold_a_local_workspace_when_before_pr_is_on() {
     assert!(
         text.contains(&task_id)
             && text.contains("local_route_before_pr")
-            && text.contains("review.before_pr (global)"),
+            && text.contains("review.timing = before_pr (global)"),
         "{text}"
     );
 
@@ -989,7 +997,7 @@ fn before_landing_hosts_are_shown_beside_the_switch_they_extend() {
     let fixture = Fixture::new();
     set_policy(&fixture, "workflow.resource_throttle.enabled", "false");
     enable_review_crew(&fixture);
-    set_policy(&fixture, "operation.review_crew", REVIEW_CREW);
+    set_policy(&fixture, "workflow.purpose_crews.review", REVIEW_CREW);
     set_policy(&fixture, "review.before_landing_hosts", "[\"hm_mac\"]");
 
     let config = fixture.json(&["config", "show", "--json"]);
@@ -1022,30 +1030,42 @@ fn before_landing_is_shown_refused_beside_before_pr_and_held_on_a_local_route() 
     let fixture = Fixture::new();
     set_policy(&fixture, "workflow.resource_throttle.enabled", "false");
     enable_review_crew(&fixture);
-    set_policy(&fixture, "operation.review_crew", REVIEW_CREW);
-    set_policy(&fixture, "review.before_landing", "true");
+    set_policy(&fixture, "workflow.purpose_crews.review", REVIEW_CREW);
+    set_policy(&fixture, "review.timing", "before_landing");
 
     let config = fixture.json(&["config", "show", "--json"]);
     let before_landing = &config["review"]["before_landing"];
     assert_eq!(before_landing["enabled"], true, "{config}");
     assert_eq!(before_landing["source"], "global", "{config}");
     assert_eq!(config["review"]["before_pr"]["enabled"], false, "{config}");
-    let text = fixture.command(&["config", "show"]).output().unwrap();
+    let text = fixture
+        .command(&["config", "show", "--all"])
+        .output()
+        .unwrap();
     assert!(text.status.success(), "{text:?}");
     let text = String::from_utf8(text.stdout).unwrap();
     assert!(
-        text.contains("before-landing: on (review.before_landing, global)"),
+        text.contains("before-landing: on (review.timing, global)"),
         "{text}"
+    );
+    let default_text = fixture.command(&["config", "show"]).output().unwrap();
+    assert!(default_text.status.success(), "{default_text:?}");
+    let default_text = String::from_utf8(default_text.stdout).unwrap();
+    assert!(
+        !default_text.contains("\nReview:\n"),
+        "default config show drops the Review summary that restates review.timing: {default_text}"
     );
     let (row, _) = doctor_row(&fixture);
     assert!(
         row["message"]
             .as_str()
             .unwrap()
-            .contains("before-landing review: on (review.before_landing, global)"),
+            .contains("before-landing review: on (review.timing, global)"),
         "{row}"
     );
 
+    // The deprecated switch cannot be set beside the timing; its refusal
+    // names the one key that holds the review layer now.
     let refused = fixture
         .command(&["config", "set", "--global", "review.before_pr", "true"])
         .output()
@@ -1053,7 +1073,7 @@ fn before_landing_is_shown_refused_beside_before_pr_and_held_on_a_local_route() 
     assert!(!refused.status.success(), "{refused:?}");
     let stderr = String::from_utf8_lossy(&refused.stderr);
     assert!(
-        stderr.contains("review.before_pr") && stderr.contains("review.before_landing"),
+        stderr.contains("review.before_pr") && stderr.contains("set review.timing"),
         "{stderr}"
     );
 
@@ -1076,14 +1096,14 @@ fn before_landing_is_shown_refused_beside_before_pr_and_held_on_a_local_route() 
         row["message"]
             .as_str()
             .unwrap()
-            .contains("review.before_landing (global)"),
+            .contains("review.timing = before_landing (global)"),
         "{row}"
     );
     assert!(
         row["remediation"]
             .as_str()
             .unwrap()
-            .contains("`orbit config set review.before_landing false`"),
+            .contains("`orbit config set review.timing off`"),
         "{row}"
     );
 
@@ -1123,7 +1143,7 @@ fn before_landing_is_shown_refused_beside_before_pr_and_held_on_a_local_route() 
     let text = String::from_utf8(text.stdout).unwrap();
     assert!(
         text.contains("local_route_before_landing")
-            && text.contains("review.before_landing (global)"),
+            && text.contains("review.timing = before_landing (global)"),
         "{text}"
     );
 }

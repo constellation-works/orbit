@@ -12,20 +12,49 @@ use super::{BASE_MODIFIED_REFUSAL, DEFAULT_TIMEOUT_MS, SLOW_TIMEOUT_MS};
 /// condition was not what failed.
 const BASE_MODIFIED_REASON: &str = "Base branch was modified. Review and try the merge again.";
 
+/// Upper bound on pull requests one listing of every open pull request reads.
+const PR_LIST_OPEN_LIMIT: &str = "500";
+
+/// The pull requests on one head branch in `state`.
 pub(super) fn pr_list(input: &Value) -> Result<Value, OrbitError> {
     let head = required_string(input, "head")?;
     let state = optional_string(input, "state").unwrap_or("open");
+    list_pull_requests(
+        input,
+        &[
+            "--state",
+            state,
+            "--head",
+            head,
+            "--json",
+            "number,title,headRefName,author",
+        ],
+    )
+}
+
+/// Every open pull request with its body, which is how a run finds its
+/// tasks' earlier delivery pull requests. Bounded by [`PR_LIST_OPEN_LIMIT`].
+pub(super) fn pr_list_open(input: &Value) -> Result<Value, OrbitError> {
+    list_pull_requests(
+        input,
+        &[
+            "--state",
+            "open",
+            "--limit",
+            PR_LIST_OPEN_LIMIT,
+            "--json",
+            "number,title,headRefName,author,body",
+        ],
+    )
+}
+
+fn list_pull_requests(input: &Value, filters: &[&str]) -> Result<Value, OrbitError> {
     let workspace_path = required_string(input, "workspace_path")?;
-    let args = vec![
-        "pr".to_string(),
-        "list".to_string(),
-        "--state".to_string(),
-        state.to_string(),
-        "--head".to_string(),
-        head.to_string(),
-        "--json".to_string(),
-        "number,title,headRefName,author".to_string(),
-    ];
+    let args = ["pr", "list"]
+        .iter()
+        .chain(filters)
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<_>>();
     let result = execute_with_transient_retry(
         "gh",
         &args,
@@ -136,6 +165,45 @@ pub(super) fn pr_close(input: &Value) -> Result<Value, OrbitError> {
         Some(Path::new(workspace_path)),
         DEFAULT_TIMEOUT_MS,
         "PR close",
+    )?;
+    Ok(json!({
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }))
+}
+
+/// [ORB-15956] Merge the base branch's current tip into a pull request's
+/// branch, as the provider's "update branch" does. `expected_head_sha` makes
+/// the provider refuse a head that moved after the caller read it.
+/// Single-shot: a retry after an ambiguous failure could merge twice.
+pub(super) fn pr_update_branch(input: &Value) -> Result<Value, OrbitError> {
+    let number = required_string(input, "pr")?;
+    let expected_head = required_string(input, "expected_head_sha")?;
+    let workspace_path = required_string(input, "workspace_path")?;
+    if !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(OrbitError::InvalidInput(format!(
+            "invalid private automation VCS PR update selector '{number}'; expected a pull \
+             request number in the workspace repository"
+        )));
+    }
+    if !valid_expected_remote_sha(Some(expected_head)) {
+        return Err(OrbitError::InvalidInput(
+            "PR branch update requires an exact 40- or 64-character expected_head_sha".into(),
+        ));
+    }
+    let result = execute(
+        "gh",
+        vec![
+            "api".to_string(),
+            format!("repos/{{owner}}/{{repo}}/pulls/{number}/update-branch"),
+            "--method".to_string(),
+            "PUT".to_string(),
+            "-f".to_string(),
+            format!("expected_head_sha={expected_head}"),
+        ],
+        Some(Path::new(workspace_path)),
+        SLOW_TIMEOUT_MS,
+        "PR branch update",
     )?;
     Ok(json!({
         "stdout": result.stdout,
@@ -306,9 +374,9 @@ pub(super) fn pr_merge_capabilities(input: &Value) -> Result<Value, OrbitError> 
         ))
     })?;
 
-    let repository = execute(
+    let repository = execute_with_transient_retry(
         "gh",
-        vec![
+        &[
             "repo".to_string(),
             "view".to_string(),
             "--json".to_string(),
@@ -339,9 +407,9 @@ pub(super) fn pr_merge_capabilities(input: &Value) -> Result<Value, OrbitError> 
     })?;
 
     let query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){autoMergeAllowed mergeCommitAllowed rebaseMergeAllowed squashMergeAllowed pullRequest(number:$number){baseRefName baseRef{branchProtectionRule{requiresLinearHistory}}}}}";
-    let response = execute(
+    let response = execute_with_transient_retry(
         "gh",
-        vec![
+        &[
             "api".to_string(),
             "graphql".to_string(),
             "-f".to_string(),
@@ -465,21 +533,87 @@ pub(super) fn pr_status(input: &Value) -> Result<Value, OrbitError> {
         "view".to_string(),
         selector.to_string(),
         "--json".to_string(),
-        "number,state,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,headRefName,headRefOid,baseRefName,mergeCommit,url".to_string(),
+        "number,state,isDraft,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,headRefName,headRefOid,baseRefName,mergeCommit,url,autoMergeRequest".to_string(),
     ];
-    let result = execute_with_transient_retry(
-        "gh",
-        &args,
-        Some(Path::new(workspace_path)),
-        DEFAULT_TIMEOUT_MS,
-        "PR status",
-    )?;
+    let result = if input.get("deadline_ms").is_some() {
+        super::super::completion_deadline::Deadline::from_input(input)?.execute(
+            "gh",
+            args,
+            Path::new(workspace_path),
+            "PR status",
+        )?
+    } else {
+        execute_with_transient_retry(
+            "gh",
+            &args,
+            Some(Path::new(workspace_path)),
+            DEFAULT_TIMEOUT_MS,
+            "PR status",
+        )?
+    };
     let pull_request: Value = serde_json::from_str(&result.stdout).map_err(|error| {
         OrbitError::Execution(format!(
             "private automation VCS PR status returned invalid JSON: {error}"
         ))
     })?;
     Ok(json!({ "pull_request": pull_request }))
+}
+
+/// Which checks on a PR's head commit branch protection requires.
+///
+/// `gh pr view --json statusCheckRollup` does not say, so this asks the
+/// GraphQL API for each rollup context's `isRequired` against the PR, with a
+/// check run's own and its app's identity. The
+/// answer carries the head commit it describes; the reader in `pr/answers.rs`
+/// refuses one that is truncated or names another head.
+pub(super) fn pr_required_checks(input: &Value) -> Result<Value, OrbitError> {
+    let selector = required_string(input, "pr")?;
+    let workspace_path = required_string(input, "workspace_path")?;
+    let Some(number) = pr_number_from_selector(selector) else {
+        return Err(OrbitError::InvalidInput(format!(
+            "invalid private automation VCS PR selector '{selector}'; expected a number or GitHub PR URL"
+        )));
+    };
+    let query = "query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){\
+        pullRequest(number:$pr){headRefOid commits(last:1){nodes{commit{oid \
+        statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{__typename \
+        ... on CheckRun{databaseId name status conclusion isRequired(pullRequestNumber:$pr) \
+        checkSuite{app{databaseId} workflowRun{workflow{name}}}} \
+        ... on StatusContext{context state isRequired(pullRequestNumber:$pr)}}}}}}}}}}";
+    let args = vec![
+        "api".to_string(),
+        "graphql".to_string(),
+        "-F".to_string(),
+        "owner={owner}".to_string(),
+        "-F".to_string(),
+        "repo={repo}".to_string(),
+        "-F".to_string(),
+        format!("pr={number}"),
+        "-f".to_string(),
+        format!("query={query}"),
+    ];
+    let result = if input.get("deadline_ms").is_some() {
+        super::super::completion_deadline::Deadline::from_input(input)?.execute(
+            "gh",
+            args,
+            Path::new(workspace_path),
+            "PR required checks",
+        )?
+    } else {
+        execute_with_transient_retry(
+            "gh",
+            &args,
+            Some(Path::new(workspace_path)),
+            DEFAULT_TIMEOUT_MS,
+            "PR required checks",
+        )?
+    };
+    let answer: Value = serde_json::from_str(&result.stdout).map_err(|error| {
+        OrbitError::Execution(format!(
+            "private automation VCS PR required checks returned invalid JSON: {error}"
+        ))
+    })?;
+    Ok(json!({ "pull_request": answer.pointer("/data/repository/pullRequest").cloned() }))
 }
 
 fn valid_pr_selector(value: &str) -> bool {

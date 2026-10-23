@@ -4,10 +4,8 @@ use std::fs::File;
 use std::io::Read;
 #[cfg(target_os = "macos")]
 use std::io::{Seek, SeekFrom};
-use std::path::Path;
-#[cfg(target_os = "linux")]
-use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::SystemTime;
 
 use orbit_types::identity::lower_hex;
@@ -46,11 +44,16 @@ pub fn process_generation() -> Result<&'static str, OrbitError> {
     process_digest(None, false)
 }
 
+/// The digest [`process_digest`] hashed to record under a generation root
+/// that did not exist yet, and the cache path it belongs at.
+static UNREMEMBERED: Mutex<Option<(PathBuf, image_digest::Unremembered)>> = Mutex::new(None);
+
 /// [`process_generation`], answered from the digest cache under `cache_root`
 /// for as long as the running image's file identity is unchanged (see
 /// [`image_digest`]). A fresh digest is written back only when `record` is
-/// set; a read-only participant must leave the root byte-identical. Whichever
-/// call runs first fixes the process's digest; later calls return it.
+/// set; a read-only participant must leave the root byte-identical. A missing
+/// root defers the write to [`remember_process_digest`]. Whichever call runs
+/// first fixes the process's digest; later calls return it.
 pub(super) fn process_digest(
     cache_root: Option<&Path>,
     record: bool,
@@ -68,18 +71,48 @@ pub(super) fn process_digest(
                 let cache = cache_root.and_then(|root| {
                     validated_generation_record_path(root, IMAGE_DIGEST_CACHE).ok()
                 });
-                image_digest::digest_with_cache(
+                let image_name = std::env::current_exe()
+                    .ok()
+                    .and_then(|image| image.file_name().map(ToOwned::to_owned));
+                let (digest, unremembered) = image_digest::digest_with_cache(
                     cache.as_deref(),
                     record,
                     SystemTime::now(),
                     file,
-                    hash_executable,
-                )
+                    |file| {
+                        image_digest::shared_test_digest(
+                            image_name.as_deref(),
+                            file,
+                            hash_executable,
+                        )
+                    },
+                )?;
+                if let (Some(cache), Some(unremembered)) = (cache, unremembered) {
+                    *UNREMEMBERED.lock().unwrap_or_else(PoisonError::into_inner) =
+                        Some((cache, unremembered));
+                }
+                Ok(digest)
             })();
             result.map_err(|e: OrbitError| e.to_string())
         })
         .as_deref()
         .map_err(refusal)
+}
+
+/// Record the digest [`process_digest`] hashed for `cache_root` before that
+/// root existed. Call once a writable join of `cache_root` has been admitted,
+/// which created the root. A digest hashed for any other root is left alone.
+pub(super) fn remember_process_digest(cache_root: &Path) {
+    let Ok(path) = validated_generation_record_path(cache_root, IMAGE_DIGEST_CACHE) else {
+        return;
+    };
+    let pending = UNREMEMBERED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take_if(|(cache, _)| *cache == path);
+    if let Some((_, unremembered)) = pending {
+        unremembered.remember(&path);
+    }
 }
 
 // Linux opens the running inode directly. Other supported systems must verify

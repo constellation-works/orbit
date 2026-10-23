@@ -14,15 +14,12 @@ pub mod job_executor;
 pub mod sqlite_sink;
 pub mod workspace;
 
-#[cfg(test)]
-mod tests;
-
 pub use audit_writer::V2AuditWriter;
 pub use crew::{ResolvedAgentSettings, resolve_crew_settings};
 pub use dispatcher::{
-    DispatchError, DispatchOutcome, LinuxRuntimeWriteAuthority, ResolvedCliExecutor,
-    ResolvedSandbox, ResolvedShellExecutor, SandboxMask, V2DispatchInput, dispatch_error_to_orbit,
-    dispatch_v2_activity,
+    DispatchError, DispatchInvocationTrace, DispatchOutcome, LinuxRuntimeWriteAuthority,
+    ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor, SandboxMask, V2DispatchInput,
+    dispatch_error_to_orbit, dispatch_v2_activity,
 };
 pub use job_executor::{
     JobOutcome, execute_job_with_resume, resolve_job_catalog_refs_for_execution, validate_job,

@@ -182,36 +182,6 @@ impl OrbitRuntime {
         Ok((source, input))
     }
 
-    /// [ORB-10002] Resume an interrupted (or failed / timed-out) job run from
-    /// its persisted step checkpoints.
-    ///
-    /// Creates a new run linked via `retry_source_run_id`, seeds its
-    /// `PipelineState` from the source run's checkpoints, and executes the
-    /// job skipping every top-level step already recorded as `success` —
-    /// their outputs are fed back into the pipeline so later steps see them.
-    /// If the source run has no successful checkpoints this degrades to a
-    /// full replay.
-    ///
-    /// [ORB-10470] Before the first step runs, the resume reconciles the tasks
-    /// its own retry lineage owns: a task blocked by the source failure is
-    /// re-admitted, and its `job_run_id` is realigned to the batch id the
-    /// reused checkpoints carry. Tasks owned by an unrelated run are untouched.
-    ///
-    /// Test-only in-process path for legacy execution and checkpoint fixtures.
-    /// Production resume uses [`OrbitRuntime::submit_resume_run`](crate::OrbitRuntime::submit_resume_run).
-    #[cfg(test)]
-    pub fn resume_job_run(&self, source_run_id: &str) -> Result<V2JobRunResult, OrbitError> {
-        let plan = self.plan_job_run_resume(source_run_id)?;
-        let (job_path, _) = self.load_v2_job_asset_by_name(&plan.source.job_id)?;
-        self.run_job_v2_from_yaml_with_retry_source(
-            &job_path,
-            plan.input.clone(),
-            Some(plan.source.run_id.clone()),
-            plan.attempt,
-            Some(&plan),
-        )
-    }
-
     fn run_job_v2_from_yaml_with_retry_source(
         &self,
         yaml_path: &Path,
@@ -220,11 +190,19 @@ impl OrbitRuntime {
         attempt: u32,
         resume: Option<&ResumePlan>,
     ) -> Result<V2JobRunResult, OrbitError> {
-        let job_name = load_job_name(yaml_path)?;
+        let (job_name, spec) = load_job_definition(yaml_path)?;
         // [ORB-11354] The foreground path takes caller-shaped input too, so it
         // gets the same reserved-key refusal as the detached submission path.
         // Nothing runs a trusted-host activity in the foreground: an admitted
         // invocation is always a detached run so it survives disconnect.
+        if input
+            .get(orbit_types::workflow::SOURCE_REPAIR_KEY)
+            .is_some()
+        {
+            return Err(OrbitError::CapabilityDenied(
+                "source repair input is reserved for explicit operator admission".into(),
+            ));
+        }
         if run_input_declares_trusted_host(&input) {
             return Err(super::pipeline::reserved_trusted_host_key_error(&job_name));
         }
@@ -233,6 +211,13 @@ impl OrbitRuntime {
                 &job_name,
             ));
         }
+        let mut input = input;
+        super::delivery::normalize_delivery_input(&spec, &mut input)?;
+        self.capture_auto_concurrency(
+            &job_name,
+            &mut input,
+            resume.is_some() || retry_source_run_id.is_some(),
+        )?;
         let scheduled_at = chrono::Utc::now();
         let run = self.stores().jobs().insert_job_run(
             &job_name,
@@ -285,7 +270,8 @@ impl OrbitRuntime {
         // Once Start succeeds, setup errors belong to this run and must reach
         // the same terminal lifecycle as execution errors in detached workers.
         let outcome = (|| {
-            self.record_run_crew_for_job(&run.run_id, &input, yaml_path)?;
+            let bundle = crate::application::automation::members::bundle_crews(self, &run, &input);
+            self.record_run_crew_for_job(&run.run_id, &input, yaml_path, bundle)?;
             self.record_event(OrbitEvent::JobRunStarted {
                 job_id: run.job_id.clone(),
                 run_id: run.run_id.clone(),
@@ -467,17 +453,20 @@ impl OrbitRuntime {
         // document. Replacing the whole state would silently resume
         // admissions.
         if let Some(existing) = self.read_run_state(&run.run_id)? {
-            if initial_state.drain_worker_limit.is_none() {
-                initial_state.drain_worker_limit = existing.drain_worker_limit;
+            if initial_state.pull_drain.drain_worker_limit.is_none() {
+                initial_state.pull_drain.drain_worker_limit =
+                    existing.pull_drain.drain_worker_limit;
             }
-            if initial_state.drain_admissions_stop.is_none() {
-                initial_state.drain_admissions_stop = existing.drain_admissions_stop;
+            if initial_state.pull_drain.drain_admissions_stop.is_none() {
+                initial_state.pull_drain.drain_admissions_stop =
+                    existing.pull_drain.drain_admissions_stop;
             }
-            if initial_state.drain_window_extension.is_none() {
-                initial_state.drain_window_extension = existing.drain_window_extension;
+            if initial_state.pull_drain.drain_window_extension.is_none() {
+                initial_state.pull_drain.drain_window_extension =
+                    existing.pull_drain.drain_window_extension;
             }
-            if initial_state.drain_cancel.is_none() {
-                initial_state.drain_cancel = existing.drain_cancel;
+            if initial_state.pull_drain.drain_cancel.is_none() {
+                initial_state.pull_drain.drain_cancel = existing.pull_drain.drain_cancel;
             }
             if initial_state.child_dispatches.is_empty() {
                 initial_state.child_dispatches = existing.child_dispatches;
@@ -489,7 +478,11 @@ impl OrbitRuntime {
         self.stores()
             .jobs()
             .write_run_state(&run.run_id, &initial_state)?;
-        if let Some(plan) = resume {
+        if let Some(plan) = resume
+            && input
+                .get(orbit_types::workflow::SOURCE_REPAIR_KEY)
+                .is_none()
+        {
             self.reconcile_resume_task_ownership(plan, &run.run_id)?;
         }
         Ok(())
@@ -750,7 +743,7 @@ impl OrbitRuntime {
         state.sync_pipeline(result.pipeline.clone());
         // A resumed run starts from its source's hold; its own outcome
         // replaces it, so only a run that is held carries one.
-        state.forge_hold = result.forge_hold.clone();
+        state.pull_drain.forge_hold = result.forge_hold.clone();
         // [ORB-10002] Per-step checkpoints already maintain step records for
         // this run; only fall back to the legacy single-summary step record
         // when no checkpoint was ever written, so a later `resume` never sees
@@ -777,6 +770,7 @@ impl OrbitRuntime {
         self.stores().jobs().complete_job_run_step(
             &run.run_id,
             &JobRunStepParams {
+                lock_wait_ms: None,
                 step_index: 0,
                 target_type: JobTargetType::Job,
                 target_id: run.job_id.clone(),
@@ -833,6 +827,7 @@ impl OrbitRuntime {
             self.stores().jobs().complete_job_run_step(
                 &run.run_id,
                 &JobRunStepParams {
+                    lock_wait_ms: step.lock_wait_ms,
                     step_index: step.step_index as usize,
                     target_type: JobTargetType::Activity,
                     target_id: step.step_id,
@@ -879,9 +874,14 @@ pub(super) fn seeded_resume_state(source_state: &PipelineState, run: &JobRun) ->
     let mut seeded = source_state.clone();
     seeded.run_id = run.run_id.clone();
     seeded.job_id = run.job_id.clone();
-    seeded.forge_hold_expired_at = None;
+    seeded.pull_drain.forge_hold_expired_at = None;
     // The resumed run's own outcome decides whether it echoes a child.
     seeded.root_cause = None;
+    // A steering watermark names what this run's own prompts carried; the
+    // resumed run's agents have seen nothing yet.
+    seeded.steering_watermarks.clear();
+    // Steering rounds are the source run's budget, not the resumed run's.
+    seeded.steering_rounds.clear();
     if let Some(pipeline) = seeded.pipeline.as_object_mut() {
         pipeline.remove(orbit_engine::review_gate::INTERRUPTED_REVIEW_KEY);
     }
@@ -889,10 +889,12 @@ pub(super) fn seeded_resume_state(source_state: &PipelineState, run: &JobRun) ->
     seeded
 }
 
-fn load_job_name(yaml_path: &Path) -> Result<String, OrbitError> {
+fn load_job_definition(
+    yaml_path: &Path,
+) -> Result<(String, orbit_types::workflow::JobV2), OrbitError> {
     let yaml = std::fs::read_to_string(yaml_path)
         .map_err(|err| OrbitError::InvalidInput(format!("read {}: {err}", yaml_path.display())))?;
     let asset = load_job_asset(&yaml)
         .map_err(|err| OrbitError::InvalidInput(format!("load {}: {err}", yaml_path.display())))?;
-    Ok(asset.name)
+    Ok((asset.name, asset.spec))
 }

@@ -3,7 +3,6 @@ use super::test_support::{body_json, enter_isolated_child};
 use crate::state::DashboardState;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use axum::response::Response;
 use orbit_common::governance::authorization::{DASHBOARD_CLOCK_SERVICE, OPERATOR_OVERRIDE_ENV};
 use orbit_core::application::routines::ClockStatus;
 use orbit_core::{OrbitError, OrbitRuntime};
@@ -12,28 +11,6 @@ use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tower::ServiceExt;
-
-pub(super) async fn request_cancel(
-    runtime: OrbitRuntime,
-    run_id: &str,
-    origin: Option<&str>,
-    host: Option<&str>,
-) -> Response {
-    let mut builder = Request::builder()
-        .method(Method::POST)
-        .uri(format!("/runs/{run_id}/cancel"));
-    if let Some(origin) = origin {
-        builder = builder.header(header::ORIGIN, origin);
-    }
-    if let Some(host) = host {
-        builder = builder.header(header::HOST, host);
-    }
-    router()
-        .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
-        .oneshot(builder.body(Body::empty()).expect("request"))
-        .await
-        .expect("response")
-}
 
 #[tokio::test]
 async fn successful_clock_change_with_failed_follow_up_read_is_audited_and_unknown() {
@@ -131,4 +108,82 @@ async fn successful_clock_change_with_failed_follow_up_read_is_audited_and_unkno
     assert_eq!(clock_audits.len(), 1);
     assert_eq!(clock_audits[0].status, AuditEventStatus::Success);
     assert_eq!(clock_audits[0].error_message, None);
+}
+
+#[tokio::test]
+async fn routine_health_clock_token_for_each_status_combination() {
+    if !enter_isolated_child(
+        module_path!(),
+        "routine_health_clock_token_for_each_status_combination",
+    ) {
+        return;
+    }
+    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+    orbit_registry::ensure_machine_identity(&runtime.global_root(), || {
+        Ok(orbit_registry::NewMachineIdentity {
+            name: "clock-fixture".to_string(),
+            task_prefix: "CF".to_string(),
+        })
+    })
+    .expect("ensure machine identity");
+    // (enabled, running, schedulable, issue, health): a reported issue alone
+    // does not change the dashboard's token.
+    // Cover the full product, including synthetic combinations such as an
+    // enabled, schedulable clock with an issue, which native probes don't emit.
+    for (enabled, running, schedulable, issue, health) in [
+        (true, Some(true), true, false, "healthy"),
+        (true, Some(true), true, true, "healthy"),
+        (true, Some(true), false, false, "missed"),
+        (true, Some(true), false, true, "missed"),
+        (true, Some(false), true, false, "healthy"),
+        (true, Some(false), true, true, "healthy"),
+        (true, Some(false), false, false, "missed"),
+        (true, Some(false), false, true, "missed"),
+        (true, None, true, false, "healthy"),
+        (true, None, true, true, "healthy"),
+        (true, None, false, false, "missed"),
+        (true, None, false, true, "missed"),
+        (false, Some(true), true, false, "unhealthy"),
+        (false, Some(true), true, true, "unhealthy"),
+        (false, Some(true), false, false, "unhealthy"),
+        (false, Some(true), false, true, "unhealthy"),
+        (false, Some(false), true, false, "paused"),
+        (false, Some(false), true, true, "paused"),
+        (false, Some(false), false, false, "paused"),
+        (false, Some(false), false, true, "paused"),
+        (false, None, true, false, "paused"),
+        (false, None, true, true, "paused"),
+        (false, None, false, false, "paused"),
+        (false, None, false, true, "paused"),
+    ] {
+        let status = ClockStatus {
+            configured_cadence_seconds: 60,
+            effective_cadence_seconds: schedulable.then_some(60),
+            enabled,
+            loaded: enabled,
+            running,
+            schedulable,
+            health_issue: issue.then(|| "fixture issue".to_string()),
+            last_tick_at: None,
+            next_tick_at: None,
+            platform: "test",
+        };
+        let case = format!("{status:?}");
+        // A fresh state per case: the routine read is memoized per server.
+        let state = DashboardState::single(runtime.clone());
+        state.set_clock_status_hook(Arc::new(move || Ok(status.clone())));
+        let request = Request::builder()
+            .uri("/routines?workspace=default")
+            .header(header::HOST, "localhost:7878")
+            .body(Body::empty())
+            .expect("request");
+        let response = router()
+            .with_state(state)
+            .oneshot(request)
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK, "{case}");
+        let report = body_json(response).await;
+        assert_eq!(report["clock"]["health"], health, "{case}");
+    }
 }

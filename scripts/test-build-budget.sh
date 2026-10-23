@@ -146,6 +146,21 @@ try:
     elif mode in {"block", "term-delay"}:
         while True:
             time.sleep(1)
+    elif mode in {"release-success", "release-fail"}:
+        while not (state / "release-owner").exists():
+            time.sleep(0.02)
+        if mode == "release-fail":
+            raise SystemExit(23)
+    elif mode == "barrier":
+        # Hold the slot until the driver releases the wave. A removed state directory
+        # means the driver has exited, and the deadline bounds any other abort.
+        deadline = time.monotonic() + duration
+        while (
+            not (state / "release-owner").exists()
+            and state.exists()
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.02)
     elif mode == "fail":
         time.sleep(duration)
         raise SystemExit(23)
@@ -167,6 +182,38 @@ finally:
 PY
 chmod +x "$TMP/helper.py"
 
+# Count helpers that have been admitted and recorded their start under $1.
+started_helpers() {
+  local marker started=0
+  for marker in "$1"/started-*; do
+    if [[ -e "$marker" ]]; then
+      started=$((started + 1))
+    fi
+  done
+  printf '%s\n' "$started"
+}
+
+# Admission under test: the first $2 helpers must be admitted together. Starts are
+# awaited through markers, so host load only delays the barrier and cannot shrink
+# the overlap. The wave then holds for a short settle window, so an over-admitted
+# helper has time to appear in the recorded max before release.
+hold_first_wave() {
+  local state="$1" expected="$2" total="$3" settle=0
+  local deadline=$((SECONDS + 15))
+  while [[ "$(started_helpers "$state")" -lt "$expected" ]]; do
+    if ((SECONDS >= deadline)); then
+      touch "$state/release-owner"
+      fail "only $(started_helpers "$state") of $expected admitted helpers started in $state"
+    fi
+    sleep 0.02
+  done
+  while [[ "$(started_helpers "$state")" -lt "$total" && "$settle" -lt 25 ]]; do
+    settle=$((settle + 1))
+    sleep 0.02
+  done
+  touch "$state/release-owner"
+}
+
 # Agent subprocesses retain HOME and PATH but receive no ORBIT_* settings.
 # The host files must still control admission, and an explicit slot override
 # must beat the host file when one is present.
@@ -180,13 +227,15 @@ run_agent_environment_case() {
   for label in a b c d; do
     if [[ -n "$override_slots" ]]; then
       (env -i HOME="$home" PATH="$PATH" ORBIT_BUILD_SLOTS="$override_slots" \
-        "$WRAPPER" -- "$TMP/helper.py" "$state" "$label" sleep 0.35) &
+        "$WRAPPER" -- "$TMP/helper.py" "$state" "$label" barrier 20) &
     else
       (env -i HOME="$home" PATH="$PATH" \
-        "$WRAPPER" -- "$TMP/helper.py" "$state" "$label" sleep 0.35) &
+        "$WRAPPER" -- "$TMP/helper.py" "$state" "$label" barrier 20) &
     fi
     pids+=("$!")
   done
+
+  hold_first_wave "$state" "$expected_slots" 4
 
   local pid
   for pid in "${pids[@]}"; do
@@ -229,17 +278,18 @@ for invalid_slots in banana 129; do
     "$TMP/invalid-host-slots.err" || fail "host slots value $invalid_slots had the wrong validation message"
 done
 
-# Different worktree paths share two slots, and enough overlapping work reaches both.
+# Different worktree paths share two slots, and the first wave reaches both.
 pids=()
 for label in a b c d; do
   (
     cd "$TMP/worktrees/$label"
     CARGO_TARGET_DIR="$TMP/targets/$label" ORBIT_BUILD_BUDGET_DIR="$TMP/locks-cross" \
       ORBIT_BUILD_SLOTS=2 ORBIT_CARGO_JOBS=3 \
-      "$WRAPPER" -- "$TMP/helper.py" "$TMP/state" "$label" sleep 0.25
+      "$WRAPPER" -- "$TMP/helper.py" "$TMP/state" "$label" barrier 20
   ) &
   pids+=("$!")
 done
+hold_first_wave "$TMP/state" 2 4
 for pid in "${pids[@]}"; do
   wait "$pid"
 done
@@ -253,31 +303,45 @@ done
 run_queue_case() {
   local case_name="$1" first_mode="$2"
   local case_state="$TMP/$case_name"
-  local owner_status
+  local owner_status owner_mode wait_interval=0.05
   mkdir -p "$case_state"
+  case "$first_mode" in
+    sleep) owner_mode=release-success ;;
+    fail) owner_mode=release-fail ;;
+    block) owner_mode=block ;;
+  esac
   ORBIT_BUILD_BUDGET_DIR="$TMP/locks-$case_name" ORBIT_BUILD_SLOTS=1 \
-    "$WRAPPER" -- "$TMP/helper.py" "$case_state" owner "$first_mode" 0.25 &
+    "$WRAPPER" -- "$TMP/helper.py" "$case_state" owner "$owner_mode" 0.25 &
   local owner_pid=$!
+  BACKGROUND_PIDS+=("$owner_pid")
   wait_for "$case_state/started-owner"
   ORBIT_BUILD_BUDGET_DIR="$TMP/locks-$case_name" ORBIT_BUILD_SLOTS=1 \
-    timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$case_state" queued sleep 0.01 &
+    _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS="$wait_interval" \
+    timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$case_state" queued sleep 0.01 \
+    2>"$case_state/queued.err" &
   local queued_pid=$!
-  sleep 0.08
+  BACKGROUND_PIDS+=("$queued_pid")
+  wait_for_match '^build-budget: still waiting for admission \(elapsed [0-9]+\.[0-9]s\)$' \
+    "$case_state/queued.err"
   [[ ! -e "$case_state/started-queued" ]] || fail "$case_name queue started before the owner released its slot"
 
   if [[ "$first_mode" == "block" ]]; then
     kill -TERM "$owner_pid"
+  else
+    touch "$case_state/release-owner"
   fi
   set +e
   wait "$owner_pid" 2>/dev/null
   owner_status=$?
   set -e
+  forget_pid "$owner_pid"
   case "$first_mode" in
     sleep) [[ "$owner_status" == "0" ]] || fail "$case_name owner returned $owner_status" ;;
     fail) [[ "$owner_status" == "23" ]] || fail "$case_name did not preserve failure status" ;;
     block) [[ "$owner_status" == "143" ]] || fail "$case_name terminated owner returned $owner_status" ;;
   esac
   wait "$queued_pid"
+  forget_pid "$queued_pid"
   [[ -e "$case_state/started-queued" ]] || fail "$case_name queue did not proceed"
 }
 
@@ -514,7 +578,8 @@ CARGO_BUILD_JOBS=6 ORBIT_CARGO_JOBS=7 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-overrid
 grep -Fq 'jobs=7' "$TMP/override/events" || fail "ORBIT_CARGO_JOBS did not take precedence"
 
 for setting in 'ORBIT_BUILD_SLOTS=0' 'ORBIT_BUILD_SLOTS=banana' \
-  'ORBIT_CARGO_JOBS=0' 'ORBIT_CARGO_JOBS=4.5' 'ORBIT_BUILD_BUDGET=maybe'; do
+  'ORBIT_CARGO_JOBS=0' 'ORBIT_CARGO_JOBS=4.5' 'ORBIT_BUILD_BUDGET=maybe' \
+  'ORBIT_BUILD_LOW_PRIORITY=maybe'; do
   set +e
   env "$setting" "$WRAPPER" -- true >/dev/null 2>"$TMP/invalid.err"
   status=$?
@@ -582,6 +647,58 @@ ORBIT_BUILD_BUDGET=0 ORBIT_CARGO_JOBS=8 \
   "$WRAPPER" -- "$TMP/helper.py" "$TMP/bypass" bypass sleep 0.01
 grep -Fq 'jobs=8' "$TMP/bypass/events" || fail "bypass lost Cargo job setting"
 grep -Fq 'slot=None' "$TMP/bypass/events" || fail "bypass unexpectedly acquired a slot"
+
+# Wrapped build children run at lower CPU and IO priority than the caller [ORB-15798].
+# The probe prints the child's niceness, then on Linux its IO class from ionice -p.
+PRIORITY_PROBE='python3 -c "import os; print(os.getpriority(os.PRIO_PROCESS, 0))"'
+if [[ "$(uname -s)" == Linux ]]; then
+  PRIORITY_PROBE+='; ionice -p $$'
+fi
+
+# run_priority_case NAME [VAR=value ...] runs the probe through the wrapper with its own budget.
+run_priority_case() {
+  local case_name="$1"
+  shift
+  env -i HOME="$TMP/probe-home" PATH="$PATH" ORBIT_BUILD_BUDGET_DIR="$TMP/locks-priority-$case_name" \
+    ORBIT_BUILD_SLOTS=1 ${1+"$@"} "$WRAPPER" -- sh -c "$PRIORITY_PROBE" \
+    >"$TMP/priority-$case_name.out" || fail "$case_name: wrapper failed"
+}
+
+# assert_lowered_priority NAME checks niceness of at least 10 and, on Linux, an idle or best-effort 7 IO class.
+assert_lowered_priority() {
+  local output="$TMP/priority-$1.out"
+  local niceness io_class
+  niceness="$(sed -n 1p "$output")"
+  [[ "$niceness" =~ ^[0-9]+$ && "$niceness" -ge 10 ]] \
+    || fail "$1: wrapped child niceness was '$niceness', expected at least 10"
+  if [[ "$(uname -s)" == Linux ]]; then
+    io_class="$(sed -n 2p "$output")"
+    [[ "$io_class" == "best-effort: prio 7" || "$io_class" == idle ]] \
+      || fail "$1: wrapped child IO class was '$io_class', expected idle or best-effort prio 7"
+  fi
+}
+
+# The unwrapped probe reports the caller's own priority, which the opt-out must reproduce.
+env -i HOME="$TMP/probe-home" PATH="$PATH" sh -c "$PRIORITY_PROBE" >"$TMP/priority-direct.out"
+run_priority_case admitted
+assert_lowered_priority admitted
+run_priority_case bypass ORBIT_BUILD_BUDGET=0
+assert_lowered_priority bypass
+run_priority_case opt-out-admitted ORBIT_BUILD_LOW_PRIORITY=0
+cmp -s "$TMP/priority-direct.out" "$TMP/priority-opt-out-admitted.out" \
+  || fail "opt-out admitted command did not restore the caller's priority"
+run_priority_case opt-out-bypass ORBIT_BUILD_BUDGET=0 ORBIT_BUILD_LOW_PRIORITY=0
+cmp -s "$TMP/priority-direct.out" "$TMP/priority-opt-out-bypass.out" \
+  || fail "opt-out bypass command did not restore the caller's priority"
+
+# A caller already nicer than the child floor keeps its level; the wrapper never lowers it.
+NICE_PROBE='import os; print(os.getpriority(os.PRIO_PROCESS, 0))'
+env -i HOME="$TMP/probe-home" PATH="$PATH" nice -n 15 python3 -c "$NICE_PROBE" >"$TMP/priority-nicer-direct.out"
+env -i HOME="$TMP/probe-home" PATH="$PATH" ORBIT_BUILD_BUDGET_DIR="$TMP/locks-priority-nicer" \
+  ORBIT_BUILD_SLOTS=1 nice -n 15 "$WRAPPER" -- python3 -c "$NICE_PROBE" \
+  >"$TMP/priority-nicer-wrapped.out" || fail "nicer caller: wrapper failed"
+cmp -s "$TMP/priority-nicer-direct.out" "$TMP/priority-nicer-wrapped.out" \
+  || fail "wrapper lowered a caller already nicer than the child floor"
 
 cat >"$TMP/fake-app" <<'SH'
 #!/usr/bin/env bash

@@ -204,9 +204,9 @@ fn audit_list_pages_through_the_window_by_cursor_and_keeps_filters() {
 }
 
 #[test]
-fn scoreboard_family_drilldown_includes_model_roles_and_denials_before_paging() {
+fn family_drilldown_includes_model_roles_and_denials_before_paging() {
     isolated(
-        "audit::scoreboard_family_drilldown_includes_model_roles_and_denials_before_paging",
+        "audit::family_drilldown_includes_model_roles_and_denials_before_paging",
         || {
             let fixture = Fixture::new();
             use AuditEventStatus::{Denied, Failure, Success};
@@ -247,13 +247,6 @@ fn scoreboard_family_drilldown_includes_model_roles_and_denials_before_paging() 
             assert_eq!(non_success.len(), 3);
             assert!(non_success.iter().any(|event| event["status"] == "denied"));
             assert!(non_success.iter().all(|event| event["status"] != "success"));
-            let scoreboard =
-                json_ok(server.get("/api/scoreboard?workspace=ws_http_fixture&window=24h"));
-            assert_eq!(
-                scoreboard["agents"]["claude"]["failure_incident_events"],
-                non_success.len(),
-                "the incident drilldown retains every raw event counted for the family"
-            );
             let page = events("agent_family=claude&status=non_success&limit=1&offset=1");
             assert_eq!(page, non_success[1..2]);
             assert_eq!(events("agent_family=claude&status=failure").len(), 2);
@@ -513,9 +506,9 @@ fn incident_messages_are_bounded_and_the_full_text_loads_by_audit_row() {
 }
 
 #[test]
-fn failure_incident_scan_coverage_is_shared_by_summary_and_scoreboard() {
+fn failure_incident_scan_coverage_reports_truncation_against_the_cap() {
     isolated(
-        "audit::failure_incident_scan_coverage_is_shared_by_summary_and_scoreboard",
+        "audit::failure_incident_scan_coverage_reports_truncation_against_the_cap",
         || {
             let fixture = Fixture::new();
             fixture
@@ -529,20 +522,10 @@ fn failure_incident_scan_coverage_is_shared_by_summary_and_scoreboard() {
             let server = fixture.server(false);
             let complete =
                 json_ok(server.get("/api/audit/summary?since=1h&workspace=ws_http_fixture"));
-            let scoreboard =
-                json_ok(server.get("/api/scoreboard?window=1h&workspace=ws_http_fixture"));
             let cap = complete["failure_incidents_scan_limit"].as_u64().unwrap();
             assert!(cap > 0);
-            for payload in [&complete, &scoreboard] {
-                assert_eq!(payload["failure_incidents_truncated"], false);
-                assert_eq!(payload["failure_incidents_scan_limit"], cap);
-            }
-            assert_eq!(
-                scoreboard["coverage"]["failure_incidents"]["availability"],
-                "observed"
-            );
+            assert_eq!(complete["failure_incidents_truncated"], false);
             assert_eq!(complete["failed_events"], 1);
-            assert_eq!(scoreboard["agents"]["codex"]["failure_incident_events"], 1);
 
             // Exceed the advertised production cap, without pinning its value
             // or adding a test-only query path. Use another summary window to
@@ -559,22 +542,10 @@ fn failure_incident_scan_coverage_is_shared_by_summary_and_scoreboard() {
             }
             let partial =
                 json_ok(server.get("/api/audit/summary?since=24h&workspace=ws_http_fixture"));
-            let scoreboard = json_ok(server.get("/api/scoreboard?workspace=ws_http_fixture"));
-            for payload in [&partial, &scoreboard] {
-                assert_eq!(payload["failure_incidents_truncated"], true);
-                assert_eq!(payload["failure_incidents_scan_limit"], cap);
-            }
-            assert_eq!(
-                scoreboard["coverage"]["failure_incidents"]["availability"],
-                "partial"
-            );
+            assert_eq!(partial["failure_incidents_truncated"], true);
+            assert_eq!(partial["failure_incidents_scan_limit"], cap);
             assert_eq!(partial["events"], cap + 1, "SQL total remains uncapped");
             assert_eq!(partial["failed_events"], cap);
-            assert_eq!(
-                scoreboard["agents"]["codex"]["failure_incident_events"],
-                cap
-            );
-            assert_eq!(scoreboard["agents"]["codex"]["failed_tool_calls"], cap + 1);
         },
     );
 }

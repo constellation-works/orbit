@@ -1,8 +1,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_store::pr_scoreboard;
-use orbit_types::task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus};
+use orbit_types::task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -13,6 +12,7 @@ use super::super::super::input::{
 use super::super::freshness::ensure_branch_fresh_against_base;
 use super::super::git::{base_sync_mode_from_input, git_command_success, git_output};
 use super::super::operations;
+use super::answers::MergeCapabilities;
 use super::attribution::ship_done_attribution;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,10 +22,10 @@ pub(in crate::executor::automation::vcs) enum MergeStrategy {
     Merge,
 }
 
-/// Repository capabilities needed to request a permitted PR merge, with the
-/// provider's own name for the repository they belong to.
+/// The merge method this run may request, with the provider's own name for
+/// the repository it applies to.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::executor::automation::vcs) struct MergeCapabilities {
+pub(in crate::executor::automation::vcs) struct PermittedMerge {
     pub(in crate::executor::automation::vcs) strategy: MergeStrategy,
     pub(in crate::executor::automation::vcs) auto_merge_allowed: bool,
     /// `owner/name` as the provider reports it. The owner landing consumer
@@ -48,14 +48,14 @@ pub(super) fn resolve_merge_strategy<H: RuntimeHost + ?Sized>(
     workspace_path: &str,
     pr_number: &str,
 ) -> Result<MergeStrategy, OrbitError> {
-    Ok(resolve_merge_capabilities(host, workspace_path, pr_number)?.strategy)
+    Ok(resolve_permitted_merge(host, workspace_path, pr_number)?.strategy)
 }
 
-pub(in crate::executor::automation::vcs) fn resolve_merge_capabilities<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn resolve_permitted_merge<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &str,
     pr_number: &str,
-) -> Result<MergeCapabilities, OrbitError> {
+) -> Result<PermittedMerge, OrbitError> {
     let response = host.run_private_vcs_operation(
         operations::PR_MERGE_CAPABILITIES,
         json!({
@@ -63,40 +63,22 @@ pub(in crate::executor::automation::vcs) fn resolve_merge_capabilities<H: Runtim
             "workspace_path": workspace_path,
         }),
     )?;
-    let repository = response.get("repository").ok_or_else(|| {
-        OrbitError::Execution(
-            "merge strategy resolution: private VCS response omitted repository capabilities"
-                .to_string(),
-        )
-    })?;
-    let capability = |key: &str| {
-        repository.get(key).and_then(Value::as_bool).ok_or_else(|| {
-            OrbitError::Execution(format!(
-                "merge strategy resolution: repository capabilities omitted boolean {key}"
-            ))
-        })
-    };
-    let squash = capability("allow_squash_merge")?;
-    let rebase = capability("allow_rebase_merge")?;
-    let merge = capability("allow_merge_commit")?;
-    let linear = capability("requires_linear_history")?;
-    let auto_merge_allowed = capability("allow_auto_merge")?;
-    let reported_repository = repository
-        .get("name_with_owner")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+    let capabilities = MergeCapabilities::from_response(&response)?;
+    let squash = capabilities.allow_squash_merge;
+    let rebase = capabilities.allow_rebase_merge;
+    let merge = capabilities.allow_merge_commit;
+    let linear = capabilities.requires_linear_history;
     let permitted = |strategy| {
-        let repository = reported_repository.ok_or_else(|| {
+        let repository = capabilities.repository.clone().ok_or_else(|| {
             OrbitError::Execution(
                 "merge strategy resolution: repository capabilities omitted name_with_owner"
                     .to_string(),
             )
         })?;
-        Ok(MergeCapabilities {
+        Ok(PermittedMerge {
             strategy,
-            auto_merge_allowed,
-            repository: repository.to_string(),
+            auto_merge_allowed: capabilities.allow_auto_merge,
+            repository,
         })
     };
 
@@ -110,10 +92,10 @@ pub(in crate::executor::automation::vcs) fn resolve_merge_capabilities<H: Runtim
         return permitted(MergeStrategy::Merge);
     }
 
-    let repository_name = reported_repository.unwrap_or("repository");
-    let base_branch = repository
-        .get("base_branch")
-        .and_then(Value::as_str)
+    let repository_name = capabilities.repository.as_deref().unwrap_or("repository");
+    let base_branch = capabilities
+        .base_branch
+        .as_deref()
         .unwrap_or("target branch");
     Err(OrbitError::Execution(format!(
         "no permitted merge method for pull request #{pr_number} in {repository_name}: \
@@ -228,51 +210,22 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
     // already be gone — ignore errors.
     let _ = git_command_success(&workspace_path, &["push", "origin", "--delete", &head]);
 
-    let batch_requires_revision = batch_tasks
-        .iter()
-        .map(|task| task_required_revision(host, task))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .any(|requires_revision| requires_revision);
-    let batch_author = batch_tasks.iter().find_map(ship_done_attribution);
-
     // Preserve ship attribution per task across the Review -> Done transition.
     // The source of truth is task.implemented_by -> task.created_by -> system
     // fallback (see `ship_done_attribution`).
+    // Unresolved post-deploy criteria survive candidate reuse by a fresh run.
     for task in &batch_tasks {
+        let completes = task.status == TaskStatus::Review
+            && host.outstanding_owed_criteria(&task.id, None)?.is_empty();
         host.apply_task_automation_update(
             &task.id,
             TaskAutomationUpdate {
-                status: if task.status == TaskStatus::Review {
-                    Some(TaskStatus::Done)
-                } else {
-                    None
-                },
+                status: completes.then_some(TaskStatus::Done),
                 external_refs: vec![pr_ref.clone()],
                 model: ship_done_attribution(task),
                 ..TaskAutomationUpdate::default()
             },
         )?;
-    }
-
-    if host.scoring_enabled()
-        && let Some(model) = batch_author
-    {
-        // The PR is already merged, so a scoreboard failure must not fail the
-        // step; it is reported instead of silently dropping the count.
-        let recorded = if batch_requires_revision {
-            pr_scoreboard::record_pr_count_with_revision(host.scoreboard_dir(), &model)
-        } else {
-            pr_scoreboard::record_pr_count_without_revision(host.scoreboard_dir(), &model)
-        };
-        if let Err(error) = recorded {
-            tracing::warn!(
-                target: "orbit.engine.pr_merge",
-                pr = %pr_number,
-                error = %error,
-                "failed to record the merged PR in the scoreboard",
-            );
-        }
     }
 
     Ok(json!({
@@ -293,19 +246,4 @@ fn resolve_batch_workspace_path<H: RuntimeHost + ?Sized>(
             super::super::worktree::resolve_shared_worktree_path(Path::new(&repo_root), batch_id)
         }
     }
-}
-
-fn task_required_revision<H: RuntimeHost + ?Sized>(
-    host: &H,
-    task: &Task,
-) -> Result<bool, OrbitError> {
-    let history = host.get_task_history(&task.id)?;
-    Ok(history.iter().any(|entry| {
-        entry.event == "status_changed"
-            && entry.from_status == Some(TaskStatus::Review)
-            && matches!(
-                entry.to_status,
-                Some(TaskStatus::Backlog | TaskStatus::InProgress | TaskStatus::Rejected)
-            )
-    }))
 }

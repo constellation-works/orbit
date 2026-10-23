@@ -76,6 +76,7 @@ fn fail_with_limit(fx: &Fixture, task: &str, crew: &str, limit: &ProviderLimitFa
 fn crew_provider(crew: &str) -> &'static str {
     match crew {
         "sol" | "luna" => "codex",
+        "opus" => "claude",
         _ => "antigravity",
     }
 }
@@ -203,13 +204,7 @@ fn an_antigravity_quota_holds_every_antigravity_crew_until_the_reported_reset() 
 
 /// A limit that reported no reset backs off from 30 minutes, doubling with
 /// each limit hold on that provider, up to 6 hours.
-#[test]
 fn a_limit_without_a_reported_reset_backs_off_from_thirty_minutes_to_six_hours() {
-    if !isolated(
-        "provider_limit_hold::a_limit_without_a_reported_reset_backs_off_from_thirty_minutes_to_six_hours",
-    ) {
-        return;
-    }
     let fx = fixture(ANTIGRAVITY_CREWS);
     let task = fx.task("gemini-flash");
     for minutes in [30, 60, 120, 240, 360, 360] {
@@ -229,13 +224,7 @@ fn a_limit_without_a_reported_reset_backs_off_from_thirty_minutes_to_six_hours()
 
 /// A reported reset is clamped to between 5 minutes and 7 days from the
 /// failure.
-#[test]
 fn a_reported_reset_is_clamped_to_five_minutes_through_seven_days() {
-    if !isolated(
-        "provider_limit_hold::a_reported_reset_is_clamped_to_five_minutes_through_seven_days",
-    ) {
-        return;
-    }
     for (reported, bound) in [
         (Duration::minutes(-10), Duration::minutes(5)),
         (Duration::days(30), Duration::days(7)),
@@ -258,12 +247,7 @@ fn a_reported_reset_is_clamped_to_five_minutes_through_seven_days() {
 
 /// A limit that names a model excludes only the crews on that model; one
 /// naming a model no crew runs excludes every crew of the provider.
-#[test]
 fn a_model_scoped_limit_excludes_only_the_crews_on_that_model() {
-    if !isolated("provider_limit_hold::a_model_scoped_limit_excludes_only_the_crews_on_that_model")
-    {
-        return;
-    }
     for (model, excluded, drawn) in [
         ("gpt-5.1-codex-max", vec!["sol"], "luna"),
         ("gpt-9", vec!["luna", "sol"], "opus"),
@@ -280,3 +264,119 @@ fn a_model_scoped_limit_excludes_only_the_crews_on_that_model() {
         assert_eq!(fx.exclusion(&task, &["sol"])["crew"], drawn, "{model}");
     }
 }
+
+/// [ORB-16371] Turning the pre-dispatch gate off does not suppress the hold
+/// a usage-limit failure records. That hold is the signal paid credits ran out.
+fn an_off_override_still_records_a_usage_limit_hold() {
+    let config = CODEX_MODELS.replacen(
+        "[workflow]\n",
+        "[workflow]\nprovider_limit_overrides = [\"codex:off\"]\n",
+        1,
+    );
+    let fx = fixture(&config);
+    let task = fx.task("sol");
+    let reported = Utc::now() + Duration::hours(2);
+    fail_with_limit(&fx, &task, "sol", &resetting_at(reported));
+    let hold = fx.last_hold(&task);
+    assert_eq!(hold.class, ProviderFailureClass::Limit);
+    assert_eq!(hold.provider.as_deref(), Some("codex"));
+    assert_eq!(hold.excluded_crews, ["luna", "sol"]);
+    assert_eq!(fx.status(&task), TaskStatus::Backlog);
+}
+
+/// Purpose pool of a Claude crew and a Codex crew. The complexity pool and
+/// the default are a third provider, so a fallback there is visible.
+const PURPOSE_HOLD: &str = r#"[workflow]
+default_crew = "flash"
+medium_complexity_crews = ["flash"]
+
+[workflow.purpose_crews]
+baseline_red_repair = ["opus:1", "sol:3"]
+
+[crews.opus]
+provider = "claude"
+model = "opus-model"
+
+[crews.sol]
+provider = "codex"
+model = "sol-model"
+
+[crews.flash]
+provider = "antigravity"
+model = "flash-model"
+"#;
+
+/// A quota hold on the crew a purpose pool assigned leaves the task on the
+/// other purpose member. The complexity pool is not that member. Once every
+/// purpose member and that fallback are held, the task waits with
+/// `provider_backoff`.
+fn a_quota_hold_on_a_purpose_assignment_draws_another_purpose_member() {
+    let fx = fixture(PURPOSE_HOLD);
+    let created = fx.tagged_task(&["baseline-red-repair"], None);
+    assert_eq!(
+        created.crew_source.as_deref(),
+        Some("purpose:baseline_red_repair"),
+        "{created:?}"
+    );
+    let selected = created
+        .crew
+        .clone()
+        .expect("the purpose pool assigned a crew");
+    let other = match selected.as_str() {
+        "opus" => "sol",
+        "sol" => "opus",
+        crew => panic!("the purpose pool assigned {crew}"),
+    };
+    let task = created.id;
+    fail_with_limit(
+        &fx,
+        &task,
+        &selected,
+        &resetting_at(Utc::now() + Duration::hours(2)),
+    );
+
+    assert!(
+        fx.admitted(&task, &[]),
+        "the other purpose member is not held"
+    );
+    assert!(fx.admitted(&task, &[other]), "{other}");
+    assert!(
+        !fx.admitted(&task, &["flash"]),
+        "the complexity pool does not take a purpose task that still has a member"
+    );
+    let excluded = fx.exclusion(&task, &["flash"]);
+    assert_eq!(excluded["reason"], "crew_not_allowed", "{excluded}");
+    assert_eq!(excluded["crew"], other, "{excluded}");
+
+    fail_with_limit(
+        &fx,
+        &task,
+        other,
+        &resetting_at(Utc::now() + Duration::hours(2)),
+    );
+    assert!(
+        fx.admitted(&task, &["flash"]),
+        "with both purpose members held, the complexity pool is the fallback"
+    );
+    assert_eq!(fx.exclusion(&task, &[other])["crew"], "flash");
+
+    fail_with_limit(
+        &fx,
+        &task,
+        "flash",
+        &resetting_at(Utc::now() + Duration::hours(2)),
+    );
+    assert!(!fx.admitted(&task, &[]));
+    let deferred = fx.exclusion(&task, &[]);
+    assert_eq!(deferred["reason"], "provider_backoff", "{deferred}");
+}
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_limit_without_a_reported_reset_backs_off_from_thirty_minutes_to_six_hours_scenarios,
+    a_limit_without_a_reported_reset_backs_off_from_thirty_minutes_to_six_hours,
+    a_reported_reset_is_clamped_to_five_minutes_through_seven_days,
+    a_model_scoped_limit_excludes_only_the_crews_on_that_model,
+    an_off_override_still_records_a_usage_limit_hold,
+    a_quota_hold_on_a_purpose_assignment_draws_another_purpose_member
+);

@@ -1,6 +1,10 @@
 use super::*;
 use crate::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use crate::driver::file::task_bundle::PendingWriteGuard;
+use orbit_types::task::{
+    ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, EXECUTION_SUMMARY_DOCUMENT, PLAN_DOCUMENT,
+    TASK_FIELDS_UPDATED_EVENT, task_fields_updated_note,
+};
 
 impl TaskV2Store {
     pub(crate) fn apply_atomic_task_mutation(
@@ -25,13 +29,9 @@ impl TaskV2Store {
         reject_forged_grant(&fields.append_history)?;
         self.with_task_lock(id, || {
             let mut bundle = self.read_existing_bundle(id)?;
-            let receipt = format!("operation_id={}", fields.operation_id);
             if bundle.events.iter().any(|event| {
                 event.event_type == fields.event_type
-                    && event.note.as_deref().is_some_and(|note| {
-                        note.ends_with(&format!(" ({receipt})"))
-                            || note.lines().next() == Some(receipt.as_str())
-                    })
+                    && event.receipt() == Some(fields.operation_id.as_str())
             }) {
                 return Ok(AtomicTaskMutationOutcome::AlreadyApplied);
             }
@@ -66,6 +66,8 @@ impl TaskV2Store {
                     note: entry.note.clone(),
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
+                    decision: entry.decision.clone(),
                 };
                 self.bundle_store.append_event(id, &event)?;
                 bundle.events.push(event);
@@ -77,9 +79,11 @@ impl TaskV2Store {
                 at: now,
                 by: fields.actor.clone(),
                 event_type: fields.event_type.clone(),
-                note: Some(format!("{} ({receipt})", fields.history_summary)),
+                note: Some(fields.history_summary.clone()),
                 from_status: status_changed.then_some(bundle.envelope.status),
                 to_status: status_changed.then_some(fields.status),
+                operation_id: Some(fields.operation_id.clone()),
+                decision: fields.decision.clone(),
             };
             self.bundle_store.append_event(id, &event)?;
             bundle.events.push(event);
@@ -88,7 +92,8 @@ impl TaskV2Store {
                 comment_id: format!("C-{:04}", next_sequence(&bundle.comments, "C-")),
                 at: now,
                 by: fields.actor.clone(),
-                body: format!("{receipt}\n{}", fields.audit_note),
+                body: fields.audit_note.clone(),
+                operation_id: Some(fields.operation_id.clone()),
             };
             self.bundle_store.append_comment(id, &comment)?;
             append_creation_grant(
@@ -104,6 +109,7 @@ impl TaskV2Store {
                 let relation = TaskRelation {
                     relation_type: TaskRelationType::BlockedBy,
                     target: target.clone(),
+                    regression: None,
                 };
                 if !bundle.envelope.relations.contains(&relation) {
                     bundle.envelope.relations.push(relation);
@@ -221,18 +227,37 @@ impl TaskV2Store {
                     value.iter().cloned().map(|target| TaskRelation {
                         relation_type: TaskRelationType::BlockedBy,
                         target,
+                        regression: None,
                     }),
                 );
                 envelope_changed = true;
             }
             if let Some(value) = &fields.source_task_id {
+                // Re-setting the same culprit keeps the link's classification.
+                let replacements = value
+                    .iter()
+                    .cloned()
+                    .map(|target| {
+                        let regression = bundle
+                            .envelope
+                            .relations
+                            .iter()
+                            .find(|relation| {
+                                relation.relation_type == TaskRelationType::RegressionFrom
+                                    && relation.target == target
+                            })
+                            .and_then(|relation| relation.regression);
+                        TaskRelation {
+                            relation_type: TaskRelationType::RegressionFrom,
+                            target,
+                            regression,
+                        }
+                    })
+                    .collect::<Vec<_>>();
                 replace_relations(
                     &mut bundle.envelope.relations,
                     TaskRelationType::RegressionFrom,
-                    value.iter().cloned().map(|target| TaskRelation {
-                        relation_type: TaskRelationType::RegressionFrom,
-                        target,
-                    }),
+                    replacements,
                 );
                 envelope_changed = true;
             }
@@ -268,6 +293,10 @@ impl TaskV2Store {
             }
             if let Some(value) = &fields.orchestrator {
                 bundle.envelope.orchestrator = value.clone();
+                envelope_changed = true;
+            }
+            if let Some(value) = fields.origin {
+                bundle.envelope.origin = Some(value);
                 envelope_changed = true;
             }
             if let Some(value) = &fields.external_refs {
@@ -319,6 +348,8 @@ impl TaskV2Store {
                     note,
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
+                    decision: None,
                 };
                 self.bundle_store.append_event(id, &event)?;
                 bundle.events.push(event);
@@ -348,33 +379,55 @@ impl TaskV2Store {
                 );
             }
             let envelope_fields_changed = prior_unrecorded_envelope != bundle.envelope;
-            let documents_changed = fields
-                .description
-                .as_ref()
-                .is_some_and(|value| value != &original_description)
-                || fields
-                    .acceptance_criteria
-                    .as_ref()
-                    .is_some_and(|value| render_acceptance(value) != original_acceptance)
-                || fields
-                    .plan
-                    .as_ref()
-                    .is_some_and(|value| value != &original_plan)
-                || fields
-                    .execution_summary
-                    .as_ref()
-                    .is_some_and(|value| value != &original_execution_summary);
+            // The note names each changed document, so an edit to what the
+            // task asks reads apart from run bookkeeping.
+            let changed_documents: Vec<&str> = [
+                (
+                    DESCRIPTION_DOCUMENT,
+                    fields
+                        .description
+                        .as_ref()
+                        .is_some_and(|value| value != &original_description),
+                ),
+                (
+                    ACCEPTANCE_CRITERIA_DOCUMENT,
+                    fields
+                        .acceptance_criteria
+                        .as_ref()
+                        .is_some_and(|value| render_acceptance(value) != original_acceptance),
+                ),
+                (
+                    PLAN_DOCUMENT,
+                    fields
+                        .plan
+                        .as_ref()
+                        .is_some_and(|value| value != &original_plan),
+                ),
+                (
+                    EXECUTION_SUMMARY_DOCUMENT,
+                    fields
+                        .execution_summary
+                        .as_ref()
+                        .is_some_and(|value| value != &original_execution_summary),
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(document, changed)| changed.then_some(document))
+            .collect();
             let context_creation_changed = !fields.context_creation.is_empty();
-            if envelope_fields_changed || documents_changed || context_creation_changed {
+            if envelope_fields_changed || !changed_documents.is_empty() || context_creation_changed
+            {
                 let event = TaskEventRowV2 {
                     schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
                     event_id: next_event_id(&bundle.events),
                     at: Utc::now(),
                     by: fields.actor.clone(),
-                    event_type: "updated".to_string(),
-                    note: Some("task fields updated".to_string()),
+                    event_type: TASK_FIELDS_UPDATED_EVENT.to_string(),
+                    note: Some(task_fields_updated_note(&changed_documents)),
                     from_status: None,
                     to_status: None,
+                    operation_id: None,
+                    decision: None,
                 };
                 self.bundle_store.append_event(id, &event)?;
                 bundle.events.push(event);
@@ -421,7 +474,18 @@ impl TaskV2Store {
         }
 
         reject_forged_grant(&fields.append_history)?;
-        self.with_task_lock(id, || {
+        // [ORB-16723] An operator's comment is the one unscoped write an
+        // active execution claim admits: its only effect is appending one
+        // comment to the append-only log, where the claim's steering reads it.
+        // Any other effect keeps the ordinary fence and its refusal.
+        let comment_only = fields.operator_comment
+            && fields.append_comments.len() == 1
+            && fields.status.is_none()
+            && fields.status_event.is_none()
+            && fields.status_note.is_none()
+            && fields.append_history.is_empty()
+            && fields.expected_status.is_none();
+        let write = |claimed: bool| {
             let mut bundle = self.read_existing_bundle(id)?;
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
             let now = Utc::now();
@@ -468,6 +532,8 @@ impl TaskV2Store {
                     note: entry.note.clone(),
                     from_status: entry.from_status,
                     to_status: entry.to_status,
+                    operation_id: None,
+                    decision: entry.decision.clone(),
                 };
                 self.bundle_store.append_event(id, &event)?;
                 bundle.events.push(event);
@@ -481,6 +547,7 @@ impl TaskV2Store {
                     at: comment.at,
                     by: comment.by.clone(),
                     body: comment.message.clone(),
+                    operation_id: None,
                 };
                 self.bundle_store.append_comment(id, &row)?;
                 bundle.comments.push(row);
@@ -501,6 +568,8 @@ impl TaskV2Store {
                     note: fields.status_note.clone(),
                     from_status: status_transition.map(|(from, _)| from),
                     to_status: status_transition.map(|(_, to)| to),
+                    operation_id: None,
+                    decision: None,
                 };
                 self.bundle_store.append_event(id, &event)?;
                 bundle.events.push(event);
@@ -512,15 +581,19 @@ impl TaskV2Store {
                 || fields.status_event.is_some()
                 || fields.status_note.is_some()
             {
-                let context_files = bundle.envelope.context_files.clone();
-                append_creation_grant(
-                    &self.bundle_store,
-                    &mut bundle,
-                    &context_files,
-                    &[],
-                    &fields.actor,
-                    now,
-                )?;
+                // A claimed task's creation grant is the claim's to keep: a
+                // comment admitted under it records no new grant.
+                if !claimed {
+                    let context_files = bundle.envelope.context_files.clone();
+                    append_creation_grant(
+                        &self.bundle_store,
+                        &mut bundle,
+                        &context_files,
+                        &[],
+                        &fields.actor,
+                        now,
+                    )?;
+                }
                 bundle.envelope.status = target_status;
                 bundle.envelope.updated_at = now;
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
@@ -530,6 +603,11 @@ impl TaskV2Store {
                 pending.finish();
             }
             Ok(())
-        })
+        };
+        if comment_only {
+            self.with_task_comment_lock(id, write)
+        } else {
+            self.with_task_lock(id, || write(false))
+        }
     }
 }

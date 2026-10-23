@@ -1,17 +1,17 @@
 ---
 title: Distributed Drain — Decisions
 owner: claude
-last_updated: 2026-10-06
-last_validated: 2026-10-06
+last_updated: 2026-10-20
+last_validated: 2026-10-12
 status: Draft
 feature: distributed-drain
 doc_role: decisions
 type: design
-summary: Pull-based admission, durable request and attempt identity, machine-scoped run lookups, record-owned settlement, owner ordering, explicit landing authority, the epic and triage retirements, retained ship sweep, before-PR review on claimed leaves, and non-pruning footprints.
+summary: Pull-based admission, durable request and attempt identity, machine-scoped run lookups, record-owned settlement, owner ordering, explicit landing authority, the epic and triage retirements, retained ship sweep, before-PR review on claimed leaves, non-pruning footprints, and scarcity-aware admission order.
 tags: [distributed-drain, multi-host, decisions]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/src/runtime/task/locks/"]
 related_features: [distributed-drain, federated-mcp, host-registry]
-related_artifacts: [ORB-12488, ORB-13992, ORB-13908, ORB-14247]
+related_artifacts: [ORB-12488, ORB-13992, ORB-13908, ORB-14247, ORB-14938, ORB-17304]
 ---
 
 # Distributed Drain — Decisions
@@ -184,7 +184,7 @@ claims to be. Fields are additive and nullable; absent means unknown.
 ## Epic is a tag, not a pipeline
 
 **Recorded:** 2026-09 · [ORB-12488]
-**Code anchors:** `crates/orbit-core/src/runtime/task/locks/index.rs::lock_context_files_for_task`, `crates/orbit-types/src/task/epic.rs::EPIC_TAG`, `crates/orbit-core/src/application/epic_retirement.rs::assess_epic_retirement`, `crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml`
+**Code anchors:** `crates/orbit-core/src/runtime/task/locks/index.rs::lock_context_files_for_task`, `crates/orbit-types/src/task/epic.rs::EPIC_TAG`, `crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml`
 
 ### Context
 
@@ -270,7 +270,7 @@ No heartbeat or automatic reclamation is introduced. Age and TTL support inspect
 ## Owner ordering does not require a materialized queue
 
 **Recorded:** 2026-09 · design-review revision of the contract authored by [ORB-12488].
-**Code anchors:** `crates/orbit-core/src/adapter/engine_host/v2_host/admission/backlog_exclusion/ordering.rs::sort_tasks_for_automatic_dispatch`
+**Code anchors:** `crates/orbit-core/src/application/admission/backlog_exclusion/ordering.rs::sort_tasks_for_automatic_dispatch`
 
 ### Context
 
@@ -294,7 +294,7 @@ filters may remain owner-evaluated without transferring priority authority to ca
 ## Landing consumes durable evidence and explicit completion authority
 
 **Recorded:** 2026-09 · design-review revision of the contract authored by [ORB-12488].
-**Code anchors:** `crates/orbit-core/assets/jobs/workspace_ship_pipeline.yaml`, `crates/orbit-engine/src/executor/automation/vcs/pr/complete.rs`
+**Code anchors:** `crates/orbit-core/assets/jobs/workspace_ship_pipeline.yaml`, `crates/orbit-engine/src/executor/automation/vcs/pr/complete/`
 
 ### Context
 
@@ -408,7 +408,7 @@ on claimed leaves, gated on the `review.before_pr` the claim captured ([ORB-1399
 `crates/orbit-store/src/driver/sqlite/job_run_store/pull.rs` (`CreateLeaf`, `claim_review_admission`),
 `crates/orbit-core/src/application/review/gate/context.rs::claimed_leaf_claim`,
 `crates/orbit-core/src/application/review/gate/settle.rs::handoff_evidence`,
-`crates/orbit-core/src/adapter/engine_host/v2_host/pull/refill.rs::reviewer_refusal`,
+`crates/orbit-core/src/application/pull_drain/refill/owner.rs::reviewer_refusal`,
 `crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml`
 
 ### Context
@@ -535,7 +535,7 @@ ACL: an owner operator retains cross-attempt receipt inspection and deliberate r
 ## An owner completion policy lands accepted handoffs without per-task approval
 
 **Recorded:** 2026-09-27 · [ORB-13637], after the first live follower drain [ORB-13625].
-**Code anchors:** `crates/orbit-store/src/repository/task/coordination/handoff.rs::accept_typed_handoff`,
+**Code anchors:** `crates/orbit-store/src/repository/task/coordination/handoff/accept.rs::accept_typed_handoff`,
 `crates/orbit-core/src/application/distributed/contract.rs::owner_completion_authority`,
 `crates/orbit-config/src/registry/settings/table.rs` (`workflow.distributed_completion`)
 
@@ -637,9 +637,9 @@ removing it, and it cannot stop the owner's own drain binding an id a follower a
 **Recorded:** 2026-09-28 · [ORB-13663], after the Mac follower's drain `jrun-20260928-0242-t1`
 was cancelled at 04:14Z and its six live leaves finished with four handoffs recorded but
 undelivered, two failures recorded nowhere, and every owner claim left `running`.
-**Code anchors:** `crates/orbit-core/src/adapter/engine_host/v2_host/pull/settle.rs`
+**Code anchors:** `crates/orbit-core/src/application/pull_drain/settle.rs`
 (`OrbitRuntime::best_effort_settle_terminal_claimed_leaf`, `OrbitRuntime::settle_pending_pulls`),
-`crates/orbit-core/src/adapter/engine_host/v2_host/pull/drain/settlement.rs::PullDrain::carry_settlement`,
+`crates/orbit-core/src/application/pull_drain/drain/settlement.rs::PullDrain::carry_settlement`,
 `crates/orbit-core/src/runtime/task/reservation_cleanup.rs::finalize_job_run_with_cleanup_after_prior_read`,
 `crates/orbit-core/src/application/job/run/actions.rs::cancel_job_run_with_reason`
 
@@ -706,7 +706,7 @@ is off on the Mac by design.
 ## No-diff-expected work does not hold context locks
 
 **Recorded:** 2026-10-06 · [ORB-14247]
-**Paths:** `crates/orbit-core/src/runtime/task/locks/`, `crates/orbit-core/src/adapter/engine_host/v2_host/admission/backlog_exclusion/`, `crates/orbit-engine/src/executor/automation/vcs/commit/actions.rs`
+**Paths:** `crates/orbit-core/src/runtime/task/locks/`, `crates/orbit-core/src/application/admission/backlog_exclusion/`, `crates/orbit-engine/src/executor/automation/vcs/commit/actions.rs`
 
 ### Context
 
@@ -730,6 +730,60 @@ An unexpected diff is committed. `git_commit` treats a non-empty stage as a norm
 - Cost: a tagged run that edits files can race an implementation task on the same paths. The race is visible at `sync_base`, not prevented by admission. A mistagged implementation task therefore no longer serializes its neighbours.
 - Cost: the empty reservation means `orbit task locks` does not show the tagged task's selectors as held. Operators inspecting locks will not see that review as a holder, which is the point of the exemption.
 
+## Admission prefers work only the requesting executor can run
+
+**Recorded:** 2026-10-20 · [ORB-17304] (refines [ORB-14938])
+**Code anchors:** `crates/orbit-types/src/task/model/task.rs::automatic_dispatch_cmp_with_affinity`, `crates/orbit-store/src/contracts/task/coordination/census.rs::census_dispatch_order`, `crates/orbit-store/src/repository/task/coordination/selection.rs::TaskCommitBoundary::admission_snapshot`, `crates/orbit-core/src/application/admission/census.rs`
+
+### Context
+
+Admission is first-fit over one canonical order. Executor capability (OS, crews, browser kit)
+only filters candidates. [ORB-14938] added one preference: within the same band and priority,
+work the executor's OS satisfies and the owner's does not. That rule compares against the owner
+alone, reads `os:` tags but not crew-derived `host_os`, knows nothing of crews, and yields to any
+higher-priority fungible task. On 2026-10-20 the Mac was the only host running the `opus` crew.
+dk-server-1 and the owner could not run it. The Mac kept taking fungible work that the Linux
+hosts would have taken on their next pass, while opus-assigned and `os:macos` work waited.
+Throughput was lost on the scarce host, not the plentiful ones.
+
+### Decision
+
+The owner orders each admission against the workspace's *live executor census*. That is a
+persisted row per executor machine, holding its declared capability, drain run and `seen_at`.
+Each follower's row is upserted in the same commit as each of its admission receipts. The owner
+writes its own row on each pass of its local drain, with the crews of that drain's window. A
+row is live within ten minutes of `seen_at`, or while its machine holds a claimed or running
+claim. Reading the census never scans receipts.
+
+A candidate that only the requester can run sorts first within its band, ahead of higher
+priorities. Among the rest, fewer eligible executors sorts first within a priority. Band stays
+the outer key. Owner-local admission uses the same comparator, with the owner as the requester.
+`workflow.admission_affinity` (`band` | `priority` | `off`) bounds how far exclusivity reaches.
+The contract is the [executor census](./specs/task-pull.md#executor-census-and-affinity).
+
+The owner still holds ordering authority. Followers declare capability, as before, and the owner
+derives the order from those declarations. Placement stays pull-based: the owner never pushes
+work at a host ([Followers pull; the owner never places](#followers-pull-the-owner-never-places)).
+
+### Consequences
+
+- A scarce host spends its slots on work no other live host can take. Fungible work stays for
+  the hosts that can run it.
+- A census of one executor reproduces the canonical order, so single-host workspaces see no change.
+- Order now depends on which executors are live. The same backlog can admit in a different order
+  as drains start and stop. Receipts record the affinity class and the census they were ordered
+  against, and a same-request replay still returns its stored receipt.
+- An unreadable census, or a missing table, reads as empty: the canonical order, never a failed
+  admission.
+- Cost: priority inversion inside a band. A medium task exclusive to the requester beats a high
+  fungible task, even when every other executor that could run the high task is saturated. The
+  census tracks liveness, not free capacity. `priority` mode is the escape hatch.
+- Cost: an executor stays counted for up to ten minutes after its drain stops, or longer while a
+  claim it holds is live. During that time, work it shares is not exclusive to anyone else.
+- Cost: every admission reads the census and evaluates each candidate's capability predicates
+  against every live executor. That cost grows with backlog size × live executors, which is small
+  today.
+
 ## Task References
 
 - [ORB-12488] — authored this design folder for the pull-based multi-host drain.
@@ -740,6 +794,8 @@ An unexpected diff is committed. `git_commit` treats a non-empty stage as a norm
 - [ORB-13992] — narrowed [V1 review policy is none](#v1-review-policy-is-none) to the `review.before_pr` switch.
 - [ORB-13895] — prepared [V1 review policy is none](#v1-review-policy-is-none) for before-PR review on claims and handoffs.
 - [ORB-13908] — superseded it ([A claimed leaf runs the before-PR review its claim captured](#a-claimed-leaf-runs-the-before-pr-review-its-claim-captured)).
+- [ORB-14938] — added owner-relative OS affinity to pull admission, refined by [Admission prefers work only the requesting executor can run](#admission-prefers-work-only-the-requesting-executor-can-run).
+- [ORB-17304] — ordered admission against the live executor census ([Admission prefers work only the requesting executor can run](#admission-prefers-work-only-the-requesting-executor-can-run)).
 - [ORB-14247] — stopped `no-diff-expected` tasks holding context locks, and kept an unexpected diff on the ordinary commit and `sync_base` path ([No-diff-expected work does not hold context locks](#no-diff-expected-work-does-not-hold-context-locks)).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

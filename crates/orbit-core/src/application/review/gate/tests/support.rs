@@ -6,28 +6,19 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use chrono::Utc;
-use orbit_engine::{ReviewReleaseRequest, ReviewerInvocationRequest, RuntimeHost};
-use orbit_types::task::{Task, TaskArtifact, TaskPriority, TaskStatus, TaskType};
-use orbit_types::workflow::{
-    FindingDisposition, JobRun, NegativeControl, PipelineState, REVIEW_CONTRACT_VERSION,
-    REVIEW_GATE_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewCertificate, ReviewFinding, ReviewLedger,
-    ReviewReport, ReviewValidation, ReviewVerdict, ReviewerInvocationEvent, ValidationOutcome,
-    ValidationRole,
-};
+use orbit_engine::RuntimeHost;
+use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
+use orbit_types::workflow::JobRun;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use crate::OrbitRuntime;
-use crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_config;
 use crate::application::job::seed_default_jobs;
-use crate::application::review::{
-    install_review_admission, record_reviewer_invocation, release_review_attempt,
-    review_gate_admit, review_gate_settle,
-};
+use crate::application::review::{install_review_admission, review_gate_admit};
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
+use crate::application::test_support::runtime_with_workspace_config;
 
 /// Workspace config with a before-PR reviewer crew distinct from the
 /// implementer; tests append further `[review]` keys.
@@ -63,7 +54,7 @@ fn fixture(config_toml: &str) -> Fixture {
 }
 
 pub(super) fn git(current_dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args(args)
         .current_dir(current_dir)
         .env("GIT_AUTHOR_NAME", "orbit[impl-model]")
@@ -144,94 +135,6 @@ fn implement_candidate(repo: &Path, task_id: &str) -> String {
     git(repo, &["rev-parse", "HEAD"])
 }
 
-pub(super) fn report(attempt_id: &str, verdict: ReviewVerdict, repaired: bool) -> ReviewReport {
-    ReviewReport {
-        external_evidence: Vec::new(),
-        schema_version: REVIEW_CONTRACT_VERSION,
-        attempt_id: attempt_id.to_string(),
-        verdict,
-        summary: "Checked the change against the criteria.".to_string(),
-        findings: if repaired || verdict == ReviewVerdict::Reject {
-            vec![ReviewFinding {
-                id: "F1".to_string(),
-                severity: "medium".to_string(),
-                summary: "Missing trailing note".to_string(),
-                paths: vec!["src.txt".to_string()],
-                disposition: if repaired {
-                    FindingDisposition::Repaired
-                } else {
-                    FindingDisposition::Open
-                },
-                change: repaired.then(|| "Appended the trailing note".to_string()),
-            }]
-        } else {
-            Vec::new()
-        },
-        validation: vec![ReviewValidation {
-            id: Some("V1".to_string()),
-            command: "make ci-fast".to_string(),
-            outcome: ValidationOutcome::Passed,
-            role: ValidationRole::Required,
-            note: None,
-            check: None,
-            control: None,
-            sources: Vec::new(),
-            mutation_target: Vec::new(),
-            deferred: Vec::new(),
-            baseline: None,
-        }],
-        retired_validation: Vec::new(),
-        escalation: (verdict == ReviewVerdict::Reject)
-            .then(|| "decide whether the note is required".to_string()),
-    }
-}
-
-/// [ORB-14616] A counterfactual control the reviewer ran on the candidate:
-/// it mutated `targets`, and the checks in `sources` rejected the mutation.
-/// The fixture's scope is `src.txt`; `README.md` is outside it.
-pub(super) fn counterfactual(sources: &[&str], targets: &[&str]) -> ReviewValidation {
-    ReviewValidation {
-        id: None,
-        command: "make test-guard".to_string(),
-        outcome: ValidationOutcome::Failed,
-        role: ValidationRole::ExpectedFailure,
-        note: Some("deleted the guarded conjunct; the repaired test failed".to_string()),
-        check: None,
-        control: Some(NegativeControl::Counterfactual),
-        sources: sources.iter().map(|source| (*source).to_string()).collect(),
-        mutation_target: targets.iter().map(|target| (*target).to_string()).collect(),
-        deferred: Vec::new(),
-        baseline: None,
-    }
-}
-
-/// Persist the reviewer's report artifact the way the reviewer tool does.
-pub(super) fn write_report(runtime: &OrbitRuntime, task_id: &str, report: &ReviewReport) {
-    write_report_bytes(
-        runtime,
-        task_id,
-        serde_json::to_vec(report).expect("serialize report"),
-    );
-}
-
-/// Persist report bytes exactly as given, drifted or malformed.
-pub(super) fn write_report_bytes(runtime: &OrbitRuntime, task_id: &str, content: Vec<u8>) {
-    runtime
-        .update_task(
-            task_id,
-            TaskUpdateParams {
-                upsert_artifacts: vec![TaskArtifact {
-                    path: REVIEW_REPORT_ARTIFACT.to_string(),
-                    content,
-                    media_type: "application/json".to_string(),
-                    created_by: None,
-                }],
-                ..TaskUpdateParams::default()
-            },
-        )
-        .expect("write review report");
-}
-
 /// Fixture with a task bundle, its admitted run, and a checked-out
 /// candidate. `task_id` is the bundle's first task.
 pub(super) struct Gated {
@@ -239,7 +142,6 @@ pub(super) struct Gated {
     pub(super) task_id: String,
     pub(super) bundle: Vec<String>,
     pub(super) run_id: String,
-    pub(super) implementation_sha: String,
 }
 
 pub(super) fn gated_fixture(config: &str) -> Gated {
@@ -253,13 +155,12 @@ pub(super) fn gated_bundle_fixture(config: &str, tasks: usize) -> Gated {
         .map(|index| seed_task(&fixture.runtime, &format!("gated change {index}")).id)
         .collect::<Vec<_>>();
     let run = admitted_run(&fixture.runtime, "task_pr_pipeline", &bundle);
-    let implementation_sha = implement_candidate(&fixture.repo, &bundle[0]);
+    let _implementation_sha = implement_candidate(&fixture.repo, &bundle[0]);
     Gated {
         fixture,
         task_id: bundle[0].clone(),
         bundle,
         run_id: run.run_id,
-        implementation_sha,
     }
 }
 
@@ -273,28 +174,6 @@ impl Gated {
         self.fixture.runtime =
             OrbitRuntime::from_roots(&self.fixture.runtime.global_root(), &workspace)
                 .expect("reopen runtime");
-    }
-
-    /// A resume of `source`: a new run carrying the source's input, linked
-    /// by `retry_source_run_id`, started now and owning the bundle.
-    pub(super) fn resume(&self, source: &str) -> String {
-        let runtime = &self.fixture.runtime;
-        let input = runtime
-            .get_job_run_backend(source)
-            .expect("read source run")
-            .and_then(|run| run.input);
-        let run = RuntimeHost::insert_job_run(
-            runtime,
-            "task_pr_pipeline",
-            2,
-            Utc::now(),
-            input,
-            Some(source.to_string()),
-        )
-        .expect("insert resumed run");
-        self.start(&run.run_id, Utc::now());
-        bind_tasks(runtime, &self.bundle, &run.run_id);
-        run.run_id
     }
 
     /// A fresh delivery run of the same bundle, as re-admission dispatches.
@@ -334,147 +213,5 @@ impl Gated {
                 "allowed_crews": [],
             }),
         )
-    }
-
-    /// Admit the re-review that follows `complete_pr` in the delivery run.
-    pub(super) fn re_admit(&self, completion: &str) -> Result<Value, orbit_engine::DispatchError> {
-        review_gate_admit(
-            &self.fixture.runtime,
-            "review_gate_admit",
-            &json!({
-                "job_run_id": self.run_id,
-                "completed_task_ids": self.bundle,
-                "workspace_path": self.fixture.repo,
-                "base": "main",
-                "base_sync": "local",
-                "mode": "pr",
-                "completion": completion,
-                "skipped_no_diff_expected": false,
-                "re_review_after": "complete_pr",
-                "allowed_crews": [],
-            }),
-        )
-    }
-
-    /// Checkpoint `output` as the delivery run's `complete_pr` step.
-    pub(super) fn record_completion(&self, output: Value) {
-        let mut state = PipelineState::new(
-            self.run_id.clone(),
-            "task_pr_pipeline".to_string(),
-            Value::Null,
-        );
-        state.record_pipeline_output("complete_pr", output);
-        self.fixture
-            .runtime
-            .stores()
-            .jobs()
-            .write_run_state(&self.run_id, &state)
-            .expect("checkpoint complete_pr");
-    }
-
-    pub(super) fn settle(&self, admission: &Value) -> Result<Value, orbit_engine::DispatchError> {
-        self.settle_in(&self.run_id, admission)
-    }
-
-    pub(super) fn settle_in(
-        &self,
-        run_id: &str,
-        admission: &Value,
-    ) -> Result<Value, orbit_engine::DispatchError> {
-        review_gate_settle(
-            &self.fixture.runtime,
-            "review_gate_settle",
-            &json!({
-                "job_run_id": run_id,
-                "completed_task_ids": self.bundle,
-                "workspace_path": self.fixture.repo,
-                "base": "main",
-                "base_sync": "local",
-                "admission": admission,
-            }),
-        )
-    }
-
-    /// What the reviewer does in the worktree: edit the source file, left
-    /// uncommitted for settlement to commit.
-    pub(super) fn reviewer_edits(&self, contents: &str) {
-        fs::write(self.fixture.repo.join("src.txt"), contents).expect("reviewer fix");
-    }
-
-    /// `git log -1` of `revision` in `format`.
-    pub(super) fn log(&self, revision: &str, format: &str) -> String {
-        git(
-            &self.fixture.repo,
-            &["log", "-1", &format!("--format={format}"), revision],
-        )
-    }
-
-    /// The task's comments, oldest first.
-    pub(super) fn comments(&self) -> Vec<String> {
-        self.fixture
-            .runtime
-            .get_task_comments(&self.task_id)
-            .expect("read comments")
-            .into_iter()
-            .map(|comment| comment.message)
-            .collect()
-    }
-
-    /// The lineage ledger an admission reserved in.
-    pub(super) fn ledger(&self, admission: &Value) -> ReviewLedger {
-        let runtime = &self.fixture.runtime;
-        runtime
-            .review_store()
-            .expect("store")
-            .review_ledger(
-                &runtime.workspace_id().expect("workspace"),
-                admission["lineage_key"].as_str().expect("lineage key"),
-            )
-            .expect("read ledger")
-            .expect("ledger exists")
-    }
-
-    /// Release the attempt `admission` reserved, as the failure handoff of
-    /// `run_id` does.
-    pub(super) fn release(&self, run_id: &str, admission: &Value) {
-        release_review_attempt(
-            &self.fixture.runtime,
-            &ReviewReleaseRequest {
-                run_id: run_id.to_string(),
-                lineage_key: admission["lineage_key"].as_str().expect("lineage").into(),
-                attempt_id: admission["attempt_id"].as_str().expect("attempt").into(),
-            },
-        )
-        .expect("release attempt");
-    }
-
-    /// Report one reviewer invocation of `run_id` for the admitted attempt
-    /// that ran `runtime_seconds`, as the engine does around the dispatch.
-    pub(super) fn reviewer_ran(&self, run_id: &str, admission: &Value, runtime_seconds: u64) {
-        for event in [
-            ReviewerInvocationEvent::Started,
-            ReviewerInvocationEvent::Finished { runtime_seconds },
-        ] {
-            record_reviewer_invocation(
-                &self.fixture.runtime,
-                &ReviewerInvocationRequest {
-                    run_id: run_id.to_string(),
-                    lineage_key: admission["lineage_key"].as_str().expect("lineage").into(),
-                    attempt_id: admission["attempt_id"].as_str().expect("attempt").into(),
-                    event,
-                },
-            )
-            .expect("record reviewer invocation");
-        }
-    }
-
-    pub(super) fn certificate(&self) -> ReviewCertificate {
-        let artifact = self
-            .fixture
-            .runtime
-            .get_task_artifact(&self.task_id, REVIEW_GATE_ARTIFACT)
-            .expect("read")
-            .expect("certificate artifact");
-        serde_json::from_slice(&artifact.content).expect("certificate json")
     }
 }

@@ -43,7 +43,7 @@ use crate::OrbitRuntime;
 /// External ref system that keys a repair task by its command and failures.
 const BASELINE_RED_REF_SYSTEM: &str = "baseline-red";
 /// Tag on every repair task the tick files.
-const BASELINE_RED_REPAIR_TAG: &str = "baseline-red-repair";
+pub(crate) const BASELINE_RED_REPAIR_TAG: &str = "baseline-red-repair";
 /// Hex digits of the key digest kept in the external ref.
 const KEY_DIGITS: usize = 24;
 
@@ -141,6 +141,7 @@ impl OrbitRuntime {
                 relations.push(TaskRelation {
                     relation_type: TaskRelationType::RelatedTo,
                     target: held.id.clone(),
+                    regression: None,
                 });
                 self.stores().task_records().update(
                     repair_id,
@@ -155,6 +156,7 @@ impl OrbitRuntime {
                                  validation `{}` fails on base `{}`, run `{}`.",
                                 held.id, held.title, hold.command, hold.base_sha, hold.run_id
                             ),
+                            operation_id: None,
                         }],
                         ..Default::default()
                     },
@@ -268,10 +270,11 @@ fn repair_task_params(
         relations: vec![TaskRelation {
             relation_type: TaskRelationType::RelatedTo,
             target: held.id.clone(),
+            regression: None,
         }],
         tags: vec![BASELINE_RED_REPAIR_TAG.to_string()],
         priority: TaskPriority::High,
-        complexity: TaskComplexity::Unassessed,
+        complexity: TaskComplexity::Medium,
         task_type: Some(TaskType::Bug),
         status: Some(TaskStatus::Backlog),
         system_created: true,

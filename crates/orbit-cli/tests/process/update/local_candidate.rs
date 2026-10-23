@@ -55,7 +55,9 @@ impl LocalInstall {
         }
         crate::git_repo::SeededRepo::new(&repo)
             .host_default_branch()
-            .readme("# update root test\n")
+            // Discovery needs a real Git boundary, but candidate provenance
+            // is operator-attested, not inferred from a fixture seed commit.
+            .no_commit()
             .build();
         super::orbit(&repo, &home, &mirror)
             .args([
@@ -133,14 +135,16 @@ impl LocalInstall {
         command.output().expect("run reported recovery command")
     }
 
-    /// A candidate built at another commit: same version, distinct bytes.
-    fn candidate(&self, name: &str) -> PathBuf {
+    /// A candidate built at another commit, warmed by its required manifest
+    /// producer before any timed staged-image probe: same version, distinct bytes.
+    fn candidate(&self, name: &str) -> (PathBuf, PathBuf) {
         let candidate = self.builds.join(name);
-        crate::generation_fixture::distinct_copy(
+        let manifest = crate::generation_fixture::distinct_copy_with_probe(
             Path::new(env!("CARGO_BIN_EXE_orbit")),
             &candidate,
+            |producer| self.manifest(producer, COMMIT_B, &format!("{name}.json")),
         );
-        candidate
+        (candidate, manifest)
     }
 
     /// Describe `candidate` with the public producer, run by the candidate.
@@ -283,7 +287,6 @@ fn assert_converged(report: &Value) {
 /// only `--version`, as an older release's argument parser would refuse the
 /// option). The newly built candidate bootstraps the capability by running
 /// the update itself, against the explicitly named installed target.
-#[test]
 fn an_older_installation_is_bootstrapped_to_an_equal_version_candidate_and_replays_idempotently() {
     let install = LocalInstall::new();
     let version = env!("CARGO_PKG_VERSION");
@@ -297,8 +300,7 @@ fn an_older_installation_is_bootstrapped_to_an_equal_version_candidate_and_repla
     )
     .expect("install the older binary");
     let older = fs::read(&install.installed).expect("older bytes");
-    let candidate = install.candidate("orbit-b");
-    let manifest = install.manifest(&candidate, COMMIT_B, "orbit-b.json");
+    let (candidate, manifest) = install.candidate("orbit-b");
 
     // The installed updater cannot do this itself.
     let refused = install.run(
@@ -388,13 +390,11 @@ fn an_older_installation_is_bootstrapped_to_an_equal_version_candidate_and_repla
     );
 }
 
-#[test]
 fn wrong_provenance_digest_target_or_ownership_refuses_before_replacement() {
     let install = LocalInstall::new();
     let before = fs::read(&install.installed).expect("installed bytes");
     let record = install.generation_record();
-    let candidate = install.candidate("orbit-b");
-    let manifest = install.manifest(&candidate, COMMIT_B, "orbit-b.json");
+    let (candidate, manifest) = install.candidate("orbit-b");
     let run = |program: &Path, args: Vec<OsString>| install.run(program, &args);
 
     // Provenance: the operator expects another commit, or abbreviates it.
@@ -409,7 +409,8 @@ fn wrong_provenance_digest_target_or_ownership_refuses_before_replacement() {
     );
     install.assert_refused(&output, "full Git commit", &before, &record);
 
-    // Manifest: missing, malformed, or another schema.
+    // Manifest: real consumer refusal on missing and malformed input.
+    // The public parser matrix separately rejects unsupported schemas.
     let missing = install.builds.join("missing.json");
     let output = run(
         &candidate,
@@ -430,21 +431,6 @@ fn wrong_provenance_digest_target_or_ownership_refuses_before_replacement() {
     install.assert_refused(
         &output,
         "not a valid orbit-local-candidate",
-        &before,
-        &record,
-    );
-    let mut future: Value =
-        serde_json::from_slice(&fs::read(&manifest).expect("manifest")).expect("JSON");
-    future["schema_version"] = 2.into();
-    let unsupported = install.builds.join("v2.json");
-    fs::write(&unsupported, future.to_string()).expect("v2 manifest");
-    let output = run(
-        &candidate,
-        install.install_args(&candidate, &unsupported, COMMIT_B),
-    );
-    install.assert_refused(
-        &output,
-        "unsupported local-candidate manifest",
         &before,
         &record,
     );
@@ -546,6 +532,13 @@ fn wrong_provenance_digest_target_or_ownership_refuses_before_replacement() {
     );
 
     // The producer never overwrites a file, including the candidate itself.
+    let produced_manifest: Value =
+        serde_json::from_slice(&fs::read(&manifest).expect("candidate manifest"))
+            .expect("produced manifest JSON");
+    let candidate_digest = produced_manifest["executable_sha256"]
+        .as_str()
+        .expect("produced candidate digest")
+        .to_owned();
     let output = run(
         &candidate,
         args(&[
@@ -560,7 +553,11 @@ fn wrong_provenance_digest_target_or_ownership_refuses_before_replacement() {
     );
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stderr).contains("never overwritten"));
-    assert_eq!(sha256(&candidate), sha256(&install.builds.join("orbit-b")));
+    assert_eq!(
+        sha256(&candidate),
+        candidate_digest,
+        "a refused producer must preserve the candidate bytes"
+    );
 
     // A live host-global client refuses an update whose --root names the
     // workspace instead: the override does not move the replaced executable.
@@ -577,12 +574,10 @@ fn wrong_provenance_digest_target_or_ownership_refuses_before_replacement() {
 /// A discovered workspace can differ from the isolated host-global authority.
 /// Its live clients still have to block the executable replacement because
 /// the update runs convergence against that workspace after the swap.
-#[test]
 fn a_live_discovered_workspace_client_blocks_a_local_candidate_update() {
     let install = LocalInstall::new();
     let before = fs::read(&install.installed).expect("installed bytes");
-    let candidate = install.candidate("orbit-b");
-    let manifest = install.manifest(&candidate, COMMIT_B, "orbit-b.json");
+    let (candidate, manifest) = install.candidate("orbit-b");
     let workspace_root = install.repo.join(".orbit");
     let workspace_record = workspace_root.join(".generation.lock");
     let workspace_client = GenerationGuard::acquire(&workspace_root, &sha256(&install.installed))
@@ -611,15 +606,18 @@ fn a_live_discovered_workspace_client_blocks_a_local_candidate_update() {
 /// A candidate that cannot coordinate with protected clients is refused
 /// before it is installed, however correct its manifest.
 #[cfg(target_os = "linux")]
-#[test]
 fn a_candidate_without_the_admission_contract_is_refused_before_replacement() {
     let install = LocalInstall::new();
     let before = fs::read(&install.installed).expect("installed bytes");
     let record = install.generation_record();
     let unprotected = install.builds.join("orbit-unprotected");
     fs::copy("/bin/true", &unprotected).expect("copy a native executable");
-    let candidate = install.candidate("orbit-b");
-    let manifest = install.manifest_by(&candidate, &unprotected, COMMIT_B, "unprotected.json");
+    let candidate = install.builds.join("orbit-b");
+    let manifest = crate::generation_fixture::distinct_copy_with_probe(
+        Path::new(env!("CARGO_BIN_EXE_orbit")),
+        &candidate,
+        |producer| install.manifest_by(producer, &unprotected, COMMIT_B, "unprotected.json"),
+    );
     let output = install.run(
         &candidate,
         &install.install_args(&unprotected, &manifest, COMMIT_B),
@@ -637,13 +635,11 @@ fn a_candidate_without_the_admission_contract_is_refused_before_replacement() {
 /// manifest FIFO holds the updater mid-validation. Meanwhile clients still
 /// run, a second update is refused, and replacing the candidate's pathname
 /// changes nothing about what is installed.
-#[test]
 fn clients_run_but_no_update_enters_mid_validation_and_the_accepted_bytes_are_installed() {
     let install = LocalInstall::new();
     let before = fs::read(&install.installed).expect("installed bytes");
-    let candidate = install.candidate("orbit-b");
+    let (candidate, manifest) = install.candidate("orbit-b");
     let accepted = fs::read(&candidate).expect("candidate bytes");
-    let manifest = install.manifest(&candidate, COMMIT_B, "orbit-b.json");
     let fifo = install.builds.join("manifest.fifo");
     mkfifo(&fifo);
 
@@ -734,11 +730,9 @@ fn clients_run_but_no_update_enters_mid_validation_and_the_accepted_bytes_are_in
 
 /// A convergence failure after the swap reports `needs_recovery` with the
 /// exact command that retries this candidate; retrying it converges.
-#[test]
 fn a_post_swap_failure_recovers_from_a_quoted_install_dir() {
     let install = LocalInstall::with_bin_name("managed tools' dir");
-    let candidate = install.candidate("orbit-b");
-    let manifest = install.manifest(&candidate, COMMIT_B, "orbit-b.json");
+    let (candidate, manifest) = install.candidate("orbit-b");
     let layout = install.repo.join(".orbit/state/layout.version");
     let current_layout = fs::read(&layout).ok();
     fs::create_dir_all(layout.parent().expect("state directory")).expect("state directory");
@@ -777,21 +771,21 @@ fn a_post_swap_failure_recovers_from_a_quoted_install_dir() {
         Some(marker) => fs::write(&layout, marker).expect("repair the workspace"),
         None => fs::remove_file(&layout).expect("repair the workspace"),
     }
-    let retried = install.retry_command(retry);
+    let before_retry = fs::read(&install.installed).expect("installed before retry");
+    // Exercise the reported shell command itself. JSON changes only its
+    // output view; a later independent replay must not hide a retry that
+    // selected the wrong workspace or skipped convergence.
+    let retried = install.retry_command(&format!("{retry} --json"));
     assert_success(&retried, "retry the same candidate");
-    assert!(
-        String::from_utf8_lossy(&retried.stdout)
-            .contains("already is the accepted local candidate"),
-        "{retried:?}"
-    );
-    let replay = install.run(
-        &install.installed,
-        &install.install_args(&candidate, &manifest, COMMIT_B),
-    );
-    let converged = report(&replay);
+    let converged = report(&retried);
     assert_eq!(converged["outcome"], "already_current", "{converged}");
     assert_eq!(converged["replaced"], false);
     assert_converged(&converged);
+    assert_eq!(
+        fs::read(&install.installed).expect("installed after retry"),
+        before_retry,
+        "the quoted recovery must converge without replacing accepted bytes"
+    );
 }
 
 /// Point an executable header at the other supported architecture.
@@ -811,4 +805,39 @@ fn retarget(path: &Path) {
         bytes[4..8].copy_from_slice(&other.to_le_bytes());
     }
     fs::write(path, bytes).expect("write retargeted executable");
+}
+
+#[test]
+fn local_candidate_contracts_0() {
+    for (name, check) in [
+        ("an_older_installation_is_bootstrapped_to_an_equal_version_candidate_and_replays_idempotently", an_older_installation_is_bootstrapped_to_an_equal_version_candidate_and_replays_idempotently as fn()),
+        ("wrong_provenance_digest_target_or_ownership_refuses_before_replacement", wrong_provenance_digest_target_or_ownership_refuses_before_replacement as fn()),
+        ("a_live_discovered_workspace_client_blocks_a_local_candidate_update", a_live_discovered_workspace_client_blocks_a_local_candidate_update as fn()),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
+}
+
+#[test]
+fn local_candidate_contracts_1() {
+    for (name, check) in [
+        #[cfg(target_os = "linux")]
+        (
+            "a_candidate_without_the_admission_contract_is_refused_before_replacement",
+            a_candidate_without_the_admission_contract_is_refused_before_replacement as fn(),
+        ),
+        (
+            "clients_run_but_no_update_enters_mid_validation_and_the_accepted_bytes_are_installed",
+            clients_run_but_no_update_enters_mid_validation_and_the_accepted_bytes_are_installed
+                as fn(),
+        ),
+        (
+            "a_post_swap_failure_recovers_from_a_quoted_install_dir",
+            a_post_swap_failure_recovers_from_a_quoted_install_dir as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }

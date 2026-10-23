@@ -51,11 +51,10 @@ validation, workspace routing, audit, lifecycle checks and capability enforcemen
 Opening a widget, a model-context message or a click grants no operator authority.
 
 The five `orbit_desktop_*` wrappers are no longer advertised. Existing callers
-can still use their canonical or sanitized names: the MCP adapter translates
-only the known contracts into domain calls. Federation negotiates the advertised
-peer surface before dispatch: new domain calls can reach the previous desktop
-contracts, and old desktop calls can reach new domain peers. A missing equivalent
-refuses rather than guessing. No error after dispatch triggers a retry. An older
+can still use canonical or sanitized domain tool names; the adapter resolves a
+sanitized name through its name map. Federation negotiates the advertised peer
+surface before dispatch, and a missing advertised operation refuses rather than
+guessing. No error after dispatch triggers a retry. An older
 peer returns catalog metadata separately and explicitly marks the combined run
 view unavailable instead of inferring empty runs.
 
@@ -75,6 +74,19 @@ offset/limit, explicit truncation and a next offset. Task details independently
 page comments, history and artifact metadata; they do not return artifact file
 contents. Runs use observed state without reconciliation, keep provider input
 and response payloads out of the projection, and expose audited log excerpts.
+Compact run reads cap `run.agent_invocation.answer` at 4096 serialized JSON
+bytes, independently of provider capture settings and log pagination. They omit
+the duplicate raw `final_message` and stream `preview`. Small structured answers
+keep their fields. For oversized answers the projection prioritizes `summary`,
+then keeps each other top-level answer field only if the complete field fits;
+oversized collections or nested values are omitted as a whole. A summary too
+large to fit is shortened at a UTF-8 character boundary, counting JSON escapes
+against the budget. The legacy invocation `summary` mirrors that excerpt.
+`answer_max_bytes`, `answer_truncated` and `answer_omitted_fields` describe this
+projection; omitted fields must not be interpreted as empty results. The
+`answer_retrieval` tool/arguments object gives an explicit full run read (without
+`view: "bounded"`) for the complete persisted structured answer. Durable stdout
+blob references remain available for the raw provider output.
 Run reads retain the canonical operator run-read gate. Usage is explicitly
 unavailable rather than zero when no usable measurement exists.
 
@@ -208,7 +220,11 @@ claim that a new binary was installed in Codex Desktop.
 
 Retain the exact request ID and payload when reconciling a timed-out write.
 A matching retry returns `replayed: true` and a fresh snapshot; it does not
-repeat the mutation. Reusing an ID with changed content is refused. Task edit,
+repeat the mutation. It does finish post-commit side effects the first attempt
+left undone: a completion records its `resolves` targets as pending with the
+receipt, and a terminal transition's pull-request closure is recorded as a
+`desktop_pr_closure` history entry once it has run, so a retry resolves only
+unsettled targets and never runs a recorded closure again. Reusing an ID with changed content is refused. Task edit,
 comment and review IDs are scoped to that task. Creation IDs are scoped to the
 workspace and reserve a stable task identity.
 
@@ -316,7 +332,7 @@ is not a browser engine or desktop shell.
 | Local stdio | Accepting adapter | Real disposable protocol probe; native rendering remains NOT RUN. |
 | Direct SSH byte relay | Destination adapter | Destination must run this candidate. Real SSH/native validation requires an authorized disposable destination. |
 | Federated local | Accepting mux adapter | Static resource stays local; data and write tools use the qualified-selector route and existing grants. Native validation remains NOT RUN. |
-| Federated remote | Accepting mux adapter | Destination must advertise the domain contracts or their explicitly mapped legacy equivalents; missing equivalents, stale routes and offline/wrong destinations refuse before dispatch. Real remote/native checks remain NOT RUN. |
+| Federated remote | Accepting mux adapter | Destination must advertise the domain contracts; missing ones, stale routes and offline/wrong destinations refuse before dispatch. Real remote/native checks remain NOT RUN. |
 
 Record exact argv separately: `mcp serve`, `mcp serve --mode remote <fixture-host>`
 and `mcp serve --mode federated`. The staged launcher is local only. Prepare other
@@ -345,7 +361,7 @@ Metadata and bridge contracts follow the official
 [packaging guide](https://developers.openai.com/plugins/build/plugins).
 Those contracts do not establish availability in an installed client.
 
-Mixed-version discovery uses the initialize metadata `orbit.domain_contract:1` for modern federated muxes. A pre-contract client named `orbit-federated-mux` receives the five legacy desktop advertisements needed by its existing discovery check; calls still translate to domain operations with the same authorization. Ordinary clients keep the reduced domain surface. New muxes verify extension arguments against a destination's advertised schema or translate to a known legacy equivalent before dispatch, and refuse unsupported options. This is covered by an in-memory MCP wire handshake and federated routing fixtures. On 2026-10-03, the actual installed `orbit 0.25.1` binary (SHA-256 `5d093179789968331c9fd4fc11af9e911f65f511a5cdd4096a5484be551104b3`) also passed old-mux discovery, legacy task read/create/snapshot, identical receipt replay, unknown-field refusal and agent drain-start refusal against the current server through an explicitly fake SSH executable and separate disposable roots. Durable readback and audit records confirmed one task and preserved caller/server identities and capabilities. This proves that build and those operations; other historical builds, real SSH hosts and native launcher behavior remain untested. See the [behavioral evidence matrix](mcp-tool-evidence.md#wire-and-remaining-gaps) for the fixture boundary and current-server identity.
+The in-memory wire handshake asserts that a client named `orbit-federated-mux` receives no `orbit_desktop_*` advertisements, with or without `orbit.domain_contract:1` initialize metadata; no production source reads that marker. The probe's own initialize identifies as `orbit-federated-mux` and carries `_meta.orbit.worker_invocation`. New muxes verify extension arguments against a destination's advertised schema and refuse unsupported options before dispatch. This is covered by an in-memory MCP wire handshake and federated routing fixtures. On 2026-10-03, the actual installed `orbit 0.25.1` binary (SHA-256 `5d093179789968331c9fd4fc11af9e911f65f511a5cdd4096a5484be551104b3`) also passed old-mux discovery, legacy task read/create/snapshot, identical receipt replay, unknown-field refusal and agent drain-start refusal against the current server through an explicitly fake SSH executable and separate disposable roots. Durable readback and audit records confirmed one task and preserved caller/server identities and capabilities. This proves that build and those operations; other historical builds, real SSH hosts and native launcher behavior remain untested. See the [behavioral evidence matrix](mcp-tool-evidence.md#wire-and-remaining-gaps) for the fixture boundary and current-server identity.
 
 Public `orbit.pipeline.invoke` submissions require operator capability. Managed runs may use the explicit-input path only with child admission recorded in host-owned reservation context; the application validates that admission. Default-input catalog submission always refuses managed runs.
 

@@ -10,7 +10,8 @@ use super::{DiskSample, HostCpuTickHistory, HostResourceProbe, HostResourceSampl
 pub(super) struct NativeProbe {
     cache: Mutex<Option<NativeCache>>,
     now: Arc<dyn Fn() -> Instant + Send + Sync>,
-    #[cfg(target_os = "macos")]
+    proc_root: PathBuf,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     cpu_ticks: Mutex<HostCpuTickHistory>,
 }
 
@@ -19,8 +20,21 @@ impl NativeProbe {
         Self {
             cache: Mutex::new(None),
             now,
-            #[cfg(target_os = "macos")]
+            proc_root: PathBuf::from("/proc"),
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             cpu_ticks: Mutex::new(HostCpuTickHistory::default()),
+        }
+    }
+}
+
+impl NativeProbe {
+    pub(super) fn with_proc_root(
+        root: PathBuf,
+        now: Arc<dyn Fn() -> Instant + Send + Sync>,
+    ) -> Self {
+        Self {
+            proc_root: root,
+            ..Self::with_clock(now)
         }
     }
 }
@@ -35,7 +49,9 @@ struct NativeCache {
     at: Instant,
     sampled_at: chrono::DateTime<chrono::Utc>,
     cpu_percent: Option<f64>,
+    cpu_utilization_percent: Option<f64>,
     memory_percent: Option<f64>,
+    io_full_percent: Option<f64>,
     disks: BTreeMap<PathBuf, Option<f64>>,
 }
 
@@ -56,12 +72,14 @@ impl HostResourceProbe for NativeProbe {
             (self.now)().saturating_duration_since(cache.at) >= super::RESOURCE_CACHE_TTL
         });
         if expired {
-            let (cpu_percent, memory_percent) = self.cpu_memory(history);
+            let (cpu_percent, cpu_utilization_percent, memory_percent) = self.cpu_memory(history);
             *guard = Some(NativeCache {
                 at: (self.now)(),
                 sampled_at: chrono::Utc::now(),
                 cpu_percent,
+                cpu_utilization_percent,
                 memory_percent,
+                io_full_percent: io_full_avg60(&self.proc_root),
                 disks: BTreeMap::new(),
             });
         }
@@ -80,11 +98,28 @@ impl HostResourceProbe for NativeProbe {
                 *history = local.clone();
             }
         }
+        #[cfg(target_os = "linux")]
+        {
+            let local = self
+                .cpu_ticks
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if local.proc.as_ref().is_some_and(|latest| {
+                history
+                    .proc
+                    .as_ref()
+                    .is_none_or(|shared| latest.sampled_at > shared.sampled_at)
+            }) {
+                history.proc = local.proc.clone();
+            }
+        }
         let Some(cache) = guard.as_mut() else {
             return HostResourceSample {
                 sampled_at: chrono::Utc::now(),
                 cpu_percent: None,
+                cpu_utilization_percent: None,
                 memory_percent: None,
+                io_full_percent: None,
                 disks: paths
                     .iter()
                     .map(|path| DiskSample {
@@ -112,10 +147,42 @@ impl HostResourceProbe for NativeProbe {
         HostResourceSample {
             sampled_at: cache.sampled_at,
             cpu_percent: cache.cpu_percent,
+            cpu_utilization_percent: cache.cpu_utilization_percent,
             memory_percent: cache.memory_percent,
+            io_full_percent: cache.io_full_percent,
             disks,
         }
     }
+}
+
+/// Share of the last minute in which every runnable task was stalled on disk
+/// I/O (`/proc/pressure/io`, `full avg60`). Absent where the host has no
+/// pressure stall information, which admission treats as not gated.
+#[cfg(target_os = "linux")]
+fn io_full_avg60(proc_root: &Path) -> Option<f64> {
+    use std::io::Read;
+    let mut data = String::new();
+    std::fs::File::open(proc_root.join("pressure/io"))
+        .ok()?
+        .take(4096)
+        .read_to_string(&mut data)
+        .ok()?;
+    parse_io_full_avg60(&data)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn io_full_avg60(_proc_root: &Path) -> Option<f64> {
+    None
+}
+
+/// `full avg10=0.00 avg60=1.23 avg300=0.00 total=123` inside PSI text.
+#[cfg(target_os = "linux")]
+fn parse_io_full_avg60(data: &str) -> Option<f64> {
+    let line = data.lines().find(|line| line.starts_with("full "))?;
+    line.split_whitespace()
+        .find_map(|field| field.strip_prefix("avg60="))?
+        .parse()
+        .ok()
 }
 
 pub(super) fn disk_percent(path: &Path) -> Option<f64> {
@@ -150,8 +217,11 @@ fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
 
 #[cfg(target_os = "linux")]
 impl NativeProbe {
-    fn cpu_memory(&self, _history: &mut HostCpuTickHistory) -> (Option<f64>, Option<f64>) {
-        fn read(path: &str) -> Option<String> {
+    fn cpu_memory(
+        &self,
+        history: &mut HostCpuTickHistory,
+    ) -> (Option<f64>, Option<f64>, Option<f64>) {
+        fn read(path: &Path) -> Option<String> {
             use std::io::Read;
             let mut data = String::new();
             std::fs::File::open(path)
@@ -161,14 +231,14 @@ impl NativeProbe {
                 .ok()?;
             Some(data)
         }
-        let cpu = read("/proc/loadavg").and_then(|data| {
+        let cpu = read(&self.proc_root.join("loadavg")).and_then(|data| {
             let load: f64 = data.split_whitespace().next()?.parse().ok()?;
             // SAFETY: sysconf with this constant has no pointer arguments. Use
             // all online host CPUs, not the caller's affinity/cgroup budget.
             let cores = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
             (cores > 0 && load.is_finite() && load >= 0.0).then(|| 100.0 * load / cores as f64)
         });
-        let memory = read("/proc/meminfo").and_then(|data| {
+        let memory = read(&self.proc_root.join("meminfo")).and_then(|data| {
             let mut total = None;
             let mut available = None;
             for line in data.lines() {
@@ -190,77 +260,143 @@ impl NativeProbe {
             (total > 0 && available <= total)
                 .then(|| 100.0 * (total - available) as f64 / total as f64)
         });
-        (cpu, memory)
+        let mut local = self
+            .cpu_ticks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if history.proc.as_ref().is_some_and(|shared| {
+            local
+                .proc
+                .as_ref()
+                .is_none_or(|old| shared.sampled_at > old.sampled_at)
+        }) {
+            local.proc = history.proc.clone();
+        }
+        let current = super::read_host_usage(&self.proc_root).map(|reading| ProcCpuTickSample {
+            sampled_at: chrono::Utc::now(),
+            reading,
+        });
+        let utilization = current.as_ref().and_then(|current| {
+            let old = local.proc.as_ref()?;
+            let age = current
+                .sampled_at
+                .signed_duration_since(old.sampled_at)
+                .to_std()
+                .ok()?;
+            if age.is_zero() || age > super::RESOURCE_MAX_AGE {
+                return None;
+            }
+            let (busy, total) = current.reading.cpu_delta(old.reading)?;
+            Some(100.0 * busy as f64 / total as f64)
+        });
+        local.proc = current;
+        history.proc = local.proc.clone();
+        (cpu, utilization, memory)
     }
 }
 
 #[cfg(target_os = "macos")]
 impl NativeProbe {
-    // libc recommends mach2 for these bindings; the underlying Mach APIs remain
-    // supported. Keep the existing dependency for this small native collector.
-    #[allow(deprecated)]
-    fn cpu_memory(&self, history: &mut HostCpuTickHistory) -> (Option<f64>, Option<f64>) {
-        use std::mem::{MaybeUninit, size_of};
-        // libc exposes the statistics calls but omits this libSystem symbol.
-        // The signature matches the macOS SDK's mach/mach_port.h declaration.
-        unsafe extern "C" {
-            fn mach_port_deallocate(
-                task: libc::mach_port_t,
-                name: libc::mach_port_t,
-            ) -> libc::kern_return_t;
-        }
-        // SAFETY: mach_host_self returns a send right owned by this call. Both
-        // statistics buffers use the libc ABI with counts in integer_t units.
-        let host = unsafe { libc::mach_host_self() };
-        let cpu_percent = self.cpu_percent(host, history);
-        let mut vm = MaybeUninit::<libc::vm_statistics64>::zeroed();
-        let mut vm_count = libc::HOST_VM_INFO64_COUNT;
-        // SAFETY: same ABI/count guarantee as CPU stats above.
-        let vm_result = unsafe {
-            libc::host_statistics64(
-                host,
-                libc::HOST_VM_INFO64,
-                vm.as_mut_ptr().cast(),
-                &mut vm_count,
-            )
-        };
-        let mut total: u64 = 0;
-        let mut length = size_of::<u64>();
-        // SAFETY: NUL-terminated name, correctly sized output, no new value.
-        let total_result = unsafe {
-            libc::sysctlbyname(
-                c"hw.memsize".as_ptr(),
-                (&mut total as *mut u64).cast(),
-                &mut length,
-                std::ptr::null_mut(),
-                0,
-            )
-        };
-        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-        let memory_percent = if vm_result == libc::KERN_SUCCESS
-            && vm_count == libc::HOST_VM_INFO64_COUNT
-            && total_result == 0
-            && length == size_of::<u64>()
-            && total > 0
-            && page_size > 0
-        {
-            // SAFETY: host_statistics64 returned all requested fields.
-            let vm = unsafe { vm.assume_init() };
-            // Free includes speculative pages; inactive is reclaimable. Do not
-            // add purgeable separately (it overlaps active/inactive pages).
-            let available = (u64::from(vm.free_count) + u64::from(vm.inactive_count))
-                .saturating_mul(page_size as u64)
-                .min(total);
-            Some(100.0 * (total - available) as f64 / total as f64)
-        } else {
-            None
-        };
-        // SAFETY: release the send right acquired by mach_host_self each sample.
-        unsafe {
-            mach_port_deallocate(libc::mach_task_self(), host);
-        }
-        (cpu_percent, memory_percent)
+    fn cpu_memory(
+        &self,
+        history: &mut HostCpuTickHistory,
+    ) -> (Option<f64>, Option<f64>, Option<f64>) {
+        with_mach_host(|host| {
+            let cpu = self.cpu_percent(host, history);
+            let memory =
+                host_memory_bytes(host).map(|(used, total)| 100.0 * used as f64 / total as f64);
+            (cpu, cpu, memory)
+        })
     }
+}
+
+/// Borrow one Mach host send right for the duration of a sample.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+pub(super) fn with_mach_host<T>(sample: impl FnOnce(libc::mach_port_t) -> T) -> T {
+    // libc omits this libSystem symbol; the signature is mach/mach_port.h's.
+    unsafe extern "C" {
+        fn mach_port_deallocate(
+            task: libc::mach_port_t,
+            name: libc::mach_port_t,
+        ) -> libc::kern_return_t;
+    }
+    struct HostPort(libc::mach_port_t);
+    impl Drop for HostPort {
+        fn drop(&mut self) {
+            // SAFETY: release the send right acquired by mach_host_self.
+            unsafe {
+                mach_port_deallocate(libc::mach_task_self(), self.0);
+            }
+        }
+    }
+    // SAFETY: mach_host_self returns a send right owned by this call.
+    let host = HostPort(unsafe { libc::mach_host_self() });
+    sample(host.0)
+}
+
+/// Used and total physical memory bytes, shared by throttle and utilization.
+/// Free includes speculative pages; inactive is treated as reclaimable.
+/// Purgeable overlaps active/inactive and is not subtracted again.
+///
+/// `host_statistics64` sets the count to the `vm_statistics64` revision it
+/// filled. That can be shorter than userspace `HOST_VM_INFO64_COUNT`: macOS
+/// 26.6 fills 62 integers of the header's 104. `free_count` and
+/// `inactive_count` are in every revision, so a successful count that covers
+/// `inactive_count` and fits this buffer is a real reading. A failed call
+/// stays unknown.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+pub(super) fn host_memory_bytes(host: libc::mach_port_t) -> Option<(u64, u64)> {
+    use std::mem::{MaybeUninit, size_of};
+    let mut vm = MaybeUninit::<libc::vm_statistics64>::zeroed();
+    let mut vm_count = libc::HOST_VM_INFO64_COUNT;
+    // SAFETY: the buffer/count follow the vm_statistics64 ABI. The kernel
+    // writes at most `vm_count` integers and reports how many it filled.
+    let vm_result = unsafe {
+        libc::host_statistics64(
+            host,
+            libc::HOST_VM_INFO64,
+            vm.as_mut_ptr().cast(),
+            &mut vm_count,
+        )
+    };
+    let mut total: u64 = 0;
+    let mut length = size_of::<u64>();
+    // SAFETY: NUL-terminated name, correctly sized output, no new value.
+    let total_result = unsafe {
+        libc::sysctlbyname(
+            c"hw.memsize".as_ptr(),
+            (&mut total as *mut u64).cast(),
+            &mut length,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    // SAFETY: sysconf with this constant has no pointer arguments.
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    // Integer length of the prefix through `inactive_count`.
+    let inactive_count_ints = (std::mem::offset_of!(libc::vm_statistics64, inactive_count)
+        / size_of::<libc::integer_t>()
+        + 1) as libc::mach_msg_type_number_t;
+    if vm_result != libc::KERN_SUCCESS
+        || vm_count < inactive_count_ints
+        || vm_count > libc::HOST_VM_INFO64_COUNT
+        || total_result != 0
+        || length != size_of::<u64>()
+        || total == 0
+        || page_size <= 0
+    {
+        return None;
+    }
+    // SAFETY: the buffer was zeroed, the call succeeded, and `vm_count` covers
+    // `inactive_count` without exceeding the buffer. Later revision fields stay
+    // zero and this function does not read them.
+    let vm = unsafe { vm.assume_init() };
+    let available = (u64::from(vm.free_count) + u64::from(vm.inactive_count))
+        .saturating_mul(page_size as u64)
+        .min(total);
+    Some((total - available, total))
 }
 
 /// One timestamped observation of the host's aggregate tick counters.
@@ -381,7 +517,7 @@ impl NativeProbe {
 /// Aggregate host CPU tick counters, or `None` when the kernel call fails.
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
-fn host_cpu_ticks(host: libc::mach_port_t) -> Option<[u32; 4]> {
+pub(super) fn host_cpu_ticks(host: libc::mach_port_t) -> Option<[u32; 4]> {
     use std::mem::MaybeUninit;
     let mut cpu = MaybeUninit::<libc::host_cpu_load_info>::zeroed();
     let mut count = libc::HOST_CPU_LOAD_INFO_COUNT;
@@ -401,7 +537,18 @@ fn host_cpu_ticks(host: libc::mach_port_t) -> Option<[u32; 4]> {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 impl NativeProbe {
-    fn cpu_memory(&self, _history: &mut HostCpuTickHistory) -> (Option<f64>, Option<f64>) {
-        (None, None)
+    fn cpu_memory(
+        &self,
+        _history: &mut HostCpuTickHistory,
+    ) -> (Option<f64>, Option<f64>, Option<f64>) {
+        (None, None, None)
     }
+}
+
+/// Linux tick baseline, shared by short-lived admission and readiness processes.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct ProcCpuTickSample {
+    sampled_at: chrono::DateTime<chrono::Utc>,
+    reading: super::HostUsageReading,
 }

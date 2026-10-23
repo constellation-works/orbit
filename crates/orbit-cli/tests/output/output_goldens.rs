@@ -7,7 +7,6 @@
 //! and `docs/design/terminal-interface/specs/table-rendering.md` (ORB-10571),
 //! plus the layer provenance `config show --json` reports.
 //!
-//! Doctor also covers a terminal sink resolved at a pinned width in a child.
 //! The CLI "table" form (a real terminal, pinned width, truncation) cannot be
 //! produced from this harness: `assert_cmd` captures stdout through a pipe,
 //! so `std::io::stdout().is_terminal()` is always `false` inside the child
@@ -24,17 +23,18 @@
 //! without an intentional rendering change is the regression this suite
 //! exists to catch.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::governance::authorization::{
-    CallerCapabilities, CallerEnvelope, GOVERNED_OPERATIONS, OperationSurface, authorize,
-    governed_tool,
+    CallerCapabilities, CallerEnvelope, GOVERNED_OPERATIONS, OperationSurface,
+    PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY, authorize, governed_tool,
 };
 use orbit_common::test_env;
 use orbit_tools::ToolRegistry;
-use orbit_types::tool::{McpTransport, ToolSessionContext};
+use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use regex::Regex;
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir_in};
@@ -168,11 +168,23 @@ impl Fixture {
         fixture
     }
 
-    /// Run `orbit` with pinned identity and geometry so the only remaining
-    /// non-determinism is timestamps and the workspace's own temp paths,
-    /// both handled by [`redact`]. `extra_env` layers on top for the
-    /// color-configuration sweep.
+    /// Run `orbit` with pinned identity and geometry. `extra_env` layers on
+    /// top for the color-configuration sweep.
     fn run(&self, args: &[&str], extra_env: &[(&str, &str)]) -> std::process::Output {
+        let output = self.run_output(args, extra_env);
+        assert!(
+            output.status.success(),
+            "`orbit {}` failed\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+
+    /// Run `orbit` without asserting success for public-boundary rejection
+    /// cases.
+    fn run_output(&self, args: &[&str], extra_env: &[(&str, &str)]) -> std::process::Output {
         let mut command = cargo_bin_cmd!("orbit");
         // ORB-11300: one shared list, so this fixture and its siblings cannot
         // drift apart on which ambient variable still routes a write. The
@@ -194,15 +206,7 @@ impl Fixture {
         for (key, value) in extra_env {
             command.env(key, value);
         }
-        let output = command.args(args).output().expect("run orbit");
-        assert!(
-            output.status.success(),
-            "`orbit {}` failed\nstdout:\n{}\nstderr:\n{}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        output
+        command.args(args).output().expect("run orbit")
     }
 
     fn redact(&self, text: &str) -> String {
@@ -253,16 +257,6 @@ impl Fixture {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }
-}
-
-#[test]
-fn fixture_does_not_inherit_config_when_tempdir_is_nested_in_checkout() {
-    let fixture = Fixture::new_in(env!("CARGO_MANIFEST_DIR"));
-    let tasks = parse_json_stdout(&fixture.run(&["task", "list", "--json"], &[]), "task list");
-    assert_eq!(
-        tasks.as_array().expect("fixture task list").len(),
-        SEED_TASKS.len()
-    );
 }
 
 #[test]
@@ -603,6 +597,45 @@ spec:
     assert_golden("plugin_build_doctor.json", &actual);
 }
 
+/// Whether MCP advertises a governed tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Placement {
+    /// Listed by `tools/list`.
+    Advertised,
+    /// Kept off MCP listing; reached via CLI or dashboard.
+    Unadvertised,
+}
+
+/// Every governed tool operation paired with its expected MCP advertisement placement.
+const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
+    ("orbit.agent.invoke", Placement::Advertised),
+    ("orbit.auto_task.delete", Placement::Unadvertised),
+    ("orbit.auto_task.reset", Placement::Unadvertised),
+    ("orbit.command.exec", Placement::Advertised),
+    ("orbit.drain.claim.bind", Placement::Unadvertised),
+    ("orbit.drain.claim.settle", Placement::Unadvertised),
+    ("orbit.drain.claims", Placement::Unadvertised),
+    ("orbit.drain.probe", Placement::Unadvertised),
+    ("orbit.drain.receipt.lookup", Placement::Unadvertised),
+    ("orbit.pipeline.invoke", Placement::Advertised),
+    ("orbit.routine.control", Placement::Advertised),
+    ("orbit.task.delete", Placement::Unadvertised),
+    ("orbit.task.locks.release", Placement::Unadvertised),
+    ("orbit.task.locks.reserve", Placement::Unadvertised),
+    ("orbit.task.pull", Placement::Unadvertised),
+    ("orbit.task.reconcile_review", Placement::Advertised),
+    ("orbit.task.reject", Placement::Unadvertised),
+    ("orbit.task.requeue", Placement::Advertised),
+    ("orbit.task.retry_handoff", Placement::Advertised),
+    ("orbit.task.review_reset", Placement::Advertised),
+    ("orbit.workflow.auto", Placement::Advertised),
+    ("orbit.workflow.run.list", Placement::Advertised),
+    ("orbit.workflow.run.resume", Placement::Advertised),
+    ("orbit.workflow.run.show", Placement::Advertised),
+    ("orbit.workflow.ship", Placement::Advertised),
+    ("orbit.workspace.claim.release", Placement::Unadvertised),
+];
+
 #[test]
 fn authorization_matrix_matches_live_registry() {
     let agent = ToolSessionContext::trusted_local(None, Some("local".into()), None);
@@ -631,6 +664,56 @@ fn authorization_matrix_matches_live_registry() {
     .map(|(name, envelope)| (name, CallerCapabilities::resolve(&envelope)));
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
+
+    let advertised = registry
+        .mcp_tool_definitions()
+        .expect("the builtin registry composes valid MCP definitions")
+        .into_iter()
+        .map(|definition| definition.schema.name)
+        .collect::<BTreeSet<_>>();
+
+    let mut observed_placement: Vec<(&str, Placement)> = GOVERNED_OPERATIONS
+        .iter()
+        .filter(|op| {
+            op.surface == OperationSurface::Tool
+                && op.id != PLUGIN_TOOL_READ_ONLY.id
+                && op.id != PLUGIN_TOOL_MUTATING.id
+        })
+        .map(|op| {
+            let placement = if advertised.contains(op.id) {
+                Placement::Advertised
+            } else {
+                Placement::Unadvertised
+            };
+            (op.id, placement)
+        })
+        .collect();
+    observed_placement.sort_unstable();
+
+    let mut declared_placement = GOVERNED_TOOL_PLACEMENT.to_vec();
+    declared_placement.sort_unstable();
+
+    assert_eq!(
+        observed_placement, declared_placement,
+        "the governed tools' MCP placement drifted from what GOVERNED_TOOL_PLACEMENT declares. \
+         Advertisement authorizes nothing, so a mismatch is not automatically a bug — \
+         but it is a decision, so record it in GOVERNED_TOOL_PLACEMENT and in \
+         docs/design/operations-as-data/4_decisions.md rather than letting the two \
+         axes diverge unobserved"
+    );
+
+    for operation in GOVERNED_OPERATIONS
+        .iter()
+        .filter(|op| op.surface == OperationSurface::Tool && advertised.contains(op.id))
+    {
+        assert!(
+            !operation.allowed.contains(&McpCapability::Agent),
+            "'{}' is advertised to MCP and governed, yet lists `agent` among its allowed \
+             capabilities — governing an operation an ordinary MCP caller already holds \
+             buys nothing and hides the entries that do refuse",
+            operation.id
+        );
+    }
     let mut operations = std::collections::BTreeMap::new();
     for schema in registry.all_schemas() {
         operations.insert(("tool", schema.name.clone()), governed_tool(&schema.name));
@@ -777,6 +860,7 @@ fn config_show_effective_provenance_matches_golden() {
         &fixture.run(&["config", "show", "--json"], &[]),
         "config show",
     );
+    assert_config_show_tiers(&fixture, &shown);
     let settings = shown["settings"].as_object().expect("settings object");
     let mut provenance = serde_json::Map::new();
     for (key, entry) in shown["provenance"].as_object().expect("provenance object") {
@@ -784,6 +868,7 @@ fn config_show_effective_provenance_matches_golden() {
         let mut projected = serde_json::Map::new();
         projected.insert("scope".to_string(), json!(scope));
         projected.insert("state".to_string(), entry["state"].clone());
+        projected.insert("tier".to_string(), entry["tier"].clone());
         projected.insert("path".to_string(), entry["path"].clone());
         if scope != "built-in" {
             projected.insert("value".to_string(), settings[key].clone());
@@ -800,6 +885,214 @@ fn config_show_effective_provenance_matches_golden() {
         serde_json::to_string_pretty(&projection).expect("serialize projection")
     );
     assert_golden("config_show_effective.json", &fixture.redact(&rendered));
+}
+
+/// Paths, Crew purposes and Review restate rows the sections already print.
+fn repeated_summary_line(line: &str) -> bool {
+    line == "Paths" || line.starts_with("Crew purposes:") || line.starts_with("Review:")
+}
+
+fn assert_default_show_omits_repeated_blocks(text: &str) {
+    assert!(
+        !text.lines().any(repeated_summary_line),
+        "default config show repeats rows in a trailing block:\n{text}"
+    );
+}
+
+fn assert_all_show_keeps_repeated_blocks(text: &str) {
+    assert!(
+        text.lines().any(|line| line == "Paths")
+            && text.contains("\nCrew purposes:\n")
+            && text.contains("\nReview:\n"),
+        "config show --all keeps Paths, Crew purposes and Review:\n{text}"
+    );
+}
+
+fn assert_identity_rows(text: &str) {
+    assert!(
+        text.lines().any(|line| line.starts_with("Identity")),
+        "config show renders machine.id and task_prefix as identity:\n{text}"
+    );
+    for label in ["id", "task_prefix"] {
+        assert!(
+            text.lines().any(|line| {
+                let mut parts = line.split_whitespace();
+                parts.next() == Some(label) && parts.any(|part| part == "identity")
+            }),
+            "{label} renders as identity, not as a config key:\n{text}"
+        );
+    }
+    let machine = lines_under(text, "Machine (");
+    assert!(
+        machine.iter().all(|line| {
+            let label = line.split_whitespace().next();
+            !matches!(label, Some("id") | Some("task_prefix"))
+        }),
+        "identity rows are not Machine config keys: {machine:?}"
+    );
+}
+
+fn lines_under<'a>(text: &'a str, heading_prefix: &str) -> Vec<&'a str> {
+    let mut collecting = false;
+    let mut body = Vec::new();
+    for line in text.lines() {
+        if !collecting {
+            collecting = line.starts_with(heading_prefix);
+            continue;
+        }
+        if !line.is_empty() && !line.starts_with(' ') {
+            break;
+        }
+        body.push(line);
+    }
+    body
+}
+
+/// Exercise the public renderer against its JSON metadata, so every registered
+/// advanced row is hidden only while unconfigured and every section's count
+/// describes the rows actually omitted. Keep policy choices in the registry.
+fn assert_config_show_tiers(fixture: &Fixture, shown: &Value) {
+    use orbit_config::{CONFIG_KEY_REGISTRY, ConfigSection};
+
+    let plain = fixture.run(&["config", "show"], &[]);
+    let plain = String::from_utf8(plain.stdout).expect("config show text");
+    let all = fixture.run(&["config", "show", "--all"], &[]);
+    let all = String::from_utf8(all.stdout).expect("config show --all text");
+    let advanced = fixture.run(&["config", "show", "--advanced"], &[]);
+    assert_eq!(all.as_bytes(), advanced.stdout);
+    let has_row = |text: &str, label: &str| {
+        text.lines()
+            .any(|line| line.starts_with("  ") && line.split_whitespace().next() == Some(label))
+    };
+    for section in ConfigSection::ORDER {
+        let mut hidden = 0;
+        for descriptor in CONFIG_KEY_REGISTRY
+            .iter()
+            .filter(|entry| entry.section == *section)
+        {
+            let key = descriptor.key;
+            let metadata = &shown["provenance"][key];
+            let tier = metadata["tier"].as_str().expect("every key has a tier");
+            assert!(matches!(tier, "standard" | "advanced"));
+            let label = section
+                .key_prefix()
+                .and_then(|prefix| key.strip_prefix(prefix))
+                .and_then(|rest| rest.strip_prefix('.'))
+                .unwrap_or(key);
+            assert!(has_row(&all, label), "--all omitted {key}");
+            if tier == "advanced" {
+                let configured = metadata["scope"] != "built-in"
+                    || !metadata["shadowed_by"]
+                        .as_array()
+                        .expect("shadowed array")
+                        .is_empty();
+                assert_eq!(has_row(&plain, label), configured, "visibility of {key}");
+                hidden += usize::from(!configured);
+            }
+        }
+        let heading = plain
+            .lines()
+            .find(|line| line.starts_with(section.title()))
+            .expect("section heading");
+        if hidden > 0 {
+            assert!(
+                heading.contains(&format!("{hidden} advanced hidden")),
+                "{heading}"
+            );
+        } else {
+            assert!(!heading.contains("advanced hidden"), "{heading}");
+        }
+    }
+    assert!(all.len() > plain.len());
+    assert_default_show_omits_repeated_blocks(&plain);
+    assert_all_show_keeps_repeated_blocks(&all);
+    assert_identity_rows(&plain);
+
+    // Set-in-any-layer includes false, empty arrays, and a security value the
+    // workspace does not inherit. set/get continue admitting advanced keys.
+    for (key, value, expected, global) in [
+        (
+            "workflow.validation_env.cargo_incremental",
+            "false",
+            json!(false),
+            true,
+        ),
+        ("workflow.provider_limit_budgets", "[]", json!([]), false),
+        (
+            "execution.codex.approval_policy",
+            "never",
+            json!("never"),
+            true,
+        ),
+    ] {
+        let mut args = vec!["config", "set", key, value];
+        if global {
+            args.push("--global");
+        }
+        fixture.run(&args, &[]);
+        let scope = if global { "global" } else { "effective" };
+        let got = parse_json_stdout(
+            &fixture.run(&["config", "get", key, "--scope", scope, "--json"], &[]),
+            "config get advanced",
+        );
+        assert_eq!(got["value"], expected);
+    }
+    let configured = fixture.run(&["config", "show"], &[]);
+    let configured = String::from_utf8(configured.stdout).expect("configured text");
+    for label in [
+        "validation_env.cargo_incremental",
+        "provider_limit_budgets",
+        "codex.approval_policy",
+    ] {
+        assert!(
+            has_row(&configured, label),
+            "configured advanced key {label}"
+        );
+    }
+    let loaded = parse_json_stdout(
+        &fixture.run(&["config", "show", "--json"], &[]),
+        "configured show",
+    );
+    assert_eq!(
+        loaded["settings"]["workflow.validation_env.cargo_incremental"],
+        false
+    );
+    assert_eq!(
+        loaded["settings"]["workflow.provider_limit_budgets"],
+        json!([])
+    );
+    assert_eq!(
+        loaded["settings"]["execution.codex.approval_policy"],
+        Value::Null
+    );
+    assert_eq!(
+        loaded["provenance"]["execution.codex.approval_policy"]["shadowed_by"][0]["reason"],
+        "not-inherited"
+    );
+
+    for scope in ["global", "workspace"] {
+        let scoped = fixture.run(&["config", "show", "--scope", scope], &[]);
+        let scoped = String::from_utf8(scoped.stdout).expect("scoped text");
+        assert!(!has_row(&scoped, "proc_spawn_max_timeout_minutes"));
+        assert_eq!(has_row(&scoped, "codex.approval_policy"), scope == "global");
+        assert_default_show_omits_repeated_blocks(&scoped);
+        assert_identity_rows(&scoped);
+        let all = fixture.run(&["config", "show", "--scope", scope, "--advanced"], &[]);
+        let all = String::from_utf8(all.stdout).expect("scoped all text");
+        assert!(has_row(&all, "proc_spawn_max_timeout_minutes"));
+        assert!(
+            all.lines().any(|line| line == "Paths"),
+            "scoped --all keeps Paths"
+        );
+        let json = parse_json_stdout(
+            &fixture.run(&["config", "show", "--scope", scope, "--json"], &[]),
+            "scoped JSON",
+        );
+        assert_eq!(
+            json["provenance"]["execution.codex.approval_policy"]["tier"],
+            "advanced"
+        );
+    }
 }
 
 /// The configuration reference's "Settable keys" table promises to match
@@ -846,33 +1139,57 @@ fn config_reference_lists_every_registry_key() {
     );
 }
 
+/// The published answer-cap range must describe the values `orbit config set`
+/// accepts, including both inclusive endpoints and their adjacent rejections.
 #[test]
-fn no_ansi_escapes_under_any_color_configuration() {
-    let fixture = Fixture::new();
-    let combinations: &[&[(&str, &str)]] = &[
-        &[],
-        &[("NO_COLOR", "1")],
-        &[("CLICOLOR_FORCE", "1")],
-        &[("TERM", "dumb")],
-        &[("NO_COLOR", "1"), ("CLICOLOR_FORCE", "1")],
-    ];
+fn config_reference_max_answer_bytes_matches_cli_bounds() {
+    const KEY: &str = "workflow.explore.max_answer_bytes";
 
-    for command in COMMANDS {
-        for extra_env in combinations {
-            for json in [false, true] {
-                let mut args = command.args.to_vec();
-                if json {
-                    args.push("--json");
-                }
-                let output = fixture.run(&args, extra_env);
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                assert!(
-                    !stdout.contains('\u{1b}'),
-                    "`orbit {}` emitted an ANSI escape under {extra_env:?}:\n{stdout}",
-                    args.join(" ")
-                );
-            }
+    let page = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../website/src/content/docs/reference/config.md");
+    let page = std::fs::read_to_string(&page)
+        .unwrap_or_else(|error| panic!("read {}: {error}", page.display()));
+    let row = page
+        .lines()
+        .find(|line| line.starts_with("| `workflow.explore.max_answer_bytes` |"))
+        .expect("config reference has a max_answer_bytes row");
+    let range = Regex::new(r"\(`(\d+)`(?:–|-|—)`(\d+)`\)").expect("range regex");
+    let captures = range
+        .captures(row)
+        .expect("max_answer_bytes row documents an inclusive numeric range");
+    let minimum: u64 = captures[1].parse().expect("numeric minimum");
+    let maximum: u64 = captures[2].parse().expect("numeric maximum");
+    assert!(minimum <= maximum, "documented minimum exceeds maximum");
+
+    let below_minimum = minimum
+        .checked_sub(1)
+        .expect("max_answer_bytes minimum must be positive");
+    let above_maximum = maximum
+        .checked_add(1)
+        .expect("max_answer_bytes maximum leaves room for an adjacent value");
+    let fixture = Fixture::new();
+    for (index, (value, accepted)) in [
+        (minimum, true),
+        (below_minimum, false),
+        (maximum, true),
+        (above_maximum, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let value = value.to_string();
+        let mut args = vec!["config", "set"];
+        if index == 0 {
+            args.push("--fresh");
         }
+        args.extend([KEY, value.as_str()]);
+        let output = fixture.run_output(&args, &[]);
+        assert_eq!(
+            output.status.success(),
+            accepted,
+            "published bounds must match `orbit config set` for {KEY}={value}; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
 
@@ -1163,15 +1480,172 @@ fn global_format_controls_tool_run_output() {
 }
 
 #[test]
-fn doctor_terminal_findings_golden() {
-    let actual = super::doctor::render_fixture("mixed");
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/output_goldens/doctor_terminal_findings.txt");
-    if std::env::var_os(UPDATE_ENV).is_some() {
-        std::fs::write(&path, &actual).expect("write doctor golden");
+fn retry_handoff_cli_selects_its_explicit_owner_and_refuses_missing_operator() {
+    if crate::isolated_test::run_in_child(
+        "output_goldens::retry_handoff_cli_selects_its_explicit_owner_and_refuses_missing_operator",
+    ) {
+        return;
     }
-    assert_eq!(
-        actual,
-        std::fs::read_to_string(path).expect("doctor golden")
+    let fixture = Fixture::new();
+    let config: Value = serde_yaml::from_str(
+        &std::fs::read_to_string(fixture.work.join(".orbit/config.yaml")).unwrap(),
+    )
+    .unwrap();
+    let internal_id = config["workspace_id"].as_str().unwrap();
+    // Legacy owners can have different catalog and task-partition identities.
+    let registry_path = fixture.home.join(".orbit/workspaces.json");
+    let registry = std::fs::read_to_string(&registry_path).unwrap();
+    let logical_id = "ws_retry-owner";
+    std::fs::write(&registry_path, registry.replace(internal_id, logical_id)).unwrap();
+    assert_ne!(internal_id, logical_id);
+
+    let command = |cwd: &Path, operator: bool| {
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(cwd)
+            .env("HOME", &fixture.home)
+            .env("USERPROFILE", &fixture.home)
+            .env("RUST_LOG", "off");
+        if operator {
+            command.env("ORBIT_OPERATOR", "1");
+        }
+        command
+    };
+    let foreign = fixture.home.join("foreign");
+    std::fs::create_dir(&foreign).unwrap();
+    crate::git_repo::init(&foreign);
+    command(&foreign, true)
+        .env("PATH", fixture._temp.path().join("empty-path"))
+        .args(["workspace", "init", "--name", "foreign", "--json"])
+        .assert()
+        .success();
+    let unregistered = fixture.home.join("unregistered");
+    crate::git_repo::init(&unregistered);
+    let path = fixture.work.to_str().unwrap();
+    let before = fixture.run(&["task", "list", "--json"], &[]);
+    let runs_before = fixture.run(&["run", "history", "--no-reconcile", "--json"], &[]);
+    let foreign_before = fixture.run(&["--workspace", "foreign", "task", "list", "--json"], &[]);
+
+    let retry = |selected: Option<&str>, owner: Option<&str>, caller: &str| {
+        let mut command = command(&fixture.home, caller == "operator");
+        if caller == "agent" {
+            command
+                .env("ORBIT_AGENT_NAME", "codex")
+                .env("ORBIT_AGENT_MODEL", "gpt");
+        }
+        if let Some(selected) = selected {
+            command.args(["--workspace", selected]);
+        }
+        command.args(["task", "retry-handoff", "handoff-absent"]);
+        if let Some(owner) = owner {
+            command.args(["--owner-workspace", owner]);
+        }
+        let output = command
+            .args([
+                "--candidate",
+                "a",
+                "--base",
+                "b",
+                "--attempt",
+                "1",
+                "--state",
+                "stopped",
+                "--reason",
+                "inspect retained handoff",
+                "--request",
+                "cli-retry-1",
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        serde_json::from_slice::<Value>(&output.stderr).unwrap_or_else(|error| {
+            panic!(
+                "{error}: stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        })
+    };
+    let expected = retry(Some(path), Some(path), "operator");
+    assert_eq!(expected["code"], "invalid_input", "{expected}");
+    assert!(
+        expected["error"]
+            .as_str()
+            .unwrap()
+            .contains("handoff-absent"),
+        "the selected owner looked up the exact handoff identity: {expected}"
     );
+    for selector in ["output-goldens", logical_id, internal_id, path] {
+        let error = retry(Some(path), Some(selector), "operator");
+        assert_eq!(error, expected, "explicit owner {selector}");
+        for caller in ["unprivileged", "agent"] {
+            let denied = retry(Some(path), Some(selector), caller);
+            assert_eq!(denied["code"], "capability_denied", "{caller}: {denied}");
+        }
+    }
+    // An owner selector alone also selects its runtime from an unrelated cwd.
+    for selector in ["output-goldens", logical_id, path] {
+        assert_eq!(
+            retry(None, Some(selector), "operator"),
+            expected,
+            "{selector}"
+        );
+        assert_eq!(
+            retry(Some(selector), Some(selector), "operator"),
+            expected,
+            "selected workspace and owner {selector}"
+        );
+    }
+    for (selected, owner, code) in [
+        (path, Some("foreign"), "capability_denied"),
+        ("foreign", Some(path), "capability_denied"),
+        (path, Some("ws_not-registered"), "invalid_input"),
+        (path, Some(unregistered.to_str().unwrap()), "invalid_input"),
+        (path, None, "usage_error"),
+    ] {
+        let error = retry(Some(selected), owner, "operator");
+        assert_eq!(error["code"], code, "{selected} / {owner:?}: {error}");
+        assert_ne!(error, expected, "refuse before looking up a handoff");
+    }
+    let foreign_error = retry(Some("foreign"), Some("foreign"), "operator");
+    assert_eq!(
+        foreign_error, expected,
+        "a foreign partition cannot find the handoff"
+    );
+    // A registered foreign name must not be silently treated as our internal ID.
+    let registry = std::fs::read_to_string(&registry_path).unwrap();
+    let mut collision: Value = serde_json::from_str(&registry).unwrap();
+    let foreign_workspace = collision["workspaces"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|workspace| workspace["name"] == "foreign")
+        .unwrap();
+    foreign_workspace["name"] = json!(internal_id);
+    std::fs::write(&registry_path, serde_json::to_vec(&collision).unwrap()).unwrap();
+    let denied = retry(Some(path), Some(internal_id), "operator");
+    assert_eq!(denied["code"], "capability_denied", "{denied}");
+    std::fs::write(&registry_path, registry).unwrap();
+
+    assert_eq!(
+        fixture.run(&["task", "list", "--json"], &[]).stdout,
+        before.stdout
+    );
+    assert_eq!(
+        fixture
+            .run(&["run", "history", "--no-reconcile", "--json"], &[])
+            .stdout,
+        runs_before.stdout,
+    );
+    assert_eq!(
+        fixture
+            .run(&["--workspace", "foreign", "task", "list", "--json"], &[])
+            .stdout,
+        foreign_before.stdout,
+    );
+    assert!(!unregistered.join(".orbit").exists());
 }

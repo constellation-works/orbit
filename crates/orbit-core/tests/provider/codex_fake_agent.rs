@@ -175,6 +175,9 @@ fn dispatch_as(harness: &Harness, activity_name: &str) -> DispatchOutcome {
     let spec = ActivityV2Spec::AgentLoop(AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "Return the requested Orbit response envelope.".to_string(),
+        steering_instruction: None,
+        regression_risk_instruction: None,
+        explore_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,
@@ -188,6 +191,8 @@ fn dispatch_as(harness: &Harness, activity_name: &str) -> DispatchOutcome {
         proc_allowed_programs: None,
         proc_disallowed_programs: None,
         trusted_host_execution: false,
+        crew_env: Vec::new(),
+        crew_account: None,
     });
     let outcome = dispatch_v2_activity(V2DispatchInput {
         activity_name,

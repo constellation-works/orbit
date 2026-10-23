@@ -8,6 +8,8 @@
 
 use std::path::Path;
 
+use orbit_common::governance::operation::{Effect, OperationVerb};
+use orbit_common::governance::task::TaskVerb;
 use orbit_core::{ActorIdentity, OrbitError, OrbitRuntime};
 use orbit_types::identity::{
     normalize_agent_family_for_model, normalize_optional_attribution_label,
@@ -15,6 +17,7 @@ use orbit_types::identity::{
 use serde_json::Value;
 
 use super::super::{CommandOut, CommandOutput, Commands, Execute};
+use super::args::Invocation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandMeta {
@@ -262,6 +265,90 @@ pub(super) fn admin_meta(
     }
 }
 
+/// The operation for a registry-derived command, from its spec.
+///
+/// A read opens the runtime without stale-run reconciliation; a write opens
+/// the full runtime. Audit metadata comes from the noun and the CLI path, with
+/// the positional record id as the target.
+pub(super) fn registry_operation<V: OperationVerb>(
+    invocation: &Invocation<V>,
+    dispatch: CommandDispatch,
+) -> CommandOperation {
+    let noun = V::noun();
+    let runtime_need = match invocation.spec.effect {
+        Effect::Read => RuntimeNeed::ReadOnly,
+        Effect::Write => RuntimeNeed::Required,
+    };
+    CommandOperation::new(
+        runtime_need,
+        Some(admin_meta(
+            noun.cli_name,
+            Some(&invocation.audit_subcommand()),
+            Some(noun.audit_target_type),
+            invocation.target_id(),
+        )),
+        None,
+        dispatch,
+    )
+}
+
+/// The operation for a registry-derived task verb: [`registry_operation`],
+/// plus the two facts the task spec does not hold.
+///
+/// A tool in `ID_RESOLVED_WORKSPACE_TOOLS` binds the workspace that owns the
+/// task id, as `orbit tool run` and MCP do for the same tool; `lint` writes
+/// only with `--restore-pruned`, so without it it opens the read-only runtime.
+pub(super) fn task_operation(
+    invocation: &Invocation<TaskVerb>,
+    dispatch: CommandDispatch,
+) -> CommandOperation {
+    let mut operation = registry_operation(invocation, dispatch);
+    if crate::command::mcp::ID_RESOLVED_WORKSPACE_TOOLS.contains(&invocation.spec.tool_name) {
+        operation = operation.with_task_owner_id(invocation.target_id().map(ToOwned::to_owned));
+    }
+    match invocation.spec.verb {
+        TaskVerb::Lint if invocation.input.get("restore_pruned") != Some(&Value::Bool(true)) => {
+            operation.runtime_need = RuntimeNeed::ReadOnly;
+        }
+        TaskVerb::ArtifactGet => {
+            operation.runtime_need = RuntimeNeed::TaskOwner {
+                task_id: invocation.target_id().unwrap_or_default().to_string(),
+            };
+        }
+        TaskVerb::LocksList | TaskVerb::LocksReserve => {
+            if let Some(meta) = &mut operation.audit_meta {
+                meta.target_type = None;
+                meta.target_id = None;
+            }
+        }
+        TaskVerb::LocksRelease => {
+            if let Some(meta) = &mut operation.audit_meta {
+                meta.target_type = Some("reservation".into());
+                meta.target_id = invocation
+                    .input
+                    .get("reservation_id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+            }
+        }
+        TaskVerb::ArtifactPut
+        | TaskVerb::Add
+        | TaskVerb::Update
+        | TaskVerb::Lint
+        | TaskVerb::List
+        | TaskVerb::Eligible
+        | TaskVerb::Show
+        | TaskVerb::ReviewReset
+        | TaskVerb::Requeue
+        | TaskVerb::BlockTriage
+        | TaskVerb::ReconcileReview
+        | TaskVerb::RetryHandoff
+        | TaskVerb::Reject
+        | TaskVerb::Delete => {}
+    }
+    operation
+}
+
 pub(super) fn dispatch_init(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
         Commands::Init(command) => command.execute_without_runtime(context.root_override),
@@ -306,6 +393,13 @@ pub(super) fn dispatch_host(command: Commands, context: DispatchContext<'_>) -> 
     match command {
         Commands::Host(command) => command.execute_without_runtime(context.root_override),
         _ => dispatch_mismatch("Host"),
+    }
+}
+
+pub(super) fn dispatch_browser_kit(command: Commands, _context: DispatchContext<'_>) -> CommandOut {
+    match command {
+        Commands::BrowserKit(command) => command.execute_without_runtime(),
+        _ => dispatch_mismatch("BrowserKit"),
     }
 }
 

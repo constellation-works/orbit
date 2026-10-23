@@ -48,7 +48,35 @@ template:
     and add the matching regression-test location. Use existing paths where
     possible; for a test file that must be created, set
     `allow_missing_context: true` and identify that intended path. Never file a
-    finding without context selectors. Skip duplicates.
+    finding without context selectors. Skip duplicates. Add `ui` to the tags
+    of a finding in something a user sees (dashboard, web pages, docs site,
+    desktop app UI), and attach its screenshot to the filed task with
+    `orbit.task.artifact.put` at a stable path such as
+    `screenshots/<view>-<theme>-<width>.png`, under the 1 MiB artifact limit:
+    `.orbit/tmp/` is cleared with the worktree.
+
+    When the finding is a regression a landed task introduced (squash-merge
+    subjects carry its ID as `[<task-id>]`; confirm with `orbit.task.show`), add
+    `{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}`
+    to its `relations` and name the culprit commit in its description. A
+    claimed run cannot record that relation: name the culprit, nature and escape
+    in the description instead. Never blame a bystander task.
+    Choose `unclassified` rather than guess. `nature` is what kind of regression
+    the link records:
+    - `broke_existing`: the culprit broke behavior that worked before it landed.
+    - `defect_in_new`: the defect is in code the culprit itself introduced.
+    - `incomplete`: the culprit shipped without part of what its task required.
+    - `merge_reintroduced`: a merge restored code or assets an earlier change had removed.
+    - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
+    - `unclassified`: the evidence does not settle the nature.
+    `escape` is why the delivery gates missed it:
+    - `no_test`: no test covered the broken behavior.
+    - `test_not_selected`: a covering test existed but the delivery's gates did not run it.
+    - `platform_only`: it shows only on a platform or host the gates did not exercise.
+    - `review_missed`: it was visible in the diff and review did not flag it.
+    - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
+    - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
+    - `unclassified`: the evidence does not settle the escape.
 
     A non-duplicate failing test that blocks the repository's
     standard validation command must be filed as a durable issue even when

@@ -4,6 +4,8 @@ const node = id => document.getElementById(id);
 const check = (condition, message) => { if (!condition) throw new Error(message); };
 const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
 const response = (payload, status = 200, headers = {}) => new Response(JSON.stringify(payload), { status, headers });
+// The summary read on every tick paints the Tools view's tool-call total.
+const summaryToolCalls = () => document.getElementById('audit-summary-body').textContent.match(/\/ (\d+) tool calls/)?.[1];
 let heldPath = '/api/tasks';
 let networkDown = false;
 let metricsError = false;
@@ -17,10 +19,12 @@ let shipLive = false;
 let shipRequests = 0;
 const pendingShips = [];
 let terminalRunFixture = false;
-let liveDrain = false;
+const fleetRequests = [];
 let readinessReads = 0;
 let crewReads = 0;
 let summaryReads = 0;
+const summaryQueries = [];
+const auditQueries = [];
 let summaryDenials = 0;
 const codebaseQueries = [];
 let frictionTitle = 'stable friction title';
@@ -73,18 +77,26 @@ function fixture(url) {
       crew: 'opus', resolved_crew: 'opus', workspace_id: 'one', workspace_name: 'one',
     }]);
     case '/api/crews': return { default_crew: 'opus', crews: [{ name: 'opus' }] };
+    // The fleet stays visible even when the selected workspace is idle.
+    // Return both rows regardless of the request's selected workspace.
+    case '/api/fleet/drains': {
+      fleetRequests.push(url.pathname + url.search);
+      return { items: ['one', 'two'].map(id => ({
+        workspace_id: id, workspace_name: id, phase: id === 'two' ? 'draining' : 'idle',
+        slots_used: id === 'two' ? 1 : 0, slots_ceiling: 4,
+        eligible_count: id === 'one' ? 2 : 0, holds: [],
+      })) };
+    }
     case '/api/workflows/auto/readiness': return {
       capacity: {
-        active_leaf_runs: liveDrain ? 1 : 0, max_active_leaf_runs: 4, free_slots: liveDrain ? 3 : 4,
-        drain_run_id: liveDrain ? 'jrun-live-fixture' : null,
-        drain_phase: liveDrain ? 'draining' : 'idle',
-        drain_status_run_id: liveDrain ? 'jrun-live-fixture' : null,
-        ends_at: liveDrain ? new Date(Date.now() + 60 * 60 * 1000).toISOString() : null,
-        running_admitted_workers: liveDrain ? 1 : 0, admitted_workers: liveDrain ? 1 : 0,
+        active_leaf_runs: 0, max_active_leaf_runs: 4, free_slots: 4,
+        drain_run_id: null, drain_phase: 'idle', drain_status_run_id: null,
+        ends_at: null, running_admitted_workers: 0, admitted_workers: 0,
       },
       tasks: [],
     };
     case '/api/job-runs': {
+      if (url.searchParams.get('state') === 'active') return list(['pending', 'running'].map(state => ({ run_id: `live-${state}`, job_id: 'fixture', state })));
       runQueries.push(url.searchParams.get('state'));
       runRequests.push(url.search);
       if (!terminalRunFixture) return list([{ run_id: marker, job_id: 'fixture', state: 'failed' }]);
@@ -93,7 +105,11 @@ function fixture(url) {
         : terminalRuns;
       return list(runs);
     }
-    case '/api/audit': return url.searchParams.has('before')
+    // Fleet-wide in-flight runs: the rail asks for one item, the total counts all.
+    case '/api/job-runs/all': return url.searchParams.get('state') === 'active'
+      ? { items: [{ run_id: 'live-fleet', job_id: 'fixture', state: 'running', workspace_id: 'one' }], total: 22, limit: 1, truncated: true }
+      : [];
+    case '/api/audit': auditQueries.push(url.searchParams); return url.searchParams.has('before')
       ? [{ id: 8999 }]
       : [{ id: 9000 }];
     case '/api/runs/cross-workspace-run': return {
@@ -122,6 +138,7 @@ function fixture(url) {
       }));
       const totals = (all) => ({ all, low: stats(6, 1200000), medium: null, hard: stats(6, 1800000), xhard: null, unset: null });
       return {
+        outcome: url.searchParams.get("outcome") || "succeeded",
         window: metricsWindow(url),
         truncated: false,
         buckets,
@@ -142,6 +159,17 @@ function fixture(url) {
       };
     }
     case '/api/tasks/completion-by-complexity': return { by_complexity: [] };
+    case '/api/diagnostics/defects': {
+      const counts = (total) => ({ total, lineage: { fix_for_fix: 0, regression: 0, unattributed: total }, origin: { other: total } });
+      return {
+        window: metricsWindow(url),
+        lineages: ['fix_for_fix', 'regression', 'unattributed'],
+        origins: ['other'],
+        buckets: [0, 1, 2].map(i => ({ start: new Date(Date.UTC(2026, 9, 11, 10 + i)).toISOString(), ...counts(healthFixture ? i : 0) })),
+        current: counts(healthFixture ? 3 : 0),
+        previous: counts(healthFixture ? 2 : 0),
+      };
+    }
     case '/api/audit/incidents': {
       const selectedClass = url.searchParams.get('class');
       const limit = Number(url.searchParams.get('limit'));
@@ -179,7 +207,8 @@ function fixture(url) {
     }
     case '/api/routines': return { machine_name: marker, routines: [{ name: marker, source: workspace, enabled: true }], clock: {} };
     case '/api/auto-tasks': return { definitions: [] };
-    case '/api/audit/summary': summaryReads++; return { events: summaryReads, failed_runs: terminalRunFixture ? 3 : 0, denials: summaryDenials, denials_sql: summaryDenials, denials_v2: 0, window: '24h' };
+    case '/api/audit/summary': summaryReads++; summaryQueries.push(url.searchParams.get('since')); return { events: summaryReads, failed_runs: terminalRunFixture ? 3 : 0, denials: summaryDenials, denials_sql: summaryDenials, denials_v2: 0, window: '24h',
+      tool_call_failure_rate: { failed: 0, total: summaryReads, denied: 0 } };
     case '/api/codebase/analytics': {
       codebaseQueries.push(url.searchParams);
       const empty = { rows: [], below_support: 0 };
@@ -187,7 +216,7 @@ function fixture(url) {
         touched: 'declared_footprint', tasks_scanned: 0, computed_at: new Date().toISOString(), cache_ttl_seconds: 300,
         regressions: empty, lock_contention: { ...empty, wait_time_recorded: false }, footprint_misses: empty,
         change_coupling: { ...empty, excluded_large: 0, large_footprint_cap: 12 }, blocked: { ...empty, causes: [] },
-        rejected: { ...empty, excluded_without_run: 0 } };
+        rejected: { ...empty, excluded_without_run: 0 }, overlap: { rows: [], ranked_paths: 0 } };
     }
     case '/api/frictions': {
       const status = url.searchParams.get('status');
@@ -300,14 +329,20 @@ await settle();
 // The aggregate list carries each task's crew, but there is no single
 // workspace crew registry to validate it against or edit through.
 heldPath = null;
-liveDrain = true;
 refresh();
 await settle();
-check(node('global-drain-state').textContent.includes('Draining'), 'a live workspace drain appears before switching to aggregate view');
+const fleetIndicator = node('global-drain-state');
+const fleetLabel = () => fleetIndicator.querySelector('.global-drain-label').textContent;
+check(fleetRequests.length > 0, 'the header reads the fleet API');
+check(getWorkspace() === 'one' && node('auto-drain-panel').dataset.drainState === 'idle', 'the selected workspace drain card stays idle');
+check(!fleetIndicator.hidden && fleetIndicator.dataset.drainState === 'draining'
+  && fleetLabel() === '1 of 2 workspaces draining', 'the selected workspace header includes the other workspace drain');
+const selectedFleetLabel = fleetLabel();
 const selectedWorkspaceReadinessReads = readinessReads;
 const selectedWorkspaceCrewReads = crewReads;
-setWorkspace(null);
-persistScopeToUrl();
+click(fleetIndicator);
+await settle();
+check(getWorkspace() === null && node('auto-drain-panel').dataset.drainState === 'fleet', 'the header opens the aggregate fleet card');
 check(new URL(window.location.href).searchParams.get('workspace') === 'all', 'aggregate scenario is represented by workspace=all');
 setActiveTab('tasks');
 await settle();
@@ -318,11 +353,27 @@ const aggregateCrewCell = aggregateCrewRow?.querySelector('.crew-cell');
 check(aggregateCrewCell?.textContent === 'opus', `aggregate crew remains visible without a missing label: ${aggregateCrewCell?.textContent}`);
 check(!aggregateCrewCell.querySelector('.task-crew-select'), 'aggregate crew cell does not offer a workspace-scoped edit');
 const aggregateDrainIndicator = node('global-drain-state');
-check(!aggregateDrainIndicator.hidden && aggregateDrainIndicator.textContent.includes('Per-workspace drain status'), 'aggregate header explains that drain status is workspace-scoped');
-check(aggregateDrainIndicator.getAttribute('aria-label').includes('Select a workspace'), 'aggregate drain indicator explains how to inspect live status');
+check(!aggregateDrainIndicator.hidden && fleetLabel() === selectedFleetLabel
+  && aggregateDrainIndicator.dataset.drainState === 'draining', 'aggregate header retains the fleet drain count');
+check(aggregateDrainIndicator.getAttribute('aria-label').includes('Open fleet drains'), 'fleet indicator names its navigation action');
+const fleetRows = [...node('auto-drain-body').querySelectorAll('.fleet-drains .fleet-row')].map(row => ({
+  workspace: row.querySelector('.fleet-workspace')?.textContent, phase: row.dataset.phase,
+  slots: row.querySelector('[data-field="slots"]')?.textContent,
+  eligible: row.querySelector('[data-field="eligible"]')?.textContent ?? null,
+}));
+const fleetRow = name => fleetRows.find(row => row.workspace === name);
+check(fleetRows.length === 2 && fleetRows[0].workspace === 'two' && fleetRow('two').phase === 'draining'
+  && fleetRow('two').slots === 'Slots 1/4' && fleetRow('one').phase === 'idle' && fleetRow('one').eligible === 'Eligible 2 eligible',
+  `aggregate fleet card leads with the live drain and shows idle eligible work: ${JSON.stringify(fleetRows)}`);
 check(readinessReads === selectedWorkspaceReadinessReads, 'aggregate view does not fetch one workspace drain status as if it were global');
 check(crewReads === selectedWorkspaceCrewReads, 'aggregate view does not request a workspace crew registry');
-liveDrain = false;
+check(text('rail-count-jobs') === '22 runs', `aggregate Jobs rail shows the fleet total in runs, not the one-item page: ${text('rail-count-jobs')}`);
+globalThis.fleetScopeEvidence = {
+  source: 'controlled API responses; shipped dashboard assets; no production drain exercised',
+  selected: { workspace: 'one', drainPhase: 'idle', fleetLabel: selectedFleetLabel },
+  aggregate: { workspace: getWorkspace(), fleetLabel: fleetLabel(), rows: fleetRows },
+  requests: [...fleetRequests],
+};
 // The run exists in workspace two. Switching to All workspaces on its detail
 // page must replace the content with a scope prompt and issue no unscoped reads.
 navigateToRun('cross-workspace-run', 'two');
@@ -350,8 +401,8 @@ await settle();
 
 const surfaces = [
   { route: 'tasks', body: 'tasks-body', path: '/api/tasks', empty: list([]), emptyText: 'No tasks' },
-  { route: 'diagnostics/runs', body: 'runs-body', path: '/api/job-runs', empty: list([]), emptyText: 'No job runs' },
-  { route: 'diagnostics/errors', body: 'diag-body', path: '/api/diagnostics/errors', empty: { items: [], since: null, coverage_since: null }, emptyText: 'No error events' },
+  { route: 'jobs/history', body: 'runs-body', path: '/api/job-runs', empty: list([]), emptyText: 'No job runs' },
+  { route: 'diagnostics/incidents/errors', body: 'diag-body', path: '/api/diagnostics/errors', empty: { items: [], since: null, coverage_since: null }, emptyText: 'No error events' },
   { route: 'operations/routines', body: 'routines-body', path: '/api/routines', empty: { routines: [], clock: {} }, emptyText: 'No routines' },
 ];
 for (const surface of surfaces) {
@@ -428,43 +479,26 @@ heldPath = null;
 terminalRunFixture = true;
 setActiveTab('tasks');
 refresh(); await settle();
-check(text('rail-count-diag-runs') === '3', 'the Runs rail count covers all three failure outcomes');
-check(node('rail-count-diag-runs').classList.contains('alert'), 'a failed-run count reads as an alert on the rail');
-setActiveTab('diagnostics/runs'); await settle();
+check(text('rail-count-jobs') === '2 runs' && !node('rail-count-jobs').classList.contains('alert'), 'Jobs counts pending and running runs in flight');
+click(node('rail-count-jobs')); await settle();
+check(window.location.hash === '#jobs/live' && text('jobs-live-body').includes('live-pending') && text('jobs-live-body').includes('live-running'), 'the in-flight badge opens Live with both active states');
+setActiveTab('jobs/history'); await settle();
 click(Array.from(node('runs-body').querySelectorAll('.runs-filter-button')).find(button => button.textContent === 'Failed')); await settle();
 check(runQueries.at(-1) === 'failed', 'the Failed filter requests the server failure group');
 check(new URL(window.location.href).searchParams.get('run_state') === 'failed', 'the Failed filter is kept in the address');
 const failureRows = Array.from(node('runs-body').children).filter(row => row.dataset.key?.startsWith('run-'));
-check(failureRows.length === Number(text('rail-count-diag-runs')), 'the Runs rail count equals the rendered failed run count');
+check(failureRows.length === 3, 'History includes every failure outcome');
 for (const state of ['failed', 'timeout', 'interrupted']) {
   check(failureRows.some(row => row.textContent.includes(`terminal-${state}`)), `${state} run remains visible under the Failed filter`);
 }
 check(!text('runs-body').includes('terminal-success') && !text('runs-body').includes('terminal-cancelled'), 'Failed filter excludes successful and cancelled runs');
-// The rail badge counts every failed run in its window, so opening it from a
-// task or job search must drop that search; otherwise the list can narrow below
-// the number clicked. The Failed-selected case covers a toolbar that is not rebuilt.
 const runsSearch = () => node('runs-body').querySelector('.runs-query');
-for (const [kind, value, param, startFilter] of [['task', 'ORB-15159', 'task_id', 'All'], ['job', 'ci_failure_sweep_pipeline', 'job_id', 'Failed']]) {
-  setActiveTab('diagnostics/runs'); await settle();
-  click(Array.from(node('runs-body').querySelectorAll('.runs-filter-button')).find(button => button.textContent === startFilter)); await settle();
-  runsSearch().value = value;
-  runsSearch().dispatchEvent(new Event('input')); await settle();
-  check(new URL(window.location.href).searchParams.get(param) === value, `${kind} search is kept in the address before the badge click`);
-  const badgeWindow = node('rail-count-diag-runs').dataset.window;
-  click(node('rail-count-diag-runs')); await settle();
-  const address = new URL(window.location.href).searchParams;
-  const request = new URLSearchParams(runRequests.at(-1));
-  check(address.get('run_state') === 'failed' && !address.has('task_id') && !address.has('job_id'), `${kind} badge click opens the failure scope without the ${kind} search in the address`);
-  check(request.get('state') === 'failed' && !request.has('task_id') && !request.has('job_id'), `${kind} badge click requests every failed run without the ${kind} search`);
-  check(request.get('since') === badgeWindow, `${kind} badge click requests the badge's counted window`);
-  check(runsSearch().value === '', `${kind} badge click clears the search field`);
-}
-// Ordinary Runs-label navigation keeps the search on screen.
-setActiveTab('diagnostics/runs'); await settle();
+// Ordinary Jobs navigation keeps the search on screen.
+setActiveTab('jobs/history'); await settle();
 runsSearch().value = 'ORB-15159';
 runsSearch().dispatchEvent(new Event('input')); await settle();
-click(document.querySelector('.tab[data-tab="runs"]')); await settle();
-check(new URL(window.location.href).searchParams.get('task_id') === 'ORB-15159' && runsSearch().value === 'ORB-15159', 'the Runs label keeps the task search');
+click(document.querySelector('.tab[data-tab="jobs"]')); await settle();
+check(new URL(window.location.href).searchParams.get('task_id') === 'ORB-15159' && runsSearch().value === 'ORB-15159', 'the Jobs label keeps the task search');
 runsSearch().value = '';
 runsSearch().dispatchEvent(new Event('input')); await settle();
 terminalRunFixture = false;
@@ -479,7 +513,7 @@ for (const origin of ['detail', 'row']) {
   const detailShip = () => node(`detail-${shipFixture.id}`)?.querySelector('.action.ship');
   const openDetail = async () => {
     if (!detailShip()) {
-      click(node('tasks-body').querySelector(`[data-key="task-${shipFixture.id}"] > .title`));
+      click(node('tasks-body').querySelector(`[data-key="task-${shipFixture.id}"] .title`));
       // Task disclosure may use a view transition; wait for the rendered
       // detail instead of assuming five microtasks outlast its animation.
       for (let attempt = 0; attempt < 50 && !detailShip(); attempt++) {
@@ -487,6 +521,8 @@ for (const origin of ['detail', 'row']) {
       }
     }
   };
+  // The open detail sits in the side pane beside the list.
+  const taskText = () => text('tasks-body') + text('task-detail-body');
   const bothEnabled = () => rowShip() && detailShip() && !rowShip().disabled && !detailShip().disabled;
   refresh(); await settle();
   await openDetail();
@@ -504,7 +540,7 @@ for (const origin of ['detail', 'row']) {
   pendingShips.shift()(response({ error: 'Dispatch fixture failed' }, 503));
   await settle();
   check(bothEnabled(), `${origin}: dispatch failure after refresh enables retry in both controls`);
-  check(text('tasks-body').includes('Dispatch fixture failed'), `${origin}: dispatch failure appears in the current detail or row`);
+  check(taskText().includes('Dispatch fixture failed'), `${origin}: dispatch failure appears in the current detail or row`);
   click(origin === 'detail' ? detailShip() : rowShip()); await settle();
   check(shipRequests === requestsBefore + 2 && pendingShips.length === 1, `${origin}: failed dispatch can be retried`);
   refresh(); await settle();
@@ -517,7 +553,7 @@ for (const origin of ['detail', 'row']) {
   await openDetail();
   click(origin === 'detail' ? rowShip() : detailShip()); await settle();
   check(shipRequests === requestsBefore + 3 && pendingShips.length === 0, `${origin}: live duplicate is refused by the server`);
-  check(text('tasks-body').includes('Ship run is already in flight'), `${origin}: live duplicate error is visible`);
+  check(taskText().includes('Ship run is already in flight'), `${origin}: live duplicate error is visible`);
 
   shipFixture.status = 'in-progress';
   shipFixture.job_run_id = `jrun-${origin}-live`;
@@ -534,8 +570,11 @@ for (const origin of ['detail', 'row']) {
   shipFixture.status = 'in-progress';
   shipFixture.job_run_id = `jrun-${origin}-retry`;
   shipLive = true;
-  pendingShips.shift()(response({ run_id: shipFixture.job_run_id, state: 'submitted' }));
+  pendingShips.shift()(response({ run_id: shipFixture.job_run_id, state: 'submitted', warning: 'Admissions throttled: cpu 97%. Running work is not touched.' }));
   await settle();
+  // The ship receipt's warning is shown with the run it started.
+  const notice = document.querySelector('.task-action-notice')?.textContent || '';
+  check(notice === `${shipFixture.id}: ship run ${shipFixture.job_run_id} submitted\nWarning: Admissions throttled: cpu 97%. Running work is not touched.`, `${origin}: the ship warning follows the run: ${notice}`);
 }
 shipFixture = null;
 shipLive = false;
@@ -572,11 +611,11 @@ heldPath = null;
 taskPaging = false;
 metricsError = true;
 const priorSummaryReads = summaryReads;
-setActiveTab('diagnostics/metrics');
+setActiveTab('analytics/metrics');
 await settle();
 check(text('metrics-body').includes('Metrics fixture failure'), 'HTTP failure visible in Metrics panel');
 check(node('conn-status').className.includes('orange') && text('meta-text').includes('Metrics') && !text('meta-text').includes('offline'), 'one HTTP panel error is amber, names the failing panel, and does not imply offline');
-check(summaryReads > priorSummaryReads && text('rail-count-audit') === String(summaryReads), 'audit summary renders updated data independently of failed panel');
+check(summaryReads > priorSummaryReads && summaryToolCalls() === String(summaryReads), 'audit summary renders updated data independently of failed panel');
 networkDown = true;
 refresh(); await settle();
 check(node('conn-status').className.includes('red') && text('meta-text').includes('offline'), 'network outage reports offline');
@@ -584,14 +623,14 @@ networkDown = false;
 metricsError = false;
 refresh(); await settle();
 check(node('conn-status').className.includes('green'), 'connection recovers');
-check(text('meta-text').includes('refreshed') && !text('meta-text').includes('diagnostics/'), 'connection line names the destination, not its route');
+check(text('meta-text').includes('refreshed') && !text('meta-text').includes('analytics/'), 'connection line names the destination, not its route');
 check(document.title !== 'orbit' && document.title.endsWith('orbit'), 'the page title names the current destination');
 // Exercise Health through the full request builder and DOM rendering path.
 healthFixture = true;
 for (const selectedWindow of ['24h', '7d']) {
   setWindow(selectedWindow);
   for (const subtab of ['metrics', 'errors']) {
-    setActiveTab(`diagnostics/${subtab}`); await settle(); refresh(); await settle();
+    setActiveTab(subtab === 'metrics' ? 'analytics/metrics' : 'diagnostics/incidents/errors'); await settle(); refresh(); await settle();
     check(healthQueries.at(-1).window === selectedWindow, `${subtab} requests selected window ${selectedWindow}`);
     check(text(subtab === 'metrics' ? 'metrics-count' : 'diag-count').includes(selectedWindow), `${subtab} header labels selected range`);
   }
@@ -644,7 +683,7 @@ for (const selectedWindow of ['24h', '7d']) {
 }
 click(node('diag-body').querySelector('.diagnostics-errors-main .c-job_run a')); await settle();
 check(window.location.hash === '#runs/jrun-health-fixture', 'Errors run link navigates to the run detail route');
-setActiveTab('diagnostics/metrics'); await settle();
+setActiveTab('analytics/metrics'); await settle();
 check(node('metrics-body').querySelectorAll('.mx-sc').length === 4 && node('metrics-body').querySelector('.mx-sc-value').textContent === '26.0m',
   'Metrics renders the four series cards, All first with the window average');
 setActiveTab('diagnostics/incidents'); await settle();
@@ -690,7 +729,7 @@ click(evidenceTaskLink); await settle();
 check(document.querySelector('.tab-pane.active')?.dataset.tab === 'tasks', 'incident evidence task link opens the Tasks view');
 healthFixture = false;
 setWindow('24h');
-setActiveTab('diagnostics/metrics'); await settle();
+setActiveTab('analytics/metrics'); await settle();
 const realTimeout = globalThis.setTimeout;
 const realFetch = globalThis.fetch;
 globalThis.setTimeout = (fn, ms, ...args) => realTimeout(fn, ms === 30000 ? 1 : ms, ...args);
@@ -779,12 +818,12 @@ globalThis.fetch = (path, options = {}) => {
   return fetchDuringHostHang(path, options);
 };
 const summaryBeforeHostHang = summaryReads;
-const eventsBeforeHostHang = text('rail-count-audit');
+const toolCallsBeforeHostHang = summaryToolCalls();
 await runPoll();
 const liveTimers = () => scheduledPolls.filter(entry => !entry.handle.cancelled);
-const polls = liveTimers().filter(entry => String(entry.fn).includes('refreshDashboard'));
+const polls = liveTimers().filter(entry => entry.fn.name === 'runRefresh');
 check(hungHostSignals.length >= 1 && hungHostSignals.every(signal => signal && !signal.aborted), 'host request stays unanswered and carries an abort signal');
-check(summaryReads > summaryBeforeHostHang && text('rail-count-audit') !== eventsBeforeHostHang, 'other panels refresh while host resources never answer');
+check(summaryReads > summaryBeforeHostHang && summaryToolCalls() !== toolCallsBeforeHostHang, 'other panels refresh while host resources never answer');
 check(!text('meta-text').includes('fetching') && node('conn-status').className.includes('green'), 'hung host request does not leave the dashboard fetching');
 check(polls.length === 1 && polls[0].ms === 30000, 'next poll is scheduled while host resources are still unanswered');
 check(liveTimers().some(entry => entry !== polls[0] && entry.ms === 30000), 'unanswered host request remains bounded by the 30s timeout');
@@ -825,24 +864,61 @@ await settle();
 check(frictionText().includes('during ORB-200') && !frictionText().includes('during ORB-100'), 'edited during-task replaces the list meta');
 check(frictionText().includes('retitled friction') && frictionText().includes('rewritten friction body'), 'later field edits keep the updated title and body');
 
-// Audit › Codebase replaced Audit › Policy: its hash restores the view through
-// the router, and the denial badge beside Audit opens Events filtered to denials.
+// Analytics › Codebase: its hash restores the view through the router. The
+// denial badge on Health opens Health › Incidents › Events filtered to
+// denials; the Events tab itself opens on failures and denials.
 summaryDenials = 4;
-window.location.hash = '#audit/codebase?window=30d&rollup=crate';
+window.location.hash = '#analytics/codebase?window=30d&rollup=crate';
 await settle();
-check(node('audit-codebase-body').style.display !== 'none' && node('audit-body').style.display === 'none', '#audit/codebase restores the Codebase view');
+check(node('analytics-codebase-main').style.display !== 'none' && document.querySelector('.tab-pane.active')?.dataset.tab === 'analytics', '#analytics/codebase restores the Codebase view');
+check(document.querySelector('#analytics-subtabs .subtab.active')?.dataset.subtab === 'codebase' && node('reliability-views').hidden, 'Codebase is the active Analytics subtab, without the Reliability views');
 const pressedValue = id => node(id).querySelector('[aria-pressed="true"]')?.dataset.value;
 check(pressedValue('codebase-window') === '30d' && pressedValue('codebase-rollup') === 'crate' && node('codebase-min-support').value === '15', 'the hash restores the codebase controls');
-check(node('audit-summary-column').style.display === 'none', 'the codebase view hides the audit summary');
 const codebaseQuery = codebaseQueries.at(-1);
 check(codebaseQuery && codebaseQuery.get('window') === '30d' && codebaseQuery.get('rollup') === 'crate' && codebaseQuery.get('min_support') === '15', 'the restored view requests its selection');
-check(node('audit-codebase-body').querySelectorAll('.codebase-tile[aria-pressed]').length === 7, 'the codebase view renders its seven ranking tiles');
-const denialBadge = node('rail-count-audit-denials');
+const codebaseTiles = [...node('codebase-body').querySelectorAll('.codebase-tile[aria-pressed]')].map(tile => tile.dataset.tile);
+check(codebaseTiles.includes('regressions') && codebaseTiles.includes('overlap') && codebaseTiles.includes('lock_contention'), 'the codebase view renders supported ranking destinations');
+check(!codebaseTiles.includes('task_pilot'), 'the codebase view omits retired task-pilot ranking tile');
+check(node('agents-roles')?.querySelector('[data-view="pilots"]'), 'task-pilot ranking destination is available under Agents > Pilots');
+const denialBadge = node('rail-count-denials');
+check(denialBadge.closest('.tab')?.dataset.tab === 'diagnostics', 'the denial badge sits on the Health rail entry');
 check(!denialBadge.hidden && denialBadge.textContent === '4 denied', 'the denial badge shows the canonical denial count');
 denialBadge.click();
 await settle();
-check(window.location.hash === '#audit?since=24h&status=denied' && node('audit-body').style.display !== 'none', `the denial badge opens Events filtered to denials: ${window.location.hash}`);
+check(window.location.hash === '#diagnostics/incidents/events?since=24h&status=denied' && node('diagnostics-events-main').style.display !== 'none', `the denial badge opens Events filtered to denials: ${window.location.hash}`);
+check(document.querySelector('#incidents-views .subtab.active')?.dataset.view === 'events', 'the badge lands on the Events view of Incidents');
+click(document.querySelector('#incidents-views [data-view="incidents"]')); await settle();
+check(window.location.hash.startsWith('#diagnostics/incidents?') && node('diagnostics-events-main').style.display === 'none', 'the Incidents view tab leaves Events');
+click(document.querySelector('#incidents-views [data-view="events"]')); await settle();
+check(new URLSearchParams(window.location.hash.split('?')[1]).get('status') === 'denied', 'Events keeps the filter it was left with');
 summaryDenials = 0;
+
+// Tools uses Analytics' selected window rather than a remembered Events
+// cutoff. A tool row then opens evidence for the window its summary shows.
+setActiveTab('diagnostics/incidents/events?since=1h&status=denied'); await settle();
+setActiveTab('analytics/reliability/tools?window=7d'); await settle();
+check(summaryQueries.at(-1) === '7d', 'Tools fetches the Analytics window independently of Events');
+click(document.querySelector('.rail .tab[data-tab="diagnostics"]')); await settle();
+check(new URLSearchParams(window.location.hash.split('?')[1]).get('since') === '1h', 'opening Tools preserves the remembered Events cutoff');
+setActiveTab('analytics/reliability/tools?window=all'); await settle();
+check(summaryQueries.at(-1) === '24h', 'Tools keeps the bounded summary fallback for an all window');
+setActiveTab('analytics/reliability/tools?window=7d'); await settle();
+const auditRenderer = await import('./js/audit.js');
+auditRenderer.renderAuditSummary({ window: '7d', tool_call_failures_by_tool: [
+  { tool: 'orbit.task.show', failed: 1, total: 5, rate: 0.2, unexpected: 1, denied: 0 },
+] });
+click(node('audit-summary-body').querySelector('tbody tr')); await settle();
+const toolRoute = new URLSearchParams(window.location.hash.split('?')[1]);
+check(toolRoute.get('since') === '7d' && toolRoute.get('tool') === 'orbit.task.show' && toolRoute.get('status') === 'denied',
+  'Tools drill-down carries the displayed window and keeps the Events status filter');
+setActiveTab('diagnostics/incidents/events?ids=9001'); await settle();
+check(document.querySelector('#audit-filter .chip.active[data-status]')?.dataset.status === 'all',
+  'exact incident evidence highlights all statuses because its request has no status restriction');
+check(auditQueries.at(-1)?.get('ids') === '9001' && !auditQueries.at(-1).has('status'),
+  'exact incident evidence requests its IDs without a status filter');
+setWindow('24h');
+persistScopeToUrl();
+setActiveTab('diagnostics/incidents/events?since=24h&status=denied'); await settle();
 
 globalThis.showTaskPaginationEvidence = async () => {
   networkDown = false;
@@ -855,7 +931,7 @@ globalThis.showTaskPaginationEvidence = async () => {
 };
 globalThis.showDiagnosticsEvidence = async () => {
   taskPaging = false;
-  setActiveTab('diagnostics/metrics');
+  setActiveTab('analytics/metrics');
   refresh();
   await settle();
 };
@@ -863,7 +939,7 @@ globalThis.showHealthEvidence = async subtab => {
   healthFixture = true;
   heldPath = null;
   setWindow('7d');
-  setActiveTab(`diagnostics/${subtab}`);
+  setActiveTab({ metrics: 'analytics/metrics', incidents: 'diagnostics/incidents', errors: 'diagnostics/incidents/errors' }[subtab]);
   refresh();
   await settle();
 };

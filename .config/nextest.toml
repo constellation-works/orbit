@@ -32,3 +32,36 @@ stateful-runtime = { max-threads = 1 }
 [[profile.default.overrides]]
 filter = 'package(orbit-core) & kind(lib) & test(/^(adapter::tool_host::tests::(command_tools|task_tools|workflow_tools)::|application::job::run::tests::(owner|reconcile)::|application::routines::tests::sweep::|application::search::tests::(global|types)::|bootstrap::tests::global_defaults::|runtime::task::tests::locks::|runtime::tests::(authorization|config_path|run_input)::|runtime::workspace::tests::claim::)/)'
 test-group = 'stateful-runtime'
+
+# A contract table performs several real CLI fixture lifecycles. Bound these
+# process-heavy task fixtures independently of the host's CPU count so concurrent
+# startup does not dominate their summed test time on shared drain hosts.
+[test-groups.task-contracts]
+max-threads = 4
+
+[[profile.default.overrides]]
+filter = 'package(orbit-cli) & binary(task)'
+test-group = 'task-contracts'
+
+# MCP includes long-lived server handover rows as well as short stdio calls;
+# it needs more slots than the task tables to keep the critical path moving.
+[test-groups.mcp-contracts]
+max-threads = 8
+
+[[profile.default.overrides]]
+filter = 'package(orbit-cli) & binary(mcp)'
+test-group = 'mcp-contracts'
+
+# Check-job only. GitHub's ubuntu runner has 4 vCPUs and keeps every nextest
+# slot busy, while about a fifth of slot time does not scale with CPU speed
+# (timers, deadlines, child waits). Two extra slots overlap that wait.
+# Inherits the default profile, including the group caps above. Local runs
+# stay on default unless they pass --profile ci. retries stays 0.
+[profile.ci]
+test-threads = 6
+retries = 0
+
+# Per-test durations for the slowest-test table in
+# docs/design-patterns/test_strategy.md. Each CI shard uploads its report.
+[profile.ci.junit]
+path = "junit.xml"

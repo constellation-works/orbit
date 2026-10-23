@@ -15,7 +15,9 @@ use tempfile::TempDir;
 use super::super::PluginBroker;
 use super::super::peer::PeerAnchor;
 use super::super::protocol::{MAX_REQUEST_BYTES, read_frame, write_frame};
-use super::super::server::IO_TIMEOUT;
+use super::super::server::with_request_timeout;
+
+const REQUEST_TIMEOUT: Duration = Duration::from_millis(250);
 use super::EchoDispatch;
 
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
@@ -92,10 +94,10 @@ fn closed_without_reply(stream: &mut UnixStream) -> bool {
 /// Keep making progress until the server closes, with a bounded writer lifetime
 /// even if the assertion fails. All bytes belong to a valid request frame.
 fn assert_trickle_expires(prefix_sent: bool, interval: Duration) {
-    let running = start(own_anchor());
+    let running = with_request_timeout(REQUEST_TIMEOUT, || start(own_anchor()));
     let mut stream = connect(&running);
     stream
-        .set_read_timeout(Some(IO_TIMEOUT + Duration::from_secs(3)))
+        .set_read_timeout(Some(REQUEST_TIMEOUT + Duration::from_secs(3)))
         .expect("bounded regression wait");
     let body = tool_request();
     let mut wire = Vec::new();
@@ -125,10 +127,10 @@ fn assert_trickle_expires(prefix_sent: bool, interval: Duration) {
     });
     assert!(closed, "a progressing incomplete frame must expire");
     assert!(
-        started.elapsed() >= IO_TIMEOUT - Duration::from_millis(100),
+        started.elapsed() >= REQUEST_TIMEOUT - Duration::from_millis(25),
         "short polling waits must not expire the request"
     );
-    assert!(started.elapsed() < IO_TIMEOUT + Duration::from_secs(3));
+    assert!(started.elapsed() < REQUEST_TIMEOUT + Duration::from_secs(3));
     assert!(
         running.dispatch.calls().is_empty(),
         "incomplete requests never dispatch"
@@ -138,5 +140,5 @@ fn assert_trickle_expires(prefix_sent: bool, interval: Duration) {
 
 #[test]
 fn a_trickling_header_cannot_extend_the_request_deadline() {
-    assert_trickle_expires(false, IO_TIMEOUT * 2 / 5);
+    assert_trickle_expires(false, REQUEST_TIMEOUT * 2 / 5);
 }

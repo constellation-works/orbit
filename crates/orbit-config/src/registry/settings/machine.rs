@@ -14,9 +14,10 @@ use crate::memory_limit::MemoryLimit;
 /// to reject.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerContainmentSettings {
-    /// `machine.worker_containment` — launch workers in their own scope.
+    /// `machine.worker_containment` is `warn` or `strict` — launch workers in
+    /// their own scope.
     pub enabled: bool,
-    /// `machine.worker_containment_strict` — refuse uncontained launches.
+    /// `machine.worker_containment = "strict"` — refuse uncontained launches.
     pub strict: bool,
     /// `machine.worker_memory_high` — throttling threshold.
     pub memory_high: MemoryLimit,
@@ -99,6 +100,8 @@ impl MachineSettings {
 pub struct ResourceThrottleSettings {
     /// Evaluate a throttle verdict while always retaining pressure telemetry.
     pub enabled: bool,
+    /// CPU signal: `load` (default) or measured `utilization`.
+    pub cpu_source: String,
     /// CPU high-water percentage.
     pub cpu_high_percent: u8,
     /// CPU recovery percentage, strictly below the high-water mark.
@@ -113,4 +116,43 @@ pub struct ResourceThrottleSettings {
     pub disk_high_percent: u8,
     /// Disk recovery percentage.
     pub disk_resume_percent: u8,
+    /// Linux disk I/O high-water percentage, read from `/proc/pressure/io` `full avg60`.
+    pub io_full_high_percent: u8,
+    /// Linux disk I/O recovery percentage, strictly below the high-water mark.
+    pub io_full_resume_percent: u8,
+}
+
+/// Host-wide delivery admission thresholds and profile bounds.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct AutoConcurrencySettings {
+    /// Whether forecast-based admission is disabled, observed, or enforced.
+    pub mode: String,
+    /// Maximum forecast CPU utilization as a share of host cores.
+    pub admit_cpu_percent: u8,
+    /// Maximum forecast non-reclaimable memory as a share of host memory.
+    pub admit_memory_percent: u8,
+    /// Number of recent completed deliveries retained per profile key.
+    pub profile_window: u32,
+    /// Minimum completed deliveries a profile key needs before use without fallback.
+    pub min_profile_deliveries: u32,
+    /// Maximum forecast horizon for a candidate, in minutes.
+    pub horizon_cap_minutes: u32,
+    /// Maximum time the queue head may wait before it blocks backfilling, in minutes.
+    pub head_max_wait_minutes: u32,
+    /// Consecutive protected passes without a better miss before the queue head is reported stuck.
+    pub head_stuck_passes: u32,
+}
+
+impl AutoConcurrencySettings {
+    pub(crate) fn validate_memory_high_percent(
+        &self,
+        resource_throttle_memory_high_percent: u8,
+    ) -> Result<(), OrbitError> {
+        if self.admit_memory_percent >= resource_throttle_memory_high_percent {
+            return Err(OrbitError::InvalidInput(format!(
+                "machine.auto_concurrency.admit_memory_percent must be less than global workflow.resource_throttle.memory_high_percent ({resource_throttle_memory_high_percent})"
+            )));
+        }
+        Ok(())
+    }
 }
