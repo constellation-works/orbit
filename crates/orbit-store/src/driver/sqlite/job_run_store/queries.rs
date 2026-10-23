@@ -22,6 +22,52 @@ pub(super) const STEP_RUN_ID_CHUNK: usize = 500;
 pub(super) const LATEST_JOB_ID_CHUNK: usize = 500;
 
 impl Store {
+    /// Project only the ownership bindings of selected runs, without decoding
+    /// run rows or reading checkpoints/steps. Selection has no age window
+    /// unless the caller supplies one in `query`.
+    pub fn job_run_task_ids_for_workspace(
+        &self,
+        workspace_id: &str,
+        query: &JobRunQuery,
+    ) -> Result<std::collections::BTreeSet<String>, OrbitError> {
+        let (selected, params) = if query.limit.is_some() {
+            job_run_list_sql(workspace_id, query)
+        } else {
+            // Without a run limit the ID set needs no recency sort or other
+            // run columns. Retain exactly the listing surface's predicates.
+            let (filter, params) = job_run_filter_sql(workspace_id, query);
+            (
+                format!("SELECT input_json FROM job_runs WHERE {filter}"),
+                params,
+            )
+        };
+        let sql = format!(
+            "WITH inputs AS (SELECT input_json FROM ({selected})) \
+             SELECT binding.value FROM inputs, json_each(\
+                 CASE WHEN json_type(input_json, '$.task_ids') = 'array' \
+                 THEN json_extract(input_json, '$.task_ids') ELSE '[]' END) AS binding \
+             WHERE binding.type = 'text' \
+             UNION SELECT json_extract(input_json, '$.task_id') FROM inputs \
+             WHERE json_type(input_json, '$.task_id') = 'text'"
+        );
+        let conn = self.read()?;
+        let mut statement = conn.prepare(&sql).map_err(sqlite_store_error)?;
+        let rows = statement
+            .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(sqlite_store_error)?;
+        let mut ids = std::collections::BTreeSet::new();
+        for row in rows {
+            let id = row.map_err(sqlite_store_error)?;
+            let id = id.trim();
+            if !id.is_empty() {
+                ids.insert(id.to_string());
+            }
+        }
+        Ok(ids)
+    }
+
     pub(super) fn latest_job_runs_for_workspace(
         &self,
         workspace_id: &str,
