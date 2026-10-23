@@ -3232,5 +3232,125 @@
       "capiKey=ordinarybuildvalue after\n"
     ],
     "expected_log": "dinarybuil"
+  },
+  {
+    "name": "byte_window_hides_HTTPAPIKey_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 13,
+      "byte_end": 28
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "HTTPAPIKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_HTTPAPIKey_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 28,
+      "byte_end": 51
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "HTTPAPIKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_SERVICEAPIKey_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 16,
+      "byte_end": 31
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "SERVICEAPIKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_SERVICEAPIKey_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 31,
+      "byte_end": 54
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "SERVICEAPIKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_databaseAPIKey_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 17,
+      "byte_end": 32
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "databaseAPIKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_databaseAPIKey_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 32,
+      "byte_end": 55
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "databaseAPIKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_CLOUDAPIKEY_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 14,
+      "byte_end": 29
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "CLOUDAPIKEY=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_CLOUDAPIKEY_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 29,
+      "byte_end": 52
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "CLOUDAPIKEY=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
   }
 ]

@@ -34,11 +34,14 @@ All existing unit tests remain. Retirement tasks can use this mapping when
 removing duplicated cases.
 
 The registered `fallback.json` byte-window cases also cover opaque values after
-`Bearer`, Authorization headers, and API-key assignments. Assignment keys match
-the case-insensitive `api[_-]?key` family, including prefix segments such as
-`x-api-key` and `my_api_key`, camelCase/acronym boundaries in `serviceApiKey`,
-`serviceAPIKey` and `HTTPApiKey`, and surrounding quotes/brackets. The original
-case distinguishes these segments from an unseparated name such as `capiKey`;
+`Bearer`, Authorization headers, and API-key assignments. Assignment keys are
+normalized to lowercase alphanumerics and match an `apikey` suffix at a root
+key or a separator, case transition, or uppercase `API` acronym boundary.
+This covers prefix segments such as `x-api-key` and `my_api_key`,
+camelCase/acronym spellings including `serviceApiKey`, `serviceAPIKey`,
+`HTTPApiKey`, `HTTPAPIKey` and `SERVICEAPIKey`, and surrounding quotes/brackets.
+Original character positions distinguish these segments from an unseparated
+name such as `capiKey`;
 `api_keyboard` and `serviceApiKeyboard` remain noncredential names. Compact `key=value`,
 quoted values, and whitespace on either side of `=` use the same classification.
 Ordinary assignments and similar noncredential names retain their cut text. Complementary
