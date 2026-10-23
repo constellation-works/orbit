@@ -1,10 +1,10 @@
 //! A provider's own reading of its account's usage windows, taken after
 //! every run. [ORB-14696]
 //!
-//! Only Codex and Claude report one. Codex writes it to the session rollout
-//! under `CODEX_HOME`; Claude writes it to its message stream on stdout.
-//! Other providers' output formats carry no usage window, so they record
-//! nothing.
+//! Codex writes windows to its session rollout under `CODEX_HOME`; Claude
+//! reports them in stdout `rate_limit_event` frames, and Muse in stdout
+//! `status` records whose payload kind is `run_usage`. Other providers record
+//! no usage windows.
 
 use std::path::Path;
 
@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use super::claude::claude_usage_windows;
 use super::codex::codex_usage_windows;
+use super::muse::muse_usage_windows;
 
 /// The usage windows `provider` reported about its own account during one
 /// run, one observation per window with source `event`, read at `now`.
@@ -33,6 +34,7 @@ pub fn provider_usage_windows(
     match provider {
         "claude" => claude_usage_windows(stdout, now),
         "codex" => codex_home.map_or_else(Vec::new, |home| codex_usage_windows(stdout, home, now)),
+        "muse" => muse_usage_windows(stdout, now),
         _ => Vec::new(),
     }
 }

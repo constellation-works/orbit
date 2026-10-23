@@ -36,7 +36,11 @@
 //! a string `payload_type` means the stream cannot be trusted, and the whole
 //! output reduces to empty, which carries no envelope and so fails closed.
 
+use chrono::{DateTime, Utc};
+use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use serde_json::Value;
+
+use super::super::usage_window::top_level_frames;
 
 /// The one record type whose payload carries the run's terminal outcome.
 const TERMINAL_RECORD: &str = "run.terminal.completed";
@@ -199,4 +203,55 @@ fn bound_terminal_error(text: &str) -> String {
     } else {
         bounded
     }
+}
+
+/// Account windows from the last top-level `status` / `run_usage` allowance
+/// (Muse Code 1.4.12), observed at run completion. Prompt echoes, answer text,
+/// tool results and child-task records never supply account telemetry.
+/// Preserve the provider's labels; neither window reports its duration.
+pub(crate) fn muse_usage_windows(
+    stdout: &[u8],
+    now: DateTime<Utc>,
+) -> Vec<ProviderLimitObservation> {
+    let Some(allowance) = top_level_frames(stdout)
+        .filter(|(_, frame)| frame.get("payload_type").and_then(Value::as_str) == Some("status"))
+        .filter_map(|(_, frame)| {
+            let payload = frame.get("payload")?;
+            if payload.get("kind").and_then(Value::as_str) != Some("run_usage") {
+                return None;
+            }
+            payload.get("allowance")?.as_object().cloned()
+        })
+        .last()
+    else {
+        return Vec::new();
+    };
+    ["window", "weekly"]
+        .into_iter()
+        .filter_map(|window| {
+            let fields = allowance.get(window)?.as_object()?;
+            let used_percent = fields.get("used_percent")?.as_f64()?;
+            if !used_percent.is_finite() || used_percent < 0.0 {
+                return None;
+            }
+            let resets_at = DateTime::from_timestamp_millis(fields.get("resets_at_ms")?.as_i64()?)?;
+            Some(ProviderLimitObservation {
+                provider: "muse".to_string(),
+                account: None,
+                model: None,
+                window: Some(window.to_string()),
+                exhausted: used_percent >= 100.0,
+                source: ProviderLimitSource::Event,
+                resets_at: Some(resets_at),
+                used_percent: Some(used_percent),
+                window_minutes: None,
+                gating: true,
+                partial: false,
+                observed_at: now,
+                run_id: None,
+                crew: None,
+                detail: "kind=run_usage".to_string(),
+            })
+        })
+        .collect()
 }
