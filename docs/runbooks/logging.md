@@ -139,10 +139,35 @@ log_max_total_mb = 500
 log_max_file_mb = 100
 ```
 
-Log snapshots return `offset` for operations and `agent_offset` for relay.
-Resume `/api/log/stream` with `from` and `agent_from`; SSE `Last-Event-ID`
-overrides them and uses `operational:agent` cursors for split feeds. Legacy
-numeric IDs still resume the operational cursor.
+Log snapshots return an opaque `cursor` that binds each feed's complete-record
+byte offset to the identity of the open file scanned by that snapshot. Pass it
+as `/api/log/stream?cursor=<URL-encoded cursor>`. Each SSE event's `id` is the
+next opaque cursor; `Last-Event-ID` overrides the query cursor on automatic
+reconnect. The dashboard remembers this full ID when closing a hidden tab's
+stream and sends it again when the tab becomes visible. Switching hosts clears
+the cursor and loads that host's snapshot.
+
+On a generation mismatch, the stream replays the affected active feed from its
+beginning, including when a replacement has already grown past the saved offset.
+The other feed retains its own position. Within the same file, cursors resume
+after complete records without duplicates; incomplete records wait for their
+newline. Identity and extent come from the same open handle, so rotation between
+a snapshot and stream open is handled the same way as disconnected rotation.
+On Unix, generation identity uses device and inode; on other platforms it uses
+file creation time (an unavailable creation time fails the read). Shrinking below
+the cursor also resets a feed. Truncating and regrowing the same file past the
+cursor between polls is not detectable by file identity. Records written only
+to an archive after a reader switches to its replacement are not replayed.
+
+The numeric snapshot fields `offset` (operations) and `agent_offset` (relay),
+query parameters `from` and `agent_from`, and older numeric or
+`operational:agent` Last-Event-ID values remain accepted. These byte-only inputs
+retain their historical seek behavior and shrink detection, but cannot detect
+a larger replacement on reconnect. Clients requiring rotation-safe resume must
+use the opaque snapshot cursor and preserve the whole SSE ID rather than
+parsing it as a number. Malformed IDs fall back to the query cursor, then the
+byte parameters. SSE IDs now carry generations; their wire representation is
+opaque and clients should URL-encode them when supplying the query cursor.
 
 Plugin-inactive auto-task skips warn once per workspace, definition, plugin, and
 seeded plugin version. The warned keys persist in the workspace's

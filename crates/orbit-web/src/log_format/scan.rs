@@ -378,6 +378,7 @@ fn scan_recent_matching_events<R: Read + Seek>(
 pub(crate) struct RenderedLogTail {
     pub events: Vec<RenderedLogEvent>,
     pub cursor: u64,
+    pub generation: String,
 }
 
 /// Snapshot the newest matching events of the log at `path` together with a
@@ -397,12 +398,17 @@ pub(crate) fn read_recent_rendered_tail(
             return Ok(RenderedLogTail {
                 events: Vec::new(),
                 cursor: 0,
+                generation: "missing".into(),
             });
         }
         Err(err) => return Err(err),
     };
-    let len = file.metadata()?.len();
-    read_rendered_tail_from(&mut file, len, filters, limit, TAIL_READ_BLOCK)
+    let metadata = file.metadata()?;
+    let generation = super::log_file_generation(&metadata)?;
+    let mut tail =
+        read_rendered_tail_from(&mut file, metadata.len(), filters, limit, TAIL_READ_BLOCK)?;
+    tail.generation = generation;
+    Ok(tail)
 }
 
 /// [`read_recent_rendered_tail`] over the first `len` bytes of `reader`.
@@ -457,6 +463,7 @@ fn read_rendered_tail_from<R: Read + Seek>(
     Ok(RenderedLogTail {
         events: events.iter().map(render_log_event_for_web).collect(),
         cursor,
+        generation: "missing".into(),
     })
 }
 

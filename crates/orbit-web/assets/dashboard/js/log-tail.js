@@ -31,6 +31,7 @@ const LOG_STREAM_RETRY_MAX_MS = 15000;
 const LOG_STREAM_UNAVAILABLE = "log stream unavailable, retrying";
 let logStreamOffset = 0;
 let logAgentStreamOffset = 0;
+let logStreamCursor = null;
 let logStreamRetryTimer = null;
 let logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
 // True once the snapshot resolved and a live stream is owed. A hidden tab
@@ -404,6 +405,7 @@ function applyLogSnapshot(payload) {
     logAgentStreamOffset = Number.isFinite(payload.agent_offset) && payload.agent_offset >= 0
       ? payload.agent_offset : 0;
   }
+  logStreamCursor = typeof payload?.cursor === "string" ? payload.cursor : null;
   events.slice().reverse().forEach(ev => {
     const row = renderLogEvent(ev, false);
     inner.appendChild(row);
@@ -458,6 +460,7 @@ function restartLogTailForHost() {
   logSnapshotReady = false;
   logStreamOffset = 0;
   logAgentStreamOffset = 0;
+  logStreamCursor = null;
   logBuffered = [];
   logBufferedDropped = 0;
   logSnapshotRetryMs = LOG_STREAM_RETRY_MIN_MS;
@@ -689,7 +692,10 @@ function writeLogCounts(counts) {
 
 function rememberStreamOffset(lastEventId) {
   if (!lastEventId) return;
-  const [operational, agent] = lastEventId.split(":");
+  // Event IDs are opaque generation-bearing cursors. Retain the whole ID
+  // across explicit close/open; EventSource handles it on automatic retries.
+  logStreamCursor = lastEventId;
+  const [operational, agent] = lastEventId.split(":").map(part => part.split("@")[0]);
   const parsed = Number(operational);
   if (Number.isFinite(parsed) && parsed >= 0) logStreamOffset = parsed;
   const agentParsed = Number(agent);
@@ -749,7 +755,9 @@ function connectLogStream() {
   closeLogStream();
   // A hidden tab opens nothing; becoming visible reconnects from the offset.
   if (document.hidden) return;
-  logStream = new EventSource(withHost(`/api/log/stream?from=${encodeURIComponent(String(logStreamOffset))}&agent_from=${encodeURIComponent(String(logAgentStreamOffset))}`));
+  const query = new URLSearchParams({ from: String(logStreamOffset), agent_from: String(logAgentStreamOffset) });
+  if (logStreamCursor !== null) query.set("cursor", logStreamCursor);
+  logStream = new EventSource(withHost(`/api/log/stream?${query}`));
   logStream.onopen = () => {
     logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
     setLogStreamConnected(true);

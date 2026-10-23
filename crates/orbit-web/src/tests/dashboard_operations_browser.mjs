@@ -999,6 +999,8 @@ try {
             message_html: 'snapshot recovered',
           }],
           offset: 42,
+          agent_offset: 12,
+          cursor: '42@operation-generation:12@agent-generation',
         }),
       });
     };
@@ -1080,6 +1082,33 @@ try {
   }
   if (!recovered.text.includes('snapshot recovered')) {
     throw new Error(`recovered snapshot was not rendered: ${recovered.text}`);
+  }
+  const snapshotCursor = new URL(recovered.url, 'http://fixture').searchParams.get('cursor');
+  if (snapshotCursor !== '42@operation-generation:12@agent-generation') {
+    throw new Error(`stream lost snapshot generations: ${recovered.url}`);
+  }
+  // A hidden-tab disconnect must retain the entire last SSE ID, including
+  // independent file generations, even if the byte offsets moved backwards.
+  const resumedCursor = await page.evaluate(() => {
+    const old = globalThis.logFixtureStream;
+    old.onmessage({ lastEventId: '17@rotated-operation:19@rotated-agent', data: JSON.stringify({
+      ts: '2026-09-27T12:00:00Z', level: 'info', code: 'OK', source: 'orbit.log',
+      message_html: 'rotation replay recovered',
+    }) });
+    let hidden = true;
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+    document.dispatchEvent(new Event('visibilitychange'));
+    if (old.readyState !== EventSource.CLOSED) throw new Error('hidden tab did not close its stream');
+    hidden = false;
+    document.dispatchEvent(new Event('visibilitychange'));
+    delete document.hidden;
+    if (globalThis.logFixtureStream === old) throw new Error('visible tab did not reopen its stream');
+    return globalThis.logFixtureUrl;
+  });
+  const resumedQuery = new URL(resumedCursor, 'http://fixture').searchParams;
+  if (resumedQuery.get('cursor') !== '17@rotated-operation:19@rotated-agent'
+      || resumedQuery.get('from') !== '17' || resumedQuery.get('agent_from') !== '19') {
+    throw new Error(`hidden-tab reconnect lost the SSE cursor: ${resumedCursor}`);
   }
   const logToolbarCheck = async (label, viewport, dockWidth, paused) => {
     await page.setViewportSize(viewport);
