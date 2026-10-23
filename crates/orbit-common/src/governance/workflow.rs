@@ -76,7 +76,7 @@ const CLAIM_TOKEN_PARAM: ParamSpec = mcp_only(
 const MODEL_PARAM: ParamSpec = mcp_only(
     "model",
     ParamType::String,
-    "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+    "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
 );
 
 const VIEW_PARAM: ParamSpec = mcp_only(

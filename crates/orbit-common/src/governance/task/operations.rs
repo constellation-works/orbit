@@ -213,12 +213,12 @@ pub(super) const IDENTITY_PARAMS: &[ParamSpec] = &[
     mcp_only(
         "agent",
         ParamType::String,
-        "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
+        "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`).",
     ),
     mcp_only(
         "model",
         ParamType::String,
-        "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
+        "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized.",
     ),
 ];
 

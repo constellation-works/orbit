@@ -277,12 +277,13 @@ pub fn resolve_crew(name: &str, registry: &BTreeMap<String, Crew>) -> Result<Cre
 /// cardinality is enforced at compile time: adding a family requires
 /// changing the array size, which in turn surfaces any call site that
 /// made assumptions about the previous number of families.
-pub const fn all_agent_families() -> [&'static str; 4] {
+pub const fn all_agent_families() -> [&'static str; 5] {
     [
         AgentFamily::Codex.as_str(),
         AgentFamily::Claude.as_str(),
         AgentFamily::Gemini.as_str(),
         AgentFamily::Grok.as_str(),
+        AgentFamily::Muse.as_str(),
     ]
 }
 
@@ -330,6 +331,9 @@ pub fn infer_agent_family_from_model(model: &str) -> Option<String> {
     if model.starts_with("grok-") || model.starts_with("grok3") {
         return Some("grok".to_string());
     }
+    if model.starts_with("muse-") {
+        return Some("muse".to_string());
+    }
 
     None
 }
@@ -369,8 +373,8 @@ pub fn normalize_agent_family_for_model(
 
 /// Resolve an optional agent/model pair to a canonical write-attribution family.
 ///
-/// A present `model` (or `agent`) must name `codex`, `claude`, `gemini`, or
-/// `grok`, or be a full model string those families can infer. Unrecognized
+/// A present `model` (or `agent`) must name `codex`, `claude`, `gemini`,
+/// `grok`, or `muse`, or be a full model string those families can infer. Unrecognized
 /// values such as `llama` are refused rather than stored verbatim.
 pub fn require_canonical_agent_family(
     agent_cli: Option<&str>,
@@ -390,7 +394,7 @@ pub fn require_canonical_agent_family(
             Ok(Some(family))
         }
         _ => Err(IdentityError::Invalid(format!(
-            "`model` '{shown}' is not a canonical agent family (codex, claude, gemini, grok) or a recognized full model string"
+            "`model` '{shown}' is not a canonical agent family (codex, claude, gemini, grok, muse) or a recognized full model string"
         ))),
     }
 }

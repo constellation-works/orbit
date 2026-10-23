@@ -436,6 +436,110 @@ fn pr_status_updates_share_admission_and_trim_before_storage() {
     assert_eq!(runtime.get_task(&task.id).unwrap().pr_status, None);
 }
 
+fn muse_identity_is_accepted_and_mismatches_refused() {
+    use serde_json::json;
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Muse provenance fixture".into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+    for (input, message) in [
+        (
+            json!({"id": task.id, "comment": "bare family", "model": "muse"}),
+            "bare family",
+        ),
+        (
+            json!({"id": task.id, "comment": "full model", "model": "muse-wonder-1.0"}),
+            "full model",
+        ),
+    ] {
+        runtime
+            .execute_tool_command("orbit.task.update", input, None, None)
+            .unwrap_or_else(|error| panic!("muse identity must be accepted: {error}"));
+        let comments = runtime.get_task_comments(&task.id).unwrap();
+        let comment = comments
+            .iter()
+            .find(|comment| comment.message == message)
+            .expect("muse comment must persist");
+        // Bare family records `muse`; a full model string keeps its model
+        // label, which must still resolve to the muse family.
+        let expected_by = if message == "bare family" {
+            "muse"
+        } else {
+            "muse-wonder-1.0"
+        };
+        assert_eq!(comment.by, expected_by, "{message}");
+        assert_eq!(
+            orbit_types::identity::agent_from_model(&comment.by),
+            Some("muse"),
+            "{message} must record the muse family"
+        );
+    }
+
+    // The matching agent/model pair reaches the same validator through the
+    // direct runtime identity API (the tool surface carries only `model`).
+    runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                comment: Some("matching pair".into()),
+                ..Default::default()
+            },
+            Some("muse".into()),
+            Some("muse-wonder-1.0".into()),
+        )
+        .expect("matching muse agent/model pair must be accepted");
+    assert!(
+        runtime
+            .get_task_comments(&task.id)
+            .unwrap()
+            .iter()
+            .any(|comment| comment.message == "matching pair"
+                && orbit_types::identity::agent_from_model(&comment.by) == Some("muse"))
+    );
+
+    let before = runtime.get_task_comments(&task.id).unwrap();
+    let mismatch = runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                comment: Some("must not persist".into()),
+                ..Default::default()
+            },
+            Some("muse".into()),
+            Some("claude".into()),
+        )
+        .expect_err("muse agent with a claude model must be refused");
+    assert!(
+        mismatch.to_string().contains("does not match"),
+        "{mismatch}"
+    );
+    let unknown = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({"id": task.id, "comment": "must not persist", "model": "llama"}),
+            None,
+            None,
+        )
+        .expect_err("unknown family must be refused");
+    assert!(
+        unknown
+            .to_string()
+            .contains("not a canonical agent family (codex, claude, gemini, grok, muse)"),
+        "{unknown}"
+    );
+    assert_eq!(runtime.get_task_comments(&task.id).unwrap(), before);
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     activity_updates_refuse_replica_writes_and_preserve_owner_updates_scenarios,
@@ -443,5 +547,6 @@ crate::scenario_table!(
     guarded_start_and_activity_notes_redact_before_persistence,
     rejected_artifacts_leave_status_document_and_history_unchanged,
     automation_persists_returned_summary_crew_and_run_history_without_status_change,
-    pr_status_updates_share_admission_and_trim_before_storage
+    pr_status_updates_share_admission_and_trim_before_storage,
+    muse_identity_is_accepted_and_mismatches_refused
 );

@@ -16,7 +16,7 @@ const TASK_STATUS_ENUM: &[&str] = &[
     "rejected",
 ];
 const TASK_COMPLEXITY_ENUM: &[&str] = &["low", "medium", "hard", "xhard"];
-const AGENT_FAMILY_ENUM: &[&str] = &["codex", "claude", "gemini", "grok"];
+const AGENT_FAMILY_ENUM: &[&str] = &["codex", "claude", "gemini", "grok", "muse"];
 
 /// Build the canonical JSON input schema for an Orbit tool.
 pub fn tool_input_schema(schema: &ToolSchema) -> Map<String, Value> {
