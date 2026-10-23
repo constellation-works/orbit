@@ -9,8 +9,10 @@ use orbit_engine::{
     V2AuditWriter, execute_job_with_resume, resolve_job_catalog_refs_for_execution,
 };
 use orbit_types::resource::ExecutorResource;
-use orbit_types::workflow::activity_job::V2AuditEventKind;
-use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind};
+use orbit_types::workflow::activity_job::{ActivityV2Spec, V2AuditEventKind};
+use orbit_types::workflow::{
+    ExecutorDef, ExecutorSandboxKind, tool_allowed, tools_allowed_by_disallow_list,
+};
 
 use super::*;
 
@@ -22,6 +24,49 @@ fn approval_drain_runs_a_pilot_with_a_disallowed_implementer_requirement() {
         return;
     }
     let workspace = Workspace::new();
+    // Positive control derived from the shipped pilot policy, not a
+    // hard-coded tool name: every registered tool the loaded `task_pilot`
+    // activity leaves callable. In deny mode that is the registered set
+    // minus its `tool_disallow_list`; in allow mode it is its `tools` list
+    // expanded against the registry.
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    let pilot_asset = load_activity_asset(
+        &std::fs::read_to_string(assets.join("activities/task_pilot.yaml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(pilot_asset.name, "task_pilot");
+    let ActivityV2Spec::AgentLoop(pilot_spec) = &pilot_asset.spec.spec else {
+        panic!("task_pilot must run an agent");
+    };
+    let pilot_disallow_list = pilot_spec.tool_disallow_list.clone();
+    let registered_tools = workspace.runtime.allowlist_known_tool_names();
+    let mut permitted_tools: Vec<String> = match &pilot_disallow_list {
+        Some(disallow_list) => tools_allowed_by_disallow_list(
+            disallow_list,
+            registered_tools.iter().map(String::as_str),
+        ),
+        None => registered_tools
+            .iter()
+            .filter(|tool| tool_allowed(tool, &pilot_spec.tools))
+            .cloned()
+            .collect(),
+    };
+    permitted_tools.sort();
+    permitted_tools.dedup();
+    assert!(
+        !permitted_tools.is_empty(),
+        "the shipped task_pilot activity must leave at least one registered tool callable"
+    );
+    assert!(
+        !permitted_tools.iter().any(|tool| tool == "orbit.task.add"),
+        "orbit.task.add must stay outside the pilot's permitted tools: {permitted_tools:?}"
+    );
+    // The smallest permitted name is a deterministic legitimate pilot tool
+    // to require alongside the disallowed one.
+    let positive_tool = permitted_tools.first().unwrap().clone();
+    let mut expected_required_tools = vec!["orbit.task.add".to_string(), positive_tool.clone()];
+    expected_required_tools.sort();
+    expected_required_tools.dedup();
     let task = workspace
         .runtime
         .add_task(TaskAddParams {
@@ -31,7 +76,7 @@ fn approval_drain_runs_a_pilot_with_a_disallowed_implementer_requirement() {
             plan: "Review README.md and file findings.".into(),
             context_files: vec!["file:README.md".into()],
             complexity: TaskComplexity::Low,
-            required_tools: vec!["orbit.task.add".into()],
+            required_tools: vec!["orbit.task.add".into(), positive_tool.clone()],
             ..Default::default()
         })
         .unwrap();
@@ -111,12 +156,12 @@ fn approval_drain_runs_a_pilot_with_a_disallowed_implementer_requirement() {
     assert_eq!(workspace.status(&task), TaskStatus::Backlog);
     assert_eq!(
         workspace.runtime.get_task(&task.id).unwrap().required_tools,
-        ["orbit.task.add"],
+        expected_required_tools,
         "piloting preserves the implementer's contract"
     );
 
     let events = audit.events_snapshot().unwrap();
-    let (requested, effective, notes) = events
+    let (requested, effective, notes, event_disallow_list) = events
         .iter()
         .find_map(|event| match &event.kind {
             V2AuditEventKind::ToolAllowlistHarnessDelegated {
@@ -124,15 +169,56 @@ fn approval_drain_runs_a_pilot_with_a_disallowed_implementer_requirement() {
                 requested_tools,
                 effective_tools,
                 omitted_requirement_notes,
+                tool_disallow_list,
                 ..
-            } if task_ids == std::slice::from_ref(&task.id) => {
-                Some((requested_tools, effective_tools, omitted_requirement_notes))
-            }
+            } if task_ids == std::slice::from_ref(&task.id) => Some((
+                requested_tools,
+                effective_tools,
+                omitted_requirement_notes,
+                tool_disallow_list,
+            )),
             _ => None,
         })
         .expect("the pilot reached the provider with its admitted tool policy");
+    // The event must carry the shipped pilot's own policy, so the positive
+    // control below is checked against the policy that actually ran.
+    assert_eq!(
+        event_disallow_list.as_ref(),
+        pilot_disallow_list.as_ref(),
+        "the pilot event must carry the loaded task_pilot disallow list"
+    );
     assert!(!requested.iter().any(|tool| tool == "orbit.task.add"));
     assert!(!effective.iter().any(|tool| tool == "orbit.task.add"));
+    // Positive control: an empty policy would satisfy the absence checks
+    // above, so both lists must retain a tool the shipped pilot permits.
+    assert!(
+        !requested.is_empty(),
+        "requested_tools must retain the permitted requirement {positive_tool}: {requested:?}"
+    );
+    assert!(
+        !effective.is_empty(),
+        "effective_tools must retain permitted pilot tools {permitted_tools:?}: {effective:?}"
+    );
+    assert!(
+        requested.iter().any(|tool| tool == &positive_tool),
+        "requested_tools must contain permitted pilot tool {positive_tool} derived from the shipped task_pilot policy: {requested:?}"
+    );
+    assert!(
+        effective.iter().any(|tool| tool == &positive_tool),
+        "effective_tools must contain permitted pilot tool {positive_tool} derived from the shipped task_pilot policy: {effective:?}"
+    );
+    assert!(
+        permitted_tools.iter().any(|tool| requested
+            .iter()
+            .any(|requested_tool| requested_tool == tool)),
+        "requested_tools must intersect the shipped pilot's permitted tools: {requested:?}"
+    );
+    assert!(
+        permitted_tools.iter().any(|tool| effective
+            .iter()
+            .any(|effective_tool| effective_tool == tool)),
+        "effective_tools must intersect the shipped pilot's permitted tools: {effective:?}"
+    );
     assert!(
         notes.iter().any(|note| {
             note.contains(&task.id)
