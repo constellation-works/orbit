@@ -71,6 +71,7 @@ pub mod test_support {
     pub use crate::application::automation::source::SOURCE_ELAPSED_ENV;
     pub use crate::application::automation::source::test_support::with_delivery_source_clock;
     pub use crate::application::automation::with_reset_probe_hook;
+    pub use crate::application::distributed::admission_checkpoint::with_pull_admission_checkpoint;
     pub use crate::application::job::pipeline::pipeline_worker_observer_completed;
     #[cfg(unix)]
     pub use crate::application::job::pipeline::with_pipeline_worker_log_open_hook;

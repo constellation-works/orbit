@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod owner_evidence;
+
 fn action(pair: &Pair, name: &str, input: Value) -> Value {
     pair.wire
         .owner
@@ -236,6 +238,13 @@ fn owner_pull_admits_selectors_and_verified_no_diff_dispositions() {
 /// Re-scope the task to `criterion` and apply one assessment of it carrying
 /// the agent findings in `findings`.
 pub(super) fn apply_assessment(pair: &Pair, criterion: &str, findings: Value) {
+    let input = assessment_input(pair, criterion, findings);
+    let output = action(pair, "apply_task_pilot_results", input);
+    assert_eq!(output["status"], "succeeded", "{output}");
+    assert_eq!(output["applied_count"], 1, "{output}");
+}
+
+fn assessment_input(pair: &Pair, criterion: &str, findings: Value) -> Value {
     let task_id = &pair.tasks[0];
     pair.wire
         .owner
@@ -262,16 +271,10 @@ pub(super) fn apply_assessment(pair: &Pair, criterion: &str, findings: Value) {
     for (field, finding) in findings.as_object().unwrap() {
         assessment[field] = finding.clone();
     }
-    let output = action(
-        pair,
-        "apply_task_pilot_results",
-        json!({
-            "workspace_path": pair.owner_repo, "prepared": prepared,
-            "results": [{"partition_index": 0, "task_ids": [task_id], "tasks": [assessment]}],
-        }),
-    );
-    assert_eq!(output["status"], "succeeded", "{output}");
-    assert_eq!(output["applied_count"], 1, "{output}");
+    json!({
+        "workspace_path": pair.owner_repo, "prepared": prepared,
+        "results": [{"partition_index": 0, "task_ids": [task_id], "tasks": [assessment]}],
+    })
 }
 
 fn owner_pull_holds_operator_validation_until_the_operator_resolves_it() {
