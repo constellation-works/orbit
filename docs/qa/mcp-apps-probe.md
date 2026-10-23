@@ -230,7 +230,14 @@ workspace and reserve a stable task identity.
 
 Creation receipts live in the allocation registry's `task_action_keys` mapping;
 other receipts are `desktop_mutation` history records committed with the task
-bundle. They survive process restart and have **no TTL**. The guarantee depends
+bundle. New mutation and PR closure entries carry a `desktop_mutation` decision
+with the request ID and payload digest; their existing diagnostic notes remain
+unchanged. Replay reads the typed receipt even if the note changes. Note-only
+history from older versions remains readable only when no decision is present;
+a different decision kind cannot fall back to note text. Legacy PR closure
+markers bind the request ID without a digest, as before.
+
+Receipts survive process restart and have **no TTL**. The guarantee depends
 on retaining that registry and task history: destructive store reset or deletion
 of a task's history removes the corresponding evidence. This desktop surface
 has no deletion operation. Receipts are not a cross-host or cross-workspace

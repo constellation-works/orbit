@@ -9,7 +9,7 @@ use orbit_store::contracts::{AtomicTaskMutationOutcome, DesktopTaskMutationParam
 use orbit_types::{
     desktop::*,
     record::OrbitEvent,
-    task::{Task, TaskHistoryEntry, TaskStatus},
+    task::{DesktopMutationReceipt, Task, TaskDecision, TaskHistoryEntry, TaskStatus},
     tool::ToolSessionContext,
 };
 
@@ -150,18 +150,19 @@ impl OrbitRuntime {
             DesktopTaskOperation::Create { .. } => unreachable!(),
         };
         // Slow PR observation precedes the bundle lock; the locked revision guards the linkage.
-        let receipt_prefix = format!("desktop_request={} ", request.request_id);
-        let expected_receipt = format!("{receipt_prefix}digest={digest}");
-        if let Some(history) = self.get_task_history(&id)?.iter().find(|h| {
-            h.event == "desktop_mutation"
-                && h.note
-                    .as_deref()
-                    .is_some_and(|n| n.starts_with(&receipt_prefix))
-        }) {
-            if history.note.as_deref() != Some(expected_receipt.as_str()) {
-                return Err(invalid("request identity reused with a different payload"));
+        for entry in self
+            .get_task_history(&id)?
+            .iter()
+            .filter(|h| h.event == "desktop_mutation")
+        {
+            if let Some(receipt) = DesktopMutationReceipt::from_entry(entry, &request.request_id)
+                .map_err(|e| invalid(&e.to_string()))?
+            {
+                if receipt.payload_digest != digest {
+                    return Err(invalid("request identity reused with a different payload"));
+                }
+                return self.desktop_write_result(&id, true, Some(&request.request_id), session);
             }
-            return self.desktop_write_result(&id, true, Some(&request.request_id), session);
         }
         let pull_request = if let DesktopTaskOperation::Review { verdict, .. } = &request.operation
         {
@@ -172,17 +173,21 @@ impl OrbitRuntime {
         let head = pull_request.as_ref().map(|pr| pr.head.clone());
         let mut outcome = None;
         self.stores().tasks().with_task_write_lock(&id, &mut || {
-            let key = format!("desktop_request={} ", request.request_id);
-            let receipt = format!("{key}digest={digest}");
-            if let Some(h) = self.get_task_history(&id)?.iter().find(|h| {
-                h.event == "desktop_mutation"
-                    && h.note.as_deref().is_some_and(|n| n.starts_with(&key))
-            }) {
-                if h.note.as_deref() != Some(receipt.as_str()) {
-                    return Err(invalid("request identity reused with a different payload"));
+            for entry in self
+                .get_task_history(&id)?
+                .iter()
+                .filter(|h| h.event == "desktop_mutation")
+            {
+                if let Some(receipt) =
+                    DesktopMutationReceipt::from_entry(entry, &request.request_id)
+                        .map_err(|e| invalid(&e.to_string()))?
+                {
+                    if receipt.payload_digest != digest {
+                        return Err(invalid("request identity reused with a different payload"));
+                    }
+                    outcome = Some(AtomicTaskMutationOutcome::AlreadyApplied);
+                    return Ok(());
                 }
-                outcome = Some(AtomicTaskMutationOutcome::AlreadyApplied);
-                return Ok(());
             }
             if self.stores().tasks().desktop_task_revision(&id)? != expected_revision {
                 return Err(OrbitError::TaskRevisionConflict {
@@ -401,25 +406,42 @@ impl OrbitRuntime {
                 return;
             }
         };
-        let receipt = format!("desktop_request={request_id} ");
-        let Some((previous, committed)) = history
+        let transition = history
             .iter()
-            .find(|h| {
-                h.event == "desktop_mutation"
-                    && h.note.as_deref().is_some_and(|n| n.starts_with(&receipt))
-            })
-            .and_then(|h| Some((h.from_status?, h.to_status?)))
-        else {
+            .filter(|h| h.event == "desktop_mutation")
+            .find_map(
+                |h| match DesktopMutationReceipt::from_entry(h, request_id) {
+                    Ok(Some(receipt)) => Some(Ok((h, receipt))),
+                    Ok(None) => None,
+                    Err(error) => Some(Err(error)),
+                },
+            );
+        let (entry, receipt) = match transition {
+            Some(Ok(transition)) => transition,
+            Some(Err(error)) => {
+                tracing::warn!(task_id = %task.id, %error, "reading the desktop receipt for PR closure failed");
+                return;
+            }
+            None => return,
+        };
+        let Some((previous, committed)) = entry.from_status.zip(entry.to_status) else {
             return;
         };
-        let note = format!("desktop_request={request_id}");
-        if !committed.is_terminal()
-            || task.status != committed
-            || history
-                .iter()
-                .any(|h| h.event == DESKTOP_PR_CLOSURE_EVENT && h.note.as_deref() == Some(&note))
-        {
+        if !committed.is_terminal() || task.status != committed {
             return;
+        }
+        for entry in history
+            .iter()
+            .filter(|h| h.event == DESKTOP_PR_CLOSURE_EVENT)
+        {
+            match DesktopMutationReceipt::from_entry(entry, request_id) {
+                Ok(None) => {}
+                Ok(Some(_)) => return,
+                Err(error) => {
+                    tracing::warn!(task_id = %task.id, %error, "reading the desktop PR closure marker failed");
+                    return;
+                }
+            }
         }
         if !self.close_task_prs_after_transition(previous, task, None) {
             return;
@@ -428,11 +450,11 @@ impl OrbitRuntime {
             at: chrono::Utc::now(),
             by: SYSTEM_ACTOR_LABEL.to_string(),
             event: DESKTOP_PR_CLOSURE_EVENT.to_string(),
-            note: Some(note),
+            note: Some(format!("desktop_request={request_id}")),
             from_status: None,
             to_status: None,
             operation_id: None,
-            decision: None,
+            decision: Some(TaskDecision::DesktopMutation(receipt)),
         };
         if let Err(error) = self.append_system_history(&task.id, vec![entry]) {
             tracing::warn!(

@@ -2,6 +2,7 @@
 use super::*;
 use crate::contracts::{AtomicTaskMutationOutcome, DesktopTaskMutationParams};
 use crate::driver::file::task_bundle::PendingWriteGuard;
+use orbit_types::task::{DesktopMutationReceipt, TaskDecision};
 
 fn revision(bundle: &TaskBundleV2) -> Result<String, OrbitError> {
     let bytes = serde_json::to_vec(&(
@@ -130,18 +131,18 @@ impl TaskV2Store {
         reject_forged_grant(&p.append_history)?;
         self.with_task_lock(id, || {
             let mut b = self.read_existing_bundle(id)?;
-            let key = format!("desktop_request={} ", p.request_id);
-            let receipt = format!("{key}digest={}", p.payload_digest);
-            if let Some(event) = b.events.iter().find(|e| {
-                e.event_type == "desktop_mutation"
-                    && e.note.as_deref().is_some_and(|n| n.starts_with(&key))
-            }) {
-                if event.note.as_deref() != Some(receipt.as_str()) {
-                    return Err(OrbitError::InvalidInput(
-                        "request identity reused with a different payload".into(),
-                    ));
+            let history = super::sidecars::task_history_from_events(b.events.clone());
+            for entry in history.iter().filter(|h| h.event == "desktop_mutation") {
+                if let Some(receipt) = DesktopMutationReceipt::from_entry(entry, &p.request_id)
+                    .map_err(|e| OrbitError::InvalidInput(e.to_string()))?
+                {
+                    if receipt.payload_digest != p.payload_digest {
+                        return Err(OrbitError::InvalidInput(
+                            "request identity reused with a different payload".into(),
+                        ));
+                    }
+                    return Ok(AtomicTaskMutationOutcome::AlreadyApplied);
                 }
-                return Ok(AtomicTaskMutationOutcome::AlreadyApplied);
             }
             if revision(&b)? != p.expected_revision {
                 return Ok(AtomicTaskMutationOutcome::Stale);
@@ -229,12 +230,18 @@ impl TaskV2Store {
                 at: now,
                 by: p.actor.clone(),
                 event_type: "desktop_mutation".into(),
-                note: Some(receipt),
+                note: Some(format!(
+                    "desktop_request={} digest={}",
+                    p.request_id, p.payload_digest
+                )),
                 from_status: (!approval && old_status != b.envelope.status).then_some(old_status),
                 to_status: (!approval && old_status != b.envelope.status)
                     .then_some(b.envelope.status),
                 operation_id: None,
-                decision: None,
+                decision: Some(TaskDecision::DesktopMutation(DesktopMutationReceipt {
+                    request_id: p.request_id.clone(),
+                    payload_digest: p.payload_digest.clone(),
+                })),
             };
             self.bundle_store.append_event(id, &event)?;
             b.events.push(event);
