@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use super::super::config::Destination;
 use super::contracts::DestinationSnapshot;
+use super::diagnostics::{OversizedContext, known_version};
 use super::discovery::{remote_tool_error, snapshot_from_discovery_content, unreachable};
 
 /// Lines the probe reader may queue ahead of the consumer before it blocks.
@@ -104,6 +105,8 @@ pub(in crate::federated) struct DestinationSession {
     /// before a routed `tools/call` is written, so it is never lower than the
     /// phase in flight even while the reader is already blocked mid-line.
     line_cap: Arc<AtomicU64>,
+    tool_result_line_cap: u64,
+    peer_version: Option<String>,
     deadline: Instant,
     next_id: i64,
     pub(super) worker_invocation: Option<orbit_types::tool::WorkerInvocation>,
@@ -113,8 +116,35 @@ pub(in crate::federated) struct DestinationSession {
 impl DestinationSession {
     pub(in crate::federated) fn start(
         destination: Destination,
+        child: Child,
+        timeout: Duration,
+    ) -> Result<Self, OrbitError> {
+        Self::start_bounded(
+            destination,
+            child,
+            timeout,
+            MAX_PROBE_LINE_BYTES,
+            MAX_TOOL_RESULT_LINE_BYTES,
+        )
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(super) fn start_with_test_line_cap(
+        destination: Destination,
+        child: Child,
+        timeout: Duration,
+        cap: u64,
+    ) -> Result<Self, OrbitError> {
+        let cap = cap.clamp(1, MAX_PROBE_LINE_BYTES);
+        Self::start_bounded(destination, child, timeout, cap, cap)
+    }
+
+    fn start_bounded(
+        destination: Destination,
         mut child: Child,
         timeout: Duration,
+        probe_line_cap: u64,
+        tool_result_line_cap: u64,
     ) -> Result<Self, OrbitError> {
         let stdin = child
             .stdin
@@ -134,14 +164,20 @@ impl DestinationSession {
         // waits, and a line longer than any MCP message ends the session
         // instead of growing a string until this process is killed.
         let (sender, lines) = sync_channel(PROBE_LINE_QUEUE);
-        let line_cap = Arc::new(AtomicU64::new(MAX_PROBE_LINE_BYTES));
+        let line_cap = Arc::new(AtomicU64::new(probe_line_cap));
         let reader_cap = Arc::clone(&line_cap);
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             loop {
                 let event = match read_bounded_line(&mut reader, &reader_cap) {
                     Ok(BoundedLine::Line(line)) => Ok(line),
-                    Ok(BoundedLine::TooLong { limit }) => Err(LineTooLong { limit }),
+                    Ok(BoundedLine::TooLong {
+                        limit,
+                        observed_bytes_lower_bound,
+                    }) => Err(LineTooLong {
+                        limit,
+                        observed_bytes_lower_bound,
+                    }),
                     Ok(BoundedLine::Eof) | Err(_) => break,
                 };
                 let refused = event.is_err();
@@ -156,6 +192,8 @@ impl DestinationSession {
             writer: Some(writer),
             lines,
             line_cap,
+            tool_result_line_cap,
+            peer_version: None,
             deadline: Instant::now() + timeout,
             next_id: 0,
             worker_invocation: None,
@@ -201,6 +239,7 @@ impl DestinationSession {
                 format!("destination negotiated MCP protocol {negotiated:?}"),
             ));
         }
+        self.peer_version = known_version(response["result"]["serverInfo"]["version"].as_str());
         self.notify("notifications/initialized")
     }
 
@@ -224,7 +263,11 @@ impl DestinationSession {
             // message here would leave the caller matching on prose.
             return Err(remote_tool_error(&self.destination, content));
         }
-        snapshot_from_discovery_content(&self.destination, content)
+        let snapshot = snapshot_from_discovery_content(&self.destination, content)?;
+        if let Some(version) = known_version(snapshot.host.binary_version.as_deref()) {
+            self.peer_version = Some(version);
+        }
+        Ok(snapshot)
     }
 
     pub(super) fn list_tool_definitions(&mut self) -> Result<Vec<Value>, OrbitError> {
@@ -249,7 +292,7 @@ impl DestinationSession {
         // Before the request is written, so the reader cannot be holding the
         // probe ceiling when the (possibly large) result starts arriving.
         self.line_cap
-            .store(MAX_TOOL_RESULT_LINE_BYTES, Ordering::Release);
+            .store(self.tool_result_line_cap, Ordering::Release);
         let response = self.request(
             "tools/call",
             json!({
@@ -292,7 +335,7 @@ impl DestinationSession {
         arguments: Value,
     ) -> Result<Value, OrbitError> {
         self.line_cap
-            .store(MAX_TOOL_RESULT_LINE_BYTES, Ordering::Release);
+            .store(self.tool_result_line_cap, Ordering::Release);
         let response = self.request(
             crate::internal_drain::CALL_METHOD,
             json!({"protocol": crate::INTERNAL_DRAIN_PROTOCOL, "name": name, "arguments": arguments}),
@@ -316,6 +359,11 @@ impl DestinationSession {
         params: Value,
         lost: LostAnswer<'_>,
     ) -> Result<Value, OrbitError> {
+        let context = OversizedContext::pending(
+            method,
+            &params,
+            matches!(lost, LostAnswer::OutcomeUnknown { .. }),
+        );
         self.next_id += 1;
         let id = self.next_id;
         self.send(
@@ -328,7 +376,7 @@ impl DestinationSession {
             }),
             |destination, reason| lost.classify(destination, id, reason),
         )?;
-        self.await_response(method, id, lost)
+        self.await_response(method, id, lost, context)
     }
 
     fn notify(&mut self, method: &str) -> Result<(), OrbitError> {
@@ -415,6 +463,7 @@ impl DestinationSession {
         method: &str,
         id: i64,
         lost: LostAnswer<'_>,
+        context: OversizedContext,
     ) -> Result<Value, OrbitError> {
         loop {
             // Checked before every read: a zero-length wait still returns a
@@ -428,12 +477,19 @@ impl DestinationSession {
             };
             let line = match received {
                 Ok(Ok(line)) => line,
-                Ok(Err(LineTooLong { limit })) => {
+                Ok(Err(LineTooLong {
+                    limit,
+                    observed_bytes_lower_bound,
+                })) => {
                     return Err(lost.classify(
                         &self.destination,
                         id,
-                        format!(
-                            "answer to '{method}' exceeded the {limit}-byte line limit and was refused"
+                        context.refusal(
+                            &self.destination,
+                            self.peer_version.as_deref(),
+                            id,
+                            limit,
+                            observed_bytes_lower_bound,
                         ),
                     ));
                 }
@@ -588,6 +644,7 @@ impl DestinationSession {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct LineTooLong {
     limit: u64,
+    observed_bytes_lower_bound: u64,
 }
 
 /// What one bounded read produced.
@@ -596,7 +653,10 @@ pub(super) enum BoundedLine {
     /// One line, including its trailing newline when the stream had one.
     Line(String),
     /// The line exceeded the cap before its newline arrived.
-    TooLong { limit: u64 },
+    TooLong {
+        limit: u64,
+        observed_bytes_lower_bound: u64,
+    },
     /// The stream ended with nothing pending.
     Eof,
 }
@@ -625,7 +685,12 @@ pub(super) fn read_bounded_line(
             None => (chunk.len(), false),
         };
         if (line.len() + take) as u64 > limit {
-            return Ok(BoundedLine::TooLong { limit });
+            // Count only the current line bytes already visible in the fixed-size
+            // read buffer. Never consume/drain further to find its end.
+            return Ok(BoundedLine::TooLong {
+                limit,
+                observed_bytes_lower_bound: line.len() as u64 + take as u64,
+            });
         }
         line.extend_from_slice(&chunk[..take]);
         reader.consume(take);

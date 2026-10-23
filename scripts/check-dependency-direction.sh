@@ -62,7 +62,8 @@ allowed_internal_deps() {
       ;;
     orbit-mcp)
       # MCP owns framing, canonical discovery, and direct SSH stdio transport.
-      echo "orbit-common orbit-registry orbit-tools orbit-types"
+      # Its dev-only self dependency enables scoped transport fixture caps.
+      echo "orbit-common orbit-mcp orbit-registry orbit-tools orbit-types"
       ;;
     orbit-web)
       echo "orbit-common orbit-cmd orbit-core orbit-registry orbit-types orbit-engine orbit-store"
@@ -80,6 +81,10 @@ allowed_internal_deps() {
 
 allowed_dev_only_deps() {
   case "$1" in
+    orbit-mcp)
+      # Only integration tests enable its test-support transport hooks.
+      echo "orbit-mcp"
+      ;;
     orbit-web)
       echo "orbit-engine orbit-store"
       ;;

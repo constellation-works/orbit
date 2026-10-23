@@ -1984,6 +1984,7 @@ dependencies = [
  "chrono",
  "libc",
  "orbit-common",
+ "orbit-mcp",
  "orbit-registry",
  "orbit-tools",
  "orbit-types",
@@ -1995,6 +1996,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
