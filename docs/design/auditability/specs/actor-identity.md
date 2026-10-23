@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Canonical Audit Actor Identity"
 tags: ["auditability"]
-last_validated: 2026-10-19
+last_validated: 2026-10-23
 ---
 
 # Spec: Canonical Audit Actor Identity
@@ -13,7 +13,7 @@ uses current model names as examples of each kind, not as a copy of that sample:
 
 | kind | example values |
 |---|---|
-| agent family | `codex`, `claude`, `grok` |
+| agent family | `codex`, `claude`, `gemini`, `grok`, `muse` |
 | model string | `claude-opus-5-5`, `gpt-6-luna`, `opus`, `sonnet`, `claude-sonnet-5` |
 | system / synthetic | `admin`, `hook` |
 | unattributed | `unknown`, `unverified`, `agent` |
@@ -49,8 +49,8 @@ label to a `CanonicalActor`:
 |---|---|
 | `kind` | `human` \| `agent` \| `system` \| `hook` \| `unattributed` |
 | `id` | grouping key within `kind`: the agent family for agents, the canonical label otherwise |
-| `vendor` | `anthropic`, `openai`, `google`, `xai`, `ollama` — agents only |
-| `family` | `claude`, `codex`, `gemini`, `grok`, `ollama` — agents only |
+| `vendor` | `anthropic`, `openai`, `google`, `xai`, `meta`, `ollama` — agents only |
+| `family` | `claude`, `codex`, `gemini`, `grok`, `muse`, `ollama` — agents only |
 | `model` | the model string as recorded, when the label named one rather than a bare family |
 | `alias_version` | the alias-map version that produced this record |
 
@@ -93,7 +93,7 @@ resolves. A bump requires a new append-only ledger migration with its own privat
 backfill helper, which re-derives exactly the rows whose stamped version is not current.
 The shipped v16 and v18 helpers are private to their versions; their current domain-map
 calls remain valid because they stamp the derivation version on every affected row. Map history: v2 (migration v18 `audit_actor_alias_v2`) promoted `fable`
-from a shorthand alias to a family rule so versioned Fable labels resolve to `claude`.
+from a shorthand alias to a family rule so versioned Fable labels resolve to `claude`; v3 registers `muse` as a canonical family, so `muse` and `muse-*` labels resolve to the `muse` family (vendor `meta`).
 
 ## Persistence
 

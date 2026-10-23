@@ -3,8 +3,8 @@ summary: "Auditability — Design"
 type: design
 title: "Auditability — Design"
 owner: codex
-last_updated: 2026-10-15
-last_validated: 2026-10-19
+last_updated: 2026-10-23
+last_validated: 2026-10-23
 status: Draft
 feature: auditability
 doc_role: design
@@ -40,7 +40,7 @@ The CLI RAII guard in `crates/orbit-cli/src/audit_middleware.rs` defaults to fai
 
 [ORB-10200] moved command and subcommand metadata selection out of the middleware into the exhaustive `Commands::operation` registry in `crates/orbit-cli/src/command/operation/registry.rs`. The same operation declaration now owns dispatch, runtime bootstrap policy, audit metadata, JSON error preference, and hook error suppression, so a new top-level command cannot compile until all five concerns are declared; `audit_middleware.rs` owns only audit persistence.
 
-For `orbit tool run`, [T20260427-52] first collapsed duplicate `agent` + `model` inputs. [ORB-00080] later made the family the durable identity: agent-facing `model` inputs should be `codex`, `claude`, `gemini`, or `grok`, while full model strings remain accepted for compatibility and normalize to the family before persistence. [ORB-10451] applies that same trust boundary to runtime bootstrap: CLI and `orbit-web` processes canonicalize `ORBIT_AGENT_NAME` / `ORBIT_AGENT_MODEL` to an agent family, and an absent or inconsistent envelope records `unknown` instead of asserting verified human presence. This changes attribution only; actor-based command gating remains separate work.
+For `orbit tool run`, [T20260427-52] first collapsed duplicate `agent` + `model` inputs. [ORB-00080] later made the family the durable identity: agent-facing `model` inputs should be `codex`, `claude`, `gemini`, `grok`, or `muse`, while full model strings remain accepted for compatibility and normalize to the family before persistence. [ORB-10451] applies that same trust boundary to runtime bootstrap: CLI and `orbit-web` processes canonicalize `ORBIT_AGENT_NAME` / `ORBIT_AGENT_MODEL` to an agent family, and an absent or inconsistent envelope records `unknown` instead of asserting verified human presence. This changes attribution only; actor-based command gating remains separate work.
 
 After [T20260428-4], tool-invocation audit is written at Core's dispatch boundary for
 registered CLI/MCP tools. The current implementation is
