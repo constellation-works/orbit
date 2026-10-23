@@ -52,5 +52,3 @@ Examples:
   orbit run readiness
   orbit run readiness TASK-123 TASK-124
   orbit run readiness --concurrency 8 --allow-crew sol --json
-
-Operator reference: orbit-orchestrate/references/orchestration.md#readiness-snapshots

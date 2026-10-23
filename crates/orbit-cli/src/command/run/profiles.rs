@@ -21,7 +21,7 @@ const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 #[derive(Args)]
 #[command(
     about = "Show what each kind of delivery costs on this host, minute by minute",
-    after_help = "One resource profile per workspace, work class and complexity, from the CPU and memory\nrecent deliveries recorded. `--accuracy` instead compares admission forecasts with the\nhost's measured load. Read-only.\nColumn reference: docs/runbooks/forecast-accuracy.md.\n\nExamples:\n  orbit run profiles\n  orbit run profiles --json\n  orbit run profiles --accuracy\n  orbit run profiles --accuracy --wide\n  orbit run profiles --accuracy --since 2026-10-15T00:00:00Z --drain <RUN> --mode enforce --json"
+    after_help = "One resource profile per workspace, work class and complexity, from the CPU and memory\nrecent deliveries recorded. `--accuracy` instead compares admission forecasts with the\nhost's measured load. Read-only.\n\nExamples:\n  orbit run profiles\n  orbit run profiles --json\n  orbit run profiles --accuracy\n  orbit run profiles --accuracy --wide\n  orbit run profiles --accuracy --since 2026-10-15T00:00:00Z --drain <RUN> --mode enforce --json"
 )]
 pub struct RunProfilesArgs {
     /// Compare recorded admission forecasts with the host's measured load

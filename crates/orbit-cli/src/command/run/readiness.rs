@@ -16,7 +16,7 @@ const DEFAULT_LIMIT: usize = 50;
 #[command(
     about = "Explain why backlog tasks can or cannot start in auto-drain",
     override_usage = "orbit run readiness [<TASK_ID>...] [OPTIONS]",
-    after_help = "This is a read-only snapshot: it does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks. Eligible tasks are not guaranteed to start.\nAn explicit --concurrency overrides the live drain's ceiling; --allow-crew\npreviews a crew restriction without changing the drain.\n\nExamples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --allow-crew sol --json\n\nOperator reference: orbit-orchestrate/references/orchestration.md#readiness-snapshots"
+    after_help = "This is a read-only snapshot: it does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks. Eligible tasks are not guaranteed to start.\nAn explicit --concurrency overrides the live drain's ceiling; --allow-crew\npreviews a crew restriction without changing the drain.\n\nExamples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --allow-crew sol --json"
 )]
 pub struct ReadinessCommand {
     /// Optional task IDs to explain. Omit to inspect a bounded backlog snapshot.

@@ -43,7 +43,6 @@ Options:
 
 JSON: {"run":<job-run>,"pull_claim":…,"crew_window":…,"catalog_layers":[…],"pipeline_state":…,"steps":[…],"steps_source":"record|audit","provider_processes":[…]}, or {"run_id","job_id","step","step_output"} with -s.
 The State: line is `.run.state`. Table step numbers are one-based; JSON `step_index` is zero-based and durations are milliseconds.
-Field reference: docs/runbooks/stuck-job-runs.md (Read `orbit run show` output).
 
 Examples:
   orbit run show
