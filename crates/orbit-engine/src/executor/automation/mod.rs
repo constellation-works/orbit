@@ -114,10 +114,12 @@ pub(crate) fn execute_engine_action<
                     )
                 }
             };
-            let target_run_id = input
-                .get("target_run_id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned);
+            let target_run_id = match input.get("target_run_id") {
+                None | Some(Value::Null) => None,
+                Some(val) => Some(val.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+                    OrbitError::InvalidInput("target_run_id must be a string".to_string())
+                })?),
+            };
             // The scratch window is validated before anything is deleted. A
             // sweep scoped to one run leaves the shared scratch alone.
             let scratch_retention_hours = match input.get("scratch_older_than_hours") {

@@ -515,6 +515,93 @@ fn worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty() {
     );
 }
 
+/// [ORB-17621] Non-string target_run_id is rejected with InvalidInput naming
+/// target_run_id before any deletion, leaving checkouts untouched.
+fn worktree_gc_rejects_non_string_target_run_id_and_deletes_nothing() {
+    isolated(
+        "worktree_gc_rejects_non_string_target_run_id_and_deletes_nothing",
+        || {
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+
+            let setup = |run_id: &str, task_id: &str| {
+                host.add_task(task_id, TaskStatus::Backlog);
+                let input = setup_input(&[task_id], run_id);
+                let setup = action(&host, "worktree_setup", &input).expect("worktree setup");
+                host.set_status(task_id, TaskStatus::Done);
+                host.add_run(job_run(run_id, JobRunState::Success, input));
+                Checkout::from_setup(&setup)
+            };
+
+            let settled = setup("jrun-gc-num-settled", "T-GC-NUM-SETTLED");
+            let other = setup("jrun-gc-num-other", "T-GC-NUM-OTHER");
+
+            assert!(
+                settled.path.exists(),
+                "setup created checkout for settled run"
+            );
+            assert!(other.path.exists(), "setup created checkout for other run");
+
+            // Numeric, boolean, array, and object target_run_id values are rejected with
+            // InvalidInput naming target_run_id, and must not delete any checkout.
+            for bad_target in [
+                json!(42),
+                json!(12345),
+                json!(true),
+                json!(["jrun"]),
+                json!({"id": "jrun"}),
+            ] {
+                let err = action(&host, "worktree_gc", &json!({"target_run_id": bad_target}))
+                    .expect_err("non-string target_run_id must be rejected");
+                match err {
+                    OrbitError::InvalidInput(message) => {
+                        assert!(
+                            message.contains("target_run_id"),
+                            "refusal must name target_run_id: {message}"
+                        );
+                    }
+                    other => panic!("expected InvalidInput, got: {other:?}"),
+                }
+                assert!(
+                    settled.path.exists(),
+                    "refused target_run_id must not delete settled checkout"
+                );
+                assert!(
+                    other.path.exists(),
+                    "refused target_run_id must not delete other checkout"
+                );
+            }
+
+            // A string target_run_id still scopes the sweep and reaps only the targeted checkout,
+            // skipping scratch GC.
+            let result = action(
+                &host,
+                "worktree_gc",
+                &json!({
+                    "target_run_id": "jrun-gc-num-settled",
+                    "scratch_older_than_hours": 1
+                }),
+            )
+            .expect("valid string target_run_id succeeds");
+            assert!(
+                result.get("scratch").is_none(),
+                "scoped sweep must skip scratch GC"
+            );
+            let reports = result["reports"].as_array().expect("gc reports");
+            assert_eq!(
+                reports.len(),
+                1,
+                "scoped sweep should only report on target run"
+            );
+            assert_eq!(reports[0]["run_id"], "jrun-gc-num-settled");
+            assert_eq!(reports[0]["action"], "removed");
+
+            assert!(!settled.path.exists(), "targeted checkout was removed");
+            assert!(other.path.exists(), "untargeted checkout remains untouched");
+        },
+    );
+}
+
 /// [ORB-14101] `branch_prefix` is a Git namespace, not a path. `..` and a
 /// leading `-` are refused before any checkout exists. A slash stays in the
 /// branch ref and becomes one directory component, including when
@@ -5303,6 +5390,10 @@ fn worktree_contracts_1() {
             (
                 "worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root",
                 worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root,
+            ),
+            (
+                "worktree_gc_rejects_non_string_target_run_id_and_deletes_nothing",
+                worktree_gc_rejects_non_string_target_run_id_and_deletes_nothing,
             ),
         ]);
     });
