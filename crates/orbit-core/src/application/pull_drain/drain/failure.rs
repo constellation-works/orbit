@@ -396,6 +396,20 @@ fn leaf_failure(
     {
         reason = format!("candidate carry failed: {refusal}; original failure: {reason}");
     }
+    // Reconciliation's liveness identity (or a candidate-carry refusal) can
+    // exhaust the reason bound before its trailing worker cause. Keep that
+    // evidence first without changing the failure class selected above.
+    if run.state == JobRunState::Interrupted
+        && let Some(clause) = diagnostic
+            .and_then(|(_, message)| message.split_once("; worker exit: "))
+            .or_else(|| reason.split_once("; worker exit: "))
+            .map(|(_, clause)| clause)
+    {
+        let context = reason
+            .split_once("; worker exit: ")
+            .map_or(reason.as_str(), |(context, _)| context);
+        reason = format!("worker exit: {clause}; {context}");
+    }
     let reason = reason.trim();
     let cut = floor_char_boundary(reason, MAX_FAILURE_REASON_BYTES);
     let crew = run
