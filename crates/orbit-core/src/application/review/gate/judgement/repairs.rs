@@ -184,7 +184,7 @@ fn out_of_scope_paths(paths: &[String], tasks: &[Task]) -> Vec<String> {
 }
 
 fn normalize_git_path(path: &str) -> String {
-    path.trim().trim_start_matches("./").to_string()
+    path.strip_prefix("./").unwrap_or(path).to_string()
 }
 
 /// The author label a reviewer's repair commit is attributed to.

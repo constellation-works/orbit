@@ -390,8 +390,8 @@ fn ensure_selector_resolves(
     entry: &str,
     roots: &ContextSelectorRoots,
 ) -> Result<(), SelectorRejection> {
-    let trimmed = entry.trim();
-    if trimmed.is_empty() {
+    let trimmed = entry.trim_start();
+    if trimmed.trim().is_empty() {
         return Err(SelectorRejection::Invalid(OrbitError::InvalidInput(
             "selector input must not be empty".to_string(),
         )));
