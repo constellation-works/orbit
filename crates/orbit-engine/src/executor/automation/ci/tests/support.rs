@@ -40,9 +40,11 @@ pub(super) struct FakeQueries {
     /// Concurrency-cancellation annotation per job id.
     concurrency_cancellations: BTreeMap<u64, String>,
     /// Failed-step logs per job id; an unscripted job's log is empty.
-    logs: BTreeMap<u64, RunLog>,
-    /// Every job whose log was read.
-    pub(super) log_reads: Mutex<Vec<u64>>,
+    logs: BTreeMap<u64, (String, bool)>,
+    /// Logs that differ by scope for a particular job.
+    scoped_logs: Vec<(u64, LogScope, String, bool)>,
+    /// Every run, job, scope and byte limit whose log was read.
+    pub(super) log_reads: Mutex<Vec<(String, u64, LogScope, usize)>>,
     /// Every limit passed to `open_pull_requests`.
     pub(super) pull_request_limits: Mutex<Vec<u64>>,
     /// Every limit passed to `closed_pull_requests`.
@@ -225,16 +227,20 @@ impl FakeQueries {
 
     /// A failed-step log GitHub delivered in full.
     pub(super) fn with_log(mut self, job_id: u64, text: &str) -> Self {
-        self.logs
-            .insert(job_id, super::super::query::bounded_run_log(text, 16_384));
+        self.logs.insert(job_id, (text.to_string(), true));
         self
     }
 
     /// A failed-step log whose source GitHub did not deliver in full.
     pub(super) fn with_incomplete_log(mut self, job_id: u64, text: &str) -> Self {
-        let mut log = super::super::query::bounded_run_log(text, 16_384);
-        log.source_complete = false;
-        self.logs.insert(job_id, log);
+        self.logs.insert(job_id, (text.to_string(), false));
+        self
+    }
+
+    /// A job log whose text differs between failed-step and all-log reads.
+    pub(super) fn with_scoped_log(mut self, job_id: u64, scope: LogScope, text: &str) -> Self {
+        self.scoped_logs
+            .push((job_id, scope, text.to_string(), true));
         self
     }
 }
@@ -341,21 +347,38 @@ impl CiQueries for FakeQueries {
 
     fn run_logs(
         &self,
-        _run_id: &str,
+        run_id: &str,
         job_id: u64,
-        _scope: LogScope,
+        scope: LogScope,
         max_bytes: usize,
         _cached_view: Option<&Value>,
     ) -> Result<RunLog, OrbitError> {
-        self.log_reads.lock().expect("log reads lock").push(job_id);
+        self.log_reads.lock().expect("log reads lock").push((
+            run_id.to_string(),
+            job_id,
+            scope,
+            max_bytes,
+        ));
         if let Some(error) = self.run_log_errors.get(&job_id) {
             return Err(OrbitError::Execution(error.clone()));
         }
-        Ok(self
-            .logs
-            .get(&job_id)
-            .cloned()
-            .unwrap_or_else(|| super::super::query::bounded_run_log("", max_bytes)))
+        let scripted = self
+            .scoped_logs
+            .iter()
+            .rev()
+            .find(|(scripted_job, scripted_scope, _, _)| {
+                *scripted_job == job_id && *scripted_scope == scope
+            })
+            .map(|(_, _, text, source_complete)| (text.as_str(), *source_complete))
+            .or_else(|| {
+                self.logs
+                    .get(&job_id)
+                    .map(|(text, source_complete)| (text.as_str(), *source_complete))
+            });
+        let (text, source_complete) = scripted.unwrap_or(("", true));
+        let mut log = super::super::query::bounded_run_log(text, max_bytes);
+        log.source_complete = source_complete;
+        Ok(log)
     }
 
     fn remote_branch_heads(&self) -> Result<RemoteBranchHeads, OrbitError> {
