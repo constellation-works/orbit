@@ -33,9 +33,13 @@ The task lands in `proposed`. Nothing runs yet.
 ## 2. Approve it
 
 In the dashboard, the task appears in **Tasks** under **Awaiting approval**.
-Open it, read the description and criteria, and click **Approve**. It moves to
-`backlog`. If the task is wrong, click **reject**, or ask your agent to fix it
-first.
+Open it, read the description, criteria, and **Context files** tab, and click
+**Approve**. It moves to `backlog`. If the task is wrong, click **reject**, or
+ask your agent to fix it first.
+
+The **Context files** tab lists the files and directories the task expects to
+change. Orbit locks them for the run, so an overlapping task waits its turn.
+Markdown files are shared rather than locked by default.
 
 ![The Tasks list: a proposed task under Awaiting approval with Approve, a task in progress with its host and View run, and backlog tasks with Ship.](../../../assets/dashboard/dashboard-approve-ship.png)
 
@@ -45,9 +49,11 @@ own.
 
 ## 3. Ship it
 
-Click **Ship** on the task. Orbit reserves the files the task touches, gives it
-an isolated worktree, and runs an agent in the sandbox to plan, execute, and
-review the change. Click **View run** to follow each step live.
+Click **Ship** on the task. Orbit locks the task's context files, gives it an
+isolated worktree, and runs an agent in the sandbox to plan, execute, and check
+the change. Click **View run** to follow each step live. A second agent reviews
+the change only when review is turned on: `review.timing` is off by default, and
+[Review layers](../../concepts/tasks/#review-layers) explains how to enable it.
 
 ![A finished ship run: its job, task, state, duration, and host, and a step timeline from worktree through implement, validate, review gate, and push to pr_open.](../../../assets/dashboard/dashboard-run-detail.png)
 
@@ -61,8 +67,13 @@ The task's detail shows the plan and the execution summary, plus the
 reviewer's verdict when second-agent review is on. **Runs** holds every step
 and event behind them.
 
-Review the pull request and merge it on GitHub. Then click **Approve** on the
-task to move it from `review` to `done`.
+Review the pull request and merge it on GitHub. Then the task moves to `done`
+by one of two routes. Click **Approve** on the task. Or let Orbit settle it:
+each `orbit run auto` delivery window, and `orbit task settle-merged <id>`,
+closes a task whose delivery pull request has merged, unless a run or claim of
+the task is still live or a post-deploy criterion is still unrecorded. Settling
+writes a landing note that names the pull request and merge commit, and starts
+no work. It approves nothing and merges nothing.
 
 If the run fails, its detail opens on the step it stopped at and the error it
 recorded. Fix the cause, then click **Resume** to restart from that step. Or
@@ -71,9 +82,11 @@ evidence and matches it to a known failure.
 
 :::note[Two gates stay yours]
 A new task waits in `proposed` until you approve it, and a ship run stops at
-`review` with the pull request open. Merging the pull request and closing the
-task are separate decisions, until you choose to
-[let runs merge](../workflows/#completing-work-with---complete).
+`review` with the pull request open. Merging the pull request is your decision,
+unless you choose to
+[let runs merge](../workflows/#completing-work-with---complete). Closing the
+task can follow your merge, through Approve or settlement. Neither merges
+anything for you.
 :::
 
 ## From the terminal
@@ -90,12 +103,18 @@ orbit task update "$TASK_ID" --approve   # proposed → backlog
 orbit run ship "$TASK_ID"                # prints a run ID and returns
 orbit run show <RUN_ID>                  # follow the run
 orbit task update "$TASK_ID" --approve   # after you merge: review → done
+orbit task settle-merged "$TASK_ID"      # or let Orbit settle it once merged
 ```
 
 `orbit task add` prints only the new task ID. `--title` and `--complexity` are
-required; `--context` narrows the work to the files that matter (see
-[Choose Scopes](../../how-to/scoping-rules/)). `--approve` takes the next
-approval step: `proposed` to `backlog`, then `review` to `done`.
+required. `--context` names the files and directories the task expects to
+change. Orbit locks them, so an overlapping task waits, and Markdown files are
+shared rather than locked by default. It is a starting point, not a limit: a
+run that changes other files still delivers, Orbit adds them to the task's
+context, and the run is recorded as a footprint miss. See
+[how a delivery window starts tasks](../../how-to/continuous-delivery/#3-check-what-will-actually-start).
+`--approve` takes the next approval step: `proposed` to `backlog`, then
+`review` to `done`.
 
 - `orbit task show "$TASK_ID"` shows the task.
 - `orbit audit list` shows the recorded events.
