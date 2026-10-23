@@ -18,6 +18,8 @@ mod git_test_support;
 mod base_sync;
 mod before_landing_review;
 mod candidate_resume;
+#[cfg(unix)]
+mod ci_collect;
 mod claimed_candidate_paths;
 #[cfg(unix)]
 mod claimed_pr_reuse;
