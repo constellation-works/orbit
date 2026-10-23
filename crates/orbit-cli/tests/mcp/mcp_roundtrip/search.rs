@@ -133,6 +133,7 @@ fn multi_word_search_ranks_partial_hits_and_preserves_cli_tool_mcp_parity() {
             .is_empty(),
         "friction matching does not use the task any-term fallback"
     );
+
     assert_eq!(
         cli("friction", "generation", 10, None)["results"]
             .as_array()
@@ -163,4 +164,70 @@ fn multi_word_search_ranks_partial_hits_and_preserves_cli_tool_mcp_parity() {
             empty
         );
     }
+}
+
+#[test]
+fn search_queryless_refusal_names_supported_fields_and_lists_reachable_alternatives() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+
+    let refused = client.call_tool_err("orbit_search", json!({ "model": "codex" }));
+    assert_eq!(
+        refused["code"], "invalid_input",
+        "wrong error category: {refused}"
+    );
+    let message = refused["message"].as_str().unwrap_or_default();
+    for field in ["query", "tag", "kind", "friction"] {
+        assert!(
+            message.contains(field),
+            "the refusal should name a supported search field (`{field}`): {refused}"
+        );
+    }
+    assert!(
+        !message.contains("path") && !message.contains("--"),
+        "the refusal must not steer toward the retired path option or CLI-only flags: {refused}"
+    );
+
+    let seeded = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "refusal alternative reachability probe",
+            "description": "Seeded task for the queryless refusal alternatives",
+            "tags": ["refusal-probe"],
+            "complexity": "low",
+            "model": "codex"
+        }),
+    );
+    let seeded_id = seeded["id"].clone();
+
+    let by_tag = client.call_tool_ok(
+        "orbit_search",
+        json!({ "tag": "refusal-probe", "model": "codex" }),
+    );
+    assert!(
+        by_tag["results"]
+            .as_array()
+            .is_some_and(|hits| hits.iter().any(|hit| hit["id"] == seeded_id)),
+        "the refused `tag` alternative must reach the seeded task: {by_tag}"
+    );
+
+    let listing = client.call_tool_ok(
+        "orbit_search",
+        json!({ "kind": "friction", "model": "codex" }),
+    );
+    assert!(
+        listing["results"].is_array(),
+        "the refused `kind: friction` alternative must reach the friction listing: {listing}"
+    );
+
+    let by_query = client.call_tool_ok(
+        "orbit_search",
+        json!({ "query": "refusal alternative reachability", "model": "codex" }),
+    );
+    assert!(
+        by_query["results"]
+            .as_array()
+            .is_some_and(|hits| hits.iter().any(|hit| hit["id"] == seeded_id)),
+        "the refused `query` alternative must reach the seeded task: {by_query}"
+    );
 }
