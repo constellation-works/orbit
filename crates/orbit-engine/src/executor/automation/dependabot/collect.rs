@@ -34,21 +34,24 @@ pub(super) fn collect<Q: DependabotQueries + ?Sized>(
     queries: &Q,
     input: &Value,
 ) -> Result<Value, OrbitError> {
-    let dependabot_limit = bounded_u64(input, "max_alerts", DEFAULT_LIMIT, MAX_LIMIT)?;
-    let code_limit = bounded_u64(input, "max_code_scanning_alerts", DEFAULT_LIMIT, MAX_LIMIT)?;
+    let dependabot_limit = bounded_u64(input, "max_alerts", DEFAULT_LIMIT, MAX_LIMIT)?.max(1);
+    let code_limit =
+        bounded_u64(input, "max_code_scanning_alerts", DEFAULT_LIMIT, MAX_LIMIT)?.max(1);
     let secret_limit = bounded_u64(
         input,
         "max_secret_scanning_alerts",
         DEFAULT_LIMIT,
         MAX_LIMIT,
-    )?;
+    )?
+    .max(1);
     let location_limit = bounded_u64(
         input,
         "max_secret_locations",
         DEFAULT_LOCATION_LIMIT,
         MAX_LIMIT,
-    )?;
-    let pr_limit = bounded_u64(input, "max_pull_requests", DEFAULT_LIMIT, MAX_LIMIT)?;
+    )?
+    .max(1);
+    let pr_limit = bounded_u64(input, "max_pull_requests", DEFAULT_LIMIT, MAX_LIMIT)?.max(1);
     let repo = optional_input_string(input, "repo");
     let auth = queries.auth_status();
     if !auth.usable() {
