@@ -44,6 +44,55 @@ pub struct CheckoutEvidence {
     pub display_truncated: bool,
 }
 
+/// A scoped selection over a log stream: a named step and/or a byte or line
+/// window. Byte offsets are 0-based and end-exclusive over the candidate
+/// bytes; line numbers are 1-based and end-exclusive over candidate lines.
+/// When a step is present the candidate is that step's lines, and a window
+/// then applies within the step section; otherwise the candidate is the
+/// whole log. Windows are still bounded by the caller's `max_bytes` excerpt
+/// cap, with the usual omission marker when the selection exceeds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogSelection {
+    pub step: Option<String>,
+    pub byte_window: Option<(usize, Option<usize>)>,
+    pub line_window: Option<(usize, Option<usize>)>,
+}
+
+impl LogSelection {
+    pub fn step(step: String) -> Self {
+        Self {
+            step: Some(step),
+            byte_window: None,
+            line_window: None,
+        }
+    }
+
+    fn needs_line_mode(&self) -> bool {
+        self.step.is_some() || self.line_window.is_some()
+    }
+
+    pub fn describe(&self, selected_bytes: usize, selected_lines: usize) -> Value {
+        let (byte_start, byte_end) = match self.byte_window {
+            Some((start, end)) => (Some(start), end),
+            None => (None, None),
+        };
+        let (line_start, line_end) = match self.line_window {
+            // Stored 0-based; report the caller's 1-based numbers.
+            Some((start, end)) => (Some(start + 1), end.map(|end| end + 1)),
+            None => (None, None),
+        };
+        serde_json::json!({
+            "step": self.step,
+            "byte_start": byte_start,
+            "byte_end": byte_end,
+            "line_start": line_start,
+            "line_end": line_end,
+            "selected_bytes": selected_bytes,
+            "selected_lines": selected_lines,
+        })
+    }
+}
+
 /// A bounded excerpt and checkout evidence collected while a log is drained.
 /// No unbounded copy of the source log is retained.
 pub struct StreamedLog {
@@ -60,6 +109,15 @@ pub struct StreamedLog {
     /// False when a source limit, invalid line, or explicit truncation notice
     /// prevents complete diagnostic collection; independent of display size.
     pub source_complete: bool,
+    /// The scoped selection applied to `text`, when one was requested.
+    pub selection: Option<LogSelection>,
+    /// Bytes in the selected section/window before the excerpt cap.
+    pub selected_bytes: usize,
+    /// Lines in the selected section/window (line/step selections).
+    pub selected_lines: usize,
+    /// Whether the requested step/window matched anything in this source.
+    /// Always true for an unscoped read.
+    pub selection_found: bool,
 }
 
 /// Incrementally retain the head/tail excerpt and checkout evidence from a
@@ -88,6 +146,14 @@ pub struct StreamedLogCollector {
     evidence: CheckoutEvidenceCollector,
     diagnostic: diagnostic::DiagnosticCollector,
     nextest: super::nextest_regions::NextestRegions,
+    selection: Option<LogSelection>,
+    scoped_line: Vec<u8>,
+    candidate_byte_offset: usize,
+    candidate_line_index: usize,
+    selected_bytes: usize,
+    selected_lines: usize,
+    selection_found: bool,
+    plain_step_active: bool,
 }
 
 impl StreamedLogCollector {
@@ -96,6 +162,26 @@ impl StreamedLogCollector {
     /// the failing command and its tail carries the assertion.
     pub fn new(max_bytes: usize, max_evidence_lines: usize) -> Self {
         Self::with_head_bytes(max_bytes, max_bytes / 2, max_evidence_lines)
+    }
+
+    /// An even split over a scoped selection (see [`LogSelection`]).
+    pub fn scoped(max_bytes: usize, max_evidence_lines: usize, selection: LogSelection) -> Self {
+        let mut collector = Self::with_head_bytes(max_bytes, max_bytes / 2, max_evidence_lines);
+        collector.selection = Some(selection);
+        collector.selection_found = false;
+        collector
+    }
+
+    /// A tail-weighted split over a scoped selection.
+    pub fn tail_weighted_scoped(
+        max_bytes: usize,
+        max_evidence_lines: usize,
+        selection: LogSelection,
+    ) -> Self {
+        let mut collector = Self::with_head_bytes(max_bytes, max_bytes / 4, max_evidence_lines);
+        collector.selection = Some(selection);
+        collector.selection_found = false;
+        collector
     }
 
     /// A tail-weighted split, for a whole-job log.
@@ -124,6 +210,14 @@ impl StreamedLogCollector {
                 max_evidence_lines,
                 MAX_CHECKOUT_LOG_SCAN_BYTES,
             ),
+            selection: None,
+            scoped_line: Vec::new(),
+            candidate_byte_offset: 0,
+            candidate_line_index: 0,
+            selected_bytes: 0,
+            selected_lines: 0,
+            selection_found: true,
+            plain_step_active: false,
         }
     }
 
@@ -162,6 +256,106 @@ impl StreamedLogCollector {
         self.diagnostic.push(chunk);
         self.nextest.push(chunk);
 
+        if let Some(selection) = self.selection.clone() {
+            if selection.needs_line_mode() {
+                self.scoped_line.extend_from_slice(chunk);
+                while let Some(end) = self.scoped_line.iter().position(|byte| *byte == b'\n') {
+                    let line: Vec<u8> = self.scoped_line.drain(..=end).collect();
+                    self.process_scoped_line(&line, &selection);
+                }
+            } else {
+                self.process_scoped_bytes(chunk, &selection);
+            }
+            return;
+        }
+        self.feed_display(chunk);
+    }
+
+    fn process_scoped_bytes(&mut self, chunk: &[u8], selection: &LogSelection) {
+        let start = self.candidate_byte_offset;
+        self.candidate_byte_offset = self.candidate_byte_offset.saturating_add(chunk.len());
+        let Some((window_start, window_end)) = selection.byte_window else {
+            self.feed_display(chunk);
+            self.selected_bytes = self.selected_bytes.saturating_add(chunk.len());
+            return;
+        };
+        let end = start.saturating_add(chunk.len());
+        let from = window_start.max(start);
+        let to = window_end.unwrap_or(usize::MAX).min(end);
+        if from < to {
+            let slice = &chunk[from - start..to - start];
+            self.selection_found = true;
+            self.selected_bytes = self.selected_bytes.saturating_add(slice.len());
+            self.feed_display(slice);
+        }
+    }
+
+    fn process_scoped_line(&mut self, line: &[u8], selection: &LogSelection) {
+        if let Some(step) = &selection.step
+            && !self.line_belongs_to_step(line, step)
+        {
+            return;
+        }
+        let index = self.candidate_line_index;
+        self.candidate_line_index = self.candidate_line_index.saturating_add(1);
+        if let Some((line_start, line_end)) = selection.line_window
+            && (index < line_start || index >= line_end.unwrap_or(usize::MAX))
+        {
+            // A byte window combined with a line window counts candidate
+            // bytes only for lines inside the line window.
+            if selection.byte_window.is_some() {
+                self.candidate_byte_offset = self.candidate_byte_offset.saturating_add(line.len());
+            }
+            return;
+        }
+        if let Some((window_start, window_end)) = selection.byte_window {
+            let start = self.candidate_byte_offset;
+            self.candidate_byte_offset = self.candidate_byte_offset.saturating_add(line.len());
+            let end = start.saturating_add(line.len());
+            let from = window_start.max(start);
+            let to = window_end.unwrap_or(usize::MAX).min(end);
+            if from < to {
+                let slice = &line[from - start..to - start];
+                self.selection_found = true;
+                self.selected_bytes = self.selected_bytes.saturating_add(slice.len());
+                self.selected_lines = self.selected_lines.saturating_add(1);
+                self.feed_display(slice);
+            }
+            return;
+        }
+        self.selection_found = true;
+        self.selected_bytes = self.selected_bytes.saturating_add(line.len());
+        self.selected_lines = self.selected_lines.saturating_add(1);
+        self.feed_display(line);
+    }
+
+    fn line_belongs_to_step(&mut self, line: &[u8], step: &str) -> bool {
+        let text = String::from_utf8_lossy(line);
+        let text = text.trim_end_matches(['\n', '\r']);
+        if text.contains('\t') {
+            let (column, _) = split_log_line(text);
+            return column.trim() == step;
+        }
+        // A plain job-API log has no step column. Its only step boundary is
+        // the runner's `##[group]…` / `##[endgroup]` framing, whose title is
+        // `Run <command>` for a run step.
+        let (_, payload) = split_log_line(text);
+        let payload = payload.trim();
+        if let Some(title) = payload.strip_prefix("##[group]") {
+            let title = title.trim();
+            let name = title.strip_prefix("Run ").unwrap_or(title);
+            self.plain_step_active = name == step || title == step;
+            return self.plain_step_active;
+        }
+        if payload.starts_with("##[endgroup]") {
+            let was_active = self.plain_step_active;
+            self.plain_step_active = false;
+            return was_active;
+        }
+        self.plain_step_active
+    }
+
+    fn feed_display(&mut self, chunk: &[u8]) {
         let head_limit = self.head_bytes;
         let head_take = head_limit.saturating_sub(self.head.len()).min(chunk.len());
         self.head.extend_from_slice(&chunk[..head_take]);
@@ -202,12 +396,22 @@ impl StreamedLogCollector {
         // Include the short stream or final partial batch in every collector
         // and both retained windows before rendering or checking completeness.
         self.flush_pending(true);
+        if let Some(selection) = self.selection.clone()
+            && selection.needs_line_mode()
+            && !self.scoped_line.is_empty()
+        {
+            let line = std::mem::take(&mut self.scoped_line);
+            self.process_scoped_line(&line, &selection);
+        }
         let evidence = self.evidence.finish();
-        let truncated = self.total_bytes > self.max_bytes;
+        let display_total = if self.selection.is_some() {
+            self.selected_bytes
+        } else {
+            self.total_bytes
+        };
+        let truncated = display_total > self.max_bytes;
         let mut text = if truncated {
-            let omitted = self
-                .total_bytes
-                .saturating_sub(self.head.len() + self.tail.len());
+            let omitted = display_total.saturating_sub(self.head.len() + self.tail.len());
             // Redact only after the cut token is gone. Joining the windows
             // would keep the omitted middle, which this collector must not
             // buffer; one adjacent byte is enough to see the split.
@@ -234,7 +438,10 @@ impl StreamedLogCollector {
         };
         let (diagnostic, mut failure_regions) = self.diagnostic.finish();
         if let Some(nextest) = nextest {
-            if truncated && let Some(blocks) = nextest["text"].as_str() {
+            if truncated
+                && self.selection.is_none()
+                && let Some(blocks) = nextest["text"].as_str()
+            {
                 text.push_str("\n[... retained nextest failure blocks ...]\n");
                 text.push_str(blocks);
             }
@@ -249,6 +456,14 @@ impl StreamedLogCollector {
             source_complete,
             diagnostic,
             failure_regions,
+            selected_bytes: if self.selection.is_some() {
+                self.selected_bytes
+            } else {
+                self.total_bytes
+            },
+            selected_lines: self.selected_lines,
+            selection_found: self.selection_found,
+            selection: self.selection.clone(),
         }
     }
 }

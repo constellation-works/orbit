@@ -1137,5 +1137,278 @@
     "cwds": [
       "caller_directory"
     ]
+  },
+  "scoped_step_read_returns_a_middle_step_crowded_out_by_head_and_tail": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "test\tDownload nextest archive\t2026-09-06T21:16:00.0000000Z Downloading nextest archive\ntest\tDownload nextest archive\t2026-09-06T21:16:01.0000000Z MIDDLE-STEP-MARKER archive downloaded in 42s\ntest\tDownload nextest archive\t2026-09-06T21:16:02.0000000Z extracted archive\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 268,
+      "total_bytes": 13668,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 13668,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": "Download nextest archive",
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 268,
+        "selected_lines": 3
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "scoped_step_larger_than_the_cap_keeps_omission_markers": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "test\tDownload nextest archive\t2026-09-06T21:16:00.0000000Z downloading archive chunk\ntest\tDownload nextest archive\t\n[... 8244 bytes omitted; raise the byte budget for more ...]\n downloading archive chunk\ntest\tDownload nextest archive\t2026-09-06T21:16:00.0000000Z downloading archive chunk\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": true,
+      "returned_bytes": 289,
+      "total_bytes": 8601,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 8601,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": "Download nextest archive",
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 8500,
+        "selected_lines": 100
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "scoped_step_absent_from_the_log_fails_without_log_bytes": {
+    "error": "invalid input: log step not found: \"No such step\" in run 34060485218 job 101560010340; no log bytes returned",
+    "calls": [
+      "run view 34060485218 --job 101560010340 --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "scoped_read_for_an_absent_job_fails_without_log_bytes": {
+    "error": "invalid input: log step not found: \"Download nextest archive\" in run 34060485218 job 424242; job 424242 is not a job of run 34060485218; no log bytes returned",
+    "calls": [
+      "run view 34060485218 --job 424242 --log",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "byte_window_returns_exactly_the_requested_bytes": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "ABCDEFGHIJ",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 10,
+      "total_bytes": 37,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 37,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 10,
+        "byte_end": 20,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 10,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "line_window_returns_exactly_the_requested_lines": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "line-two\nline-three\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 20,
+      "total_bytes": 39,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 39,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 2,
+        "line_end": 4,
+        "selected_bytes": 20,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_keeps_failure_regions_from_the_full_log": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "HEAD\n",
+      "diagnostic_unit": "2026-09-06T21:16:00.0000000Z ##[group]Run cargo nextest run\n2026-09-06T21:16:00.0000000Z ##[endgroup]\n2026-09-06T21:16:01.0000000Z FAIL [ 0.123s] (1/10) suite failing_test\n2026-09-06T21:16:01.0000000Z ──────── STDOUT ────────\n2026-09-06T21:16:01.0000000Z captured output\n2026-09-06T21:16:01.0000000Z ──────── STDERR ────────\n2026-09-06T21:16:01.0000000Z thread 'failing_test' panicked at tests/sample.rs:12:3:\n2026-09-06T21:16:01.0000000Z expected a completed operation\n2026-09-06T21:16:02.0000000Z Summary [ 1.0s] 10 tests run: 1 failed\n2026-09-06T21:16:02.0000000Z ##[error]Process completed with exit code 100.\n",
+      "failure_regions": {
+        "kind": "runner_failure_regions",
+        "complete": false,
+        "command_complete": true,
+        "selection_complete": true,
+        "text": "2026-09-06T21:16:01.0000000Z FAIL [ 0.123s] (1/10) suite failing_test\n2026-09-06T21:16:01.0000000Z ──────── STDOUT ────────\n2026-09-06T21:16:01.0000000Z captured output\n2026-09-06T21:16:01.0000000Z ──────── STDERR ────────\n2026-09-06T21:16:01.0000000Z thread 'failing_test' panicked at tests/sample.rs:12:3:\n2026-09-06T21:16:01.0000000Z expected a completed operation\n",
+        "returned_bytes": 432,
+        "command_bytes": 683,
+        "retained_source_bytes": 432,
+        "omitted_bytes": 251,
+        "assertion_payload_omitted_bytes": 0,
+        "failure_anchor_count": 1,
+        "byte_ranges": [
+          {
+            "start_byte": 107,
+            "end_byte": 539,
+            "retained_source_bytes": 432,
+            "omitted_bytes": 0
+          }
+        ]
+      },
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 5,
+      "total_bytes": 683,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 683,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 0,
+        "byte_end": 5,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 5,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "scoped_step_read_recovers_the_step_from_a_job_log_when_the_run_read_is_empty": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "2026-09-06T21:16:00.0000000Z ##[group]Run cargo nextest run\n2026-09-06T21:16:01.0000000Z MIDDLE-STEP-MARKER nextest archive ready\n2026-09-06T21:16:02.0000000Z ##[endgroup]\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 172,
+      "total_bytes": 362,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 362,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": "cargo nextest run",
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 172,
+        "selected_lines": 3
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "byte_window_with_end_not_after_start_is_rejected": {
+    "error": "invalid input: `byte_end` must be greater than `byte_start`",
+    "calls": [],
+    "cwds": []
   }
 }

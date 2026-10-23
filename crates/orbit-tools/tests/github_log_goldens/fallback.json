@@ -1670,5 +1670,515 @@
     "registered": true,
     "tool": "github.run.list",
     "job_logs": {}
+  },
+  {
+    "name": "scoped_step_read_returns_a_middle_step_crowded_out_by_head_and_tail",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "scope": "all",
+      "step": "Download nextest archive"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {},
+    "max_bytes": 1024,
+    "registered": true,
+    "run_log": [
+      {
+        "text": "test\tSet up job\t2026-09-06T21:15:00.0000000Z setting up the runner\n",
+        "repeat": 100
+      },
+      "test\tDownload nextest archive\t2026-09-06T21:16:00.0000000Z Downloading nextest archive\ntest\tDownload nextest archive\t2026-09-06T21:16:01.0000000Z MIDDLE-STEP-MARKER archive downloaded in 42s\ntest\tDownload nextest archive\t2026-09-06T21:16:02.0000000Z extracted archive\n",
+      {
+        "text": "test\tRun tests\t2026-09-06T21:20:00.0000000Z running the test suite\n",
+        "repeat": 100
+      }
+    ]
+  },
+  {
+    "name": "scoped_step_larger_than_the_cap_keeps_omission_markers",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "scope": "all",
+      "step": "Download nextest archive"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {},
+    "max_bytes": 256,
+    "registered": true,
+    "run_log": [
+      "test\tSet up job\t2026-09-06T21:15:00.0000000Z setup\n",
+      {
+        "text": "test\tDownload nextest archive\t2026-09-06T21:16:00.0000000Z downloading archive chunk\n",
+        "repeat": 100
+      },
+      "test\tRun tests\t2026-09-06T21:20:00.0000000Z tests\n"
+    ]
+  },
+  {
+    "name": "scoped_step_absent_from_the_log_fails_without_log_bytes",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "scope": "all",
+      "step": "No such step"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "test\tDownload nextest archive\t2026-09-06T21:16:00.0000000Z Downloading nextest archive\ntest\tDownload nextest archive\t2026-09-06T21:16:01.0000000Z MIDDLE-STEP-MARKER archive downloaded in 42s\ntest\tDownload nextest archive\t2026-09-06T21:16:02.0000000Z extracted archive\n"
+    ]
+  },
+  {
+    "name": "scoped_read_for_an_absent_job_fails_without_log_bytes",
+    "input": {
+      "run": "34060485218",
+      "job": "424242",
+      "scope": "all",
+      "step": "Download nextest archive"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true
+  },
+  {
+    "name": "byte_window_returns_exactly_the_requested_bytes",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 10,
+      "byte_end": 20
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n"
+    ]
+  },
+  {
+    "name": "line_window_returns_exactly_the_requested_lines",
+    "input": {
+      "run": "34060485218",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "line-one\nline-two\nline-three\nline-four\n"
+    ]
+  },
+  {
+    "name": "byte_window_keeps_failure_regions_from_the_full_log",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 0,
+      "byte_end": 5
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "HEAD\n2026-09-06T21:16:00.0000000Z ##[group]Run cargo nextest run\n2026-09-06T21:16:00.0000000Z ##[endgroup]\n2026-09-06T21:16:01.0000000Z FAIL [ 0.123s] (1/10) suite failing_test\n2026-09-06T21:16:01.0000000Z ──────── STDOUT ────────\n2026-09-06T21:16:01.0000000Z captured output\n2026-09-06T21:16:01.0000000Z ──────── STDERR ────────\n2026-09-06T21:16:01.0000000Z thread 'failing_test' panicked at tests/sample.rs:12:3:\n2026-09-06T21:16:01.0000000Z expected a completed operation\n2026-09-06T21:16:02.0000000Z Summary [ 1.0s] 10 tests run: 1 failed\n2026-09-06T21:16:02.0000000Z ##[error]Process completed with exit code 100.\n"
+    ]
+  },
+  {
+    "name": "scoped_step_read_recovers_the_step_from_a_job_log_when_the_run_read_is_empty",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "step": "cargo nextest run"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "2026-09-06T21:15:00.0000000Z ##[group]Run actions/checkout@v4\n2026-09-06T21:15:01.0000000Z checked out\n2026-09-06T21:15:01.0000000Z ##[endgroup]\n2026-09-06T21:16:00.0000000Z ##[group]Run cargo nextest run\n2026-09-06T21:16:01.0000000Z MIDDLE-STEP-MARKER nextest archive ready\n2026-09-06T21:16:02.0000000Z ##[endgroup]\n2026-09-06T21:20:00.0000000Z trailing output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true
+  },
+  {
+    "name": "byte_window_with_end_not_after_start_is_rejected",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 20,
+      "byte_end": 10
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n"
+    ]
   }
 ]
