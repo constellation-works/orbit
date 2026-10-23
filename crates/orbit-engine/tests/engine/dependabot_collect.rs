@@ -140,6 +140,54 @@ fn explicit_repository_reaches_alert_queries() {
 }
 
 #[test]
+fn zero_alert_limit_clamps_to_one_and_empty_responses_are_fully_collected() {
+    const TEST: &str = "zero_alert_limit_clamps_to_one_and_empty_responses_are_fully_collected";
+    if std::env::var(CHILD_ENV).as_deref() != Ok(TEST) {
+        spawn_isolated(TEST);
+        return;
+    }
+
+    let root = tempfile::tempdir().expect("repo root");
+    let host = RootHost {
+        root: root.path().to_string_lossy().into_owned(),
+    };
+    let outcome = execute_deterministic_action(
+        &host,
+        "collect_dependabot_alerts",
+        &json!({}),
+        &json!({"repo": "acme/orbit", "max_alerts": 0}),
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .expect("zero alert limit should be clamped before building the query");
+
+    let snapshot = &outcome["dependabot_snapshot"];
+    assert_eq!(snapshot["collection_status"], "fully_collected");
+    assert_eq!(snapshot["collected"], true);
+    assert_eq!(snapshot["truncation"]["alerts_limit"], 1);
+    assert_eq!(snapshot["truncation"]["alerts_at_cap"], false);
+    assert_eq!(snapshot["open_alerts"], json!([]));
+    assert_eq!(
+        snapshot["code_scanning"]["collection_status"],
+        "fully_collected"
+    );
+    assert_eq!(
+        snapshot["secret_scanning"]["collection_status"],
+        "fully_collected"
+    );
+
+    let calls =
+        fs::read_to_string(std::env::var(LOG_ENV).expect("fake gh log")).expect("read gh calls");
+    assert!(
+        calls.lines().any(|line| {
+            line.contains("repos/acme/orbit/dependabot/alerts") && line.contains("per_page=1")
+        }),
+        "the Dependabot request must use the minimum page size of one: {calls}"
+    );
+}
+
+#[test]
 fn repo_view_failure_degrades_without_losing_alert_families() {
     const TEST: &str = "repo_view_failure_degrades_without_losing_alert_families";
     if std::env::var(CHILD_ENV).as_deref() != Ok(TEST) {
