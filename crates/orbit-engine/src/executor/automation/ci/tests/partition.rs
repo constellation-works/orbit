@@ -393,6 +393,8 @@ fn closed_pull_request_omitted_by_full_listing_is_found_by_head() {
     stale_run["event"] = json!("pull_request");
     stale_run["head_branch"] = json!(branch);
     let queries = queries
+        // This PR falls beyond the global page and needs a branch lookup.
+        .with_pull_request("CLOSED", 1001, branch, &closed_head)
         .with_closed_pull_request_for_branch(branch, 1001, &closed_head)
         .with_runs(vec![vec![stale_run]]);
 
@@ -406,6 +408,13 @@ fn closed_pull_request_omitted_by_full_listing_is_found_by_head() {
         .expect("closed branch is retired");
     assert_eq!(entry["reason"], json!("pull_request_closed"));
     assert_eq!(entry["pr_number"], json!(1001));
+    assert_eq!(
+        *queries
+            .closed_pull_request_limits
+            .lock()
+            .expect("closed PR limits"),
+        [100]
+    );
     assert_eq!(
         *queries
             .closed_pull_request_branch_queries
