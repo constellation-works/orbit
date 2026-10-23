@@ -1983,6 +1983,7 @@ fn doctor_skips_a_crew_whose_executor_host_os_excludes_this_host() {
 
 /// Set `host_os` on `provider`'s seeded executor, leaving every other field
 /// as shipped.
+#[cfg(not(target_os = "macos"))]
 fn pin_executor_host_os(fixture: &WorkCheckout, provider: &str, host_os: &[&str]) {
     let path = fixture
         .home
