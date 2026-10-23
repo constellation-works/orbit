@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use super::super::collect::{collect, collect_for_sweep};
+use super::super::collect::{collect, collect_at, collect_for_sweep};
 use super::super::history::RetryableHistory;
 use super::support::{FakeQueries, HEAD, input, run};
 
@@ -331,4 +331,155 @@ fn unavailable_collection_breaks_a_consecutive_error_streak() {
     let after_gap = history.observe(vec![error], "scheduled-4");
     assert_eq!(after_gap.retryable.len(), 1);
     assert!(after_gap.persistent.is_empty());
+}
+
+#[test]
+fn query_errors_in_snapshot_notes_are_redacted_without_losing_operation_context() {
+    // Synthetic credential; no host credentials or GitHub processes are used.
+    let token = format!("ghp_{}", "A".repeat(36));
+    let error = format!("query failed: {token}");
+    let candidate = || {
+        let mut red = run(
+            50,
+            "CI",
+            HEAD,
+            "completed",
+            Some("failure"),
+            "2026-10-07T02:10:00Z",
+        );
+        red["head_branch"] = json!("candidate");
+        FakeQueries::authenticated()
+            .with_head("topic", HEAD)
+            .with_head("candidate", HEAD)
+            .with_runs(vec![vec![red]])
+    };
+    const PREVIOUS: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const SUCCESSOR: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let pending = || {
+        let mut red = run(
+            200,
+            "CI",
+            HEAD,
+            "completed",
+            Some("failure"),
+            "2026-10-07T02:10:00Z",
+        );
+        red["updated_at"] = json!("2026-10-07T02:45:00Z");
+        FakeQueries::authenticated()
+            .with_head("topic", SUCCESSOR)
+            .with_ancestor(HEAD, SUCCESSOR)
+            .with_ancestor(PREVIOUS, HEAD)
+            .with_runs(vec![vec![
+                run(
+                    201,
+                    "CI",
+                    SUCCESSOR,
+                    "in_progress",
+                    None,
+                    "2026-10-07T02:50:00Z",
+                ),
+                red,
+                run(
+                    199,
+                    "CI",
+                    PREVIOUS,
+                    "completed",
+                    Some("failure"),
+                    "2026-10-07T01:10:00Z",
+                ),
+            ]])
+            .with_failed_jobs(
+                200,
+                json!([{
+                    "job_id": 2000, "name": "check", "conclusion": "failure",
+                    "failed_steps": [{"name": "compile"}],
+                }]),
+            )
+            .with_failed_jobs(
+                199,
+                json!([{
+                    "job_id": 1990, "name": "check", "conclusion": "failure",
+                    "failed_steps": [{"name": "compile"}],
+                }]),
+            )
+    };
+    let cases = [
+        (
+            "closed PR list",
+            candidate().with_closed_pull_requests_error(&error),
+            "closed pull requests could not be listed",
+        ),
+        (
+            "closed PR head",
+            candidate()
+                .with_closed_pull_requests_error("listing unavailable")
+                .with_closed_pull_request_branch_error("candidate", &error),
+            "closed pull requests for candidate branch 'candidate' could not be listed",
+        ),
+        (
+            "open PR head",
+            candidate()
+                .with_pull_request("CLOSED", 17, "candidate", HEAD)
+                .with_open_pull_request_branch_error("candidate", &error),
+            "open pull requests for candidate branch 'candidate' could not be listed",
+        ),
+        (
+            "remote head",
+            candidate().with_head_error("candidate", &error),
+            "branch 'candidate' could not be checked against origin",
+        ),
+        (
+            "successor ancestry",
+            pending().with_ancestry_error(HEAD, SUCCESSOR, &error),
+            "run 200 could not be compared with in-flight run 201",
+        ),
+        (
+            "previous ancestry",
+            pending().with_ancestry_error(PREVIOUS, HEAD, &error),
+            "run 200 could not be compared with its previous completed run 199",
+        ),
+        (
+            "run view",
+            pending().with_run_view_error(200, &error),
+            "run view 200 could not be read to compare run 200",
+        ),
+        (
+            "job log",
+            pending().with_run_log_error(2000, &error),
+            "failed-step log of job 2000 in run 200 could not be read",
+        ),
+    ];
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-07T02:55:00Z")
+        .expect("fixture time")
+        .with_timezone(&chrono::Utc);
+    let mut leaked = Vec::new();
+    for (case, queries, operation) in cases {
+        let evidence = collect_at(
+            &queries,
+            &input(),
+            &mut RetryableHistory::default(),
+            "redaction-regression",
+            now,
+        )
+        .expect("collect partial evidence");
+        let notes = evidence["truncation"]["notes"].as_array().expect("notes");
+        assert!(
+            notes
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|note| note.contains(operation) && note.contains("query failed:")),
+            "{case}: the note must identify the failed operation and retain its safe error detail"
+        );
+        if notes
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|note| note.contains(&token))
+        {
+            leaked.push(case);
+        }
+    }
+    assert!(
+        leaked.is_empty(),
+        "CI notes exposed credentials for {leaked:?}"
+    );
 }
