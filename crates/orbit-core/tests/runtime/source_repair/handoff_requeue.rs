@@ -16,6 +16,7 @@ use orbit_core::application::routines::{
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, TaskPrForge};
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::{
+    TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT, TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT,
     TRANSIENT_INFRA_REQUEUED_EVENT, TransientInfraRequeue, TransientInfrastructure,
 };
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
@@ -541,42 +542,109 @@ fn recorded(f: &Fixture, event: &str) -> usize {
         .count()
 }
 
-/// A publication that does not authenticate is refused once and then left
-/// to an operator; a transient error only defers the next attempt.
+/// Move the latest deferred authentication into the past in this isolated
+/// fixture, preserving the recorded-attempt count while advancing its clock.
+fn advance_transient_deferral_backoff(f: &Fixture) {
+    let events = f
+        .runtime
+        .global_root()
+        .join("tasks/workspaces")
+        .join(f.runtime.workspace_id().unwrap())
+        .join(&f.task)
+        .join(orbit_types::task::TASK_EVENTS_FILE_NAME);
+    let raw = std::fs::read_to_string(&events).unwrap();
+    let mut rows = raw
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let latest = rows
+        .iter_mut()
+        .rev()
+        .find(|row| row["type"] == TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT && row["by"] == "system")
+        .expect("a transient authentication failure was recorded");
+    latest["at"] = json!((Utc::now() - chrono::Duration::minutes(11)).to_rfc3339());
+    let lines = rows
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    std::fs::write(events, format!("{}\n", lines.join("\n"))).unwrap();
+}
+
+/// Repeated transient forge failures defer automatic requeue only up to its
+/// bound, leaving the blocked publication for an operator afterward.
 fn automatic_authentication_failures_are_bounded() {
-    use orbit_types::workflow::{
-        TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT, TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT,
-    };
     let (f, _) = escalated_handoff_fixture(None, Some(TransientInfrastructure::StoreLocked));
-    // The forge cannot be asked: the attempt is deferred, not refused.
+    // Record every forge invocation so the test proves attempts, not only the
+    // task's final held status.
     let gh = f._root.path().join("bin/gh");
-    let healthy = std::fs::read_to_string(&gh).unwrap();
-    std::fs::write(&gh, "#!/bin/sh\necho 'HTTP 502' >&2\nexit 1\n").unwrap();
-    assert!(
-        f.runtime
-            .requeue_cleared_transient_infra_blocks()
-            .unwrap()
-            .is_empty()
-    );
-    std::fs::write(&gh, healthy).unwrap();
-    assert_eq!(recorded(&f, TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT), 1);
+    let attempts = f._root.path().join("forge-attempts");
+    let quoted_attempts = attempts.display().to_string().replace('\'', "'\\''");
+    std::fs::write(
+        &gh,
+        format!(
+            "#!/bin/sh\nprintf 'attempt\\n' >> '{quoted_attempts}'\necho 'HTTP 502' >&2\nexit 1\n"
+        ),
+    )
+    .unwrap();
+
+    // The production cap is five. Advance the persisted retry timestamp after
+    // each public requeue call rather than sleeping through the ten-minute
+    // backoff; each attempt still records its real transient failure.
+    const DEFERRAL_LIMIT: usize = 5;
+    for attempt in 1..=DEFERRAL_LIMIT {
+        let forge_calls_before =
+            std::fs::read_to_string(&attempts).map_or(0, |calls| calls.lines().count());
+        assert!(
+            f.runtime
+                .requeue_cleared_transient_infra_blocks()
+                .unwrap()
+                .is_empty(),
+            "transient forge errors leave the publication blocked"
+        );
+        assert_eq!(
+            recorded(&f, TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT),
+            attempt
+        );
+        assert!(
+            std::fs::read_to_string(&attempts).unwrap().lines().count() > forge_calls_before,
+            "deferral {attempt} reached the failing forge"
+        );
+        assert_eq!(status(&f), TaskStatus::Blocked);
+        advance_transient_deferral_backoff(&f);
+    }
+
     assert_eq!(recorded(&f, TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT), 0);
+    let forge_calls_at_cap = std::fs::read_to_string(&attempts).unwrap().lines().count();
     let blocked = f.runtime.transient_infra_blocked_tasks().unwrap();
+    assert_eq!(blocked.len(), 1, "{blocked:?}");
     assert!(
         blocked[0]
             .held
             .as_deref()
-            .is_some_and(|held| held.starts_with("retrying after")),
-        "{blocked:?}"
+            .is_some_and(|held| held.contains("failed 5 times on transient errors")),
+        "the exhausted authentication bound holds the task: {blocked:?}"
     );
-    assert!(
-        f.runtime
-            .requeue_cleared_transient_infra_blocks()
-            .unwrap()
-            .is_empty(),
-        "the next tick backs off"
+
+    // Even after the backoff expires again, exhausted authentication failures
+    // do not retry, append deferral records, or release the blocked task.
+    for _ in 0..2 {
+        assert!(
+            f.runtime
+                .requeue_cleared_transient_infra_blocks()
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert_eq!(
+        recorded(&f, TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT),
+        DEFERRAL_LIMIT
     );
-    assert_eq!(recorded(&f, TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT), 1);
+    assert_eq!(
+        std::fs::read_to_string(&attempts).unwrap().lines().count(),
+        forge_calls_at_cap,
+        "the forge is no longer queried after the cap"
+    );
     assert_eq!(status(&f), TaskStatus::Blocked);
 }
 
