@@ -38,16 +38,20 @@ impl Execute for AgentsCommand {
 }
 
 /// One row per crew and model, ranked rows first, with a column per term.
+///
+/// The selection line and the units footer are status, not records, so they
+/// are notices: stderr in every mode, which keeps stdout to the rows alone.
 pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
     let terms = value["terms"].as_array().cloned().unwrap_or_default();
-    let mut blocks = vec![Block::text(selection_line(value))];
-    if value["status"] == "not_computed" {
-        blocks.push(Block::text(format!(
+    let computed = value["status"] != "not_computed";
+    let empty = if computed {
+        "no row in the window".to_string()
+    } else {
+        format!(
             "The {} scorecard is not computed yet.",
             text(&value["role"])
-        )));
-        return blocks;
-    }
+        )
+    };
     let mut columns = vec![
         Column::new("RANK").number(),
         Column::new("CREW").fixed(),
@@ -62,7 +66,8 @@ pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
     );
     let mut table = Table::new(columns)
         .keep_all_columns()
-        .empty_message("no row in the window");
+        .empty_message(empty)
+        .trailing_notice(selection_line(value));
     for row in value["rows"].as_array().into_iter().flatten() {
         let mut cells = vec![
             if row["below_support"] == true {
@@ -82,18 +87,19 @@ pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
         );
         table.add_row(cells);
     }
-    blocks.push(Block::table(table));
-    blocks.push(Block::text(format!(
-        "\nUnits: {}. Score: each term per 100 units, weighted and summed; a row above the fleet average ({}) is pulled down toward it.\nWeights: {}",
-        text(&value["unit"]),
-        number(&value["fleet_average"]),
-        terms
-            .iter()
-            .map(|term| format!("{} × {}", number(&term["weight"]), text(&term["key"])))
-            .collect::<Vec<_>>()
-            .join(", "),
-    )));
-    blocks
+    if computed {
+        table = table.trailing_notice(format!(
+            "Units: {}. Score: each term per 100 units, weighted and summed; a row above the fleet average ({}) is pulled down toward it.\nWeights: {}",
+            text(&value["unit"]),
+            number(&value["fleet_average"]),
+            terms
+                .iter()
+                .map(|term| format!("{} × {}", number(&term["weight"]), text(&term["key"])))
+                .collect::<Vec<_>>()
+                .join(", "),
+        ));
+    }
+    vec![Block::table(table)]
 }
 
 /// One row's terms, then the tasks behind each nonzero count.
