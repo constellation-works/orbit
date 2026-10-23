@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 
 use fs2::FileExt;
 
-use super::paths::validated_generation_root;
-use super::refusal::refusal;
-use super::registry::collect_abandoned_stage;
+use super::super::paths::validated_generation_root;
+use super::super::refusal::refusal;
+use super::super::registry::collect_abandoned_stage;
 use crate::OrbitError;
 
 const WAITERS_DIR: &str = ".generation-admission-waiters";

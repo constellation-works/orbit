@@ -7,12 +7,13 @@ use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 
-use super::super::admission::{GenerationGuard, PROBE_SETTLE, Participant};
-use super::super::identity::{Access, CompatibilityIdentity, LedgerCompatibility};
-use super::super::paths::ADMISSION_LOCK;
-use super::super::records::open;
-use super::super::registry::ParticipantRole;
-use super::super::update::GenerationUpdate;
+use super::super::super::identity::{Access, CompatibilityIdentity, LedgerCompatibility};
+use super::super::super::paths::ADMISSION_LOCK;
+use super::super::super::records::open;
+use super::super::super::registry::ParticipantRole;
+use super::super::super::update::GenerationUpdate;
+use super::super::guard::{GenerationGuard, Participant};
+use super::super::lock::PROBE_SETTLE;
 
 fn identity() -> CompatibilityIdentity {
     let ledger = LedgerCompatibility {

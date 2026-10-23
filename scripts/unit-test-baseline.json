@@ -57,7 +57,7 @@
     },
     "orbit-common": {
       "test_function_paths": [
-        "fs/generation/tests/admission.rs::an_update_waits_for_a_participant_paused_mid_release",
+        "fs/generation/admission/tests/guard.rs::an_update_waits_for_a_participant_paused_mid_release",
         "fs/generation/tests/handoff.rs::a_completed_refusal_is_not_probed_again",
         "fs/generation/tests/handoff.rs::a_probe_that_times_out_is_retried_at_the_next_boundary",
         "fs/io/tests/lock.rs::read_file_lock_holder_does_not_block_on_a_fifo_swapped_after_the_path_check",
