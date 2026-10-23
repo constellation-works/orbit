@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use orbit_common::OrbitError;
-use orbit_common::fs::selector::anchor_path;
+use orbit_common::fs::selector::{anchor_path, canonicalize_existing_prefix};
 use orbit_types::task::Task;
 use serde::{Deserialize, Serialize};
 
@@ -11,8 +11,7 @@ use crate::OrbitRuntime;
 use crate::application::task::DeclaredContextFiles;
 
 use super::paths::{
-    canonicalize_existing_prefix, context_workspace_root, is_path_under_workspace,
-    normalize_path_token, task_path_exists,
+    context_workspace_root, is_path_under_workspace, normalize_path_token, task_path_exists,
 };
 use crate::runtime::task::declared_context_files;
 
