@@ -13,7 +13,7 @@
 //! state under a live action, unless the operator forces it.
 
 use super::recovery;
-use crate::AutomationError;
+use crate::{AutomationError, DeferredReason};
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::recovery::*;
@@ -75,7 +75,9 @@ pub fn apply(
     let record = record(store, request, &state)?;
 
     if !store.automation_reset(&state, &record)? {
-        return Err(AutomationError::Deferred("concurrent_evaluation".into()));
+        return Err(AutomationError::Deferred(
+            DeferredReason::ConcurrentEvaluation,
+        ));
     }
 
     // The state is gone, so the applied document reports the position the reset
@@ -91,7 +93,9 @@ fn load_inspected(
 ) -> Result<AutomationState, AutomationError> {
     let state = recovery::load(store, request.consumer)?;
     if request.inspected_state != Some(&state) {
-        return Err(AutomationError::Deferred("concurrent_evaluation".into()));
+        return Err(AutomationError::Deferred(
+            DeferredReason::ConcurrentEvaluation,
+        ));
     }
     Ok(state)
 }

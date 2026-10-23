@@ -1,6 +1,6 @@
 //! Operator waivers for settled failed or exhausted batches.
 
-use crate::AutomationError;
+use crate::{AutomationError, DeferredReason};
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::*;
@@ -49,7 +49,7 @@ pub fn waive(
     next.generation = previous
         .generation
         .checked_add(1)
-        .ok_or_else(|| AutomationError::Deferred("generation_exhausted".into()))?;
+        .ok_or_else(|| AutomationError::Deferred(DeferredReason::GenerationExhausted))?;
     next.active = None;
     next.pending.retain(|delivery| {
         !active
@@ -68,7 +68,9 @@ pub fn waive(
     };
 
     if !store.automation_waive(&previous, &next, &waiver)? {
-        return Err(AutomationError::Deferred("concurrent_evaluation".into()));
+        return Err(AutomationError::Deferred(
+            DeferredReason::ConcurrentEvaluation,
+        ));
     }
 
     Ok(())

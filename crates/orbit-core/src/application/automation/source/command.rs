@@ -2,7 +2,7 @@
 
 use super::super::source_cache::SourceCache;
 use chrono::{DateTime, Utc};
-use orbit_automation::AutomationError;
+use orbit_automation::{AutomationError, DeferredReason};
 use orbit_common::process::supervisor::{
     Outcome, Periodic, ProcessStopCause, Stdin, Stream, SupervisedChild, Supervision, Termination,
 };
@@ -107,15 +107,15 @@ impl<'a> Source<'a> {
         let mut file = self.capture(program, args, env, input, budget, OUTPUT_LIMIT)?;
 
         file.seek(SeekFrom::Start(0))
-            .map_err(|e| AutomationError::Deferred(e.to_string()))?;
+            .map_err(|e| AutomationError::Deferred(DeferredReason::SourceIo(e.into())))?;
 
         let mut result = String::new();
         file.take(OUTPUT_LIMIT + 1)
             .read_to_string(&mut result)
-            .map_err(|e| AutomationError::Deferred(e.to_string()))?;
+            .map_err(|e| AutomationError::Deferred(DeferredReason::SourceIo(e.into())))?;
 
         if result.len() as u64 > OUTPUT_LIMIT {
-            return Err(AutomationError::Deferred("source_budget".into()));
+            return Err(AutomationError::Deferred(DeferredReason::SourceBudget));
         }
 
         Ok(if trim_output {
@@ -143,40 +143,41 @@ impl<'a> Source<'a> {
         // propagated one. Production builds do not include the seam.
         #[cfg(test)]
         if canonical_signature_deadline_armed(args) {
-            return Err(AutomationError::Deferred("source_deadline".into()));
+            return Err(AutomationError::Deferred(DeferredReason::SourceDeadline));
         }
 
         #[cfg(test)]
         if source_deadline_forced(self) {
-            return Err(AutomationError::Deferred("source_deadline".into()));
+            return Err(AutomationError::Deferred(DeferredReason::SourceDeadline));
         }
 
         if self.elapsed() > SOURCE_DEADLINE {
-            return Err(AutomationError::Deferred("source_deadline".into()));
+            return Err(AutomationError::Deferred(DeferredReason::SourceDeadline));
         }
 
         let stdin = match input {
             None => Stdio::null(),
             Some(bytes) => {
-                let mut stdin =
-                    tempfile::tempfile().map_err(|e| AutomationError::Deferred(e.to_string()))?;
+                let mut stdin = tempfile::tempfile()
+                    .map_err(|e| AutomationError::Deferred(DeferredReason::SourceIo(e.into())))?;
                 stdin
                     .write_all(bytes)
                     .and_then(|()| stdin.seek(SeekFrom::Start(0)).map(drop))
-                    .map_err(|e| AutomationError::Deferred(e.to_string()))?;
+                    .map_err(|e| AutomationError::Deferred(DeferredReason::SourceIo(e.into())))?;
                 Stdio::from(stdin)
             }
         };
 
-        let file = tempfile::tempfile().map_err(|e| AutomationError::Deferred(e.to_string()))?;
+        let file = tempfile::tempfile()
+            .map_err(|e| AutomationError::Deferred(DeferredReason::SourceIo(e.into())))?;
         let output = file
             .try_clone()
-            .map_err(|e| AutomationError::Deferred(e.to_string()))?;
-        let mut diagnostics =
-            tempfile::tempfile().map_err(|e| AutomationError::Deferred(e.to_string()))?;
+            .map_err(|e| AutomationError::Deferred(DeferredReason::SourceIo(e.into())))?;
+        let mut diagnostics = tempfile::tempfile()
+            .map_err(|e| AutomationError::Deferred(DeferredReason::SourceIo(e.into())))?;
         let errors = diagnostics
             .try_clone()
-            .map_err(|e| AutomationError::Deferred(e.to_string()))?;
+            .map_err(|e| AutomationError::Deferred(DeferredReason::SourceIo(e.into())))?;
         // Keep each value as a separate OS argument. This avoids treating the
         // collected values as a command-line string while retaining Git's
         // normal argument semantics.
@@ -200,10 +201,10 @@ impl<'a> Source<'a> {
             .stderr(errors)
             .spawn()
             .map_err(|e| {
-                AutomationError::Deferred(format!(
-                    "source_spawn_failed: {}: {e}",
+                AutomationError::Deferred(DeferredReason::SourceSpawnFailed(format!(
+                    "{}: {e}",
                     command_line(program, args)
-                ))
+                )))
             })?;
 
         let mut over_limit = || {
@@ -237,17 +238,21 @@ impl<'a> Source<'a> {
                 on_stopped_descendant: None,
                 extendable_deadline: None,
             })
-            .map_err(|error| AutomationError::Deferred(error.to_string()))?;
+            .map_err(|error| {
+                AutomationError::Deferred(DeferredReason::SourceSupervision(error.into()))
+            })?;
 
         if outcome.timed_out || stopped_periodically(&outcome) {
-            return Err(AutomationError::Deferred("source_budget".into()));
+            return Err(AutomationError::Deferred(DeferredReason::SourceBudget));
         }
         if !outcome.success {
-            return Err(AutomationError::Deferred(format!(
-                "evidence_unavailable: {}: {}",
-                command_line(program, args),
-                failure_text(&mut diagnostics, &failure_fallback(&outcome))
-            )));
+            return Err(AutomationError::Deferred(
+                DeferredReason::EvidenceUnavailable(format!(
+                    "{}: {}",
+                    command_line(program, args),
+                    failure_text(&mut diagnostics, &failure_fallback(&outcome))
+                )),
+            ));
         }
 
         // A child that exits between the last check and here may have written
@@ -257,7 +262,7 @@ impl<'a> Source<'a> {
             .map(|meta| meta.len() > limit)
             .unwrap_or(true)
         {
-            return Err(AutomationError::Deferred("source_budget".into()));
+            return Err(AutomationError::Deferred(DeferredReason::SourceBudget));
         }
 
         Ok(file)
@@ -294,11 +299,11 @@ impl<'a> Source<'a> {
     ) -> Result<Vec<String>, AutomationError> {
         let budget = match SOURCE_DEADLINE.checked_sub(self.elapsed()) {
             Some(budget) if !budget.is_zero() => budget,
-            _ => return Err(AutomationError::Deferred("source_deadline".into())),
+            _ => return Err(AutomationError::Deferred(DeferredReason::SourceDeadline)),
         };
         let mut file = self.capture("git", args, &[], None, budget, LISTING_LIMIT)?;
         file.seek(SeekFrom::Start(0))
-            .map_err(|e| AutomationError::Deferred(e.to_string()))?;
+            .map_err(|e| AutomationError::Deferred(DeferredReason::SourceIo(e.into())))?;
 
         let mut paths = Vec::new();
         let mut record = Vec::new();
@@ -307,7 +312,7 @@ impl<'a> Source<'a> {
             record.clear();
             let read = reader
                 .read_until(0, &mut record)
-                .map_err(|e| AutomationError::Deferred(e.to_string()))?;
+                .map_err(|e| AutomationError::Deferred(DeferredReason::SourceIo(e.into())))?;
             if read == 0 {
                 break;
             }
@@ -332,7 +337,9 @@ impl<'a> Source<'a> {
             "gh",
             &["pr", "view", reference, "--json", "state,mergeCommit,url"],
         )?;
-        serde_json::from_str(&output).map_err(|error| AutomationError::Deferred(error.to_string()))
+        serde_json::from_str(&output).map_err(|error| {
+            AutomationError::Deferred(DeferredReason::ProviderResponseDecode(error.into()))
+        })
     }
 
     pub(crate) fn git(&self, args: &[&str]) -> Result<String, AutomationError> {
@@ -364,7 +371,7 @@ impl<'a> Source<'a> {
     ) -> Result<String, AutomationError> {
         let budget = match SOURCE_DEADLINE.checked_sub(self.elapsed()) {
             Some(budget) if !budget.is_zero() => budget,
-            _ => return Err(AutomationError::Deferred("source_deadline".into())),
+            _ => return Err(AutomationError::Deferred(DeferredReason::SourceDeadline)),
         };
         self.command_with("git", args, &[], input, budget)
     }

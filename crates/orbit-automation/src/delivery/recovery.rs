@@ -15,7 +15,7 @@
 //! Nothing here covers, waives or discards debt. Coverage still requires valid
 //! evidence from the assigned executor of an admitted action.
 
-use crate::AutomationError;
+use crate::{AutomationError, DeferredReason};
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::recovery::*;
@@ -108,7 +108,9 @@ pub fn apply(
     let (next, record) = plan(request, &state)?;
 
     if !store.automation_recover(&state, &next, &record)? {
-        return Err(AutomationError::Deferred("concurrent_evaluation".into()));
+        return Err(AutomationError::Deferred(
+            DeferredReason::ConcurrentEvaluation,
+        ));
     }
 
     let mut applied = vec![];
@@ -150,7 +152,9 @@ fn load_inspected(
         .expected_generation
         .is_some_and(|generation| generation != state.generation)
     {
-        return Err(AutomationError::Deferred("concurrent_evaluation".into()));
+        return Err(AutomationError::Deferred(
+            DeferredReason::ConcurrentEvaluation,
+        ));
     }
     Ok(state)
 }
@@ -181,7 +185,7 @@ fn plan(
     next.generation = state
         .generation
         .checked_add(1)
-        .ok_or_else(|| AutomationError::Deferred("generation_exhausted".into()))?;
+        .ok_or_else(|| AutomationError::Deferred(DeferredReason::GenerationExhausted))?;
 
     // Recovery is how a stalled consumer resumes, so the marker never
     // survives it: the reason either no longer applies or has to be re-proven.
@@ -207,7 +211,7 @@ fn plan(
         next.generation = state
             .generation
             .checked_add(1)
-            .ok_or_else(|| AutomationError::Deferred("generation_exhausted".into()))?;
+            .ok_or_else(|| AutomationError::Deferred(DeferredReason::GenerationExhausted))?;
         Some(record)
     } else {
         None
@@ -266,7 +270,7 @@ fn reissue(
 
     attempt.attempt = from_attempt
         .checked_add(1)
-        .ok_or_else(|| AutomationError::Deferred("attempt_exhausted".into()))?;
+        .ok_or_else(|| AutomationError::Deferred(DeferredReason::AttemptExhausted))?;
     attempt.action_key = format!("automation:{}:{}", attempt.batch.id, attempt.attempt);
     attempt.state = BatchState::Claimed;
     attempt.retry_after = None;

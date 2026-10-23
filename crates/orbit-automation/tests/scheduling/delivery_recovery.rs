@@ -5,7 +5,7 @@ use super::delivery::{
     CONSUMER, Host, evaluate, evaluate_at, landing, now, revision, setup, trigger,
 };
 use orbit_automation::{
-    AutomationError,
+    AutomationError, DeferredReason,
     delivery::{self, recovery, reset},
 };
 use orbit_store::contracts::AutomationStoreBackend;
@@ -255,9 +255,10 @@ fn a_terminal_proof_cannot_reissue_a_concurrently_admitted_replacement() {
     assert!(store.automation_commit(&state, &admitted, None).unwrap());
 
     let error = recovery::apply(store.as_ref(), &operation).unwrap_err();
-    assert!(
-        matches!(error, AutomationError::Deferred(reason) if reason == "concurrent_evaluation")
-    );
+    assert!(matches!(
+        error,
+        AutomationError::Deferred(DeferredReason::ConcurrentEvaluation)
+    ));
     assert_eq!(store.automation_state(CONSUMER).unwrap(), Some(admitted));
     assert!(
         store
@@ -412,8 +413,12 @@ fn reset_cannot_inherit_terminal_proof_across_retry_admission() {
         reset::preview(store.as_ref(), &operation),
         reset::apply(store.as_ref(), &operation),
     ] {
-        assert!(matches!(result,
-            Err(AutomationError::Deferred(reason)) if reason == "concurrent_evaluation"));
+        assert!(matches!(
+            result,
+            Err(AutomationError::Deferred(
+                DeferredReason::ConcurrentEvaluation
+            ))
+        ));
         assert_eq!(
             store.automation_state(CONSUMER).unwrap(),
             Some(replacement.clone())

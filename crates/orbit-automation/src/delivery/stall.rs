@@ -26,8 +26,8 @@
 //! crew, the stall clears and the held claim is admitted in the same pass.
 
 use super::{DeliveryHost, Evaluation, recovery};
-use crate::AutomationError;
 use crate::checkpoint::diagnostic;
+use crate::{AutomationError, DeferredReason};
 use chrono::{DateTime, Duration, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::recovery::{
@@ -42,15 +42,6 @@ pub const HISTORY_DIVERGED: &str = "history_diverged";
 /// No crew the claimed action could be minted with can run under its task's
 /// `os:` tags; see [`DeliveryHost::admission_hold`].
 pub const CREW_OS_INELIGIBLE: &str = "crew_os_ineligible";
-
-/// Reasons that never clear themselves: every later evaluation reads the same
-/// fact, so retrying is indistinguishable from doing nothing.
-const STUCK: &[&str] = &[
-    HISTORY_DIVERGED,
-    "repository_changed",
-    "provider_identity_missing",
-    "state_missing",
-];
 
 /// How long any other deferred reason may persist before it is escalated.
 /// Hosts override it from `automation.stall_window_minutes`.
@@ -80,8 +71,14 @@ pub struct StallReport<'a> {
     pub at: DateTime<Utc>,
 }
 
-fn is_stuck(reason: &str) -> bool {
-    STUCK.contains(&reason)
+fn is_stuck(reason: &DeferredReason) -> bool {
+    matches!(
+        reason,
+        DeferredReason::HistoryDiverged
+            | DeferredReason::RepositoryChanged
+            | DeferredReason::ProviderIdentityMissing
+            | DeferredReason::StateMissing
+    )
 }
 
 /// The stalled diagnostic for a consumer evaluation may not resume, or `None`
@@ -159,13 +156,13 @@ pub(super) fn deferred(
     store: &dyn AutomationStoreBackend,
     host: &dyn DeliveryHost,
     request: &Evaluation<'_>,
-    reason: String,
+    reason: DeferredReason,
 ) -> Result<AutomationDiagnostic, AutomationError> {
     let Some(state) = store.automation_state(request.consumer)? else {
         return Err(AutomationError::Deferred(reason));
     };
 
-    if reason == HISTORY_DIVERGED {
+    if matches!(reason, DeferredReason::HistoryDiverged) {
         return diverged(store, host, request, state);
     }
 
@@ -179,7 +176,7 @@ pub(super) fn deferred(
         request,
         &state,
         AutomationStall {
-            reason: reason.clone(),
+            reason: reason.to_string(),
             since: request.now,
             escalated_at: None,
             friction_id: None,
@@ -191,7 +188,7 @@ pub(super) fn deferred(
     diagnostic(
         store,
         request.consumer,
-        &stalled_reason(&reason),
+        &stalled_reason(&reason.to_string()),
         Some(state),
     )
 }
@@ -436,10 +433,12 @@ fn write(
     next.generation = state
         .generation
         .checked_add(1)
-        .ok_or_else(|| AutomationError::Deferred("generation_exhausted".into()))?;
+        .ok_or_else(|| AutomationError::Deferred(DeferredReason::GenerationExhausted))?;
 
     if !store.automation_stall(state, &next)? {
-        return Err(AutomationError::Deferred("concurrent_evaluation".into()));
+        return Err(AutomationError::Deferred(
+            DeferredReason::ConcurrentEvaluation,
+        ));
     }
 
     Ok(next)

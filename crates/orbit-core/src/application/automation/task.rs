@@ -5,7 +5,7 @@ use crate::OrbitRuntime;
 use crate::runtime::run_input::recorded_task_ids;
 use chrono::{DateTime, Utc};
 use orbit_automation::{
-    AutomationError,
+    AutomationError, DeferredReason,
     delivery::{
         ActionOutcome, digest, evidence,
         evidence::{EvidenceFacts, MIN_RATIONALE_CHARS},
@@ -284,7 +284,7 @@ pub(super) fn job_outcome(
                 != expected.get(key)
         })
     {
-        return Err(AutomationError::Deferred("job_input_mismatch".into()));
+        return Err(AutomationError::Deferred(DeferredReason::JobInputMismatch));
     }
 
     // The most recent step carrying evidence wins.

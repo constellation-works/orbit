@@ -4,10 +4,10 @@
 //! action or drops a failure tombstone.
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_automation::AutomationError;
 use orbit_automation::members::{
     MemberAdmission, MemberEvaluation, MemberHost, MemberOutcome, MemberPage, evaluate,
 };
+use orbit_automation::{AutomationError, DeferredReason};
 use orbit_store::{Store, compose, contracts::AutomationStoreBackend};
 use orbit_types::workflow::automation::{
     AutomationDiagnostic, SourceRevision,
@@ -39,7 +39,9 @@ impl MemberHost for Host {
     fn head(&self, _: &str) -> Result<(String, SourceRevision), AutomationError> {
         if let Some(probes) = self.head_probes.borrow_mut().as_mut() {
             *probes += 1;
-            return Err(AutomationError::Deferred("head_probed".into()));
+            return Err(AutomationError::Deferred(DeferredReason::SourceIo(
+                std::io::Error::other("head_probed").into(),
+            )));
         }
         Ok((
             "repo".into(),

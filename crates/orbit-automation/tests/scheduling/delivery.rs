@@ -5,10 +5,10 @@
 //! `delivery_adopt` and `delivery_recovery` share this fixture.
 
 use chrono::{TimeZone, Utc};
-use orbit_automation::AutomationError;
 use orbit_automation::delivery::{
     self, ActionOutcome, DeliveryHost, Evaluation, evidence::EvidenceFacts,
 };
+use orbit_automation::{AutomationError, DeferredReason};
 use orbit_common::OrbitError;
 use orbit_store::{Store, compose, contracts::AutomationStoreBackend};
 use orbit_types::workflow::automation::*;
@@ -208,7 +208,9 @@ impl DeliveryHost for Host {
             .or_insert_with(|| format!("action-{len}"))
             .clone();
         if self.fail_admit.swap(false, Ordering::SeqCst) {
-            return Err(AutomationError::Deferred("crash_after_mint".into()));
+            return Err(AutomationError::Deferred(DeferredReason::SourceIo(
+                std::io::Error::other("crash_after_mint").into(),
+            )));
         }
         Ok(id)
     }

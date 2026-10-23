@@ -4,7 +4,7 @@ use super::super::{pins, preparation};
 use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
 use orbit_automation::{
-    AutomationError,
+    AutomationError, DeferredReason,
     members::{MemberAdmission, MemberHost, MemberOutcome, MemberPage},
 };
 use orbit_common::{NotFoundKind, OrbitError};
@@ -384,14 +384,14 @@ impl MemberHost for Host<'_> {
             .runtime
             .automation_store()?
             .automation_state(&attempt.consumer)?
-            .ok_or_else(|| AutomationError::Deferred("claim_missing".into()))?;
+            .ok_or_else(|| AutomationError::Deferred(DeferredReason::ClaimMissing))?;
         if state
             .members
             .as_ref()
             .and_then(|members| members.active.as_ref())
             != Some(attempt)
         {
-            return Err(AutomationError::Deferred("claim_superseded".into()));
+            return Err(AutomationError::Deferred(DeferredReason::ClaimSuperseded));
         }
 
         // Pin the source the attempt froze so the run can still reach it later.

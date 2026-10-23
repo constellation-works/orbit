@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use orbit_automation::AutomationError;
+use orbit_automation::{AutomationError, DeferredReason};
 use orbit_types::workflow::automation::SourceRevision;
 
 type HeadKey = (PathBuf, String, String);
@@ -12,7 +12,7 @@ type LookupKey = (String, String, String);
 type InspectionKey = (PathBuf, String, bool);
 /// `None` records that libgit2 cannot open the checkout, so Git commands run.
 type InspectionHead = Option<(String, SourceRevision)>;
-type Cached<T> = Result<T, String>;
+type Cached<T> = Result<T, DeferredReason>;
 
 /// A fetched head belongs to one Git object store; local inspection heads are
 /// scoped to a checkout and request. Provider responses can be
@@ -77,7 +77,7 @@ fn cached<K: Ord, T: Clone>(
     // own bounded deadline; a cache never extends or shares that budget.
     let result = query().map_err(|error| match error {
         AutomationError::Deferred(reason) => reason,
-        other => other.to_string(),
+        other => DeferredReason::CachedFailure(other.into()),
     });
     entries.borrow_mut().insert(key, result.clone());
     result.map_err(AutomationError::Deferred)

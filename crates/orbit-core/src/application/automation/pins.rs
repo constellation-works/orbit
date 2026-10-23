@@ -19,7 +19,9 @@
 
 use super::source::Source;
 use crate::OrbitRuntime;
-use orbit_automation::{AutomationError, automation_error_to_orbit, delivery::digest};
+use orbit_automation::{
+    AutomationError, DeferredReason, automation_error_to_orbit, delivery::digest,
+};
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::{AutomationState, members::MemberAttempt};
 use serde::{Deserialize, Serialize};
@@ -32,9 +34,6 @@ use std::path::Path;
 const LEGACY_NAMESPACE: &str = "refs/orbit/automation/";
 const OWNED_NAMESPACE: &str = "refs/orbit/pins/v1/";
 const OWNER_RECORDS: &str = "refs/orbit/pin-owners/v1/";
-
-/// The deferral every ownership refusal carries.
-const OWNER_UNPROVEN: &str = "automation_pin_owner_unproven";
 
 /// Store pages read while inventorying consumers.
 const CONSUMER_PAGE_LIMIT: usize = 100;
@@ -55,7 +54,9 @@ fn is_attempt_id(id: &str) -> bool {
 }
 
 fn unproven(detail: impl std::fmt::Display) -> AutomationError {
-    AutomationError::Deferred(format!("{OWNER_UNPROVEN}: {detail}"))
+    AutomationError::Deferred(DeferredReason::AutomationPinOwnerUnproven(format!(
+        "{detail}"
+    )))
 }
 
 /// Who may create, release and reclaim the pins of one namespace: the
@@ -223,9 +224,11 @@ fn delete(source: &Source, refname: &str, expected: &str) -> Result<(), Automati
 }
 
 fn moved(refname: &str, pinned: &str, commit: &str) -> AutomationError {
-    AutomationError::Deferred(format!(
-        "automation_pin_moved: {refname} names {pinned}, not the attempt's {commit}"
-    ))
+    AutomationError::Deferred(DeferredReason::AutomationPinMoved {
+        refname: refname.into(),
+        pinned: pinned.into(),
+        commit: commit.into(),
+    })
 }
 
 /// Pin the source `attempt` froze in `owner`'s namespace and return the ref.
@@ -251,9 +254,9 @@ pub(super) fn pin(
     match exact(source, &refname)? {
         Some(pinned) if pinned == *commit => Ok(refname),
         Some(pinned) => Err(moved(&refname, &pinned, commit)),
-        None => Err(AutomationError::Deferred(format!(
-            "automation_pin_unwritten: {refname}"
-        ))),
+        None => Err(AutomationError::Deferred(
+            DeferredReason::AutomationPinUnwritten { refname },
+        )),
     }
 }
 

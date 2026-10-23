@@ -3,7 +3,7 @@
 use super::source::Source;
 use crate::OrbitRuntime;
 use crate::application::task::TaskListFilter;
-use orbit_automation::{AutomationError, delivery::digest};
+use orbit_automation::{AutomationError, DeferredReason, delivery::digest};
 use orbit_common::OrbitError;
 use orbit_types::task::ExternalRef;
 use orbit_types::workflow::automation::*;
@@ -21,7 +21,7 @@ pub(super) fn association(
     repository: &str,
     branch: &str,
 ) -> Result<DeliveryAssociation, AutomationError> {
-    let invalid = || AutomationError::Deferred("provider_identity_missing".into());
+    let invalid = || AutomationError::Deferred(DeferredReason::ProviderIdentityMissing);
 
     let reference = pr["html_url"].as_str().ok_or_else(invalid)?.to_string();
     let anchor = pr["merge_commit_sha"]
@@ -176,7 +176,7 @@ pub(super) fn attribute(
         // An unreadable task store defers the pass: freezing "no task" for a
         // landing that has one would be a wrong attribution, not a gap.
         let unavailable = |error: OrbitError| {
-            AutomationError::Deferred(format!("task_records_unavailable: {error}"))
+            AutomationError::Deferred(DeferredReason::TaskRecordsUnavailable(format!("{error}")))
         };
         let filter = TaskListFilter {
             external_ref: Some(ExternalRef::github_pr(number).map_err(OrbitError::from)?),
