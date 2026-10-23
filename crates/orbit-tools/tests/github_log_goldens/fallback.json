@@ -2752,5 +2752,305 @@
       "Bearer OPAQUESECRETVALUE1234567890abcdef after\n"
     ],
     "expected_log": "\n[... 28 bytes omitted; raise the byte budget for more ...]\n after\n"
+  },
+  {
+    "name": "byte_window_hides_compact_api_key_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 8,
+      "byte_end": 23
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_compact_api_key_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 25,
+      "byte_end": 48
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_quoted_api_key_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 9,
+      "byte_end": 24
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key=\"OPAQUESECRETVALUE1234567890abcdef\" after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_quoted_api_key_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 26,
+      "byte_end": 50
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key=\"OPAQUESECRETVALUE1234567890abcdef\" after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_spaced_x_api_key_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 12,
+      "byte_end": 27
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "x-api-key = OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_spaced_x_api_key_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 29,
+      "byte_end": 52
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "x-api-key = OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_mixed_case_x_api_key_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 12,
+      "byte_end": 27
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "X-aPi-KeY = OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_mixed_case_x_api_key_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 29,
+      "byte_end": 52
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "X-aPi-KeY = OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_prefixed_api_key_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 13,
+      "byte_end": 28
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "my_api_key = OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_prefixed_api_key_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 30,
+      "byte_end": 53
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "my_api_key = OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_prefixed_apikey_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 15,
+      "byte_end": 30
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "service-APIKEY=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_prefixed_apikey_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 32,
+      "byte_end": 55
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "service-APIKEY=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_bracketed_quoted_api_key_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 17,
+      "byte_end": 32
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "[\"x-api-key\"] = \"OPAQUESECRETVALUE1234567890abcdef\" after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_bracketed_quoted_api_key_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 34,
+      "byte_end": 58
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "[\"x-api-key\"] = \"OPAQUESECRETVALUE1234567890abcdef\" after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_compact_api_dash_key_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 8,
+      "byte_end": 23
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api-key=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_compact_api_dash_key_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 25,
+      "byte_end": 48
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api-key=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_space_before_equals_api_key_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 9,
+      "byte_end": 24
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key =OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_space_before_equals_api_key_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 26,
+      "byte_end": 49
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key =OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_preserves_ordinary_assignment_fragment",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 11,
+      "byte_end": 21
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "build_id=ordinarybuildvalue after\n"
+    ],
+    "expected_log": "dinarybuil"
+  },
+  {
+    "name": "byte_window_preserves_similar_key_assignment_fragment",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 17,
+      "byte_end": 27
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_keyboard = ordinarybuildvalue after\n"
+    ],
+    "expected_log": "dinarybuil"
   }
 ]
