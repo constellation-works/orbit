@@ -380,6 +380,8 @@
         "executor/automation/ci/tests/collect.rs::a_run_scoped_error_repeated_on_three_sweeps_becomes_a_persistent_note",
         "executor/automation/ci/tests/collect.rs::checkout_evidence_uses_all_scope_and_each_log_read_uses_the_requested_bound",
         "executor/automation/ci/tests/collect.rs::concurrency_cancelled_newest_runs_with_incomplete_logs_are_inconclusive_not_retryable",
+        "executor/automation/ci/tests/collect.rs::over_budget_completed_failure_keeps_its_investigation_budget_error",
+        "executor/automation/ci/tests/collect.rs::over_budget_in_flight_candidate_yields_an_investigation_budget_error",
         "executor/automation/ci/tests/collect.rs::query_errors_in_snapshot_notes_are_redacted_without_losing_operation_context",
         "executor/automation/ci/tests/collect.rs::repeated_collection_for_one_sweep_does_not_advance_persistence",
         "executor/automation/ci/tests/collect.rs::run_bound_above_the_page_limit_reports_the_applied_limit_and_its_cap",

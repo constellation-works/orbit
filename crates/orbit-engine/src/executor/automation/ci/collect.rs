@@ -398,15 +398,23 @@ pub(super) fn collect_at<Q: CiQueries + ?Sized>(
             investigation_candidates - attempted
         ));
         for (index, failure) in inspect.iter().enumerate() {
-            if selected.contains(&index) || !run_is_completed(failure) {
+            if selected.contains(&index) {
                 continue;
             }
+            // An unexpanded in-flight summary carries no `failed_jobs`, so the
+            // actionable filter below drops it. Without this error the skipped
+            // mixed-state candidate would vanish without a trace.
+            let message = if run_is_completed(failure) {
+                "current failure was not investigated because max_investigated_runs was exhausted"
+            } else {
+                "in-flight run was not investigated because max_investigated_runs was exhausted"
+            };
             push_retryable_error(
                 &mut retryable_errors,
                 "investigation",
                 "investigation_budget",
                 failure.get("run_id"),
-                "current failure was not investigated because max_investigated_runs was exhausted",
+                message,
             );
         }
     }
