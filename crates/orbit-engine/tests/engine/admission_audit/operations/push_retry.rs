@@ -58,7 +58,7 @@ fn pushes_recover_from_transient_remote_failures() {
                         .expect("transient push failure must recover");
                     assert_eq!(output["stdout"], "pushed\n", "{operation}: {message}");
                     assert_eq!(output["attempts"], 2, "{operation}: {message}");
-                    assert_eq!(fixture.calls(), ["push", "ls-remote", "push"]);
+                    assert_eq!(fixture.calls(), ["push", "ls-remote", "ls-remote", "push"]);
                     assert_eq!(fixture.push_count(), 2, "{operation}: {message}");
                     assert_eq!(
                         fixture.packs(),
@@ -107,7 +107,7 @@ error: failed to push some refs to 'https://github.com/example/orbit.git'\n";
                     (2..=4).contains(&waited),
                     "{operation}: retry wait {waited} ms was not recorded"
                 );
-                assert_eq!(fixture.calls(), ["push", "ls-remote", "push"]);
+                assert_eq!(fixture.calls(), ["push", "ls-remote", "ls-remote", "push"]);
                 assert_eq!(
                     fixture.packs(),
                     ["thin", "no-thin"],
@@ -203,7 +203,7 @@ fn pushes_confirm_lost_replies_without_reusing_a_consumed_lease() {
                 let output = run_private_operation(operation, &fixture.input(operation, lease))
                     .expect("the exact remote head proves the failed reply hid a successful push");
                 assert!(output["stdout"].as_str().unwrap().starts_with(PUSH_HEAD));
-                assert_eq!(fixture.calls(), ["push", "ls-remote"]);
+                assert_eq!(fixture.calls(), ["push", "ls-remote", "ls-remote"]);
                 assert_eq!(fixture.push_count(), 1, "{operation}: lease={lease}");
             }
         },
@@ -267,9 +267,12 @@ fn pushes_bound_retries_and_stop_when_remote_confirmation_fails() {
                     [
                         "push",
                         "ls-remote",
-                        "push",
                         "ls-remote",
                         "push",
+                        "ls-remote",
+                        "ls-remote",
+                        "push",
+                        "ls-remote",
                         "ls-remote"
                     ]
                 );
@@ -296,7 +299,7 @@ fn pushes_bound_retries_and_stop_when_remote_confirmation_fails() {
                     .expect_err("a failed remote read must not trigger another mutation");
                 assert_eq!(ForgeUnavailableHold::from_text(&error.to_string()), None);
                 assert!(error.to_string().contains("unable to read remote ref"));
-                assert_eq!(fixture.calls(), ["push", "ls-remote"]);
+                assert_eq!(fixture.calls(), ["push", "ls-remote", "ls-remote"]);
                 assert_eq!(fixture.push_count(), 1);
             }
         },
@@ -318,6 +321,10 @@ while [ "$1" = -c ]; do shift 2; done
 command=$1
 shift
 case "$command" in
+  remote)
+    [ "$1" = get-url ] && [ "$2" = --push ] && [ "$3" = --all ] && [ "$4" = origin ] || exit 2
+    printf '%s\n' 'https://github.com/example/orbit.git'
+    ;;
   rev-parse)
     [ "$1" = --verify ] && [ "$2" = refs/heads/branch ] || exit 2
     printf '%s\n' '{PUSH_HEAD}'
@@ -353,10 +360,23 @@ case "$command" in
     ;;
   ls-remote)
     printf '%s\n' ls-remote >> calls
-    [ "$1" = --refs ] && [ "$2" = -- ] && [ "$3" = origin ] || exit 2
-    case "$4" in refs/heads/branch|refs/orbit/candidates/run) ;; *) exit 2 ;; esac
-    if [ -s lookup-failure ]; then cat lookup-failure >&2; exit 1; fi
-    cat remote
+    case "$1" in
+      --get-url)
+        case "$2" in
+          https://github.com/example/orbit.git/.orbit-publication-probe)
+            printf '%s\n' 'https://github.com/example/orbit.git'
+            ;;
+          *) exit 2 ;;
+        esac
+        ;;
+      --refs)
+        [ "$2" = -- ] && [ "$3" = 'https://github.com/example/orbit.git/.orbit-publication-probe' ] || exit 2
+        case "$4" in refs/heads/branch|refs/orbit/candidates/run) ;; *) exit 2 ;; esac
+        if [ -s lookup-failure ]; then cat lookup-failure >&2; exit 1; fi
+        cat remote
+        ;;
+      *) exit 2 ;;
+    esac
     ;;
   *) exit 2 ;;
 esac

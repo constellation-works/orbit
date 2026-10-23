@@ -5,7 +5,10 @@ use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 
-use super::git::{git_failure_error, git_run, timeout_recovery_error};
+use super::git::{
+    direct_remote_target, git_failure_error, git_run, timeout_recovery_error,
+    verify_direct_remote_target,
+};
 
 const PROBE_ATTEMPTS: u32 = 3;
 const INITIAL_BACKOFF_MS: u64 = 250;
@@ -101,14 +104,25 @@ pub(super) struct RemoteBranchProbe {
 /// `remote` must be the destination `git push -- origin <branch>` would
 /// write (the single effective push URL), not the name `origin`: a plain
 /// `ls-remote origin` reads the fetch URL, which can name a different
-/// repository than the push URL [ORB-17671].
+/// repository than the push URL [ORB-17671]. The URL is probed through
+/// a direct remote target so `insteadOf` is not applied to the
+/// already-resolved URL a second time [ORB-17686].
 pub(super) fn pre_push_remote_branch(
     repo_root: &Path,
     branch: &str,
     remote: &str,
 ) -> Result<RemoteBranchProbe, OrbitError> {
+    let target = direct_remote_target(remote);
+    verify_direct_remote_target(repo_root, remote, &target)?;
     let reference = format!("refs/heads/{branch}");
-    let args = ["ls-remote", "--heads", remote, &reference];
+    let mut owned: Vec<String> = target.prefix_args();
+    owned.extend([
+        "ls-remote".to_string(),
+        "--heads".to_string(),
+        target.probe_url.clone(),
+        reference,
+    ]);
+    let args: Vec<&str> = owned.iter().map(String::as_str).collect();
     let probe = remote_ref_output(repo_root, &args, "git_push pre-push")?;
     Ok(RemoteBranchProbe {
         sha: probe.stdout.split_whitespace().next().map(str::to_owned),

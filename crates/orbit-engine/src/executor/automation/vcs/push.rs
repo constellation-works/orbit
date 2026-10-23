@@ -12,8 +12,9 @@ use super::super::input::{canonicalize_existing_dir, input_string_field, require
 use super::claim::carry_to_durable_ref;
 use super::freshness::commit_sha;
 use super::git::{
-    GitTimeoutBudget, GitTimeoutBudgetGuard, fetch_remote_base, git_command_success, git_output,
-    git_success, normalize_base_branch,
+    GitTimeoutBudget, GitTimeoutBudgetGuard, direct_remote_target, fetch_remote_base,
+    git_command_success, git_output, git_success, normalize_base_branch,
+    verify_direct_remote_target,
 };
 use super::handoff::{
     FAILED_HANDOFF_ACTOR, FailedHandoffPhase, HandoffContext, completed_task_ids_from_input,
@@ -438,16 +439,20 @@ fn push_decision(
     }
 
     // Fetch the observed head from the publication destination itself:
-    // the fetch remote may not hold the object `remote_sha` names.
-    git_success(
-        workspace_path,
-        &[
-            "fetch",
-            "--no-tags",
-            push_url,
-            &format!("refs/heads/{branch}"),
-        ],
-    )?;
+    // the fetch remote may not hold the object `remote_sha` names. Fetch
+    // by the direct target so `insteadOf` is not applied to the resolved
+    // push URL a second time [ORB-17686].
+    let target = direct_remote_target(push_url);
+    verify_direct_remote_target(workspace_path, push_url, &target)?;
+    let mut fetch_args: Vec<String> = target.prefix_args();
+    fetch_args.extend([
+        "fetch".to_string(),
+        "--no-tags".to_string(),
+        target.probe_url.clone(),
+        format!("refs/heads/{branch}"),
+    ]);
+    let fetch_refs: Vec<&str> = fetch_args.iter().map(String::as_str).collect();
+    git_success(workspace_path, &fetch_refs)?;
     if git_command_success(
         workspace_path,
         &["merge-base", "--is-ancestor", remote_sha, local_sha],

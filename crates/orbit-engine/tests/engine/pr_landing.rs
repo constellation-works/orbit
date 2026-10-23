@@ -7092,6 +7092,110 @@ fn git_push_publishes_to_effective_push_destination_not_fetch_remote() {
     );
 }
 
+/// ORB-17686: a `pushInsteadOf` destination that also matches an
+/// `insteadOf` rule must be probed and fetched as itself, not as the
+/// repository the `insteadOf` rule rewrites it to. The decoy holds the
+/// candidate, the fetch remote holds it too, and the actual push
+/// destination starts at the base: only the destination's state can
+/// satisfy a lease, drive the fast-forward decision, or be reused.
+fn git_push_probes_composed_rewrite_destination_not_its_rewrite() {
+    isolated(
+        "git_push_probes_composed_rewrite_destination_not_its_rewrite",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let fetch_remote = fx.forge.join("remote.git");
+            let push_remote = fx.forge.join("push.git");
+            let decoy = fx.forge.join("decoy.git");
+            git(&fx.repo, &["init", "--bare", path_str(&push_remote)]);
+            git(&fx.repo, &["init", "--bare", path_str(&decoy)]);
+            // The decoy and the fetch remote both hold the candidate;
+            // the publication destination holds only the base.
+            git(&fx.repo, &["push", path_str(&decoy), BRANCH]);
+            assert_eq!(
+                bare_tip(&decoy, BRANCH).as_deref(),
+                Some(fx.candidate.as_str())
+            );
+            git(
+                &fx.repo,
+                &[
+                    "push",
+                    path_str(&push_remote),
+                    &format!("{BASE}:refs/heads/{BRANCH}"),
+                ],
+            );
+            // origin fetches from fetch.git, pushes to push.git, and
+            // push.git as a URL argument would rewrite to decoy.git.
+            git(
+                &fx.repo,
+                &[
+                    "config",
+                    &format!("url.{}.pushInsteadOf", path_str(&push_remote)),
+                    path_str(&fetch_remote),
+                ],
+            );
+            git(
+                &fx.repo,
+                &[
+                    "config",
+                    &format!("url.{}.insteadOf", path_str(&decoy)),
+                    path_str(&push_remote),
+                ],
+            );
+            assert_eq!(
+                git(
+                    &fx.repo,
+                    &["remote", "get-url", "--push", "--all", "origin"]
+                ),
+                path_str(&push_remote)
+            );
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            // A lease on the candidate is not satisfied by the decoy (or
+            // the fetch remote) holding it: the destination is at the
+            // base, so the lease is lost and nothing is written.
+            let leased = action(
+                &host,
+                "git_push",
+                &json!({
+                    "workspace_path": fx.repo,
+                    "branch": BRANCH,
+                    "lease_remote_sha": fx.candidate,
+                }),
+            )
+            .expect_err("a lease held only by the decoy must not bind the push destination");
+            assert!(leased.to_string().contains("push_lease_lost"), "{leased}");
+            assert_eq!(
+                bare_tip(&push_remote, BRANCH).as_deref(),
+                Some(fx.base_sha.as_str())
+            );
+            // The probe sees the base at the destination, fetches that
+            // head from the destination, and fast-forwards it.
+            let pushed = action(
+                &host,
+                "git_push",
+                &json!({"workspace_path": fx.repo, "branch": BRANCH}),
+            )
+            .unwrap();
+            assert_eq!(
+                pushed["decision"], "performed_fast_forward",
+                "the destination, not the decoy, drives the decision: {pushed}"
+            );
+            assert_eq!(
+                bare_tip(&push_remote, BRANCH).as_deref(),
+                Some(fx.candidate.as_str())
+            );
+            // Only now, with the destination itself holding the exact
+            // candidate, is reuse a truthful report.
+            let reused = action(
+                &host,
+                "git_push",
+                &json!({"workspace_path": fx.repo, "branch": BRANCH}),
+            )
+            .unwrap();
+            assert_eq!(reused["decision"], "reused_current", "{reused}");
+        },
+    );
+}
+
 /// ORB-17671: a self-pointing effective push URL is refused even when the
 /// fetch URL names a real remote, including from a linked worktree that
 /// shares the primary checkout's Git common directory.
@@ -9438,6 +9542,7 @@ fn pr_number_and_push_transports() {
 fn git_push_effective_destination_contracts() {
     isolated("git_push_effective_destination_contracts", |_| {
         git_push_publishes_to_effective_push_destination_not_fetch_remote();
+        git_push_probes_composed_rewrite_destination_not_its_rewrite();
         git_push_refuses_self_pointing_effective_push_url();
     });
 }
