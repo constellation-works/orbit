@@ -27,18 +27,30 @@ pub(crate) fn enabled_completion_refuses_repair_and_mutation_provenance() {
                 run_id: f.source.run_id.clone()
             })
             .to_string(),
-            "malformed" => "{".into(),
-            _ => json!(PrAutoFixAttempt {
-                pr_number: "17".into(),
-                head_sha: f.head.clone(),
-                blocker: PrAutoFixBlocker::FailedChecks,
-                attempt: 1,
-                budget: PR_AUTO_FIX_BUDGET,
-                run_id: f.source.run_id.clone(),
-                crew: "fixture".into(),
-                crew_source: "fixture".into()
+            "merge" | "auto_merge" => json!({
+                "run_id": f.source.run_id,
+                "operation": case,
+                "pr_number": "17",
+                "head_sha": f.head,
             })
             .to_string(),
+            "malformed" => "{".into(),
+            _ => {
+                // A pending repair is a later admitted attempt with no matching
+                // pushed event in this history.
+                let attempt = if case == "pending" { 2 } else { 1 };
+                json!(PrAutoFixAttempt {
+                    pr_number: "17".into(),
+                    head_sha: f.head.clone(),
+                    blocker: PrAutoFixBlocker::FailedChecks,
+                    attempt,
+                    budget: PR_AUTO_FIX_BUDGET,
+                    run_id: f.source.run_id.clone(),
+                    crew: "fixture".into(),
+                    crew_source: "fixture".into()
+                })
+                .to_string()
+            }
         };
         f.runtime
             .apply_task_automation_update(
