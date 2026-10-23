@@ -16,11 +16,11 @@ pub(crate) use env::{ProvenanceEnv, provenance_env};
 #[cfg(feature = "test-support")]
 pub use hosts::NullRuntimeHost;
 pub use hosts::{
-    ClaimExecutionContext, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
-    FinalRecoveryApplication, FinalRecoveryApplied, GeneratedPath, HandoffLandingContext,
-    HandoffLandingStep, HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle,
-    PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig, RebaseRecoveryAttemptScope,
-    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
+    ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
+    FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied, GeneratedPath,
+    HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate, PLUGIN_BROKER_ENV,
+    PluginBrokerHandle, PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig,
+    RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
     ReviewReportCorrectionRequest, ReviewerInvocationRequest, RuntimeHost,
     STEP_RECOVERY_DECISION_SCHEMA_VERSION, ScratchGcEntry, ScratchGcReport, SteeringGateReading,
     SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,

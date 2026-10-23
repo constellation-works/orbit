@@ -38,6 +38,10 @@ use completion::mutation::{
     enabled_completion_refuses_repair_and_mutation_provenance,
     expired_completion_budget_never_merges,
 };
+use completion::policy::{
+    candidate_drift_refuses_equivalent_policy_retry, equivalent_policy_drift_retries_observation,
+    relevant_policy_drift_preserves_publication,
+};
 use completion::prerequisite::{
     later_prerequisite_read_failure_resumes_only_completion,
     permanent_required_check_and_merge_capability_answers_do_not_resume,
@@ -862,6 +866,9 @@ crate::scenario_table!(
 crate::scenario_table!(
     published_completion_scenarios,
     unchanged_publication_retries_only_completion,
+    equivalent_policy_drift_retries_observation,
+    relevant_policy_drift_preserves_publication,
+    candidate_drift_refuses_equivalent_policy_retry,
     moved_base_and_empty_requirements_retry_unchanged_completion,
     empty_requirements_still_bind_completion_policy,
     repeated_observation_failure_escalates_after_one_retry,

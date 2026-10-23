@@ -26,10 +26,11 @@ use crate::activity_job::{
 };
 
 use super::super::{
-    ClaimExecutionContext, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
-    FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingUpdate,
-    PluginBrokerHandle, PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig,
-    RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
+    ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
+    FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied,
+    HandoffLandingContext, HandoffLandingUpdate, PluginBrokerHandle, PluginBrokerRun,
+    PrAutoFixAdmission, PrAutoFixRequest, PrConfig, RebaseRecoveryAttemptScope,
+    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
     ReviewReportCorrectionRequest, ReviewerInvocationRequest, ScratchGcReport, SteeringGateReading,
     SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,
     StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, TaskActivityUpdate,
@@ -775,6 +776,15 @@ pub trait NullRuntimeHost: Send + Sync {
         _candidate_source: Option<&str>,
     ) -> Result<SteeringRoundAdmission, OrbitError> {
         Err(unsupported_runtime_capability("admit_steering_round"))
+    }
+
+    fn completion_observation_admission(
+        &self,
+        _run_id: &str,
+        _task_id: &str,
+        _step_id: &str,
+    ) -> Result<CompletionObservationAdmission, OrbitError> {
+        Ok(CompletionObservationAdmission::Unavailable)
     }
 
     fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {

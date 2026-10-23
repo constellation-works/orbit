@@ -410,14 +410,89 @@ pub(crate) fn upgrade_resume_admission_mismatch(
     if !super::REVIEW_ADMITTED_JOBS.contains(&run.job_id.as_str()) {
         return None;
     }
-    let Some(input) = run.input.as_ref() else {
-        return Some("run has no captured review admission".to_string());
+    let (mut previous, current) = match resume_admissions(runtime, run) {
+        Ok(pair) => pair,
+        Err(reason) => return Some(reason),
     };
-    let previous = match ReviewAdmission::from_run_input(input) {
-        Ok(Some(admission)) => admission,
-        Ok(None) => return Some("run has no captured review admission".to_string()),
-        Err(error) => return Some(error.to_string()),
+    previous.captured_at = current.captured_at;
+    (previous != current).then(|| {
+        "the captured review admission differs from the current review policy; submit a new run to capture it"
+            .to_string()
+    })
+}
+
+/// Unlike ordinary checkpoint resume, completion observation only needs the
+/// obligations that apply to this unchanged candidate. Provenance-only drift
+/// and the retired after-landing state cannot add a pre-landing gate.
+pub(crate) fn completion_admission_mismatch(
+    runtime: &OrbitRuntime,
+    run: &orbit_types::workflow::JobRun,
+) -> Option<String> {
+    let (mut previous, current) = match resume_admissions(runtime, run) {
+        Ok(pair) => pair,
+        Err(reason) => return Some(reason),
     };
+    let gated = |timing| matches!(timing, ReviewTiming::BeforePr | ReviewTiming::BeforeLanding);
+    let same = if !gated(previous.timing) && !gated(current.timing) {
+        previous.contract_version == current.contract_version
+            && previous.policy_version == current.policy_version
+            && previous.required_validation_commands == current.required_validation_commands
+    } else {
+        previous.captured_at = current.captured_at;
+        previous.timing_source.clone_from(&current.timing_source);
+        previous.crew_source.clone_from(&current.crew_source);
+        previous == current
+    };
+    if same {
+        return None;
+    }
+    let changed = [
+        (previous.timing != current.timing, "timing"),
+        (
+            previous.contract_version != current.contract_version
+                || previous.policy_version != current.policy_version,
+            "contract version",
+        ),
+        (
+            previous.crew != current.crew || previous.crew_pool != current.crew_pool,
+            "reviewer crew/pool",
+        ),
+        (previous.budget != current.budget, "review budget"),
+        (
+            previous.required_validation_commands != current.required_validation_commands,
+            "required validation commands",
+        ),
+        (
+            previous.baseline_commands != current.baseline_commands,
+            "baseline commands",
+        ),
+        (
+            previous.host_evidence != current.host_evidence,
+            "host evidence",
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(different, name)| different.then_some(name))
+    .collect::<Vec<_>>();
+    Some(format!(
+        "candidate review obligations changed: {} (captured {}, current {}); require current-policy candidate recovery",
+        changed.join(", "),
+        previous.timing.as_str(),
+        current.timing.as_str(),
+    ))
+}
+
+fn resume_admissions(
+    runtime: &OrbitRuntime,
+    run: &orbit_types::workflow::JobRun,
+) -> Result<(ReviewAdmission, ReviewAdmission), String> {
+    let input = run
+        .input
+        .as_ref()
+        .ok_or("run has no captured review admission")?;
+    let previous = ReviewAdmission::from_run_input(input)
+        .map_err(|error| error.to_string())?
+        .ok_or("run has no captured review admission")?;
     // A run that captured its layer from `--review` resolves today's policy
     // with the same request, so the option alone is never a mismatch.
     let request = match ReviewLayer::from_run_input(input) {
@@ -426,19 +501,10 @@ pub(crate) fn upgrade_resume_admission_mismatch(
                 .then(|| ReviewLayer::from_timing(previous.timing))
                 .flatten()
         }),
-        Err(error) => return Some(error.to_string()),
+        Err(error) => return Err(error.to_string()),
     };
-    let current = match resolve(runtime, request) {
-        Ok(current) => current,
-        Err(error) => return Some(error.to_string()),
-    };
-    let mut comparable_previous = previous;
-    // Capture time is provenance, not part of the admission contract.
-    comparable_previous.captured_at = current.captured_at;
-    (comparable_previous != current).then(|| {
-        "the captured review admission differs from the current review policy; submit a new run to capture it"
-            .to_string()
-    })
+    let current = resolve(runtime, request).map_err(|error| error.to_string())?;
+    Ok((previous, current))
 }
 
 fn reserved_review_key_error(job_name: &str) -> OrbitError {

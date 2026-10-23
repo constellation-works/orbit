@@ -15,9 +15,9 @@ use orbit_agent::loop_engine::InMemorySink;
 use orbit_common::{ConflictedFile, OrbitError, RecoverableVcsConflict};
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 use orbit_engine::{
-    DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied, JobOutcome, TaskAutomationUpdate, V2AuditWriter, V2SqliteSink,
-    execute_job_with_resume,
+    CompletionObservationAdmission, DispatchError, FinalRecoveryAdmission,
+    FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied, JobOutcome,
+    TaskAutomationUpdate, V2AuditWriter, V2SqliteSink, execute_job_with_resume,
 };
 use orbit_types::workflow::activity_job::{ActivityV2, JobV2, V2AuditEventKind};
 use orbit_types::workflow::{
@@ -37,6 +37,7 @@ enum Reply {
     Ok(Value),
     Fail,
     Permanent,
+    Observation,
     Diagnostic(String),
     Conflict(RecoverableVcsConflict),
 }
@@ -56,6 +57,7 @@ struct RecoveryHost {
     workspace_path: String,
     primary_root: Option<std::path::PathBuf>,
     cli: Option<orbit_engine::ResolvedCliExecutor>,
+    completion_admission: CompletionObservationAdmission,
 }
 
 impl RecoveryHost {
@@ -78,6 +80,7 @@ impl RecoveryHost {
             workspace_path: "/worktrees/run".to_string(),
             primary_root: None,
             cli: None,
+            completion_admission: CompletionObservationAdmission::Unavailable,
         }
     }
 
@@ -138,6 +141,10 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost {
             .and_then(VecDeque::pop_front);
         match reply {
             Some(Reply::Ok(value)) => Ok(value),
+            Some(Reply::Observation) => Err(DispatchError::CompletionObservationUnavailable {
+                action: action.to_string(),
+                message: "TLS handshake timeout".into(),
+            }),
             Some(Reply::Fail) => Err(DispatchError::DeterministicActionFailed {
                 action: action.to_string(),
                 message: format!("{action} failed"),
@@ -225,6 +232,15 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost {
             workspace_root: self.primary_root.clone(),
             ..Default::default()
         }
+    }
+
+    fn completion_observation_admission(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<CompletionObservationAdmission, OrbitError> {
+        Ok(self.completion_admission.clone())
     }
 
     fn admit_final_recovery(
@@ -1598,6 +1614,10 @@ fn recovery_contracts_4() {
     crate::git_fixture::isolated(module_path!(), "recovery_contracts_4", || {
         crate::git_fixture::run_scenarios(&[
             (
+                "completion_observation_classifies_retry_policy_and_candidate_refusal",
+                completion_observation_classifies_retry_policy_and_candidate_refusal,
+            ),
+            (
                 "a_failure_before_the_worktree_exists_skips_final_recovery",
                 a_failure_before_the_worktree_exists_skips_final_recovery,
             ),
@@ -1627,4 +1647,56 @@ fn recovery_contracts_4() {
             ),
         ]);
     });
+}
+
+/// The executor cannot turn a policy refusal into completion authority, and
+/// the deterministic retry spends the existing once-only recovery budget.
+fn completion_observation_classifies_retry_policy_and_candidate_refusal() {
+    for (admission, kind, classification, count) in [
+        (
+            CompletionObservationAdmission::Retry,
+            "resume",
+            "transient-observation",
+            2,
+        ),
+        (
+            CompletionObservationAdmission::PolicyChanged {
+                reason: "review now required".into(),
+            },
+            "requeue",
+            "policy-changed",
+            1,
+        ),
+        (
+            CompletionObservationAdmission::Unavailable,
+            "escalate",
+            "candidate-changed",
+            1,
+        ),
+    ] {
+        let mut host = RecoveryHost::new([("work", vec![Reply::Observation, Reply::Observation])]);
+        host.completion_admission = admission;
+        let job = pipeline(false);
+        let observed =
+            orbit_engine::test_support::with_vcs_retry_wait(|_| {}, || run(&job, &host, None));
+        assert!(observed.result.is_err());
+        assert_eq!(host.count("work"), count);
+        assert_eq!(host.count("decide"), 0, "classification is host-owned");
+        assert_eq!(host.count("setup"), 1);
+        let applications = host.applications();
+        assert_eq!(
+            applications.len(),
+            1,
+            "a second observation failure cannot renew recovery"
+        );
+        let decision = &applications[0].decision;
+        assert_eq!(decision.kind(), kind);
+        let text = match decision {
+            FinalRecoveryDecision::Resume { rationale, .. } => rationale,
+            FinalRecoveryDecision::Requeue { reason } => reason,
+            FinalRecoveryDecision::Escalate { diagnosis, .. } => diagnosis,
+            other => panic!("unexpected {other:?}"),
+        };
+        assert!(text.contains(classification), "{text}");
+    }
 }

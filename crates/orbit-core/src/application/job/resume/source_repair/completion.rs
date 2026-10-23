@@ -1,9 +1,36 @@
 //! Reuse only the successful prefix of this worker's unchanged publication.
 use super::*;
+use orbit_engine::CompletionObservationAdmission;
 use orbit_types::task::ArtifactWriter;
 use orbit_types::workflow::{
     REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewTiming,
 };
+use serde::{Deserialize, Serialize};
+
+/// Keep the original strict hash for old receipts. New receipts also bind
+/// every non-review input independently, so review-only config drift can be
+/// judged against the captured candidate's actual obligations.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CompletionPolicy {
+    schema_version: u32,
+    strict: String,
+    non_review: String,
+}
+
+impl CompletionPolicy {
+    fn matches(&self, captured: &str, observation: bool) -> bool {
+        if captured == self.strict {
+            return true; // schema 2, before separate review-drift evidence
+        }
+        let Ok(previous) = serde_json::from_str::<Self>(captured) else {
+            return false;
+        };
+        previous.schema_version == self.schema_version
+            && (previous.strict == self.strict
+                || (observation && previous.non_review == self.non_review))
+    }
+}
 
 impl OrbitRuntime {
     pub(crate) fn published_completion_policy(
@@ -30,7 +57,7 @@ impl OrbitRuntime {
             .collect::<Result<Vec<_>, _>>()?;
         // Only the digest leaves the host. Environment values may contain secrets.
         let environment = self.validation_subprocess_environment();
-        digest(&json!({
+        let mut material = json!({
             // Older captures predate write-ahead completion mutation provenance.
             "schema_version": 2, "run_id": run_id, "input": run.input,
             "tasks": task_ids, "meanings": meanings,
@@ -40,8 +67,20 @@ impl OrbitRuntime {
             "crews": self.context.settings().crews(),
             "validation_policy": format!("{:?}", self.context.settings().validation_env()),
             "environment": format!("{environment:?}"),
-        }))
-        .map(Some)
+        });
+        let strict = digest(&material)?;
+        material["review"] = json!({"version": self.operation_policy().version});
+        // Baseline replays belong to review, not native validation. Their
+        // candidate obligations are compared separately with the admission.
+        material["gates"]["baseline_commands"] = json!([]);
+        let policy = CompletionPolicy {
+            schema_version: 3,
+            strict,
+            non_review: digest(&material)?,
+        };
+        serde_json::to_string(&policy)
+            .map(Some)
+            .map_err(|error| refuse(error.to_string()))
     }
 
     pub(crate) fn authenticate_published_completion(
@@ -50,6 +89,17 @@ impl OrbitRuntime {
         task_id: &str,
         step_id: &str,
     ) -> Result<bool, OrbitError> {
+        self.classify_published_completion(run_id, task_id, step_id, false)
+            .map(|admission| matches!(admission, CompletionObservationAdmission::Retry))
+    }
+
+    pub(crate) fn classify_published_completion(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        step_id: &str,
+        observation: bool,
+    ) -> Result<CompletionObservationAdmission, OrbitError> {
         let source = self
             .get_job_run_backend(run_id)?
             .ok_or_else(|| refuse("completion run missing"))?;
@@ -171,6 +221,8 @@ impl OrbitRuntime {
         let policy = self
             .published_completion_policy(run_id, &[task_id.into()])?
             .ok_or_else(|| refuse("completion policy unavailable"))?;
+        let policy: CompletionPolicy =
+            serde_json::from_str(&policy).map_err(|error| refuse(error.to_string()))?;
         // A workspace that requires no command has no receipt to check, but
         // its capture still binds the effective completion policy.
         let validated = if commands.is_empty() {
@@ -184,7 +236,9 @@ impl OrbitRuntime {
         };
         if !validated
             || validation["commands"] != json!(commands)
-            || validation["completion_policy"] != policy
+            || !validation["completion_policy"]
+                .as_str()
+                .is_some_and(|captured| policy.matches(captured, observation))
         {
             return Err(refuse(
                 "native validation candidate or effective policy changed",
@@ -234,18 +288,26 @@ impl OrbitRuntime {
         }
         let admission = crate::application::review::run_review_admission(self, run_id)?;
         let timing = admission.as_ref().map(|a| a.timing);
-        if timing.is_none()
-            && (self.operation_policy().review_before_pr.value
+        let policy_change = if timing.is_none() {
+            (self.operation_policy().review_before_pr.value
                 || self.operation_policy().review_before_landing.value)
-        {
-            return Err(refuse("review policy has no captured admission"));
+                .then(|| {
+                    "review policy has no captured admission for the newly required gate".into()
+                })
+        } else if observation {
+            crate::application::review::completion_admission_mismatch(self, &source)
+        } else {
+            crate::application::review::upgrade_resume_admission_mismatch(self, &source)
+        };
+        if !observation && policy_change.is_some() {
+            return Err(refuse(if timing.is_none() {
+                "review policy has no captured admission"
+            } else {
+                "captured review policy changed"
+            }));
         }
-        if timing.is_some()
-            && crate::application::review::upgrade_resume_admission_mismatch(self, &source)
-                .is_some()
-        {
-            return Err(refuse("captured review policy changed"));
-        }
+        // Even policy drift cannot admit a stale or missing captured certificate.
+        // Check all original review evidence before choosing governed recovery.
         if let Some(timing @ (ReviewTiming::BeforePr | ReviewTiming::BeforeLanding)) = timing {
             let id = if timing == ReviewTiming::BeforePr {
                 "review_gate_settle"
@@ -295,6 +357,9 @@ impl OrbitRuntime {
                 return Err(refuse("completion review certificate disagrees"));
             }
         }
-        Ok(true)
+        Ok(match policy_change {
+            Some(reason) => CompletionObservationAdmission::PolicyChanged { reason },
+            None => CompletionObservationAdmission::Retry,
+        })
     }
 }
