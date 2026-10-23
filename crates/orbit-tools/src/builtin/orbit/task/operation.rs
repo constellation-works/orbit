@@ -11,7 +11,7 @@
 
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::{OperationInput, OperationVerb};
-use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
+use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb, artifact_listing_hint};
 use orbit_common::protocol::tool_input::{reject_unknown_tool_fields, required_string};
 use serde_json::Value;
 
@@ -35,9 +35,15 @@ impl GuardedModes for TaskVerb {
                 let keys = std::iter::once(path.name)
                     .chain(path.aliases.iter().copied())
                     .collect::<Vec<_>>();
-                required_string(input, &["id"], "id").and_then(|_| {
-                    required_string(input, &keys, "path").map_err(|error| OrbitError::InvalidInput(format!("{error}; list available artifacts with orbit.task.show and field: \"artifacts\"")))
-                }).err().map(Err)
+                let listing_hint = artifact_listing_hint(&ctx.session_context);
+                required_string(input, &["id"], "id")
+                    .and_then(|_| {
+                        required_string(input, &keys, "path").map_err(|error| {
+                            OrbitError::InvalidInput(format!("{error}; {listing_hint}"))
+                        })
+                    })
+                    .err()
+                    .map(Err)
             }
             TaskVerb::Add => {
                 guarded::is_guarded(input).then(|| guarded::write(ctx, input.clone(), true))

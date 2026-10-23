@@ -467,9 +467,15 @@ fn artifact_errors_explain_the_source_file_listing_and_size_remedies() {
             .runtime
             .run_tool("orbit.task.artifact.get", input)
             .expect_err("get reads one artifact rather than listing a directory");
-        for hint in ["orbit.task.show", "field: \"artifacts\""] {
+        // [ORB-17648] An in-process (CLI-surface) caller gets CLI syntax,
+        // never the MCP tool-call spelling.
+        for hint in ["orbit task show", "--fields artifacts"] {
             assert!(error.to_string().contains(hint), "{error}");
         }
+        assert!(
+            !error.to_string().contains("orbit.task.show"),
+            "CLI hint must not name the MCP tool: {error}"
+        );
     }
 
     let put = || {
@@ -695,8 +701,33 @@ fn doc_duties_discovery_fetches_only_listed_ledgers() {
         ),
         "{error:?}"
     );
-    for hint in ["orbit.task.show", "field: \"artifacts\""] {
+    // [ORB-17648] CLI-surface not-found names the CLI listing command.
+    for hint in ["orbit task show", "--fields artifacts"] {
         assert!(error.to_string().contains(hint), "{error}");
+    }
+    assert!(
+        !error.to_string().contains("orbit.task.show"),
+        "CLI hint must not name the MCP tool: {error}"
+    );
+    // The MCP surface keeps its own tool-call spelling for the same refusal.
+    let mcp_error = runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.task.artifact.get",
+            json!({"id": middle, "path": "doc-duties-ledger.json"}),
+            None,
+            Some("codex".into()),
+            orbit_core::adapter::command::ToolEntryPoint::Mcp,
+            orbit_types::tool::ToolSessionContext {
+                origin_session_id: Some("mcp-session-fixture".into()),
+                effective_capabilities: std::collections::BTreeSet::from([
+                    orbit_types::tool::McpCapability::Agent,
+                ]),
+                ..Default::default()
+            },
+        )
+        .expect_err("MCP absent ledger must stay refused, not fabricated");
+    for hint in ["orbit.task.show", "field: \"artifacts\""] {
+        assert!(mcp_error.to_string().contains(hint), "{mcp_error}");
     }
     let read = runtime
         .run_tool(

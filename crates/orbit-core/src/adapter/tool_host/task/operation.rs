@@ -60,7 +60,11 @@ pub(in crate::adapter::tool_host) fn dispatch(
         TaskVerb::ArtifactPut => Err(OrbitError::Execution(
             "artifact preparation dispatch invariant violated".into(),
         )),
-        TaskVerb::ArtifactGet => read(super::read::artifact_get(runtime, &input)),
+        TaskVerb::ArtifactGet => read(super::read::artifact_get(
+            runtime,
+            caller.session_context,
+            &input,
+        )),
         TaskVerb::LocksList => read(crate::runtime::task::locks::list(runtime)),
         TaskVerb::LocksReserve => read(crate::runtime::task::locks::reserve(
             runtime,
