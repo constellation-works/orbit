@@ -182,6 +182,26 @@ fn seed_without_a_host_backend_keeps_the_declared_sandbox() {
     }
 }
 
+/// Muse runs on macOS and Linux: a fresh seed on either platform carries
+/// no `host_os` restriction, and the shipped sandbox marker is translated
+/// per host (`linux-bwrap` on Linux, `macos-sandbox-exec` on macOS).
+#[test]
+fn seed_shipped_muse_is_unrestricted_with_platform_sandbox() {
+    for (target_os, sandbox) in [
+        (LINUX, ExecutorSandboxKind::LinuxBwrap),
+        ("macos", ExecutorSandboxKind::MacosSandboxExec),
+    ] {
+        let store = InMemoryExecutorStore::default();
+        seed_default_executors_for_platform(&store, false, target_os).expect("seed defaults");
+        let muse = store
+            .get_executor_def("muse")
+            .expect("get")
+            .expect("muse present");
+        assert_eq!(muse.host_os, None, "muse on {target_os}");
+        assert_eq!(muse.sandbox, Some(sandbox), "muse on {target_os}");
+    }
+}
+
 /// [ORB-13857] macOS keeps sandbox-exec on a fresh seed and, as before, does
 /// not rewrite an installed default that carries no sandbox.
 #[test]

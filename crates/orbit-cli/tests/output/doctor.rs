@@ -1953,8 +1953,9 @@ fn routed_crew_fixture(crew: &str, provider: &str) -> WorkCheckout {
 
 /// A crew whose executor `host_os` excludes this host is unsupported here, not
 /// a missing install: its provider row is `skipped` with no install advice, as
-/// `orbit doctor providers` reports it. The shipped Muse executor is macOS-only,
-/// so every other host, Linux and Windows alike, takes this branch.
+/// `orbit doctor providers` reports it. This fixture explicitly pins the muse
+/// executor to macOS only (the shipped asset is unrestricted), so every other
+/// host, Linux and Windows alike, takes this branch.
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn doctor_skips_a_crew_whose_executor_host_os_excludes_this_host() {
@@ -1964,6 +1965,7 @@ fn doctor_skips_a_crew_whose_executor_host_os_excludes_this_host() {
         return;
     }
     let fixture = routed_crew_fixture("muse-wonder", "muse");
+    pin_executor_host_os(&fixture, "muse", &["macos"]);
     let parsed = rows(&doctor(&fixture, &[]));
     let crew = row(&parsed, "provider:muse-wonder");
     assert_eq!(crew["status"], "skipped", "{crew}");
@@ -1977,6 +1979,29 @@ fn doctor_skips_a_crew_whose_executor_host_os_excludes_this_host() {
         crew["remediation"].is_null(),
         "an unsupported crew gets no install advice: {crew}"
     );
+}
+
+/// Set `host_os` on `provider`'s seeded executor, leaving every other field
+/// as shipped.
+fn pin_executor_host_os(fixture: &WorkCheckout, provider: &str, host_os: &[&str]) {
+    let path = fixture
+        .home
+        .join(".orbit/resources/executors")
+        .join(format!("{provider}.yaml"));
+    let mut executor: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&path).expect("seeded executor"))
+            .expect("seeded executor YAML");
+    executor["spec"]["host_os"] = serde_yaml::Value::Sequence(
+        host_os
+            .iter()
+            .map(|os| serde_yaml::Value::String((*os).to_string()))
+            .collect(),
+    );
+    fs::write(
+        &path,
+        serde_yaml::to_string(&executor).expect("pinned executor YAML"),
+    )
+    .expect("pinned executor");
 }
 
 /// Point `provider`'s seeded executor at a launcher that cannot exist: an
@@ -2008,10 +2033,10 @@ fn pin_missing_launcher(fixture: &WorkCheckout, provider: &str) -> String {
     launcher
 }
 
-/// The complement: on macOS, where Muse runs, a missing CLI is still an error
-/// with install advice. Its launcher is pinned to an absent path under the
-/// fixture root, so an installed Muse in a system prefix cannot satisfy it.
-#[cfg(target_os = "macos")]
+/// The complement: Muse is unrestricted (it runs on macOS and Linux), so a
+/// missing CLI is still an error with install advice on every host. Its
+/// launcher is pinned to an absent path under the fixture root, so an
+/// installed Muse in a system prefix cannot satisfy it.
 #[test]
 fn doctor_keeps_a_missing_cli_an_error_on_a_host_the_executor_supports() {
     if crate::isolated_test::run_in_child(

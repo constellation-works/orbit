@@ -196,7 +196,8 @@ fn a_recent_follower_claim_lets_a_linux_owner_draw_the_macos_only_crew() {
     );
 }
 
-/// The shipped muse executor, macOS only, as workspace init installs it.
+/// An explicitly constrained muse executor, macOS only, installed by this
+/// fixture to exercise the general `host_os` contract.
 fn declare_muse_macos(runtime: &OrbitRuntime) {
     runtime
         .upsert_executor_def(&ExecutorDef {
