@@ -449,6 +449,23 @@ fn fallback_fixture_goldens() {
                 })
             })
         };
+        if let Some(expected) = case.get("expected_log") {
+            let output = result.as_ref().unwrap();
+            assert_eq!(
+                &output["log"], expected,
+                "byte selection must not expose a cut credential: {}",
+                case["name"]
+            );
+            let selection = &output["selection"];
+            assert_eq!(selection["byte_start"], case["input"]["byte_start"]);
+            assert_eq!(selection["byte_end"], case["input"]["byte_end"]);
+            assert_eq!(
+                selection["selected_bytes"].as_u64().unwrap(),
+                case["input"]["byte_end"].as_u64().unwrap()
+                    - case["input"]["byte_start"].as_u64().unwrap(),
+                "redaction must preserve source-coordinate selection counts"
+            );
+        }
         let calls = std::fs::read_to_string(root.path().join("calls"))
             .unwrap_or_default()
             .lines()

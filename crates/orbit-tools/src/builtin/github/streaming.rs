@@ -17,6 +17,9 @@ pub const MAX_CHECKOUT_LOG_SCAN_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CHECKOUT_EVIDENCE_LINE_BYTES: usize = 16 * 1024;
 /// Bound and amortize work across small transport reads.
 const STREAM_BATCH_BYTES: usize = 4096;
+/// Original token context for byte-window cuts. Overlong cut tokens are
+/// conservatively omitted instead of retaining an unbounded credential.
+const WINDOW_TOKEN_CONTEXT_BYTES: usize = 16 * 1024;
 
 /// The commit a runner actually checked out, read out of the runner's own log.
 ///
@@ -51,6 +54,9 @@ pub struct CheckoutEvidence {
 /// then applies within the step section; otherwise the candidate is the
 /// whole log. Windows are still bounded by the caller's `max_bytes` excerpt
 /// cap, with the usual omission marker when the selection exceeds it.
+/// Coordinates and counts refer to source bytes, before redaction. A cut
+/// credential token (or an overlong token whose safety cannot be established)
+/// is omitted from the display; ordinary byte windows remain exact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogSelection {
     pub step: Option<String>,
@@ -132,7 +138,8 @@ pub struct StreamedLog {
 /// A truncated excerpt drops a whitespace-delimited token split by either
 /// retained boundary before redaction. A raw cut would otherwise keep a
 /// credential prefix or suffix that `redact_all` cannot match. Only the two
-/// windows, plus one byte beside each cut and a bounded 4 KiB input batch,
+/// windows, plus one byte beside each excerpt cut, a bounded 4 KiB input
+/// batch, and up to 16 KiB of original token context for byte selections,
 /// are retained. `finish` processes the last partial batch before rendering.
 pub struct StreamedLogCollector {
     max_bytes: usize,
@@ -152,6 +159,7 @@ pub struct StreamedLogCollector {
     diagnostic: diagnostic::DiagnosticCollector,
     nextest: super::nextest_regions::NextestRegions,
     selection: Option<LogSelection>,
+    window_tokens: WindowBoundaryTokens,
     scoped_line: Vec<u8>,
     candidate_byte_offset: usize,
     candidate_line_index: usize,
@@ -218,6 +226,7 @@ impl StreamedLogCollector {
                 MAX_CHECKOUT_LOG_SCAN_BYTES,
             ),
             selection: None,
+            window_tokens: WindowBoundaryTokens::default(),
             scoped_line: Vec::new(),
             candidate_byte_offset: 0,
             candidate_line_index: 0,
@@ -288,6 +297,8 @@ impl StreamedLogCollector {
             self.selected_bytes = self.selected_bytes.saturating_add(chunk.len());
             return;
         };
+        self.window_tokens
+            .push(chunk, start, window_start, window_end);
         let end = start.saturating_add(chunk.len());
         let from = window_start.max(start);
         let to = window_end.unwrap_or(usize::MAX).min(end);
@@ -317,18 +328,11 @@ impl StreamedLogCollector {
             }
             return;
         }
-        if let Some((window_start, window_end)) = selection.byte_window {
-            let start = self.candidate_byte_offset;
-            self.candidate_byte_offset = self.candidate_byte_offset.saturating_add(line.len());
-            let end = start.saturating_add(line.len());
-            let from = window_start.max(start);
-            let to = window_end.unwrap_or(usize::MAX).min(end);
-            if from < to {
-                let slice = &line[from - start..to - start];
-                self.selection_found = true;
-                self.selected_bytes = self.selected_bytes.saturating_add(slice.len());
+        if selection.byte_window.is_some() {
+            let before = self.selected_bytes;
+            self.process_scoped_bytes(line, selection);
+            if self.selected_bytes > before {
                 self.selected_lines = self.selected_lines.saturating_add(1);
-                self.feed_display(slice);
             }
             return;
         }
@@ -438,6 +442,15 @@ impl StreamedLogCollector {
             let line = std::mem::take(&mut self.scoped_line);
             self.process_scoped_line(&line, &selection);
         }
+        if let Some((start, end)) = self.selection.as_ref().and_then(|s| s.byte_window) {
+            self.window_tokens
+                .finish_token(self.candidate_byte_offset, start, end);
+        }
+        // Outer selection cuts need the original tokens, even when the
+        // selected bytes fit the display budget. Keep these independent of
+        // the inner head/tail excerpt cuts.
+        let trim_prefix = self.window_tokens.trim_prefix;
+        let trim_suffix = self.window_tokens.trim_suffix;
         let evidence = self.evidence.finish();
         let display_total = if self.selection.is_some() {
             self.selected_bytes
@@ -450,9 +463,16 @@ impl StreamedLogCollector {
             // Redact only after the cut token is gone. Joining the windows
             // would keep the omitted middle, which this collector must not
             // buffer; one adjacent byte is enough to see the split.
-            let head = excerpt_without_partial_suffix(&self.head, self.head_following);
-            let tail =
-                excerpt_without_partial_prefix(self.tail.make_contiguous(), self.tail_preceding);
+            let head = excerpt_without_partial_suffix(
+                &self.head,
+                cut_continues_token(self.head_following),
+            );
+            let head = excerpt_without_partial_prefix(head.as_bytes(), trim_prefix);
+            let tail = excerpt_without_partial_prefix(
+                self.tail.make_contiguous(),
+                cut_continues_token(self.tail_preceding),
+            );
+            let tail = excerpt_without_partial_suffix(tail.as_bytes(), trim_suffix);
             format!(
                 "{}\n[... {omitted} bytes omitted; raise the byte budget for more ...]\n{}",
                 redact_all(&head),
@@ -462,7 +482,9 @@ impl StreamedLogCollector {
             // When the source is short, all bytes are in `tail` except the
             // initial head window, so join the two retained halves.
             self.head.extend(self.tail);
-            redact_all(&String::from_utf8_lossy(&self.head))
+            let text = excerpt_without_partial_prefix(&self.head, trim_prefix);
+            let text = excerpt_without_partial_suffix(text.as_bytes(), trim_suffix);
+            redact_all(&text)
         };
         let nextest_complete = self.nextest.source_complete();
         let nextest = self.nextest.finish(self.total_bytes);
@@ -506,6 +528,59 @@ impl StreamedLogCollector {
     }
 }
 
+/// Inspect original whitespace-delimited tokens at selection cuts without
+/// changing source offsets or retaining the omitted middle of a large log.
+#[derive(Default)]
+struct WindowBoundaryTokens {
+    token: Vec<u8>,
+    token_start: usize,
+    overlong: bool,
+    trim_prefix: bool,
+    trim_suffix: bool,
+}
+
+impl WindowBoundaryTokens {
+    fn push(&mut self, chunk: &[u8], start: usize, from: usize, to: Option<usize>) {
+        let mut offset = start;
+        for part in chunk.split_inclusive(u8::is_ascii_whitespace) {
+            // Once both cuts have been passed, no later token can affect
+            // their safety. The rest of the source is still drained.
+            if to.is_some_and(|end| self.token_start >= end) {
+                break;
+            }
+            let whitespace = part.last().is_some_and(u8::is_ascii_whitespace);
+            let token_part = &part[..part.len() - usize::from(whitespace)];
+            let take = WINDOW_TOKEN_CONTEXT_BYTES
+                .saturating_sub(self.token.len())
+                .min(token_part.len());
+            self.token.extend_from_slice(&token_part[..take]);
+            self.overlong |= take < token_part.len();
+            offset = offset.saturating_add(token_part.len());
+            if whitespace {
+                self.finish_token(offset, from, to);
+                offset = offset.saturating_add(1);
+                self.token_start = offset;
+            }
+        }
+    }
+
+    fn finish_token(&mut self, end: usize, from: usize, to: Option<usize>) {
+        let cuts_start = self.token_start < from && from < end;
+        let cuts_end = to.is_some_and(|to| self.token_start < to && to < end);
+        if (cuts_start || cuts_end)
+            && (self.overlong || {
+                let token = String::from_utf8_lossy(&self.token);
+                redact_all(&token) != token
+            })
+        {
+            self.trim_prefix |= cuts_start;
+            self.trim_suffix |= cuts_end;
+        }
+        self.token.clear();
+        self.overlong = false;
+    }
+}
+
 /// Whether `adjacent` belongs to the same whitespace-delimited token as the
 /// excerpt byte on the other side of the cut.
 fn cut_continues_token(adjacent: Option<u8>) -> bool {
@@ -519,9 +594,9 @@ fn cut_continues_token(adjacent: Option<u8>) -> bool {
 /// that credential and the tail cut keeps the suffix without its prefix, so
 /// neither window matches. Removing the partial token leaves every complete
 /// token in the window for `redact_all`.
-fn excerpt_without_partial_suffix(bytes: &[u8], following: Option<u8>) -> String {
+fn excerpt_without_partial_suffix(bytes: &[u8], cut_token: bool) -> String {
     let text = String::from_utf8_lossy(bytes);
-    if !cut_continues_token(following) {
+    if !cut_token {
         return text.into_owned();
     }
     match text.rfind(char::is_whitespace) {
@@ -535,9 +610,9 @@ fn excerpt_without_partial_suffix(bytes: &[u8], following: Option<u8>) -> String
 
 /// Drop a token split by the start of the retained tail. See
 /// [`excerpt_without_partial_suffix`].
-fn excerpt_without_partial_prefix(bytes: &[u8], preceding: Option<u8>) -> String {
+fn excerpt_without_partial_prefix(bytes: &[u8], cut_token: bool) -> String {
     let text = String::from_utf8_lossy(bytes);
-    if !cut_continues_token(preceding) {
+    if !cut_token {
         return text.into_owned();
     }
     match text.find(char::is_whitespace) {
