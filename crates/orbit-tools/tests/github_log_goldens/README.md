@@ -36,7 +36,10 @@ removing duplicated cases.
 The registered `fallback.json` byte-window cases also cover opaque values after
 `Bearer`, Authorization headers, and API-key assignments. Assignment keys match
 the case-insensitive `api[_-]?key` family, including prefix segments such as
-`x-api-key` and `my_api_key`, and surrounding quotes/brackets. Compact `key=value`,
+`x-api-key` and `my_api_key`, camelCase/acronym boundaries in `serviceApiKey`,
+`serviceAPIKey` and `HTTPApiKey`, and surrounding quotes/brackets. The original
+case distinguishes these segments from an unseparated name such as `capiKey`;
+`api_keyboard` and `serviceApiKeyboard` remain noncredential names. Compact `key=value`,
 quoted values, and whitespace on either side of `=` use the same classification.
 Ordinary assignments and similar noncredential names retain their cut text. Complementary
 value cuts and cuts inside introducers must omit the value while retaining raw
