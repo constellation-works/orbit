@@ -17,8 +17,8 @@ pub const MAX_CHECKOUT_LOG_SCAN_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CHECKOUT_EVIDENCE_LINE_BYTES: usize = 16 * 1024;
 /// Bound and amortize work across small transport reads.
 const STREAM_BATCH_BYTES: usize = 4096;
-/// Original token context for byte-window cuts. Overlong cut tokens are
-/// conservatively omitted instead of retaining an unbounded credential.
+/// Original line-prefix/token context for byte-window cuts. Context beyond
+/// this bound is conservatively omitted rather than retaining a credential.
 const WINDOW_TOKEN_CONTEXT_BYTES: usize = 16 * 1024;
 
 /// The commit a runner actually checked out, read out of the runner's own log.
@@ -55,7 +55,7 @@ pub struct CheckoutEvidence {
 /// whole log. Windows are still bounded by the caller's `max_bytes` excerpt
 /// cap, with the usual omission marker when the selection exceeds it.
 /// Coordinates and counts refer to source bytes, before redaction. A cut
-/// credential token (or an overlong token whose safety cannot be established)
+/// credential token (or overlong context whose safety cannot be established)
 /// is omitted from the display; ordinary byte windows remain exact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogSelection {
@@ -139,7 +139,7 @@ pub struct StreamedLog {
 /// retained boundary before redaction. A raw cut would otherwise keep a
 /// credential prefix or suffix that `redact_all` cannot match. Only the two
 /// windows, plus one byte beside each excerpt cut, a bounded 4 KiB input
-/// batch, and up to 16 KiB of original token context for byte selections,
+/// batch, and up to 16 KiB of original line-prefix context for byte selections,
 /// are retained. `finish` processes the last partial batch before rendering.
 pub struct StreamedLogCollector {
     max_bytes: usize,
@@ -449,8 +449,11 @@ impl StreamedLogCollector {
         // Outer selection cuts need the original tokens, even when the
         // selected bytes fit the display budget. Keep these independent of
         // the inner head/tail excerpt cuts.
-        let trim_prefix = self.window_tokens.trim_prefix;
-        let trim_suffix = self.window_tokens.trim_suffix;
+        let window_start = self
+            .selection
+            .as_ref()
+            .and_then(|s| s.byte_window)
+            .map_or(0, |w| w.0);
         let evidence = self.evidence.finish();
         let display_total = if self.selection.is_some() {
             self.selected_bytes
@@ -463,16 +466,17 @@ impl StreamedLogCollector {
             // Redact only after the cut token is gone. Joining the windows
             // would keep the omitted middle, which this collector must not
             // buffer; one adjacent byte is enough to see the split.
-            let head = excerpt_without_partial_suffix(
-                &self.head,
-                cut_continues_token(self.head_following),
-            );
-            let head = excerpt_without_partial_prefix(head.as_bytes(), trim_prefix);
-            let tail = excerpt_without_partial_prefix(
+            let head = self.window_tokens.safe_slice(&self.head, 0, window_start);
+            let head =
+                excerpt_without_partial_suffix(head, cut_continues_token(self.head_following));
+            let tail_offset = display_total.saturating_sub(self.tail.len());
+            let tail = self.window_tokens.safe_slice(
                 self.tail.make_contiguous(),
-                cut_continues_token(self.tail_preceding),
+                tail_offset,
+                window_start,
             );
-            let tail = excerpt_without_partial_suffix(tail.as_bytes(), trim_suffix);
+            let tail =
+                excerpt_without_partial_prefix(tail, cut_continues_token(self.tail_preceding));
             format!(
                 "{}\n[... {omitted} bytes omitted; raise the byte budget for more ...]\n{}",
                 redact_all(&head),
@@ -482,9 +486,8 @@ impl StreamedLogCollector {
             // When the source is short, all bytes are in `tail` except the
             // initial head window, so join the two retained halves.
             self.head.extend(self.tail);
-            let text = excerpt_without_partial_prefix(&self.head, trim_prefix);
-            let text = excerpt_without_partial_suffix(text.as_bytes(), trim_suffix);
-            redact_all(&text)
+            let text = self.window_tokens.safe_slice(&self.head, 0, window_start);
+            redact_all(&String::from_utf8_lossy(text))
         };
         let nextest_complete = self.nextest.source_complete();
         let nextest = self.nextest.finish(self.total_bytes);
@@ -528,56 +531,128 @@ impl StreamedLogCollector {
     }
 }
 
-/// Inspect original whitespace-delimited tokens at selection cuts without
-/// changing source offsets or retaining the omitted middle of a large log.
+/// Inspect tokens with their original line prefix, including credential
+/// introducers that a byte window may omit or cut. Only display bounds change;
+/// source coordinates and selected counts continue to describe the raw stream.
 #[derive(Default)]
 struct WindowBoundaryTokens {
-    token: Vec<u8>,
+    context: Vec<u8>,
+    context_start: usize,
     token_start: usize,
     overlong: bool,
-    trim_prefix: bool,
-    trim_suffix: bool,
+    omit_prefix_until: usize,
+    omit_suffix_from: Option<usize>,
 }
 
 impl WindowBoundaryTokens {
     fn push(&mut self, chunk: &[u8], start: usize, from: usize, to: Option<usize>) {
         let mut offset = start;
         for part in chunk.split_inclusive(u8::is_ascii_whitespace) {
-            // Once both cuts have been passed, no later token can affect
-            // their safety. The rest of the source is still drained.
+            // The token crossing the end still needs its complete source.
             if to.is_some_and(|end| self.token_start >= end) {
                 break;
             }
-            let whitespace = part.last().is_some_and(u8::is_ascii_whitespace);
-            let token_part = &part[..part.len() - usize::from(whitespace)];
-            let take = WINDOW_TOKEN_CONTEXT_BYTES
-                .saturating_sub(self.token.len())
-                .min(token_part.len());
-            self.token.extend_from_slice(&token_part[..take]);
-            self.overlong |= take < token_part.len();
+            let whitespace = part.last().copied().filter(u8::is_ascii_whitespace);
+            let token_part = &part[..part.len() - usize::from(whitespace.is_some())];
+            self.extend_context(token_part);
             offset = offset.saturating_add(token_part.len());
-            if whitespace {
+            if let Some(whitespace) = whitespace {
                 self.finish_token(offset, from, to);
                 offset = offset.saturating_add(1);
                 self.token_start = offset;
+                // Bearer/header/assignment whitespace can cross a newline.
+                // Keep a pending introducer, still under the same byte cap.
+                let line_break = matches!(whitespace, b'\n' | b'\r');
+                let pending_introducer = line_break
+                    && self
+                        .context
+                        .split(u8::is_ascii_whitespace)
+                        .rfind(|part| !part.is_empty())
+                        .is_some_and(|part| {
+                            part.eq_ignore_ascii_case(b"bearer")
+                                || matches!(part.last(), Some(b':' | b'='))
+                        });
+                if line_break && !pending_introducer {
+                    self.context.clear();
+                    self.context_start = offset;
+                    self.overlong = false;
+                } else {
+                    self.extend_context(&[whitespace]);
+                }
             }
         }
     }
 
+    fn extend_context(&mut self, bytes: &[u8]) {
+        let take = WINDOW_TOKEN_CONTEXT_BYTES
+            .saturating_sub(self.context.len())
+            .min(bytes.len());
+        self.context.extend_from_slice(&bytes[..take]);
+        self.overlong |= take < bytes.len();
+    }
+
     fn finish_token(&mut self, end: usize, from: usize, to: Option<usize>) {
-        let cuts_start = self.token_start < from && from < end;
-        let cuts_end = to.is_some_and(|to| self.token_start < to && to < end);
-        if (cuts_start || cuts_end)
-            && (self.overlong || {
-                let token = String::from_utf8_lossy(&self.token);
-                redact_all(&token) != token
-            })
-        {
-            self.trim_prefix |= cuts_start;
-            self.trim_suffix |= cuts_end;
+        if self.token_start == end || end <= from || to.is_some_and(|to| self.token_start >= to) {
+            return;
         }
-        self.token.clear();
-        self.overlong = false;
+        let cuts_end = to.is_some_and(|to| self.token_start < to && to < end);
+        let lost_prefix = self.context_start < from;
+        if !cuts_end && !lost_prefix {
+            return;
+        }
+        let token_index = self
+            .token_start
+            .saturating_sub(self.context_start)
+            .min(self.context.len());
+        let prefix = String::from_utf8_lossy(&self.context[..token_index]);
+        let token = String::from_utf8_lossy(&self.context[token_index..]);
+        let sensitive = self.overlong || Self::context_redacts_token(&prefix, &token);
+        if !sensitive {
+            return;
+        }
+        if cuts_end {
+            self.omit_suffix_from = Some(
+                self.omit_suffix_from
+                    .map_or(self.token_start, |old| old.min(self.token_start)),
+            );
+        }
+        if lost_prefix {
+            // A cut in an introducer can leave the following value whole yet
+            // unrecognizable. Check whether the retained prefix still gives
+            // the redactor enough context before preserving that value.
+            let visible_index = from.saturating_sub(self.context_start).min(token_index);
+            let visible_prefix = String::from_utf8_lossy(&self.context[visible_index..token_index]);
+            if self.overlong
+                || self.token_start < from
+                || !Self::context_redacts_token(&visible_prefix, &token)
+            {
+                self.omit_prefix_until = end;
+            }
+        }
+    }
+
+    fn context_redacts_token(prefix: &str, token: &str) -> bool {
+        // Spaced assignments are credential introducers even when the generic
+        // text redactor only recognizes JSON/header spellings of the key.
+        let api_key_assignment = prefix.trim_end().strip_suffix('=').is_some_and(|key| {
+            key.split_whitespace().last().is_some_and(|key| {
+                ["api_key", "api-key", "apikey"]
+                    .iter()
+                    .any(|name| key.eq_ignore_ascii_case(name))
+            })
+        });
+        api_key_assignment
+            || redact_all(&format!("{prefix}{token}")) != format!("{}{token}", redact_all(prefix))
+    }
+
+    fn safe_slice<'a>(&self, bytes: &'a [u8], offset: usize, window_start: usize) -> &'a [u8] {
+        let start = self.omit_prefix_until.saturating_sub(window_start);
+        let end = self
+            .omit_suffix_from
+            .map_or(usize::MAX, |end| end.saturating_sub(window_start));
+        let from = start.saturating_sub(offset).min(bytes.len());
+        let to = end.saturating_sub(offset).min(bytes.len());
+        &bytes[from.min(to)..to]
     }
 }
 

@@ -1891,5 +1891,725 @@
     "cwds": [
       "selected_workspace"
     ]
+  },
+  "byte_window_hides_bearer_value_prefix": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 0,
+      "total_bytes": 54,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 54,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 14,
+        "byte_end": 30,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 16,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_hides_bearer_value_suffix": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 0,
+      "total_bytes": 54,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 54,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 30,
+        "byte_end": 47,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 17,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_hides_bearer_value_both_edges": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 0,
+      "total_bytes": 54,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 54,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 19,
+        "byte_end": 42,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 23,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_hides_authorization_value_prefix": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 0,
+      "total_bytes": 55,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 55,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 15,
+        "byte_end": 31,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 16,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_hides_authorization_value_suffix": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 0,
+      "total_bytes": 55,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 55,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 31,
+        "byte_end": 48,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 17,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_hides_authorization_value_both_edges": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 0,
+      "total_bytes": 55,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 55,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 20,
+        "byte_end": 43,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 23,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_hides_spaced_api_key_value_prefix": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 0,
+      "total_bytes": 50,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 50,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 10,
+        "byte_end": 26,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 16,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_hides_spaced_api_key_value_suffix": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 0,
+      "total_bytes": 50,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 50,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 26,
+        "byte_end": 43,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 17,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_hides_spaced_api_key_value_both_edges": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 0,
+      "total_bytes": 50,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 50,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 15,
+        "byte_end": 38,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 23,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_hides_value_after_cut_bearer_word": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 0,
+      "total_bytes": 47,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 47,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 3,
+        "byte_end": 40,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 37,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_keeps_safe_text_after_contextual_credential": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": " after\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 7,
+      "total_bytes": 47,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 47,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 10,
+        "byte_end": 47,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 37,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_keeps_innocuous_cut_words": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "llo world ordinary ",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 19,
+      "total_bytes": 26,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 26,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 2,
+        "byte_end": 21,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 19,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_hides_value_after_cut_authorization_word": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 0,
+      "total_bytes": 49,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 49,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 3,
+        "byte_end": 48,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 45,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_hides_value_after_cut_api_key_word": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 0,
+      "total_bytes": 44,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 44,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 3,
+        "byte_end": 43,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 40,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_preserves_complete_bearer_context": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "Bearer [REDACTED_AUTH]",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 22,
+      "total_bytes": 54,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 54,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 7,
+        "byte_end": 47,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 40,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_hides_contextual_credential_suffix_at_eof": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": false,
+      "truncated": false,
+      "returned_bytes": 0,
+      "total_bytes": 40,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 40,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 12,
+        "byte_end": 40,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 28,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_hides_a_value_after_newline_bearer": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 0,
+      "total_bytes": 41,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 41,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 3,
+        "byte_end": 40,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 37,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_hides_a_value_after_newline_authorization": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 0,
+      "total_bytes": 49,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 49,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 17,
+        "byte_end": 48,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 31,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "byte_window_hides_contextual_value_across_stream_batch_boundary": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 0,
+      "total_bytes": 4129,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 4129,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 4096,
+        "byte_end": 4112,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 16,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "capped_byte_window_hides_value_after_cut_bearer_word": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "\n[... 28 bytes omitted; raise the byte budget for more ...]\n after\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": true,
+      "returned_bytes": 67,
+      "total_bytes": 47,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 47,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": 3,
+        "byte_end": 47,
+        "line_start": null,
+        "line_end": null,
+        "selected_bytes": 44,
+        "selected_lines": 0
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
   }
 }
