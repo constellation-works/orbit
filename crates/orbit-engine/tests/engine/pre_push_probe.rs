@@ -246,10 +246,17 @@ const FAKE_GIT: &str = r#"#!/bin/sh
 set -eu
 while [ "$1" = -c ]; do shift 2; done
 case "$1" in
-  remote) printf '%s\n' 'https://fixture.invalid/orbit.git' ;;
+  remote)
+    [ "$2" = get-url ] && [ "$3" = --push ] && [ "$4" = --all ] && [ "$5" = origin ] || exit 2
+    printf '%s\n' 'https://fixture.invalid/orbit.git' ;;
   rev-parse) printf '%s\n' '__HEAD__' ;;
   ls-remote)
-    [ "$2" = --heads ] && { [ "$3" = origin ] || [ "$3" = 'https://fixture.invalid/orbit.git' ]; } && [ "$4" = refs/heads/candidate ] || exit 2
+    if [ "$2" = --get-url ]; then
+      [ "$3" = 'https://fixture.invalid/orbit.git/.orbit-publication-probe' ] || exit 2
+      printf '%s\n' 'https://fixture.invalid/orbit.git'
+      exit 0
+    fi
+    [ "$2" = --heads ] && [ "$3" = 'https://fixture.invalid/orbit.git/.orbit-publication-probe' ] && [ "$4" = refs/heads/candidate ] || exit 2
     printf '%s\n' probe >> calls
     count=$(($(cat count) + 1))
     printf '%s\n' "$count" > count
