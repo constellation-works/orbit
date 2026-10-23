@@ -295,7 +295,7 @@ fn confirmed_at_publication_destination(
     repo_root: &Path,
     target_ref: &str,
     head_sha: &str,
-) -> Result<bool, OrbitError> {
+) -> Result<Option<orbit_exec::ExecutionResult>, OrbitError> {
     let listed = execute(
         "git",
         vec![
@@ -326,6 +326,7 @@ fn confirmed_at_publication_destination(
                 .to_string(),
         ));
     }
+    let mut confirmation = None;
     for url in &urls {
         let target = direct_remote_target(url);
         let mut verify_args = target.prefix_args();
@@ -373,10 +374,13 @@ fn confirmed_at_publication_destination(
                 && fields.next().is_none()
         });
         if !holds {
-            return Ok(false);
+            return Ok(None);
+        }
+        if confirmation.is_none() {
+            confirmation = Some(remote);
         }
     }
-    Ok(true)
+    Ok(confirmation)
 }
 
 /// Retry only transient push failures, confirming the exact remote ref before
@@ -428,8 +432,9 @@ fn execute_push_with_transient_retry(
         // wrote, not the fetch remote: a plain `ls-remote origin` reads
         // the fetch URL, and probing the resolved push URL by URL would
         // apply `insteadOf` to it a second time [ORB-17671, ORB-17686].
-        if confirmed_at_publication_destination(repo_root, target_ref, head_sha)
-            .map_err(PushFailure::Error)?
+        if let Some(confirmation) =
+            confirmed_at_publication_destination(repo_root, target_ref, head_sha)
+                .map_err(PushFailure::Error)?
         {
             tracing::info!(target: "orbit_engine::executor::automation::vcs::operations",
                 operation,
@@ -438,7 +443,7 @@ fn execute_push_with_transient_retry(
                 "confirmed push landed after a transient failure"
             );
             return Ok(Pushed {
-                result,
+                result: confirmation,
                 attempts: attempt,
                 waited_ms,
             });
