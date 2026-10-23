@@ -28,8 +28,8 @@ use orbit_types::workflow::{
 
 use super::*;
 use crate::context::{
-    FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied, TaskAutomationUpdate,
+    CompletionObservationAdmission, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
+    FinalRecoveryApplication, FinalRecoveryApplied, TaskAutomationUpdate,
 };
 use crate::executor::automation::vcs::absorbed::{AbsorbedCandidate, verify_absorbed_candidate};
 use crate::executor::automation::vcs::git::{git_command_success, git_output};
@@ -299,14 +299,14 @@ pub(super) fn attempt_final_recovery(
         error,
         DispatchError::CompletionObservationUnavailable { .. }
     ) {
-        let authentication = ctx
-            .host
-            .authenticate_completion_tail(&ctx.run_id, &task_id, &step.id);
+        let authentication =
+            ctx.host
+                .completion_observation_admission(&ctx.run_id, &task_id, &step.id);
         let refusal = match authentication {
-            Ok(true) => {
+            Ok(CompletionObservationAdmission::Retry) => {
                 crate::executor::automation::vcs::fixed_wait(COMPLETION_OBSERVATION_RETRY_BACKOFF);
                 let rationale =
-                    "authenticated unchanged publication; retry current completion observation"
+                    "transient-observation: authenticated unchanged publication; retry current completion observation"
                         .to_string();
                 let application = FinalRecoveryApplication {
                     task_id,
@@ -345,7 +345,31 @@ pub(super) fn attempt_final_recovery(
                     None,
                 );
             }
-            Ok(false) => "host has no authenticated completion prefix".to_string(),
+            Ok(CompletionObservationAdmission::PolicyChanged { reason }) => {
+                // The ordinary bounded requeue preserves the publication and
+                // admits a fresh run under current policy; no old gate is reused.
+                let application = FinalRecoveryApplication {
+                    task_id,
+                    failed_step_id: step.id.clone(),
+                    decision: FinalRecoveryDecision::Requeue {
+                        reason: format!(
+                            "policy-changed: {reason}; transient completion observation requires current-policy source repair"
+                        ),
+                    },
+                    resume_step_index: None,
+                    preserved_steps: Vec::new(),
+                    repair_commit: None,
+                    resume_context: None,
+                    workspace_path: worktree.workspace_path.into(),
+                    completion_done: ctx.input.get("completion").and_then(Value::as_str)
+                        == Some("done"),
+                    infrastructure: None,
+                };
+                return conclude(job, ctx, step, activity, &application, None, None);
+            }
+            Ok(CompletionObservationAdmission::Unavailable) => {
+                "host has no authenticated completion prefix".to_string()
+            }
             Err(error) => error.to_string(),
         };
         // A refusal must not reach an agent that can request the same stale
@@ -354,7 +378,7 @@ pub(super) fn attempt_final_recovery(
             task_id,
             failed_step_id: step.id.clone(),
             decision: FinalRecoveryDecision::Escalate {
-                diagnosis: format!("unchanged completion reuse refused: {refusal}; original error: {error_message}"),
+                diagnosis: format!("unchanged completion reuse refused: candidate-changed: {refusal}; original error: {error_message}"),
                 human_action: "Inspect the publication and admit current-policy source repair when its evidence or inputs changed.".into(),
             },
             resume_step_index: None,

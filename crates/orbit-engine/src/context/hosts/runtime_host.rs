@@ -27,10 +27,11 @@ use crate::activity_job::{
 };
 
 use super::{
-    ClaimExecutionContext, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
-    FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingUpdate,
-    PluginBrokerHandle, PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig,
-    RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
+    ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
+    FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied,
+    HandoffLandingContext, HandoffLandingUpdate, PluginBrokerHandle, PluginBrokerRun,
+    PrAutoFixAdmission, PrAutoFixRequest, PrConfig, RebaseRecoveryAttemptScope,
+    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
     ReviewReportCorrectionRequest, ReviewerInvocationRequest, ScratchGcReport, SteeringGateReading,
     SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,
     StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, TaskActivityUpdate,
@@ -920,6 +921,15 @@ pub trait RuntimeHost: Send + Sync {
     ) -> Result<Option<String>, OrbitError> {
         Ok(None)
     }
+
+    /// Classify a transient completion observation after authenticating the
+    /// publication and its receipts. This grants no authority to retry mutations.
+    fn completion_observation_admission(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        step_id: &str,
+    ) -> Result<CompletionObservationAdmission, OrbitError>;
 
     /// Authenticate an unchanged publication before the once-only final recovery
     /// retries a read-only completion observation in the same active execution.

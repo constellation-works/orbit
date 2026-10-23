@@ -61,11 +61,11 @@ pub use activity_job::{
     resolve_job_catalog_refs_for_execution, validate_job, validate_job_deterministic_actions,
 };
 pub use context::{
-    ClaimExecutionContext, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
-    FinalRecoveryApplication, FinalRecoveryApplied, GeneratedPath, HandoffLandingContext,
-    HandoffLandingStep, HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle,
-    PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig, RebaseRecoveryAttemptScope,
-    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
+    ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
+    FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied, GeneratedPath,
+    HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate, PLUGIN_BROKER_ENV,
+    PluginBrokerHandle, PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig,
+    RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
     ReviewReportCorrectionRequest, ReviewerInvocationRequest, RuntimeHost,
     STEP_RECOVERY_DECISION_SCHEMA_VERSION, ScratchGcEntry, ScratchGcReport, SteeringGateReading,
     SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,

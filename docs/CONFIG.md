@@ -1280,6 +1280,26 @@ the existing pull request is reused. Republication is leased to the exact
 previously published head, including when the repeated sync has no rebase
 left to perform. A changed or deleted remote branch refuses that push.
 
+A transient read-only PR or repository observation failure gets one
+host-authenticated completion retry within the original completion deadline.
+The host checks the unchanged publication, validation receipts and captured
+review certificate first; the retried completion reads PR state again and
+checks the published head and base before merging. The recovery rationale
+records `transient-observation`. Review provenance changes and the retired
+capture-only after-landing timing do not add review obligations. New
+validation captures bind non-review inputs separately so review-only config
+drift can be checked against the candidate's captured obligations; older
+captures still require their original full policy digest to match.
+
+A changed review obligation (timing, reviewer pool, budget, baseline commands or
+host evidence) refuses completion reuse and records `policy-changed`. The
+existing bounded requeue preserves the branch and PR for a fresh run under
+current policy, with fresh validation and review. Changed candidate/base
+bindings, mutation or rewrite provenance, and missing or stale evidence
+retain their refusals, recorded as `candidate-changed`. Conflicts, red checks
+and permission failures keep their existing recovery path; a lost mutation
+reply never grants this read-only retry.
+
 **Escalated blocks.** A final-recovery `requeue` is bounded to two per task
 in 24 hours; past that the decision is refused and the task stays blocked.
 The bound has no configuration key. What final recovery escalates waits in

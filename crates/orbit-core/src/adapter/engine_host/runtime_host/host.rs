@@ -5,12 +5,12 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::{
-    CrewConfig, DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
-    FinalRecoveryApplication, FinalRecoveryApplied, PluginBrokerHandle, PluginBrokerRun,
-    RebaseRecoveryAttemptScope, ResolvedActivityTools, ResolvedCliExecutor, ResolvedSandbox,
-    ResolvedShellExecutor, RuntimeHost, SteeringGateReading, SteeringRoundAdmission,
-    StepRecoveryDecisionRead, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
-    TaskActivityUpdate, TaskAutomationUpdate,
+    CompletionObservationAdmission, CrewConfig, DispatchError, FinalRecoveryAdmission,
+    FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied,
+    PluginBrokerHandle, PluginBrokerRun, RebaseRecoveryAttemptScope, ResolvedActivityTools,
+    ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor, RuntimeHost, SteeringGateReading,
+    SteeringRoundAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
+    StepRecoveryDecisionSlot, TaskActivityUpdate, TaskAutomationUpdate,
 };
 use orbit_store::contracts::{
     InvocationQuery, InvocationRecord, JobRunStepParams, TaskReservationReleaseReason,
@@ -856,6 +856,15 @@ impl RuntimeHost for OrbitRuntime {
         task_ids: &[String],
     ) -> Result<Option<String>, OrbitError> {
         self.published_completion_policy(run_id, task_ids)
+    }
+
+    fn completion_observation_admission(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        step_id: &str,
+    ) -> Result<CompletionObservationAdmission, OrbitError> {
+        self.classify_published_completion(run_id, task_id, step_id, true)
     }
 
     fn authenticate_completion_tail(

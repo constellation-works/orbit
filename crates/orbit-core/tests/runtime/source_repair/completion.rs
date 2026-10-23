@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 #[path = "completion/mutation.rs"]
 pub(super) mod mutation;
+#[path = "completion/policy.rs"]
+pub(super) mod policy;
 #[path = "completion/prerequisite.rs"]
 pub(super) mod prerequisite;
 
