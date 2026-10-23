@@ -1,0 +1,56 @@
+Explain why backlog tasks can or cannot start in auto-drain
+
+Usage: orbit run readiness [<TASK_ID>...] [OPTIONS]
+
+Arguments:
+  [TASK_ID]...
+          Optional task IDs to explain. Omit to inspect a bounded backlog snapshot
+
+Options:
+      --concurrency <N>
+          Leaf-run concurrency to evaluate. Omit for the live local drain's ceiling, else a live pull drain's, else 5
+
+      --root <ROOT>
+          Orbit data directory to use (overrides every other source)
+
+      --limit <N>
+          Maximum tasks to explain, including an explicit selection (1-500)
+          
+          [default: 50]
+
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
+      --allow-crew <CREW>
+          Evaluate as if the drain were restricted to these configured crews. Repeatable and comma-separated; omitted, the live drain's own crew restriction applies (none when no drain is live or it has none)
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+This is a read-only snapshot: it does not reserve work, reconcile stale runs,
+submit a run, or mutate tasks. Eligible tasks are not guaranteed to start.
+An explicit --concurrency overrides the live drain's ceiling; --allow-crew
+previews a crew restriction without changing the drain.
+
+Examples:
+  orbit run readiness
+  orbit run readiness TASK-123 TASK-124
+  orbit run readiness --concurrency 8 --allow-crew sol --json
+
+Operator reference: orbit-orchestrate/references/orchestration.md#readiness-snapshots

@@ -204,6 +204,8 @@ for pull setup, captured review policy and owner landing authority.
 Runs are asynchronous: these commands return once the run is durable, printing a
 run ID. They do not claim the eventual outcome.
 
+## Readiness snapshots
+
 `orbit run readiness` is the diagnostic counterpart to auto-drain. It reads a
 bounded snapshot of the explicit workspace and reports each selected backlog
 task as ready or waiting, naming unmet dependency IDs/statuses, context-lock
@@ -222,6 +224,18 @@ at 3 is not reported against the default of 5.
 Its answer can change immediately after the snapshot, so `eligible` means
 "would be admitted by this snapshot", never a guarantee that work will start.
 
+`--allow-crew` previews the same restriction as `orbit run auto --allow-crew`:
+excluded tasks report `crew_not_allowed` with the crew they would run as,
+and permitted tasks keep filling free slots. Without it, the live drain's
+own restriction applies (`capacity.allowed_crews` in JSON); with no live
+restriction, all configured crews are allowed.
+
+A drain started while another runs waits for it. Readiness lists it as
+`Queued drain:` with its completion, ceiling, crews and window. `Unset env:`
+names the `execution.env.pass` variables its start did not hold, and the
+snapshot names any Claude crew in its window left with no worker credential.
+JSON records these queued drains in `capacity.queued_drains`.
+
 It also names a scheduled host shutdown or reboot and its mode. Within
 `machine.host_shutdown_hold_minutes` (default 180), tasks report
 `host_shutdown_scheduled` and new unattended admissions hold; running workers
@@ -230,6 +244,33 @@ drains report the same hold as `Pull drain requests held:`. Report the time and
 configured window, and wait or follow an explicit operator instruction; do not
 cancel the schedule or override the hold automatically. See
 [authorization.md](authorization.md#keep-authorized-work-moving).
+
+While sustained host resource pressure throttles admissions
+(`[workflow.resource_throttle]`), every task reports `resource_throttled` and
+the output names the resource, its value, threshold and since-when. Unknown
+readings never throttle; JSON lists them in
+`capacity.resource_telemetry_unknown`. On a replica the throttle is this
+host's own and holds its pull drain; the owner's throttle never holds a pull
+claim. When that pull drain's last pass requested no claim for another reason,
+`Pull drain requests held:` names it (`capacity.pull_drain_refusal`), for
+example `circuit_open` once three of its claims in a row settled as failures,
+until its breaker half-opens to admit one probe claim.
+
+When CPU is the only held resource, `no-diff-expected` auto-tasks (marked
+`cpu-light`) still start within the `cpu_light_leaves` reserved slots. Once
+those are taken they report `cpu_light_budget_full`; memory, disk or I/O
+pressure holds them too. On Linux, sustained disk I/O stall (`io full`, from
+`/proc/pressure/io`) is one of the held resources; hosts without it are not gated.
+
+A `Provider limits:` line names each provider usage window at or past its
+`workflow.provider_limit_*` threshold, its reset, and the crews admission skips
+until then. A task whose every crew is skipped reports `provider_limit` with
+that detail. JSON lists every live reading in `provider_limits`: `provider`,
+`scope`, `window`, `used_percent`, `exhausted`, `resets_at`, `source`,
+`observed_at`, `threshold`, `gated`, `until` and `crews`.
+
+A task whose frozen delivery batch is within two hours of its deadline sorts
+ahead of same-priority backlog and names that deadline.
 
 Two of its answers separate contention from capacity:
 
@@ -269,8 +310,9 @@ Two of its answers separate contention from capacity:
   `review.verify_findings = false` to stop gating findings; `detail` gives
   the command.
 - `awaiting_footprint` and `awaiting_exclusive_slot` mean the task declares
-  no `context_files` in a run with more than one slot. It waits for the task
-  pilot, then for a slot with nothing else in flight; `detail` names the
+  no `context_files` and has no `no-diff-expected` tag in a run with more than
+  one slot. It would hold no file lock, so it waits for the task pilot, then
+  for a slot with nothing else in flight; `detail` names the
   deadline and the fix. A `conflict_deferred` whose `provenance` is
   `unknown_footprint` is blocked by a running task with no footprint, and
   `exclusive_reservation` by such a task waiting to go alone. See

@@ -21,6 +21,7 @@ const CASES: &[(&[&str], &str)] = &[
     (&[], "root.txt"),
     (&["run"], "run/root.txt"),
     (&["run", "auto"], "run/auto.txt"),
+    (&["run", "readiness"], "run/readiness.txt"),
     (&["init"], "init.txt"),
     (&["host", "add"], "host/add.txt"),
     (&["host", "remove"], "host/remove.txt"),
