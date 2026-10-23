@@ -441,23 +441,24 @@ class NextestShardWorkflowTests(unittest.TestCase):
         self.calls = self.root / "calls"
         # Each stub records its argv, one JSON list per line. It names the real
         # interpreter: the python3 stub shadows it on PATH.
-        record = f"#!{sys.executable}\nimport json, sys\nopen({str(self.calls)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        record = f"#!{sys.executable}\nimport json, os, sys\nopen({str(self.calls)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\nraise SystemExit(int(os.environ.get('SHARD_FIXTURE_EXIT', '0')))\n"
         for path in (self.root / "bin/python3", self.root / "scripts/cpu-utilisation.sh"):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(record)
             path.chmod(0o755)
 
-    def run_step(self, job, name):
+    def run_step(self, job, name, expected_status=0):
         step = next(step for step in job["steps"] if step.get("name") == name)
         self.calls.write_text("")
         env = dict(PATH=f"{self.root / 'bin'}:{os.environ['PATH']}", RUNNER_TEMP=str(self.root),
+                   SHARD_FIXTURE_EXIT=str(expected_status),
                    **self.document["env"], **job.get("env", {}))
         result = self_test_hang.run(
             ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
             step=name, cwd=self.root,
             env={key: str(value) for key, value in env.items()},
             text=True, capture_output=True)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, expected_status, result.stdout + result.stderr)
         return [json.loads(line) for line in self.calls.read_text().splitlines()]
 
     def test_shard_jobs_partition_once_each_and_the_check_job_awaits_all_of_them(self):
@@ -473,12 +474,20 @@ class NextestShardWorkflowTests(unittest.TestCase):
         upload = "Upload nextest archive"
         self.assertIn(upload, build_steps)
         self.assertLess(build_steps.index(upload), build_steps.index("Prove the shards cover every test"))
+        [pack] = self.run_step(jobs["test-build"], "Pack nextest archive for transfer")
+        self.assertEqual(pack[1], "pack")
+        upload_step = next(step for step in jobs["test-build"]["steps"] if step.get("name") == upload)
+        self.assertEqual(upload_step["with"]["path"].replace("${{ runner.temp }}", str(self.root)), pack[3])
         partitions = {}
         for job_id, job in shard_jobs.items():
             with self.subTest(job=job_id):
                 self.assertNotIn("strategy", job, "Orbit's rerun certification needs literal shard jobs")
                 self.assertEqual(job["steps"], shard_jobs["test-1"]["steps"], "every shard runs the same steps")
                 [nextest] = self.run_step(job, "Run nextest shard")
+                [unpack] = self.run_step(job, "Restore native nextest archive")
+                self.assertEqual(unpack[:2], [pack[0], "unpack"])
+                self.assertEqual(unpack[2:], [pack[3], pack[2]])
+                self.assertEqual(nextest[nextest.index("--archive-file") + 1], unpack[3])
                 self.assertEqual(nextest[:4], ["--label", "nextest", "--", "cargo"])
                 self.assertIn("--no-fail-fast", nextest)
                 self.assertNotIn("--run-ignored", nextest)
@@ -496,6 +505,13 @@ class NextestShardWorkflowTests(unittest.TestCase):
         self.assertEqual(wait[1::2], ["--job"] * len(awaited))
         self.assertEqual(sorted(awaited), sorted([jobs["test-build"]["name"], *partitions.values()]),
                          "the Check job's elapsed time must cover the test build and every shard")
+
+    def test_repack_and_shard_failures_remain_failed_workflow_steps(self):
+        for job, step in (("test-build", "Pack nextest archive for transfer"),
+                          ("test-1", "Restore native nextest archive"),
+                          ("test-1", "Run nextest shard")):
+            with self.subTest(step=step):
+                self.run_step(self.document["jobs"][job], step, expected_status=7)
 
     def test_an_affected_crates_archive_passes_empty_partitions_and_gates_only_orbit_exec(self):
         jobs = self.document["jobs"]

@@ -403,7 +403,12 @@ The test gate in `ci.yml` runs on parallel runners from one build:
 - `Test build` runs `ci-guardrails.sh --test-archive PATH`. It runs the folded
   workflow test build, then `cargo nextest archive` of the workspace's lib, bin
   and test targets under the same lint environment, so the archive costs no
-  compile. The job uploads the archive as a one-day artifact, then runs
+  compile. `ci-repack-nextest.py pack SOURCE DESTINATION` re-encodes the same
+  tar stream with zstd level 6 and a 512 MiB history window for transfer.
+  This captures repeated linked executable sections beyond the native
+  archive's 2 MiB window. It requires the runner's `zstd` CLI; the decoder
+  is capped at the same 512 MiB window the encoder may emit. The job uploads this
+  transfer archive as a one-day artifact, then runs
   `ci-guardrails.sh --test-partitions PATH`:
   [check-nextest-partitions.py](../scripts/check-nextest-partitions.py) lists
   the archive once unpartitioned and once per `--partition count:k/N`
@@ -416,8 +421,17 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   their runner. Each waits through
   [ci-await-jobs.py](../scripts/ci-await-jobs.py) `--step` for the build's
   `Upload nextest archive` step rather than the whole job, downloads the
-  archive, and runs `cargo nextest run --profile ci --partition count:k/N`
+  archive, restores a native small-window encoding with
+  `ci-repack-nextest.py unpack SOURCE DESTINATION`, and runs
+  `cargo nextest run --profile ci --partition count:k/N`
   from it. A build that fails before the upload fails the wait at once.
+  Repacking preserves every tar byte; it never extracts members or replaces
+  an existing destination. Both zstd stages must succeed before publishing
+  the destination, and corrupt input, missing zstd or encoder failure fails
+  the job. Download artifact digest verification still precedes conversion;
+  nextest retains responsibility for safe extraction. The original build-side
+  archive remains the input to the partition proof. The transfer's larger
+  window cannot be passed directly to nextest's default decoder.
   Extracting into the checkout puts `target/debug/orbit` and the test binaries
   at the paths they were built for. Each shard uploads its nextest JUnit report
   (`target/nextest/ci/junit.xml`) as `nextest-junit-k`, which carries the
