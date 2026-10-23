@@ -34,7 +34,11 @@ All existing unit tests remain. Retirement tasks can use this mapping when
 removing duplicated cases.
 
 The registered `fallback.json` byte-window cases also cover opaque values after
-`Bearer`, Authorization headers, and spaced `api_key =` assignments. Complementary
+`Bearer`, Authorization headers, and API-key assignments. Assignment keys match
+the case-insensitive `api[_-]?key` family, including prefix segments such as
+`x-api-key` and `my_api_key`, and surrounding quotes/brackets. Compact `key=value`,
+quoted values, and whitespace on either side of `=` use the same classification.
+Ordinary assignments and similar noncredential names retain their cut text. Complementary
 value cuts and cuts inside introducers must omit the value while retaining raw
 source coordinates and selected-byte counts. Complete Bearer context and harmless
 cut words remain readable; EOF, newlines, collector batch boundaries, and capped

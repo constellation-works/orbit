@@ -632,14 +632,32 @@ impl WindowBoundaryTokens {
     }
 
     fn context_redacts_token(prefix: &str, token: &str) -> bool {
-        // Spaced assignments are credential introducers even when the generic
-        // text redactor only recognizes JSON/header spellings of the key.
-        let api_key_assignment = prefix.trim_end().strip_suffix('=').is_some_and(|key| {
-            key.split_whitespace().last().is_some_and(|key| {
-                ["api_key", "api-key", "apikey"]
-                    .iter()
-                    .any(|name| key.eq_ignore_ascii_case(name))
+        // Assignments are credential introducers even when the generic text
+        // redactor only recognizes JSON/header spellings. The separator may
+        // precede this token (key = value) or belong to it (key=value/key =value).
+        let assignment_key = if let Some(key) = prefix.trim_end().strip_suffix('=') {
+            key.split_whitespace().last()
+        } else {
+            token.split_once('=').and_then(|(key, _)| {
+                if key.is_empty() {
+                    prefix.split_whitespace().last()
+                } else {
+                    Some(key)
+                }
             })
+        };
+        let api_key_assignment = assignment_key.is_some_and(|key| {
+            let key = key
+                .trim_matches(['\'', '"', '[', ']', '{', '}', '(', ')'])
+                .to_ascii_lowercase();
+            let Some(stem) = key.strip_suffix("key") else {
+                return false;
+            };
+            let stem = stem.strip_suffix(['_', '-']).unwrap_or(stem);
+            // Match the api[_-]?key family, with optional prefix segments
+            // such as x-api-key or service_api_key, rather than a key list.
+            stem.strip_suffix("api")
+                .is_some_and(|prefix| prefix.is_empty() || prefix.ends_with(['_', '-']))
         });
         api_key_assignment
             || redact_all(&format!("{prefix}{token}")) != format!("{}{token}", redact_all(prefix))
