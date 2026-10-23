@@ -1929,3 +1929,13 @@ a.orbit-card:focus-visible :is(h2, h3) {
   border: 1px solid var(--sl-color-hairline-light);
   border-radius: 8px;
 }
+
+/* Search dialog Cancel (mobile): Starlight paints this button with
+   --sl-color-text-accent on the gray-6 dialog surface, which is 4.46:1 in
+   light theme — below the 4.5:1 normal-text threshold. Repoint just this
+   control at the darker accent-high step (9.07:1); links elsewhere keep
+   the text-accent token. Unlayered rules win over Starlight's layered
+   ones, so no !important is needed. */
+:root[data-theme='light'] site-search button[data-close-modal] {
+  color: var(--sl-color-accent-high);
+}
