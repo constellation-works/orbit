@@ -128,9 +128,14 @@ pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
         return Ok(RefreshStep::None);
     }
     match &status.review_decision {
-        super::super::pr::ReviewDecision::NotApplicable => {}
-        super::super::pr::ReviewDecision::Reported(value) if value == "APPROVED" => {}
-        _ => return Err(refused("required or unreadable review decision")),
+        super::super::pr::ReviewDecision::NotApplicable
+        | super::super::pr::ReviewDecision::Approved => {}
+        super::super::pr::ReviewDecision::ReviewRequired
+        | super::super::pr::ReviewDecision::ChangesRequested
+        | super::super::pr::ReviewDecision::Other(_)
+        | super::super::pr::ReviewDecision::Unavailable => {
+            return Err(refused("required or unreadable review decision"));
+        }
     }
     let number = status
         .number

@@ -311,6 +311,154 @@ fn absent_context_refreshes_an_accepted_handoff_without_changing_acceptance() {
 }
 
 #[test]
+fn review_decision_variants_gate_accepted_landing_and_preserve_spelling() {
+    isolated(
+        "absent_context::review_decision_variants_gate_accepted_landing_and_preserve_spelling",
+        |sandbox| {
+            struct Case {
+                label: &'static str,
+                raw: Option<&'static str>,
+                missing: bool,
+                lands: bool,
+                review: Option<Value>,
+            }
+            let cases: &[Case] = &[
+                Case {
+                    label: "approved",
+                    raw: Some("\"APPROVED\""),
+                    missing: false,
+                    lands: true,
+                    review: None,
+                },
+                Case {
+                    label: "review_required",
+                    raw: Some("\"REVIEW_REQUIRED\""),
+                    missing: false,
+                    lands: false,
+                    review: Some(
+                        json!({"value":"REVIEW_REQUIRED","original_chars":15,"truncated":false}),
+                    ),
+                },
+                Case {
+                    label: "changes_requested",
+                    raw: Some("\"CHANGES_REQUESTED\""),
+                    missing: false,
+                    lands: false,
+                    review: Some(
+                        json!({"value":"CHANGES_REQUESTED","original_chars":17,"truncated":false}),
+                    ),
+                },
+                Case {
+                    label: "unknown",
+                    raw: Some("\"Future_Decision\""),
+                    missing: false,
+                    lands: false,
+                    review: Some(
+                        json!({"value":"Future_Decision","original_chars":15,"truncated":false}),
+                    ),
+                },
+                Case {
+                    label: "lowercase",
+                    raw: Some("\"approved\""),
+                    missing: false,
+                    lands: false,
+                    review: Some(json!({"value":"approved","original_chars":8,"truncated":false})),
+                },
+                Case {
+                    label: "padded",
+                    raw: Some("\" APPROVED \""),
+                    missing: false,
+                    lands: false,
+                    review: Some(
+                        json!({"value":" APPROVED ","original_chars":10,"truncated":false}),
+                    ),
+                },
+                Case {
+                    label: "whitespace",
+                    raw: Some("\" \""),
+                    missing: false,
+                    lands: false,
+                    review: Some(json!({"value":" ","original_chars":1,"truncated":false})),
+                },
+                Case {
+                    label: "empty",
+                    raw: Some("\"\""),
+                    missing: false,
+                    lands: true,
+                    review: None,
+                },
+                Case {
+                    label: "null",
+                    raw: Some("null"),
+                    missing: false,
+                    lands: true,
+                    review: None,
+                },
+                Case {
+                    label: "missing",
+                    raw: None,
+                    missing: true,
+                    lands: false,
+                    review: Some(json!({"state":"unavailable"})),
+                },
+                Case {
+                    label: "numeric",
+                    raw: Some("42"),
+                    missing: false,
+                    lands: false,
+                    review: Some(json!({"state":"unavailable"})),
+                },
+            ];
+            for case in cases {
+                let (label, raw, missing, lands, expected_review) =
+                    (case.label, case.raw, case.missing, case.lands, &case.review);
+                in_fresh_row(sandbox, |row| {
+                    let (fx, host) = setup(row, NEW);
+                    if missing {
+                        fs::write(fx.forge.join("review-missing"), "missing").unwrap();
+                    } else if let Some(raw) = raw {
+                        fs::write(fx.forge.join("review-raw"), raw).unwrap();
+                    }
+                    let host = accepted_landing(&fx, host);
+                    let result = execute_deterministic_action(
+                        &host,
+                        "handoff_land",
+                        &json!({}),
+                        &json!({"handoff_id":"accepted-fixture","run_id":RUN_ID,"max_wait_seconds":30}),
+                        false,
+                        &HashMap::new(),
+                        None,
+                    );
+                    if lands {
+                        let landed = result.unwrap_or_else(|e| panic!("{label}: {e}"));
+                        assert_eq!(landed["phase"], "landed", "{label}");
+                        assert_eq!(
+                            fs::read_to_string(fx.forge.join("mutations")).unwrap(),
+                            "update\nmerge\n",
+                            "{label}: only approved/not-applicable refresh and merge"
+                        );
+                    } else {
+                        assert!(result.is_err(), "{label}: must refuse, got {result:?}");
+                        assert!(
+                            !fx.forge.join("mutations").exists(),
+                            "{label}: refused review must request no mutation"
+                        );
+                        let updates = host.updates.lock().unwrap();
+                        let stopped = updates.last().expect("refusal update");
+                        let evidence: Value = serde_json::from_str(&stopped.evidence).unwrap();
+                        assert_eq!(
+                            &evidence["observation"]["pr"]["review"],
+                            expected_review.as_ref().unwrap(),
+                            "{label}: diagnostic preserves provider spelling/state"
+                        );
+                    }
+                });
+            }
+        },
+    );
+}
+
+#[test]
 fn unsupported_or_unproven_emission_never_updates_or_repairs() {
     isolated(
         "absent_context::unsupported_or_unproven_emission_never_updates_or_repairs",

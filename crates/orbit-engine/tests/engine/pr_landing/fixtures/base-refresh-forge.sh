@@ -70,9 +70,15 @@ review=''
 [ ! -f "$forge/review" ] || review=REVIEW_REQUIRED
 if [ -f "$forge/auth" ] && [ "$1" = api ]; then echo 'HTTP 403 forbidden' >&2; exit 1; fi
 [ ! -f "$forge/review-required" ] || review=REVIEW_REQUIRED
+review_json="\"$review\""
+[ ! -f "$forge/review-raw" ] || review_json=$(cat "$forge/review-raw")
 case "$1 ${2:-}" in
     'pr view')
-        printf '{"number":42,"state":"%s","mergedAt":%s,"mergeable":"MERGEABLE","mergeStateStatus":"%s","reviewDecision":"%s","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":%s,"url":"https://github.com/%s/pull/42"}\n' "$state" "$merged_at" "$merge_state" "$review" "$rollup" "$branch" "$head" "$base" "$merge_commit" "$slug" ;;
+        if [ -f "$forge/review-missing" ]; then
+            printf '{"number":42,"state":"%s","mergedAt":%s,"mergeable":"MERGEABLE","mergeStateStatus":"%s","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":%s,"url":"https://github.com/%s/pull/42"}\n' "$state" "$merged_at" "$merge_state" "$rollup" "$branch" "$head" "$base" "$merge_commit" "$slug"
+        else
+            printf '{"number":42,"state":"%s","mergedAt":%s,"mergeable":"MERGEABLE","mergeStateStatus":"%s","reviewDecision":%s,"statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":%s,"url":"https://github.com/%s/pull/42"}\n' "$state" "$merged_at" "$merge_state" "$review_json" "$rollup" "$branch" "$head" "$base" "$merge_commit" "$slug"
+        fi ;;
     'repo view') printf '{"nameWithOwner":"%s"}\n' "$slug" ;;
     'api graphql')
         if [ -f "$forge/policy-unreadable" ]; then echo '{"errors":[{"message":"unavailable"}]}'; exit; fi
