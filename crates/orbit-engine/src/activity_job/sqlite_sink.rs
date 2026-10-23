@@ -83,14 +83,6 @@ impl V2SqliteSink {
         Ok(())
     }
 
-    pub fn persisted_event_count(&self) -> Result<i64, OrbitError> {
-        self.store.count_v2_audit_events(&V2AuditEventFilter {
-            workspace_id: self.workspace_id.clone(),
-            run_id: Some(self.run_id.clone()),
-            ..Default::default()
-        })
-    }
-
     /// Persisted envelope events for this run in insertion order. Backs the
     /// cross-crate `V2AuditWriter::events_snapshot` path.
     pub(crate) fn snapshot_events(&self) -> Result<Vec<V2AuditEvent>, OrbitError> {
