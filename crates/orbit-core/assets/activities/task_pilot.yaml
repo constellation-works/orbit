@@ -335,6 +335,27 @@ spec:
        rules above apply to companions too: generator evidence alone does
        not authorize a missing selector. Report an expected missing output
        without creation authorization as an evidence gap instead.
+       When the planned change already establishes a new or renamed
+       action, or a changed cross-module interface, follow it through the
+       existing registration wiring it requires before finalizing
+       selectors. At `source_revision`, inspect the exact existing sites
+       that must change for the change to resolve and run: the typed
+       action catalog or registry declaration, any embedding or asset
+       registry that must resolve the new or renamed reference, the
+       dispatcher that routes typed actions to implementations, and
+       module declarations or re-exports that expose a changed
+       interface. Propose an exact file selector for each such site only
+       when source evidence shows that site must change, and record each
+       wiring dependency and its source reason in `assessment_rationale`.
+       Do not propose a registry, dispatcher, embedding or export site
+       that the change leaves unchanged, and do not sweep every registry
+       or caller: an existing same-name action-body-only change adds no
+       unchanged registry selector. A required wiring target that does
+       not exist at `source_revision` follows the existence and
+       creation-authorization rules above: without operator-declared
+       creation intent, report it as an evidence gap rather than
+       proposing its missing selector, and never predict an unspecified
+       new filename.
        Derive the modification targets from evidence, never by sweeping a
        directory or a crate. For a removal or a rename, the targets are the
        files that actually reference the symbol — enumerate them
