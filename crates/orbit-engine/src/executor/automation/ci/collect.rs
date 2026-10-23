@@ -335,6 +335,15 @@ pub(super) fn collect_at<Q: CiQueries + ?Sized>(
     let mut seen_run_ids = std::collections::BTreeSet::new();
     for failure in current.iter().chain(mixed_candidates.iter()) {
         let Some(run_id) = failure.get("run_id").and_then(Value::as_u64) else {
+            // Report invalid identities before applying investigation budgets:
+            // dropping the run here would turn missing evidence into a clean sweep.
+            push_retryable_error(
+                &mut retryable_errors,
+                "registration",
+                "run_identity",
+                None,
+                "current failure has no numeric run_id",
+            );
             continue;
         };
         if !seen_run_ids.insert(run_id) {
