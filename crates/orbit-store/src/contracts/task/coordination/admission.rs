@@ -580,15 +580,6 @@ pub enum AdmissionLookup {
     NotFound,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AdmissionStorageUsage {
-    pub receipts: u64,
-    pub tombstones: u64,
-    /// Logical UTF-8 payload bytes; excludes SQLite page/index overhead.
-    pub receipt_bytes: u64,
-    pub tombstone_bytes: u64,
-}
-
 /// One task an owner-local drain wave selected, with the canonical lock
 /// footprint its gate will reserve [ORB-15514].
 #[derive(Debug, Clone, PartialEq, Eq)]

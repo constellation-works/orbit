@@ -593,9 +593,7 @@ executor crew capability and provider-unavailable release under [ORB-13941], 202
 
 ## Internal storage accounting
 
-`TaskCommitBoundary::admission_storage_usage` reports full-receipt and permanent-tombstone
-counts and logical UTF-8 payload bytes. SQLite page and index overhead is additional. An
-idle receipt is eligible to compact immediately; a claim in claimed, running, or handed-off phase
+An idle receipt is eligible to compact immediately; a claim in claimed, running, or handed-off phase
 retains its full receipt. At the default 60-second idle sleep, one idle drain leaves 1,440 request
 identities per day even after compaction. No age-based tombstone deletion is supported.
 
