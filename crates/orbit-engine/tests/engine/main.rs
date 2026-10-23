@@ -46,6 +46,7 @@ mod review_fixes;
 mod reviewer_wall_clock;
 #[cfg(unix)]
 mod source_inspection;
+mod task_complete_batch;
 mod v2_cli_agent;
 #[cfg(unix)]
 mod v2_cli_sandbox;
