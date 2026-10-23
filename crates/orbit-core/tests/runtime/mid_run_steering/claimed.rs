@@ -10,6 +10,7 @@
 //! from the replica. The distributed-drain suite drives the same channel
 //! against a real owner's claim journal.
 
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -33,6 +34,7 @@ pub(super) struct SimulatedOwner {
     comments: Mutex<Vec<TaskComment>>,
     steering: Mutex<ClaimSteeringReading>,
     records: Mutex<Vec<ClaimSteeringRecord>>,
+    calls: Mutex<Vec<(String, Option<String>)>>,
     unreachable: AtomicBool,
 }
 
@@ -44,6 +46,7 @@ impl SimulatedOwner {
             comments: Mutex::default(),
             steering: Mutex::default(),
             records: Mutex::default(),
+            calls: Mutex::default(),
             unreachable: AtomicBool::new(false),
         })
     }
@@ -71,6 +74,14 @@ impl SimulatedOwner {
     fn steering_calls(&self) -> usize {
         self.records.lock().unwrap().len()
     }
+
+    fn owner_call_counts(&self) -> BTreeMap<(String, Option<String>), usize> {
+        let mut counts = BTreeMap::new();
+        for call in self.calls.lock().unwrap().iter() {
+            *counts.entry(call.clone()).or_default() += 1;
+        }
+        counts
+    }
 }
 
 impl OwnerCoordinator for SimulatedOwner {
@@ -80,6 +91,10 @@ impl OwnerCoordinator for SimulatedOwner {
         input: Value,
         session: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
+        self.calls.lock().unwrap().push((
+            name.to_owned(),
+            input["_worker_read"].as_str().map(str::to_owned),
+        ));
         if self.unreachable.load(Ordering::SeqCst) {
             return Err(OrbitError::Execution(
                 "the simulated owner is unreachable".into(),
@@ -133,7 +148,8 @@ fn steering_text(prompt: &Value) -> Option<&str> {
 
 fn a_claimed_leaf_steers_from_the_owner_record_and_never_certifies_its_replica() {
     for pipeline in CLAIMED_PIPELINES {
-        // Off, the leaf never asks its owner about steering.
+        // Off, task context still reads the owner's task, history, and
+        // comments. Steering adds no prompt or gate reads or writes.
         let fx = admitted("");
         let run = fx.run(None);
         let owner = SimulatedOwner::of(&fx);
@@ -144,6 +160,15 @@ fn a_claimed_leaf_steers_from_the_owner_record_and_never_certifies_its_replica()
         let outcome = host.execute(&pipeline_head(pipeline), None);
         assert!(outcome.success, "{pipeline}: {outcome:?}");
         assert!(host.labels().iter().any(|label| label == "commit"));
+        assert_eq!(
+            owner.owner_call_counts(),
+            BTreeMap::from([
+                (("orbit.task.show".into(), Some("comments".into())), 1),
+                (("orbit.task.show".into(), Some("history".into())), 1),
+                (("orbit.task.show".into(), Some("task".into())), 1),
+            ]),
+            "{pipeline}: disabled steering adds no owner reads"
+        );
         assert_eq!(owner.steering_calls(), 0, "{pipeline}: off is inert");
 
         // A comment only the replica holds is not steering: the gate reads
