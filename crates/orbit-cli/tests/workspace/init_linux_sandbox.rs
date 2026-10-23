@@ -150,7 +150,7 @@ fn assert_warned_init(output: &Output) -> Value {
         "warning must name the reason: {stderr}"
     );
     for remedy in [
-        "docs/runbooks/linux-sandbox.md",
+        "Fix the cause named in the warning",
         "orbit init --host-prerequisites-only",
         "orbit doctor providers",
         "dispatch stays blocked",

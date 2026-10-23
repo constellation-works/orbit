@@ -46,7 +46,6 @@ Options:
 One resource profile per workspace, work class and complexity, from the CPU and memory
 recent deliveries recorded. `--accuracy` instead compares admission forecasts with the
 host's measured load. Read-only.
-Column reference: docs/runbooks/forecast-accuracy.md.
 
 Examples:
   orbit run profiles

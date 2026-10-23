@@ -29,7 +29,7 @@ const SHIPPED_CATALOG_LAYER: &str = "shipped";
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON: {\"run\":<job-run>,\"pull_claim\":…,\"crew_window\":…,\"catalog_layers\":[…],\"pipeline_state\":…,\"steps\":[…],\"steps_source\":\"record|audit\",\"provider_processes\":[…]}, or {\"run_id\",\"job_id\",\"step\",\"step_output\"} with -s.\nThe State: line is `.run.state`. Table step numbers are one-based; JSON `step_index` is zero-based and durations are milliseconds.\nField reference: docs/runbooks/stuck-job-runs.md (Read `orbit run show` output).\n\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
+    after_help = "JSON: {\"run\":<job-run>,\"pull_claim\":…,\"crew_window\":…,\"catalog_layers\":[…],\"pipeline_state\":…,\"steps\":[…],\"steps_source\":\"record|audit\",\"provider_processes\":[…]}, or {\"run_id\",\"job_id\",\"step\",\"step_output\"} with -s.\nThe State: line is `.run.state`. Table step numbers are one-based; JSON `step_index` is zero-based and durations are milliseconds.\n\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
 )]
 pub struct RunShowArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.
