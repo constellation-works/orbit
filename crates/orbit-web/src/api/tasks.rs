@@ -236,7 +236,7 @@ fn reject_unsupported_task_body_fields(
     if agent.is_some() {
         return Some(bad_request(format!(
             "{endpoint} no longer accepts `agent`; use `model` with the agent \
-             family (codex, claude, gemini, or grok) for attribution"
+             family (codex, claude, gemini, grok, or muse) for attribution"
         )));
     }
     if unsupported.is_empty() {

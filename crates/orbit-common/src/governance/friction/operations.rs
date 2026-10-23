@@ -155,13 +155,13 @@ const ADD: FrictionOperation = FrictionOperation {
             default: None,
             redact: Redaction::None,
             mcp_description: Some(Description::Static(
-                "Required agent family for attribution (`codex`, `claude`, `gemini`, or `grok`)",
+                "Required agent family for attribution (`codex`, `claude`, `gemini`, `grok`, or `muse`)",
             )),
             cli: Some(CliBinding {
                 required: false,
                 kind: flag("model"),
                 help: Description::Static(
-                    "Agent family to attribute the record to (`codex`, `claude`, `gemini`, or `grok`)",
+                    "Agent family to attribute the record to (`codex`, `claude`, `gemini`, `grok`, or `muse`)",
                 ),
             }),
         },

@@ -66,7 +66,7 @@ const TASK_UPDATE_STATUS_VALUES: &[EnumValue] = &[
 const WRITE_MODEL_PARAM: ParamSpec = both(
     "model",
     ParamType::String,
-    "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+    "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
     CliArgKind::flag("model"),
     "Explicit agent model to persist on the task artifact",
 );

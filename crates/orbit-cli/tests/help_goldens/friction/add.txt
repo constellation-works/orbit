@@ -22,7 +22,7 @@ Options:
           Optional task ID being worked on when friction occurred; an ID that names no task is refused
 
       --model <MODEL>
-          Agent family to attribute the record to (`codex`, `claude`, `gemini`, or `grok`)
+          Agent family to attribute the record to (`codex`, `claude`, `gemini`, `grok`, or `muse`)
 
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)

@@ -99,6 +99,9 @@ pub fn agent_from_model(model: &str) -> Option<&'static str> {
     if model.starts_with("grok-") || model.starts_with("grok3") {
         return Some("grok");
     }
+    if model == "muse" || model.starts_with("muse-") {
+        return Some("muse");
+    }
 
     None
 }
@@ -120,6 +123,7 @@ pub fn provider_for_agent_family(family: &str) -> Option<&'static str> {
         "gemini" => Some("google"),
         "ollama" => Some("ollama"),
         "grok" => Some("xai"),
+        "muse" => Some("meta"),
         _ => None,
     }
 }

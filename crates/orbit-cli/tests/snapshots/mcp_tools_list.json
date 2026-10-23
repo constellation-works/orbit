@@ -43,9 +43,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
         },
         "workspace": {
           "type": "string",
@@ -89,9 +90,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
         },
         "workspace": {
           "type": "string",
@@ -140,9 +142,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
         },
         "workspace": {
           "type": "string",
@@ -415,9 +418,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
         },
         "workspace": {
           "type": "string",
@@ -459,9 +463,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
         },
         "workspace": {
           "type": "string",
@@ -521,9 +526,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
         },
         "workspace": {
           "type": "string",
@@ -578,9 +584,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
         },
         "workspace": {
           "type": "string",
@@ -651,9 +658,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Required agent family for attribution (`codex`, `claude`, `gemini`, or `grok`)"
+          "description": "Required agent family for attribution (`codex`, `claude`, `gemini`, `grok`, or `muse`)"
         },
         "workspace": {
           "type": "string",
@@ -767,9 +775,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
         },
         "workspace": {
           "type": "string",
@@ -811,9 +820,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
         },
         "workspace": {
           "type": "string",
@@ -868,7 +878,7 @@
         },
         "agent": {
           "type": "string",
-          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`)."
+          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
         },
         "model": {
           "type": "string",
@@ -876,9 +886,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
         }
       },
       "required": [
@@ -969,7 +980,8 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
           "description": "Diagnostic model attribution; never grants authority"
         }
@@ -1064,9 +1076,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
         },
         "workspace": {
           "type": "string",
@@ -1259,9 +1272,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
         }
       },
       "required": [
@@ -1339,7 +1353,7 @@
         },
         "agent": {
           "type": "string",
-          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`)."
+          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
         },
         "model": {
           "type": "string",
@@ -1347,9 +1361,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
         },
         "workspace": {
           "type": "string",
@@ -1391,9 +1406,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
         },
         "workspace": {
           "type": "string",
@@ -1449,7 +1465,7 @@
         },
         "agent": {
           "type": "string",
-          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`)."
+          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
         },
         "model": {
           "type": "string",
@@ -1457,9 +1473,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
         }
       },
       "required": [
@@ -1508,7 +1525,7 @@
         },
         "agent": {
           "type": "string",
-          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`)."
+          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
         },
         "model": {
           "type": "string",
@@ -1516,9 +1533,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
         },
         "workspace": {
           "type": "string",
@@ -1638,7 +1656,7 @@
         },
         "agent": {
           "type": "string",
-          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`)."
+          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
         },
         "model": {
           "type": "string",
@@ -1646,9 +1664,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
         },
         "workspace": {
           "type": "string",
@@ -1865,7 +1884,7 @@
         },
         "agent": {
           "type": "string",
-          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`)."
+          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
         },
         "model": {
           "type": "string",
@@ -1873,9 +1892,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
         },
         "fields": {
           "anyOf": [
@@ -2211,9 +2231,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
         },
         "workspace": {
           "type": "string",
@@ -2528,9 +2549,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
         }
       },
       "required": [
@@ -2734,9 +2756,10 @@
             "codex",
             "claude",
             "gemini",
-            "grok"
+            "grok",
+            "muse"
           ],
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
         },
         "workspace": {
           "type": "string",
