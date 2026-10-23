@@ -15,9 +15,6 @@
 //! purpose by name, so [`CrewPurpose::parse`] still reads the names those
 //! purposes had on their own [ORB-16775].
 
-/// Prefix of every `workflow.purpose_crews.<purpose>` configuration key.
-pub const PURPOSE_CREWS_KEY_PREFIX: &str = "workflow.purpose_crews.";
-
 /// Tag prefix that names a task's purpose explicitly, as
 /// `crew-purpose:<purpose>`. An auto-task template carries it in its tags to
 /// name a purpose for the tasks it files.
@@ -116,12 +113,6 @@ impl CrewPurpose {
         Self::ALL
             .into_iter()
             .find(|purpose| purpose.has_purpose_key() && purpose.config_key() == key)
-    }
-
-    /// Whether this purpose chooses the crew of a task, rather than of an
-    /// activity a run dispatches.
-    pub fn is_task_purpose(self) -> bool {
-        matches!(self, Self::BaselineRedRepair | Self::SweepTasks)
     }
 
     /// How the crew is chosen while the purpose's pool is unset: the route

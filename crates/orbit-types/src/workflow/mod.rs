@@ -59,7 +59,7 @@ pub use auto_task::{
 pub use child_dispatch::{
     ChildCancellation, ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase,
 };
-pub use crew_purpose::{CREW_PURPOSE_TAG_PREFIX, CrewPurpose, PURPOSE_CREWS_KEY_PREFIX};
+pub use crew_purpose::{CREW_PURPOSE_TAG_PREFIX, CrewPurpose};
 pub use executor_def::{
     AuthProbe, AuthProbeSuccess, ExecutorDef, ExecutorSandboxKind, ExecutorType, ModelPairOverride,
     StdoutFormat, deserialize_executor_host_os,
