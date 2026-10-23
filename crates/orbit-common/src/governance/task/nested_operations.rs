@@ -11,7 +11,7 @@ pub(super) const ARTIFACT_PUT: TaskOperation = TaskOperation {
     verb: TaskVerb::ArtifactPut,
     cli_path: &["artifact", "put"],
     tool_name: "orbit.task.artifact.put",
-    tool_description: "Store a file (any content, up to 1 MiB) as a task artifact. Sources must stay inside the workspace after symlink resolution; write evidence under `.orbit/tmp/`. See `docs/design/task-artifacts/2_design.md#evidence-contracts` and the assigned task's evidence template for automation coverage and review report contracts.",
+    tool_description: "Store a file (any content, up to 1 MiB) as a task artifact. Sources must stay inside the workspace after symlink resolution; write evidence under `.orbit/tmp/`. Artifact paths beginning with `review-` in any ASCII case are reserved for the review gate's system writer; the only agent-writable exception is the schema-checked `review-report.json`. Name ordinary supporting evidence with a nonreserved name (for example `examination-checks.json`). See `docs/design/task-artifacts/2_design.md#evidence-contracts` and the assigned task's evidence template for automation coverage and review report contracts.",
     cli_about: "Store a source file under a task's artifacts directory",
     cli_help: CliHelp {
         long_about: None,
@@ -47,7 +47,7 @@ pub(super) const ARTIFACT_PUT: TaskOperation = TaskOperation {
             both(
                 "path",
                 ParamType::String,
-                "Artifact path relative to the task artifacts directory. Defaults to the source file name.",
+                "Artifact path relative to the task artifacts directory. Defaults to the source file name. Paths beginning with `review-` in any ASCII case are reserved for the review gate's system writer; the only agent-writable exception is the schema-checked `review-report.json`. Rename ordinary supporting evidence to a nonreserved name (for example `examination-checks.json`).",
                 CliArgKind::Flag {
                     long: "path",
                     delimiter: None,
