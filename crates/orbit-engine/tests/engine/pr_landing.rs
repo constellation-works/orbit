@@ -6961,6 +6961,180 @@ fn fixture_push_guard_checks_all_effective_push_urls() {
     );
 }
 
+/// The tip of `branch` in the bare repository at `bare`, when it has one.
+fn bare_tip(bare: &Path, branch: &str) -> Option<String> {
+    let output = crate::git_test_support::command()
+        .args([
+            "--git-dir",
+            path_str(bare),
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ])
+        .output()
+        .unwrap();
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// ORB-17671: the fetch remote already holding the candidate must not make
+/// `git_push` report `reused_current` when the effective push destination
+/// is a different, empty repository. The action publishes to that
+/// destination under its lease, and only then may it reuse it.
+fn git_push_publishes_to_effective_push_destination_not_fetch_remote() {
+    isolated(
+        "git_push_publishes_to_effective_push_destination_not_fetch_remote",
+        |sandbox| {
+            for case in ["pushurl", "pushInsteadOf"] {
+                let fx = Fixture::new(sandbox);
+                let push_remote = fx.forge.join("push.git");
+                git(&fx.repo, &["init", "--bare", path_str(&push_remote)]);
+                assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{case}");
+                assert_eq!(bare_tip(&push_remote, BRANCH), None, "{case}");
+                let fetch_remote = fx.forge.join("remote.git");
+                if case == "pushurl" {
+                    git(
+                        &fx.repo,
+                        &["config", "remote.origin.pushurl", path_str(&push_remote)],
+                    );
+                } else {
+                    git(
+                        &fx.repo,
+                        &[
+                            "config",
+                            &format!("url.{}.pushInsteadOf", path_str(&push_remote)),
+                            path_str(&fetch_remote),
+                        ],
+                    );
+                }
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                // A lease on the published head is a lease at the push
+                // destination: the fetch remote holding it does not satisfy it.
+                let leased = action(
+                    &host,
+                    "git_push",
+                    &json!({
+                        "workspace_path": fx.repo,
+                        "branch": BRANCH,
+                        "lease_remote_sha": fx.candidate,
+                    }),
+                )
+                .expect_err("a lease at the fetch remote must not bind the push destination");
+                assert!(
+                    leased.to_string().contains("push_lease_lost"),
+                    "{case}: {leased}"
+                );
+                assert_eq!(bare_tip(&push_remote, BRANCH), None, "{case}");
+
+                let pushed = action(
+                    &host,
+                    "git_push",
+                    &json!({"workspace_path": fx.repo, "branch": BRANCH}),
+                )
+                .unwrap();
+                assert_eq!(
+                    pushed["decision"], "performed_create",
+                    "{case} must publish, not reuse the fetch state: {pushed}"
+                );
+                assert_eq!(
+                    bare_tip(&push_remote, BRANCH).as_deref(),
+                    Some(fx.candidate.as_str()),
+                    "{case}"
+                );
+                // Only now, with the destination holding the exact
+                // candidate, is reuse a truthful report.
+                let reused = action(
+                    &host,
+                    "git_push",
+                    &json!({"workspace_path": fx.repo, "branch": BRANCH}),
+                )
+                .unwrap();
+                assert_eq!(reused["decision"], "reused_current", "{case}: {reused}");
+            }
+
+            // Several distinct push destinations are refused before any
+            // of them is written or reported as published.
+            let fx = Fixture::new(sandbox);
+            let first = fx.forge.join("push-one.git");
+            let second = fx.forge.join("push-two.git");
+            git(&fx.repo, &["init", "--bare", path_str(&first)]);
+            git(&fx.repo, &["init", "--bare", path_str(&second)]);
+            git(
+                &fx.repo,
+                &["config", "--add", "remote.origin.pushurl", path_str(&first)],
+            );
+            git(
+                &fx.repo,
+                &[
+                    "config",
+                    "--add",
+                    "remote.origin.pushurl",
+                    path_str(&second),
+                ],
+            );
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let refused = action(
+                &host,
+                "git_push",
+                &json!({"workspace_path": fx.repo, "branch": BRANCH}),
+            )
+            .expect_err("multiple distinct push destinations must be refused");
+            assert!(
+                refused.to_string().contains("distinct effective push URLs"),
+                "{refused}"
+            );
+            assert_eq!(bare_tip(&first, BRANCH), None);
+            assert_eq!(bare_tip(&second, BRANCH), None);
+        },
+    );
+}
+
+/// ORB-17671: a self-pointing effective push URL is refused even when the
+/// fetch URL names a real remote, including from a linked worktree that
+/// shares the primary checkout's Git common directory.
+fn git_push_refuses_self_pointing_effective_push_url() {
+    isolated(
+        "git_push_refuses_self_pointing_effective_push_url",
+        |sandbox| {
+            for case in ["direct", "linked_worktree"] {
+                let fx = Fixture::new(sandbox);
+                git(
+                    &fx.repo,
+                    &["config", "remote.origin.pushurl", path_str(&fx.repo)],
+                );
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                let workspace = if case == "linked_worktree" {
+                    let linked = fx.forge.join("linked-worktree");
+                    git(
+                        &fx.repo,
+                        &["worktree", "add", "--detach", path_str(&linked)],
+                    );
+                    linked.canonicalize().unwrap()
+                } else {
+                    fx.repo.clone()
+                };
+                let refused = action(
+                    &host,
+                    "git_push",
+                    &json!({"workspace_path": workspace, "branch": BRANCH}),
+                )
+                .expect_err("a self-pointing push URL must be refused");
+                assert!(
+                    refused.to_string().contains("is this same repository"),
+                    "{case}: {refused}"
+                );
+                assert!(
+                    refused.to_string().contains("push URL"),
+                    "{case} must name the effective push destination: {refused}"
+                );
+            }
+        },
+    );
+}
+
 /// ORB-14717: a silent origin must not turn reviewed work into a candidate
 /// failure. Only a cached ref sharing ancestry can complete the handoff.
 fn claimed_handoff_fetch_timeout_uses_only_a_related_cached_base() {
@@ -9257,6 +9431,14 @@ fn pr_number_and_push_transports() {
         pr_open_preserves_provider_number_representations();
         fixture_push_guard_checks_all_effective_push_urls();
         fixture_push_refuses_non_file_transports_without_network();
+    });
+}
+
+#[test]
+fn git_push_effective_destination_contracts() {
+    isolated("git_push_effective_destination_contracts", |_| {
+        git_push_publishes_to_effective_push_destination_not_fetch_remote();
+        git_push_refuses_self_pointing_effective_push_url();
     });
 }
 
