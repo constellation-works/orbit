@@ -245,6 +245,40 @@ fn error_operations(evidence: &Value, key: &str) -> Vec<String> {
 }
 
 #[test]
+fn repository_and_run_view_query_failures_are_retryable() {
+    let repo_view_error = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_repo_view_error("repository details unavailable");
+    let run_list_error = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_repository_runs_error("workflow runs unavailable");
+    let run_view_error = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_runs(vec![vec![run(
+            42,
+            "CI",
+            HEAD,
+            "completed",
+            Some("failure"),
+            "2026-10-07T02:10:00Z",
+        )]])
+        .with_run_view_error(42, "run details unavailable");
+
+    for (operation, queries) in [
+        ("repo_view", repo_view_error),
+        ("run_list", run_list_error),
+        ("run_view", run_view_error),
+    ] {
+        let evidence = collect(&queries, &input(), &mut RetryableHistory::default())
+            .expect("collect partial evidence");
+        assert!(
+            error_operations(&evidence, "retryable_errors").contains(&operation.to_string()),
+            "{operation} failures must be included in retryable_errors"
+        );
+    }
+}
+
+#[test]
 fn concurrency_cancelled_newest_runs_with_incomplete_logs_are_inconclusive_not_retryable() {
     // Without the annotation the fixture is the incident: every sweep fails
     // on logs a cancelled job was never going to finish.

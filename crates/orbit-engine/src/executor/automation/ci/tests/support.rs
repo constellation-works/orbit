@@ -15,6 +15,7 @@ use super::super::query::{AuthStatus, CiQueries, LogScope, RemoteBranchHeads, Ru
 #[derive(Default)]
 pub(super) struct FakeQueries {
     repo: Value,
+    repo_view_error: Option<String>,
     auth_usable: bool,
     branch_heads: BTreeMap<String, String>,
     branch_head_errors: BTreeMap<String, String>,
@@ -25,6 +26,7 @@ pub(super) struct FakeQueries {
     /// Repository-wide run pages. Each `repository_runs` call pops the next
     /// page, so a test can make CI progress between calls.
     runs: Mutex<Vec<Vec<Value>>>,
+    repository_runs_error: Option<String>,
     /// `failed_jobs` per run id; an unscripted run has none.
     failed_jobs: BTreeMap<String, Value>,
     open_pull_requests: Vec<Value>,
@@ -79,6 +81,11 @@ impl FakeQueries {
         }
     }
 
+    pub(super) fn with_repo_view_error(mut self, error: &str) -> Self {
+        self.repo_view_error = Some(error.to_string());
+        self
+    }
+
     pub(super) fn with_head(mut self, branch: &str, sha: &str) -> Self {
         self.branch_heads
             .insert(branch.to_string(), sha.to_string());
@@ -123,6 +130,11 @@ impl FakeQueries {
 
     pub(super) fn with_runs(self, pages: Vec<Vec<Value>>) -> Self {
         *self.runs.lock().expect("runs lock") = pages;
+        self
+    }
+
+    pub(super) fn with_repository_runs_error(mut self, error: &str) -> Self {
+        self.repository_runs_error = Some(error.to_string());
         self
     }
 
@@ -259,6 +271,9 @@ impl CiQueries for FakeQueries {
     }
 
     fn repo_view(&self) -> Result<Value, OrbitError> {
+        if let Some(error) = &self.repo_view_error {
+            return Err(OrbitError::Execution(error.clone()));
+        }
         Ok(self.repo.clone())
     }
 
@@ -327,6 +342,9 @@ impl CiQueries for FakeQueries {
 
     fn repository_runs(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {
         self.run_limits.lock().expect("run limits lock").push(limit);
+        if let Some(error) = &self.repository_runs_error {
+            return Err(OrbitError::Execution(error.clone()));
+        }
         let mut runs = self.runs.lock().expect("runs lock");
         let mut page = if runs.len() > 1 {
             runs.remove(0)
