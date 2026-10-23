@@ -266,6 +266,21 @@ known missing companion; a generator relationship alone grants no creation
 intent. Task-pilot records an expected missing output without authorization
 as an evidence gap rather than proposing an undeclared missing selector.
 
+When the planned change establishes a new or renamed action, or a changed
+cross-module interface, follow it through the existing registration wiring
+it requires and declare the exact existing sites that source evidence shows
+must change: the typed action catalog or registry declaration, any embedding
+or asset registry that must resolve the new or renamed reference, the
+dispatcher that routes typed actions to implementations, and module
+declarations or re-exports that expose a changed interface. Record each
+wiring dependency and its source reason in the description or authoring
+evidence. Declare only sites that must change: do not reserve every registry
+or caller, and add no unchanged registry selector for an existing same-name
+action-body-only change. A required wiring target that does not yet exist
+follows the creation-intent rules below; without that authorization, name it
+as an evidence gap rather than declaring its missing selector, and never
+predict an unspecified new filename.
+
 For review-filed tasks, task-pilot keeps selectors the finding names as change
 targets. It may omit a selector it verifies as read-only evidence or an
 incidental shared-doc touch by recording its exact selector and inspection
