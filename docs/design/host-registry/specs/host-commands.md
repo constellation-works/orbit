@@ -265,9 +265,14 @@ The view is Settings › Hosts (`#config/hosts`).
   The dashboard's periodic refresh lists with `probe=false` and keeps each row's last probed
   fields, so identity discovery is not repeated in the background. A row marked not probed has not been
   asked since the view opened.
-- While the view is open, each refresh separately reads host resources and each workspace's
-  drain capacity through `/api/on/<host>/host/resources` and
-  `/api/on/<host>/workflows/auto/readiness`. The serving host is answered locally. The Health
+- While the view is open, each refresh reads host resources and a single aggregate of every workspace's
+  drain state through `/api/on/<host>/host/resources` and
+  `/api/on/<host>/fleet/drains`. The selected host shares the topbar's in-flight
+  resource read or its result received within the last second; switching hosts clears it.
+  Other hosts read resources independently, and every panel refresh rereads drain state.
+  A missing workspace row shows drain unavailable rather than idle. Older remote
+  hosts without the aggregate or its independent drain/pull fields retain the
+  per-workspace readiness compatibility path until they are upgraded. The serving host is answered locally. The Health
   column shows load, memory, disk, drain state and the throttle verdict; Show switches the
   dashboard to that host. Unreachable or unprobed hosts are not asked for health readings,
   and a failed reading is shown without suppressing other hosts. These readings remain view

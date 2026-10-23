@@ -92,6 +92,9 @@ fn fleet_drain_row(pinned: &Pinned, entry: &crate::state::WsEntry) -> Value {
         "holds": [],
         "queued_drains": [],
         "task_pilot_warning": null,
+        "drain_phase": null,
+        "pull_active": null,
+        "pull_admissions_stopped": null,
     });
     let readiness = if entry.active {
         pinned
@@ -169,6 +172,18 @@ fn fleet_drain_row(pinned: &Pinned, entry: &crate::state::WsEntry) -> Value {
                     capacity["drain_phase"].as_str().unwrap_or("idle")
                 };
             row["phase"] = json!(phase);
+            // Keep the independent drain and pull states for Settings Hosts;
+            // the fleet's combined `phase` alone loses a concurrent pull.
+            row["drain_phase"] = json!(capacity["drain_phase"].as_str().unwrap_or(
+                if capacity["drain_run_id"].is_string() {
+                    "draining"
+                } else {
+                    "idle"
+                }
+            ));
+            row["pull_active"] = json!(capacity["pull_drain_run_id"].is_string());
+            row["pull_admissions_stopped"] =
+                json!(capacity["pull_drain_admissions_stopped"] == true);
             row["slots_used"] = capacity["active_leaf_runs"].clone();
             row["slots_ceiling"] = capacity["max_active_leaf_runs"].clone();
             row["eligible_count"] = json!(eligible);
