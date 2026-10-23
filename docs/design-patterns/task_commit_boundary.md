@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Task/Reservation Commit Boundary"
-last_validated: 2026-10-19
+last_validated: 2026-10-23
 ---
 # Task/Reservation Commit Boundary
 

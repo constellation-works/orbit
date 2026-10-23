@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-10-19
+last_validated: 2026-10-23
 ---
 # Boundary-First Testing
 
