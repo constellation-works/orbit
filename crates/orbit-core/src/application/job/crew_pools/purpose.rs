@@ -25,6 +25,18 @@ use super::types::CrewCandidate;
 /// purpose's pool, as `purpose:<purpose>`.
 pub(crate) const PURPOSE_SOURCE_PREFIX: &str = "purpose:";
 
+/// Prefix of the task comment that records a provider-limit reassignment of
+/// an auto-task's explicit crew [ORB-17638].
+pub(crate) const PROVIDER_LIMIT_REASSIGNMENT_PREFIX: &str = "Provider-limit reassignment:";
+
+/// Whether `tags` mark a task minted by an auto-task (`auto-task:<name>`).
+pub(crate) fn auto_task_minted(tags: &[String]) -> bool {
+    tags.iter().any(|tag| {
+        tag.strip_prefix("auto-task:")
+            .is_some_and(|name| !name.is_empty())
+    })
+}
+
 /// Whether `source` is a system assignment — a purpose pool, a complexity
 /// pool, or the default — rather than an explicit pin or a legacy crew with
 /// no assignment evidence.

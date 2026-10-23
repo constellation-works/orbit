@@ -4,7 +4,10 @@
 //! the same task choice; a task created without a crew before assignment moved
 //! to creation time, a stale pool assignment after rerating, or a default
 //! fallback for an empty pool, is routed through the current pools at admission,
-//! which reads the record and never writes it.
+//! which reads the record and never writes it. The one exception is an
+//! auto-task task whose explicit crew is provider-limited [ORB-17638]:
+//! admission durably reassigns that task to its complexity pool and records
+//! a warning comment on it.
 
 mod activity;
 mod admission;
@@ -18,5 +21,8 @@ pub(crate) use draw::{
     complexity_crews_key, complexity_of_crews_key, random_crew_ticket, seeded_crew_ticket,
     weighted_draw,
 };
-pub(crate) use purpose::{PURPOSE_SOURCE_PREFIX, automatic_crew_source};
+pub(crate) use purpose::{
+    PROVIDER_LIMIT_REASSIGNMENT_PREFIX, PURPOSE_SOURCE_PREFIX, auto_task_minted,
+    automatic_crew_source,
+};
 pub(crate) use types::{CapturedCrewPools, CreationCrewAssignment, CrewCandidate, InspectionPool};

@@ -1,15 +1,26 @@
 use orbit_common::OrbitError;
 use orbit_config::ComplexityCrewPools;
-use orbit_types::task::Task;
+use orbit_types::task::{Task, TaskComment, TaskComplexity, TaskHistoryEntry, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::provider_limit::ProviderLimit;
+use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::runtime::engine::crew::{CrewAllowlist, enforce_crew_allowlist};
 use crate::runtime::run_input::non_empty;
 
 use super::draw::{auto_task_id, permitted_candidates, pools_from_input, weighted_draw};
-use super::types::{COMPLEXITIES, POLICY_PIPELINES, POOLS_KEY, SELECTION_KEY};
+use super::types::{COMPLEXITIES, CapturedCrewPools, POLICY_PIPELINES, POOLS_KEY, SELECTION_KEY};
+use super::{PROVIDER_LIMIT_REASSIGNMENT_PREFIX, auto_task_minted};
+
+/// A planned provider-limit reassignment of an auto-task's explicit crew
+/// [ORB-17638], decided before the admission draw.
+struct ProviderLimitReassignment {
+    original: String,
+    provider: String,
+    limit: String,
+    complexity: TaskComplexity,
+}
 
 /// Replay recaptures automatic admission under current policy. Only a crew
 /// recorded as the caller's explicit choice survives; run-level pool overrides
@@ -171,10 +182,30 @@ impl OrbitRuntime {
             .get("crew")
             .and_then(Value::as_str)
             .and_then(non_empty);
+        // [ORB-17638] Only a task-level explicit crew qualifies; an explicit
+        // run crew is the operator's call for this run alone.
+        let reassignment = if explicit.is_none() {
+            self.provider_limit_reassignment_plan(&task)
+        } else {
+            None
+        };
         let (crews, source) = self.auto_task_crew_candidates(&task, &pools, explicit)?;
         let allowlist = self.crew_allowlist_from_input(input)?;
         let candidates = permitted_candidates(crews, &source, allowlist.as_ref())?;
         let selected = weighted_draw(&candidates, &source, random)?;
+        if let Some(plan) = &reassignment
+            && plan.original != selected.crew.name
+            && let Err(error) = self.persist_provider_limit_reassignment(
+                &task.id,
+                plan,
+                &selected.crew.name,
+                &pools,
+            )
+        {
+            // The draw for this run stands; only the durable reassignment
+            // is lost, and the next admission will decide it again.
+            tracing::warn!(task_id = %task.id, "could not record provider-limit reassignment: {error}");
+        }
         // [ORB-14697] An explicit run crew is not gated; the selection
         // records the provider limit it runs against.
         let provider_limit = explicit.and_then(|_| {
@@ -199,5 +230,146 @@ impl OrbitRuntime {
         }
         input["crew"] = json!(selected.crew.name);
         Ok(())
+    }
+
+    /// The reassignment [ORB-17638] calls for on `task`, if any: an
+    /// auto-task task, not yet running, whose explicit crew is gated by a
+    /// live usage-limit reading. A `<provider>:off` override gates nothing
+    /// in [`Self::provider_limit_gate`], so it plans nothing here either.
+    fn provider_limit_reassignment_plan(&self, task: &Task) -> Option<ProviderLimitReassignment> {
+        if !auto_task_minted(&task.tags)
+            || !matches!(task.status, TaskStatus::Backlog | TaskStatus::Proposed)
+        {
+            return None;
+        }
+        match self.explicit_task_crew(task) {
+            Ok(true) => {}
+            Ok(false) => return None,
+            Err(error) => {
+                tracing::warn!(task_id = %task.id, "could not read crew provenance for provider-limit reassignment: {error}");
+                return None;
+            }
+        }
+        let complexity = task.complexity?;
+        let original = task.crew.as_deref().and_then(non_empty)?.to_string();
+        let crew = match self.resolve_crew_for_task(None, Some(&original)) {
+            Ok(crew) => crew,
+            Err(error) => {
+                tracing::warn!(task_id = %task.id, "could not resolve explicit crew for provider-limit reassignment: {error}");
+                return None;
+            }
+        };
+        let gate = self.provider_limit_gate(chrono::Utc::now());
+        let limit = gate.limit_for(&crew)?.describe();
+        match self.provider_limit_reassignment_overridden(task) {
+            Ok(true) => return None,
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(task_id = %task.id, "could not read provider-limit reassignment history: {error}");
+                return None;
+            }
+        }
+        Some(ProviderLimitReassignment {
+            provider: crew.assignment.provider.clone(),
+            original,
+            limit,
+            complexity,
+        })
+    }
+
+    /// Durably reassign `task_id` from its gated explicit crew to
+    /// `replacement`, with the warning comment, as one locked record update
+    /// [ORB-17638]. Revalidates under the task write lock: the crew must
+    /// still be the gated one, the task must not be running or claimed, and
+    /// no operator crew change may have superseded an earlier warning.
+    /// `Ok(false)` when a revalidation refuses the write.
+    fn persist_provider_limit_reassignment(
+        &self,
+        task_id: &str,
+        plan: &ProviderLimitReassignment,
+        replacement: &str,
+        pools: &CapturedCrewPools,
+    ) -> Result<bool, OrbitError> {
+        // The replacement must be a drawable, non-gated member of the
+        // task's complexity pool, not a purpose or default fallback.
+        let Some((pool, _)) = self.complexity_pool_candidates(Some(plan.complexity), pools)? else {
+            return Ok(false);
+        };
+        let Some(replacement_candidate) = pool
+            .iter()
+            .find(|candidate| candidate.weight > 0 && candidate.crew.name == replacement)
+        else {
+            return Ok(false);
+        };
+        let gate = self.provider_limit_gate(chrono::Utc::now());
+        if gate.limit_for(&replacement_candidate.crew).is_some() {
+            return Ok(false);
+        }
+        let warning = format!(
+            "{PROVIDER_LIMIT_REASSIGNMENT_PREFIX} warning: crew `{}` (provider {}) is gated by {}; \
+             reassigned to crew `{replacement}` from the {} complexity pool. \
+             The task's explicit crew was replaced durably; a later operator crew change will not be overridden.",
+            plan.original,
+            plan.provider,
+            plan.limit,
+            plan.complexity.as_str(),
+        );
+        let mut recorded = false;
+        self.stores().tasks().with_task_write_lock(task_id, &mut || {
+            let current = self.get_task(task_id)?;
+            if current.crew.as_deref() != Some(plan.original.as_str())
+                || !matches!(current.status, TaskStatus::Backlog | TaskStatus::Proposed)
+                || !auto_task_minted(&current.tags)
+                || !self.explicit_task_crew(&current)?
+                || self.provider_limit_reassignment_overridden(&current)?
+            {
+                return Ok(());
+            }
+            match self.inspect_execution_claims() {
+                Ok(claims) if claims.iter().any(|inspection| {
+                    inspection.claim.task_id == task_id && inspection.claim.phase.is_unsettled()
+                }) => return Ok(()),
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(task_id = %task_id, "could not read execution claims for provider-limit reassignment: {error}");
+                    return Ok(());
+                }
+            }
+            let now = chrono::Utc::now();
+            self.stores().task_records().update(
+                task_id,
+                TaskRecordUpdateParams {
+                    actor: SYSTEM_ACTOR_LABEL.to_string(),
+                    crew: Some(Some(replacement.to_string())),
+                    crew_source: Some(Some(format!("pool:{}", plan.complexity.as_str()))),
+                    expected_status: Some(vec![current.status]),
+                    append_comments: vec![TaskComment {
+                        at: now,
+                        by: SYSTEM_ACTOR_LABEL.to_string(),
+                        message: warning.clone(),
+                        operation_id: None,
+                    }],
+                    append_history: vec![TaskHistoryEntry {
+                        at: now,
+                        by: SYSTEM_ACTOR_LABEL.to_string(),
+                        event: "crew_assigned".to_string(),
+                        note: Some(format!(
+                            "assigned crew `{replacement}` from pool:{} (provider-limit reassignment from `{}`: {})",
+                            plan.complexity.as_str(),
+                            plan.original,
+                            plan.limit,
+                        )),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                    }],
+                    ..Default::default()
+                },
+            )?;
+            recorded = true;
+            Ok(())
+        })?;
+        Ok(recorded)
     }
 }

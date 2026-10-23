@@ -7,7 +7,7 @@
 //! every delivery submission runs.
 
 use chrono::{DateTime, Duration, SubsecRound, Utc};
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{OrbitRuntime, ShipMode, TaskComplexity, TaskStatus, WorkspaceRuntimeBinding};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::{JobRunState, JobRunTrigger};
@@ -684,6 +684,181 @@ fn live_provider_policy_reloads_and_keeps_the_last_good_config() {
     assert_eq!(pass()["loose_task_ids"], json!([]));
 }
 
+/// [ORB-17638] An auto-task task whose explicit crew's provider is
+/// usage-gated is durably reassigned to a non-gated complexity-pool crew
+/// before dispatch, with a visible warning naming the original crew, its
+/// provider and limit, and the replacement. The `<provider>:off` override,
+/// an all-gated pool, a non-auto-task explicit crew, an operator crew
+/// change after the warning, and a running task are all left alone.
+fn an_auto_task_explicit_crew_is_reassigned_when_its_provider_is_limited() {
+    substitute_worker();
+    let fx = Fixture::new(&config(r#"["opus", "sol"]"#, ""));
+    let created = fx.filed_task(
+        Some("opus"),
+        &["auto-task:ux-review-ui"],
+        "file:auto-reassigned.txt",
+    );
+    assert_eq!(created.crew_source.as_deref(), Some("explicit"));
+    let task = created.id.clone();
+    fx.read_claude(93.0, false, Utc::now() + Duration::hours(2));
+
+    let entry = fx.readiness(&task);
+    assert_eq!(entry["eligible"], true, "{entry}");
+    let admitted = fx.replay_admission(json!({ "task_ids": [task] }));
+    assert_eq!(admitted["crew"], "sol", "{admitted}");
+
+    let runtime = fx.runtime();
+    let stored = runtime.get_task(&task).unwrap();
+    assert_eq!(stored.crew.as_deref(), Some("sol"), "{stored:?}");
+    assert_eq!(
+        stored.crew_source.as_deref(),
+        Some("pool:hard"),
+        "{stored:?}"
+    );
+    let warnings = runtime
+        .get_task_comments(&task)
+        .unwrap()
+        .into_iter()
+        .filter(|comment| comment.message.starts_with("Provider-limit reassignment:"))
+        .collect::<Vec<_>>();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let warning = &warnings[0].message;
+    for named in ["opus", "claude", "five_hour", "sol"] {
+        assert!(warning.contains(named), "warning names {named}: {warning}");
+    }
+
+    // A second admission uses the reassigned crew and warns only once.
+    let admitted = fx.replay_admission(json!({ "task_ids": [task] }));
+    assert_eq!(admitted["crew"], "sol", "{admitted}");
+    assert_eq!(
+        runtime
+            .get_task_comments(&task)
+            .unwrap()
+            .iter()
+            .filter(|comment| comment.message.starts_with("Provider-limit reassignment:"))
+            .count(),
+        1
+    );
+
+    // An operator crew change after the warning is left alone.
+    runtime
+        .update_task_with_identity(
+            &task,
+            TaskUpdateParams {
+                crew: Some(Some("opus".to_string())),
+                ..Default::default()
+            },
+            Some("codex".to_string()),
+            None,
+        )
+        .unwrap();
+    let admitted = fx.replay_admission(json!({ "task_ids": [task] }));
+    assert_eq!(admitted["crew"], "opus", "{admitted}");
+    assert_eq!(
+        runtime.get_task(&task).unwrap().crew.as_deref(),
+        Some("opus")
+    );
+    let entry = fx.readiness(&task);
+    assert_eq!(entry["eligible"], false, "{entry}");
+    assert_eq!(entry["reason"], "provider_limit", "{entry}");
+
+    // A non-auto-task task with the same explicit gated crew is unchanged.
+    let plain = fx.filed_task(Some("opus"), &[], "file:auto-plain.txt");
+    let admitted = fx.replay_admission(json!({ "task_ids": [plain.id] }));
+    assert_eq!(admitted["crew"], "opus", "{admitted}");
+    let stored = runtime.get_task(&plain.id).unwrap();
+    assert_eq!(stored.crew.as_deref(), Some("opus"), "{stored:?}");
+    assert!(
+        runtime
+            .get_task_comments(&plain.id)
+            .unwrap()
+            .iter()
+            .all(|comment| !comment.message.starts_with("Provider-limit reassignment:")),
+        "no reassignment warning for a non-auto-task task"
+    );
+
+    // A running auto-task task is not rewritten.
+    let running = fx.filed_task(
+        Some("opus"),
+        &["auto-task:ux-review-ui"],
+        "file:auto-running.txt",
+    );
+    runtime
+        .update_task_with_identity(
+            &running.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            },
+            Some("codex".to_string()),
+            None,
+        )
+        .unwrap();
+    fx.replay_admission(json!({ "task_ids": [running.id] }));
+    let stored = runtime.get_task(&running.id).unwrap();
+    assert_eq!(stored.crew.as_deref(), Some("opus"), "{stored:?}");
+    assert!(
+        runtime
+            .get_task_comments(&running.id)
+            .unwrap()
+            .iter()
+            .all(|comment| !comment.message.starts_with("Provider-limit reassignment:")),
+        "no reassignment warning for a running task"
+    );
+
+    // With every pool crew gated, no reassignment occurs.
+    let fx = Fixture::new(&config(r#"["opus"]"#, ""));
+    let gated = fx.filed_task(
+        Some("opus"),
+        &["auto-task:ux-review-ui"],
+        "file:auto-all-gated.txt",
+    );
+    fx.read_claude(93.0, false, Utc::now() + Duration::hours(2));
+    let entry = fx.readiness(&gated.id);
+    assert_eq!(entry["eligible"], false, "{entry}");
+    assert_eq!(entry["reason"], "provider_limit", "{entry}");
+    let admitted = fx.replay_admission(json!({ "task_ids": [gated.id] }));
+    assert_eq!(admitted["crew"], "opus", "{admitted}");
+    let runtime = fx.runtime();
+    assert_eq!(
+        runtime.get_task(&gated.id).unwrap().crew.as_deref(),
+        Some("opus")
+    );
+    assert!(
+        runtime
+            .get_task_comments(&gated.id)
+            .unwrap()
+            .iter()
+            .all(|comment| !comment.message.starts_with("Provider-limit reassignment:"))
+    );
+
+    // `claude:off` suppresses gating, so nothing is reassigned or warned.
+    let fx = Fixture::new(&config(
+        r#"["opus", "sol"]"#,
+        "provider_limit_overrides = [\"claude:off\"]",
+    ));
+    let ungated = fx.filed_task(
+        Some("opus"),
+        &["auto-task:ux-review-ui"],
+        "file:auto-off.txt",
+    );
+    fx.read_claude(100.0, true, Utc::now() + Duration::hours(2));
+    let admitted = fx.replay_admission(json!({ "task_ids": [ungated.id] }));
+    assert_eq!(admitted["crew"], "opus", "{admitted}");
+    let runtime = fx.runtime();
+    assert_eq!(
+        runtime.get_task(&ungated.id).unwrap().crew.as_deref(),
+        Some("opus")
+    );
+    assert!(
+        runtime
+            .get_task_comments(&ungated.id)
+            .unwrap()
+            .iter()
+            .all(|comment| !comment.message.starts_with("Provider-limit reassignment:"))
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_task_waits_on_an_exhausted_provider_until_the_reset_scenarios,
@@ -693,5 +868,6 @@ crate::scenario_table!(
     an_override_at_one_hundred_gates_only_an_exhausted_window,
     an_off_override_leaves_an_exhausted_provider_eligible,
     a_recorded_antigravity_quota_keeps_low_complexity_work_off_its_crew_until_the_reset,
-    a_purpose_assignment_redraws_within_its_pool_when_its_provider_is_limited
+    a_purpose_assignment_redraws_within_its_pool_when_its_provider_is_limited,
+    an_auto_task_explicit_crew_is_reassigned_when_its_provider_is_limited
 );
