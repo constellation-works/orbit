@@ -2215,6 +2215,44 @@ fn task_artifact_get_is_global_by_default_across_tool_run_task_cli_and_mcp() {
     );
 }
 
+/// [ORB-17648] A missing artifact path refuses with the listing remedy in the
+/// caller's own surface syntax: the CLI names `orbit task show --fields
+/// artifacts`, while MCP keeps the `orbit.task.show` tool-call spelling.
+#[test]
+fn missing_artifact_names_the_listing_in_each_surface_syntax() {
+    let workspace = McpWorkspace::init();
+    let task_id = author_task(&workspace, "Surface-specific artifact hint");
+
+    let missed = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["task", "artifact", "get", &task_id, "nope.txt"])
+        .output()
+        .expect("run task artifact get with a missing path");
+    assert!(
+        !missed.status.success(),
+        "a missing artifact must refuse on the CLI"
+    );
+    let stderr = String::from_utf8_lossy(&missed.stderr);
+    assert!(
+        stderr.contains("orbit task show") && stderr.contains("--fields artifacts"),
+        "the CLI refusal must name the CLI listing command: {stderr}"
+    );
+    assert!(
+        !stderr.contains("orbit.task.show"),
+        "the CLI refusal must not name the MCP tool: {stderr}"
+    );
+
+    let mut client = workspace.serve();
+    let refused = client.call_tool_err(
+        "orbit_task_artifact_get",
+        json!({ "id": task_id, "path": "nope.txt" }),
+    );
+    let message = refused["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("orbit.task.show") && message.contains("field: \"artifacts\""),
+        "the MCP refusal must keep the MCP listing spelling: {refused}"
+    );
+}
+
 /// [ORB-12254] Regression guard for the class of bug this task fixed: a tool
 /// whose advertised schema leaves `workspace` optional in an unbound session
 /// must actually resolve without one, and a tool that requires it must still

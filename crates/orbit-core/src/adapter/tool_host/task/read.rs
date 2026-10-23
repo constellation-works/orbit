@@ -2,7 +2,9 @@
 
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::OperationInput;
+use orbit_common::governance::task::artifact_listing_hint;
 use orbit_types::task::validate_relative_artifact_path;
+use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -11,18 +13,18 @@ use super::super::json::serialize_task_artifact_read;
 
 /// Read one stored artifact's bytes through the task's own artifact owner.
 ///
-/// Discovery stays separate from retrieval: `orbit.task.show` with
-/// `field: "artifacts"` lists compact metadata, and only this call pays for a
-/// payload. Path containment, workspace ownership, and the symlink-safe blob
-/// resolve all belong to the store, so this handler adds no second access
-/// rule of its own — a caller can only ever reach an artifact through the task
-/// that owns it.
+/// Discovery stays separate from retrieval: the task's artifact listing shows
+/// compact metadata, and only this call pays for a payload. Path containment,
+/// workspace ownership, and the symlink-safe blob resolve all belong to the
+/// store, so this handler adds no second access rule of its own — a caller can
+/// only ever reach an artifact through the task that owns it.
 pub(super) fn artifact_get(
     runtime: &OrbitRuntime,
+    session: &ToolSessionContext,
     input: &OperationInput,
 ) -> Result<Value, OrbitError> {
     let id = input.required_string("id")?;
-    let listing_hint = "list available artifacts with orbit.task.show and field: \"artifacts\"";
+    let listing_hint = artifact_listing_hint(session);
     let path = input
         .required_string("path")
         .map_err(|error| OrbitError::InvalidInput(format!("{error}; {listing_hint}")))?;
