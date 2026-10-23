@@ -24,7 +24,18 @@ impl GithubRunLogsTool {
     ) -> Result<RunLogRequests, OrbitError> {
         orbit_common::protocol::tool_input::reject_unknown_tool_fields(
             input,
-            &["run", "job", "scope", "max_bytes", "repo"],
+            &[
+                "run",
+                "job",
+                "scope",
+                "max_bytes",
+                "repo",
+                "step",
+                "byte_start",
+                "byte_end",
+                "line_start",
+                "line_end",
+            ],
         )?;
         let requests = RunLogRequests::from_input(input)?;
         Ok(match super::super::tool_workspace_dir(ctx) {
@@ -38,7 +49,7 @@ impl crate::Tool for GithubRunLogsTool {
     fn schema(&self) -> orbit_types::tool::ToolSchema {
         super::super::gh_schema(
             "github.run.logs",
-            "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. The source stream is read incrementally with an 8 MiB stdout limit and process timeout. A separate diagnostic_unit retains a unique complete failing runner command up to 256 KiB; display truncation does not imply missing command evidence. Source-limit exhaustion is retryable. When the run-scoped read succeeds with no output, or GitHub says the parent run is still in progress, the excerpt can be recovered from the log API of a verified completed job belonging to that run; failed scope is restricted to unsuccessful jobs. `source` and `source_jobs` identify the recovery. Other errors remain errors.",
+            "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. Optionally scope the excerpt to a named step (step, usually with job) or to a byte window (byte_start/byte_end, 0-based end-exclusive) or line window (line_start/line_end, 1-based end-exclusive); a window combined with step applies within the step section, an absent step or window fails without returning other log bytes, and the response reports the selection and its selected_bytes/selected_lines. The source stream is read incrementally with an 8 MiB stdout limit and process timeout. A separate diagnostic_unit retains a unique complete failing runner command up to 256 KiB; display truncation does not imply missing command evidence. Source-limit exhaustion is retryable. When the run-scoped read succeeds with no output, or GitHub says the parent run is still in progress, the excerpt can be recovered from the log API of a verified completed job belonging to that run; failed scope is restricted to unsuccessful jobs. `source` and `source_jobs` identify the recovery. Other errors remain errors.",
             vec![
                 super::super::tool_param("run", "Numeric workflow-run ID", "string", true),
                 super::super::tool_param(
@@ -65,6 +76,36 @@ impl crate::Tool for GithubRunLogsTool {
                     "string",
                     false,
                 ),
+                super::super::tool_param(
+                    "step",
+                    "Exact workflow step name to return only that step's log section (usually with job); fails if the step is absent",
+                    "string",
+                    false,
+                ),
+                super::super::tool_param(
+                    "byte_start",
+                    "Start of a byte window (0-based, inclusive); with byte_end returns exactly those bytes, bounded by max_bytes",
+                    "integer",
+                    false,
+                ),
+                super::super::tool_param(
+                    "byte_end",
+                    "End of a byte window (0-based, exclusive); must be greater than byte_start",
+                    "integer",
+                    false,
+                ),
+                super::super::tool_param(
+                    "line_start",
+                    "Start of a line window (1-based, inclusive); with line_end returns exactly those lines, bounded by max_bytes",
+                    "integer",
+                    false,
+                ),
+                super::super::tool_param(
+                    "line_end",
+                    "End of a line window (1-based, exclusive); must be greater than line_start",
+                    "integer",
+                    false,
+                ),
             ],
         )
     }
@@ -77,9 +118,13 @@ impl crate::Tool for GithubRunLogsTool {
         let scope = requests.scope;
         let read = read_run_log(&requests, LogReadBounds::new(max_bytes), None)?;
         let log = read.log;
+        let selection = log
+            .selection
+            .as_ref()
+            .map(|selection| selection.describe(log.selected_bytes, log.selected_lines));
         let evidence = log.checkout_evidence;
 
-        Ok(json!({
+        let mut output = json!({
             "run_id": input.get("run"),
             "scope": scope.as_str(),
             "log": log.text,
@@ -103,6 +148,10 @@ impl crate::Tool for GithubRunLogsTool {
             "checkout_evidence_complete": evidence.complete,
             "checkout_evidence_scanned_bytes": evidence.scanned_bytes,
             "checkout_evidence_source_truncated": evidence.source_truncated,
-        }))
+        });
+        if let Some(selection) = selection {
+            output["selection"] = selection;
+        }
+        Ok(output)
     }
 }
