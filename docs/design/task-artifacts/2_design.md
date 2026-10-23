@@ -3,7 +3,7 @@ summary: "Task Artifacts — Design"
 type: design
 title: "Task Artifacts — Design"
 owner: codex
-last_updated: 2026-10-21
+last_updated: 2026-10-23
 last_validated: 2026-10-19
 status: Draft
 feature: task-artifacts
@@ -210,6 +210,49 @@ The consequence is the lesson from ORB-11364: **an operator-host path is not a p
 Retrieval routes to the authoritative workspace explicitly. `orbit.task.artifact.get` classifies as `control_plane`, so a federated call is delivered to the workspace's owning host using the host-qualified selector the caller copied from federated `orbit.workspace.list`. An unknown selector is refused, never guessed; workspace scoping stays fail-closed and no implicit cross-workspace access is introduced.
 
 Attachment is not injection: storing an artifact on a task does not push it into an already-running worker's context. A worker picks it up on its next read.
+
+### Evidence contracts
+
+Ordinary artifacts accept any content up to 1 MiB; unknown extensions use
+`application/octet-stream`. Artifact paths are relative to the task's artifact
+directory and default to the source filename. Source confinement, destination
+path normalization, size limits and presentation rules are described above.
+Attaching an ordinary artifact never advances automation coverage.
+
+Two evidence filenames have additional contracts. Use the versioned template
+assigned to the task or review rather than deriving a payload from the tool's
+chooser description:
+
+- **`automation-coverage.json`:** preserve the supplied schema version and exact
+  frozen batch, input and revisions. Complete the examined commit and delivery
+  lists, concrete checks and findings, and one `delivery_examinations` entry per
+  frozen delivery. Its examined and skipped paths must together match that
+  delivery's diff; include a verdict and a delivery-specific rationale. Set
+  `examination_complete` only after all obligations are examined. Batch/action
+  IDs, `consumer`, `epoch` and `input_digest` are strings; elements of
+  `examined_commits`, `examined_deliveries` and `findings` are strings, not frozen
+  objects. Each `checks` entry is an object with string `subject`, `method` and
+  `observation`. Coverage acceptance requires the assigned executor run context;
+  stale, unauthorized or path-mismatched evidence is rejected during evaluation.
+  A schema refusal identifies the field/index and parse error, including the
+  expected type for a type mismatch. Correct that field using the assigned
+  template, preserve its version and frozen identity, and re-put the corrected
+  file inside the assigned run. The
+  [delivery code review template](../../../crates/orbit-core/assets/auto_tasks/delivery-code-review.yaml)
+  contains the examination instructions and examples; the task's supplied
+  evidence template provides its frozen identity and versioned shape.
+- **`review-report.json`:** attachment validates the before-PR review report
+  contract and refuses a mismatch with the field named. Follow the complete
+  report schema and validation instructions in the
+  [review repair activity](../../../crates/orbit-core/assets/activities/agent_review_repair.yaml).
+  For a counterfactual control, `mutation_target` lists repository-relative
+  paths temporarily changed by the control; `sources` names the checks that
+  rejected the mutation. Restore mutation targets byte for byte. When the
+  review's own repair changed a target, hash its repaired state with
+  `git hash-object <path>` **before** the control runs, record that target-to-blob
+  mapping in `repaired_blob`, and restore those repaired bytes afterward. A
+  repaired finding must list that file in `paths`; settlement refuses missing
+  declarations or a final candidate whose bytes differ from the declared blob.
 
 ## 6. Local Task Store and Canonical Lookup
 
