@@ -115,13 +115,16 @@ pub enum TaskStatus {
     InProgress,
     /// Implementation complete; awaiting review/merge.
     Review,
-    /// Accepted and closed. May be reopened by an explicit status edit.
+    /// Accepted and closed. Terminal; reopening requires a human operator to
+    /// use `task update --force`.
     Done,
     /// Temporarily paused (waiting on a dependency or decision).
     Blocked,
-    /// Soft-deleted. Can be restored to any other status.
+    /// Soft-deleted. Terminal; restoration requires a human operator to use
+    /// `task update --force`.
     Archived,
-    /// Declined. Can be reclassified to any other status.
+    /// Declined. Ordinary edits may return it to backlog or in-progress;
+    /// other transitions require a human operator to use `task update --force`.
     Rejected,
     /// Future-scoped — wanted but not yet actionable. Agents skip someday tasks.
     Someday,

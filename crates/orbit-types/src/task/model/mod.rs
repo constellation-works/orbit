@@ -2,9 +2,10 @@
 //!
 //! ## Task Status Lifecycle
 //!
-//! An explicit, authorized edit may move a task directly between any two
-//! statuses. Status is an audited classification; workflow admission,
-//! completion, and delivery keep their own stricter operational gates.
+//! Ordinary status edits follow the lifecycle transition rules: `done` and
+//! `archived` are terminal, while `rejected` may return only to `backlog` or
+//! `in-progress`. A human operator can override the table with
+//! `task update --force`; forced changes are recorded in task history.
 //!
 //! ### Statuses
 //! | Status       | Purpose |
@@ -14,10 +15,10 @@
 //! | Someday      | Future-scoped — wanted but not yet actionable. Agents skip someday tasks. |
 //! | InProgress   | Actively being worked on. |
 //! | Review       | Implementation complete; awaiting review/merge. |
-//! | Done         | Accepted and closed. May be reopened by an explicit edit. |
+//! | Done         | Accepted and closed. Terminal. |
 //! | Blocked      | Temporarily paused. |
-//! | Archived     | Soft-deleted. Restorable to any other status. |
-//! | Rejected     | Declined. Can be re-opened. |
+//! | Archived     | Soft-deleted. Terminal. |
+//! | Rejected     | Declined. Can return to backlog or in-progress. |
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
