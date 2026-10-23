@@ -308,3 +308,45 @@ assert.equal(urls.length, requests, 'a hidden tab does not poll host resources o
 document.hidden = false;
 
 console.log('topbar host chips (load, mem, disk, io where reported): per-chip severity and held state, many paths, fixed text across throttle, unknown/stale and polling, and per-provider usage chips (windows together, stale, gating-off, missing usage, fold, host reset) passed');
+
+// Settings Hosts shares only a concurrent/fresh topbar read for the same host.
+const { fetchHostResourcePayloadFor } = resource.namespace;
+const identity = { name: 'serving-name', machine_id: 'local', local: true };
+common.namespace.setRegisteredHosts([identity]);
+resetHostResources();
+nextResponse = new Promise(resolve => { resolvePending = resolve; });
+const sharedStart = urls.length;
+const topbarRead = fetchAndRenderHostResources();
+const hostsRead = fetchHostResourcePayloadFor('serving-name', { shareSelected: true, identity });
+assert.equal(urls.length, sharedStart + 1, 'concurrent Hosts and topbar reads issue one resource request');
+resolvePending({ ok: true, json: async () => recovered });
+await topbarRead;
+assert.equal(await hostsRead, recovered);
+assert.equal(await fetchHostResourcePayloadFor('serving-name', { shareSelected: true, identity }), recovered);
+assert.equal(urls.length, sharedStart + 1, 'the just-completed topbar result is shared');
+nextResponse = { ok: true, json: async () => payload };
+await fetchHostResourcePayloadFor('other-host', { shareSelected: true });
+assert.equal(urls.at(-1), '/api/on/other-host/host/resources', 'another host never inherits the selected snapshot');
+now += 1001;
+assert.equal(await fetchHostResourcePayloadFor('serving-name', { shareSelected: true, identity }), payload);
+assert.equal(urls.at(-1), '/api/on/serving-name/host/resources', 'a later panel refresh reads resources again');
+resetHostResources();
+nextResponse = new Promise(resolve => { resolvePending = resolve; });
+const retired = fetchAndRenderHostResources();
+resetHostResources();
+nextResponse = { ok: true, json: async () => recovered };
+const afterReset = urls.length;
+await fetchHostResourcePayloadFor('serving-name', { shareSelected: true, identity });
+assert.equal(urls.length, afterReset + 1, 'a host switch invalidates even an in-flight shared read');
+resolvePending({ ok: true, json: async () => payload });
+await retired;
+console.log('resource request sharing: concurrent, fresh, expired, different host and reset passed');
+
+common.namespace.setRegisteredHosts([{ name: 'remote', machine_id: 'remote-id', ssh: 'old-target' }]);
+common.namespace.setHost('remote');
+nextResponse = { ok: true, json: async () => recovered };
+await fetchAndRenderHostResources();
+const beforeRetarget = urls.length;
+await fetchHostResourcePayloadFor('remote', { shareSelected: true, identity: { name: 'remote', machine_id: 'remote-id', ssh: 'new-target' } });
+assert.equal(urls.length, beforeRetarget + 1, 'a retargeted SSH destination cannot borrow the previous destination reading');
+console.log('resource request sharing: registry retarget invalidates the selected snapshot');

@@ -61,7 +61,10 @@ workspace is selected; opening it selects the fleet overview.
 `GET /api/fleet/drains` returns `{ items: [...] }` with one row per registered
 workspace on the addressed host. Each row includes `workspace_id`, `workspace_name`,
 `phase`, `slots_used`, `slots_ceiling`, `eligible_count`, `top_wait_reason`,
-`holds`, and `queued_drains` (readiness's windows waiting for the live one). Failed/inactive workspaces stay visible with `phase: "unavailable"`, an
+`holds`, and `queued_drains` (readiness's windows waiting for the live one).
+`drain_phase`, `pull_active`, and `pull_admissions_stopped` preserve independent
+drain/pull states for Settings Hosts, including a pull concurrent with a drain.
+These fields are null on unavailable workspaces. Failed/inactive workspaces stay visible with `phase: "unavailable"`, an
 `error`, and null counts. Counts use the read-only readiness snapshot (up to 500
 tasks); `counts_truncated` marks a lower bound, displayed with `+`. The top wait
 is the most frequent reason among those tasks, with alphabetical ties. Slots

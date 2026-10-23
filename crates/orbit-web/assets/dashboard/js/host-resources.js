@@ -1,6 +1,6 @@
 // These live chips observe the selected host (the serving host unless the host
 // picker names another), independently of workspace scope.
-import { el, getHost, isHostUnavailable } from './common.js';
+import { el, findRegisteredHost, getHost, getServingHost, isHostUnavailable } from './common.js';
 
 /// The throttle verdict as the topbar chips and the Settings System tab both
 /// state it: `held`, `open`, `disabled`, or `unknown` (stale or no payload).
@@ -276,7 +276,16 @@ export function onHostResources(listener) {
 /// rejects instead of pending for the rest of the page's life. A null name is
 /// the serving host; any other name goes through `/api/on/<host>/`, which
 /// answers the serving host's own name locally.
-export async function fetchHostResourcePayloadFor(hostName) {
+export async function fetchHostResourcePayloadFor(hostName, { shareSelected = false, identity = null } = {}) {
+  // Only share the selected host's current topbar read. Other hosts and
+  // explicit resource reads still read independently. Matching machine and
+  // SSH target prevents a registry edit from reusing the old host's reading.
+  // A completed read is shared for at most one second.
+  if (shareSelected && selectedRead && (selectedRead.host === hostName || (identity?.local && !selectedRead.host))
+      && (!identity || selectedRead.target === resourceTarget(identity))
+      && (selectedRead.pending || Date.now() - selectedRead.at < 1000)) {
+    return selectedRead.promise;
+  }
   const path = hostName
     ? `/api/on/${encodeURIComponent(hostName)}/host/resources`
     : '/api/host/resources';
@@ -302,8 +311,19 @@ export async function fetchHostResourcePayloadFor(hostName) {
 }
 
 /// The selected host. Same path `withHost` would build.
+let selectedRead = null;
+const resourceTarget = row => row ? JSON.stringify([row.machine_id, row.ssh || null]) : null;
 export async function fetchHostResourcePayload() {
-  return fetchHostResourcePayloadFor(getHost());
+  const host = getHost();
+  const read = { host, target: resourceTarget(host ? findRegisteredHost(host) : getServingHost()), pending: true, at: 0 };
+  selectedRead = read;
+  read.promise = fetchHostResourcePayloadFor(read.host);
+  try {
+    return await read.promise;
+  } finally {
+    read.pending = false;
+    read.at = Date.now();
+  }
 }
 
 let sequence = 0;
@@ -336,6 +356,7 @@ export async function fetchAndRenderHostResources() {
 /// the previous host is dropped with it.
 export function resetHostResources() {
   sequence += 1;
+  selectedRead = null;
   ioReported = false;
   lastPayload = null;
   renderHostResources(null);

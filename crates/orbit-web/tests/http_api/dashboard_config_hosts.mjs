@@ -160,6 +160,7 @@ const RESOURCES = {
     { throttle: true, pressures: [{ resource: 'cpu' }, { resource: 'memory' }], reason: 'cpu and memory high' },
   ),
 };
+const legacyHosts = new Set();
 const DRAINS = {
   gamma: { drain_phase: 'draining', drain_run_id: 'jrun-gamma', pull_drain_run_id: 'jrun-pull', pull_drain_admissions_stopped: false },
 };
@@ -207,8 +208,16 @@ const route = (url, options) => {
       if (resourceFailures[name]) return refuse(503, 'resource_unavailable', resourceFailures[name]);
       return response(RESOURCES[name] || resourceBody({ percent: 10, severity: 'ok' }, { percent: 10, severity: 'ok' }, { percent: 10, severity: 'ok' }));
     }
-    if (rest === 'workflows/auto/readiness') {
-      return response({ capacity: DRAINS[name] || { drain_phase: 'idle', drain_run_id: null, pull_drain_run_id: null } });
+    if (rest === 'workflows/auto/readiness') return response({ capacity: DRAINS[name] || { drain_phase: 'idle' } });
+    if (rest === 'fleet/drains') {
+      const host = name === LOCAL.name ? LOCAL : entries.find(entry => entry.name === name);
+      const capacity = DRAINS[name] || { drain_phase: 'idle' };
+      return response({ items: (host?.workspaces || []).map(workspace => ({
+        workspace_id: workspace.id, phase: capacity.drain_phase,
+        ...(legacyHosts.has(name) ? {} : { drain_phase: capacity.drain_phase }),
+        pull_active: Boolean(capacity.pull_drain_run_id),
+        pull_admissions_stopped: capacity.pull_drain_admissions_stopped === true,
+      })) });
     }
   }
   return response({ error: `unexpected ${method} ${url.pathname}` }, 404);
@@ -332,6 +341,10 @@ assert.equal(named(row('hm_gamma'), 'host-drain')[0].textContent, 'Draining · P
 DRAINS.alpha = { drain_phase: 'winding_down', drain_run_id: 'jrun-wind', pull_drain_run_id: 'jrun-pull-a', pull_drain_admissions_stopped: true };
 await fetchAndRenderConfig();
 assert.equal(named(row('hm_alpha'), 'host-drain')[0].textContent, 'Winding down · Pull drain · admissions stopped');
+legacyHosts.add('alpha');
+await fetchAndRenderConfig();
+assert.equal(named(row('hm_alpha'), 'host-drain')[0].textContent, 'Winding down · Pull drain · admissions stopped', 'an older remote keeps its independent readiness facts');
+legacyHosts.delete('alpha');
 delete DRAINS.alpha;
 assert.match(named(row('hm_gamma'), 'host-health')[0].getAttribute('aria-label'), /Throttle verdict: held/);
 assert.equal(named(row('hm_beta'), 'host-resource').length, 0, 'an unreachable host has no readings');
@@ -339,7 +352,7 @@ assert.match(named(row('hm_beta'), 'host-health')[0].textContent, /could not be 
 const healthPaths = requests.filter((request) => request.path.startsWith('/api/on/')).map((request) => request.path.split('?')[0]);
 for (const name of ['box-a', 'alpha', 'gamma']) {
   assert.ok(healthPaths.includes(`/api/on/${name}/host/resources`), `${name} resources were read`);
-  assert.ok(healthPaths.includes(`/api/on/${name}/workflows/auto/readiness`), `${name} drain capacity was read`);
+  assert.ok(healthPaths.includes(`/api/on/${name}/fleet/drains`), `${name} drain capacity was read`);
 }
 assert.equal(healthPaths.filter((path) => path.includes('/beta/')).length, 0, 'an unreachable host is not asked for readings');
 assert.match(named(body, 'host-head')[0].textContent, /Health/);

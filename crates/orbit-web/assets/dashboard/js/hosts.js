@@ -10,7 +10,7 @@
 // next refresh without the dashboard opening SSH sessions every 30 seconds.
 //
 // Health is separate from that probe [ORB-15230]. While this view is open,
-// each refresh also reads `/host/resources` and drain capacity for every
+// each refresh also reads `/host/resources` and one `/fleet/drains` for every
 // reachable host through `/api/on/<host>/` (the serving host's own name is
 // answered locally). An unreachable host is not asked; its row shows the
 // probe error. One host's failure leaves the others up. Show uses the same
@@ -414,39 +414,63 @@ async function readHealth(row) {
   if (row.reachable == null) return { kind: "unprobed" };
   const workspaces = Array.isArray(row.workspaces) ? row.workspaces : [];
   const [resources, drains] = await Promise.all([
-    fetchHostResourcePayloadFor(row.name).then(
+    fetchHostResourcePayloadFor(row.name, { shareSelected: true, identity: row }).then(
       (body) => ({ resources: body, resourcesError: null }),
       (error) => ({ resources: null, resourcesError: error.message || "resources unavailable" }),
     ),
-    Promise.all(workspaces.map((workspace) => readDrain(row.name, workspace))),
+    readDrains(row.name, workspaces),
   ]);
   return { kind: "ready", ...resources, drains, workspaceCount: workspaces.length };
 }
 
-async function readDrain(hostName, workspace) {
-  const id = workspace.id;
-  const path = `/api/on/${encodeURIComponent(hostName)}/workflows/auto/readiness?workspace=${encodeURIComponent(id)}`;
+async function readDrains(hostName, workspaces) {
+  if (!workspaces.length) return [];
+  let items;
+  let failure;
   try {
-    const payload = await fetchJson(path);
-    const capacity = payload && payload.capacity ? payload.capacity : {};
-    return {
-      id,
-      name: workspace.name || id,
-      phase: capacity.drain_phase || (capacity.drain_run_id ? "draining" : "idle"),
-      pull: Boolean(capacity.pull_drain_run_id),
-      pullStopped: capacity.pull_drain_admissions_stopped === true,
-      error: null,
-    };
+    const payload = await fetchJson(`/api/on/${encodeURIComponent(hostName)}/fleet/drains`);
+    if (!Array.isArray(payload?.items)) throw new Error("drain unavailable");
+    items = new Map(payload.items.map((item) => [item.workspace_id, item]));
   } catch (error) {
+    // Older remote dashboards may predate the aggregate endpoint entirely.
+    if (error.status === 404) return Promise.all(workspaces.map((workspace) => readLegacyDrain(hostName, workspace)));
+    failure = error.message || "drain unavailable";
+  }
+  return Promise.all(workspaces.map((workspace) => {
+    const id = workspace.id;
+    const item = items?.get(id);
+    // An older remote aggregate cannot describe concurrent drain/pull state.
+    // Keep its existing readiness API as the compatibility path for that row.
+    if (item && !item.error && item.phase !== "unavailable" && item.drain_phase === undefined) {
+      return readLegacyDrain(hostName, workspace);
+    }
+    // Missing or malformed rows remain unknown, never silently idle.
+    const error = failure || item?.error || (!item?.drain_phase || typeof item.pull_active !== "boolean"
+      || typeof item.pull_admissions_stopped !== "boolean" ? "drain unavailable" : null);
     return {
       id,
       name: workspace.name || id,
-      phase: null,
-      pull: false,
-      pullStopped: false,
-      error: error.message || "drain unavailable",
+      phase: error ? null : item.drain_phase,
+      pull: !error && item.pull_active,
+      pullStopped: !error && item.pull_admissions_stopped,
+      error,
     };
+  }));
+}
+
+async function readLegacyDrain(hostName, workspace) {
+  const drain = { id: workspace.id, name: workspace.name || workspace.id, phase: null, pull: false, pullStopped: false, error: null };
+  try {
+    const payload = await fetchJson(`/api/on/${encodeURIComponent(hostName)}/workflows/auto/readiness?workspace=${encodeURIComponent(workspace.id)}`);
+    const capacity = payload?.capacity;
+    if (!capacity) throw new Error("drain unavailable");
+    drain.phase = capacity.drain_phase || (capacity.drain_run_id ? "draining" : "idle");
+    drain.pull = Boolean(capacity.pull_drain_run_id);
+    drain.pullStopped = capacity.pull_drain_admissions_stopped === true;
+  } catch (error) {
+    drain.error = error.message || "drain unavailable";
   }
+  return drain;
 }
 
 function reachableCell(row) {

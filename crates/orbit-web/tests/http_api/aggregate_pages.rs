@@ -209,6 +209,111 @@ fn fleet_drains_exposes_idle_ready_work_beside_a_live_workspace() {
     );
 }
 
+/// Hosts needs the independent phase and pull facts from one read per host,
+/// with a failed workspace isolated from the other nine.
+#[test]
+fn fleet_drains_preserves_hosts_health_for_ten_workspaces() {
+    isolated(
+        "aggregate_pages::fleet_drains_preserves_hosts_health_for_ten_workspaces",
+        || {
+            let tmp = tempfile::tempdir().unwrap();
+            let global = tmp.path().join("global");
+            std::fs::create_dir_all(&global).unwrap();
+            let names = (0..10).map(|n| format!("workspace{n}")).collect::<Vec<_>>();
+            let roots = names
+                .iter()
+                .map(|name| seed_workspace(&global, tmp.path(), name))
+                .collect::<Vec<_>>();
+            let bindings = names
+                .iter()
+                .zip(&roots)
+                .map(|(name, (_, repo))| (name.as_str(), repo.as_path()))
+                .collect::<Vec<_>>();
+            write_registry(&global, &bindings);
+            let runtime = OrbitRuntime::from_roots(&global, &roots[0].0).unwrap();
+            let drain = seed_run(
+                &runtime,
+                "jrun-health-drain",
+                "workspace_auto_pipeline",
+                JobRunState::Running,
+            );
+            let mut pull = seed_run(
+                &runtime,
+                "jrun-health-pull",
+                "workspace_pull_pipeline",
+                JobRunState::Running,
+            );
+            pull.input = Some(serde_json::json!({"max_active_leaf_runs": 4}));
+            write_seeded_run(&runtime, &pull);
+            let server = spawn_server(
+                tmp.path(),
+                false,
+                false,
+                false,
+                &tmp.path().join("process.log"),
+                None,
+                &[],
+            );
+            let snapshot = json_ok(server.get("/api/fleet/drains"));
+            assert_eq!(snapshot["items"][0]["drain_phase"], "draining");
+            assert_eq!(snapshot["items"][0]["pull_active"], true);
+            let rows = snapshot["items"].as_array().unwrap();
+            assert_eq!(rows.len(), 10);
+            for row in rows {
+                let id = row["workspace_id"].as_str().unwrap();
+                let readiness =
+                    json_ok(server.get(&format!("/api/workflows/auto/readiness?workspace={id}")));
+                let capacity = &readiness["capacity"];
+                assert_eq!(
+                    row["drain_phase"], capacity["drain_phase"],
+                    "independent drain phase for {id}"
+                );
+                assert_eq!(
+                    row["pull_active"],
+                    capacity["pull_drain_run_id"].is_string(),
+                    "independent pull for {id}"
+                );
+                assert_eq!(
+                    row["pull_admissions_stopped"],
+                    capacity["pull_drain_admissions_stopped"] == true
+                );
+                assert_eq!(row["slots_used"], capacity["active_leaf_runs"]);
+                assert_eq!(row["slots_ceiling"], capacity["max_active_leaf_runs"]);
+            }
+            // No reconciliation or mutation of live run records is authorized by this GET.
+            assert_eq!(
+                runtime
+                    .sqlite_store()
+                    .unwrap()
+                    .get_job_run_for_workspace(&runtime.workspace_id().unwrap(), &drain.run_id)
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                JobRunState::Running
+            );
+            std::fs::write(roots[9].0.join("config.toml"), "[invalid TOML").unwrap();
+            let failed = json_ok(server.get("/api/fleet/drains"));
+            let rows = failed["items"].as_array().unwrap();
+            assert_eq!(rows.len(), 10);
+            let broken = rows
+                .iter()
+                .find(|row| row["workspace_id"] == names[9])
+                .unwrap();
+            assert_eq!(broken["phase"], "unavailable");
+            assert!(broken["error"].is_string());
+            assert!(broken["drain_phase"].is_null());
+            assert!(broken["pull_active"].is_null());
+            assert!(broken["pull_admissions_stopped"].is_null());
+            assert_eq!(
+                rows.iter()
+                    .filter(|row| row["drain_phase"].is_string())
+                    .count(),
+                9
+            );
+        },
+    );
+}
+
 #[test]
 fn aggregate_job_runs_page_is_bounded_and_observational() {
     isolated(
