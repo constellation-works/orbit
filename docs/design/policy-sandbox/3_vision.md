@@ -24,13 +24,12 @@ This document captures the questions Orbit must answer before policy and sandbox
 3. **Should process controls move into `PolicyDef`?** `proc.spawn` applies activity program allowlists or denylists, while its child inherits the enclosing CLI worker's operating-system sandbox. It does not evaluate arbitrary path arguments against `FsProfile` or apply a Linux Landlock read boundary. The program policy is not part of `PolicyDef`; future shapes include `allowExec` / `denyExec` or env access tied to `fsProfile`.
 4. **What is the symlink contract?** `PolicyEngine::check_resolved` follows symlinks and denies resolved paths outside the workspace; TOCTOU between that check and filesystem access remains an OS-level concern.
 5. **Should glob syntax grow?** Character classes, braces, and broader `**` forms would reduce user surprise but may re-evaluate existing profiles differently.
-6. **Should `PolicyDecision` and `FsPolicyEvaluation` converge?** A unified outcome could serve future network, exec, and env policy checks.
-7. **Should profiles be composable?** `extends:`, `includes:`, or mixins would reduce repetition but add resolution-order questions.
-8. **Should empty rule lists warn?** `read: []` / `modify: []` safely denies everything, but a load-time warning would catch likely mistakes earlier.
-9. **What is the dry-run / explain story?** A command like `orbit policy explain --profile <name> --op modify --path <path>` would shorten policy authoring loops.
-10. **Should all denials share one audit shape?** Fs denials, task-lock denials, program allowlists, and future exec denials still report through different channels; auditability asks the same question.
-11. **How should concurrent exec handle signals?** Answered: refcounted SIGINT/SIGTERM install with a lock-free live-pgid table. The handler `killpg`s every registered group; each waiter observes the shared pending signal until the last waiter restores and forwards it. The install mutex is not held across the child's lifetime.
-12. **How far should CLI policy coverage go?** macOS `sandbox-exec` narrows writes, but alternatives include trapping CLI fs calls or moving more work to HTTP-backed activities.
+6. **Should profiles be composable?** `extends:`, `includes:`, or mixins would reduce repetition but add resolution-order questions.
+7. **Should empty rule lists warn?** `read: []` / `modify: []` safely denies everything, but a load-time warning would catch likely mistakes earlier.
+8. **What is the dry-run / explain story?** A command like `orbit policy explain --profile <name> --op modify --path <path>` would shorten policy authoring loops.
+9. **Should all denials share one audit shape?** Fs denials, task-lock denials, program allowlists, and future exec denials still report through different channels; auditability asks the same question.
+10. **How should concurrent exec handle signals?** Answered: refcounted SIGINT/SIGTERM install with a lock-free live-pgid table. The handler `killpg`s every registered group; each waiter observes the shared pending signal until the last waiter restores and forwards it. The install mutex is not held across the child's lifetime.
+11. **How far should CLI policy coverage go?** macOS `sandbox-exec` narrows writes, but alternatives include trapping CLI fs calls or moving more work to HTTP-backed activities.
 
 ### 1.1 Shipped answer: a `linux-bwrap` CLI backend
 

@@ -75,8 +75,6 @@ PolicyEngine::check(profile, operation, path) -> FsPolicyEvaluation
 
 `FsPolicyEvaluation` carries `{ profile, operation, path, allowed, matched_rule }`. `evaluator.rs` currently passes through to `PolicyDef::check_path`; the indirection leaves room for caching or layered evaluators later.
 
-`PolicyDecision` (`crates/orbit-types/src/policy/policy_decision.rs`) is a separate `Allow | Deny { reason }` enum for broader policy/RBAC callers. `PolicyEngine::check` does not produce it; fs callers use `FsPolicyEvaluation`.
-
 ---
 
 ## 5. Tool-Layer Enforcement (retired)
@@ -563,11 +561,10 @@ database/lock and asserts 100 collision-free dense IDs per artifact kind ([ORB-1
 8. **Generic exec inherits the worker sandbox.** Activity-scoped `proc.spawn` does not inspect path arguments or impose Landlock (§7.3). A program policy is mandatory: asset load rejects an activity whose tools cover `proc.spawn` without either `proc_allowed_programs` or `proc_disallowed_programs`. The former keeps its exact legacy allowlist behavior, including `[]` denying every program; the latter refuses listed basenames and resolved paths while admitting other programs. The v2 activity tool context remains activity-scoped, so a missing program policy denies every program instead of degrading to allow-all ([ORB-10959], [ORB-11031]). The disallow list does not replace the enclosing worker's filesystem sandbox or plugin program grants.
 9. **Symlink semantics are implicit.** `workspace_relative_path` follows symlinks and rejects out-of-workspace targets, but no spec states that invariant.
 10. **Glob syntax is narrow.** Character classes, brace expansion, and POSIX bracket expressions are unsupported.
-11. **Policy result shapes are parallel.** `PolicyDecision` and `FsPolicyEvaluation` have no bridge for future non-fs evaluators.
-12. **Empty rule sets are safe but opaque.** A profile with only deny rules reports `matched_rule = "[]"`, not the matching deny rule.
-13. **Signal handling is process-global.** SIGINT/SIGTERM dispositions are shared across concurrent waits (refcounted install, lock-free pgid fan-out). A waiter that cannot claim a pgid slot still terminates from the generation counter within one poll interval.
-14. **Linux `denyRead` has no generic child read boundary.** Linux Bubblewrap masks selected paths but does not enforce arbitrary unbounded `denyRead` globs for `proc.spawn`. A child can read a matching path if its enclosing worker can read it (§7.3). The retained Landlock primitive's name and inode limits apply only to callers that explicitly choose it, not to this tool.
-15. **Workspace canonicalization errors collapse to denial.** A missing workspace root can surface as `PolicyDenied("path is outside workspace")` rather than a clearer root-missing error.
+11. **Empty rule sets are safe but opaque.** A profile with only deny rules reports `matched_rule = "[]"`, not the matching deny rule.
+12. **Signal handling is process-global.** SIGINT/SIGTERM dispositions are shared across concurrent waits (refcounted install, lock-free pgid fan-out). A waiter that cannot claim a pgid slot still terminates from the generation counter within one poll interval.
+13. **Linux `denyRead` has no generic child read boundary.** Linux Bubblewrap masks selected paths but does not enforce arbitrary unbounded `denyRead` globs for `proc.spawn`. A child can read a matching path if its enclosing worker can read it (§7.3). The retained Landlock primitive's name and inode limits apply only to callers that explicitly choose it, not to this tool.
+14. **Workspace canonicalization errors collapse to denial.** A missing workspace root can surface as `PolicyDenied("path is outside workspace")` rather than a clearer root-missing error.
 
 ---
 

@@ -66,7 +66,6 @@ When the default policy denies workspace `.orbit/**`, the engine host re-allows 
 | Concern | Where it lives | Primary task ID |
 |---------|----------------|-----------------|
 | Policy schema and validation | `crates/orbit-types/src/policy/policy_def.rs`, `crates/orbit-types/src/resource/data.rs` | [T20260416-0728] |
-| Allow/deny enum | `crates/orbit-types/src/policy/policy_decision.rs` | [T20260426-0622] |
 | Policy facade | `crates/orbit-policy/src/{lib,engine,evaluator}.rs` | [T20260416-0728] |
 | Profile resolution + deny injection | `crates/orbit-types/src/policy/policy_def.rs` (`effective_profile`, `check_path`) | [T20260416-0728] |
 | Versioned `.orbit` modify boundary and missing-anchor preparation | `crates/orbit-core/assets/policies/default.yaml`, `crates/orbit-core/src/adapter/engine_host/actions/sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`, `crates/orbit-exec/src/{linux_sandbox,macos_sandbox}/` | [ORB-10560], [ORB-10573], [ORB-10602] |
