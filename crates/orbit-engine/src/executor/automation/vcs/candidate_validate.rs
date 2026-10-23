@@ -77,7 +77,7 @@ use super::claim::{
 use super::commit::attribute_candidate_paths;
 use super::deferred_sandbox::{deferred_replays, with_replays};
 use super::flaky::rerun_failed_tests;
-use super::git::{git_command_success, git_output};
+use super::git::{git_command_success, git_output, git_output_paths};
 use super::handoff::completed_task_ids_from_input;
 use super::light_delivery::{light_delivery_decision, record_light_delivery};
 use super::validation_log::{FailureLog, rerun_log};
@@ -454,22 +454,19 @@ fn attribute_reviewed_paths<H: RuntimeHost + ?Sized>(
     let workspace_path = input_string_field(input, "workspace_path")
         .map(std::path::PathBuf::from)
         .ok_or_else(|| OrbitError::InvalidInput("workspace_path is required".to_string()))?;
-    let changed = git_output(
+    let changed = git_output_paths(
         &workspace_path,
         &[
             "diff",
             "--name-only",
             "--no-renames",
+            "-z",
             "--end-of-options",
             &format!("{ownership_base}..HEAD"),
         ],
-    )?;
-    let changed = changed
-        .lines()
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .map(str::to_string)
-        .collect::<BTreeSet<_>>();
+    )?
+    .into_iter()
+    .collect::<BTreeSet<_>>();
     let tasks = task_ids
         .iter()
         .map(|task_id| host.get_task(task_id))

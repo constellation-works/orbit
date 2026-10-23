@@ -1227,6 +1227,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             std::fs::write(repo.join("coupled.txt"), "reviewer repair\n").unwrap();
             // ORB-13990: a repair no finding names still passes and widens.
             std::fs::write(repo.join("undeclared.txt"), "reviewer companion\n").unwrap();
+            std::fs::write(repo.join("trailing.txt "), "trailing whitespace\n").unwrap();
         }
         let report = json!({
             "schema_version": REVIEW_CONTRACT_VERSION,
@@ -1291,6 +1292,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             if repaired {
                 vec![
                     "file:coupled.txt".to_string(),
+                    "file:trailing.txt ".to_string(),
                     "file:undeclared.txt".to_string(),
                 ]
             } else {
@@ -1360,7 +1362,11 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             assert_eq!(widening.activity, "review_gate_settle");
             assert_eq!(
                 widening.selectors,
-                ["file:coupled.txt", "file:undeclared.txt"]
+                [
+                    "file:coupled.txt",
+                    "file:trailing.txt ",
+                    "file:undeclared.txt"
+                ]
             );
         } else {
             assert!(added.is_empty(), "{added:?}");
@@ -1368,7 +1374,12 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
         if repaired {
             assert_eq!(
                 runtime.get_task(&task.id).unwrap().context_files,
-                ["file:src.txt", "file:coupled.txt", "file:undeclared.txt"]
+                [
+                    "file:src.txt",
+                    "file:coupled.txt",
+                    "file:trailing.txt ",
+                    "file:undeclared.txt"
+                ]
             );
         }
     }

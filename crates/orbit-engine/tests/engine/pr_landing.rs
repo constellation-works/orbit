@@ -6551,6 +6551,54 @@ fn review_revalidation_widens_selectors_for_a_reviewer_change_outside_task_owner
     );
 }
 
+/// Reviewer validation must report literal Git paths: non-ASCII, quote and
+/// newline characters are not C-quoted, and trailing filename whitespace is
+/// not trimmed. A path already covered by a selector widens nothing.
+#[test]
+fn review_revalidation_preserves_quoted_reviewer_filenames() {
+    isolated(
+        "review_revalidation_preserves_quoted_reviewer_filenames",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            host.set_context_files(TASK_ID, &["file:src/feature.txt", "file:docs/café.md"]);
+            fx.commit("docs/café.md", "already covered\n");
+            fx.commit("docs/new\nline.md", "newline name\n");
+            fx.commit("docs/quote\".md", "quote name\n");
+            let fixed_head = fx.commit("docs/trailing.md ", "trailing space\n");
+            let mut input = fx.validate_input();
+            input["ownership_base_sha"] = json!(fx.candidate);
+
+            let validated = action(&host, "candidate_validate", &input)
+                .expect("reviewer paths with quoted characters validate");
+            assert_eq!(
+                validated["owned_paths"],
+                json!([
+                    "docs/café.md",
+                    "docs/new\nline.md",
+                    "docs/quote\".md",
+                    "docs/trailing.md "
+                ])
+            );
+            assert_eq!(fx.head(), fixed_head, "validation changes no commit");
+            assert_eq!(
+                host.widenings(),
+                vec![(
+                    TASK_ID.to_string(),
+                    ContextWideningStep::Review,
+                    "candidate_validate".to_string(),
+                    vec![
+                        "docs/new\nline.md".to_string(),
+                        "docs/quote\".md".to_string(),
+                        "docs/trailing.md ".to_string(),
+                    ],
+                )],
+                "only uncovered literal paths widen, with no quoted phantom for the covered path"
+            );
+        },
+    );
+}
+
 /// [ORB-13989] A reviewer commit that fails owner revalidation rejects the
 /// candidate. The handoff keeps the implementation commit and the reviewer
 /// commit exactly as they are, pushes them so they are recoverable, blocks the

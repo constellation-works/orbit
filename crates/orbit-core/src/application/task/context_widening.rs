@@ -91,7 +91,7 @@ impl OrbitRuntime {
 fn uncovered_selectors(context_files: &[String], paths: &[String]) -> Vec<String> {
     let mut added: Vec<String> = Vec::new();
     for path in paths {
-        let path = path.trim().trim_start_matches("./");
+        let path = path.strip_prefix("./").unwrap_or(path);
         if path.is_empty() {
             continue;
         }

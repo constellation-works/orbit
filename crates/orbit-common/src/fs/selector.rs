@@ -126,7 +126,9 @@ impl FromStr for Selector {
     type Err = SelectorParseError;
 
     fn from_str(selector: &str) -> Result<Self, Self::Err> {
-        let trimmed = selector.trim();
+        // Anchored paths may carry meaningful leading/trailing whitespace in
+        // a filename, so only leading selector whitespace is discarded.
+        let trimmed = selector.trim_start();
         if let Some(path) = trimmed.strip_prefix("dir:") {
             return Ok(Self::Dir {
                 path: normalize_selector_path(selector, path)?,
@@ -396,22 +398,23 @@ enum ParsedScope {
 
 impl ParsedScope {
     fn parse(input: &str) -> Result<Self, SelectorParseError> {
-        let trimmed = input.trim();
-        if trimmed.is_empty() {
+        if input.trim().is_empty() {
             return Err(SelectorParseError {
                 input: input.to_string(),
                 reason: "selector input must not be empty".to_string(),
             });
         }
 
-        if trimmed.starts_with("dir:")
-            || trimmed.starts_with("file:")
-            || trimmed.starts_with("symbol:")
-            || trimmed.starts_with("module:")
-            || trimmed.starts_with("command:")
+        let start = input.trim_start();
+        if start.starts_with("dir:")
+            || start.starts_with("file:")
+            || start.starts_with("symbol:")
+            || start.starts_with("module:")
+            || start.starts_with("command:")
         {
-            return Ok(Self::Selector(trimmed.parse()?));
+            return Ok(Self::Selector(start.parse()?));
         }
+        let trimmed = input.trim();
 
         let (path_like, _had_position_suffix) = strip_position_suffix(trimmed);
         let path = normalize_path_text(path_like).map_err(|reason| SelectorParseError {
@@ -554,7 +557,8 @@ fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
 }
 
 fn normalize_path_text(raw: &str) -> Result<String, String> {
-    let normalized = raw.trim().replace('\\', "/");
+    // Filename whitespace is meaningful; do not trim the path.
+    let normalized = raw.replace('\\', "/");
     if normalized.is_empty() {
         return Err("selector path must not be empty".to_string());
     }
