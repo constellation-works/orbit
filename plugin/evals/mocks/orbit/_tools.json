@@ -787,7 +787,7 @@
     },
     {
       "name": "orbit_task_artifact_put",
-      "description": "Store a file (any content, up to 1 MiB) as a task artifact. Sources must stay inside the workspace after symlink resolution; write evidence under `.orbit/tmp/`. See `docs/design/task-artifacts/2_design.md#evidence-contracts` and the assigned task's evidence template for automation coverage and review report contracts.",
+      "description": "Store a file (any content, up to 1 MiB) as a task artifact. Sources must stay inside the workspace after symlink resolution; write evidence under `.orbit/tmp/`. See the assigned task's evidence template for automation coverage and review report contracts.",
       "inputSchema": {
         "additionalProperties": true,
         "properties": {
