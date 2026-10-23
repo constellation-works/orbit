@@ -71,20 +71,25 @@ SSH, run `orbit web connect <ssh-host>`. See
    files a task with acceptance criteria. The task appears in **Tasks** under
    **Awaiting approval**.
 2. **Click Approve.** The task moves to the backlog.
-3. **Click Ship.** Orbit reserves the task's files and runs an agent in an
-   isolated worktree to plan, execute, and review the change. Follow it from
-   **View run**.
+3. **Click Ship.** Orbit locks the task's context files and runs an agent in an
+   isolated worktree to plan, execute, and check the change. A second agent
+   reviews it only when review is turned on. Follow the run from **View run**.
 4. **Review the pull request.** The run stops with the task in `review` and
-   the pull request open. Merge it on GitHub, then click **Approve** on the
-   task to close it.
+   the pull request open. Merge it on GitHub. Then click **Approve** on the
+   task, or let Orbit close it: a later `orbit run auto` delivery window
+   settles a task whose pull request has merged. See
+   [First Task](./first-task/#4-review-and-close-it) for both routes.
 
 Your agent can approve and ship for you when you tell it to. The dashboard
 shows the same task either way.
 
 :::note[Two gates stay yours]
 A new task waits in `proposed` until you approve it, and a ship run stops at
-`review` with the pull request open. Merging the pull request and closing the
-task are separate decisions.
+`review` with the pull request open. Merging the pull request is your decision,
+unless you choose to
+[let runs merge](./workflows/#completing-work-with---complete). Closing the
+task can follow your merge, through Approve or settlement. Neither merges
+anything for you.
 :::
 
 Prefer the terminal? [First Task](./first-task/) walks through the same flow
