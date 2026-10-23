@@ -138,7 +138,7 @@ impl TaskV2Store {
             from_status: None,
             to_status: Some(params.status),
             operation_id: None,
-            decision: None,
+            decision: params.creation_decision.clone(),
         }];
         // The initial grant is part of the bundle the create publishes, so a
         // task never exists without the creation intent its writer declared.

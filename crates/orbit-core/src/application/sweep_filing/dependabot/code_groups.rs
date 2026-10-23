@@ -24,7 +24,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use orbit_types::task::{TaskComplexity, TaskRelation, TaskRelationType, TaskStatus, TaskType};
+use orbit_types::task::{
+    CodeScanningAlertEvidence, TaskComplexity, TaskDecision, TaskRelation, TaskRelationType,
+    TaskStatus, TaskType,
+};
 use serde_json::{Value, json};
 
 use crate::application::task::TaskAddParams;
@@ -130,10 +133,71 @@ pub(super) fn group_alert_numbers(group: &CodeAlertGroup) -> Vec<u64> {
     numbers
 }
 
+/// Parse one provider snapshot alert into typed evidence, once, at the
+/// filing boundary. Every later reader matches on this struct.
+pub(super) fn evidence_from_alert(repository: &str, alert: &Value) -> CodeScanningAlertEvidence {
+    CodeScanningAlertEvidence {
+        repository: repository.to_string(),
+        number: alert_number(alert),
+        rule_id: field(alert, "rule_id"),
+        rule_name: field(alert, "rule_name"),
+        security_severity: field(alert, "security_severity"),
+        tool_name: field(alert, "tool_name"),
+        tool_version: field(alert, "tool_version"),
+        tool_guid: field(alert, "tool_guid"),
+        message: field(alert, "message"),
+        git_ref: field(alert, "ref"),
+        commit_sha: field(alert, "commit_sha"),
+        path: field(alert, "path"),
+        start_line: alert_line(alert, "start_line"),
+        end_line: alert_line(alert, "end_line"),
+        created_at: field(alert, "created_at"),
+        updated_at: field(alert, "updated_at"),
+        html_url: field(alert, "html_url"),
+    }
+}
+
+fn alert_line(alert: &Value, key: &str) -> Option<u64> {
+    match alert.get(key) {
+        Some(Value::Number(number)) => number.as_u64(),
+        Some(Value::String(text)) => text.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+/// The alert shape the group builder consumes, rebuilt from typed
+/// evidence so grouping semantics stay exactly as they were.
+pub(super) fn evidence_to_alert(evidence: &CodeScanningAlertEvidence) -> Value {
+    json!({
+        "number": evidence.number,
+        "rule_id": evidence.rule_id,
+        "rule_name": evidence.rule_name,
+        "security_severity": evidence.security_severity,
+        "tool_name": evidence.tool_name,
+        "tool_version": evidence.tool_version,
+        "tool_guid": evidence.tool_guid,
+        "message": evidence.message,
+        "ref": evidence.git_ref,
+        "commit_sha": evidence.commit_sha,
+        "path": evidence.path,
+        "start_line": evidence.start_line,
+        "end_line": evidence.end_line,
+        "created_at": evidence.created_at,
+        "updated_at": evidence.updated_at,
+        "html_url": evidence.html_url,
+    })
+}
+
 pub(super) fn code_group_task_params(request: &CodeGroupTaskRequest<'_>) -> TaskAddParams {
     let repository = repository_name(request.snapshot);
     let alerts = &request.group.alerts;
     let rule = field(&alerts[0], "rule_id");
+    // A per-alert (single-alert) task carries its evidence as a typed
+    // creation decision; a group task is already grouped and carries none.
+    let single_evidence = match alerts.as_slice() {
+        [alert] => Some(evidence_from_alert(repository, alert)),
+        _ => None,
+    };
 
     let mut tags = vec![CODE_TAG.to_string()];
     tags.extend(
@@ -149,7 +213,8 @@ pub(super) fn code_group_task_params(request: &CodeGroupTaskRequest<'_>) -> Task
 
     TaskAddParams {
         title: group_title(&rule, request.group),
-        description: group_description(request),
+        description: group_description(request, single_evidence.as_ref()),
+        creation_decision: single_evidence.map(TaskDecision::CodeScanningAlert),
         acceptance_criteria: group_acceptance_criteria(&rule, request.group),
         tags,
         // Scanner locations are evidence about where the finding was observed,
@@ -311,12 +376,15 @@ fn inline_locations(alerts: &[Value]) -> String {
     rendered
 }
 
-fn group_description(request: &CodeGroupTaskRequest<'_>) -> String {
+fn group_description(
+    request: &CodeGroupTaskRequest<'_>,
+    single_evidence: Option<&CodeScanningAlertEvidence>,
+) -> String {
     let alerts = &request.group.alerts;
     let mut out = "This task was filed from bounded Code scanning evidence collected on the engine-private host boundary. It does not require agent-side GitHub access.\n\n".to_string();
 
-    if let [alert] = alerts.as_slice() {
-        append_single_alert_evidence(&mut out, request.snapshot, alert);
+    if let Some(evidence) = single_evidence {
+        append_single_alert_evidence(&mut out, evidence);
     } else {
         append_shared_cause(&mut out, request.snapshot, alerts);
         append_alert_ledger(&mut out, alerts);
@@ -338,29 +406,38 @@ fn group_description(request: &CodeGroupTaskRequest<'_>) -> String {
     out
 }
 
-/// The single-alert record. Its `- Key: value` bullets are also the format the
-/// consolidation path reads back out of an existing per-alert task, so the
-/// keys and their order are a parsed contract, not presentation.
-fn append_single_alert_evidence(out: &mut String, snapshot: &Value, alert: &Value) {
+/// The single-alert record, rendered from typed evidence for people and
+/// older binaries. Consolidation reads the typed decision, not these
+/// bullets; only the legacy reader for pre-typing tasks parses them.
+fn append_single_alert_evidence(out: &mut String, evidence: &CodeScanningAlertEvidence) {
     out.push_str(&format!(
         "## Alert evidence\n\n- Repository: `{}`\n- Alert: `#{}`\n- Rule: `{}` ({})\n- Security severity: `{}`\n- Tool: `{}` (version `{}`, guid `{}`)\n- Message: {}\n- Ref: `{}`\n- Commit: `{}`\n- Location: `{}`{}\n- Created: `{}`\n- Updated: `{}`\n- Alert URL: {}\n",
-        repository_name(snapshot),
-        field(alert, "number"),
-        display(&field(alert, "rule_id")),
-        display(&field(alert, "rule_name")),
-        display(&field(alert, "security_severity")),
-        display(&field(alert, "tool_name")),
-        display(&field(alert, "tool_version")),
-        display(&field(alert, "tool_guid")),
-        display(&field(alert, "message")),
-        display(&field(alert, "ref")),
-        display(&field(alert, "commit_sha")),
-        display(&field(alert, "path")),
-        line_suffix(alert),
-        display(&field(alert, "created_at")),
-        display(&field(alert, "updated_at")),
-        display(&field(alert, "html_url")),
+        evidence.repository,
+        evidence.number,
+        display(&evidence.rule_id),
+        display(&evidence.rule_name),
+        display(&evidence.security_severity),
+        display(&evidence.tool_name),
+        display(&evidence.tool_version),
+        display(&evidence.tool_guid),
+        display(&evidence.message),
+        display(&evidence.git_ref),
+        display(&evidence.commit_sha),
+        display(&evidence.path),
+        evidence_line_suffix(evidence),
+        display(&evidence.created_at),
+        display(&evidence.updated_at),
+        display(&evidence.html_url),
     ));
+}
+
+fn evidence_line_suffix(evidence: &CodeScanningAlertEvidence) -> String {
+    match (evidence.start_line, evidence.end_line) {
+        (None, _) => String::new(),
+        (Some(start), None) => format!(" line {start}"),
+        (Some(start), Some(end)) if start == end => format!(" line {start}"),
+        (Some(start), Some(end)) => format!(" lines {start}-{end}"),
+    }
 }
 
 fn append_shared_cause(out: &mut String, snapshot: &Value, alerts: &[Value]) {

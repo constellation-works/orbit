@@ -275,6 +275,7 @@ impl OrbitRuntime {
                     origin,
                     comments: comments.clone(),
                     context_creation: params.context_creation.authorize.clone(),
+                    creation_decision: params.creation_decision.clone(),
                 },
                 action_key,
                 digest,

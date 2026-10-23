@@ -151,6 +151,7 @@ impl Owner {
                 origin: None,
                 comments: Vec::new(),
                 context_creation: Vec::new(),
+                creation_decision: None,
             })
             .expect("create task")
     }

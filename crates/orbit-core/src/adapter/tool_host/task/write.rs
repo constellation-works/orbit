@@ -175,6 +175,7 @@ pub(super) fn add(
             orchestrator_model: optional_string(input, "orchestrator_model")?,
             origin: parse_optional_task_origin(input, "origin")?,
             context_creation: ContextCreationAuthorization::default(),
+            creation_decision: None,
         },
         &screen,
         caller.agent,

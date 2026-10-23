@@ -58,6 +58,9 @@ pub struct TaskCreateParams {
     /// initial creation grant in the same bundle commit as the task.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context_creation: Vec<String>,
+    /// Typed decision recorded on the task's `created` history event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creation_decision: Option<TaskDecision>,
 }
 
 /// Parameters for a partial update to an existing task.
