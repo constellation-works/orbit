@@ -603,25 +603,6 @@ impl TaskCommitBoundary {
         }
         Ok(live)
     }
-
-    pub fn admission_storage_usage(&self) -> Result<AdmissionStorageUsage, OrbitError> {
-        self.enter_ordinary(|| {
-            let mut usage = AdmissionStorageUsage::default();
-            for row in self.coordination_rows(RECEIPT_KIND)? {
-                match decode::<StoredReceipt>(&row.payload_json)? {
-                    StoredReceipt::Full { .. } => {
-                        usage.receipts += 1;
-                        usage.receipt_bytes += row.payload_json.len() as u64;
-                    }
-                    StoredReceipt::Tombstone { .. } => {
-                        usage.tombstones += 1;
-                        usage.tombstone_bytes += row.payload_json.len() as u64;
-                    }
-                }
-            }
-            Ok(usage)
-        })
-    }
 }
 
 /// The ordered pre-admission ladder, shared by admission and the read-only
