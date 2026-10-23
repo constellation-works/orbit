@@ -50,7 +50,8 @@ presence. Path fields live on `WorkspacePaths` in
 | `state/scoreboard/` | retired scoreboard counters left by older Orbit versions; nothing reads or writes them | non-authoritative; safe to delete |
 | `state/job-runs/` | run-definition snapshots (`jrun-*.job.yaml`); new run history lives in SQLite | retain if old run evidence matters |
 | `state/audit/blobs/` | redacted content-addressed blobs referenced by global `v2_audit_events` | preserve with audit history when detailed output matters |
-| `state/logs/`, `state/worktrees/` | workspace-local worker stdio logs and linked worktrees | regenerable |
+| `state/logs/` | workspace-local worker stdio logs | disposable; retain when needed for operational evidence |
+| `state/worktrees/` | linked run worktrees; active or failed runs can retain uncommitted candidates | preserve active worktrees and retained dirty candidates; use [worktree GC](./worktree-reclaim.md#dirty-worktrees-of-settled-tasks) only after its terminal-run and candidate-recovery checks |
 
 ### Global `~/.orbit/`
 
