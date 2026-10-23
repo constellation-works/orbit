@@ -42,10 +42,18 @@ pub(crate) struct PinnedHosts {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct HostFileFingerprint([Option<(SystemTime, u64)>; 3]);
 
+/// The last valid snapshot and the error of a newer failed file, published
+/// together under one lock so a reader never splices a repaired snapshot
+/// onto the error that preceded it.
+#[derive(Default)]
+struct PublishedHosts {
+    snapshot: Option<Arc<HostSnapshot>>,
+    load_error: Option<HostLoadError>,
+}
+
 pub(crate) struct HostFileState {
     global_root: PathBuf,
-    current: Mutex<Option<Arc<HostSnapshot>>>,
-    load_error: Mutex<Option<HostLoadError>>,
+    published: Mutex<PublishedHosts>,
     /// Sampled before the last successful load; a failed load leaves it
     /// untouched so the next request retries.
     last_fingerprint: Mutex<Option<HostFileFingerprint>>,
@@ -58,8 +66,7 @@ impl HostFileState {
     pub(crate) fn new(global_root: PathBuf) -> Self {
         Self {
             global_root,
-            current: Mutex::new(None),
-            load_error: Mutex::new(None),
+            published: Mutex::new(PublishedHosts::default()),
             last_fingerprint: Mutex::new(None),
             refresh_lock: Mutex::new(()),
             generation_counter: AtomicU64::new(INITIAL_GENERATION),
@@ -78,9 +85,12 @@ impl HostFileState {
                 self.reload();
             }
         }
+        gate_wait("pin-after-reload");
+        gate_signal("pin-read-attempted");
+        let published = lock(&self.published);
         PinnedHosts {
-            snapshot: lock(&self.current).clone(),
-            load_error: lock(&self.load_error).clone(),
+            snapshot: published.snapshot.clone(),
+            load_error: published.load_error.clone(),
         }
     }
 
@@ -114,8 +124,15 @@ impl HostFileState {
                     generation: self.generation_counter.fetch_add(1, Ordering::Relaxed),
                     registry,
                 };
-                *lock(&self.current) = Some(Arc::new(snapshot));
-                *lock(&self.load_error) = None;
+                {
+                    let mut published = lock(&self.published);
+                    published.snapshot = Some(Arc::new(snapshot));
+                    // Held under the publication lock: a gated reader blocks
+                    // here instead of seeing the new snapshot beside the
+                    // error it replaces.
+                    gate_wait("publish-before-clear");
+                    published.load_error = None;
+                }
                 *lock(&self.last_fingerprint) = Some(fingerprint);
             }
             Err(error) => {
@@ -124,12 +141,50 @@ impl HostFileState {
                     %error,
                     "host file failed to load; the dashboard keeps its last valid snapshot"
                 );
-                *lock(&self.load_error) = Some(HostLoadError {
+                lock(&self.published).load_error = Some(HostLoadError {
                     code: crate::api::host_error_code(&error).to_string(),
                     message: error.to_string(),
                 });
             }
         }
+    }
+}
+
+/// Test-only gate directory (`ORBIT_TEST_HOSTS_PUBLISH_GATE`): a point is
+/// active only when `<point>.armed` exists there. A waiting point records
+/// `<point>.reached` and blocks until `<point>.release` appears; a signal
+/// point only records `<point>.reached`. Inert unless the file test arms it.
+const PUBLISH_GATE_ENV: &str = "ORBIT_TEST_HOSTS_PUBLISH_GATE";
+
+fn gate_dir() -> Option<PathBuf> {
+    std::env::var_os(PUBLISH_GATE_ENV).map(PathBuf::from)
+}
+
+#[allow(
+    clippy::disallowed_methods,
+    reason = "test-gate marker file in a scratch directory; durability is irrelevant"
+)]
+fn gate_wait(point: &str) {
+    let Some(dir) = gate_dir() else { return };
+    if !dir.join(format!("{point}.armed")).exists() {
+        return;
+    }
+    let _ = std::fs::write(dir.join(format!("{point}.reached")), b"reached");
+    let release = dir.join(format!("{point}.release"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !release.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[allow(
+    clippy::disallowed_methods,
+    reason = "test-gate marker file in a scratch directory; durability is irrelevant"
+)]
+fn gate_signal(point: &str) {
+    let Some(dir) = gate_dir() else { return };
+    if dir.join(format!("{point}.armed")).exists() {
+        let _ = std::fs::write(dir.join(format!("{point}.reached")), b"reached");
     }
 }
 

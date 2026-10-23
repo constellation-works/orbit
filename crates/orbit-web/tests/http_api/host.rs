@@ -1,5 +1,55 @@
+use std::path::Path;
+use std::time::{Duration, Instant};
+
 use super::support::{Fixture, isolated, json_ok};
-use serde_json::json;
+use serde_json::{Value, json};
+
+fn write_host_entry(fixture: &Fixture, name: &str, machine_id: &str, prefix: &str, pad: usize) {
+    let text = format!(
+        "schema_version = 1\n# {}\n\n[[hosts]]\nname = \"{name}\"\nmachine_id = \"{machine_id}\"\nssh = \"{name}.example\"\ntask_prefix = \"{prefix}\"\n",
+        "x".repeat(pad)
+    );
+    std::fs::write(fixture.global.join("hosts.toml"), text).unwrap();
+}
+
+fn get_hosts(origin: &str) -> Value {
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap();
+    json_ok(
+        client
+            .get(format!("{origin}/api/hosts?probe=false"))
+            .send()
+            .unwrap(),
+    )
+}
+
+fn host_names(body: &Value) -> Vec<&str> {
+    body["hosts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|host| host["name"].as_str().unwrap())
+        .collect()
+}
+
+fn wait_gate(gate: &Path, point: &str) {
+    let reached = gate.join(format!("{point}.reached"));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !reached.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for gate {point}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn gate_file(gate: &Path, point: &str, kind: &str) {
+    std::fs::write(gate.join(format!("{point}.{kind}")), b"x").unwrap();
+}
 
 #[test]
 fn host_resources_are_host_scoped_and_expose_pressure_recovery_unknown_and_age() {
@@ -50,6 +100,111 @@ fn host_resources_are_host_scoped_and_expose_pressure_recovery_unknown_and_age()
                     .unwrap()
                     .starts_with("application/javascript")
             );
+        },
+    );
+}
+
+#[test]
+fn hosts_list_never_pairs_repaired_snapshot_with_older_load_error() {
+    isolated(
+        "host::hosts_list_never_pairs_repaired_snapshot_with_older_load_error",
+        || {
+            let fixture = Fixture::new();
+            let gate = fixture.path("host-gate");
+            std::fs::create_dir_all(&gate).unwrap();
+            write_host_entry(&fixture, "alpha", "hm_alpha", "AA", 0);
+            let server = fixture.server_with_envs(
+                false,
+                &[("ORBIT_TEST_HOSTS_PUBLISH_GATE", gate.as_os_str())],
+            );
+            let origin = server.origin.clone();
+
+            let v1 = get_hosts(&origin);
+            let generation_v1 = v1["generation"].as_u64().unwrap();
+            assert!(host_names(&v1).contains(&"alpha"), "{v1}");
+            assert_eq!(v1["load_error"], json!(null), "{v1}");
+
+            // Failure-to-repair overlap: request A records the malformed
+            // file's error and pauses before reading the published view;
+            // request B repairs the file and pauses between publishing the
+            // repaired snapshot and clearing the older error.
+            for point in [
+                "pin-after-reload",
+                "publish-before-clear",
+                "pin-read-attempted",
+            ] {
+                gate_file(&gate, point, "armed");
+            }
+            std::fs::write(
+                fixture.global.join("hosts.toml"),
+                "schema_version = \"broken\"\n[[hosts]]\nname = [\n",
+            )
+            .unwrap();
+            let origin_a = origin.clone();
+            let request_a = std::thread::spawn(move || get_hosts(&origin_a));
+            wait_gate(&gate, "pin-after-reload");
+
+            write_host_entry(&fixture, "beta", "hm_beta", "BB", 24);
+            let origin_b = origin.clone();
+            let request_b = std::thread::spawn(move || get_hosts(&origin_b));
+            wait_gate(&gate, "publish-before-clear");
+
+            gate_file(&gate, "pin-after-reload", "release");
+            wait_gate(&gate, "pin-read-attempted");
+            gate_file(&gate, "publish-before-clear", "release");
+
+            let a = request_a.join().unwrap();
+            let b = request_b.join().unwrap();
+            let generation_v2 = b["generation"].as_u64().unwrap();
+            assert!(generation_v2 > generation_v1, "v1={v1} b={b}");
+            for body in [&a, &b] {
+                assert_eq!(
+                    body["generation"].as_u64().unwrap(),
+                    generation_v2,
+                    "{body}"
+                );
+                assert!(host_names(body).contains(&"beta"), "{body}");
+                assert!(!host_names(body).contains(&"alpha"), "{body}");
+                assert_eq!(
+                    body["load_error"],
+                    json!(null),
+                    "repaired generation must not carry the older load error: {body}"
+                );
+            }
+
+            // A malformed newer file reports its error beside the last valid
+            // snapshot and is retried on the next request.
+            std::fs::write(
+                fixture.global.join("hosts.toml"),
+                "schema_version = \"broken-again\"\n[[hosts]]\nname = [ [\n# retry\n",
+            )
+            .unwrap();
+            for _ in 0..2 {
+                let failed = get_hosts(&origin);
+                assert_eq!(
+                    failed["generation"].as_u64().unwrap(),
+                    generation_v2,
+                    "{failed}"
+                );
+                assert!(host_names(&failed).contains(&"beta"), "{failed}");
+                assert!(failed["load_error"]["message"].is_string(), "{failed}");
+            }
+
+            // Repair clears the error; an unchanged file keeps its generation.
+            write_host_entry(&fixture, "gamma", "hm_gamma", "GA", 48);
+            let repaired = get_hosts(&origin);
+            let generation_v3 = repaired["generation"].as_u64().unwrap();
+            assert!(generation_v3 > generation_v2, "{repaired}");
+            assert!(host_names(&repaired).contains(&"gamma"), "{repaired}");
+            assert_eq!(repaired["load_error"], json!(null), "{repaired}");
+            let unchanged = get_hosts(&origin);
+            assert_eq!(
+                unchanged["generation"].as_u64().unwrap(),
+                generation_v3,
+                "{unchanged}"
+            );
+            assert!(host_names(&unchanged).contains(&"gamma"), "{unchanged}");
+            assert_eq!(unchanged["load_error"], json!(null), "{unchanged}");
         },
     );
 }

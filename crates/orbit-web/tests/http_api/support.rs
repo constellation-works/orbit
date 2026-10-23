@@ -242,6 +242,15 @@ impl Fixture {
         )
     }
 
+    /// A server with extra environment for the server child.
+    pub(super) fn server_with_envs(
+        &self,
+        operator: bool,
+        env: &[(&str, &std::ffi::OsStr)],
+    ) -> Server {
+        self.server_impl_with_env(operator, false, false, &self.path("process.log"), None, env)
+    }
+
     pub(super) fn counted_task_server(&self) -> Server {
         self.server_impl_with_log(
             false,
