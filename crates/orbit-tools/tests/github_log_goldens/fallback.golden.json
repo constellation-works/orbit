@@ -1362,13 +1362,13 @@
     "output": {
       "run_id": "34060485218",
       "scope": "failed",
-      "log": "2026-09-06T21:16:00.0000000Z ##[group]Run cargo nextest run\n2026-09-06T21:16:01.0000000Z MIDDLE-STEP-MARKER nextest archive ready\n2026-09-06T21:16:02.0000000Z ##[endgroup]\n",
-      "diagnostic_unit": null,
+      "log": "2026-09-06T21:16:00.0000000Z ##[group]Run cargo nextest run\n2026-09-06T21:16:00.0000000Z cargo nextest run\n2026-09-06T21:16:01.0000000Z ##[endgroup]\n2026-09-06T21:16:01.0000000Z MIDDLE-STEP-MARKER nextest archive ready\n2026-09-06T21:16:02.0000000Z ##[group]Archive details\n2026-09-06T21:16:02.0000000Z nested archive output\n2026-09-06T21:16:03.0000000Z ##[endgroup]\n2026-09-06T21:16:03.0000000Z RUNTIME-OUTPUT: archive downloaded in 42s\n2026-09-06T21:16:04.0000000Z ##[error]Process completed with exit code 100.\n",
+      "diagnostic_unit": "2026-09-06T21:16:00.0000000Z ##[group]Run cargo nextest run\n2026-09-06T21:16:00.0000000Z cargo nextest run\n2026-09-06T21:16:01.0000000Z ##[endgroup]\n2026-09-06T21:16:01.0000000Z MIDDLE-STEP-MARKER nextest archive ready\n2026-09-06T21:16:02.0000000Z ##[group]Archive details\n2026-09-06T21:16:02.0000000Z nested archive output\n2026-09-06T21:16:03.0000000Z ##[endgroup]\n2026-09-06T21:16:03.0000000Z RUNTIME-OUTPUT: archive downloaded in 42s\n2026-09-06T21:16:04.0000000Z ##[error]Process completed with exit code 100.\n",
       "failure_regions": null,
       "source_complete": true,
       "truncated": false,
-      "returned_bytes": 172,
-      "total_bytes": 362,
+      "returned_bytes": 513,
+      "total_bytes": 815,
       "source": "job_api_log",
       "source_jobs": [
         {
@@ -1383,7 +1383,7 @@
       "checkout_commits": [],
       "checkout_evidence": [],
       "checkout_evidence_complete": true,
-      "checkout_evidence_scanned_bytes": 362,
+      "checkout_evidence_scanned_bytes": 815,
       "checkout_evidence_source_truncated": false,
       "selection": {
         "step": "cargo nextest run",
@@ -1391,10 +1391,23 @@
         "byte_end": null,
         "line_start": null,
         "line_end": null,
-        "selected_bytes": 172,
-        "selected_lines": 3
+        "selected_bytes": 513,
+        "selected_lines": 9
       }
     },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "scoped_step_by_workflow_name_in_a_raw_job_log_returns_an_unsupported_mapping_error": {
+    "error": "invalid input: log step selection unsupported: \"Download nextest archive\" in run 34060485218 job 101560010340: raw job logs name steps only by their `Run <command>` display group, not by workflow step name, so this step's identity and runtime boundaries cannot be reliably established in the raw log; job log fallback read 1 of 1 candidate job(s): job 101560010340 (`test`): raw log step mapping unsupported for the requested step; no log bytes returned",
     "calls": [
       "run view 34060485218 --job 101560010340 --log-failed",
       "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",

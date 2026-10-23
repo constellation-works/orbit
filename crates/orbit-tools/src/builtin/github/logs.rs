@@ -291,6 +291,9 @@ pub struct RunLogRead {
     /// Why the fallback recovered nothing, already redacted. Set only when the
     /// read ends with no text: a fallback that found evidence reports none.
     pub fallback_error: Option<String>,
+    /// The requested step could not be mapped in a raw job log (see
+    /// `StreamedLog::selection_unsupported`).
+    pub selection_unsupported: bool,
 }
 
 /// Read one bounded log excerpt, recovering from per-job logs when the
@@ -363,10 +366,16 @@ pub fn read_run_log_guarded(
                 source: SOURCE_RUN_LOG,
                 source_jobs: Vec::new(),
                 fallback_error: None,
+                selection_unsupported: false,
             });
         }
         if log.total_bytes > 0 {
-            return Err(selection_not_found_error(requests, &log, None));
+            return Err(selection_not_found_error(
+                requests,
+                &log,
+                None,
+                log.selection_unsupported,
+            ));
         }
         // An empty run-scoped read is the known blind spot: the scoped
         // selection may still be present in a verified job log.
@@ -379,6 +388,7 @@ pub fn read_run_log_guarded(
             source: SOURCE_RUN_LOG,
             source_jobs: Vec::new(),
             fallback_error: None,
+            selection_unsupported: false,
         });
     }
     Ok(recover_from_job_logs(
@@ -402,6 +412,7 @@ fn ensure_selection_found(
         requests,
         &read.log,
         read.fallback_error.as_deref(),
+        read.selection_unsupported || read.log.selection_unsupported,
     ))
 }
 
@@ -409,6 +420,7 @@ fn selection_not_found_error(
     requests: &RunLogRequests,
     log: &StreamedLog,
     fallback_error: Option<&str>,
+    selection_unsupported: bool,
 ) -> OrbitError {
     let Some(selection) = &requests.selection else {
         return OrbitError::InvalidInput("log selection not found".to_string());
@@ -418,10 +430,17 @@ fn selection_not_found_error(
         None => String::new(),
     };
     let detail = if let Some(step) = &selection.step {
-        format!(
-            "log step not found: \"{step}\" in run {}{job}",
-            requests.run_id
-        )
+        if selection_unsupported {
+            format!(
+                "log step selection unsupported: \"{step}\" in run {}{job}: raw job logs name steps only by their `Run <command>` display group, not by workflow step name, so this step's identity and runtime boundaries cannot be reliably established in the raw log",
+                requests.run_id
+            )
+        } else {
+            format!(
+                "log step not found: \"{step}\" in run {}{job}",
+                requests.run_id
+            )
+        }
     } else if let Some((start, end)) = selection.byte_window {
         format!(
             "byte window {start}..{} matched no log bytes in run {}{job} ({} bytes read)",
@@ -555,11 +574,12 @@ fn recover_from_job_logs(
     cached_run_view: Option<&Value>,
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
 ) -> RunLogRead {
-    let unrecovered = |reason: String| RunLogRead {
+    let unrecovered = |reason: String, selection_unsupported: bool| RunLogRead {
         log: empty,
         source: SOURCE_RUN_LOG,
         source_jobs: Vec::new(),
         fallback_error: Some(redact_all(&reason)),
+        selection_unsupported,
     };
 
     let qualify = |reason: String| match primary_error {
@@ -568,14 +588,15 @@ fn recover_from_job_logs(
     };
     let jobs = match fallback_jobs(requests, cached_run_view, guard) {
         Ok(jobs) => jobs,
-        Err(reason) => return unrecovered(qualify(reason)),
+        Err(reason) => return unrecovered(qualify(reason), false),
     };
     let considered = jobs.len();
     let mut attempts: Vec<String> = Vec::new();
+    let mut selection_unsupported = false;
     for job in jobs.iter().take(bounds.max_fallback_jobs) {
         let request = match guard(&requests.job_log_request(job.id)) {
             Ok(request) => request,
-            Err(error) => return unrecovered(qualify(error.to_string())),
+            Err(error) => return unrecovered(qualify(error.to_string()), selection_unsupported),
         };
         match stream_bounded_log(
             &request,
@@ -590,12 +611,20 @@ fn recover_from_job_logs(
                     source: SOURCE_JOB_API_LOG,
                     source_jobs: vec![job.to_json()],
                     fallback_error: None,
+                    selection_unsupported: false,
                 };
             }
-            Ok(_) if requests.selection.is_some() => attempts.push(format!(
-                "{} did not contain the requested step/window",
-                job.label()
-            )),
+            Ok(log) if requests.selection.is_some() => {
+                selection_unsupported |= log.selection_unsupported;
+                attempts.push(if log.selection_unsupported {
+                    format!(
+                        "{}: raw log step mapping unsupported for the requested step",
+                        job.label()
+                    )
+                } else {
+                    format!("{} did not contain the requested step/window", job.label())
+                })
+            }
             Ok(_) => attempts.push(format!("{} returned no log text", job.label())),
             Err(error) => attempts.push(format!("{}: {error}", job.label())),
         }
@@ -612,7 +641,7 @@ fn recover_from_job_logs(
             bounds.max_fallback_jobs
         ));
     }
-    unrecovered(qualify(reason))
+    unrecovered(qualify(reason), selection_unsupported)
 }
 
 /// The jobs whose logs may be read for this request, from verified run

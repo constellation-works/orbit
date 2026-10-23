@@ -2120,7 +2120,63 @@
     },
     "job_logs": {
       "101560010340": [
-        "2026-09-06T21:15:00.0000000Z ##[group]Run actions/checkout@v4\n2026-09-06T21:15:01.0000000Z checked out\n2026-09-06T21:15:01.0000000Z ##[endgroup]\n2026-09-06T21:16:00.0000000Z ##[group]Run cargo nextest run\n2026-09-06T21:16:01.0000000Z MIDDLE-STEP-MARKER nextest archive ready\n2026-09-06T21:16:02.0000000Z ##[endgroup]\n2026-09-06T21:20:00.0000000Z trailing output\n"
+        "2026-09-06T21:15:00.0000000Z ##[group]Run actions/checkout@v4\n2026-09-06T21:15:01.0000000Z ##[endgroup]\n2026-09-06T21:15:01.0000000Z checked out\n2026-09-06T21:16:00.0000000Z ##[group]Run cargo nextest run\n2026-09-06T21:16:00.0000000Z cargo nextest run\n2026-09-06T21:16:01.0000000Z ##[endgroup]\n2026-09-06T21:16:01.0000000Z MIDDLE-STEP-MARKER nextest archive ready\n2026-09-06T21:16:02.0000000Z ##[group]Archive details\n2026-09-06T21:16:02.0000000Z nested archive output\n2026-09-06T21:16:03.0000000Z ##[endgroup]\n2026-09-06T21:16:03.0000000Z RUNTIME-OUTPUT: archive downloaded in 42s\n2026-09-06T21:16:04.0000000Z ##[error]Process completed with exit code 100.\n2026-09-06T21:20:00.0000000Z ##[group]Run cargo doc\n2026-09-06T21:20:00.0000000Z OTHER-STEP-MARKER trailing output\n2026-09-06T21:20:01.0000000Z ##[endgroup]\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true
+  },
+  {
+    "name": "scoped_step_by_workflow_name_in_a_raw_job_log_returns_an_unsupported_mapping_error",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "step": "Download nextest archive"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "2026-09-06T21:15:00.0000000Z ##[group]Run actions/checkout@v4\n2026-09-06T21:15:01.0000000Z ##[endgroup]\n2026-09-06T21:15:01.0000000Z checked out\n2026-09-06T21:16:00.0000000Z ##[group]Run curl -fsSL https://example.invalid/nextest.tar.gz -o nextest.tar.gz\n2026-09-06T21:16:00.0000000Z curl -fsSL https://example.invalid/nextest.tar.gz -o nextest.tar.gz\n2026-09-06T21:16:01.0000000Z ##[endgroup]\n2026-09-06T21:16:01.0000000Z RUNTIME-OUTPUT: archive downloaded in 42s\n2026-09-06T21:16:02.0000000Z ##[error]Process completed with exit code 100.\n2026-09-06T21:20:00.0000000Z ##[group]Run cargo nextest run\n2026-09-06T21:20:00.0000000Z OTHER-STEP-MARKER tests running\n2026-09-06T21:20:01.0000000Z ##[endgroup]\n"
       ]
     },
     "max_bytes": 16384,
