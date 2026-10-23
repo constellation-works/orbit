@@ -64,11 +64,15 @@ modify `docs/drafts/`. Every `modify` rule must be covered by a `read` rule,
 and a profile rule may not repeat a global deny entry.
 
 Orbit's default policy defines `implementer`, `reviewer`, `docs_writer` and
-`pure_compute`. The profile named `unrestricted`, which an activity gets when
-it sets no `fsProfile`, always exists: it reads and modifies everything the
-global denies leave open. A workspace policy of the same name merges over the
-host's: deny rules accumulate, and a workspace profile replaces a host profile
-of the same name. See [Scoping rules](../scoping/).
+`pure_compute`. An activity with no `fsProfile` gets `unrestricted`. Unless the
+policy defines that profile explicitly, Orbit supplies it with read and modify
+access to everything the global denies leave open. A workspace policy of the
+same name merges over the host's: deny rules accumulate, and a workspace
+profile replaces a host profile of the same name. See [Scoping rules](../scoping/).
+
+When the host policy has write denies, a workspace `denyModify` exception must
+stay inside an exception the host already allows; it cannot reopen another
+host-denied path.
 
 An activity selects a profile with `fsProfile`:
 
