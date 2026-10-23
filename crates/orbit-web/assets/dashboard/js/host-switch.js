@@ -116,7 +116,11 @@ export function chooseHost(name) {
 function buildPicker() {
   const container = $("rail-host");
   if (!container) return;
-  const select = el("select", { class: "workspace-select host-select", title: "Host" });
+  // ORB-17652: the visible "Host" label below is hidden on phones, so the
+  // select also carries its name directly — the same mechanism as the
+  // workspace picker's "Workspace" name, keeping the two pickers labelled
+  // consistently at every width.
+  const select = el("select", { class: "workspace-select host-select", title: "Host", "aria-label": "Host" });
   select.id = "host-select";
   const serving = getServingHost();
   const servingOption = el("option", { text: `${serving ? serving.name : "This host"} (serving host)` });

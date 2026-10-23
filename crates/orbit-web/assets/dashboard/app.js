@@ -1394,7 +1394,12 @@ async function initWorkspaceSelector() {
 }
 
 function buildWorkspaceSelector() {
-  const select = el("select", { class: "workspace-select", title: "Workspace" });
+  // ORB-17652: the select's only name source was its `title`, which assistive
+  // tech does not reliably expose. An `aria-label` names it in the
+  // accessibility tree at every width with no visual change to the rail
+  // (a visible label would reflow the compact phone layout), matching the
+  // host picker's programmatic "Host" name.
+  const select = el("select", { class: "workspace-select", title: "Workspace", "aria-label": "Workspace" });
   select.id = "workspace-select";
 
   const allOption = el("option", { text: "All workspaces" });
