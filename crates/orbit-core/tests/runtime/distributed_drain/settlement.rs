@@ -134,6 +134,7 @@ fn a_launch_failure_cancels_the_leaf_releases_the_task_and_suppresses_the_host()
 /// An operator cancellation of a launched claimed leaf reaches its owner as a
 /// release, so the task keeps its candidate in backlog with the cancel reason.
 fn operator_cancelled_claimed_leaf_returns_to_backlog_with_reason() {
+    let cancel_reason = "preserve this candidate for later";
     let pair = Pair::new(1);
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
@@ -157,7 +158,7 @@ fn operator_cancelled_claimed_leaf_returns_to_backlog_with_reason() {
             &leaf,
             "operator",
             "cli",
-            Some("preserve this candidate for later"),
+            Some(cancel_reason),
             false,
             false,
         )
@@ -172,7 +173,8 @@ fn operator_cancelled_claimed_leaf_returns_to_backlog_with_reason() {
     assert!(
         failure["reason"]
             .as_str()
-            .is_some_and(|reason| !reason.is_empty())
+            .is_some_and(|reason| reason.contains(cancel_reason)),
+        "settlement failure should preserve the operator reason: {failure:?}"
     );
     let owner_task = pair.owner_task(&task);
     let comments = owner_task["comments"].as_array().expect("owner comments");
@@ -180,7 +182,8 @@ fn operator_cancelled_claimed_leaf_returns_to_backlog_with_reason() {
     assert!(
         comments.last().unwrap()["message"]
             .as_str()
-            .is_some_and(|note| !note.is_empty())
+            .is_some_and(|note| note.contains(cancel_reason)),
+        "owner comment should preserve the operator reason: {comments:?}"
     );
     let claim = pair.follower.pull_leaf_claim(&leaf).unwrap().unwrap();
     assert_eq!(claim.settlement_phase, "settled");
