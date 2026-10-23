@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Newtype Wrapper"
-last_validated: 2026-10-19
+last_validated: 2026-10-23
 ---
 # Newtype Wrapper
 
