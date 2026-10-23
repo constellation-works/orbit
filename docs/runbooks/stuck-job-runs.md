@@ -1010,8 +1010,11 @@ refuses. Settling performs reads only: it cannot push again or create a PR.
 The task history's `source_repair_publication_observed` entries retain waiting
 and converged observations with cumulative `settling` counters, reserved delay,
 independent `remote_branch` evidence and the authenticated push hash. Delay is
-recorded before waiting, so interruption cannot replenish the budget. Original
-pipeline receipts are unchanged. A later exact candidate read can reconcile an
+recorded before waiting, so interruption cannot replenish the budget. Automation
+replays the typed `source_repair_publication` decision on each history entry;
+only older entries without a decision replay the diagnostic JSON note. Editing
+the note on a typed entry does not change its reservation. Original pipeline
+receipts are unchanged. A later exact candidate read can reconcile an
 exhausted wait without repeating the push.
 
 If publication refuses the PR identity after pushing, inspect the task history's
