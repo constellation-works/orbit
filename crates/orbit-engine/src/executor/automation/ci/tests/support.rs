@@ -38,8 +38,10 @@ pub(super) struct FakeQueries {
     logs: BTreeMap<u64, RunLog>,
     /// Every job whose log was read.
     pub(super) log_reads: Mutex<Vec<u64>>,
-    /// Every limit passed to `open_pull_requests` and `repository_runs`.
+    /// Every limit passed to `open_pull_requests`.
     pub(super) pull_request_limits: Mutex<Vec<u64>>,
+    /// Every limit passed to `closed_pull_requests`.
+    pub(super) closed_pull_request_limits: Mutex<Vec<u64>>,
     pub(super) open_pull_request_branch_queries: Mutex<Vec<String>>,
     pub(super) closed_pull_request_branch_queries: Mutex<Vec<String>>,
     pub(super) run_limits: Mutex<Vec<u64>>,
@@ -218,14 +220,28 @@ impl CiQueries for FakeQueries {
             .lock()
             .expect("pull request limits lock")
             .push(limit);
-        Ok(self.open_pull_requests.clone())
+        Ok(self
+            .open_pull_requests
+            .iter()
+            .take(usize::try_from(limit).unwrap_or(usize::MAX))
+            .cloned()
+            .collect())
     }
 
-    fn closed_pull_requests(&self, _limit: u64) -> Result<Vec<Value>, OrbitError> {
+    fn closed_pull_requests(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {
+        self.closed_pull_request_limits
+            .lock()
+            .expect("closed pull request limits lock")
+            .push(limit);
         if let Some(error) = &self.closed_pull_requests_error {
             return Err(OrbitError::Execution(error.clone()));
         }
-        Ok(self.closed_pull_requests.clone())
+        Ok(self
+            .closed_pull_requests
+            .iter()
+            .take(usize::try_from(limit).unwrap_or(usize::MAX))
+            .cloned()
+            .collect())
     }
 
     fn closed_pull_requests_for_branch(&self, branch: &str) -> Result<Vec<Value>, OrbitError> {
@@ -262,11 +278,13 @@ impl CiQueries for FakeQueries {
     fn repository_runs(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {
         self.run_limits.lock().expect("run limits lock").push(limit);
         let mut runs = self.runs.lock().expect("runs lock");
-        if runs.len() > 1 {
-            Ok(runs.remove(0))
+        let mut page = if runs.len() > 1 {
+            runs.remove(0)
         } else {
-            Ok(runs.first().cloned().unwrap_or_default())
-        }
+            runs.first().cloned().unwrap_or_default()
+        };
+        page.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(page)
     }
 
     fn run_view(&self, run_id: &str) -> Result<Value, OrbitError> {
