@@ -98,25 +98,17 @@ minute (§2). Admission reads none of it yet. macOS has no scopes, so its
 workers run uncontained and record the same minutes from the process tree
 (§2).
 
-**No-diff work still builds today.** Owner-run pipelines skip validation
-for a `no-diff-expected` task with a clean tree: `task_pr_pipeline.yaml`'s
-`validate` step is gated on `skipped_no_diff_expected`. Two routes still
-build anyway:
-
-- **Claimed route.** It runs the owner's required validation commands on the
-  clean base (`task_claimed_pr_pipeline.yaml` `validate_no_diff`, then
-  `orbit-engine/src/executor/automation/vcs/claim/no_diff.rs`). The owner
-  refuses a handoff without those logs
-  (`orbit-store/src/repository/task/coordination/handoff/evidence.rs`). In ws_orbit
-  that means a full `cargo check` of the workspace for every claimed review.
-- **Instructions.** On every route, the implementer prompt
-  (`assets/activities/agent_implement.yaml`) and the repository gates tell
-  the agent to run every workspace check before handoff, with no exemption
-  for the tag.
-
-[ORB-15764] and [ORB-15765] fix those two. The CPU-light rule also counts
-build-heavy QA sweeps as light, because they carry the tag; [ORB-15766]
-fixes that.
+**No-diff work skips workspace validation.** Owner-run pipelines skip
+validation for a `no-diff-expected` task with a clean tree:
+`task_pr_pipeline.yaml` gates its `validate` step on
+`skipped_no_diff_expected`. The claimed pipeline takes a separate
+`validate_no_diff` path, which runs no required workspace command or replay
+of a sandbox-deferred gate. Both routes may still run commands required by
+the task's own brief, such as product checks for a QA sweep. The implementer
+instructions also exempt this tag from workspace gates. These claimed-route
+and instruction changes address [ORB-15764] and [ORB-15765]. The CPU-light
+admission rule excludes build-heavy QA sweeps declared by
+`auto_task_builds_by_design` [ORB-15766].
 
 **History.** Each host keeps one SQLite database, `~/.orbit/orbit.db`, shared
 by its workspaces. The `job_runs` table holds each run's start, end and host.
@@ -346,18 +338,22 @@ profiles. A template's base class is not stored: it comes from whether the
 newest delivery's task in the profile's window carries `no-diff-expected` in
 the host's task index.
 
-### 3.2 No-diff work must not build
+### 3.2 No-diff work should not build by default
 
 The work class is a grouping key, not a promise about cost: a `no-diff`
 profile is measured like any other. A no-diff task that compiles or runs
-tests is a defect in the pipeline or the task's instructions. It is not a
-cost to learn. Its profile makes the defect visible.
+workspace tests outside its brief's requirements is a defect in the pipeline
+or the task's instructions. It is not a cost to learn. Its profile makes the
+defect visible. A task-specific product check, such as a QA sweep, remains
+part of that task's workload.
 
 `orbit run profiles` flags every `no-diff` profile, and every template
 profile whose tasks are no-diff, that shows build-like load: more than one
 core sustained for two minutes. It names the deliveries behind the flag.
-Until [ORB-15764] and [ORB-15765] land, every claimed review will be flagged
-(§1). Templates that build by design are exempt from the flag through one
+With the claimed no-diff pipeline skipping workspace validation, a clean
+claimed review should not create build-like load (§1). A no-diff delivery
+that does sustain build-like load remains flagged. Templates that build by
+design are exempt from the flag through one
 declaration, `auto_task_builds_by_design` (`qa-sweep` and `qa-full-sweep`,
 in `orbit-types/src/workflow/auto_task/definition.rs`), which the CPU-light
 rule shares. The
