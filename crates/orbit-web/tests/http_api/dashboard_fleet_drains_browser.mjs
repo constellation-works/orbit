@@ -280,6 +280,15 @@ async function assertWorkspaceDefaults(browser, port) {
     await page.locator('#workspace-select').selectOption('busy');
     await page.goto(bare);
     await page.waitForFunction(() => globalThis.fleetReady);
+    // ORB-17652: both rail pickers expose a programmatic name from
+    // `aria-label`, not only a `title` fallback or a label hidden on
+    // phones, and the two are named by the same mechanism.
+    const workspacePicker = page.getByRole('combobox', { name: 'Workspace', exact: true });
+    assert.equal(await workspacePicker.getAttribute('id'), 'workspace-select', 'workspace picker is named Workspace in the accessibility tree');
+    assert.equal(await workspacePicker.getAttribute('aria-label'), 'Workspace', 'workspace picker name comes from aria-label, not only its title');
+    const hostPicker = page.getByRole('combobox', { name: 'Host', exact: true });
+    assert.equal(await hostPicker.getAttribute('id'), 'host-select', 'host picker is named Host in the accessibility tree');
+    assert.equal(await hostPicker.getAttribute('aria-label'), 'Host', 'host picker name comes from aria-label, not only its visible label');
     assert.equal(await page.locator('#workspace-select').inputValue(), 'busy', 'picker choice restored on a bare URL');
     await page.locator('#workspace-select').selectOption('');
     await page.goto(bare);
