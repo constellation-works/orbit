@@ -24,20 +24,34 @@ task that fails.
   the [runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/distributed-drain.md)
   shows how.
 - **Matching machines.** Every replica runs the same Orbit version and
-  distributed-drain protocol revision as the owner and declares the same
-  `workflow.required_validation_commands`. If the owner turns on before-PR
-  review (`review.timing = "before_pr"`), every replica must be able to run
+  distributed-drain protocol revision and fingerprint as the owner. A leaf
+  runs the owner's captured `workflow.required_validation_commands`; a
+  difference from the replica's list warns when the drain starts. If the owner
+  turns on before-PR review (`review.timing = "before_pr"`), every replica must be able to run
   the owner's pre-landing reviewer (`workflow.purpose_crews.pre_landing_review`,
   or `workflow.purpose_crews.review` while that is unset): each pulled task is then reviewed, and the
   reviewer's fixes committed, on the replica before its pull request opens.
   Crews may differ: a replica only receives tasks whose crew it can run. Operating systems may differ too: a
   task tagged `os:macos` (or `os:linux`, `os:windows`) only goes to a machine
   running that OS, and waits in the owner's backlog until one asks for work.
+  The crew's executor can also restrict its OS. A task tagged `ui` additionally
+  needs a verified browser kit on the executing host (`orbit browser-kit status`).
 - **SSH is the access control.** Anyone who can `ssh` to the owner owns it. To
   shut a replica out, remove its key from the owner's `authorized_keys`.
 - **Landing stays on the owner.** Approve each handoff on the owner's
   dashboard, or set `workflow.distributed_completion = "done"` on the owner to
   land every validated handoff, the way `--complete` lands its own tasks.
+
+The owner can also require review after the replica opens its PR, with
+`review.timing = "before_landing"`, or only for selected replica machine IDs
+with `review.before_landing_hosts`. The replica runs the captured reviewer
+and hands back evidence for the reviewed head; it never merges.
+
+Admission uses a live executor census. Within a dispatch band, work only the
+requesting host can run leads ahead of priority; among the remaining work,
+scarcer tasks lead within a priority. `workflow.admission_affinity` defaults
+to `"band"`; choose `"priority"` to keep exclusive work within its priority,
+or `"off"` for the plain order. This also applies to the owner's local drain.
 
 ## Set it up by hand
 
@@ -112,9 +126,10 @@ task to `review`.
 When the drain starts, it checks which crews this machine can run: enabled,
 with the provider CLI installed. Tasks on other crews stay in the owner's
 backlog for another machine. `orbit run show <drain-run>` lists the runnable
-crews and why the others were left out. A provider that turns out not to be
-signed in sends its task back to `backlog` and is dropped for the rest of the
-drain.
+crews and why the others were left out. An authentication failure sends its
+task back to `backlog` and excludes that provider account's crews. A crew with
+its own `env` has its own account, so other accounts remain usable. Delayed
+authentication probes can re-admit the affected account within the same drain.
 
 ## Stop, cancel, and settle
 

@@ -32,7 +32,7 @@ leaves the existing export confirmation unchanged.
 | `orbit workspace init` | Register the current repository as a workspace. `--name`, `--base-branch`, `--ship-mode pr\|local`, `--role owner\|replica` (`replica` requires `--owner <machine_id>`), `--task-id-start <N>`, `--mcp`, `--inject-agent-rules`; `--force` reconciles an already registered workspace. |
 | `orbit workspace list` \| `show` \| `sync` \| `role` | List and show registered workspaces, converge managed artifacts (`sync`), and validate this checkout's role (`role`). |
 | `orbit workspace ship-mode [pr\|local]` | Print the workspace's ship mode, or rebind it in the workspace registry without re-running init. Config files and managed defaults are left untouched. |
-| `orbit workspace source-remote show` \| `rebind` | Show the workspace's source-repository identity, or replace the source remote after a repository transfer (`rebind --remote <URL>`; try `--dry-run` first). |
+| `orbit workspace source-remote show` \| `rebind` | Show the workspace's source-repository identity, or replace the source remote after a repository transfer (`rebind --remote <URL>`; try `--dry-run` first). Use a credential-free Git origin and a credential helper: fresh registration refuses origins containing embedded credentials. |
 | `orbit workspace publication bind` \| `show` \| `rebind` \| `remove` | Manage this owner's binding to a dedicated task-publication repository. See [Publish and Restore Tasks](../../how-to/task-publication/). |
 | `orbit workspace remove` \| `teardown` | `remove` deregisters a workspace; `teardown` removes Orbit artifacts from it. |
 | `orbit config show` \| `get` \| `set` \| `keys` \| `path` | Read and write configuration, including this machine's identity under `machine.*`. Rename the machine with `orbit config set --global machine.name <value>`. See [Configuration](../config/). |
@@ -122,6 +122,15 @@ keyed by the requested field names.
 | `orbit run agent <prompt>` | Operator only. Run an agent on the host to investigate and report. It runs outside the filesystem sandbox, changes no task, and dispatches nothing. `--cwd`, `--crew`, `--timeout` (default 1800 s, max 7200), `--wait`, `--idempotency-key`, `--provider-sandbox`. Returns a run ID to read with `orbit run show` or `logs`; `--wait` blocks and prints the answer instead. |
 
 See [Delivery Workflows](../../getting-started/workflows/).
+
+`--allow-crew` accepts a named crew or an alias with the same provider, model
+and provider account. A crew with its own `env` has a separate account, so
+allow it explicitly even when its model matches another permitted crew.
+
+Pull drains with before-landing review can admit replacements while leaves
+are reviewing: at an unchanged concurrency of N, at most N leaves implement
+and at most 2N are occupied, absent pre-existing excess. Lowering the ceiling
+keeps running leaves. `orbit run show` reports the claim stages.
 
 ### Run inspection
 

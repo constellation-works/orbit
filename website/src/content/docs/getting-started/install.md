@@ -139,12 +139,14 @@ the fix for each failure.
 
 ### Configure and check
 
-`orbit init` writes a working `~/.orbit/config.toml` with a crew for each agent
-CLI it found, and picks a default crew. To pick a different one, set
-`workflow.default_crew`. Then check the workspace:
+`orbit init` writes `~/.orbit/config.toml` with the built-in crews, enabling
+those whose agent CLI it detects. It picks a default from those available;
+with none detected, enable a crew before dispatching. To pick a different
+default, choose an enabled crew and set `workflow.default_crew`. Seed the
+workspace config on its first edit, then check the workspace:
 
 ```bash
-orbit config set workflow.default_crew opus
+orbit config set --seed-from-global workflow.default_crew opus
 orbit doctor
 ```
 
@@ -165,4 +167,6 @@ npm install -g @orbit-tools/cli@latest
 `orbit update --check` tells you whether a newer release is out. npm owns this
 install, so `orbit update` prints the npm command instead of replacing the
 binary. Pending state migrations apply the next time Orbit opens the
-workspace.
+workspace. Upgrade every host together for distributed work, and restart
+long-lived MCP servers too: older clients cannot write after the current
+handoff-storage migration.
