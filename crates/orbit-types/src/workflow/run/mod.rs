@@ -1,5 +1,6 @@
 mod agent_blocker;
 mod baseline;
+mod candidate_carry;
 mod deferred_sandbox;
 mod delivery;
 mod diagnostic;
@@ -27,6 +28,7 @@ pub use baseline::{
     BaselineRedHold, KNOWN_RED_MARKER, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
     is_baseline_red_failure,
 };
+pub use candidate_carry::{CandidateCarry, CandidateCarryOutput};
 pub use deferred_sandbox::{
     BUBBLEWRAP_NAMESPACE_PROBE, DEFERRED_SANDBOX_ARTIFACT, DeferralHandoff, DeferralLane,
     DeferralProbe, DeferredSandboxArtifact, DeferredSandboxValidation, NamespaceProbe,

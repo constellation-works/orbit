@@ -10,16 +10,17 @@ use orbit_store::contracts::{
     ProviderUnavailable,
 };
 use orbit_types::workflow::{
-    BASELINE_RED_MARKER, BaselineRedHold, ClaimFailureClass, FORGE_UNAVAILABLE_MARKER,
-    FinalRecoveryDecision, ForgeUnavailableHold, JobRunState, OWNER_BUSY_MARKER,
-    OWNER_ROUTE_UNAVAILABLE_MARKER, PROVIDER_CAPACITY_MARKER, PROVIDER_LIMIT_MARKER,
-    PROVIDER_UNAVAILABLE_MARKER, PipelineState, ReviewEvidenceHold, TRANSIENT_FAILURE_MARKER,
-    UPGRADE_PENDING_MARKER, VALIDATION_ENVIRONMENT_MARKER, is_baseline_red_failure,
-    is_forge_unavailable, is_owner_busy, is_provider_limit, is_provider_refusal,
+    BASELINE_RED_MARKER, BaselineRedHold, CandidateCarry, CandidateCarryOutput, ClaimFailureClass,
+    FORGE_UNAVAILABLE_MARKER, FinalRecoveryDecision, ForgeUnavailableHold, JobRunState,
+    OWNER_BUSY_MARKER, OWNER_ROUTE_UNAVAILABLE_MARKER, PROVIDER_CAPACITY_MARKER,
+    PROVIDER_LIMIT_MARKER, PROVIDER_UNAVAILABLE_MARKER, PipelineState, ReviewEvidenceHold,
+    TRANSIENT_FAILURE_MARKER, UPGRADE_PENDING_MARKER, VALIDATION_ENVIRONMENT_MARKER,
+    is_baseline_red_failure, is_forge_unavailable, is_owner_busy, is_provider_limit,
+    is_provider_refusal,
 };
 
 use super::super::candidate::{
-    SYNC_BASE_STEP, candidate_note, first_incomplete_step, preserved_candidate,
+    SYNC_BASE_STEP, candidate_note, first_incomplete_step, preserved_candidate_with_carry,
 };
 
 /// Largest failure excerpt a settlement carries. The whole diagnostic stays in
@@ -387,12 +388,12 @@ fn leaf_failure(
     for marker in FAILURE_MARKERS {
         reason = reason.replace(marker, "");
     }
-    if let Some(carry) = state
+    let carry = state
         .and_then(|state| state.failure_activity_checkpoint.as_ref())
-        .filter(|checkpoint| checkpoint.activity_name == "claim_candidate_carry")
-        .map(|checkpoint| &checkpoint.output)
-        && carry.get("carry").and_then(serde_json::Value::as_str) == Some("failed")
-        && let Some(refusal) = carry.get("reason").and_then(serde_json::Value::as_str)
+        .and_then(CandidateCarryOutput::from_checkpoint);
+    if let Some(carry) = &carry
+        && carry.carry == CandidateCarry::Failed
+        && let Some(refusal) = &carry.reason
     {
         reason = format!("candidate carry failed: {refusal}; original failure: {reason}");
     }
@@ -427,7 +428,8 @@ fn leaf_failure(
         class,
         reason: reason[..cut].to_string(),
         crew,
-        candidate: state.and_then(|state| preserved_candidate(run, state)),
+        candidate: state
+            .and_then(|state| preserved_candidate_with_carry(run, state, carry.as_ref())),
         provider_limit,
         provider_refusal,
         owner_busy,
