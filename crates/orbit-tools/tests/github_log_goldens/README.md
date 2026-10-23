@@ -33,6 +33,16 @@ helper. Its streaming omission marker is part of the output contract.
 All existing unit tests remain. Retirement tasks can use this mapping when
 removing duplicated cases.
 
+The registered `fallback.json` byte-window cases also cover opaque values after
+`Bearer`, Authorization headers, and spaced `api_key =` assignments. Complementary
+value cuts and cuts inside introducers must omit the value while retaining raw
+source coordinates and selected-byte counts. Complete Bearer context and harmless
+cut words remain readable; EOF, newlines, collector batch boundaries, and capped
+head/tail display exercise the same public `github.run.logs` path. Classification
+retains at most 16 KiB of original line-prefix context, carrying pending
+introducers across newlines. If that bound is exceeded, affected display bytes
+are conservatively omitted until the next context reset.
+
 ## Carrier cost and boundary coverage
 
 Rows write `golden row start: <suite>/<fixture>` to stderr before source
