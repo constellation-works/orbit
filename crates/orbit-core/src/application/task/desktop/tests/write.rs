@@ -70,6 +70,42 @@ fn provider_reports_pr_17() -> orbit_common::test_env::ScopedEnv {
     orbit_common::test_env::scoped([("PATH", Some(path.to_str().unwrap()))])
 }
 
+fn rewrite_receipt_notes(runtime: &crate::OrbitRuntime, id: &str, legacy: bool) {
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+    let registry = TaskRegistryStore::open(&task_registry_path(&runtime.global_root())).unwrap();
+    let path = registry
+        .find_task_binding(id)
+        .unwrap()
+        .unwrap()
+        .canonical_path
+        .join(orbit_types::task::TASK_EVENTS_FILE_NAME);
+    let rows: String = std::fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            let mut row: serde_json::Value = serde_json::from_str(line).unwrap();
+            if let Some("desktop_mutation" | "desktop_pr_closure") = row["type"].as_str() {
+                if legacy {
+                    let request_id = row["decision"]["request_id"].as_str().unwrap();
+                    row["note"] = if row["type"] == "desktop_mutation" {
+                        json!(format!(
+                            "desktop_request={request_id} digest={}",
+                            row["decision"]["payload_digest"].as_str().unwrap()
+                        ))
+                    } else {
+                        json!(format!("desktop_request={request_id}"))
+                    };
+                    row.as_object_mut().unwrap().remove("decision");
+                } else {
+                    row["note"] = json!("Unrelated diagnostic prose.");
+                }
+            }
+            format!("{row}\n")
+        })
+        .collect();
+    std::fs::write(path, rows).unwrap();
+}
+
 /// Fault injection is necessary to stop exactly after the receipt commits,
 /// before its first post-lock read, without relying on process timing.
 #[test]
@@ -180,6 +216,7 @@ fn completion_replay_finishes_side_effects_after_a_post_lock_read_failure() {
     assert!(forge.closed.lock().unwrap().is_empty());
     assert_eq!(friction_status(), FrictionStatus::Open);
 
+    rewrite_receipt_notes(&runtime, &task.id, false);
     let replay = runtime
         .desktop_task_write(request.clone(), None, None, &operator)
         .expect("replay finishes the side effects");
@@ -196,12 +233,17 @@ fn completion_replay_finishes_side_effects_after_a_post_lock_read_failure() {
         )
         .expect("human reopens target");
     *forge.open.lock().unwrap() = open_prs.to_vec();
+    rewrite_receipt_notes(&runtime, &task.id, false);
     let history = runtime.get_task_history(&task.id).unwrap();
+    let revision = runtime
+        .desktop_task_snapshot(&task.id, &operator)
+        .unwrap()
+        .revision;
     let again = runtime
-        .desktop_task_write(request, None, None, &operator)
+        .desktop_task_write(request.clone(), None, None, &operator)
         .expect("second replay");
     assert!(again.replayed);
-    assert_eq!(again.snapshot.revision, replay.snapshot.revision);
+    assert_eq!(again.snapshot.revision, revision);
     assert_eq!(
         runtime.get_task_history(&task.id).unwrap(),
         history,
@@ -216,5 +258,19 @@ fn completion_replay_finishes_side_effects_after_a_post_lock_read_failure() {
         friction_status(),
         FrictionStatus::Open,
         "a successful resolve must not override a later human reopening"
+    );
+    rewrite_receipt_notes(&runtime, &task.id, true);
+    let legacy_history = runtime.get_task_history(&task.id).unwrap();
+    assert!(
+        runtime
+            .desktop_task_write(request, None, None, &operator)
+            .unwrap()
+            .replayed
+    );
+    assert_eq!(runtime.get_task_history(&task.id).unwrap(), legacy_history);
+    assert_eq!(
+        *forge.closed.lock().unwrap(),
+        vec![12],
+        "legacy closure marker must prevent a repeated closure"
     );
 }
