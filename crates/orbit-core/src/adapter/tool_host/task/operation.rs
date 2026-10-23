@@ -15,7 +15,8 @@ use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    TaskEligibilityQuery, TaskListFilter, TaskListQuery, TaskOsReadout, task_pilot_warnings,
+    TaskEligibilityQuery, TaskListFilter, TaskListQuery, TaskOsReadout, TaskWriteMetadata,
+    TaskWriteResponsePolicy, task_pilot_warnings, task_write_response_json,
 };
 
 use super::super::dispatch::ToolCaller;
@@ -23,8 +24,7 @@ use super::super::input::{
     parse_optional_task_origin, parse_task_priority, parse_task_status, parse_task_type,
 };
 use super::super::json::{
-    serialize_error, serialize_task_lint_report, serialize_task_show,
-    serialize_task_write_response, task_fields_to_json,
+    serialize_error, serialize_task_lint_report, serialize_task_show, task_fields_to_json,
 };
 use super::write::{TaskWriteOutput, write_response_fields};
 
@@ -272,7 +272,12 @@ fn reject(
         model,
     )?;
     Ok(TaskWriteOutput {
-        response: serialize_task_write_response(runtime, &task, response_fields.as_deref())?,
+        response: task_write_response_json(
+            runtime,
+            &task,
+            &TaskWriteResponsePolicy::from_fields(response_fields.as_deref()),
+            &TaskWriteMetadata::default(),
+        )?,
         persisted_id: task.id,
     })
 }

@@ -18,12 +18,13 @@ use orbit_types::task::{
     ExternalRef, TaskPriority, TaskStatus, is_task_show_projection_field,
     unknown_task_show_field_message,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
     ContextCreationAuthorization, ScreenedTaskWrite, TaskAddParams, TaskUpdateAuthority,
-    TaskUpdateParams, TaskWriteScreen, is_operator_rescue_close,
+    TaskUpdateParams, TaskWriteResponsePolicy, TaskWriteScreen, is_operator_rescue_close,
+    screened_task_write_response_json,
 };
 
 use super::super::dispatch::ToolCaller;
@@ -32,7 +33,6 @@ use super::super::input::{
     parse_optional_task_origin, parse_relations, parse_task_priority, parse_task_status,
     parse_task_type,
 };
-use super::super::json::serialize_task_write_response;
 
 /// The CLI-only options `orbit task add` sends.
 const ADD_CLI_OPTIONS: &[&str] = &[
@@ -392,35 +392,23 @@ pub(super) fn artifact_put(
     screened_write_response(runtime, written, None)
 }
 
-/// The write response: the task projection plus, only when non-empty, the
-/// write's `warnings` and the `context_files_unverified` selectors the
-/// owning worker's relaxation stored, so a strict write's response is the
-/// bare projection.
+/// The write response in the tool host's compact/projected profile:
+/// the shared projection plus, only when non-empty, the write's
+/// `warnings` and `context_files_unverified` selectors.
 fn screened_write_response(
     runtime: &OrbitRuntime,
     written: ScreenedTaskWrite,
     fields: Option<&[String]>,
 ) -> Result<TaskWriteOutput, OrbitError> {
-    let ScreenedTaskWrite {
-        task,
-        warnings,
-        context_files_unverified,
-    } = written;
-    let mut response = serialize_task_write_response(runtime, &task, fields)?;
-    if let Some(obj) = response.as_object_mut() {
-        if !context_files_unverified.is_empty() {
-            obj.insert(
-                "context_files_unverified".to_string(),
-                json!(context_files_unverified),
-            );
-        }
-        if !warnings.is_empty() {
-            obj.insert("warnings".to_string(), json!(warnings));
-        }
-    }
+    let persisted_id = written.task.id.clone();
+    let response = screened_task_write_response_json(
+        runtime,
+        &written,
+        &TaskWriteResponsePolicy::from_fields(fields),
+    )?;
     Ok(TaskWriteOutput {
         response,
-        persisted_id: task.id,
+        persisted_id,
     })
 }
 

@@ -1,18 +1,20 @@
 //! The `*_to_json` projections the dashboard API serves. A task detail builds
 //! on the show record every read surface shares
 //! (`orbit_core::application::task::task_show_json`) and adds only the
-//! dashboard's own extras. A mutation response builds on `task_record_json`
-//! instead, so it does not carry show-only guidance. An audit event builds on
+//! dashboard's own extras, through the shared core enrichment. A mutation
+//! response is the core task-write projection in its dashboard full-record
+//! profile, so it does not carry show-only guidance. An audit event builds on
 //! the base the CLI shares (`orbit_types::telemetry::audit_event_base_json`).
 //! The job-catalog projection lives in `orbit_core::application::job`; the
-//! other projections are dashboard-local.
+//! list summary and the other projections are dashboard-local.
 
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_core::application::task::{
-    PullRequestLinks, TaskOsReadout, TaskRow, task_pilot_warnings, task_record_json,
-    task_show_json, task_status_transition_allowed, task_status_transition_required_field,
+    PullRequestLinks, TaskOsReadout, TaskRow, job_run_is_locally_navigable, link_pull_requests,
+    mark_readiness_preparing, summary_status_transitions, task_detail_with_dashboard_extras,
+    task_pilot_warnings, tasks_in_pilot_preparation,
 };
 use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
 use orbit_core::{AuditEvent, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus};
@@ -46,55 +48,7 @@ pub(crate) fn task_to_json(
     object
 }
 
-fn link_pull_requests(object: &mut Map<String, Value>, task: &Task, links: &PullRequestLinks) {
-    let mut external_refs = task.external_refs.clone();
-    links.link(&mut external_refs);
-    object.insert("external_refs".to_string(), json!(external_refs));
-}
-
-/// Tasks an active task-pilot run is preparing. Their readiness gaps are about
-/// to be settled by that run, so the dashboard shows them as preparing. The
-/// flag is decoration on a read: a job store that cannot be read leaves every
-/// task unmarked rather than failing the task read.
-fn tasks_in_pilot_preparation(runtime: &OrbitRuntime) -> BTreeSet<String> {
-    runtime
-        .tasks_in_pilot_preparation()
-        .unwrap_or_else(|error| {
-            tracing::warn!(%error, "task readiness: active pilot preparations unreadable");
-            BTreeSet::new()
-        })
-}
-
-/// Add `readiness.preparing` to a projection that carries readiness.
-fn mark_readiness_preparing(value: &mut Value, preparing: bool) {
-    if let Some(readiness) = value.get_mut("readiness").and_then(Value::as_object_mut) {
-        readiness.insert("preparing".to_string(), Value::Bool(preparing));
-    }
-}
-
-pub(crate) fn task_to_json_with_sidecars(
-    runtime: &OrbitRuntime,
-    task: &Task,
-    status_by_id: &BTreeMap<String, TaskStatus>,
-) -> Result<Value, OrbitError> {
-    let row = runtime.get_task_row(&task.id)?;
-    task_row_to_json(runtime, &row, status_by_id)
-}
-
-/// A mutation response: [`task_record_json`] plus the dashboard extras. It does
-/// not carry the show-only `next_step` and `final_recovery` guidance.
-/// `GET /api/tasks/:id` serves [`task_detail_json`] instead. List endpoints
-/// serve [`TaskListProjection`].
-pub(crate) fn task_row_to_json(
-    runtime: &OrbitRuntime,
-    row: &TaskRow,
-    status_by_id: &BTreeMap<String, TaskStatus>,
-) -> Result<Value, OrbitError> {
-    let object = task_record_json(runtime, row, status_by_id)?;
-    with_dashboard_extras(runtime, row, object)
-}
-
-/// `GET /api/tasks/:id`: [`task_show_json`] plus the dashboard extras — linked
+/// `GET /api/tasks/:id`: the show record plus the dashboard extras — linked
 /// pull requests, the lifecycle transitions with their evidence requirements,
 /// run navigability and `readiness.preparing`.
 pub(crate) fn task_detail_json(
@@ -102,55 +56,7 @@ pub(crate) fn task_detail_json(
     row: &TaskRow,
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Value, OrbitError> {
-    let object = task_show_json(runtime, row, status_by_id)?;
-    with_dashboard_extras(runtime, row, object)
-}
-
-/// Linked pull requests, lifecycle transitions, run navigability and
-/// `readiness.preparing`. These are dashboard controls, not part of the shared
-/// task record.
-fn with_dashboard_extras(
-    runtime: &OrbitRuntime,
-    row: &TaskRow,
-    mut object: Map<String, Value>,
-) -> Result<Value, OrbitError> {
-    let task = &row.task;
-    link_pull_requests(&mut object, task, &PullRequestLinks::new(runtime));
-    object.insert(
-        "status_transitions".to_string(),
-        dashboard_status_transitions(runtime, task)?,
-    );
-    // ORB-12516: whether `#runs?run_id=` can resolve this task's run *here*.
-    // A run recorded against another machine lives in that host's job store, so
-    // the detail names the host to inspect instead of linking to nothing. An
-    // unrecorded host keeps the historical local link — the provenance line
-    // still reads *unknown*, which is what the absent field means.
-    object.insert(
-        "job_run_navigable".to_string(),
-        Value::Bool(job_run_is_locally_navigable(
-            runtime.automation_machine_identity(),
-            task,
-        )),
-    );
-    let mut value = Value::Object(object);
-    if value.get("readiness").is_some() {
-        let preparing = tasks_in_pilot_preparation(runtime).contains(&task.id);
-        mark_readiness_preparing(&mut value, preparing);
-    }
-    Ok(value)
-}
-
-fn job_run_is_locally_navigable(local_machine_id: Option<&str>, task: &Task) -> bool {
-    if task.job_run_id.is_none() {
-        return false;
-    }
-    let Some(host) = task.job_run_machine.as_ref() else {
-        return true;
-    };
-    // A recorded host has to *match* to navigate: with no local identity there
-    // is nothing to prove the run is here, and an owner-local link would open
-    // the wrong thing or nothing. An unrecorded host is handled above.
-    local_machine_id.is_some_and(|local| local == host.machine_id)
+    task_detail_with_dashboard_extras(runtime, row, status_by_id)
 }
 
 /// Marker the list rows carry so a client can tell a summary from the full
@@ -160,7 +66,7 @@ pub(crate) const TASK_SUMMARY_PROJECTION: &str = "summary";
 /// One request's worth of list-row rendering state.
 ///
 /// DANI-10391: a list page used to render every row through
-/// [`task_row_to_json`], so fifty rows meant fifty serialised descriptions,
+/// the full record projection, so fifty rows meant fifty serialised descriptions,
 /// plans, comment and history logs, fifty crew-registry rebuilds, and one to
 /// four store lookups per row (job runs behind the `done` evidence check and
 /// the run-recorded crew, plus the review ledger). The dashboard reads none of
@@ -260,49 +166,6 @@ const TASK_SUMMARY_OMITTED_BODIES: [&str; 4] = [
     "execution_summary",
     "acceptance_criteria",
 ];
-
-const STATUS_ORDER: [TaskStatus; 9] = [
-    TaskStatus::InProgress,
-    TaskStatus::Review,
-    TaskStatus::Blocked,
-    TaskStatus::Proposed,
-    TaskStatus::Backlog,
-    TaskStatus::Someday,
-    TaskStatus::Done,
-    TaskStatus::Rejected,
-    TaskStatus::Archived,
-];
-
-fn governed_status_targets(task: &Task) -> impl Iterator<Item = TaskStatus> {
-    let current = task.status;
-    STATUS_ORDER.into_iter().filter(move |target| {
-        *target != current && task_status_transition_allowed(current, *target)
-    })
-}
-
-fn dashboard_status_transitions(runtime: &OrbitRuntime, task: &Task) -> Result<Value, OrbitError> {
-    governed_status_targets(task)
-        .map(|target| {
-            Ok(json!({
-                "status": target.to_string(),
-                "required_field": task_status_transition_required_field(runtime, task, target)?,
-            }))
-        })
-        .collect::<Result<Vec<_>, OrbitError>>()
-        .map(Value::Array)
-}
-
-/// The governed targets alone. `required_field` is deliberately absent rather
-/// than `null`: the `done` requirement depends on the task's job run, which the
-/// list path no longer reads, so a client that needs the requirement asks the
-/// detail endpoint instead of treating "unknown" as "none".
-fn summary_status_transitions(task: &Task) -> Value {
-    Value::Array(
-        governed_status_targets(task)
-            .map(|target| json!({ "status": target.to_string() }))
-            .collect(),
-    )
-}
 
 /// Registry-only crew resolution for summary rows: the task's explicit crew
 /// when the registry still configures it, otherwise the configured default,
