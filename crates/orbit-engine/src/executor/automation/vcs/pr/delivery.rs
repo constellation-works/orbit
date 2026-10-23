@@ -369,14 +369,19 @@ pub(super) fn blocked_checks(
     pull_request: &PullRequestStatus,
 ) -> Result<&[StatusCheck], BlockedCheckRefusal> {
     match &pull_request.review_decision {
-        ReviewDecision::Reported(decision)
-            if matches!(decision.as_str(), "REVIEW_REQUIRED" | "CHANGES_REQUESTED") =>
-        {
-            return Err(BlockedCheckRefusal::ReviewRequired(decision.clone()));
+        ReviewDecision::ReviewRequired | ReviewDecision::ChangesRequested => {
+            return Err(BlockedCheckRefusal::ReviewRequired(
+                pull_request
+                    .review_decision
+                    .provider_spelling()
+                    .unwrap_or_default()
+                    .to_string(),
+            ));
         }
-        ReviewDecision::NotApplicable => {}
-        ReviewDecision::Reported(decision) if decision == "APPROVED" => {}
-        _ => return Err(BlockedCheckRefusal::ReviewUnavailable),
+        ReviewDecision::NotApplicable | ReviewDecision::Approved => {}
+        ReviewDecision::Other(_) | ReviewDecision::Unavailable => {
+            return Err(BlockedCheckRefusal::ReviewUnavailable);
+        }
     }
     let checks = pull_request
         .status_checks
