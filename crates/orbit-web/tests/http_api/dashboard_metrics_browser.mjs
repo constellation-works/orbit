@@ -200,7 +200,7 @@ try {
 
   const paths = () => body.locator('.mx-lines path').evaluateAll(nodes => nodes.map(node => ({ cls: node.getAttribute('class'), d: node.getAttribute('d') })));
   let lines = await paths();
-  assert.equal(lines.length, 4, 'All, easy, medium and hard lines');
+  assert.equal(lines.length, 4, 'All, low, medium and hard lines');
   assert.ok(lines.at(-1).cls.includes('mx-s-all'), 'All draws over the complexity lines');
   assert.equal((lines.at(-1).d.match(/M/g) || []).length, 2, 'the bucket without runs breaks the All line');
   assert.equal(await body.locator('.mx-pt.hollow').count(), 1, 'only the one-run hard bucket is hollow');
