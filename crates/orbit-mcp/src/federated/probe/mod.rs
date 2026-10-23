@@ -7,6 +7,7 @@
 //! MCP over the same non-PTY SSH argv the v1 proxy uses.
 
 mod contracts;
+mod diagnostics;
 mod discovery;
 mod local;
 mod session;
