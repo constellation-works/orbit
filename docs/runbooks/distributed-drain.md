@@ -380,6 +380,71 @@ registered machine name or id); a requirement on another machine stays a
 `utility_warnings` finding for an operator. A re-scope, a newer assessment without
 the finding, or an evidenced operator decision clears it.
 
+This also covers a scan whose brief requires the authoritative owner-workspace
+audit and a completed predecessor's cursor artifact or execution summary, even
+if its criterion names no host. Preparation supplies `owner_machine`; the pilot
+reads the evidence contract alongside the criteria and records the affected
+criterion in `required_machine`. Supported tool names are insufficient evidence
+of portability: owner listing/search is bridged, but `task.show` and
+`task.artifact.get` remain scoped to the claimed task. A follower's audit is a
+different host's data. Preserve the selected predecessor and window; an
+unreadable cursor is never permission to guess one or begin a new baseline.
+
+The initial pull selection and its transactional candidate recheck both honor
+the typed hold, before any claim, leaf or worktree exists. Local backlog
+selection, explicit ship selection, drain classification and readiness allow
+the owning machine. Routing grants no audit/run capability: those surfaces
+retain their operator restrictions. Portable scans whose reads fit the bridge
+remain eligible on followers. Independent operator or re-home/re-authoring
+holds still apply; a scan title or tag releases none of them.
+
+For a workspace-authored definition such as `tool-failure-patterns`, an operator
+can adopt the following evidence contract on the owner after deploying the
+updated pilot guidance. This is an adoption procedure, not a bundled asset or
+an instruction to change a live definition during a repair task. Coordinate a
+window without concurrent definition edits or scheduled admission; use the
+registered owner workspace selector, never a replica or linked-worktree path.
+The tool's `template` replaces the whole template, so copy the current one
+and modify only its description and criteria. Do not send a partial template.
+
+```bash
+OWNER_WORKSPACE='<registered owner workspace>'
+mkdir -p .orbit/tmp
+orbit --workspace "$OWNER_WORKSPACE" auto-task show tool-failure-patterns --json > .orbit/tmp/scan-before.json
+python3 - "$OWNER_WORKSPACE" <<'PY'
+import json, pathlib, sys
+scratch = pathlib.Path('.orbit/tmp')
+before = json.loads((scratch / 'scan-before.json').read_text())
+template = before['template']
+contract = ('Execute on the owning machine using the authoritative owner-workspace '
+            'audit and the selected completed predecessor cursor artifact, with '
+            'its execution summary as the existing fallback. A follower audit '
+            'or guessed cursor/window is not evidence. Preparation must record '
+            'required_machine for this owner evidence contract before admission; '
+            'routing grants no additional tool scope or operator capability.')
+if contract not in template['description']:
+    template['description'] += '\n\n## Owner evidence requirement\n\n' + contract + '\n'
+if contract not in template['acceptance_criteria']:
+    template['acceptance_criteria'].append(contract)
+payload = {'workspace': sys.argv[1], 'name': before['name'], 'template': template}
+(scratch / 'scan-owner-evidence-update.json').write_text(json.dumps(payload, indent=2) + '\n')
+PY
+# Review the payload against scan-before.json before applying it.
+ORBIT_OPERATOR=1 orbit tool run orbit.auto_task.update --input-file .orbit/tmp/scan-owner-evidence-update.json
+orbit --workspace "$OWNER_WORKSPACE" auto-task show tool-failure-patterns --json > .orbit/tmp/scan-after.json
+```
+
+Compare the snapshots: only the template description, appended criterion and
+update provenance may change. In particular retain all existing criteria,
+required tools, tags, crew, status, schedule, dedupe, enabled/effective-enabled
+state, settings and cursor. The payload omits every settings field. Re-read and
+rebuild it if the definition changes before application. Do not mint, dispatch,
+advance a cursor or change existing task lifecycle state as part of adoption.
+Have the owner run normal preparation/apply for pending scans before their next
+admission, verify the persisted `native_os_hold.machine` names the owner and
+that followers report `Machine requirement:`. An already-minted task does not
+inherit template edits; assess its existing owner-evidence contract separately.
+
 Admission honours an OS finding while the task's `os:` tags do not name the
 required OS. A local drain, ship discovery or `orbit run ship` on a host of
 another OS leaves the task in `backlog` as `native_os_required`, and the owner

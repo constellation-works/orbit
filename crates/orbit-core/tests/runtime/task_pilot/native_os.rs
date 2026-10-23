@@ -612,13 +612,15 @@ fn a_machine_finding_holds_every_machine_but_the_owner() {
     let mut workspace = Workspace::new();
     let task = backlog_task(
         &workspace,
-        &["Timings against the owner's live task store reach a p95 under 1 s."],
+        &[
+            "Scan the authoritative workspace audit after the completed predecessor's cursor, preserving the cursor when its evidence is unavailable.",
+        ],
         &[],
     );
     let needs_owner = |machine: &str| {
         Some(json!({"required_machine": [{
             "criterion": 1, "machine": machine,
-            "evidence": "Only the owner's live store holds the measured workspace.",
+            "evidence": "The owner holds the authoritative audit and predecessor cursor; the task-scoped bridge cannot supply those reads.",
         }]}))
     };
     // The finding must name this owner: a pilot cannot route work to a
@@ -684,7 +686,7 @@ fn a_machine_finding_holds_every_machine_but_the_owner() {
             &task.id,
             TaskUpdateParams {
                 comment: Some(
-                    "task-pilot-admission: clear\nThe operator recorded the timings on the owner."
+                    "task-pilot-admission: clear\nThe operator completed the audit on the owner and attached its cursor evidence."
                         .into(),
                 ),
                 ..Default::default()

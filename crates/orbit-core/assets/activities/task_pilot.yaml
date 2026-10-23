@@ -437,8 +437,19 @@ spec:
        Also check whether a criterion's evidence can come only from one
        particular machine: its live task store, its running services, or its
        data, such as timings measured on a named host against its workspace.
-       When that machine is `owner_machine` (it matches the criterion's host
-       by `machine_name` or `machine_id`), record each such criterion in
+       This includes workspace-authored scans that require the authoritative
+       owner-workspace audit and a completed predecessor's cursor artifact or
+       execution summary, even when no host is named in the criterion. Read
+       the description's evidence contract alongside the criteria. A follower's
+       local audit is different data; listing/searching owner tasks does not
+       grant predecessor task.show or artifact.get access through the closed
+       claimed-owner bridge, which scopes those reads to the claimed task.
+       Required tool names alone therefore do not prove that evidence is
+       available. Preserve the predecessor and window contract: never guess a
+       cursor, substitute follower data, widen broker scope or remove tools.
+       When that machine is `owner_machine` (explicitly named by
+       `machine_name` or `machine_id`, or required by this owner-evidence
+       contract), record each affected criterion in
        `required_machine` as
        `{"criterion":N,"machine":"<owner machine_name or machine_id>","evidence":"..."}`;
        pull admission then refuses a claim from every other machine and gives
@@ -446,6 +457,10 @@ spec:
        `owner_machine`, so when the criterion needs another machine, or
        `owner_machine` is null, leave `required_machine` empty and report the
        requirement in `utility_warnings` for an operator to arrange.
+       This finding routes execution; it grants no tools, operator capability
+       or scope. Keep any independent re-home/re-authoring or operator hold:
+       being a scan does not make an otherwise unsupported report eligible.
+       Portable scans whose actual reads fit the bridge need no machine hold.
        Also check whether a criterion can be evidenced only by the deployed
        build on a named host, after the change merges and is deployed there:
        the latency of that host's live service, or the installed binary's

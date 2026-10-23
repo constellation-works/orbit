@@ -787,6 +787,8 @@ impl crate::OrbitRuntime {
                 )
             })
             .flatten();
+        #[cfg(feature = "test-support")]
+        super::admission_checkpoint::notify();
         boundary.admit_task(
             identity,
             request,

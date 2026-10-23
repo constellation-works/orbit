@@ -39,6 +39,8 @@
 //! [design §4.1]: ../../../../../docs/design/distributed-drain/2_design.md
 //! [spec]: ../../../../../docs/design/distributed-drain/specs/task-pull.md
 
+#[cfg(feature = "test-support")]
+pub(crate) mod admission_checkpoint;
 mod auth_failures;
 mod auth_recovery;
 mod claimed_review;
