@@ -763,3 +763,82 @@ fn succeeded_durations_survive_run_gc_and_upgrade_backfill() {
         },
     );
 }
+
+#[test]
+fn trend_endpoints_refuse_oversized_windows_and_bound_all_history() {
+    isolated(
+        "metrics_trends::trend_endpoints_refuse_oversized_windows_and_bound_all_history",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let old = now - Duration::days(800);
+            // History far older than any ladder window can split into the
+            // bucket ceiling, reachable only through an `all` window.
+            let task = add_task(&fixture, TaskComplexity::Low, TaskStatus::Backlog);
+            record_run(&fixture, "old-run", Some(&task), 10, old, None);
+            outcome(&fixture, "old-run", old, JobRunState::Success, "performed");
+            let closed = add_task(&fixture, TaskComplexity::Low, TaskStatus::Done);
+            close_at(&fixture, &closed, TaskStatus::Done, old);
+            let defect = add_typed(&fixture, TaskType::Bug, &[], None);
+            let index =
+                rusqlite::Connection::open(fixture.global.join("tasks").join("index.sqlite"))
+                    .unwrap();
+            index
+                .execute(
+                    "UPDATE task_bundle_index SET created_at = ?1 WHERE task_id = ?2",
+                    (old.to_rfc3339(), &defect),
+                )
+                .unwrap();
+            drop(index);
+
+            let server = fixture.server(false);
+            for endpoint in ["implement_one", "completions", "defects"] {
+                // A representable cutoff whose previous window is not
+                // representable, and a very old cutoff that would create
+                // over 100,000 weekly buckets: both are client errors,
+                // never a panic surfaced as 500.
+                for query in ["since=5000000000000s", "since=0001-01-01T00:00:00Z"] {
+                    let response = server.get(&format!("/api/diagnostics/{endpoint}?{query}&{WS}"));
+                    let status = response.status().as_u16();
+                    let body: Value = response.json().expect("HTTP JSON body");
+                    assert_eq!(status, 400, "{endpoint} {query}: {body}");
+                    assert!(
+                        body["error"]
+                            .as_str()
+                            .is_some_and(|error| !error.is_empty()),
+                        "{endpoint} {query} returns a structured error: {body}"
+                    );
+                }
+
+                // Ordinary windows keep clock alignment and previous counts.
+                let day =
+                    json_ok(server.get(&format!("/api/diagnostics/{endpoint}?since=24h&{WS}")));
+                assert_eq!(day["window"]["bucket_seconds"], 3600, "{endpoint}");
+                let buckets = day["buckets"].as_array().unwrap();
+                assert_eq!(buckets.len(), 25, "{endpoint}");
+                assert!(day["previous"].is_object(), "{endpoint}");
+
+                // `all` is accepted however old the history is, widened
+                // past the ladder so its bucket count stays bounded.
+                let all =
+                    json_ok(server.get(&format!("/api/diagnostics/{endpoint}?since=all&{WS}")));
+                assert_eq!(all["previous"], Value::Null, "{endpoint}");
+                let buckets = all["buckets"].as_array().unwrap();
+                assert!(
+                    buckets.len() <= 61,
+                    "{endpoint} all window has {} buckets",
+                    buckets.len()
+                );
+            }
+
+            let runs =
+                json_ok(server.get(&format!("/api/diagnostics/implement_one?since=all&{WS}")));
+            assert_eq!(runs["current"]["all"]["n"], 1);
+            let completions =
+                json_ok(server.get(&format!("/api/diagnostics/completions?since=all&{WS}")));
+            assert_eq!(completions["current"]["done"]["total"], 1);
+            let defects = json_ok(server.get(&format!("/api/diagnostics/defects?since=all&{WS}")));
+            assert_eq!(defects["current"]["total"], 1);
+        },
+    );
+}
