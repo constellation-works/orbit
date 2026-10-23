@@ -859,6 +859,91 @@ fn an_auto_task_explicit_crew_is_reassigned_when_its_provider_is_limited() {
     );
 }
 
+/// Muse's account-wide windows flow through persistence, readiness, explicit
+/// crew admission and the same gate-off policy as every reporting provider.
+fn muse_windows_gate_admission_and_remain_visible_with_gating_off() {
+    substitute_worker();
+    let muse_config = |extra: &str| {
+        format!(
+            "{}\n[crews.wonder]\nprovider = \"muse\"\nmodel = \"muse-model\"\n",
+            config(r#"["wonder", "sol"]"#, extra)
+        )
+    };
+    let fx = Fixture::new(&muse_config(""));
+    let task = fx.task(Some("wonder"));
+    let reset = (Utc::now() + Duration::hours(2)).trunc_subsecs(6);
+    fx.read(
+        "muse",
+        "window",
+        ProviderLimitSource::Event,
+        Some(90.0),
+        false,
+        reset,
+    );
+    fx.read(
+        "muse",
+        "weekly",
+        ProviderLimitSource::Event,
+        Some(10.0),
+        false,
+        reset,
+    );
+    let entry = fx.readiness(&task);
+    assert_eq!(entry["reason"], "provider_limit", "{entry}");
+    let view = fx.runtime().provider_limits_view(Utc::now());
+    let muse = view
+        .providers
+        .iter()
+        .find(|provider| provider.provider == "muse")
+        .unwrap();
+    assert!(muse.reports_usage && muse.gated, "{muse:?}");
+    assert_eq!(view.provider_readings("muse", None).count(), 2);
+    assert!(view.crew("wonder").unwrap().gated);
+    fx.configure(&muse_config("provider_limit_overrides = [\"muse:off\"]"));
+    fx.read(
+        "muse",
+        "window",
+        ProviderLimitSource::Event,
+        Some(100.0),
+        true,
+        reset,
+    );
+    let entry = fx.readiness(&task);
+    assert_eq!(entry["eligible"], true, "{entry}");
+    let readings = fx.limits();
+    assert_eq!(readings.len(), 2);
+    for reading in &readings {
+        assert_eq!(reading["provider"], "muse");
+        assert_eq!(reading["threshold"], "off");
+        assert_eq!(reading["gated"], false);
+        assert_eq!(reading["source"], "event");
+    }
+    let view = fx.runtime().provider_limits_view(Utc::now());
+    assert!(!view.crew("wonder").unwrap().gated);
+    assert!(
+        view.providers
+            .iter()
+            .any(|provider| provider.provider == "muse"
+                && provider.reports_usage
+                && !provider.gated)
+    );
+    fx.configure(&muse_config(""));
+    assert_eq!(fx.readiness(&task)["reason"], "provider_limit");
+    // An operator-selected run crew is admitted with the same limit warning.
+    let admitted = fx.replay_admission(json!({
+        "task_ids": [task], "crew": "wonder",
+        "crew_selection": {"task_id": task, "crew": "wonder", "source": "explicit"},
+    }));
+    assert_eq!(admitted["crew"], "wonder");
+    assert!(
+        admitted["crew_selection"]["provider_limit"]
+            .as_str()
+            .unwrap()
+            .starts_with("muse window at 100%"),
+        "{admitted}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_task_waits_on_an_exhausted_provider_until_the_reset_scenarios,
@@ -867,6 +952,7 @@ crate::scenario_table!(
     an_explicit_crew_waits_unless_the_policy_draws_from_its_pool,
     an_override_at_one_hundred_gates_only_an_exhausted_window,
     an_off_override_leaves_an_exhausted_provider_eligible,
+    muse_windows_gate_admission_and_remain_visible_with_gating_off,
     a_recorded_antigravity_quota_keeps_low_complexity_work_off_its_crew_until_the_reset,
     a_purpose_assignment_redraws_within_its_pool_when_its_provider_is_limited,
     an_auto_task_explicit_crew_is_reassigned_when_its_provider_is_limited

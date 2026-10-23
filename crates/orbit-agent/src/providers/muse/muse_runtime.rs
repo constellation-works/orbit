@@ -103,7 +103,9 @@ impl AgentRuntime for MuseRuntime {
         spec.fixed_env = MUSE_CLI_FIXED_ENV;
         spec.prompt_file_flag = Some(MUSE_PROMPT_FILE_FLAG);
         // The retained `run.terminal.completed` record carries no usage in
-        // Muse Code 1.4.10, so Orbit claims none rather than inventing one.
+        // Muse Code 1.4.10. Account windows (1.4.12) come from the separate
+        // `status` / `run_usage` allowance via `provider_usage_windows`; per-run
+        // token accounting remains unreported here.
         Ok((spec, InvocationTrace::default()))
     }
 

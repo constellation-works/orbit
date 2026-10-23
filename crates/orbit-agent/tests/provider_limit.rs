@@ -7,6 +7,7 @@ use std::time::Duration;
 use chrono::{FixedOffset, TimeZone, Utc};
 use orbit_agent::{
     apply_antigravity_print_timeout, provider_usage_limit, provider_usage_limit_details,
+    provider_usage_windows,
 };
 
 #[test]
@@ -252,5 +253,123 @@ fn grok_failure_texts_are_classified_as_provider_usage_limits() {
     assert!(
         provider_usage_limit(older_402),
         "should detect limit in grok 1.0.46 402 text"
+    );
+}
+
+/// Muse Code 1.4.12 allowance payload recorded on macOS at 2026-10-23T04:13Z.
+/// The fixture keeps that payload and minimal surrounding stream records.
+const MUSE_USAGE: &[u8] = include_bytes!("provider_invocation/fixtures/muse_usage.jsonl");
+
+#[test]
+fn muse_run_usage_records_account_windows_at_completion() {
+    let now = Utc.with_ymd_and_hms(2026, 10, 23, 4, 14, 0).unwrap();
+    let readings = provider_usage_windows("muse", MUSE_USAGE, None, now);
+    assert_eq!(readings.len(), 2, "the recorded allowance has two windows");
+    for (reading, label, used, reset) in [
+        (&readings[0], "window", 27.0, 1_792_740_094_000),
+        (&readings[1], "weekly", 10.0, 1_792_972_800_000),
+    ] {
+        assert_eq!(reading.provider, "muse");
+        assert_eq!(reading.window.as_deref(), Some(label));
+        assert_eq!(reading.used_percent, Some(used));
+        assert_eq!(
+            reading.resets_at,
+            chrono::DateTime::from_timestamp_millis(reset)
+        );
+        assert_eq!(
+            reading.source,
+            orbit_types::telemetry::ProviderLimitSource::Event
+        );
+        assert_eq!(reading.observed_at, now);
+        assert!(reading.gating);
+        assert!(!reading.exhausted);
+        assert_eq!(reading.model, None);
+        assert_eq!(reading.account, None);
+        assert_eq!(reading.window_minutes, None, "no duration was reported");
+        assert_eq!(reading.run_id, None);
+        assert_eq!(reading.crew, None);
+    }
+}
+
+#[test]
+fn muse_usage_windows_reject_absent_malformed_and_embedded_allowances() {
+    use serde_json::{Value, json};
+    let now = Utc::now();
+    let records: Vec<Value> = std::str::from_utf8(MUSE_USAGE)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let status = records[1].clone();
+    let mut cases = vec![
+        json!({"payload_type": "status", "payload": {"kind": "run_usage", "models": []}}),
+        json!({"payload_type": "status", "payload": {"kind": "other", "allowance": status["payload"]["allowance"]}}),
+        json!({"schemaVersion": 1, "payload_type": "status", "payload": status["payload"]}),
+    ];
+    for record_type in [
+        "run.lifecycle.started",
+        "turn.input.user",
+        "run.output.delta",
+        "tool.result",
+        "task.lifecycle.status",
+        "run.terminal.completed",
+    ] {
+        cases.push(json!({"payload_type": record_type, "payload": status["payload"]}));
+        cases.push(json!({"payload_type": record_type, "payload": {"text": status.to_string()}}));
+    }
+    for allowance in [
+        Value::Null,
+        json!([]),
+        json!("unknown"),
+        json!({"monthly": {"used_percent": 99, "resets_at_ms": 1792740094000_i64}}),
+    ] {
+        cases.push(json!({"payload_type": "status", "payload": {"kind": "run_usage", "allowance": allowance}}));
+    }
+    for fields in [
+        Value::Null,
+        json!([]),
+        json!({}),
+        json!({"used_percent": "27", "resets_at_ms": 1792740094000_i64}),
+        json!({"used_percent": -1, "resets_at_ms": 1792740094000_i64}),
+        json!({"used_percent": 27}),
+        json!({"resets_at_ms": 1792740094000_i64}),
+        json!({"used_percent": 27, "resets_at_ms": "1792740094000"}),
+        json!({"used_percent": 27, "resets_at_ms": 1.5}),
+        json!({"used_percent": 27, "resets_at_ms": i64::MAX}),
+    ] {
+        cases.push(json!({"payload_type": "status", "payload": {"kind": "run_usage", "allowance": {"window": fields, "weekly": fields}}}));
+    }
+    for record in cases {
+        assert!(
+            provider_usage_windows("muse", record.to_string().as_bytes(), None, now).is_empty(),
+            "must ignore {record}"
+        );
+    }
+    let no_allowance = format!("{}\n{}", records[0], records[2]);
+    for capture in [b"".as_slice(), b"not json", no_allowance.as_bytes()] {
+        assert!(provider_usage_windows("muse", capture, None, now).is_empty());
+    }
+    assert!(provider_usage_windows("claude", MUSE_USAGE, None, now).is_empty());
+}
+
+#[test]
+fn muse_usage_windows_use_last_allowance_and_keep_valid_partial_windows() {
+    use serde_json::{Value, json};
+    let now = Utc::now();
+    let mut status: Value =
+        serde_json::from_slice::<Value>(MUSE_USAGE.split(|byte| *byte == b'\n').nth(1).unwrap())
+            .unwrap();
+    status["payload"]["allowance"] =
+        json!({"weekly": {"used_percent": 102.125, "resets_at_ms": 1792972800000_i64}});
+    let capture = format!("{}\n{status}", std::str::from_utf8(MUSE_USAGE).unwrap());
+    let readings = provider_usage_windows("muse", capture.as_bytes(), None, now);
+    assert_eq!(readings.len(), 1);
+    assert_eq!(readings[0].window.as_deref(), Some("weekly"));
+    assert_eq!(readings[0].used_percent, Some(102.125));
+    assert!(readings[0].exhausted && readings[0].gating);
+    status["payload"]["allowance"]["window"] = json!({"used_percent": "bad"});
+    assert_eq!(
+        provider_usage_windows("muse", status.to_string().as_bytes(), None, now),
+        readings
     );
 }
