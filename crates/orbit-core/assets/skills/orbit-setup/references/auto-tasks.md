@@ -158,6 +158,88 @@ then preserves the file as written and stops refreshing it, and `show` reports
 `body: forked` with the differing fields. `orbit workspace sync` moves an older
 fork that differs only in settings back under management.
 
+### Adopting a current bundled body from a stale fork
+
+A genuine custom body is intentionally preserved, even if it still names a
+retired tool. Sync recognizes historical shipped bodies by exact body digest;
+it cannot decide which local prose to discard. Do not weaken that matcher,
+delete/recreate the definition, or use `restore` to replace an existing fork.
+
+Use the owning checkout and its registered workspace explicitly. This is an
+operator change after review, separate from preparing or testing a repair:
+
+1. Snapshot the effective definition through `orbit auto-task show <name>
+   --workspace <owner> --json`. Agents can read effective definitions through
+   the granted `orbit.auto_task.list` tool, selecting the named row; the CLI
+   `show` also supplies layering and source diagnostics. Confirm `definition_source`
+   points at the intended checkout. Save the complete response, including
+   `layering.forked_fields`, not just the YAML or `layering.settings`: settings
+   can still live in the fork itself. Record enabled, the complete schedule,
+   dedupe, crew, priority, complexity, all tags and any other effective fields.
+2. Extract the proposed fields from the **matching installed release's**
+   bundled definition. Initialize a fresh disposable workspace with that
+   executable and the target's base branch, then use `auto-task show <name>
+   --json` there to obtain its uncustomized template. For candidate validation,
+   obtain fields from that candidate's bundle. Take `template.description`,
+   not the top-level description; parse YAML if using bundled source. Render
+   any workspace branch placeholders for the target. Diff the effective template
+   against that bundle and review every custom procedural difference. Choose
+   explicitly what to replace and what to retain, including title, criteria,
+   context files, required tools and comments. Keep a before snapshot, proposed
+   patch, readable diff and decision record together as review artifacts.
+3. Replace only the approved fields with a field-scoped update. For a
+   description-only adoption:
+
+   ```bash
+   # bundled-body.txt contains the parsed template.description, reviewed above.
+   orbit auto-task update <name> --workspace <owner> --body "$(cat bundled-body.txt)"
+   # Or write a JSON file and use the registered tool:
+   orbit tool run orbit.auto_task.update --input-file reviewed-body-patch.json
+   ```
+
+   The JSON shape is
+   `{"name":"<name>","workspace":"<owner>","template_patch":{"description":"<reviewed bundled body>"}}`.
+   Include another body field such as `acceptance_criteria` in `template_patch`
+   only when its replacement was separately reviewed. Omit operational fields.
+   Do not send a whole `template` through MCP: omitted fields receive defaults.
+   Do not send tags as a patch to add one tag: that field replaces the list.
+   Re-read immediately before applying; if the snapshot changed, review again.
+   The body update has no compare-and-swap precondition, so coordinate with
+   other editors and avoid concurrent edits during adoption.
+4. Read back with `show --json` and compare every saved effective field. Only
+   approved body fields and the edit stamps may differ. Stop on a settings
+   mismatch; do not blindly replay an old full definition over a newer edit.
+   Run `orbit workspace sync --workspace <owner> --check --json`, review the
+   **whole** report (sync can affect other managed assets), then apply
+   `orbit workspace sync --workspace <owner> --json` when its changes are agreed.
+   Inspect the named auto-task's action and read back again. A settings-only
+   fork migrates and reports `layering.body: managed`; enabled, schedule,
+   dedupe and template settings must still equal the snapshot. Migration
+   restores bundled creation metadata; save the original stamps in the review
+   record rather than treating them as operational settings. Retained custom
+   body fields leave it `forked`, intentionally; name those fields rather than
+   claiming upstream refresh has resumed. User-authored definitions remain
+   user-authored and do not acquire bundled management through this procedure.
+5. Prove the patch first in a disposable workspace in an isolated child process
+   with inherited Orbit/Git authority cleared (see the repository development
+   guide's safe mutable CLI fixtures). Seed the observed fork and its complete
+   settings, apply the exact payload, sync, compare before/after, and mint there
+   with `orbit auto-task mint <name>`. Read the minted task back and verify its
+   instructions and settings. Keep payload, snapshots, sync actions and mint
+   evidence. Never mint on the live workspace merely to verify adoption:
+   `mint` creates real work even when disabled. Existing minted tasks keep their
+   original instructions and need a separate reviewed action if still active.
+
+For a stale `friction-curation` fork, the adopted listing and group queries
+must use `orbit.search` (`kind: friction`, `status: friction:open` for the open
+set). Preserve the bundled 1000-hit truncation guidance and tag narrowing.
+Review local resolution wording and criteria as well as the retired listing
+paragraphs; replacing only the description may leave older criteria forked.
+`orbit.friction.list` stays inactive and its refusal points agents to search.
+After delivery, the operator still needs to approve the recorded custom-body
+decisions and apply the reviewed patch on the owner, then verify settings and
+sync as above. A disposable proof is not evidence of live adoption.
+
 `mint` ignores the schedule, the dedupe policy, and `enabled`, and leaves the
 scheduler's cursor untouched — so it creates real work even for a disabled definition. Inspect with
 `show` first; mint only when creating that task is intended.
