@@ -351,31 +351,47 @@ pub(in crate::executor::automation::vcs) fn classify_pr_state(
     }
 }
 
-/// Review and readable-rollup guards shared by landing and auto-fix. They
-/// precede any pending-check or source-repair authority.
-pub(super) fn blocked_checks(pull_request: &PullRequestStatus) -> Result<&[StatusCheck], String> {
+/// Review and readable-rollup refusals shared by landing and auto-fix.
+/// Display is diagnostic only; recovery authority matches the variants.
+#[derive(Debug, thiserror::Error)]
+pub(super) enum BlockedCheckRefusal {
+    #[error("review is required ({0})")]
+    ReviewRequired(String),
+    #[error("review decision is unavailable")]
+    ReviewUnavailable,
+    #[error("status check rollup is unreadable{suffix}", suffix = .0.as_ref().map(|name| format!(" for '{name}'")).unwrap_or_default())]
+    RollupUnreadable(Option<String>),
+}
+
+/// Review and readable-rollup guards precede any pending-check or
+/// source-repair authority.
+pub(super) fn blocked_checks(
+    pull_request: &PullRequestStatus,
+) -> Result<&[StatusCheck], BlockedCheckRefusal> {
     match &pull_request.review_decision {
         ReviewDecision::Reported(decision)
             if matches!(decision.as_str(), "REVIEW_REQUIRED" | "CHANGES_REQUESTED") =>
         {
-            return Err(format!("review is required ({decision})"));
+            return Err(BlockedCheckRefusal::ReviewRequired(decision.clone()));
         }
         ReviewDecision::NotApplicable => {}
         ReviewDecision::Reported(decision) if decision == "APPROVED" => {}
-        _ => return Err("review decision is unavailable".into()),
+        _ => return Err(BlockedCheckRefusal::ReviewUnavailable),
     }
     let checks = pull_request
         .status_checks
         .as_deref()
-        .ok_or_else(|| "status check rollup is unreadable".to_string())?;
+        .ok_or(BlockedCheckRefusal::RollupUnreadable(None))?;
     for check in checks {
         let name = check
             .name
             .as_deref()
             .filter(|name| !name.is_empty())
-            .ok_or_else(|| "status check rollup is unreadable".to_string())?;
+            .ok_or(BlockedCheckRefusal::RollupUnreadable(None))?;
         if check.state.is_none() {
-            return Err(format!("status check rollup is unreadable for '{name}'"));
+            return Err(BlockedCheckRefusal::RollupUnreadable(Some(
+                name.to_string(),
+            )));
         }
     }
     Ok(checks)
@@ -384,7 +400,7 @@ pub(super) fn blocked_checks(pull_request: &PullRequestStatus) -> Result<&[Statu
 fn classify_blocked_pr(pull_request: &PullRequestStatus) -> PrMergeState {
     let checks = match blocked_checks(pull_request) {
         Ok(checks) => checks,
-        Err(reason) => return PrMergeState::Blocked(reason),
+        Err(reason) => return PrMergeState::Blocked(reason.to_string()),
     };
     for check in checks {
         if check.state == Some(CheckState::Failed) {
@@ -498,6 +514,13 @@ impl From<String> for CheckWaitRefusal {
             reason,
             cause: None,
         }
+    }
+}
+
+impl From<BlockedCheckRefusal> for CheckWaitRefusal {
+    fn from(reason: BlockedCheckRefusal) -> Self {
+        // Check-wait refusals are outward diagnostics, never recovery authority.
+        reason.to_string().into()
     }
 }
 

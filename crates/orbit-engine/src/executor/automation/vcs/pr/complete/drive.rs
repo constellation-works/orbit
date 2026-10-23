@@ -15,8 +15,8 @@ use super::super::super::super::input::input_string_field;
 use super::super::super::push::push_batch_changes;
 use super::super::answers::{ReviewedMergeOutcome, read_pr_status, read_pr_status_before};
 use super::super::auto_fix::{
-    AutoFix, BlockedVerdict, LocalRepair, adopt_published_repairs, base_tip_checks,
-    blocked_verdict, publish_local_repair, record_base_path, record_landed_repair,
+    AutoFix, BlockedStopReason, BlockedVerdict, LocalRepair, adopt_published_repairs,
+    base_tip_checks, blocked_verdict, publish_local_repair, record_base_path, record_landed_repair,
     record_published_repair, red_base_wait, repair_failed_checks, reserve_base_refresh, stopped,
 };
 use super::super::delivery::{
@@ -316,12 +316,8 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             // rerun, including when a reservation already exists.
             let diagnose = is_blocked_merge_state(&status)
                 && matches!(verdict, BlockedVerdict::RepairChecks(_));
-            if let BlockedVerdict::Stop(reason) = &verdict
-                && (reason.starts_with("review is required")
-                    || reason == "review decision is unavailable"
-                    || reason.contains("unreadable"))
-            {
-                return Err(stopped(pr_number, reason));
+            if let BlockedVerdict::Stop(BlockedStopReason::CheckRefusal(reason)) = &verdict {
+                return Err(stopped(pr_number, &reason.to_string()));
             }
             infrastructure_wait |= matches!(
                 super::super::infrastructure::recover(
@@ -405,7 +401,9 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 };
                 match blocked_verdict(&status, unsettled_polls, pending_required) {
                     BlockedVerdict::Wait => unsettled_polls += 1,
-                    BlockedVerdict::Stop(reason) => return Err(stopped(pr_number, &reason)),
+                    BlockedVerdict::Stop(reason) => {
+                        return Err(stopped(pr_number, &reason.to_string()));
+                    }
                     // A repair commit on a reviewed head is reviewed again
                     // before it is published; the last completion round has
                     // no re-review left to give it.

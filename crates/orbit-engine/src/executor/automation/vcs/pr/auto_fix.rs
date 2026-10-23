@@ -70,7 +70,7 @@ use super::super::landing::checks::{HeadCheckEvidence, head_check_evidence, unmo
 use super::super::push::push_batch_changes;
 use super::super::retry_lineage::{LineageStep, LineageStop, RetryLineage};
 use super::answers::{CheckState, PullRequestStatus, RequiredChecks, read_required_checks};
-use super::delivery::{DeliveryPin, blocked_checks};
+use super::delivery::{BlockedCheckRefusal, DeliveryPin, blocked_checks};
 
 /// Polls a `BLOCKED` head with no failed and no running check is waited on
 /// before it counts as blocked: a freshly published head can report no
@@ -168,6 +168,16 @@ fn repair_ledger_runs<H: RuntimeHost + ?Sized>(
     )))
 }
 
+/// A gate refusal forbids infrastructure recovery as well as source repair;
+/// unsatisfied checks alone may still allow bounded infrastructure recovery.
+#[derive(Debug, thiserror::Error)]
+pub(super) enum BlockedStopReason {
+    #[error(transparent)]
+    CheckRefusal(BlockedCheckRefusal),
+    #[error("required reviews or checks are not satisfied")]
+    UnsatisfiedChecks,
+}
+
 /// What a `BLOCKED` pull request means to an auto-fix watcher.
 pub(super) enum BlockedVerdict {
     /// Checks are still running, or the head has not settled yet.
@@ -175,7 +185,7 @@ pub(super) enum BlockedVerdict {
     /// Required checks failed: repair them.
     RepairChecks(Vec<(Option<String>, String)>),
     /// An administrative blocker no code repair clears.
-    Stop(String),
+    Stop(BlockedStopReason),
 }
 
 /// Read a `BLOCKED` pull request for auto-fix. A review gate or an
@@ -188,7 +198,7 @@ pub(super) fn blocked_verdict(
 ) -> BlockedVerdict {
     let checks = match blocked_checks(status) {
         Ok(checks) => checks,
-        Err(reason) => return BlockedVerdict::Stop(reason),
+        Err(reason) => return BlockedVerdict::Stop(BlockedStopReason::CheckRefusal(reason)),
     };
     if pending_required {
         return BlockedVerdict::Wait;
@@ -204,7 +214,7 @@ pub(super) fn blocked_verdict(
     if unsettled_polls < UNSETTLED_BLOCKED_POLLS {
         return BlockedVerdict::Wait;
     }
-    BlockedVerdict::Stop("required reviews or checks are not satisfied".into())
+    BlockedVerdict::Stop(BlockedStopReason::UnsatisfiedChecks)
 }
 
 /// The failure that stops an auto-fix watcher without an agent.
