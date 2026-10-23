@@ -647,17 +647,26 @@ impl WindowBoundaryTokens {
             })
         };
         let api_key_assignment = assignment_key.is_some_and(|key| {
-            let key = key
-                .trim_matches(['\'', '"', '[', ']', '{', '}', '(', ')'])
-                .to_ascii_lowercase();
-            let Some(stem) = key.strip_suffix("key") else {
+            let key = key.trim_matches(['\'', '"', '[', ']', '{', '}', '(', ')']);
+            let lowercase = key.to_ascii_lowercase();
+            let Some(stem) = lowercase.strip_suffix("key") else {
                 return false;
             };
             let stem = stem.strip_suffix(['_', '-']).unwrap_or(stem);
             // Match the api[_-]?key family, with optional prefix segments
-            // such as x-api-key or service_api_key, rather than a key list.
-            stem.strip_suffix("api")
-                .is_some_and(|prefix| prefix.is_empty() || prefix.ends_with(['_', '-']))
+            // such as x-api-key, serviceApiKey or HTTPApiKey. Keep the
+            // original case for camelCase/acronym segment boundaries.
+            stem.strip_suffix("api").is_some_and(|prefix| {
+                if prefix.is_empty() || prefix.ends_with(['_', '-']) {
+                    return true;
+                }
+                let api_start = prefix.len();
+                let original = key.as_bytes();
+                original[api_start].is_ascii_uppercase()
+                    && (original[api_start - 1].is_ascii_lowercase()
+                        || original[api_start - 1].is_ascii_digit()
+                        || original[api_start + 1].is_ascii_lowercase())
+            })
         });
         api_key_assignment
             || redact_all(&format!("{prefix}{token}")) != format!("{}{token}", redact_all(prefix))
