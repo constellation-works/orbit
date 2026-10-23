@@ -2,6 +2,7 @@ use serde_json::{Value, json};
 
 use super::super::collect::{collect, collect_at, collect_for_sweep};
 use super::super::history::RetryableHistory;
+use super::super::query::LogScope;
 use super::support::{FakeQueries, HEAD, input, run};
 
 fn full_page(count: u64) -> Vec<Value> {
@@ -71,6 +72,66 @@ fn zero_listing_bounds_are_raised_to_one_so_the_sweep_can_complete() {
     assert_eq!(evidence["truncation"]["max_runs"], json!(1));
     assert_eq!(evidence["truncation"]["max_pull_requests"], json!(1));
     assert_eq!(evidence["outcome_hint"], json!("no_current_failure"));
+}
+
+#[test]
+fn checkout_evidence_uses_all_scope_and_each_log_read_uses_the_requested_bound() {
+    const RUN_ID: u64 = 88_004;
+    const JOB_ID: u64 = 88_005;
+    const LOG_MAX_BYTES: usize = 128;
+
+    let failed_log = format!("compile failed\n{}", "x".repeat(512));
+    let all_log = format!(
+        "HEAD is now at {HEAD} workflow checkout\n{}",
+        "x".repeat(512)
+    );
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_runs(vec![vec![run(
+            RUN_ID,
+            "CI",
+            HEAD,
+            "completed",
+            Some("failure"),
+            "2026-10-07T02:10:00Z",
+        )]])
+        .with_failed_jobs(
+            RUN_ID,
+            json!([{
+                "job_id": JOB_ID,
+                "name": "check",
+                "status": "completed",
+                "conclusion": "failure",
+                "failed_steps": [{"name": "compile", "conclusion": "failure"}],
+            }]),
+        )
+        .with_scoped_log(JOB_ID, LogScope::Failed, &failed_log)
+        .with_scoped_log(JOB_ID, LogScope::All, &all_log);
+    let mut input = input();
+    input["log_max_bytes"] = json!(LOG_MAX_BYTES);
+
+    let evidence = collect(&queries, &input, &mut RetryableHistory::default()).expect("collect");
+
+    let failure = &evidence["current_failures"][0];
+    assert_eq!(failure["run_id"], json!(RUN_ID));
+    assert_eq!(failure["log_total_bytes"], json!(failed_log.len()));
+    assert!(
+        failure["log_returned_bytes"]
+            .as_u64()
+            .expect("returned byte count")
+            <= LOG_MAX_BYTES as u64,
+        "the failed-scope excerpt must honor log_max_bytes"
+    );
+    assert_eq!(failure["checkout_evidence_scope"], json!("all"));
+    assert_eq!(failure["actual_checkout_shas"], json!([HEAD]));
+    assert_eq!(
+        *queries.log_reads.lock().expect("log reads"),
+        [
+            (RUN_ID.to_string(), JOB_ID, LogScope::Failed, LOG_MAX_BYTES),
+            (RUN_ID.to_string(), JOB_ID, LogScope::All, LOG_MAX_BYTES),
+        ],
+        "checkout recovery must read Failed then All for the same run and job"
+    );
 }
 
 const PR_BRANCH: &str = "orbit/ORB-14260-6bfc1a2d";

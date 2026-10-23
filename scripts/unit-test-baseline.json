@@ -378,6 +378,7 @@
         "activity_job/job_executor/tests/step.rs::compute_backoff_ms_respects_initial_max_and_zero_attempt_boundary",
         "activity_job/workspace/tests/fingerprint.rs::diff_chunk_starts_supported_markers_and_line_boundaries",
         "executor/automation/ci/tests/collect.rs::a_run_scoped_error_repeated_on_three_sweeps_becomes_a_persistent_note",
+        "executor/automation/ci/tests/collect.rs::checkout_evidence_uses_all_scope_and_each_log_read_uses_the_requested_bound",
         "executor/automation/ci/tests/collect.rs::concurrency_cancelled_newest_runs_with_incomplete_logs_are_inconclusive_not_retryable",
         "executor/automation/ci/tests/collect.rs::query_errors_in_snapshot_notes_are_redacted_without_losing_operation_context",
         "executor/automation/ci/tests/collect.rs::repeated_collection_for_one_sweep_does_not_advance_persistence",
