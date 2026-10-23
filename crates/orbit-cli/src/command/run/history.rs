@@ -207,7 +207,7 @@ pub(crate) fn run_history_payload(
     if !waiting.is_empty() {
         blocks.push(Block::text(waiting.join("\n")));
     }
-    Ok(Payload::blocks(doc, blocks).into())
+    Ok(Payload::blocks(doc, blocks).with_records(values).into())
 }
 
 /// One `--failures` row: a task and the root-cause run behind it.
@@ -316,7 +316,7 @@ fn failure_history_payload(
             Cell::new(format!("orbit run show {}", row.run_id)),
         ]);
     }
-    Ok(Payload::blocks(doc, vec![Block::table(table)]).into())
+    Ok(Payload::enveloped_list(doc, values, table).into())
 }
 
 fn is_reported_failure(state: JobRunState) -> bool {

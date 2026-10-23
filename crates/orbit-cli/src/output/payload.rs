@@ -214,6 +214,14 @@ impl Payload {
         }
     }
 
+    /// Supply a list's NDJSON records while retaining its JSON document and
+    /// human blocks, including any notices after the table.
+    #[must_use]
+    pub(crate) fn with_records(mut self, records: Vec<Value>) -> Self {
+        self.records = Some(records);
+        self
+    }
+
     /// Set the process exit code after this payload is rendered.
     #[must_use]
     pub fn with_exit_code(mut self, exit_code: i32) -> Self {
