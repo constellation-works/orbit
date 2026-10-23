@@ -6,7 +6,7 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
-use orbit_types::task::TaskRelationType;
+use orbit_types::task::{CodeScanningAlertEvidence, TaskDecision, TaskRelationType};
 use serde_json::{Value, json};
 
 fn fixture(global: Option<&str>, workspace: Option<&str>) -> (tempfile::TempDir, OrbitRuntime) {
@@ -522,6 +522,159 @@ fn rejection_naming_a_covering_task_does_not_suppress_code_scanning_refiling() {
     assert_eq!(refiled["filed_count"], 1, "{refiled}");
 }
 
+fn typed_evidence(number: u64, line: u64) -> CodeScanningAlertEvidence {
+    CodeScanningAlertEvidence {
+        repository: "acme/orbit".to_string(),
+        number,
+        rule_id: "rust/example".to_string(),
+        rule_name: "Unsafe input".to_string(),
+        security_severity: "high".to_string(),
+        tool_name: "CodeQL".to_string(),
+        tool_version: "1".to_string(),
+        tool_guid: "rust".to_string(),
+        message: "Unsafe input".to_string(),
+        git_ref: "refs/heads/main".to_string(),
+        commit_sha: "fixture".to_string(),
+        path: "src/lib.rs".to_string(),
+        start_line: Some(line),
+        end_line: Some(line),
+        created_at: String::new(),
+        updated_at: String::new(),
+        html_url: String::new(),
+    }
+}
+
+/// New per-alert tasks carry typed evidence on their creation history.
+/// Consolidation matches on that struct, so edited description prose does
+/// not change grouping, while a mismatched creation decision never falls
+/// through to the legacy markdown reader.
+fn typed_code_scanning_evidence_consolidates_despite_edited_prose() {
+    // Filing a single alert records the typed decision and renders the
+    // same human-readable evidence bullets from it.
+    let (_root, runtime) = fixture(None, None);
+    let filed = file(
+        &runtime,
+        code_snapshot(484, "rust/cleartext-logging", "crates/a/src/lib.rs"),
+        None,
+    );
+    assert_eq!(filed["filed_count"], 1, "{filed}");
+    let filed_id = filed["filed"][0]["task_id"].as_str().unwrap().to_string();
+    let history = runtime.get_task_history(&filed_id).unwrap();
+    let created = history
+        .iter()
+        .find(|entry| entry.event == "created")
+        .unwrap();
+    let Some(TaskDecision::CodeScanningAlert(evidence)) = &created.decision else {
+        panic!(
+            "filed task must carry typed evidence, got {:?}",
+            created.decision
+        );
+    };
+    assert_eq!(evidence.repository, "acme/orbit");
+    assert_eq!(evidence.number, 484);
+    assert_eq!(evidence.rule_id, "rust/cleartext-logging");
+    assert_eq!(evidence.path, "crates/a/src/lib.rs");
+    assert_eq!(evidence.start_line, Some(12));
+    assert_eq!(evidence.git_ref, "refs/heads/main");
+    let filed_task = runtime.get_task(&filed_id).unwrap();
+    assert!(
+        filed_task.description.contains(
+            "## Alert evidence\n\n- Repository: `acme/orbit`\n- Alert: `#484`\n- Rule: `rust/cleartext-logging` (Cleartext logging)\n- Security severity: `high`\n- Tool: `CodeQL` (version `2`, guid `codeql`)\n- Message: Logs sensitive data\n- Ref: `refs/heads/main`\n- Commit: `fixture`\n- Location: `crates/a/src/lib.rs` line 12\n- Created: `unknown`\n- Updated: `unknown`\n- Alert URL: unknown\n"
+        ),
+        "rendered description must stay byte-identical:\n{}",
+        filed_task.description
+    );
+
+    // Typed records whose prose was edited past recognition still group.
+    let (_root, runtime) = fixture(None, None);
+    let mut source_ids = Vec::new();
+    for number in [81_u64, 82] {
+        let source = runtime
+            .add_task(TaskAddParams {
+                title: format!("Typed alert {number}"),
+                description: "Edited by an operator; the evidence block is gone.".to_string(),
+                tags: vec![
+                    "code-scanning-sweep".to_string(),
+                    format!("code-scanning:fixture-{number}"),
+                ],
+                creation_decision: Some(TaskDecision::CodeScanningAlert(typed_evidence(
+                    number, number,
+                ))),
+                complexity: TaskComplexity::Medium,
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            })
+            .unwrap();
+        source_ids.push(source.id);
+    }
+    source_ids.sort();
+    let consolidate = |apply| {
+        runtime
+            .run_deterministic(
+                "consolidate_code_scanning_tasks",
+                &json!({}),
+                &json!({"apply": apply}),
+                ToolContext::default(),
+            )
+            .unwrap()
+    };
+    let preview = consolidate(false);
+    assert_eq!(preview["outcome"], "dry_run", "{preview}");
+    assert_eq!(preview["group_count"], 1);
+    assert_eq!(preview["groups"][0]["source_task_ids"], json!(source_ids));
+    assert_eq!(preview["groups"][0]["alert_numbers"], json!([81, 82]));
+    let applied = consolidate(true);
+    assert_eq!(applied["outcome"], "applied", "{applied}");
+    for id in &source_ids {
+        assert_eq!(runtime.get_task(id).unwrap().status, TaskStatus::Rejected);
+    }
+
+    // A creation entry carrying a different decision is mismatched: the
+    // valid legacy markdown in its description must not be consulted.
+    let (_root, runtime) = fixture(None, None);
+    for number in [81_u64, 82] {
+        runtime
+            .add_task(TaskAddParams {
+                title: format!("Mismatched alert {number}"),
+                description: format!(
+                    "## Alert evidence\n\n- Repository: `acme/orbit`\n- Alert: `#{number}`\n- Rule: `rust/example` (Unsafe input)\n- Security severity: `high`\n- Tool: `CodeQL` (version `1`, guid `rust`)\n- Message: Unsafe input\n- Ref: `refs/heads/main`\n- Commit: `fixture`\n- Location: `src/lib.rs` line {number}\n"
+                ),
+                tags: vec![
+                    "code-scanning-sweep".to_string(),
+                    format!("code-scanning:fixture-{number}"),
+                ],
+                creation_decision: Some(TaskDecision::DrainApprovalHeld {
+                    classification: "fixture".to_string(),
+                }),
+                complexity: TaskComplexity::Medium,
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let refused = consolidate_on(&runtime);
+    assert_eq!(refused["group_count"], 0, "{refused}");
+    assert_eq!(refused["scanned_source_tasks"], 0);
+    let reasons: Vec<_> = refused["skipped"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["reason"].as_str().unwrap())
+        .collect();
+    assert_eq!(reasons, vec!["unparsable_evidence", "unparsable_evidence"]);
+}
+
+fn consolidate_on(runtime: &OrbitRuntime) -> Value {
+    runtime
+        .run_deterministic(
+            "consolidate_code_scanning_tasks",
+            &json!({}),
+            &json!({"apply": false}),
+            ToolContext::default(),
+        )
+        .unwrap()
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     consolidation_retires_every_duplicate_alert_owner_once_scenarios,
@@ -532,5 +685,6 @@ crate::scenario_table!(
     rejected_code_scanning_owner_suppresses_refiling_until_the_alert_changes,
     rejected_owner_distinguishes_punctuation_only_path_and_rule_changes,
     rejected_grouped_owner_refills_alert_moved_onto_a_sibling_location,
-    rejection_naming_a_covering_task_does_not_suppress_code_scanning_refiling
+    rejection_naming_a_covering_task_does_not_suppress_code_scanning_refiling,
+    typed_code_scanning_evidence_consolidates_despite_edited_prose
 );

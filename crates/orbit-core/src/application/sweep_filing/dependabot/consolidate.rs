@@ -19,15 +19,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, TaskRelation, TaskRelationType, TaskStatus};
+use orbit_types::task::{
+    CodeScanningAlertEvidence, Task, TaskHistoryEntry, TaskRelation, TaskRelationType, TaskStatus,
+};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskAddParams;
 
 use super::code_groups::{
-    CodeAlertGroup, CodeGroupTaskRequest, cause_key, code_group_task_params, group_alert_numbers,
-    group_bounds, group_code_alerts, group_paths,
+    CodeAlertGroup, CodeGroupTaskRequest, cause_key, code_group_task_params, evidence_to_alert,
+    group_alert_numbers, group_bounds, group_code_alerts, group_paths,
 };
 use super::filing::{CODE_KEY_PREFIX, CODE_TAG, field};
 use crate::application::sweep_filing::bounded_u64;
@@ -69,7 +71,8 @@ pub(crate) fn consolidate_code_scanning_tasks(
     let mut skipped = Vec::new();
     let mut sources = Vec::new();
     for task in &tasks {
-        match classify(task) {
+        let history = runtime.get_task_history(&task.id)?;
+        match classify(task, &history) {
             Ok(Some(source)) => sources.push(source),
             Ok(None) => {}
             Err(reason) => skipped.push(json!({
@@ -116,7 +119,7 @@ pub(crate) fn consolidate_code_scanning_tasks(
 /// is the whole safety question here, so a new one has to be answered rather
 /// than defaulted. Proposed and backlog are the unstarted statuses, and both
 /// are statuses [`OrbitRuntime::reject_task`] retires under a compare-and-set.
-fn classify(task: &Task) -> Result<Option<SourceTask>, &'static str> {
+fn classify(task: &Task, history: &[TaskHistoryEntry]) -> Result<Option<SourceTask>, &'static str> {
     match task.status {
         TaskStatus::Proposed | TaskStatus::Backlog => {}
         TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected => return Ok(None),
@@ -128,8 +131,21 @@ fn classify(task: &Task) -> Result<Option<SourceTask>, &'static str> {
     if alert_key_count(task) != 1 {
         return Err("already_grouped");
     }
-    let Some((repository, alert)) = parse_alert_evidence(&task.description) else {
-        return Err("unparsable_evidence");
+    // Typed evidence wins and matches on the struct. Only a creation
+    // entry with no decision consults the single legacy markdown reader;
+    // a mismatched decision never falls through to text.
+    let (repository, alert) = match CodeScanningAlertEvidence::from_history(history) {
+        Ok(Some(evidence)) => {
+            let repository = evidence.repository.clone();
+            (repository, evidence_to_alert(&evidence))
+        }
+        Ok(None) => {
+            let Some(parsed) = parse_alert_evidence_legacy(&task.description) else {
+                return Err("unparsable_evidence");
+            };
+            parsed
+        }
+        Err(_) => return Err("unparsable_evidence"),
     };
     Ok(Some(SourceTask {
         id: task.id.clone(),
@@ -261,7 +277,8 @@ fn apply_one(
 ) -> Result<(), OrbitError> {
     for source_id in &consolidation.source_ids {
         let source = runtime.get_task(source_id)?;
-        if !matches!(classify(&source), Ok(Some(_))) {
+        let history = runtime.get_task_history(source_id)?;
+        if !matches!(classify(&source, &history), Ok(Some(_))) {
             entry["applied"] = json!(false);
             entry["not_applied_reason"] = json!("source_task_started");
             entry["moved_source_task_id"] = json!(source_id);
@@ -318,14 +335,17 @@ fn replacement_params(consolidation: &Consolidation) -> TaskAddParams {
     params
 }
 
-/// Read a swept per-alert task's `## Alert evidence` block back into the alert
-/// shape the group builder consumes.
+/// LEGACY READER — the single compatibility reader for per-alert tasks
+/// filed before typed evidence existed. It reads a swept task's
+/// `## Alert evidence` block back into the alert shape the group builder
+/// consumes, and `classify` consults it only for a creation history entry
+/// with no decision. New tasks are read from their typed decision.
 ///
 /// Only that section is read, so a later section cannot inject a key, and
 /// every field the cause signature depends on is required — a record edited
 /// past recognition is reported as unparsable instead of being grouped on
 /// partial evidence.
-fn parse_alert_evidence(description: &str) -> Option<(String, Value)> {
+fn parse_alert_evidence_legacy(description: &str) -> Option<(String, Value)> {
     let fields = evidence_fields(description);
     let text = |key: &str| fields.get(key).cloned();
     let quoted = |key: &str| fields.get(key).and_then(|value| backticks(value));

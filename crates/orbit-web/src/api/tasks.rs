@@ -627,6 +627,7 @@ pub(super) async fn create_task_action(
         orchestrator_model: body.orchestrator_model,
         origin: body.origin,
         context_creation: Default::default(),
+        creation_decision: None,
     };
     task_mutation_response(runtime, "task creation", move |runtime| {
         runtime.add_task_screened(

@@ -2,8 +2,8 @@ use orbit_types::identity::OrbitId;
 
 use super::paths::ContextCreationAuthorization;
 use orbit_types::task::{
-    ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskHistoryEntry, TaskOrigin,
-    TaskPriority, TaskRelation, TaskStatus, TaskType,
+    ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskDecision, TaskHistoryEntry,
+    TaskOrigin, TaskPriority, TaskRelation, TaskStatus, TaskType,
 };
 
 #[derive(Default, Clone)]
@@ -139,6 +139,8 @@ pub struct TaskAddParams {
     ///
     /// [`OrbitRuntime::add_task_screened`]: crate::OrbitRuntime::add_task_screened
     pub context_creation: ContextCreationAuthorization,
+    /// Typed decision recorded on the task's `created` history event.
+    pub creation_decision: Option<TaskDecision>,
 }
 
 impl Default for TaskAddParams {
@@ -168,6 +170,7 @@ impl Default for TaskAddParams {
             orchestrator_model: None,
             origin: None,
             context_creation: ContextCreationAuthorization::default(),
+            creation_decision: None,
         }
     }
 }

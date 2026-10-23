@@ -1090,6 +1090,7 @@ fn reserved_key_publishes_a_new_bundle_before_replaying() {
             origin: None,
             comments: Vec::new(),
             context_creation: Vec::new(),
+            creation_decision: None,
         };
         let id = owner.registry.allocate_task_id(PARTITION_ID).unwrap();
         let input_digest = digest
@@ -1215,6 +1216,7 @@ impl Coordinated {
                 origin: None,
                 comments: Vec::new(),
                 context_creation: Vec::new(),
+                creation_decision: None,
             })
             .expect("create task")
     }
