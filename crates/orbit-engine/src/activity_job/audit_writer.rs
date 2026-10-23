@@ -155,12 +155,6 @@ impl V2AuditWriter {
         Ok(Arc::new(writer))
     }
 
-    /// Legacy JSONL path hook. SQLite-backed audit persistence has no envelope
-    /// log path, so callers should treat `None` as the expected production value.
-    pub fn envelope_log_path(&self) -> Option<std::path::PathBuf> {
-        None
-    }
-
     /// Run identifier carried in every emitted envelope. Exposed so dual-write
     /// helpers (e.g. `job_executor::audit::emit_job_event`) can stamp `run_id` onto
     /// paired tracing events without re-threading the value from call sites.
