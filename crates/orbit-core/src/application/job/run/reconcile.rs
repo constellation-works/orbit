@@ -263,13 +263,20 @@ impl OrbitRuntime {
         // [ORB-12969] The diagnostic is handed to finalization so the coupled
         // tasks' interruption block names the error code; the step itself is
         // recorded below, only once the interrupted write has won.
+        // The same call freezes a claimed leaf's settlement. Supply the exit
+        // evidence now: enriching only the later step cannot amend the outbox.
+        let settlement_message =
+            match reconciled_worker_exit_clause(self.stores().audit_events(), &current) {
+                Some(clause) => format!("{message}; {clause}"),
+                None => message.clone(),
+            };
         let changed = self.finalize_job_run_with_reservation_cleanup_and_diagnostic(
             &current.run_id,
             JobRunState::Interrupted,
             finished_at,
             duration_ms,
             TaskReservationReleaseReason::StaleRunReconciled,
-            Some((&error_code, &message)),
+            Some((&error_code, &settlement_message)),
         )?;
         if !changed {
             return Ok(false);

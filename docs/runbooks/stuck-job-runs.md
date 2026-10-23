@@ -226,6 +226,19 @@ job run marked interrupted because recorded worker process is no longer alive (r
 
 The clause adds evidence only; it changes neither which runs are interrupted nor when.
 
+For a claimed follower leaf, reconciliation samples this evidence immediately before
+finalization records its claim release in the durable outbox. The owner receives that
+sample in the release reason, with the `worker exit:` clause placed first so the
+1024-byte reason bound retains the cause (or the explicit absence of an observed
+status). Remaining scope and liveness detail is retained within that bound. Run
+diagnostics can include a newer observation read after the interrupted write, or an
+`afterwards` observation appended by the supervisor. Those later observations do not
+replace the recorded release, even if delivery is still pending: retries send the
+same settlement, preserve its failure class and apply it once at the owner. An
+unavailable status in the release therefore describes what was known at the
+settlement sample, not proof that no supervisor ever recorded an exit. Consult the
+follower's run diagnostic and audit trail for evidence recorded later.
+
 A process running a different executable than the one recorded for a live Orbit root (for
 example, right after the binary was replaced while workers from the previous build are still
 running) opens the state write-free. It can read every run record but finalizes and repairs

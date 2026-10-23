@@ -105,6 +105,8 @@ mod single_pass;
 mod unavailable_hold;
 mod waiting;
 mod window_extension;
+#[cfg(unix)]
+mod worker_exit_settlement;
 mod worktree_gc;
 
 const OWNER: &str = "hm_owner";
