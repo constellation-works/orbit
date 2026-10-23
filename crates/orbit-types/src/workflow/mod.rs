@@ -96,7 +96,7 @@ pub use reconciliation::{
     ReconciledCommandRun, ReconciledExecution, ReconciledPullRequest, ReconciledReview,
     ReconciledValidation, ReconciliationAdmission, ReconciliationAttempt, ReconciliationBinding,
     ReconciliationCommandSource, ReconciliationContract, ReconciliationLog, ReconciliationOutcome,
-    ReviewReconciliation, run_input_declares_review_reconciliation,
+    RequiredValidationFailureKind, ReviewReconciliation, run_input_declares_review_reconciliation,
     strip_review_reconciliation_admission,
 };
 pub use review::{

@@ -70,7 +70,8 @@ use orbit_exec::{
 };
 use orbit_types::workflow::{
     BaselineRedFailures, HOST_TEST_DEFERRED_PREFIX, HostEvidenceRefusal, HostSandboxCommand,
-    SEATBELT_DEFERRAL_PREFIX, VALIDATION_ENVIRONMENT_MARKER, judge_host_test_output,
+    RequiredValidationFailureKind, SEATBELT_DEFERRAL_PREFIX, VALIDATION_ENVIRONMENT_MARKER,
+    judge_host_test_output,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -371,16 +372,20 @@ impl RequiredCommandRun {
     }
 
     /// `environment` when the command stopped, lacked a tool or deferred a path,
-    /// `candidate` when it otherwise failed, `null` when it passed.
-    pub(in crate::executor::automation::vcs) fn failure_kind(&self) -> Value {
+    /// `candidate` when it otherwise failed, `None` when it passed.
+    pub(in crate::executor::automation::vcs) fn failure_kind(
+        &self,
+    ) -> Option<RequiredValidationFailureKind> {
         if self.infrastructure_failure.is_some() {
-            return json!("environment");
+            return Some(RequiredValidationFailureKind::Environment);
         }
         match (&self.missing_tool, self.passed) {
-            (_, true) if self.deferred_notice.is_some() => json!("environment"),
-            (_, true) => Value::Null,
-            (Some(_), false) => json!("environment"),
-            (None, false) => json!("candidate"),
+            (_, true) if self.deferred_notice.is_some() => {
+                Some(RequiredValidationFailureKind::Environment)
+            }
+            (_, true) => None,
+            (Some(_), false) => Some(RequiredValidationFailureKind::Environment),
+            (None, false) => Some(RequiredValidationFailureKind::Candidate),
         }
     }
 
