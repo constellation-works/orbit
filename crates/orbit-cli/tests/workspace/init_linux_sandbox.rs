@@ -114,6 +114,29 @@ fn deny_namespace_and_elevation(command: &mut Command) {
     }
 }
 
+/// Point `provider`'s seeded executor at a launcher that cannot exist: an
+/// absolute path under the disposable fixture root. An absolute command is
+/// looked up only at that path, never on `PATH` or in the system prefixes, so
+/// no installed CLI can satisfy it. Every other seeded field, including
+/// `host_os`, stays as seeded.
+fn pin_missing_launcher(fixture: &Fixture, provider: &str) {
+    let launcher = fixture
+        ._temp
+        .path()
+        .join("absent-launchers")
+        .join(provider)
+        .display()
+        .to_string();
+    let path = fixture
+        .home
+        .join(".orbit/resources/executors")
+        .join(format!("{provider}.yaml"));
+    let mut executor: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    executor["spec"]["command"] = serde_yaml::Value::String(launcher);
+    fs::write(&path, serde_yaml::to_string(&executor).unwrap()).unwrap();
+}
+
 fn assert_warned_init(output: &Output) -> Value {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{output:?}");
@@ -259,6 +282,12 @@ fn linux_bwrap_dispatch_after_warned_init_refuses_to_launch_the_provider() {
         muse_executor["spec"].get("host_os").is_none(),
         "seeded muse carries no host_os restriction: {muse_executor:?}"
     );
+    // Pin missing launchers to absent absolute paths so a Muse (or Claude)
+    // installed in a supported system prefix cannot satisfy the "not
+    // installed" expectation. The seeded sandbox/host_os assertions above
+    // already verified the shipped executor; only the lookup input changes.
+    pin_missing_launcher(&fixture, "muse");
+    pin_missing_launcher(&fixture, "claude");
     let doctor = fixture
         .command()
         .args(["doctor", "providers", "--json"])
