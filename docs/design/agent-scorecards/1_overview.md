@@ -2,7 +2,7 @@
 title: Agent Scorecards — Overview
 owner: claude
 last_updated: 2026-10-19
-last_validated: 2026-10-19
+last_validated: 2026-10-23
 status: Draft
 feature: agent-scorecards
 doc_role: overview
