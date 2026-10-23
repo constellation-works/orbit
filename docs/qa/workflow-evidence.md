@@ -2,7 +2,7 @@
 type: context
 summary: "Evidence map for shipped Orbit jobs and the coverage boundaries of their named tests."
 last_updated: 2026-10-19
-last_validated: 2026-10-18
+last_validated: 2026-10-23
 ---
 
 # Shipped workflow evidence
@@ -25,7 +25,7 @@ relative to `crates/orbit-engine/src/`.
 
 | Shipped job | Evidence level and named behavior | Owning test source |
 | --- | --- | --- |
-| `agent_invoke_pipeline` | Graph through MCP stdio: `a_remote_operator_session_invokes_an_agent_end_to_end` submits an invocation, polls terminal success and verifies the completed envelope plus persisted trusted-host admission. Provider executables return planted responses; the shipped graph is not replaced. Refusal: `a_remote_agent_session_cannot_invoke_an_agent`. Core admission refusals: `a_runs_own_runner_grant_cannot_admit_an_invocation`, `an_admitted_run_cannot_be_resumed`, `an_unauthorized_keyed_submission_claims_nothing`. | `crates/orbit-cli/tests/mcp/mcp_roundtrip.rs`; Core `application/job/tests/agent_invoke.rs` |
+| `agent_invoke_pipeline` | Graph through MCP stdio: `a_remote_operator_session_invokes_an_agent_end_to_end` submits an invocation, polls terminal success and verifies the completed envelope plus persisted trusted-host admission. Provider executables return planted responses; the shipped graph is not replaced. Refusal: `a_remote_agent_session_cannot_invoke_an_agent`. Core admission refusals: `a_runs_own_runner_grant_cannot_admit_an_invocation`, `an_admitted_run_cannot_be_resumed`, `an_unauthorized_keyed_submission_claims_nothing`. | `crates/orbit-cli/tests/mcp/mcp_roundtrip.rs`; `crates/orbit-core/tests/runtime/admission_audit/agent_invoke.rs` |
 | `agent_explore_pipeline` | Boundary: `agent_explore_admission_scenarios` submits an explorer from a managed implement run's MCP environment and verifies the pool crew, the caller's worktree, no trusted-host admission, inherited resource class, idempotent retry and run-detail summary; refusals cover an out-of-pool crew, a foreign cwd, a widened provider sandbox, each budget, the disabled switch, other activities, nesting and a finished caller; the operator path stays trusted-host. `agent_explore_sandbox_scenarios` (Linux) resolves the shipped explorer profile and verifies it denies a worktree write the implementer's grants. Engine: `delegation_is_offered_only_while_the_host_enables_it`, `an_unwrapped_explorer_runs_codex_read_only`, `an_unwrapped_explorer_without_a_read_only_mode_is_refused_before_spawn`, `a_wrapped_explorer_still_dispatches`, `an_implementer_with_the_executor_sandbox_off_still_runs`. The shipped graph's provider run is not executed. | `crates/orbit-core/tests/runtime/admission_audit/agent_explore.rs`; `crates/orbit-engine/tests/engine/v2_cli_agent/explore.rs` |
 | `baseline_hold_refresh_pipeline` | Graph through the owner sweep runtime: `a_hold_check_runs_off_the_tick_and_ticks_meanwhile_fire_routines_and_auto_tasks` dispatches and executes the shipped refresh job outside the tick, records its verdict and lets other clock work continue. `a_checked_tip_is_judged_from_its_recorded_result_without_another_run` and `an_inconclusive_tip_waits_for_backoff_or_a_new_tip_before_another_refresh` cover recorded results and bounded retry. | `crates/orbit-core/tests/runtime/baseline_hold_tick.rs` |
 | `blocked_task_recovery_pipeline` | Graph through the owner runtime: `recovery_uses_machine_bound_run_evidence_and_its_own_crew_draw` runs the shipped recovery job for a settled follower failure, checks machine-bound failure evidence and crew selection, and verifies requeue. | `crates/orbit-core/tests/runtime/distributed_drain/recovery.rs` |
@@ -55,7 +55,7 @@ These supplement the rows; they are not execution proof for every shipped job:
 - `crates/orbit-cli/tests/mcp/mcp_roundtrip/transport_operations.rs`:
   `stdio_resume_runs_only_deterministic_remaining_steps_and_reopens_checkpoint_lineage`
   resumes a fixture job over MCP stdio from its own checkpoints.
-- Engine `activity_job/job_executor/tests/resume.rs`:
+- `crates/orbit-engine/tests/engine/admission_audit/resume.rs`:
   `resume_reexecuted_pr_output_reaches_promotion_and_checkpoint`.
 - `crates/orbit-engine/tests/engine/v2_worktree_lifecycle.rs`:
   `conflict_recovery_leaf_completes_only_its_checkpointed_rebase`.
