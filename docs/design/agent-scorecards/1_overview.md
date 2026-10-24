@@ -16,11 +16,11 @@ related_artifacts: []
 
 # Agent Scorecards — Overview
 
-Agent scorecards rank the agents that do each part of Orbit's delivery work: the orchestrators that file and supervise tasks, the implementers that write the change, the reviewers that gate it, and the task pilots that predict its footprint and complexity. Each role gets one scorecard of the same shape, ranked by crew and model, on a new Observe › **Agents** dashboard destination. Every problem Orbit records (a spec edit, a rejected review, a missed regression, a wasted lock) counts against exactly one role, so a single defect never lowers two rankings.
+Agent scorecards rank the agents that do each part of Orbit's delivery work: the orchestrators that file and supervise tasks, the implementers that write the change, the reviewers that gate it, and the task pilots that predict its footprint and complexity. Each role gets one scorecard of the same shape, ranked by crew and model, in the Analytics › **Agents** dashboard view (`#analytics/agents/<role>`). Every problem Orbit records (a spec edit, a rejected review, a missed regression, a wasted lock) counts against exactly one role, so a single defect never lowers two rankings.
 
 ## 1. Motivation
 
-Orbit ranked orchestrators (Analytics › Orchestrators, now Observe › Agents) and task pilots (one tile of Analytics › Codebase). Those two views use different shapes, and neither answers the question operators actually ask when choosing crew pools: which crew and model does this job best?
+Orbit ranked orchestrators (Analytics › Orchestrators, now in Analytics › Agents at `#analytics/agents/<role>`) and task pilots (one tile of Analytics › Codebase). Those two views use different shapes, and neither answers the question operators actually ask when choosing crew pools: which crew and model does this job best?
 
 The orchestrator composite also charges the orchestrator for crew-caused rework. On the 7-day data that motivated this feature, 22 of opus's 28 rework items had cause `crew`, so its score mostly measured its implementers. Separate implementer and reviewer scorecards can only be fair if every problem has one owner.
 
