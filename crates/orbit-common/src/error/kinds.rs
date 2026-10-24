@@ -303,16 +303,29 @@ pub enum RemoteToolCode {
     ProtocolSkew,
     /// The call could not reach the plugin broker.
     PluginBrokerUnavailable,
+    /// The remote rejected the request's input; nothing was decided.
+    InvalidInput,
+    /// The remote's catalog role refused the call, before any capability
+    /// grant was consulted.
+    CapabilityRefused,
+    /// The caller's capability grant does not cover the call.
+    CapabilityDenied,
+    /// The remote's policy refused the call.
+    PolicyDenied,
     /// Any other code, exactly as received.
     Other(String),
 }
 
 impl RemoteToolCode {
-    const NAMED: [Self; 4] = [
+    const NAMED: [Self; 8] = [
         Self::LockBusy,
         Self::NotFound,
         Self::ProtocolSkew,
         Self::PluginBrokerUnavailable,
+        Self::InvalidInput,
+        Self::CapabilityRefused,
+        Self::CapabilityDenied,
+        Self::PolicyDenied,
     ];
 
     /// The wire spelling of this code.
@@ -322,6 +335,10 @@ impl RemoteToolCode {
             Self::NotFound => "not_found",
             Self::ProtocolSkew => "protocol_skew",
             Self::PluginBrokerUnavailable => "plugin_broker_unavailable",
+            Self::InvalidInput => "invalid_input",
+            Self::CapabilityRefused => "capability_refused",
+            Self::CapabilityDenied => "capability_denied",
+            Self::PolicyDenied => "policy_denied",
             Self::Other(code) => code.as_str(),
         }
     }
