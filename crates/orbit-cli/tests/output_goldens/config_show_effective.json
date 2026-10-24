@@ -378,6 +378,20 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.crew_performance_cap": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_performance_strength": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.crew_performance_types": {
       "scope": "built-in",
       "state": "default",

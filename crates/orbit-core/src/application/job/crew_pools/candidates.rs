@@ -11,8 +11,7 @@ use crate::runtime::run_input::non_empty;
 
 use super::draw::{
     INSPECTION_CREW_UNAVAILABLE, complexity_crews_key, permitted_candidates, pools_from_input,
-    pressure_weighted_candidates, random_crew_ticket, seeded_crew_ticket, sole_candidate,
-    weighted_draw,
+    random_crew_ticket, seeded_crew_ticket, sole_candidate, weighted_candidates, weighted_draw,
 };
 use super::purpose::{PURPOSE_SOURCE_PREFIX, automatic_crew_source, task_crew_purpose};
 use super::types::{
@@ -76,8 +75,13 @@ impl OrbitRuntime {
             return Ok(None);
         }
         let before = task.crew.clone();
-        let assignment =
-            self.creation_crew_assignment(complexity, None, &task.tags, &mut random_crew_ticket)?;
+        let assignment = self.creation_crew_assignment(
+            complexity,
+            None,
+            &task.tags,
+            &task.context_files,
+            &mut random_crew_ticket,
+        )?;
         task.crew = assignment
             .as_ref()
             .map(|assignment| assignment.crew.clone());
@@ -367,10 +371,14 @@ impl OrbitRuntime {
             return Ok(None);
         };
         let (mut crews, draw_source) = self.admissible_crew_candidates(&redraw, &pools)?;
-        let weighting = pressure_weighted_candidates(
+        // The claimed snapshot carries no tags or context files to type the
+        // task by, and a follower keeps no performance snapshot of its own,
+        // so this re-draw weighs this host's usage pressure only.
+        let weighting = weighted_candidates(
             &mut crews,
             &self.provider_limit_policy().usage_pressure,
             || self.usage_pressure_read(chrono::Utc::now()),
+            || None,
         );
         if weighting.is_none() {
             return Ok(None);
@@ -664,7 +672,9 @@ impl OrbitRuntime {
     /// this write leaves the task with, before drawing. An explicit crew is
     /// kept exactly as the caller wrote it.
     /// [ORB-17770] Under usage pressure, both pool draws weigh their members
-    /// by crew pressure; this covers task add, `task update --crew ""` and
+    /// by crew pressure, and under `workflow.crew_performance` by each
+    /// crew's performance on the task's tier and type (read from `tags` and
+    /// `context_files`); this covers task add, `task update --crew ""` and
     /// [`Self::rerate_task_crew`]. The recorded source stays the pool's.
     /// `None` means this workspace can name no crew at all, so the field stays
     /// unset and dispatch resolves one from configuration as it always has.
@@ -673,6 +683,7 @@ impl OrbitRuntime {
         complexity: Option<TaskComplexity>,
         explicit: Option<&str>,
         tags: &[String],
+        context_files: &[String],
         random: &mut impl FnMut() -> Result<u64, OrbitError>,
     ) -> Result<Option<CreationCrewAssignment>, OrbitError> {
         if let Some(explicit) = explicit.and_then(non_empty) {
@@ -685,7 +696,7 @@ impl OrbitRuntime {
             && let Some((candidates, _)) = self.purpose_pool_candidates(purpose, false)?
         {
             let source = format!("{PURPOSE_SOURCE_PREFIX}{purpose}");
-            let candidates = self.creation_pressure_weighted(candidates);
+            let candidates = self.creation_weighted(candidates, complexity, tags, context_files);
             let candidates = permitted_candidates(candidates, &source, None)?;
             let selected = weighted_draw(&candidates, &source, random)?;
             return Ok(Some(CreationCrewAssignment {
@@ -702,7 +713,8 @@ impl OrbitRuntime {
             )?
         {
             let source = format!("pool:{complexity}");
-            let candidates = self.creation_pressure_weighted(candidates);
+            let candidates =
+                self.creation_weighted(candidates, Some(complexity), tags, context_files);
             let candidates = permitted_candidates(candidates, &source, None)?;
             let selected = weighted_draw(&candidates, &source, random)?;
             return Ok(Some(CreationCrewAssignment {
@@ -735,13 +747,20 @@ impl OrbitRuntime {
         }))
     }
 
-    /// A creation-seam pool draw's members, weighed by usage pressure when
-    /// it applies [ORB-17770].
-    fn creation_pressure_weighted(&self, mut candidates: Vec<CrewCandidate>) -> Vec<CrewCandidate> {
-        pressure_weighted_candidates(
+    /// A creation-seam pool draw's members, weighed by usage pressure
+    /// [ORB-17770] and crew performance when they apply.
+    fn creation_weighted(
+        &self,
+        mut candidates: Vec<CrewCandidate>,
+        complexity: Option<TaskComplexity>,
+        tags: &[String],
+        context_files: &[String],
+    ) -> Vec<CrewCandidate> {
+        weighted_candidates(
             &mut candidates,
             &self.provider_limit_policy().usage_pressure,
             || self.usage_pressure_read(chrono::Utc::now()),
+            || self.crew_performance_read(complexity, tags, context_files),
         );
         candidates
     }

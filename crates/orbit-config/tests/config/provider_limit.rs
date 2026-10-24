@@ -410,3 +410,62 @@ fn invalid_usage_pressure_settings_are_refused_by_load_and_config_set() {
         }
     }
 }
+
+/// `workflow.crew_performance*` default to off at strength 3 and cap 4, ride
+/// the provider-limit policy beside usage pressure, and give the scope's
+/// factor: `clamp(exp(k × advantage / 100), 1/cap, cap)`.
+#[test]
+fn crew_performance_keys_default_to_off_and_give_the_scope_factor() {
+    let policy = load("")
+        .expect("an empty [workflow] loads")
+        .crew_performance;
+    assert_eq!(policy, CrewPerformancePolicy::default());
+    assert_eq!(policy.mode, CrewPerformanceMode::Off);
+    assert!(!policy.applies());
+    assert_eq!((policy.strength, policy.cap), (3.0, 4.0));
+
+    let policy = load("crew_performance = \"comparative\"")
+        .expect("comparative loads")
+        .crew_performance;
+    assert!(policy.applies());
+    assert_eq!(policy.advantage(108.0, 98.0), 10.0, "score − crew mean");
+    assert!((policy.factor(10.0) - 1.3499).abs() < 1e-4, "+10 is ×1.35");
+    assert!((policy.factor(-10.0) - 0.7408).abs() < 1e-4, "−10 is ×0.74");
+    assert_eq!(policy.factor(100.0), 4.0, "capped at cap");
+    assert_eq!(policy.factor(-100.0), 0.25, "floored at 1 / cap");
+    let policy = load("crew_performance = \"absolute\"")
+        .expect("absolute loads")
+        .crew_performance;
+    assert_eq!(policy.advantage(115.0, 114.0), 15.0, "score − 100");
+    let off = load("crew_performance = \"absolute\"\ncrew_performance_strength = 0")
+        .expect("strength 0 loads")
+        .crew_performance;
+    assert!(!off.applies(), "strength 0 disables the factor");
+    for (key, value) in [
+        ("workflow.crew_performance_strength", "0.5"),
+        ("workflow.crew_performance_cap", "1"),
+    ] {
+        set(key, value).unwrap_or_else(|error| panic!("config set admits {key}: {error}"));
+    }
+}
+
+/// A cap below 1 and a negative or non-finite strength are refused by load
+/// and by `orbit config set`, naming the key.
+#[test]
+fn invalid_crew_performance_settings_are_refused_by_load_and_config_set() {
+    for (key, value, expected) in [
+        ("workflow.crew_performance_cap", "0.5", "at least 1"),
+        ("workflow.crew_performance_cap", "nan", "at least 1"),
+        ("workflow.crew_performance_strength", "-1", "at least 0"),
+        ("workflow.crew_performance_strength", "inf", "at least 0"),
+    ] {
+        let field = key.trim_start_matches("workflow.");
+        for error in [
+            load(&format!("{field} = {value}")).expect_err(&format!("load {key} = {value}")),
+            set(key, value).expect_err(&format!("set {key} = {value}")),
+        ] {
+            assert!(error.contains(key), "{key} = {value}: {error}");
+            assert!(error.contains(expected), "{key} = {value}: {error}");
+        }
+    }
+}

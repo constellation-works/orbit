@@ -188,6 +188,7 @@ impl OrbitRuntime {
             Some(params.complexity),
             params.crew.as_deref(),
             &normalized_tags,
+            &params.context_files,
             &mut creation_crew_ticket(action_key),
         )?;
         // A crew the system chose from a setting records that setting rather

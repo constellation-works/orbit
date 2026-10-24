@@ -102,8 +102,10 @@ pub use aliases::{
     ShellProbeMode, WorkerContainmentMode, deprecated_key_rewrites, translate_deprecated_keys,
 };
 pub use crew_performance::{
-    CREW_PERFORMANCE_KEY, CREW_PERFORMANCE_TYPES_KEY, CREW_PERFORMANCE_WINDOW_DAYS_KEY,
-    CrewPerformanceMode, CrewPerformanceType, DEFAULT_CREW_PERFORMANCE_WINDOW_DAYS, OTHER_TYPE,
+    CREW_PERFORMANCE_CAP_KEY, CREW_PERFORMANCE_KEY, CREW_PERFORMANCE_STRENGTH_KEY,
+    CREW_PERFORMANCE_TYPES_KEY, CREW_PERFORMANCE_WINDOW_DAYS_KEY, CrewPerformanceMode,
+    CrewPerformancePolicy, CrewPerformanceType, DEFAULT_CREW_PERFORMANCE_CAP,
+    DEFAULT_CREW_PERFORMANCE_STRENGTH, DEFAULT_CREW_PERFORMANCE_WINDOW_DAYS, OTHER_TYPE,
     classify_task_type, crew_performance_types_hash,
 };
 pub use crew_pools::{

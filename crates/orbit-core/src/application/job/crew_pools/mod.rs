@@ -14,6 +14,10 @@
 //! under the task's existing automatic source. Activity, review, verifier and
 //! explorer pools use the same helper through `draw_crew_pool`, after their
 //! existing membership filters, and carry each member's draw provenance.
+//! `workflow.crew_performance` multiplies the creation, re-rate and
+//! admission draws by each crew's performance factor from the persisted
+//! snapshot through the same seam; it never re-draws an assigned crew by
+//! itself, and activity draws take no performance factor.
 
 mod activity;
 mod admission;

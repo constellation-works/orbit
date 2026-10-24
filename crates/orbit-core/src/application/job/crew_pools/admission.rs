@@ -10,8 +10,8 @@ use crate::runtime::engine::crew::{CrewAllowlist, enforce_crew_allowlist};
 use crate::runtime::run_input::non_empty;
 
 use super::draw::{
-    PressureWeighting, auto_task_id, permitted_candidates, pools_from_input,
-    pressure_weighted_candidates, weighted_draw,
+    DrawWeighting, auto_task_id, permitted_candidates, pools_from_input, weighted_candidates,
+    weighted_draw,
 };
 use super::types::{COMPLEXITIES, CapturedCrewPools, POLICY_PIPELINES, POOLS_KEY, SELECTION_KEY};
 use super::{PROVIDER_LIMIT_REASSIGNMENT_PREFIX, auto_task_minted};
@@ -193,24 +193,27 @@ impl OrbitRuntime {
             None
         };
         let (mut crews, mut source) = self.auto_task_crew_candidates(&task, &pools, explicit)?;
-        // [ORB-17770] Weigh the narrowed pool by usage pressure; an explicit
-        // run crew is the operator's call and has no draw to weigh.
+        // [ORB-17770] Weigh the narrowed pool by usage pressure and crew
+        // performance; an explicit run crew is the operator's call and has
+        // no draw to weigh. Performance never widens the pool: only the
+        // usage-pressure view above re-draws an assigned crew.
         let weighting = if explicit.is_none() {
-            pressure_weighted_candidates(
+            weighted_candidates(
                 &mut crews,
                 &self.provider_limit_policy().usage_pressure,
                 || self.usage_pressure_read(chrono::Utc::now()),
+                || self.crew_performance_read(task.complexity, &task.tags, &task.context_files),
             )
         } else {
             None
         };
-        if weighting.is_some() {
+        if weighting.as_ref().is_some_and(DrawWeighting::pressured) {
             source = format!("{source}; usage pressure");
         }
         let allowlist = self.crew_allowlist_from_input(input)?;
         let candidates = permitted_candidates(crews, &source, allowlist.as_ref())?;
         let selected = weighted_draw(&candidates, &source, random)?;
-        if let Some(weighting) = &weighting
+        if let Some(weighting) = weighting.as_ref().filter(|weighting| weighting.pressured())
             && let Some(original) = task.crew.as_deref()
             && original != selected.crew.name
             && let Some(redraw) = self.usage_pressure_redraw_view(&task)?
@@ -254,8 +257,8 @@ impl OrbitRuntime {
             "complexity": task.complexity,
             // The odds this draw ran on, renormalised over the permitted
             // members, so `orbit run show` can explain the choice.
-            // A usage-pressure draw adds each member's `pressure` and the
-            // `effective_weight` it drew on [ORB-17770].
+            // A weighted draw adds each member's `pressure` [ORB-17770]
+            // and `performance` factor, and the `effective_weight` it drew on.
             "eligible_pool": candidates
                 .iter()
                 .map(|candidate| match &weighting {
@@ -424,7 +427,7 @@ impl OrbitRuntime {
         original: &str,
         source: &str,
         replacement: &str,
-        weighting: &PressureWeighting,
+        weighting: &DrawWeighting,
     ) -> Result<(), OrbitError> {
         let now = chrono::Utc::now();
         let describe = |crew: &str| {
@@ -433,12 +436,25 @@ impl OrbitRuntime {
                 |pressure| pressure.describe(now),
             )
         };
-        let note = format!(
+        let mut note = format!(
             "crew redrawn from {source} (`{original}`) to {source} (`{replacement}`) at admission \
              under usage pressure: `{original}` {}, `{replacement}` {}",
             describe(original),
             describe(replacement),
         );
+        // The re-draw carries the performance factor too when it applied.
+        if let Some((mode, _)) = weighting.performance_lens() {
+            let performance = |crew: &str| {
+                weighting
+                    .performance_description(crew)
+                    .unwrap_or_else(|| "×1".to_string())
+            };
+            note.push_str(&format!(
+                "; crew performance {mode}: `{original}` {}, `{replacement}` {}",
+                performance(original),
+                performance(replacement),
+            ));
+        }
         self.stores()
             .tasks()
             .with_task_write_lock(task_id, &mut || {

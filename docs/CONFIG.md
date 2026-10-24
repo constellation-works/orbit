@@ -296,6 +296,8 @@ usage_pressure_cap = 8
 usage_pressure_strength = 1.0
 crew_performance_types = []
 crew_performance = "off"
+crew_performance_strength = 3
+crew_performance_cap = 4
 crew_performance_window_days = 30
 ```
 
@@ -317,7 +319,9 @@ crew_performance_window_days = 30
 | `workflow.usage_pressure_cap` | `8` | **Advanced.** Under `usage_pressure`, the weight multiplier is clamped to `[1/cap, cap]`. A number of at least `1`; `1` leaves every weight as configured. |
 | `workflow.usage_pressure_strength` | `1.0` | **Advanced.** Under `usage_pressure`, the exponent applied to pressure before the cap. A number of at least `0`; `0` disables weighting and the admission re-draw. |
 | `workflow.crew_performance_types` | `[]` | **Advanced.** Ordered task types for the implementer scorecard's by-type matrix, each a `[[workflow.crew_performance_types]]` table with `name`, `tags` and `paths`. See [crew performance types](#crew-performance-types). |
-| `workflow.crew_performance` | `off` | **Advanced.** Whether the hourly crew-performance snapshot is built: `off`, `absolute` or `comparative`. Independent of `workflow.crew_selection`. Crew draws do not use the snapshot yet; `off` also makes the seeded refresh routine no-op without scanning. See [crew performance snapshot](#crew-performance-snapshot). |
+| `workflow.crew_performance` | `off` | **Advanced.** How task creation, complexity re-rate and admission draws weigh pool members by crew performance: `off`, `absolute` (toward the crew that scores best on the task's type) or `comparative` (toward the type each crew does best against its own mean). Independent of `workflow.crew_selection`; the two factors multiply. `off` also makes the seeded refresh routine no-op without scanning. See [performance-weighted draws](#performance-weighted-draws) and [crew performance snapshot](#crew-performance-snapshot). |
+| `workflow.crew_performance_strength` | `3` | **Advanced.** `k` in the performance factor `clamp(exp(k × advantage / 100), 1/cap, cap)`. A number of at least `0`; `0` disables the factor. |
+| `workflow.crew_performance_cap` | `4` | **Advanced.** The performance factor is clamped to `[1/cap, cap]`. A number of at least `1`; `1` leaves every weight as configured. |
 | `workflow.crew_performance_window_days` | `30` | **Advanced.** Evidence window in days (`1`–`90`) the crew-performance snapshot is built from. Values outside that range are refused. |
 | `workflow.auto_ship` | `false` | Opt this workspace in to `orbit run ship-sweep`, the cross-workspace unattended ship command (skipped with `auto_ship_disabled` while `false`). The seeded `ship-sweep` routine ignores this key; its `enabled:` flag is its only switch. Neither grants `--complete` or `--approve-proposed`, and a `no-auto-approve` task is never auto-approved by either flag's drain or the CI sweep. |
 | `workflow.required_validation_commands` | `[]` | Commands every delivered candidate must pass before push or merge. Empty runs no required check. See [required validation](#required-validation). |
@@ -343,13 +347,13 @@ tags = ["ui"]
 paths = ["web/**"]
 ```
 
-A task takes the first type whose `tags` it carries (any of) or whose `paths` globs match any of its `context_files` (any of); a task matching none is `other`. Names must be unique and non-empty, `other` is reserved, and an entry with neither `tags` nor `paths` is refused with a config error naming the entry. The list is a lens: the scorecard classifies historical tasks with the current list at scan time, so editing it re-sorts history. Orbit ships no types beyond `other`, so an empty list puts every task in `other`. The matrix is read with `orbit agents scorecard --role implementers --by-type`; crew selection does not use it yet.
+A task takes the first type whose `tags` it carries (any of) or whose `paths` globs match any of its `context_files` (any of); a task matching none is `other`. Names must be unique and non-empty, `other` is reserved, and an entry with neither `tags` nor `paths` is refused with a config error naming the entry. The list is a lens: the scorecard classifies historical tasks with the current list at scan time, so editing it re-sorts history. Orbit ships no types beyond `other`, so an empty list puts every task in `other`. The matrix is read with `orbit agents scorecard --role implementers --by-type`; under [`workflow.crew_performance`](#performance-weighted-draws) a draw classifies the task with the same list.
 
 ### Crew performance snapshot
 
 A crew draw must never run the scorecard scan, so the by-type cell matrix is persisted as a per-workspace snapshot: one row per `(crew, model, tier, type)` cell with its raw score, `n`, crew mean and shrunk score, plus the evidence window, a hash of the type list it was built with, and `computed_at`. The seeded `crew_performance_refresh` routine (hourly, seeded enabled) runs `job:crew_performance_refresh_pipeline` to rebuild it; each refresh replaces the previous snapshot atomically. Run it on demand with `orbit run job crew_performance_refresh_pipeline`.
 
-While `workflow.crew_performance` is `off` (the default) the refresh writes no snapshot, records `skipped: crew_performance_off`, and skips the scan (the hourly routine still records a job run). Set it to `absolute` or `comparative` to start building snapshots over `workflow.crew_performance_window_days` (default `30`, `1`–`90`). A stored snapshot is usable only while fresh: a reader gets the typed reason `missing`, `stale` (older than 24 hours) or `type_list_changed` (built from a different `workflow.crew_performance_types` list) otherwise. `orbit run readiness` prints one line for the snapshot — its computed time, window and type list, or the unusable reason — and `--json` carries the same under `crew_performance`. Crew draws do not read the snapshot yet.
+While `workflow.crew_performance` is `off` (the default) the refresh writes no snapshot, records `skipped: crew_performance_off`, and skips the scan (the hourly routine still records a job run). Set it to `absolute` or `comparative` to start building snapshots over `workflow.crew_performance_window_days` (default `30`, `1`–`90`). A stored snapshot is usable only while fresh: a reader gets the typed reason `missing`, `stale` (older than 24 hours) or `type_list_changed` (built from a different `workflow.crew_performance_types` list) otherwise. `orbit run readiness` prints one line for the snapshot — its computed time, window and type list, or the unusable reason — and `--json` carries the same under `crew_performance`. [Performance-weighted draws](#performance-weighted-draws) read it and treat every unusable reason as factor 1.
 
 ### Unlocked context paths
 
@@ -1194,7 +1198,7 @@ hard_complexity_crews   = ["opus", "sol"]          # bare = uniform
 
 **Allowlists.** With `--allow-crew`, the draw renormalizes over permitted members, keeping their ratios. A pool with no permitted positive-weight member is disjoint, and `orbit run readiness --allow-crew <crew>` reports `crew_not_allowed`. Without `--allow-crew`, readiness (and the dashboard Drain card) applies the live drain's own set and reports it as `capacity.allowed_crews`. The allowlist is checked against `task.crew` and still applies to system and review activities at dispatch.
 
-**Frozen per run.** The admitting run captures the effective pools in run input `auto_crew_pools`, inherited by descendants. Each admitted leaf records `crew` and `crew_selection` (task ID, complexity, source, and the eligible `[{name, weight}]` after renormalization, with `pressure` and `effective_weight` under [usage-pressure draws](#usage-pressure-draws)), shown as `Crew Selection:` in `orbit run show`. Retries and resumes keep it.
+**Frozen per run.** The admitting run captures the effective pools in run input `auto_crew_pools`, inherited by descendants. Each admitted leaf records `crew` and `crew_selection` (task ID, complexity, source, and the eligible `[{name, weight}]` after renormalization, with `pressure` and `effective_weight` under [usage-pressure draws](#usage-pressure-draws) and `performance` under [performance-weighted draws](#performance-weighted-draws)), shown as `Crew Selection:` in `orbit run show`. Retries and resumes keep it.
 
 ### Provider failure holds
 
@@ -1291,6 +1295,25 @@ With `workflow.crew_selection = "usage_pressure"` and a positive strength, crew 
 - **Pull offer order.** A follower under `usage_pressure` also reports each crew's weekly pressure in its pull capability (recomputed each pass; absent under `static`, and an absent report reads as neutral `1`). The owner orders that follower's offers by it only below band, priority, expiry and census reach/affinity: of tasks tied on all of those, the one whose pool contains the follower's highest-pressure crew is offered first. Pressure never overrides a higher priority or an expiring task, never gates admission, and owner-local dispatch, which has no pressure input, orders exactly as before.
 
 Under `static`, or with the keys unset, every seeded draw uses its original configured weights and consumes the same random tickets; recorded members omit pressure fields. The pressure is this host's reading; a drain admitting on this host weighs its own readings.
+
+#### Performance-weighted draws
+
+```toml
+[workflow]
+crew_performance = "comparative"    # default "off"; or "absolute"
+crew_performance_strength = 3       # default; 0 disables
+crew_performance_cap = 4            # default
+```
+
+With `workflow.crew_performance` set and a positive strength, task pool draws also weigh each member by its crew's implementer score on the task's type within its complexity tier, read from the [crew performance snapshot](#crew-performance-snapshot). The task's type comes from [`workflow.crew_performance_types`](#crew-performance-types) and its tier from its complexity (`unassessed` when it has none).
+
+- **Factor.** Each member's cell `(crew, current model, tier, type)` gives a score and the crew's tier mean. `absolute` reads the advantage `score − 100`, `comparative` reads `score − crew mean`, and the factor is `clamp(exp(strength × advantage / 100), 1/cap, cap)`: at the default strength, +10 points is ×1.35 and −10 is ×0.74. A crew with no cell for the type reads its crew mean (so comparative is ×1), and a crew with no evidence for its current model in that tier reads 100. Evidence from a crew's earlier model does not count.
+- **Effective weight.** A member draws on `weight × pressure_factor × performance_factor`, ×1000 and rounded to whole tickets, with the pressure factor `1` unless [usage-pressure draws](#usage-pressure-draws) apply too. A weight of `0` stays undrawable, the factor never adds a crew outside the pool, and the usage-limit gate and provider holds still narrow the pool first.
+- **Draws it covers.** Task creation, `task update --crew ""`, the re-draw after a complexity change, and delivery admission of a task drawn from its whole pool. Performance alone never re-draws an assigned crew at admission; under `usage_pressure` the pressure re-draw carries both factors. Explicit crews, a single candidate and tasks outside a pool are untouched. Activity, review, verifier and explorer pools, and a pull follower's claimed-leaf re-draw, take no performance factor.
+- **Unusable snapshot.** A missing, stale (over 24 hours) or `type_list_changed` snapshot, or one the store cannot read (`unreadable`), gives every member factor 1 and records the reason; with usage pressure off the draw then uses the configured weights exactly.
+- **Provenance.** Each `eligible_pool` member of the recorded `crew_selection` gains a `performance` object: `mode`, `tier`, `type`, `factor`, and either the cell's `score`, `crew_mean`, `n`, `evidence` (`cell`, `crew_mean` or `none`) and the snapshot's `computed_at`, or `unusable` with the reason. A scaled draw records `effective_weight` too. `orbit run show` prints each member's factor and the mode and type under `Crew Selection:` (`eligible=haiku:40×1.57, luna:30×1.27, gemini-flash:30×0.74 performance=absolute type=review`). An admission pressure re-draw's `crew_redrawn` history entry appends both crews' performance factors.
+
+With the keys unset or `off`, every draw and its recorded selection is what it was without them.
 
 #### Budgets for providers that report no usage
 
