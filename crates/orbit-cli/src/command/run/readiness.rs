@@ -416,6 +416,9 @@ fn crew_performance_line(crew_performance: &Value) -> String {
         let reason = crew_performance["unusable_reason"]
             .as_str()
             .unwrap_or("missing");
+        if let Some(error) = crew_performance["error"].as_str() {
+            return format!("Crew performance snapshot: {reason} (mode {mode}): {error}");
+        }
         return format!("Crew performance snapshot: {reason} (mode {mode}).");
     }
     let types = snapshot["types"]
