@@ -400,6 +400,17 @@ function setConfigSubtabImpl(ctx, name) {
   }
 }
 
+function revealActiveRailSelection() {
+  const tab = document.querySelector(".rail .tab.active");
+  if (!tab) return;
+  // Counts and web fonts can change this width after the route was selected.
+  // Recompute the space beside the destination before revealing its view.
+  $("tabs").style.setProperty("--active-tab-width", `${tab.offsetWidth}px`);
+  document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active")
+    ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  tab.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
 function setActiveTabImpl(ctx, raw, opts = {}) {
   const previousTab = document.querySelector(".tab.active");
   const previousSubtab = document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active");
@@ -611,8 +622,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   // A repeated hash normalization must not undo intervening keyboard scrolling.
   const activeSubtab = document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active");
   if (activeTabEl !== previousTab || activeSubtab !== previousSubtab) {
-    activeSubtab?.scrollIntoView({ block: "nearest", inline: "nearest" });
-    activeTabEl?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    revealActiveRailSelection();
   }
   const hashChanged = window.location.hash !== hash;
   const shouldUpdateHash = opts.updateHash !== false;
@@ -648,6 +658,14 @@ function navigateToRunImpl(ctx, runId, workspaceId = null) {
 }
 
 function initTabsImpl(ctx) {
+  // A late count on any preceding entry shifts the selection, even when the
+  // destination itself keeps its width. Observe entries as well as the row so
+  // those updates and font/viewport changes repair both nested scroll strips.
+  // Scrolling alone does not resize them, so keyboard exploration stays put.
+  const railLayout = new ResizeObserver(revealActiveRailSelection);
+  for (const entry of document.querySelectorAll(".rail .tabs, .rail .tab, .rail-subtabs .subtab")) {
+    railLayout.observe(entry);
+  }
   $("skip-link")?.addEventListener("click", (event) => {
     const main = activePaneMain();
     if (!main) return;
