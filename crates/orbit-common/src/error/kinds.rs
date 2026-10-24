@@ -135,11 +135,13 @@ pub struct SqliteContention {
     pub detail: String,
 }
 
-/// The error family an [`crate::OrbitError::StorageAccessDenied`] reports as.
+/// The error family an [`crate::OrbitError::StorageAccessDenied`] or
+/// [`crate::OrbitError::StorageLockBusy`] reports as.
 ///
-/// A read-only or access-denied failure keeps the message prefix and the
-/// stable error code of the variant it would otherwise have been built as, so
-/// carrying the class changes no user-visible text and no wire code.
+/// A read-only, access-denied or lock-busy failure keeps the message prefix
+/// and the stable error code of the variant it would otherwise have been
+/// built as, so carrying the class changes no user-visible text and no wire
+/// code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StorageLayer {

@@ -405,9 +405,21 @@ pub fn is_readonly_or_access_sqlite_error(error: &rusqlite::Error) -> bool {
     )
 }
 
+/// Whether SQLite gave up on another connection's lock: `SQLITE_BUSY` or
+/// `SQLITE_LOCKED` (and their extended codes).
+fn is_lock_busy_sqlite_error(error: &rusqlite::Error) -> bool {
+    use rusqlite::ErrorCode;
+
+    matches!(
+        error.sqlite_error_code(),
+        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+    )
+}
+
 /// A `layer` failure described by `message`, keeping whether SQLite refused
 /// it as read-only or access-denied (see
-/// [`is_readonly_or_access_sqlite_error`]). Use it wherever a
+/// [`is_readonly_or_access_sqlite_error`]) or lost it to a lock that outlasted
+/// the busy timeout ([`OrbitError::StorageLockBusy`]). Use it wherever a
 /// `rusqlite::Error` on a write or open path is wrapped into an
 /// [`OrbitError`].
 pub fn sqlite_error(
@@ -415,6 +427,12 @@ pub fn sqlite_error(
     error: &rusqlite::Error,
     message: impl Into<String>,
 ) -> OrbitError {
+    if is_lock_busy_sqlite_error(error) {
+        return OrbitError::StorageLockBusy {
+            layer,
+            message: message.into(),
+        };
+    }
     OrbitError::storage(layer, is_readonly_or_access_sqlite_error(error), message)
 }
 
@@ -495,14 +513,10 @@ fn apply_default_pragmas_inner(
 }
 
 fn sqlite_operation_error(path: Option<&Path>, phase: &str, error: &rusqlite::Error) -> OrbitError {
-    use rusqlite::ErrorCode;
-
-    let contention = matches!(
-        error.sqlite_error_code(),
-        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
-    );
     let detail = sqlite_error_detail(error);
-    if contention && let Some(path) = path {
+    if is_lock_busy_sqlite_error(error)
+        && let Some(path) = path
+    {
         return OrbitError::SqliteContention(Box::new(SqliteContention {
             path: path.display().to_string(),
             phase: phase.to_string(),

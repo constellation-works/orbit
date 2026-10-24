@@ -824,7 +824,7 @@ where
     // outlasts one busy timeout is retried once, and only after the tool
     // itself succeeded: a failed call has nothing committed to protect, and
     // its own error must not wait on a second timeout.
-    if result.is_ok() && audit_write.as_ref().is_err_and(is_store_lock_contention) {
+    if result.is_ok() && audit_write.as_ref().is_err_and(OrbitError::is_lock_busy) {
         tracing::warn!(
             tool = name,
             "committed tool call lost the audit-store lock; retrying with the busy timeout"
@@ -852,17 +852,6 @@ where
     // (ORB-16383). Finding M1 (SECURITY-REVIEW-2026-07-15) still holds for
     // the silent case: a missing audit row is reported on the success value.
     finalize_successful_dispatch(name, execution_kind, value, audit_write)
-}
-
-/// Whether `error` is a SQLite writer lock that the store's busy timeout
-/// did not outlast. `sqlite_store_error` keeps that as [`OrbitError::Store`]
-/// whose text is `database is locked`; the classified contention variant is
-/// the same wait exhausted on a path-aware open.
-fn is_store_lock_contention(error: &OrbitError) -> bool {
-    if error.is_lock_busy() {
-        return true;
-    }
-    orbit_common::is_lock_busy_message(&error.to_string())
 }
 
 /// Fold a successful tool call together with its audit-write outcome into the

@@ -337,6 +337,18 @@ pub enum OrbitError {
         layer: StorageLayer,
         message: String,
     },
+    /// A SQLite operation lost only to another connection's lock outlasting
+    /// its busy timeout (`SQLITE_BUSY` or `SQLITE_LOCKED`). Classified from
+    /// SQLite's result code where the error is translated, so callers answer
+    /// it with [`Self::is_lock_busy`] instead of reading message text.
+    /// Displays, reports and serializes exactly as the `layer` variant it
+    /// stands in for.
+    #[error("{layer}: {message}")]
+    #[serde(untagged, serialize_with = "serialize_as_storage_layer")]
+    StorageLockBusy {
+        layer: StorageLayer,
+        message: String,
+    },
 }
 
 const _: () = assert!(
@@ -356,4 +368,12 @@ fn serialize_private_vcs_failure<S: serde::Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(&failure.message)
+}
+
+fn serialize_as_storage_layer<S: serde::Serializer>(
+    layer: &StorageLayer,
+    message: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    OrbitError::storage(*layer, false, message).serialize(serializer)
 }

@@ -228,6 +228,10 @@ pub(crate) fn host_error_code(error: &OrbitError) -> &str {
         | OrbitError::StorageAccessDenied {
             layer: StorageLayer::Io,
             ..
+        }
+        | OrbitError::StorageLockBusy {
+            layer: StorageLayer::Io,
+            ..
         } => "io_error",
         _ => "internal_error",
     }

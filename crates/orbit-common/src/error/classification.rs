@@ -234,13 +234,15 @@ impl OrbitError {
 
     /// The storage family this error reports as — [`Self::Io`],
     /// [`Self::Store`] or [`Self::Migration`], whether or not it carries a
-    /// read-only or access class — or `None` for any other error.
+    /// read-only, access or lock-busy class — or `None` for any other error.
     pub fn storage_layer(&self) -> Option<StorageLayer> {
         match self {
             Self::Io(_) => Some(StorageLayer::Io),
             Self::Store(_) => Some(StorageLayer::Store),
             Self::Migration(_) => Some(StorageLayer::Migration),
-            Self::StorageAccessDenied { layer, .. } => Some(*layer),
+            Self::StorageAccessDenied { layer, .. } | Self::StorageLockBusy { layer, .. } => {
+                Some(*layer)
+            }
             _ => None,
         }
     }
@@ -276,9 +278,15 @@ impl OrbitError {
     /// or either on a remote owner, which reports it as
     /// [`LOCK_BUSY_ERROR_CODE`]. Nothing was decided under the lock, so the
     /// same call can succeed once its holder lets go.
+    ///
+    /// Answered from the variant alone, like
+    /// [`Self::is_readonly_or_access_failure`]: a SQLite busy or locked
+    /// result is classified where the `rusqlite::Error` is translated.
     pub fn is_lock_busy(&self) -> bool {
         match self {
-            Self::FileLockTimeout(_) | Self::SqliteContention(_) => true,
+            Self::FileLockTimeout(_) | Self::SqliteContention(_) | Self::StorageLockBusy { .. } => {
+                true
+            }
             Self::RemoteTool { code, .. } => code == LOCK_BUSY_ERROR_CODE,
             _ => false,
         }
