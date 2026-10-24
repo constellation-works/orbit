@@ -4296,5 +4296,397 @@
     "run_log": [
       "test\tcargo test\tsafe output\ntest\tother\tordinary\ntest\tcargo test\tstill safe\n"
     ]
+  },
+  {
+    "name": "line_context_primary_timestamp_bearer",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "2026-09-06T21:15:07.1234567Z Bearer\n2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\n2026-09-06T21:15:07.1234567Z safe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_columns_bearer",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "job\tcargo test\tBearer\njob\tcargo test\tSYNTHETICVALUE1234567890\njob\tcargo test\tsafe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_columns_timestamp_bearer",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4,
+      "step": "cargo test"
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "job\tcargo test\t2026-09-06T21:15:07.1234567Z Bearer\njob\tcargo test\t2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\njob\tcargo test\t2026-09-06T21:15:07.1234567Z safe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_timestamp_authorization",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "2026-09-06T21:15:07.1234567Z Authorization:\n2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\n2026-09-06T21:15:07.1234567Z safe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_timestamp_api_key",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "2026-09-06T21:15:07.1234567Z api_key:\n2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\n2026-09-06T21:15:07.1234567Z safe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_timestamp_ordinary",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "2026-09-06T21:15:07.1234567Z ordinary output\n2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\n2026-09-06T21:15:07.1234567Z safe output\n"
+    ]
+  },
+  {
+    "name": "line_context_fallback_timestamp_bearer",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {
+      "101560010340": [
+        "2026-09-06T21:15:07.1234567Z Bearer\n2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\n2026-09-06T21:15:07.1234567Z safe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_columns_bearer",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {
+      "101560010340": [
+        "job\tcargo test\tBearer\njob\tcargo test\tSYNTHETICVALUE1234567890\njob\tcargo test\tsafe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_columns_timestamp_bearer",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4,
+      "step": "cargo test"
+    },
+    "job_logs": {
+      "101560010340": [
+        "job\tcargo test\t2026-09-06T21:15:07.1234567Z Bearer\njob\tcargo test\t2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\njob\tcargo test\t2026-09-06T21:15:07.1234567Z safe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_timestamp_authorization",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {
+      "101560010340": [
+        "2026-09-06T21:15:07.1234567Z Authorization:\n2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\n2026-09-06T21:15:07.1234567Z safe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_timestamp_api_key",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {
+      "101560010340": [
+        "2026-09-06T21:15:07.1234567Z api_key:\n2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\n2026-09-06T21:15:07.1234567Z safe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_timestamp_ordinary",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {
+      "101560010340": [
+        "2026-09-06T21:15:07.1234567Z ordinary output\n2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\n2026-09-06T21:15:07.1234567Z safe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
   }
 ]
