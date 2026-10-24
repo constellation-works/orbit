@@ -1,18 +1,24 @@
-//! Display-only weekly usage pressure, computed from the view's existing observations.
+//! Weekly usage pressure, computed from this host's provider-limit
+//! observations. Surfaces show it raw; under
+//! `workflow.crew_selection = "usage_pressure"` task crew draws weigh it
+//! [ORB-17770].
 
 use chrono::{DateTime, Utc};
+use orbit_types::identity::Crew;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use serde::{Deserialize, Serialize};
 
-use super::gate::reading_lifetime;
+use super::gate::{reading_covers, reading_lifetime};
 use super::view::short_time;
+use crate::OrbitRuntime;
 
 const WEEK_MINUTES: u32 = 10080;
 
 /// Raw headroom per fraction of a weekly window remaining. Unknown is neutral.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UsagePressure {
-    /// Raw, uncapped multiplier; this does not affect crew selection.
+    /// Raw, uncapped multiplier. Crew draws cap it under
+    /// `workflow.crew_selection = "usage_pressure"`.
     pub pressure: f64,
     /// The weekly window that set the minimum, or `None` for neutral unknown usage.
     pub pressure_window: Option<PressureWindow>,
@@ -79,6 +85,26 @@ impl UsagePressure {
             .unwrap_or_default()
     }
 
+    /// `crew`'s pressure: the minimum over the weekly readings of its
+    /// account, account-wide or scoped to a model its own contains.
+    pub(super) fn for_crew(
+        observations: &[ProviderLimitObservation],
+        crew: &Crew,
+        now: DateTime<Utc>,
+    ) -> Self {
+        Self::from_readings(
+            observations.iter().filter(|reading| {
+                reading_covers(
+                    &reading.provider,
+                    reading.account.as_deref(),
+                    reading.model.as_deref(),
+                    crew,
+                )
+            }),
+            now,
+        )
+    }
+
     /// A raw multiplier with its binding window and reset, suitable for CLI output.
     #[must_use]
     pub fn describe(&self, now: DateTime<Utc>) -> String {
@@ -116,4 +142,34 @@ pub struct CrewUsagePressure {
     /// Minimum over account-wide and matching model weekly windows.
     #[serde(flatten)]
     pub usage: UsagePressure,
+}
+
+/// One read of this host's observations, for weighing crew draws by their
+/// crews' weekly pressure.
+pub(crate) struct UsagePressureRead {
+    observations: Vec<ProviderLimitObservation>,
+    now: DateTime<Utc>,
+}
+
+impl UsagePressureRead {
+    /// `crew`'s pressure at this read.
+    pub(crate) fn crew(&self, crew: &Crew) -> UsagePressure {
+        UsagePressure::for_crew(&self.observations, crew, self.now)
+    }
+}
+
+impl OrbitRuntime {
+    /// This host's observations at `now`. An unreadable store is logged and
+    /// reads as neutral pressure for every crew, as admission treats limits.
+    pub(crate) fn usage_pressure_read(&self, now: DateTime<Utc>) -> UsagePressureRead {
+        let observations = self
+            .provider_limit_observations(now)
+            .unwrap_or_else(|error| {
+                tracing::warn!(
+                    "could not read this host's provider usage for crew pressure: {error}"
+                );
+                Vec::new()
+            });
+        UsagePressureRead { observations, now }
+    }
 }

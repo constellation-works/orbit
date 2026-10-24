@@ -238,6 +238,9 @@ pub struct ProviderLimitPolicy {
     /// Operator-declared budgets for providers that report no usage, by
     /// canonical provider [ORB-14699].
     pub budgets: Vec<ProviderLimitBudget>,
+    /// How task crew draws weigh weekly usage pressure
+    /// (`workflow.crew_selection`, `workflow.usage_pressure_*`).
+    pub usage_pressure: UsagePressurePolicy,
 }
 
 impl Default for ProviderLimitPolicy {
@@ -248,7 +251,94 @@ impl Default for ProviderLimitPolicy {
             crew_overrides: BTreeMap::new(),
             explicit_crews: ProviderLimitExplicitCrews::Wait,
             budgets: Vec::new(),
+            usage_pressure: UsagePressurePolicy::default(),
         }
+    }
+}
+
+/// `workflow.usage_pressure_cap` when unset.
+pub const DEFAULT_USAGE_PRESSURE_CAP: f64 = 8.0;
+/// `workflow.usage_pressure_strength` when unset.
+pub const DEFAULT_USAGE_PRESSURE_STRENGTH: f64 = 1.0;
+
+const CREW_SELECTION_KEY: &str = "workflow.crew_selection";
+const USAGE_PRESSURE_CAP_KEY: &str = "workflow.usage_pressure_cap";
+const USAGE_PRESSURE_STRENGTH_KEY: &str = "workflow.usage_pressure_strength";
+
+/// How a task's automatic crew draw weighs its pool members
+/// (`workflow.crew_selection`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CrewSelection {
+    /// Draw on the configured weights alone.
+    #[default]
+    Static,
+    /// Scale each member's weight by its crew's weekly usage pressure.
+    UsagePressure,
+}
+
+impl CrewSelection {
+    /// Every accepted value, as written in `config.toml`.
+    pub const CHOICES: [&'static str; 2] = ["static", "usage_pressure"];
+
+    /// The value as written in `config.toml`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Static => "static",
+            Self::UsagePressure => "usage_pressure",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "static" => Some(Self::Static),
+            "usage_pressure" => Some(Self::UsagePressure),
+            _ => None,
+        }
+    }
+}
+
+/// The admitted `workflow.crew_selection` and `workflow.usage_pressure_*`
+/// settings.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UsagePressurePolicy {
+    /// Whether draws weigh usage pressure at all.
+    pub selection: CrewSelection,
+    /// The multiplier is clamped to `[1 / cap, cap]`; at least 1.
+    pub cap: f64,
+    /// The exponent applied to pressure; `0` disables weighting.
+    pub strength: f64,
+}
+
+impl Default for UsagePressurePolicy {
+    fn default() -> Self {
+        Self {
+            selection: CrewSelection::Static,
+            cap: DEFAULT_USAGE_PRESSURE_CAP,
+            strength: DEFAULT_USAGE_PRESSURE_STRENGTH,
+        }
+    }
+}
+
+impl UsagePressurePolicy {
+    /// Whether draws weigh pressure: `usage_pressure` with a positive
+    /// strength.
+    #[must_use]
+    pub fn applies(&self) -> bool {
+        self.selection == CrewSelection::UsagePressure && self.strength > 0.0
+    }
+
+    /// The weight multiplier for `pressure`:
+    /// `clamp(pressure ^ strength, 1 / cap, cap)`. A non-finite or negative
+    /// pressure counts as neutral.
+    #[must_use]
+    pub fn multiplier(&self, pressure: f64) -> f64 {
+        let pressure = if pressure.is_finite() && pressure >= 0.0 {
+            pressure
+        } else {
+            1.0
+        };
+        pressure.powf(self.strength).clamp(1.0 / self.cap, self.cap)
     }
 }
 
@@ -320,6 +410,11 @@ impl ConfigSnapshot {
             )
             .unwrap_or_default(),
             budgets: self.provider_limit_budgets(),
+            usage_pressure: UsagePressurePolicy {
+                selection: CrewSelection::parse(&self.workflow_crew_selection).unwrap_or_default(),
+                cap: self.workflow_usage_pressure_cap,
+                strength: self.workflow_usage_pressure_strength,
+            },
         }
     }
 }
@@ -393,6 +488,43 @@ pub(crate) fn admit_overrides(raw: Option<Vec<String>>) -> Result<Vec<String>, O
         .into_iter()
         .map(|(target, threshold)| format!("{}{SEPARATOR}{}", target.name(), threshold.render()))
         .collect())
+}
+
+/// Admit `workflow.crew_selection`, `static` when unset.
+pub(crate) fn admit_crew_selection(raw: Option<String>) -> Result<String, OrbitError> {
+    let value = raw.as_deref().map_or("static", str::trim);
+    CrewSelection::parse(value)
+        .map(|selection| selection.as_str().to_string())
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "{CREW_SELECTION_KEY} has invalid value '{value}'; expected one of: {}",
+                CrewSelection::CHOICES.join(", ")
+            ))
+        })
+}
+
+/// Admit `workflow.usage_pressure_cap`: a finite number of at least 1.
+pub(crate) fn admit_usage_pressure_cap(raw: Option<f64>) -> Result<f64, OrbitError> {
+    let cap = raw.unwrap_or(DEFAULT_USAGE_PRESSURE_CAP);
+    if cap.is_finite() && cap >= 1.0 {
+        Ok(cap)
+    } else {
+        Err(OrbitError::InvalidInput(format!(
+            "{USAGE_PRESSURE_CAP_KEY} must be a finite number of at least 1, got {cap}"
+        )))
+    }
+}
+
+/// Admit `workflow.usage_pressure_strength`: a finite number of at least 0.
+pub(crate) fn admit_usage_pressure_strength(raw: Option<f64>) -> Result<f64, OrbitError> {
+    let strength = raw.unwrap_or(DEFAULT_USAGE_PRESSURE_STRENGTH);
+    if strength.is_finite() && strength >= 0.0 {
+        Ok(strength)
+    } else {
+        Err(OrbitError::InvalidInput(format!(
+            "{USAGE_PRESSURE_STRENGTH_KEY} must be a finite number of at least 0, got {strength}"
+        )))
+    }
 }
 
 /// Admit `workflow.provider_limit_explicit_crews`, `wait` when unset.

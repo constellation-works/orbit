@@ -8,7 +8,7 @@ last_validated: 2026-10-23
 
 # Scope: usage-pressure crew selection
 
-Status: phase 1 pressure view implemented; selection phases 2–4 remain proposed.
+Status: phase 1 pressure view and phase 2 task draws ([`workflow.crew_selection`](../../CONFIG.md#usage-pressure-draws)) implemented; phases 3–4 remain proposed.
 Bearing: [provider usage limits](../../CONFIG.md#provider-usage-limits) already record every
 window a provider reports ([ORB-14695] failures, [ORB-14696] post-run readings, [ORB-17644] Muse)
 and gate crews that reach a threshold ([ORB-14697]). Weighted pools
@@ -106,8 +106,7 @@ effective_weight = weight × clamp(pressure ^ strength, 1 / cap, cap)
 ### Where pressure applies
 
 Pressure is computed at the draw, from **the readings of the host whose login the run will
-spend**, through the same `provider_limit_gate` read that gating uses, so it costs no extra
-store reads.
+spend**, from the same provider-limit observations that gating reads.
 
 1. **Admission re-draws automatic assignments.** With pressure on, a task whose crew came from
    an automatic source (`pool:<complexity>`, `purpose:<purpose>`, `default`) is re-drawn from
@@ -146,8 +145,9 @@ Readings stay per host.
 - **Readiness, doctor and the dashboard limit strip** show each account's pressure next to its
   readings ([ORB-14698]), e.g. `claude ×25.2 (seven_day 10%, resets 18:00)` (raw pressure,
   before any draw cap), plus which window set it.
-- **Task history.** An admission re-draw that changes the crew records `crew_assigned` with the
-  old crew, the new one and the pressures that decided it.
+- **Task history.** An admission re-draw that changes the crew records `crew_redrawn`, the event
+  a complexity re-rate already uses, with the old crew, the new one and the pressures that
+  decided it.
 
 ## Non-goals
 

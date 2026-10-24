@@ -328,3 +328,85 @@ fn crew_account_targets_load_only_for_a_defined_crew_with_env() {
         );
     }
 }
+
+/// [ORB-17770] `workflow.crew_selection` and `workflow.usage_pressure_*`
+/// default to static draws at cap 8 and strength 1, and a value written by
+/// `orbit config set` is what `orbit config get` reads back.
+#[test]
+fn usage_pressure_keys_default_to_static_and_round_trip_through_config_set() {
+    let policy = load("").expect("an empty [workflow] loads").usage_pressure;
+    assert_eq!(policy, UsagePressurePolicy::default());
+    assert_eq!(policy.selection, CrewSelection::Static);
+    assert!(!policy.applies());
+    assert_eq!((policy.cap, policy.strength), (8.0, 1.0));
+
+    for (key, value, read_back) in [
+        (
+            "workflow.crew_selection",
+            r#""usage_pressure""#,
+            json!("usage_pressure"),
+        ),
+        ("workflow.usage_pressure_cap", "4", json!(4.0)),
+        ("workflow.usage_pressure_cap", "1", json!(1.0)),
+        ("workflow.usage_pressure_strength", "0.5", json!(0.5)),
+        ("workflow.usage_pressure_strength", "0", json!(0.0)),
+    ] {
+        let global = tempfile::tempdir().expect("global tempdir");
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut store = ConfigStore::open(ConfigScope::Global, global.path().join("config.toml"))
+            .expect("open the global config");
+        store.set_value(key, value).expect("config set writes");
+        store
+            .validate_for_set(key)
+            .unwrap_or_else(|error| panic!("config set admits {key} = {value}: {error}"));
+        store.save().expect("config set saves");
+        let config = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
+            .expect("the written config loads");
+        assert_eq!(
+            config.snapshot.value_for(key),
+            Some(read_back),
+            "config get reads back {key} = {value}"
+        );
+    }
+
+    let policy = load(
+        "crew_selection = \"usage_pressure\"\nusage_pressure_cap = 4\nusage_pressure_strength = 2",
+    )
+    .expect("valid usage pressure settings load")
+    .usage_pressure;
+    assert!(policy.applies());
+    assert_eq!(policy.multiplier(1.5), 2.25, "pressure ^ strength");
+    assert_eq!(policy.multiplier(25.0), 4.0, "capped at cap");
+    assert_eq!(policy.multiplier(0.1), 0.25, "floored at 1 / cap");
+    let off = load("crew_selection = \"usage_pressure\"\nusage_pressure_strength = 0")
+        .expect("strength 0 loads")
+        .usage_pressure;
+    assert!(!off.applies(), "strength 0 disables weighting");
+}
+
+/// [ORB-17770] A cap below 1, a negative strength and an unknown selection
+/// are refused by load and by `orbit config set`, naming the key.
+#[test]
+fn invalid_usage_pressure_settings_are_refused_by_load_and_config_set() {
+    for (key, value, expected) in [
+        ("workflow.usage_pressure_cap", "0.5", "at least 1"),
+        ("workflow.usage_pressure_cap", "0", "at least 1"),
+        ("workflow.usage_pressure_cap", "nan", "at least 1"),
+        ("workflow.usage_pressure_strength", "-0.1", "at least 0"),
+        ("workflow.usage_pressure_strength", "inf", "at least 0"),
+        (
+            "workflow.crew_selection",
+            r#""pressure""#,
+            "static, usage_pressure",
+        ),
+    ] {
+        let field = key.trim_start_matches("workflow.");
+        for error in [
+            load(&format!("{field} = {value}")).expect_err(&format!("load {key} = {value}")),
+            set(key, value).expect_err(&format!("set {key} = {value}")),
+        ] {
+            assert!(error.contains(key), "{key} = {value}: {error}");
+            assert!(error.contains(expected), "{key} = {value}: {error}");
+        }
+    }
+}

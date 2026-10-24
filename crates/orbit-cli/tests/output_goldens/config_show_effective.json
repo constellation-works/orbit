@@ -371,6 +371,13 @@
         }
       ]
     },
+    "workflow.crew_selection": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.default_crew": {
       "scope": "global",
       "state": "set",
@@ -705,6 +712,20 @@
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.usage_pressure_cap": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.usage_pressure_strength": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },

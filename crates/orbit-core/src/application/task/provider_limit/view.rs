@@ -347,17 +347,7 @@ impl ProviderLimitsView {
             .filter(|crew| crew.enabled)
             .map(|crew| CrewUsagePressure {
                 crew: crew.name.clone(),
-                usage: UsagePressure::from_readings(
-                    observations.iter().filter(|reading| {
-                        reading_covers(
-                            &reading.provider,
-                            reading.account.as_deref(),
-                            reading.model.as_deref(),
-                            crew,
-                        )
-                    }),
-                    now,
-                ),
+                usage: UsagePressure::for_crew(observations, crew, now),
             })
             .collect();
 

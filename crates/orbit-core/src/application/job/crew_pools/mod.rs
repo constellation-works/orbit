@@ -7,7 +7,11 @@
 //! which reads the record and never writes it. The one exception is an
 //! auto-task task whose explicit crew is provider-limited [ORB-17638]:
 //! admission durably reassigns that task to its complexity pool and records
-//! a warning comment on it.
+//! a warning comment on it. The other is `workflow.crew_selection =
+//! "usage_pressure"` [ORB-17770]: creation, re-rate and admission draws weigh
+//! each member by its crew's weekly usage pressure, and admission draws a
+//! system-chosen crew again from its whole pool, persisting a changed crew
+//! under the task's existing automatic source.
 
 mod activity;
 mod admission;

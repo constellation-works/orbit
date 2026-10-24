@@ -9,7 +9,10 @@ use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::runtime::engine::crew::{CrewAllowlist, enforce_crew_allowlist};
 use crate::runtime::run_input::non_empty;
 
-use super::draw::{auto_task_id, permitted_candidates, pools_from_input, weighted_draw};
+use super::draw::{
+    PressureWeighting, auto_task_id, permitted_candidates, pools_from_input,
+    pressure_weighted_candidates, weighted_draw,
+};
 use super::types::{COMPLEXITIES, CapturedCrewPools, POLICY_PIPELINES, POOLS_KEY, SELECTION_KEY};
 use super::{PROVIDER_LIMIT_REASSIGNMENT_PREFIX, auto_task_minted};
 
@@ -189,10 +192,41 @@ impl OrbitRuntime {
         } else {
             None
         };
-        let (crews, source) = self.auto_task_crew_candidates(&task, &pools, explicit)?;
+        let (mut crews, mut source) = self.auto_task_crew_candidates(&task, &pools, explicit)?;
+        // [ORB-17770] Weigh the narrowed pool by usage pressure; an explicit
+        // run crew is the operator's call and has no draw to weigh.
+        let weighting = if explicit.is_none() {
+            pressure_weighted_candidates(
+                &mut crews,
+                &self.provider_limit_policy().usage_pressure,
+                || self.usage_pressure_read(chrono::Utc::now()),
+            )
+        } else {
+            None
+        };
+        if weighting.is_some() {
+            source = format!("{source}; usage pressure");
+        }
         let allowlist = self.crew_allowlist_from_input(input)?;
         let candidates = permitted_candidates(crews, &source, allowlist.as_ref())?;
         let selected = weighted_draw(&candidates, &source, random)?;
+        if let Some(weighting) = &weighting
+            && let Some(original) = task.crew.as_deref()
+            && original != selected.crew.name
+            && let Some(redraw) = self.usage_pressure_redraw_view(&task)?
+            && let Some(automatic) = redraw.crew_source.as_deref()
+            && let Err(error) = self.persist_usage_pressure_redraw(
+                &task.id,
+                original,
+                automatic,
+                &selected.crew.name,
+                weighting,
+            )
+        {
+            // As with a provider-limit reassignment, the draw for this run
+            // stands and the next admission decides it again.
+            tracing::warn!(task_id = %task.id, "could not record usage-pressure crew re-draw: {error}");
+        }
         if let Some(plan) = &reassignment
             && plan.original != selected.crew.name
             && let Err(error) = self.persist_provider_limit_reassignment(
@@ -220,9 +254,14 @@ impl OrbitRuntime {
             "complexity": task.complexity,
             // The odds this draw ran on, renormalised over the permitted
             // members, so `orbit run show` can explain the choice.
+            // A usage-pressure draw adds each member's `pressure` and the
+            // `effective_weight` it drew on [ORB-17770].
             "eligible_pool": candidates
                 .iter()
-                .map(|candidate| json!({"name": candidate.crew.name, "weight": candidate.weight}))
+                .map(|candidate| match &weighting {
+                    Some(weighting) => weighting.member(candidate),
+                    None => json!({"name": candidate.crew.name, "weight": candidate.weight}),
+                })
                 .collect::<Vec<_>>(),
         });
         if let Some(limit) = provider_limit {
@@ -371,5 +410,65 @@ impl OrbitRuntime {
             Ok(())
         })?;
         Ok(recorded)
+    }
+
+    /// Durably move `task_id` from `original` to `replacement`, the crew a
+    /// usage-pressure admission re-draw chose, keeping its automatic
+    /// `source` [ORB-17770]. Unlike [`Self::persist_provider_limit_reassignment`]
+    /// the source is carried through, so a `purpose:` or `default` task is
+    /// never relabelled as a pool draw. Revalidates under the task write
+    /// lock that the crew and its source are still the ones drawn from.
+    fn persist_usage_pressure_redraw(
+        &self,
+        task_id: &str,
+        original: &str,
+        source: &str,
+        replacement: &str,
+        weighting: &PressureWeighting,
+    ) -> Result<(), OrbitError> {
+        let now = chrono::Utc::now();
+        let describe = |crew: &str| {
+            weighting.pressure(crew).map_or_else(
+                || "×1 (no live weekly usage)".to_string(),
+                |pressure| pressure.describe(now),
+            )
+        };
+        let note = format!(
+            "crew redrawn from {source} (`{original}`) to {source} (`{replacement}`) at admission \
+             under usage pressure: `{original}` {}, `{replacement}` {}",
+            describe(original),
+            describe(replacement),
+        );
+        self.stores()
+            .tasks()
+            .with_task_write_lock(task_id, &mut || {
+                let current = self.get_task(task_id)?;
+                if current.crew.as_deref() != Some(original)
+                    || self.task_crew_source(&current)?.as_deref() != Some(source)
+                {
+                    return Ok(());
+                }
+                self.stores().task_records().update(
+                    task_id,
+                    TaskRecordUpdateParams {
+                        actor: SYSTEM_ACTOR_LABEL.to_string(),
+                        crew: Some(Some(replacement.to_string())),
+                        crew_source: Some(Some(source.to_string())),
+                        expected_status: Some(vec![current.status]),
+                        append_history: vec![TaskHistoryEntry {
+                            at: now,
+                            by: SYSTEM_ACTOR_LABEL.to_string(),
+                            event: "crew_redrawn".to_string(),
+                            note: Some(note.clone()),
+                            from_status: None,
+                            to_status: None,
+                            operation_id: None,
+                            decision: None,
+                        }],
+                        ..Default::default()
+                    },
+                )?;
+                Ok(())
+            })
     }
 }

@@ -9,9 +9,10 @@ use crate::runtime::run_input::non_empty;
 
 use super::draw::{
     INSPECTION_CREW_UNAVAILABLE, can_inspect, complexity_crews_key, permitted_candidates,
-    pools_from_input, random_crew_ticket, sole_candidate, weighted_draw,
+    pools_from_input, pressure_weighted_candidates, random_crew_ticket, sole_candidate,
+    weighted_draw,
 };
-use super::purpose::{PURPOSE_SOURCE_PREFIX, task_crew_purpose};
+use super::purpose::{PURPOSE_SOURCE_PREFIX, automatic_crew_source, task_crew_purpose};
 use super::types::{
     COMPLEXITIES, CapturedCrewPool, CapturedCrewPools, CreationCrewAssignment, CrewCandidate,
     InspectionPool, POOLS_KEY,
@@ -176,6 +177,9 @@ impl OrbitRuntime {
     /// limits then remove the limited crews, falling back to that purpose pool
     /// and then the complexity pool only. An explicit crew is the caller's
     /// decision and ignores both.
+    ///
+    /// [ORB-17770] Under usage pressure, a crew the system chose is drawn
+    /// again from its whole pool ([`Self::usage_pressure_redraw_view`]).
     pub(crate) fn auto_task_crew_candidates(
         &self,
         task: &Task,
@@ -190,7 +194,40 @@ impl OrbitRuntime {
                 "explicit".to_string(),
             ));
         }
-        self.admissible_crew_candidates(task, pools)
+        match self.usage_pressure_redraw_view(task)? {
+            Some(redraw) => self.admissible_crew_candidates(&redraw, pools),
+            None => self.admissible_crew_candidates(task, pools),
+        }
+    }
+
+    /// `task` as an admission re-draw sees it [ORB-17770]: with no crew and
+    /// its automatic source (`pool:<tier>`, `purpose:<purpose>` or
+    /// `default`), so the draw covers the source's whole pool instead of
+    /// keeping the assigned member. `None` when usage pressure does not
+    /// apply, the task has no crew, or its crew is an explicit choice or a
+    /// legacy pin, which are never re-drawn.
+    pub(crate) fn usage_pressure_redraw_view(
+        &self,
+        task: &Task,
+    ) -> Result<Option<Task>, OrbitError> {
+        if !self.provider_limit_policy().usage_pressure.applies()
+            || self
+                .crew_unless_retired(task.crew.as_deref())
+                .and_then(non_empty)
+                .is_none()
+        {
+            return Ok(None);
+        }
+        let Some(source) = self
+            .task_crew_source(task)?
+            .filter(|source| automatic_crew_source(source))
+        else {
+            return Ok(None);
+        };
+        let mut redraw = task.clone();
+        redraw.crew = None;
+        redraw.crew_source = Some(source);
+        Ok(Some(redraw))
     }
 
     /// The task's validated pool assignment or explicit pin, else its complexity
@@ -464,6 +501,9 @@ impl OrbitRuntime {
     /// complexity. Complexity pools exclude crews incompatible with the tags
     /// this write leaves the task with, before drawing. An explicit crew is
     /// kept exactly as the caller wrote it.
+    /// [ORB-17770] Under usage pressure, both pool draws weigh their members
+    /// by crew pressure; this covers task add, `task update --crew ""` and
+    /// [`Self::rerate_task_crew`]. The recorded source stays the pool's.
     /// `None` means this workspace can name no crew at all, so the field stays
     /// unset and dispatch resolves one from configuration as it always has.
     pub(crate) fn creation_crew_assignment(
@@ -483,6 +523,7 @@ impl OrbitRuntime {
             && let Some((candidates, _)) = self.purpose_pool_candidates(purpose, false)?
         {
             let source = format!("{PURPOSE_SOURCE_PREFIX}{purpose}");
+            let candidates = self.creation_pressure_weighted(candidates);
             let candidates = permitted_candidates(candidates, &source, None)?;
             let selected = weighted_draw(&candidates, &source, random)?;
             return Ok(Some(CreationCrewAssignment {
@@ -499,6 +540,7 @@ impl OrbitRuntime {
             )?
         {
             let source = format!("pool:{complexity}");
+            let candidates = self.creation_pressure_weighted(candidates);
             let candidates = permitted_candidates(candidates, &source, None)?;
             let selected = weighted_draw(&candidates, &source, random)?;
             return Ok(Some(CreationCrewAssignment {
@@ -529,5 +571,16 @@ impl OrbitRuntime {
             crew: default.name,
             source: "default".to_string(),
         }))
+    }
+
+    /// A creation-seam pool draw's members, weighed by usage pressure when
+    /// it applies [ORB-17770].
+    fn creation_pressure_weighted(&self, mut candidates: Vec<CrewCandidate>) -> Vec<CrewCandidate> {
+        pressure_weighted_candidates(
+            &mut candidates,
+            &self.provider_limit_policy().usage_pressure,
+            || self.usage_pressure_read(chrono::Utc::now()),
+        );
+        candidates
     }
 }
