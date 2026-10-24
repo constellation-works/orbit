@@ -99,6 +99,7 @@ const ids = [
   'audit-body', 'codebase-body', 'audit-count', 'audit-search',
   'plugins-body', 'plugins-count',
   'scoreboard-orchestration', 'scoreboard-orchestration-count',
+  'scoreboard-exploration', 'scoreboard-explore-count',
 ];
 const byId = Object.fromEntries(ids.map(id => [id, Object.assign(new Node('div'), { id })]));
 const document = {
@@ -157,10 +158,12 @@ function analytics(marker) {
   return { window: '90d', rollup: 'file', min_support: 1, regressions: { rows: [row], below_support: 0 } };
 }
 function summary(marker) {
+  const cohort = { runs: 1, priced_runs: 1, footprint_known_runs: 1, footprint_miss_rate: 0, footprint_miss_runs: 0, explore_calls: 1, explore_cost_usd: 1, mean_duration_ms: 60000, mean_cost_usd: 1 };
   return {
     window: '24h',
     agents: { claude: { tasks_created: 12, tasks_planned: 1, tasks_completed: 1, tool_calls: 4 } },
     orchestration: { since: 'start', until: 'cutoff', as_of: 'now', buckets: [{ kind: 'orchestrator', orchestrator: marker }], normalized_tokens: { normalized_token_total: 10, invocation_count: 1, linked_task_count: 1 } },
+    explore_comparison: { crews: [{ crew: marker, with_explore: cohort, without_explore: { ...cohort, explore_calls: 0 } }] },
   };
 }
 
@@ -258,8 +261,11 @@ shows('scoreboard-orchestration', 'score-workspace-b', 'score-workspace-a');
 common.setWorkspace(null);
 scoreboard.placeholdScoreboardAggregate();
 assert.ok(placeheld('scoreboard-orchestration'), 'cost panel is placeheld in aggregate view');
+assert.ok(placeheld('scoreboard-exploration'), 'exploration panel is placeheld in aggregate view');
 assert.ok(!text('scoreboard-orchestration').includes('score-workspace-b'), `cost panel still shows the previous workspace in aggregate view: ${text('scoreboard-orchestration')}`);
+assert.ok(!text('scoreboard-exploration').includes('score-workspace-b'), `exploration panel still shows the previous workspace in aggregate view: ${text('scoreboard-exploration')}`);
 assert.equal(text('scoreboard-orchestration-count'), '—', 'cost count keeps a previous-workspace count in aggregate view');
+assert.equal(text('scoreboard-explore-count'), '—', 'exploration count keeps a previous-workspace count in aggregate view');
 
 common.setWorkspace('ws-a');
 const crossing = scoreboard.fetchAndRenderScoreboard();
@@ -270,7 +276,55 @@ pending.at(-1).resolve(response(summary('score-after-aggregate')));
 await settle();
 await crossing;
 assert.ok(placeheld('scoreboard-orchestration'), 'cost panel stays placeheld after a late response');
+assert.ok(placeheld('scoreboard-exploration'), 'exploration panel stays placeheld after a late response');
 assert.ok(!text('scoreboard-orchestration').includes('score-after-aggregate'), 'cost panel painted a late workspace response in aggregate view');
+assert.ok(!text('scoreboard-exploration').includes('score-after-aggregate'), 'exploration panel painted a late workspace response in aggregate view');
+
+// Exploration status: a held cold GET shows Loading in the exploration
+// body, a failed cold load shows Unable to load there, one GET fills both
+// bodies, and a failed same-window refresh keeps crew rows with the
+// stale-data note in the visible exploration body.
+common.setWorkspace('ws-a');
+await settle();
+{
+  const before = pending.length;
+  const cold = scoreboard.fetchAndRenderScoreboard();
+  assert.equal(pending.length, before + 1, 'one GET feeds both cost bodies on a cold load');
+  assert.ok(text('scoreboard-exploration').includes('Loading…'), `exploration should show Loading while cold load is in flight: ${text('scoreboard-exploration')}`);
+  assert.ok(text('scoreboard-orchestration').includes('Loading…'), `spend should show Loading while cold load is in flight: ${text('scoreboard-orchestration')}`);
+  pending.at(-1).resolve(response({ error: 'cost unavailable' }, 500));
+  await assert.rejects(cold);
+  await settle();
+  assert.ok(text('scoreboard-exploration').includes('Unable to load'), `exploration should show Unable to load after a failed cold load: ${text('scoreboard-exploration')}`);
+  assert.ok(!text('scoreboard-exploration').includes('No implement runs in this window.'), 'exploration must not keep its static empty copy after a failed cold load');
+  assert.ok(text('scoreboard-orchestration').includes('Unable to load'), `spend should show Unable to load after a failed cold load: ${text('scoreboard-orchestration')}`);
+
+  const beforeSuccess = pending.length;
+  const success = scoreboard.fetchAndRenderScoreboard();
+  assert.equal(pending.length, beforeSuccess + 1, 'one GET feeds both cost bodies on success');
+  pending.at(-1).resolve(response(summary('explore-crew')));
+  await success;
+  await settle();
+  shows('scoreboard-orchestration', 'explore-crew', 'score-after-aggregate');
+  shows('scoreboard-exploration', 'explore-crew', 'score-after-aggregate');
+  assert.equal(text('scoreboard-explore-count'), '1 crew', 'exploration count follows the successful response');
+
+  const beforeRefresh = pending.length;
+  const refresh = scoreboard.fetchAndRenderScoreboard();
+  assert.equal(pending.length, beforeRefresh + 1, 'one GET feeds both cost bodies on refresh');
+  assert.ok(text('scoreboard-exploration').includes('explore-crew'), 'exploration keeps crew rows while a refresh is in flight');
+  pending.at(-1).resolve(response({ error: 'cost refresh unavailable' }, 500));
+  await assert.rejects(refresh);
+  await settle();
+  assert.ok(text('scoreboard-exploration').includes('Refresh failed; showing stale data'), `exploration should show the stale-data note after a failed refresh: ${text('scoreboard-exploration')}`);
+  assert.ok(text('scoreboard-exploration').includes('explore-crew'), 'exploration keeps crew rows after a failed refresh');
+  assert.ok(text('scoreboard-orchestration').includes('Refresh failed; showing stale data'), `spend should show the stale-data note after a failed refresh: ${text('scoreboard-orchestration')}`);
+
+  common.setWorkspace(null);
+  scoreboard.placeholdScoreboardAggregate();
+  assert.ok(placeheld('scoreboard-exploration'), 'exploration panel is placeheld when aggregate view follows a failed refresh');
+  assert.ok(!text('scoreboard-exploration').includes('explore-crew'), 'exploration drops crew rows in aggregate view');
+}
 await audit.fetchAndRenderAudit(ctx);
 await codebase.fetchAndRenderCodebase();
 assert.ok(placeheld('audit-body') && !text('audit-body').includes('audit-workspace-b'), 'aggregate audit drops the previous workspace');
