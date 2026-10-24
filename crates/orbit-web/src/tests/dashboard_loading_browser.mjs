@@ -720,6 +720,111 @@ async function assertCostPage(page) {
   if (!routed.text.includes('$1.25') || routed.removed.length) {
     throw new Error(`Routing disturbed the painted cost panel: ${JSON.stringify({ removed: routed.removed, text: routed.text.slice(0, 240) })}`);
   }
+  await assertCostExplorationStatus(page, orchestration);
+}
+
+// Cost exploration is a separate tab panel: in aggregate view opened from
+// another Analytics subtab both bodies placeholder, and while exploration
+// is visible it shows its own loading, cold-error, and stale-refresh notes
+// from the single /api/cost GET that also fills Spend.
+async function assertCostExplorationStatus(page, orchestration) {
+  const aggregate = await page.evaluate(async () => {
+    const common = await import('/js/common.js');
+    common.setMultiWorkspace(true);
+    common.setWorkspace(null);
+    const { setActiveTab } = await import('/js/router.js');
+    const opts = { refresh: false, updateHash: false };
+    setActiveTab('analytics/metrics', opts);
+    setActiveTab('analytics/cost?tab=exploration', opts);
+    return {
+      spend: document.getElementById('scoreboard-orchestration').textContent,
+      explore: document.getElementById('scoreboard-exploration').textContent,
+      exploreVisible: document.getElementById('scoreboard-exploration').checkVisibility(),
+      spendPanelHidden: document.getElementById('scoreboard-panel-spend').hidden,
+      explorePanelHidden: document.getElementById('scoreboard-panel-exploration').hidden,
+    };
+  });
+  if (!aggregate.spend.includes('Select a workspace to view this panel')
+    || !aggregate.explore.includes('Select a workspace to view this panel')) {
+    throw new Error(`Aggregate Cost opened from another subtab must placeholder both bodies: ${JSON.stringify(aggregate)}`);
+  }
+  if (!aggregate.exploreVisible || aggregate.explorePanelHidden || !aggregate.spendPanelHidden) {
+    throw new Error(`Exploration must be the visible Cost panel in the aggregate check: ${JSON.stringify(aggregate)}`);
+  }
+  await page.evaluate(async (orchestration) => {
+    const common = await import('/js/common.js');
+    common.setWorkspace('one');
+    const cohort = { runs: 1, mean_duration_ms: 60000, mean_cost_usd: 1, priced_runs: 1, footprint_known_runs: 1, footprint_miss_runs: 0, footprint_miss_rate: 0, explore_calls: 1, explore_cost_usd: 0.5 };
+    globalThis.__costPayload = {
+      window: common.getWindow(), orchestration,
+      explore_comparison: { crews: [{ crew: 'browser-crew', with_explore: cohort, without_explore: { ...cohort, explore_calls: 0 } }] },
+    };
+    globalThis.__costCalls = 0;
+    globalThis.fetch = (path) => {
+      const url = new URL(path, window.location.href);
+      if (url.pathname !== '/api/cost') return new Promise(() => {});
+      globalThis.__costCalls += 1;
+      return new Promise(resolve => { globalThis.__resolveCost = resolve; });
+    };
+    const { fetchAndRenderScoreboard } = await import('/js/scoreboard.js');
+    globalThis.__costDone = fetchAndRenderScoreboard()
+      .then(() => { globalThis.__costOutcome = 'ok'; }, error => { globalThis.__costOutcome = error.message; });
+  }, orchestration);
+  const loading = await page.evaluate(() => ({
+    calls: globalThis.__costCalls,
+    explore: document.getElementById('scoreboard-exploration').textContent,
+    visible: document.getElementById('scoreboard-exploration').checkVisibility(),
+  }));
+  if (loading.calls !== 1 || !loading.visible || !loading.explore.includes('Loading…')) {
+    throw new Error(`Exploration must show Loading from one in-flight GET: ${JSON.stringify(loading)}`);
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.screenshot({ path: path.join(evidence, 'cost-exploration-loading-1280.png') });
+  await page.evaluate(() => {
+    globalThis.__resolveCost(new Response(JSON.stringify({ error: 'cost unavailable' }), { status: 500 }));
+  });
+  await page.waitForFunction(() => globalThis.__costOutcome === 'cost unavailable');
+  const coldError = await page.evaluate(() => document.getElementById('scoreboard-exploration').textContent);
+  if (!coldError.includes('Unable to load') || coldError.includes('No implement runs in this window.')) {
+    throw new Error(`Exploration must show Unable to load after a failed cold load: ${coldError}`);
+  }
+  await page.evaluate(async () => {
+    globalThis.fetch = (path) => {
+      const url = new URL(path, window.location.href);
+      if (url.pathname !== '/api/cost') return new Promise(() => {});
+      globalThis.__costCalls += 1;
+      return Promise.resolve(new Response(JSON.stringify(globalThis.__costPayload), { status: 200 }));
+    };
+    const { fetchAndRenderScoreboard } = await import('/js/scoreboard.js');
+    await fetchAndRenderScoreboard();
+  });
+  const filled = await page.evaluate(() => ({
+    calls: globalThis.__costCalls,
+    explore: document.getElementById('scoreboard-exploration').textContent,
+    spend: document.getElementById('scoreboard-orchestration').textContent,
+  }));
+  if (filled.calls !== 2 || !filled.explore.includes('browser-crew') || !filled.spend.includes('$1.25')) {
+    throw new Error(`One successful GET must fill both Cost bodies: ${JSON.stringify(filled)}`);
+  }
+  await page.evaluate(async () => {
+    globalThis.fetch = (path) => {
+      const url = new URL(path, window.location.href);
+      if (url.pathname !== '/api/cost') return new Promise(() => {});
+      return Promise.resolve(new Response(JSON.stringify({ error: 'cost refresh unavailable' }), { status: 500 }));
+    };
+    const { fetchAndRenderScoreboard } = await import('/js/scoreboard.js');
+    globalThis.__costDone = fetchAndRenderScoreboard()
+      .then(() => { globalThis.__costOutcome = 'ok'; }, error => { globalThis.__costOutcome = error.message; });
+  });
+  await page.waitForFunction(() => globalThis.__costOutcome === 'cost refresh unavailable');
+  const stale = await page.evaluate(() => document.getElementById('scoreboard-exploration').textContent);
+  if (!stale.includes('Refresh failed; showing stale data') || !stale.includes('browser-crew')) {
+    throw new Error(`Exploration must keep crew rows with the stale-data note after a failed refresh: ${stale}`);
+  }
+  for (const width of [1280, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.screenshot({ path: path.join(evidence, `cost-exploration-stale-${width}.png`) });
+  }
 }
 
 // ORB-14481: from 1024px up the top bar is one fixed-height row on every

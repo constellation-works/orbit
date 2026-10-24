@@ -329,7 +329,10 @@ function setAnalyticsSubtabImpl(ctx, name, view = ctx.getReliabilityView()) {
   markWorkspaceSelectorScope(shown === "pipeline");
   // Pipeline aggregates across workspaces server-side, so it stays live in the
   // aggregate view; Cost is per-workspace and does not.
-  if (name === "cost" && isAggregateView()) renderPanelPlaceholder("scoreboard-orchestration");
+  if (name === "cost" && isAggregateView()) {
+    renderPanelPlaceholder("scoreboard-orchestration");
+    renderPanelPlaceholder("scoreboard-exploration");
+  }
   // Metrics, Pipeline and Resources read as soon as they open, not on the next tick.
   if (shown === "metrics" && ctx.fetchMetrics) ctx.fetchMetrics();
   if (shown === "pipeline" && ctx.fetchReliability) ctx.fetchReliability();
