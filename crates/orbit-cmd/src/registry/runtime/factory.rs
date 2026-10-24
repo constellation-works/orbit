@@ -43,13 +43,44 @@ pub struct ResolvedWorkspaceSelection {
 /// machine's `[machine]` identity, and the workspace `[plugin_enablement]`
 /// toggles) are resolved from at open — plus the host plugin rows, which
 /// decide the plugin tool surface and live in the plugin store, not a file.
+/// Stat-based fingerprint of the layered `config.toml` files a runtime's
+/// settings are resolved from: the global `config.toml` and the workspace
+/// `.orbit/config.toml`.
+///
+/// This is the config-only slice of [`RegisteredRuntimeStamp`], split out so
+/// a long-lived host that keeps a built runtime (the dashboard) can notice a
+/// config edit with only `stat` calls — no registry, plugin-store or audit
+/// reads per request. Size and modification time, not content, so a
+/// same-length edit inside one mtime tick is missed, as with the other
+/// stamps here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigLayerStamp {
+    global_config: FileStamp,
+    workspace_config: FileStamp,
+}
+
+impl ConfigLayerStamp {
+    /// Stamp the config layers for a workspace rooted at `workspace_root`
+    /// (its `.orbit` directory) under `global_root`. An absent or unreadable
+    /// file stamps as nothing, so a file that later appears or disappears is
+    /// itself a change.
+    ///
+    /// The paths mirror `ConfigRoots::new(global_root, workspace_root)` in
+    /// Core's composition.
+    pub fn read(global_root: &Path, workspace_root: &Path) -> Self {
+        Self {
+            global_config: FileStamp::read(&global_root.join(CONFIG_TOML_FILE)),
+            workspace_config: FileStamp::read(&workspace_root.join(CONFIG_TOML_FILE)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredRuntimeStamp {
     registry: FileStamp,
     host_registry: FileStamp,
     workspace_binding: FileStamp,
-    global_config: FileStamp,
-    workspace_config: FileStamp,
+    config: ConfigLayerStamp,
     /// The host plugin rows. A host `orbit plugin enable|disable` writes the
     /// plugin store, not a config file, so without this a cached runtime would
     /// keep serving the tool surface it was built with. A workspace toggle
@@ -72,8 +103,7 @@ impl RegisteredRuntimeStamp {
             registry: FileStamp::read(&workspace_registry::registry_path_for(global_root)),
             host_registry: FileStamp::read(&orbit_registry::hosts::hosts_path(global_root)),
             workspace_binding: FileStamp::read(&workspace_config_path(&checkout.orbit_dir)),
-            global_config: FileStamp::read(&global_root.join(CONFIG_TOML_FILE)),
-            workspace_config: FileStamp::read(&checkout.orbit_dir.join(CONFIG_TOML_FILE)),
+            config: ConfigLayerStamp::read(global_root, &checkout.orbit_dir),
             host_plugins: host_plugin_rows(global_root).unwrap_or_default(),
         }
     }

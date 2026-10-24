@@ -30,6 +30,16 @@ impl Pinned {
         self.inner.resolve_runtime(&self.snapshot, id)
     }
 
+    /// Stale-tolerant resolve for `GET /api/config/file` only; see
+    /// [`crate::state::dashboard`] for why aggregates stay strict.
+    pub(crate) fn runtime_for_config_file(
+        &self,
+        id: &str,
+    ) -> Result<Arc<OrbitRuntime>, WsRejection> {
+        self.inner
+            .resolve_runtime_for_config_file(&self.snapshot, id)
+    }
+
     /// Open runtimes whose binding matches the pinned snapshot, in snapshot
     /// order — the coherent open set for this request's generation.
     pub(crate) fn open_runtimes(&self) -> Vec<(String, Arc<OrbitRuntime>)> {
@@ -148,6 +158,43 @@ impl FromRequestParts<DashboardState> for Ws {
                     .ok_or_else(WsRejection::no_default)?,
             };
             Ok(Ws(pinned.runtime_for(&id)?))
+        })
+        .await
+        .map_err(|error| WsRejection {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: format!("workspace selection panicked: {error}"),
+        })?
+    }
+}
+
+/// Stale-tolerant workspace extractor for `GET /api/config/file` only.
+///
+/// A broken layered config must stay repairable through the file view (400
+/// with the file path), while every other endpoint — including fleet and
+/// aggregate rows — reports the same breakage as an error/`unavailable`.
+/// Handlers destructure it as `ConfigFileWs(runtime)`.
+pub(crate) struct ConfigFileWs(pub(crate) Arc<OrbitRuntime>);
+
+#[axum::async_trait]
+impl FromRequestParts<DashboardState> for ConfigFileWs {
+    type Rejection = WsRejection;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &DashboardState,
+    ) -> Result<Self, Self::Rejection> {
+        let requested = parts.uri.query().and_then(workspace_from_query);
+        let state = state.clone();
+        tokio::task::spawn_blocking(move || {
+            let pinned = state.pin();
+            let id = match requested {
+                Some(id) => id,
+                None => pinned
+                    .default_workspace()
+                    .map(str::to_string)
+                    .ok_or_else(WsRejection::no_default)?,
+            };
+            Ok(ConfigFileWs(pinned.runtime_for_config_file(&id)?))
         })
         .await
         .map_err(|error| WsRejection {
