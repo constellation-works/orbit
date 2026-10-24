@@ -18,6 +18,7 @@ mod infrastructure;
 mod merge;
 mod open;
 mod promote;
+mod recovery;
 pub(in crate::executor::automation::vcs) mod source_identity;
 
 pub use answers::PullRequestStatus;
@@ -44,3 +45,4 @@ pub(in crate::executor::automation::vcs) use open::{
     close_earlier_task_pull_requests, open_or_reuse_unchecked,
 };
 pub(in crate::executor::automation) use promote::pr_promote;
+pub(crate) use recovery::completion_recovery_checks;

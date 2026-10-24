@@ -604,15 +604,16 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     }
     unreported.required_observation["head_matches"] = json!(true);
     let mut pending = false;
+    let mut failed = None;
     for check in &required.checks {
         match check.state {
             Some(CheckState::Pending) => pending = true,
             Some(CheckState::Passed) => {}
             Some(CheckState::Failed) => {
-                return Ok(PrMergeState::Blocked(format!(
+                failed = Some(format!(
                     "required check '{}' failed",
                     check.name.as_deref().unwrap_or_default()
-                )));
+                ));
             }
             None => {
                 unreported.required_observation["outcome"] = json!("unreadable_state");
@@ -633,6 +634,9 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     });
     if pending {
         return Ok(PrMergeState::Pending);
+    }
+    if let Some(reason) = failed {
+        return Ok(PrMergeState::Blocked(reason));
     }
     // A failed check keeps its existing recovery or stop.
     if checks

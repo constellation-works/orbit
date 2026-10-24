@@ -187,7 +187,7 @@ impl ReviewDecision {
 
 /// One entry of a pull request's status check rollup: a CheckRun
 /// (`status`/`conclusion`) or a StatusContext (`state`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StatusCheck {
     /// The CheckRun's name or the StatusContext's context, trimmed.
     pub(crate) name: Option<String>,

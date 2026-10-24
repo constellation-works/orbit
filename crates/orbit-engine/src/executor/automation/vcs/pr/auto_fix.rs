@@ -599,17 +599,38 @@ fn required_failures<H: RuntimeHost + ?Sized>(
 ) -> Result<RequiredFailures, String> {
     let required = read_required_checks(host, Path::new(workspace_path), pr_number)
         .map_err(|error| format!("its required checks could not be read: {error}"))?;
-    if required.head_sha != head_sha {
+    if required.head_sha != head_sha || required.reported_head_sha.as_deref() != Some(head_sha) {
         return Err(format!(
             "its required checks were read on head {} rather than {head_sha}",
             required.head_sha
         ));
     }
-    let failed = failed
+    if required.checks.iter().any(|check| {
+        check.state != Some(CheckState::Passed) && check.state != Some(CheckState::Failed)
+    }) {
+        return Err("its required checks have not all concluded; no repair is admitted".into());
+    }
+    let mut failed = failed
         .iter()
         .filter(|(workflow, name)| required.requires(workflow.as_deref(), name))
         .cloned()
         .collect::<Vec<_>>();
+    // The policy read is newer than the status rollup. Include failures that
+    // concluded between those reads, so a settled sibling cannot be omitted.
+    for check in required
+        .checks
+        .iter()
+        .filter(|check| check.state == Some(CheckState::Failed))
+    {
+        if let Some(name) = &check.name {
+            let identity = (check.workflow_name.clone(), name.clone());
+            if !failed.iter().any(|(workflow, failed_name)| {
+                failed_name == name && (workflow.is_none() || workflow == &check.workflow_name)
+            }) {
+                failed.push(identity);
+            }
+        }
+    }
     if failed.is_empty() {
         return Err("only optional checks failed; the merge is blocked by something else".into());
     }

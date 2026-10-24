@@ -1381,11 +1381,12 @@ existing recovery activities, final validation and push do the repair:
 
 - On an open blocked PR, the watcher reads authenticated required-check policy
   for the pinned current head. Queued or running required checks keep waiting
-  within the original completion deadline, even beside an unrelated optional
-  failure. So does a required check that current branch policy names and a
-  freshly pushed head has not reported yet; it is never treated as passed. An
-  unclassified or optional pending check grants no wait, and a
-  required failure still takes precedence over pending checks. Review gates and
+  within the original completion deadline, even beside a failed required or
+  optional check. Repair admission waits until all reported required checks
+  conclude and includes every required failure from the latest policy read. A
+  required check that current branch policy names and a freshly pushed head
+  has not reported yet also waits; it is never treated as passed. An
+  unclassified or optional pending check grants no wait. Review gates and
   unreadable or stale evidence still stop the watcher. A failed required check
   whose job log shows a code failure is compared with the current base tip
   before a repair is admitted. Orbit reads the latest push run of the same
@@ -1405,6 +1406,11 @@ existing recovery activities, final validation and push do the repair:
   authenticated retry ancestors. The stopped rebase's branch and original head
   must both match that repaired head; its target base remains pinned. Missing,
   unrelated or disconnected push records cannot authorize a different head.
+- Final recovery after `complete_pr` re-reads required checks on the current
+  head and receives each failed check's name and diagnostic evidence in
+  `required_check_failures`, independently of the earlier step error. Pending,
+  unreadable or changing checks refuse a partial diagnosis without renewing
+  the completion watch deadline.
 - A failed required check run that no workflow produced (a provider app's
   aggregate result, such as a code-scanning check beside passing analysis jobs)
   is repaired only from its own failure annotations. The watcher reads them
