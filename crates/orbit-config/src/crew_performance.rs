@@ -135,9 +135,11 @@ pub struct CrewPerformanceType {
 /// The type of a task under `types`: the first entry whose `tags` it carries
 /// (any of) or whose `paths` globs match any of its `context_files` (any of),
 /// else `other`. Context-file selectors are `file:`, `dir:` or `symbol:`
-/// prefixed; a `symbol:` selector names no path and never matches, and a
-/// `dir:` selector also matches a glob that only matches beneath it. This is
-/// the one classification the scorecard and the later draw both use.
+/// prefixed; a `symbol:` selector matches by its backing file
+/// (`symbol:<path>#<name>:<kind>`), and a `dir:` selector also matches a glob
+/// that only matches beneath it. `module:` and `command:` selectors name no
+/// path and never match. This is the one classification the scorecard and the
+/// later draw both use.
 #[must_use]
 pub fn classify_task_type<'a>(
     types: &'a [CrewPerformanceType],
@@ -175,7 +177,14 @@ fn selector_path(selector: &str) -> Option<(&str, bool)> {
         Some((path, false))
     } else if let Some(path) = selector.strip_prefix("dir:") {
         Some((path, true))
-    } else if selector.starts_with("symbol:") {
+    } else if let Some(remainder) = selector.strip_prefix("symbol:") {
+        let (path, _) = remainder.split_once('#')?;
+        if path.is_empty() {
+            None
+        } else {
+            Some((path, false))
+        }
+    } else if selector.starts_with("module:") || selector.starts_with("command:") {
         None
     } else {
         Some((selector, false))
