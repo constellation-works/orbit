@@ -154,6 +154,13 @@ impl Fixture {
             "schema_version: 1\nworkspace_id: ws_http_fixture\n",
         )
         .unwrap();
+        if task_prefix == orbit_types::identity::LEGACY_TASK_PREFIX {
+            fs::write(
+                global.join("config.toml"),
+                format!("[machine]\nid = \"hm_0000000000000001\"\nname = \"{machine_name}\"\ntask_prefix = \"{task_prefix}\"\n"),
+            )
+            .unwrap();
+        }
         orbit_registry::ensure_machine_identity(&global, || {
             Ok(orbit_registry::NewMachineIdentity {
                 name: machine_name.into(),
