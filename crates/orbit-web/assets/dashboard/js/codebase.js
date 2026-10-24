@@ -1,25 +1,32 @@
-// Analytics › Codebase: which parts of the repository are expensive or risky for
-// agents to change, ranked from records Orbit already keeps
-// (/api/codebase/analytics). "Touched" is the declared footprint, not the
-// landed diff. The server caches one scan per workspace; the window, minimum
-// support and rollup only slice it, so the 30 s poll never rescans bundles.
-// How well task pilots predicted landed diffs is graded under Agents › Pilots.
+// Analytics › Codebase: which paths are costly for agents to change, ranked
+// from records Orbit already keeps (/api/codebase/analytics). "Touched" is the
+// declared footprint, not the landed diff. The server caches one scan per
+// workspace; the window, minimum support and rollup only slice it, so the 30 s
+// poll never rescans bundles. How well task pilots predicted landed diffs is
+// graded under Agents › Pilots.
 //
-// The view is seven ranking tiles, the list of the selected tile and a detail
-// panel for the selected row. Tile, row and the other view choices live here,
-// not in the hash, and every node is keyed and hashed for `syncNodes`, so a
-// poll that answers the same payload leaves the page exactly as it was.
+// Four views, each a hash route that keeps the selection's query:
+//   #analytics/codebase             Hotspots: one table, a column per path signal
+//   #analytics/codebase/file?path=  one path: its signals, regressed tasks and
+//                                   the files that land with it (/api/codebase/related)
+//   #analytics/codebase/coupling    reserved-together pairs and lock waits
+//   #analytics/codebase/marks       the regression-risk marks comparison
+// The other view choices (Show all, the path search, release grouping, the
+// lock sort) live here, not in the hash. Every node is keyed and hashed for
+// `syncNodes`, so a poll that answers the same payload leaves the page exactly
+// as it was.
 
-import { captureWorkspaceVisit, onWorkspaceChange, el, fetchJson, isAggregateView, renderPanelPlaceholder, requestPanel, syncNodes, taskHref, formatDateTime } from './common.js';
+import { captureWorkspaceVisit, onWorkspaceChange, el, fetchJson, isAggregateView, renderPanelPlaceholder, requestPanel, scopedHashHref, syncNodes, taskHref, formatDateTime } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
 const BODY_ID = "codebase-body";
 const WINDOWS = ["7d", "30d", "90d", "all"];
 const ROLLUPS = ["file", "dir", "crate"];
-// The dimensions a regression is broken down and filtered by, each value in
-// the server's breakdown order. `absent` (a link stored without a
-// classification) and `unclassified` (the filer could not tell) stay apart.
+const VIEWS = ["hotspots", "file", "coupling", "marks"];
+// The dimensions a regression is filtered by, each value in the server's
+// breakdown order. `absent` (a link stored without a classification) and
+// `unclassified` (the filer could not tell) stay apart.
 const REGRESSION_DIMENSIONS = [
   { key: "nature", label: "Nature", values: ["broke_existing", "defect_in_new", "incomplete", "merge_reintroduced", "contract_drift", "unclassified", "absent"] },
   { key: "escape", label: "Escape", values: ["no_test", "test_not_selected", "platform_only", "review_missed", "spec_ambiguous", "nondeterministic", "unclassified", "absent"] },
@@ -35,87 +42,73 @@ const VALUE_LABELS = {
   code_review: "code review", qa_sweep: "QA sweep", post_merge_ci: "post-merge CI", production_run: "production run",
 };
 const valueLabel = (value) => VALUE_LABELS[value] || String(value ?? "").replace(/_/g, " ");
-// What each dimension means, shown under the Regressions definition.
-const REGRESSION_DEFINITIONS = [
-  ["Nature", "What kind of regression the regression_from link records: broke existing behavior, a defect in code the task added, an incomplete delivery, a merge that reintroduced removed code, or docs and contracts that drifted. Unclassified: the filer could not tell. Absent: the link carries no classification. Neither is guessed."],
-  ["Escape", "Why the delivery gates missed it, from the same link: no test covered it, a covering test was not selected, it shows only on another platform, review missed it, the spec was ambiguous, or it is nondeterministic. Unclassified and absent as for nature."],
-  ["Layer", "Where the fix sits: the layer most of the regression task's landed files map to, or its declared footprint until it lands. Tests and docs count only when the fix touched nothing else; unknown when it has neither. One table maps paths to layers: CI/tests, docs/skills, dashboard, sandbox/policy, store/migration, VCS/delivery, config, CLI/MCP surface, runtime/lifecycle, else other."],
-  ["Detected by", "Who found it, from the regression task's tags: delivery review, security review, code review, QA sweep, post-merge CI (CI failure sweep and CI repairs) or production run (run failure patterns); otherwise operator when an operator filed it, else other."],
-  ["Counts", "A chip counts links under the other dimensions' filters, so it shows what choosing it would leave. The cross-tabs count links under every filter. A crew's or complexity tier's rate is its done tasks with a matching regression ÷ its done tasks in the window (crew, else the implementer), listed when it has the minimum support. Filters narrow the path ranking and the detail too."],
-];
 const DEFAULT_FILTER = Object.fromEntries(REGRESSION_DIMENSIONS.map((dimension) => [dimension.key, null]));
 const DEFAULT_QUERY = { window: "90d", min_support: 15, rollup: "file", ...DEFAULT_FILTER };
-// The minimum-support stepper walks this ladder; a hashed value off it steps
-// to its neighbours.
+// The minimum-support choices; a hashed value off the ladder is added to it.
 const SUPPORT_STEPS = [1, 2, 3, 5, 10, 15, 20, 30, 50, 100];
 // "Show paths with 5+ tasks" and "Lower to 5".
 const LOWERED_SUPPORT = 5;
 // A task that regressed this many ranked paths is marked: one fix there lifts
 // several rows.
 const WIDE_TASK_PATHS = 5;
-// Regressed tasks shown in the detail panel before "All N".
+// Regressed tasks listed on a file before "All N".
 const TASKS_SHOWN = 3;
+// Paths each signal contributes to "One signal" before Show all.
+const SINGLES_SHOWN = 3;
+// Unranked known paths a search offers to open.
+const OTHER_PATHS_SHOWN = 8;
+// Partners the file view's "Changes with" lists.
+const RELATED_TOP = 10;
+// The files a release bump changes together. Their pairs say only that a
+// release happened, so Coupling & locks folds them into one row by default.
+const RELEASE_FILES = [
+  "Cargo.toml", "Cargo.lock", "CHANGELOG.md", "npm/package.json", "server.json",
+  "plugin/plugin.json", "plugin/.claude-plugin/plugin.json", "plugin/.codex-plugin/plugin.json",
+];
 
-// The four path rankings the overlap list joins.
-const PATH_RANKINGS = ["regressions", "footprint_misses", "blocked", "rejected"];
-const RANKINGS = {
-  regressions: {
-    label: "Regressions", short: "Regressed", unit: "done", below: "too few done tasks",
-    definition: "Done tasks that a later task named in regression_from ÷ done tasks that declared the path, for tasks done in the window. Each regression is broken down by nature, escape, layer and who detected it; choosing a value filters the paths, the detail and the crew and complexity rates.",
-  },
-  footprint_misses: {
-    label: "Footprint misses", short: "Footprint", unit: "declared", below: "too few tasks",
-    definition: "Tasks that widened context_files onto the path mid-run ÷ tasks that declared it. A high rate means agents keep discovering they need this path.",
-  },
-  blocked: {
-    label: "Blocked by a run", short: "Blocked", unit: "declared", below: "too few tasks",
-    definition: "Tasks a run failure blocked ÷ tasks that declared the path. Infrastructure causes (auth, sandbox, disk, provider limits) and manual blocks are counted by cause, never against paths; a base conflict counts only against the conflicting paths it recorded.",
-  },
-  rejected: {
-    label: "Rejected after a run", short: "Rejected", unit: "with a run", below: "too few tasks with a run",
-    definition: "Rejected tasks that had a job run ÷ tasks with a run that declared the path.",
-  },
-  change_coupling: {
-    label: "Change coupling", below: "too few shared",
-    definition: "How often two paths are reserved together: reservations holding both ÷ reservations holding either (Jaccard). Reservations naming many files are left out.",
-  },
-  lock_contention: {
-    label: "Lock contention", below: "too few requesters",
-    definition: "Requesters denied a lock on the path ÷ requesters that reserved or were denied it. Retries by one task or run count once.",
-  },
-
+// The path signals, in column order. Each has one colour, set on the element
+// that carries data-signal and read by its dots and shaded cells.
+const SIGNALS = ["regressions", "footprint_misses", "blocked", "rejected"];
+const SIGNAL_INFO = {
+  regressions: { label: "Regressed", sub: "of done tasks", unit: "done tasks", rgb: "255, 122, 107", missing: "regressed" },
+  footprint_misses: { label: "Footprint miss", sub: "widened mid-run", unit: "declared", rgb: "242, 178, 76", missing: "was widened onto mid-run" },
+  blocked: { label: "Blocked", sub: "by a run failure", unit: "declared", rgb: "195, 155, 255", missing: "was blocked by a run failure" },
+  rejected: { label: "Rejected", sub: "after a run", unit: "with a run", rgb: "154, 164, 178", missing: "was rejected after a run" },
 };
-const OVERLAP = {
-  label: "In several rankings",
-  title: "Paths in more than one ranking",
-};
-const TILE_ORDER = ["overlap", ...PATH_RANKINGS, "change_coupling", "lock_contention"];
 const ROLLUP_NOUNS = { file: "File", dir: "Directory", crate: "Crate" };
+const WINDOW_PHRASES = { "7d": "in the last 7 days", "30d": "in the last 30 days", "90d": "in the last 90 days", all: "in all recorded history" };
+const PURPOSES = {
+  hotspots: "Paths that are costly for agents to change. Rates are over tasks that declared the path, which is not always the landed diff.",
+  coupling: "Files that are reserved together, and files that make tasks wait for a lock.",
+  file: "",
+  marks: "Whether regression-risk marks in implement and review prompts lowered regressions on the marked paths.",
+};
 
 let codebaseQuery = { ...DEFAULT_QUERY };
-// What the reader picked on the page: the tile, the row (`path:<path>` or
-// `pair:<left>\n<right>`), whether expected pairs are hidden, whether lock
-// contention is sorted by total wait, whether every regressed task is
-// listed, and which path was last copied.
-let view = { tile: "overlap", selected: null, hideExpected: false, lockByWait: false, allTasks: false, copied: null };
+// The open view and, for the file view, its path.
+let route = { view: "hotspots", path: null };
+// What the reader picked on the page: every ranked path or the top of each
+// signal, the path search, whether release files are grouped, the lock sort
+// (`wait` or `rate`), whether every regressed task is listed, and which path
+// was last copied.
+let view = { showAll: false, search: "", groupRelease: true, lockSort: "wait", allTasks: false, copied: null };
 let lastData = null;
 let lastPayloadKey = null;
-let relatedPath = "";
-let relatedData = null;
-let relatedRequest = 0;
-let relatedKey = null;
-let relatedRequestFailed = false;
-let relatedSort = "jaccard";
+let paintedView = null;
+// The file view's related-files request: the key it answers, its response or
+// error, and a counter that retires superseded requests.
+let related = { key: null, data: null, error: null, loading: false, request: 0 };
 let requestHashChange = () => {};
+
+function resetRelated() {
+  related = { key: null, data: null, error: null, loading: false, request: related.request + 1 };
+}
+
 onWorkspaceChange(() => {
   lastData = null;
   lastPayloadKey = null;
-  relatedPath = "";
-  relatedData = null;
-  relatedRequest += 1;
-  relatedKey = null;
-  relatedRequestFailed = false;
-  for (const id of ["codebase-path-options", "codebase-related-results"]) { if ($(id)) $(id).textContent = ""; }
+  resetRelated();
+  view = { ...view, search: "", showAll: false };
   if ($("codebase-path-search")) $("codebase-path-search").value = "";
 });
 
@@ -139,31 +132,56 @@ function activeFilters(query = codebaseQuery) {
   return REGRESSION_DIMENSIONS.filter((dimension) => query[dimension.key]);
 }
 
-/// Read the view's selection from an `#analytics/codebase?…` hash query.
-function applyCodebaseHashQuery(query) {
-  codebaseQuery = normalizedQuery({
+function normalizedRoute(viewName, path) {
+  if (viewName === "file") return path ? { view: "file", path } : { view: "hotspots", path: null };
+  return { view: VIEWS.includes(viewName) ? viewName : "hotspots", path: null };
+}
+
+function setRoute(next) {
+  if (next.path !== route.path) view = { ...view, allTasks: false, copied: null };
+  route = next;
+}
+
+/// Read the view and its selection from an `#analytics/codebase[/<view>]?…`
+/// hash: `viewName` is the segment after `codebase`.
+function applyCodebaseHashQuery(query, viewName = null) {
+  const next = normalizedQuery({
     window: query.get("window"),
     min_support: query.get("min_support") ?? DEFAULT_QUERY.min_support,
     rollup: query.get("rollup"),
     ...Object.fromEntries(REGRESSION_DIMENSIONS.map(({ key }) => [key, query.get(key)])),
   });
+  const sameQuery = JSON.stringify(next) === JSON.stringify(codebaseQuery);
+  codebaseQuery = next;
+  setRoute(normalizedRoute(viewName, query.get("path")));
   syncCodebaseControls();
+  // A view change alone answers from the payload on hand.
+  if (sameQuery && lastData) {
+    paint();
+    ensureRelated();
+  }
 }
 
-/// The view's hash, naming the non-default parts of the selection, so a
-/// reload or a shared link restores the same view.
-function buildCodebaseHash() {
+/// The hash of `target` (the open view by default) with the non-default parts
+/// of the selection, so a reload or a shared link restores the same view.
+function buildCodebaseHash(target = route) {
+  const { view: viewName, path } = normalizedRoute(target.view, target.path);
   const sp = new URLSearchParams();
   if (codebaseQuery.window !== DEFAULT_QUERY.window) sp.set("window", codebaseQuery.window);
   if (codebaseQuery.min_support !== DEFAULT_QUERY.min_support) sp.set("min_support", String(codebaseQuery.min_support));
   if (codebaseQuery.rollup !== DEFAULT_QUERY.rollup) sp.set("rollup", codebaseQuery.rollup);
   for (const { key } of activeFilters()) sp.set(key, codebaseQuery[key]);
+  if (viewName === "file") sp.set("path", path);
   const qs = sp.toString();
-  return qs ? `#analytics/codebase?${qs}` : "#analytics/codebase";
+  return `#analytics/codebase${viewName === "hotspots" ? "" : `/${viewName}`}${qs ? `?${qs}` : ""}`;
 }
 
 function getCodebaseQuery() {
   return { ...codebaseQuery };
+}
+
+function getCodebaseRoute() {
+  return { ...route };
 }
 
 function segmentButtons(id) {
@@ -181,11 +199,41 @@ function syncCodebaseControls() {
   }
   const support = $("codebase-min-support");
   if (support) {
-    support.value = String(codebaseQuery.min_support);
-    support.textContent = String(codebaseQuery.min_support);
+    const value = String(codebaseQuery.min_support);
+    const steps = [...new Set([...SUPPORT_STEPS, codebaseQuery.min_support])].sort((a, b) => a - b);
+    if (support.dataset.steps !== steps.join(",")) {
+      support.textContent = "";
+      for (const step of steps) {
+        const option = el("option", { text: String(step) });
+        option.value = String(step);
+        support.appendChild(option);
+      }
+      support.dataset.steps = steps.join(",");
+    }
+    support.value = value;
   }
-  const down = $("codebase-min-down");
-  if (down) down.disabled = codebaseQuery.min_support <= 1;
+  // The file and marks views have their own heading and no toolbar; Coupling
+  // keeps the window, rollup and minimum but has no path search.
+  const toolbar = $("codebase-toolbar");
+  if (toolbar) toolbar.hidden = route.view === "file" || route.view === "marks";
+  const search = $("codebase-search");
+  if (search) search.hidden = route.view !== "hotspots";
+  const views = $("codebase-views");
+  if (views) {
+    views.hidden = route.view === "file" || route.view === "marks";
+    for (const link of views.querySelectorAll("a")) {
+      const on = link.dataset.view === route.view;
+      link.classList.toggle("on", on);
+      if (on) link.setAttribute("aria-current", "page");
+      else link.setAttribute("aria-current", "false");
+      link.setAttribute("href", scopedHashHref(buildCodebaseHash({ view: link.dataset.view })));
+    }
+  }
+  const purpose = $("codebase-purpose");
+  if (purpose) {
+    purpose.textContent = PURPOSES[route.view] || "";
+    purpose.hidden = !purpose.textContent;
+  }
 }
 
 /// Change the selection and ask for a new hash; an invalid or unchanged
@@ -201,13 +249,20 @@ function updateQuery(update) {
   requestHashChange();
 }
 
-function steppedSupport(current, direction) {
-  if (direction < 0) return [...SUPPORT_STEPS].reverse().find((step) => step < current) ?? 1;
-  return SUPPORT_STEPS.find((step) => step > current) ?? current + SUPPORT_STEPS.at(-1);
+/// Open another view (and path) from the payload on hand, then ask for its hash.
+function navigate(target) {
+  const next = normalizedRoute(target.view, target.path);
+  if (next.view === route.view && next.path === route.path) return;
+  setRoute(next);
+  syncCodebaseControls();
+  paint();
+  ensureRelated();
+  requestHashChange();
 }
 
-/// Bind the window and group-by segments and the minimum-support stepper.
-/// `onChange` runs after the selection changes, to rewrite the hash.
+/// Bind the window and group-by segments, the minimum-support select, the
+/// path search and the view tabs. `onChange` runs after the selection or the
+/// view changes, to rewrite the hash.
 function wireCodebaseControls(onChange) {
   requestHashChange = onChange;
   for (const [id, field] of [["codebase-window", "window"], ["codebase-rollup", "rollup"]]) {
@@ -215,19 +270,21 @@ function wireCodebaseControls(onChange) {
       button.addEventListener("click", () => updateQuery({ [field]: button.dataset.value }));
     }
   }
-  const step = (id, direction) => {
-    const button = $(id);
-    if (button) button.addEventListener("click", () => updateQuery({ min_support: steppedSupport(codebaseQuery.min_support, direction) }));
-  };
-  step("codebase-min-down", -1);
-  step("codebase-min-up", 1);
+  const support = $("codebase-min-support");
+  if (support) support.addEventListener("change", () => updateQuery({ min_support: Number(support.value) }));
   const search = $("codebase-path-search");
-  if (search) search.addEventListener("input", renderPathOptions);
-  const form = $("codebase-related-form");
-  if (form) form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    fetchRelated(search.value);
-  });
+  if (search) {
+    search.addEventListener("input", () => {
+      view = { ...view, search: search.value };
+      paint();
+    });
+  }
+  const views = $("codebase-views");
+  if (views) {
+    for (const link of views.querySelectorAll("a")) {
+      link.addEventListener("click", (event) => followLink(event, { view: link.dataset.view }));
+    }
+  }
   syncCodebaseControls();
 }
 
@@ -249,12 +306,8 @@ function fetchAndRenderCodebase() {
   if (isAggregateView()) {
     lastData = null;
     lastPayloadKey = null;
-    relatedPath = "";
-    relatedData = null;
-    relatedRequest += 1;
-    relatedKey = null;
-    relatedRequestFailed = false;
-    for (const id of ["codebase-path-options", "codebase-related-results"]) { if ($(id)) $(id).textContent = ""; }
+    paintedView = null;
+    resetRelated();
     setMeta("");
     renderPanelPlaceholder(BODY_ID);
     return Promise.resolve();
@@ -314,26 +367,42 @@ function expectedPair(paths) {
   return right === `${left}tests/` || left === `${right}tests/`;
 }
 
-const pathKey = (path) => `path:${path}`;
-const pairKey = (paths) => `pair:${(paths || []).join("\n")}`;
+function releasePair(paths) {
+  return Array.isArray(paths) && paths.length === 2 && paths.every((path) => RELEASE_FILES.includes(path));
+}
 
 // ---- model ------------------------------------------------------------------
 
-/// Everything the tiles, list and detail read, derived from one payload and
-/// the view state.
+// Whether a signal has anything to show in this window. Regressed stays while
+// a filter is set, so the filter row can say what it left.
+function signalShown(data, key) {
+  if (rowsOf(data, key).length) return true;
+  return key === "regressions" && activeFilters(data.regression_filter || {}).length > 0;
+}
+
+/// Everything the views read, derived from one payload and the view state.
 function buildModel(data) {
-  // path -> { ranking: { rank, row } } over the four path rankings.
+  const signals = SIGNALS.filter((key) => signalShown(data, key));
+  // path -> { signal: { rank, row } } over the shown signals.
   const index = new Map();
-  for (const key of PATH_RANKINGS) {
+  for (const key of signals) {
     rowsOf(data, key).forEach((row, at) => {
       if (!index.has(row.path)) index.set(row.path, {});
       index.get(row.path)[key] = { rank: at + 1, row };
     });
   }
-  // Paths in two or more rankings, ordered by the server (the same list
+  // Paths under two or more signals, ordered by the server (the same list
   // `orbit codebase analytics` prints): by how many, then by the highest rate
   // outside Rejected (whose one-off rejections would otherwise lead).
-  const overlaps = rowsOf(data, "overlap").map((row) => ({ path: row.path, keys: Array.isArray(row.rankings) ? row.rankings : [] }));
+  const multi = rowsOf(data, "overlap")
+    .filter((row) => index.has(row.path) && Object.keys(index.get(row.path)).length >= 2)
+    .map((row) => row.path);
+  const flagged = new Set(multi);
+  // Every other ranked path, by signal, in that signal's order.
+  const singles = signals.map((key) => ({
+    key,
+    paths: rowsOf(data, key).map((row) => row.path).filter((path) => !flagged.has(path)),
+  }));
   // How many ranked regression paths each task regressed.
   const regressedPaths = new Map();
   for (const row of rowsOf(data, "regressions")) {
@@ -341,44 +410,19 @@ function buildModel(data) {
       regressedPaths.set(id, (regressedPaths.get(id) || 0) + 1);
     }
   }
-  const pairs = rowsOf(data, "change_coupling").map((row, at) => ({ row, rank: at + 1, expected: expectedPair(row.paths) }));
-  const limit = Number(data.row_limit) || Math.max(0, ...TILE_ORDER.slice(1).map((key) => rowsOf(data, key).length));
-  const model = { data, index, overlaps, regressedPaths, pairs, limit };
-  model.entries = listEntries(model);
-  const keys = model.entries.map((entry) => entry.key);
-  model.selected = keys.includes(view.selected) ? view.selected : (keys[0] ?? null);
-  return model;
-}
-
-/// The selectable rows of the open tile, in order.
-function listEntries(model) {
-  const { data, overlaps, pairs } = model;
-  if (view.tile === "overlap") return overlaps.map((entry) => ({ key: pathKey(entry.path), path: entry.path }));
-  if (view.tile === "change_coupling") {
-    return pairs.filter((pair) => !(view.hideExpected && pair.expected)).map((pair) => ({ key: pairKey(pair.row.paths), pair }));
-  }
-  const rows = view.tile === "lock_contention" ? lockRowsShown(data) : rowsOf(data, view.tile);
-  return rows.map((row) => ({ key: pathKey(row.path), path: row.path }));
+  const limit = Number(data.row_limit) || Math.max(0, ...SIGNALS.map((key) => rowsOf(data, key).length));
+  return { data, signals, index, multi, singles, regressedPaths, limit };
 }
 
 function causeTotals(data) {
   const blocked = section(data, "blocked");
   const causes = Array.isArray(blocked.causes) ? blocked.causes : [];
   const byKind = (kind) => causes.filter((cause) => cause.kind === kind).reduce((sum, cause) => sum + (Number(cause.tasks) || 0), 0);
-  const total = causes.reduce((sum, cause) => sum + (Number(cause.tasks) || 0), 0);
-  const events = Array.isArray(blocked.unclassified_events) ? blocked.unclassified_events : [];
-  return {
-    causes, total, events, attributed: byKind("attributed"), unclassified: byKind("unclassified"),
-    notFailures: Number(blocked.not_failures) || 0,
-  };
-}
-
-function maxRejected(data) {
-  return rowsOf(data, "rejected").reduce((max, row) => Math.max(max, Number(row.numerator) || 0), 0);
+  return { infrastructure: byKind("infrastructure"), manual: byKind("manual"), unclassified: byKind("unclassified") };
 }
 
 // Whether the payload carries lock waits. An older one does not, and the
-// panel renders it as it always did.
+// view renders rates only.
 function lockWaitsRecorded(data) {
   return section(data, "lock_contention").wait_time_recorded === true;
 }
@@ -390,9 +434,8 @@ function rowsByWait(data) {
   return lockWaitsRecorded(data) && Array.isArray(rows) ? rows : [];
 }
 
-function lockRowsShown(data) {
-  const byWait = rowsByWait(data);
-  return view.lockByWait && byWait.length ? byWait : rowsOf(data, "lock_contention");
+function lockByWait(data) {
+  return view.lockSort === "wait" && rowsByWait(data).length > 0;
 }
 
 // Nothing to rank and nothing below support: no requester was ever refused.
@@ -411,37 +454,13 @@ function pathNode(path, extraClass = "") {
   ]);
 }
 
-function rateBar(rate) {
-  const width = Math.max(2, Math.min(100, Math.round((Number(rate) || 0) * 100)));
+function rateBar(fraction) {
+  const width = Math.max(2, Math.min(100, Math.round((Number(fraction) || 0) * 100)));
   return el("span", { class: "codebase-bar", "aria-hidden": "true" }, [el("span", { style: { width: `${width}%` } })]);
-}
-
-function metricNode(rate, numerator, denominator) {
-  return el("span", { class: "codebase-metric" }, [
-    rateBar(rate),
-    el("span", { class: "codebase-rate", text: pct(rate) }),
-    el("span", { class: "codebase-frac", text: `${count(numerator)} of ${count(denominator)}` }),
-  ]);
-}
-
-function chip(ranking, text, fraction) {
-  const node = el("span", { class: "codebase-chip" }, [
-    el("span", { class: "codebase-dot", "aria-hidden": "true" }),
-    `${RANKINGS[ranking].short} `,
-    el("span", { class: "codebase-chip-rate", text }),
-  ]);
-  node.dataset.ranking = ranking;
-  if (fraction) node.appendChild(el("span", { class: "codebase-chip-frac", text: fraction }));
-  return node;
 }
 
 function note(text, extraClass = "") {
   return el("p", { class: `codebase-note${extraClass ? ` ${extraClass}` : ""}`, text });
-}
-
-function hint(text, tone = "") {
-  const node = el("div", { class: `codebase-hint${tone ? ` ${tone}` : ""}`, role: tone === "warn" ? "note" : null }, [el("span", { text })]);
-  return node;
 }
 
 function actionButton(label, onClick, extraClass = "") {
@@ -450,145 +469,41 @@ function actionButton(label, onClick, extraClass = "") {
   return button;
 }
 
-function withId(node, id) {
-  node.id = id;
-  return node;
-}
-
 function keyed(node, key, hash) {
   node.dataset.key = key;
   node.dataset.hash = JSON.stringify(hash);
   return node;
 }
 
-function select(key) {
-  if (view.selected === key) return;
-  view = { ...view, selected: key, allTasks: false, copied: null };
-  paint();
-  // Stacked on a phone, the detail sits below the list; bring it into view.
-  const detail = $("codebase-detail");
-  const list = $("codebase-list");
-  if (detail && list && typeof detail.scrollIntoView === "function"
-    && detail.getBoundingClientRect().top >= list.getBoundingClientRect().bottom) {
-    detail.scrollIntoView({ block: "nearest" });
-  }
+function signalDot(key) {
+  const dot = el("span", { class: "codebase-dot", "aria-hidden": "true" });
+  dot.dataset.signal = key;
+  return dot;
 }
 
-// ---- tiles ------------------------------------------------------------------
-
-function tileModels(model) {
-  const { data, index, overlaps, pairs } = model;
-  const min = data.min_support;
-  const belowFoot = (key) => `${rowsOf(data, key).length} ranked · ${count(section(data, key).below_support)} ${RANKINGS[key].below}`;
-  const rateTile = (key) => {
-    const top = rowsOf(data, key)[0];
-    return {
-      key, label: RANKINGS[key].label,
-      big: top ? pct(top.rate) : "None",
-      sub: top ? `top: ${splitPath(top.path).base}` : "nothing ranked",
-      foot: belowFoot(key),
-    };
-  };
-  const three = overlaps.filter((entry) => entry.keys.length >= 3).length;
-  const overlap = {
-    key: "overlap", label: OVERLAP.label,
-    big: overlaps.length ? plural(overlaps.length, "path") : "None",
-    sub: `${count(three)} in three or more`,
-    foot: `of ${plural(index.size, "ranked path")}`,
-  };
-  const regressions = rateTile("regressions");
-  const filters = activeFilters(data.regression_filter || {});
-  if (filters.length) {
-    regressions.filter = `filtered: ${filters.map((dimension) => valueLabel(data.regression_filter[dimension.key])).join(" · ")}`;
-  }
-  const { unclassified } = causeTotals(data);
-  const blocked = { ...rateTile("blocked"), warn: unclassified > 0 ? `${plural(unclassified, "block")} unclassified` : null };
-  const rejected = section(data, "rejected");
-  const rejectedTile = {
-    key: "rejected", label: RANKINGS.rejected.label,
-    big: plural(rejected.rejected_with_run, "task"),
-    sub: `at most ${count(maxRejected(data))} on any path`,
-    foot: belowFoot("rejected"),
-  };
-  const topPair = pairs[0];
-  const coupling = topPair
-    ? {
-      key: "change_coupling", label: RANKINGS.change_coupling.label, big: pct(topPair.row.rate),
-      sub: `top: ${(topPair.row.paths || []).map((path) => splitPath(path).base).join(" ↔ ")}`,
-      foot: belowFoot("change_coupling"),
-    }
-    : { key: "change_coupling", label: RANKINGS.change_coupling.label, big: "None", sub: `no pair reaches ${count(min)}`, foot: belowFoot("change_coupling") };
-  const lock = lockIsQuiet(data)
-    ? { key: "lock_contention", label: RANKINGS.lock_contention.label, big: "None", sub: "no lock refused", foot: "nothing to rank", tone: "good" }
-    : rateTile("lock_contention");
-  return [overlap, regressions, rateTile("footprint_misses"), blocked, rejectedTile, coupling, lock];
+// A plain click opens the view in place; a modified click (new tab, copy
+// link) follows the scoped href.
+function followLink(event, target) {
+  if (event && (event.defaultPrevented || event.button > 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)) return;
+  if (event && typeof event.preventDefault === "function") event.preventDefault();
+  navigate(target);
 }
 
-function tilesNode(model) {
-  const tiles = tileModels(model);
-  const node = el("section", { class: "codebase-tiles", "aria-label": "Rankings" });
-  for (const tile of tiles) {
-    const on = view.tile === tile.key;
-    const button = el("button", { class: `codebase-tile${on ? " on" : ""}`, type: "button", "aria-pressed": String(on) }, [
-      el("span", { class: "codebase-tile-label" }, [el("span", { class: "codebase-dot", "aria-hidden": "true" }), tile.label]),
-      el("span", { class: "codebase-tile-big", text: tile.big }),
-      el("span", { class: "codebase-tile-sub", text: tile.sub, title: tile.sub }),
-      el("span", { class: `codebase-tile-foot${tile.tone ? ` ${tile.tone}` : ""}`, text: tile.foot }),
-    ]);
-    if (tile.warn) button.appendChild(el("span", { class: "codebase-tile-foot warn", text: tile.warn }));
-    if (tile.filter) button.appendChild(el("span", { class: "codebase-tile-foot filter", text: tile.filter, title: tile.filter }));
-    button.dataset.tile = tile.key;
-    button.addEventListener("click", () => {
-      if (view.tile === tile.key) return;
-      view = { ...view, tile: tile.key };
-      paint();
-    });
-    node.appendChild(button);
-  }
-  return keyed(node, "tiles", { tiles, open: view.tile });
+function viewLink(target, children, extraClass = "") {
+  const link = el("a", { class: extraClass }, children);
+  link.setAttribute("href", scopedHashHref(buildCodebaseHash(target)));
+  link.addEventListener("click", (event) => followLink(event, target));
+  return link;
 }
 
-// ---- list -------------------------------------------------------------------
-
-function rowButton(key, selected, children) {
-  const button = el("button", { class: "codebase-row", type: "button", "aria-current": key === selected ? "true" : null }, children);
-  button.addEventListener("click", () => select(key));
-  return el("li", {}, [button]);
+function fileLink(path) {
+  const link = viewLink({ view: "file", path }, [pathNode(path)], "codebase-path-link");
+  link.dataset.path = path;
+  return link;
 }
 
-function rowList(items) {
-  const list = el("ol", { class: "codebase-rows" });
-  for (const item of items) list.appendChild(item);
-  return list;
-}
-
-function listFoot(children) {
-  return el("div", { class: "codebase-list-foot" }, children);
-}
-
-function overlapContent(model) {
-  const { data, index, overlaps, selected } = model;
-  const content = [];
-  if (data.rollup === "crate") {
-    content.push(hint("Almost every crate clears the threshold at this level, so most crates show up in every ranking and this list says little. Group by file or directory to find hotspots."));
-  }
-  if (overlaps.length === 0) {
-    content.push(el("p", { class: "codebase-empty", text: "No path turns up in more than one ranking." }));
-  } else {
-    content.push(rowList(overlaps.map((entry) => {
-      const hits = index.get(entry.path);
-      return rowButton(pathKey(entry.path), selected, [
-        el("span", { class: "codebase-rank", text: `${entry.keys.length}×` }),
-        el("span", { class: "codebase-pathcell" }, [
-          pathNode(entry.path),
-          el("span", { class: "codebase-chips" }, entry.keys.map((key) =>
-            chip(key, pct(hits[key].row.rate), `${count(hits[key].row.numerator)}/${count(hits[key].row.denominator)}`))),
-        ]),
-      ]);
-    })));
-  }
-  content.push(listFoot([note(`${count(overlaps.length)} of the ${plural(index.size, "ranked path")} show up in two or more rankings. Change coupling and lock contention rank pairs and locks, so they are not counted here.`)]));
-  return content;
+function backLink() {
+  return viewLink({ view: "hotspots" }, ["‹ Hotspots"], "codebase-back");
 }
 
 function lowerSupportButton(data, label) {
@@ -596,199 +511,654 @@ function lowerSupportButton(data, label) {
   return actionButton(label, () => updateQuery({ min_support: LOWERED_SUPPORT }));
 }
 
-function emptyRanking(data, key) {
-  const below = Number(section(data, key).below_support) || 0;
-  const text = below > 0
-    ? `No path reaches minimum support ${count(data.min_support)}; ${count(below)} fall below it.`
-    : "No path has data in this window.";
-  return el("p", { class: "codebase-empty", text });
-}
-
-function rankingContent(model, key) {
-  const { data, index, selected } = model;
-  const rows = rowsOf(data, key);
-  const content = [];
-  if (key === "blocked") content.push(...causeNodes(data));
-  if (key === "rejected") {
-    const rejected = section(data, "rejected");
-    const max = maxRejected(data);
-    content.push(hint(`${plural(rejected.rejected_with_run, "task was", "tasks were")} rejected after a run in this window; ${count(rejected.excluded_without_run)} rejected at proposal are left out. The most on any one path is ${count(max)}${max <= 2 ? ", so treat this list as weak evidence." : "."}`));
-  }
-  const filtered = key === "regressions" && activeFilters(data.regression_filter || {}).length > 0;
-  if (key === "regressions") content.push(regressionFilters(data));
-  if (rows.length === 0 && filtered) content.push(filteredEmpty(data));
-  else if (rows.length === 0) content.push(emptyRanking(data, key));
-  else {
-    content.push(rowList(rows.map((row, at) => {
-      const hits = index.get(row.path) || {};
-      const meta = PATH_RANKINGS.filter((other) => other !== key && hits[other]).map((other) => chip(other, pct(hits[other].row.rate)));
-      if (key === "footprint_misses" && Number(row.widenings) > Number(row.numerator)) {
-        meta.push(el("span", { class: "codebase-extra", text: `${plural(row.widenings, "widening")}` }));
-      }
-      if (key === "blocked" && Number(row.unclassified) > 0) {
-        meta.push(el("span", { class: "codebase-extra", text: `${count(row.unclassified)} more blocked, cause unknown` }));
-      }
-      const cell = [pathNode(row.path)];
-      if (meta.length) cell.push(el("span", { class: "codebase-chips" }, meta));
-      return rowButton(pathKey(row.path), selected, [
-        el("span", { class: "codebase-rank", text: String(at + 1) }),
-        el("span", { class: "codebase-pathcell" }, cell),
-        metricNode(row.rate, row.numerator, row.denominator),
-      ]);
-    })));
-  }
-  const below = Number(section(data, key).below_support) || 0;
-  content.push(listFoot([
-    note(`${plural(below, "path")} below minimum support ${count(data.min_support)} ${below === 1 ? "is" : "are"} hidden.`),
-    lowerSupportButton(data, `Show paths with ${LOWERED_SUPPORT}+ tasks`),
-  ]));
-  if (key === "regressions") content.push(regressionBreakdowns(data));
-  return content;
-}
-
-// ---- regression breakdowns --------------------------------------------------
-
-function setFilter(key, value) {
-  updateQuery({ [key]: codebaseQuery[key] === value ? null : value });
-}
+// ---- hotspots ---------------------------------------------------------------
 
 function clearFiltersButton() {
   return actionButton("Clear filters", () => updateQuery(DEFAULT_FILTER), "small");
 }
 
-/// One row of chips per dimension: every value some link takes (and the
-/// chosen one), with its link count; a chip toggles its filter.
-function regressionFilters(data) {
+/// One select per dimension, every value some link takes (and the chosen
+/// one) with its link count. They filter the Regressed column.
+function filtersNode(model) {
+  const { data } = model;
   const regressions = section(data, "regressions");
   const breakdowns = regressions.breakdowns || {};
   const filter = data.regression_filter || {};
-  const block = el("div", { class: "codebase-facets", role: "group", "aria-label": "Filter regressions" });
-  if (!Number(regressions.links)) {
-    block.appendChild(note("No regression_from link targets a task done in this window, so there is nothing to break down or filter."));
-    return block;
+  const block = el("div", { class: "codebase-filters", role: "group", "aria-label": "Filter regressions" }, [
+    el("span", { class: "codebase-filters-label", text: "Regressions only:" }),
+  ]);
+  if (!Number(regressions.links) && !activeFilters(filter).length) {
+    block.appendChild(el("span", { class: "codebase-extra", text: "no regression link targets a task done in this window" }));
+    return keyed(block, "filters", { links: 0 });
   }
+  const selects = [];
   for (const dimension of REGRESSION_DIMENSIONS) {
     const entries = Array.isArray(breakdowns[dimension.key]) ? breakdowns[dimension.key] : [];
     const shown = entries.filter((entry) => Number(entry.links) > 0 || entry.value === filter[dimension.key]);
-    const chips = el("span", { class: "codebase-chips" });
+    const control = el("select", { class: "codebase-select" });
+    control.dataset.dimension = dimension.key;
+    const any = el("option", { text: "Any" });
+    any.value = "";
+    control.appendChild(any);
     for (const entry of shown) {
-      const on = filter[dimension.key] === entry.value;
-      const chipButton = el("button", { class: `codebase-facet${on ? " on" : ""}`, type: "button", "aria-pressed": String(on) }, [
-        `${valueLabel(entry.value)} `,
-        el("span", { class: "codebase-chip-frac", text: count(entry.links) }),
-      ]);
-      chipButton.dataset.dimension = dimension.key;
-      chipButton.dataset.value = entry.value;
-      chipButton.addEventListener("click", () => setFilter(dimension.key, entry.value));
-      chips.appendChild(chipButton);
+      const option = el("option", { text: `${valueLabel(entry.value)} · ${count(entry.links)}` });
+      option.value = entry.value;
+      if (entry.value === filter[dimension.key]) option.selected = true;
+      control.appendChild(option);
     }
-    if (!shown.length) chips.appendChild(el("span", { class: "codebase-extra", text: "none under the other filters" }));
-    const row = el("div", { class: "codebase-facet-row" }, [el("span", { class: "codebase-facet-label", text: dimension.label }), chips]);
-    row.dataset.dimension = dimension.key;
-    block.appendChild(row);
+    control.value = filter[dimension.key] || "";
+    control.addEventListener("change", () => updateQuery({ [dimension.key]: control.value || null }));
+    selects.push(shown.map((entry) => [entry.value, entry.links]));
+    block.appendChild(el("label", { class: "codebase-filter" }, [dimension.label, control]));
   }
   const active = activeFilters(filter);
   if (active.length) {
-    block.appendChild(el("div", { class: "codebase-facet-row" }, [
-      el("span", { class: "codebase-facet-label", text: "Filtered" }),
-      el("span", { class: "codebase-extra", text: `${count(regressions.matching_links)} of ${plural(regressions.links, "regression link")} on ${plural(regressions.regressed, "regressed task")}` }),
-      clearFiltersButton(),
-    ]));
+    block.appendChild(el("span", { class: "codebase-extra codebase-filter-count", text: `${count(regressions.matching_links)} of ${plural(regressions.links, "regression link")} on ${plural(regressions.regressed, "regressed task")}` }));
+    block.appendChild(clearFiltersButton());
   }
-  return block;
+  return keyed(block, "filters", { selects, filter, links: regressions.links, matching: regressions.matching_links, regressed: regressions.regressed });
 }
 
-function filteredEmpty(data) {
-  return el("div", { class: "codebase-empty-state" }, [
-    el("p", { class: "codebase-empty-title", text: "No path has a regression matching these filters." }),
-    note("Paths below the minimum support stay hidden; widen a filter or clear them all."),
-    el("div", { class: "codebase-actions" }, [clearFiltersButton(), lowerSupportButton(data, `Show paths with ${LOWERED_SUPPORT}+ tasks`)]),
-  ]);
-}
-
-// A cell's shade, from none to the table's largest count.
-function cellLevel(value, max) {
-  if (!(value > 0) || !(max > 0)) return "0";
-  return String(Math.max(1, Math.ceil((value / max) * 4)));
-}
-
-function crossTabNode(tab, title) {
-  const rowsOfTab = Array.isArray(tab && tab.rows) ? tab.rows : [];
-  const columns = Array.isArray(tab && tab.columns) ? tab.columns : [];
-  const counts = Array.isArray(tab && tab.counts) ? tab.counts : [];
-  const block = el("div", { class: "codebase-crosstab-block" }, [el("p", { class: "codebase-eyebrow", text: title })]);
-  if (!rowsOfTab.length || !columns.length) {
-    block.appendChild(note("No regression matches these filters."));
-    return block;
-  }
-  const max = Math.max(0, ...counts.flat().map((value) => Number(value) || 0));
-  const header = (text, scope) => {
-    const cell = el("th", { text });
-    cell.setAttribute("scope", scope);
+function cellNode(key, hit, total) {
+  const cell = el("td", { class: "codebase-cell-td" });
+  cell.dataset.signal = key;
+  if (!hit) {
+    cell.appendChild(el("span", { class: "codebase-cell empty", text: "—" }));
     return cell;
-  };
-  const head = el("tr", {}, [header("", "col"), ...columns.map((column) => header(valueLabel(column), "col"))]);
-  const body = el("tbody");
-  rowsOfTab.forEach((rowValue, rowAt) => {
-    const cells = columns.map((column, columnAt) => {
-      const value = Number(counts[rowAt]?.[columnAt]) || 0;
-      const cell = el("td", { text: value ? count(value) : "·" });
-      cell.dataset.level = cellLevel(value, max);
-      cell.dataset.row = rowValue;
-      cell.dataset.column = column;
-      return cell;
-    });
-    body.appendChild(el("tr", {}, [header(valueLabel(rowValue), "row"), ...cells]));
-  });
-  const table = el("table", { class: "codebase-crosstab", "aria-label": `${title}: regression links` }, [el("thead", {}, [head]), body]);
-  table.dataset.tab = `${tab.row}_${tab.column}`;
-  block.appendChild(el("div", { class: "codebase-crosstab-scroll" }, [table]));
-  return block;
+  }
+  const { row, rank } = hit;
+  const rate = Math.max(0, Math.min(1, Number(row.rate) || 0));
+  const shade = el("span", {
+    class: "codebase-cell",
+    title: `${SIGNAL_INFO[key].label}: ${count(row.numerator)} of ${count(row.denominator)} ${SIGNAL_INFO[key].unit} · #${rank} of ${count(total)}`,
+    style: { background: `rgba(${SIGNAL_INFO[key].rgb}, ${(0.08 + rate * 0.37).toFixed(2)})` },
+  }, [
+    el("span", { class: "codebase-cell-rate", text: pct(row.rate) }),
+    el("span", { class: "codebase-cell-frac", text: `${count(row.numerator)}/${count(row.denominator)}` }),
+  ]);
+  cell.appendChild(shade);
+  return cell;
 }
 
-function sliceNode(rates, key, many, title, minSupport) {
-  const block = el("div", { class: "codebase-slice" }, [el("p", { class: "codebase-eyebrow", text: title })]);
-  const rows = Array.isArray(rates && rates.rows) ? rates.rows : [];
-  const below = Number(rates && rates.below_support) || 0;
-  if (!rows.length) {
-    block.appendChild(note(`No ${key} has ${count(minSupport)} or more done tasks in this window${below ? `; ${plural(below, key, many)} fall${below === 1 ? "s" : ""} below it` : ""}.`));
-    return block;
-  }
-  const list = el("ul", { class: "codebase-crews" });
-  for (const row of rows) {
-    const item = el("li", { class: "codebase-crew-row" }, [
-      el("span", { class: "codebase-crew-name", text: row[key] || "unassigned", title: row[key] || "unassigned" }),
-      rateBar(row.rate),
-      el("span", { class: "codebase-rate", text: pct(row.rate) }),
-      el("span", { class: "codebase-frac", text: `${count(row.numerator)}/${count(row.denominator)}` }),
-    ]);
-    item.dataset[key] = row[key] || "unassigned";
-    list.appendChild(item);
-  }
-  block.appendChild(list);
-  if (below) block.appendChild(note(`${plural(below, key, many)} below minimum support ${count(minSupport)} ${below === 1 ? "is" : "are"} hidden.`));
-  return block;
+function hotRow(model, path) {
+  const hits = model.index.get(path) || {};
+  const row = el("tr", { class: "codebase-hot-row" }, [
+    el("td", { class: "codebase-hot-path" }, [fileLink(path)]),
+    ...model.signals.map((key) => cellNode(key, hits[key], rowsOf(model.data, key).length)),
+  ]);
+  row.dataset.path = path;
+  return row;
 }
 
-/// The cross-tabs and the crew and complexity rates under the path list.
-function regressionBreakdowns(data) {
-  const regressions = section(data, "regressions");
-  const tabs = regressions.cross_tabs || {};
-  const node = el("div", { class: "codebase-breakdowns" });
-  if (Number(regressions.links)) {
-    node.appendChild(el("div", { class: "codebase-crosstabs" }, [
-      crossTabNode(tabs.nature_escape, "Nature × escape"),
-      crossTabNode(tabs.escape_layer, "Escape × layer"),
+function sectionRow(model, text, kind) {
+  const cell = el("td", { class: "codebase-hot-section", text });
+  cell.setAttribute("colspan", String(model.signals.length + 1));
+  const row = el("tr", {}, [cell]);
+  row.dataset.section = kind;
+  return row;
+}
+
+/// The paths each section lists: under a search, every ranked match; else
+/// the flagged paths, then the top of each signal or, with Show all, the rest.
+function hotspotSections(model) {
+  const query = view.search.trim().toLowerCase();
+  const matches = (path) => !query || path.toLowerCase().includes(query);
+  const multi = model.multi.filter(matches);
+  const seen = new Set(multi);
+  const singles = [];
+  for (const { paths } of model.singles) {
+    const kept = paths.filter(matches).filter((path) => !seen.has(path));
+    for (const path of query || view.showAll ? kept : kept.slice(0, SINGLES_SHOWN)) {
+      seen.add(path);
+      singles.push(path);
+    }
+  }
+  return { query, multi, singles };
+}
+
+function hotspotTable(model) {
+  const { data, signals, index } = model;
+  const box = el("section", { class: "codebase-hot", "aria-label": "Hotspots" });
+  if (!signals.length) {
+    box.appendChild(el("div", { class: "codebase-empty-state" }, [
+      el("p", { class: "codebase-empty-title", text: `No path reaches minimum support ${count(data.min_support)} under any signal in this window.` }),
+      el("div", { class: "codebase-actions" }, [lowerSupportButton(data, `Show paths with ${LOWERED_SUPPORT}+ tasks`), data.window !== "all" ? actionButton("Use all time", () => updateQuery({ window: "all" })) : null]),
     ]));
+    return keyed(box, "hotspots", { empty: true, min: data.min_support, window: data.window });
   }
-  node.appendChild(el("div", { class: "codebase-slices" }, [
-    sliceNode(regressions.by_crew, "crew", "crews", "Regression rate by crew", data.min_support),
-    sliceNode(regressions.by_complexity, "complexity", "complexities", "Regression rate by complexity", data.min_support),
-  ]));
-  node.appendChild(note("Rates are done tasks a matching regression named ÷ done tasks, by the regressed task's crew (else its implementer) and complexity. Crews take different complexity tiers, so compare crews within a tier."));
-  node.appendChild(riskMarksNode(data));
-  return node;
+  const { query, multi, singles } = hotspotSections(model);
+  const head = el("tr", {}, [
+    el("th", { class: "codebase-hot-path", text: ROLLUP_NOUNS[data.rollup] || "Path" }),
+    ...signals.map((key) => {
+      const cell = el("th", { class: "codebase-hot-signal" }, [
+        el("span", { class: "codebase-hot-label" }, [signalDot(key), SIGNAL_INFO[key].label]),
+        el("span", { class: "codebase-hot-sub", text: SIGNAL_INFO[key].sub }),
+      ]);
+      cell.dataset.signal = key;
+      return cell;
+    }),
+  ]);
+  for (const cell of head.children) cell.setAttribute("scope", "col");
+  const body = el("tbody");
+  if (multi.length) {
+    body.appendChild(sectionRow(model, `Flagged by two or more signals · ${count(multi.length)}`, "multi"));
+    for (const path of multi) body.appendChild(hotRow(model, path));
+  }
+  if (singles.length) {
+    const label = query ? `One signal · ${count(singles.length)}` : view.showAll ? `One signal · ${count(singles.length)}` : `One signal · top ${SINGLES_SHOWN} of each`;
+    body.appendChild(sectionRow(model, label, "single"));
+    for (const path of singles) body.appendChild(hotRow(model, path));
+  }
+  if (!multi.length && !singles.length) {
+    const cell = el("td", { class: "codebase-empty", text: query ? `No ranked path matches “${view.search.trim()}”.` : "No path is ranked in this window." });
+    cell.setAttribute("colspan", String(signals.length + 1));
+    body.appendChild(el("tr", {}, [cell]));
+  }
+  const table = el("table", { class: "codebase-hot-table" }, [el("thead", {}, [head]), body]);
+  table.setAttribute("aria-label", "Paths by signal");
+  // The table scrolls sideways inside its box on a narrow screen.
+  const scroll = el("div", { class: "codebase-hot-scroll", role: "region", "aria-label": "Paths by signal" }, [table]);
+  scroll.tabIndex = 0;
+  box.appendChild(scroll);
+  const shown = multi.length + singles.length;
+  const foot = el("div", { class: "codebase-hot-foot" }, [
+    el("span", { class: "codebase-extra", text: query ? `${count(shown)} of ${plural(index.size, "ranked path")} match` : `${count(shown)} of ${plural(index.size, "ranked path")} shown` }),
+  ]);
+  if (!query && (view.showAll || shown < index.size)) {
+    const toggle = actionButton(view.showAll ? `Show top ${SINGLES_SHOWN} of each` : `Show all ${count(index.size)}`, () => {
+      view = { ...view, showAll: !view.showAll };
+      paint();
+    }, "small");
+    toggle.setAttribute("aria-expanded", String(view.showAll));
+    foot.appendChild(toggle);
+  }
+  box.appendChild(foot);
+  if (query) {
+    // Paths no signal ranks can still be opened: their files and partners.
+    const ranked = new Set(index.keys());
+    const others = (Array.isArray(data.known_paths) ? data.known_paths : [])
+      .filter((path) => !ranked.has(path) && path.toLowerCase().includes(query)).slice(0, OTHER_PATHS_SHOWN);
+    if (others.length) {
+      const list = el("ul", { class: "codebase-other-paths", "aria-label": "Other matching paths" });
+      for (const path of others) list.appendChild(el("li", {}, [fileLink(path)]));
+      box.appendChild(el("div", { class: "codebase-others" }, [el("p", { class: "codebase-eyebrow", text: "Not ranked · open to see what changes with it" }), list]));
+    }
+  }
+  const cells = [...multi, ...singles].map((path) => signals.map((key) => {
+    const hit = index.get(path)?.[key];
+    return hit ? [hit.rank, hit.row.rate, hit.row.numerator, hit.row.denominator] : null;
+  }));
+  return keyed(box, "hotspots", {
+    signals, rollup: data.rollup, multi, singles, cells, total: index.size, showAll: view.showAll, query,
+    lengths: signals.map((key) => rowsOf(data, key).length), known: query ? data.known_paths || null : null,
+  });
 }
+
+function linkTo(text, target) {
+  return viewLink(target, [text]);
+}
+
+function riskMarksLine(data) {
+  const marks = section(data, "regressions").risk_marks || {};
+  if (!marks.enabled_at) return ["No implement or review prompt has marked a regression-prone file yet, so there is nothing to compare."];
+  const sample = (rates) => Number(rates?.denominator)
+    ? `${pct(rates.rate)} (${count(rates.numerator)} of ${count(rates.denominator)})`
+    : "no tasks";
+  return [
+    `Regression-risk marks: ${sample(marks.with_marks)} of marked tasks regressed, against ${sample(marks.before)} in the ${count(marks.window_days)} days before marking. `,
+    linkTo("Per-path comparison", { view: "marks" }),
+  ];
+}
+
+/// The footnotes that stand in for whole sections: hidden columns, blocks
+/// that never count, the regression-risk marks and where defect trends live.
+function notesNode(model) {
+  const { data, signals } = model;
+  const lines = [];
+  for (const key of SIGNALS.filter((signal) => !signals.includes(signal))) {
+    const text = key === "rejected" && !Number(section(data, "rejected").rejected_with_run)
+      ? "No task was rejected after a run in this window, so that column is hidden."
+      : `No path with ${count(data.min_support)}+ tasks ${SIGNAL_INFO[key].missing} in this window, so the ${SIGNAL_INFO[key].label} column is hidden.`;
+    lines.push([text]);
+  }
+  const causes = causeTotals(data);
+  let blocks = `Blocks from infrastructure (${count(causes.infrastructure)}) and manual holds (${count(causes.manual)}) never count against paths.`;
+  if (causes.unclassified > 0) blocks += ` Neither do ${plural(causes.unclassified, "block")} with no recorded cause.`;
+  lines.push([blocks]);
+  if (data.rollup === "crate") {
+    lines.push(["At crate grouping nearly every crate clears the minimum, so most crates turn up under several signals. Group by file or directory to find hotspots."]);
+  }
+  lines.push(riskMarksLine(data));
+  const defects = el("a", { text: "Metrics › Defects" });
+  defects.setAttribute("href", scopedHashHref("#analytics/metrics"));
+  lines.push(["Defect trends are on ", defects, "."]);
+  const node = el("div", { class: "codebase-notes" }, lines.map((parts) => el("p", { class: "codebase-note" }, parts)));
+  const marks = section(data, "regressions").risk_marks || {};
+  return keyed(node, "notes", {
+    hidden: SIGNALS.filter((signal) => !signals.includes(signal)), rejected: section(data, "rejected").rejected_with_run,
+    causes, rollup: data.rollup, min: data.min_support,
+    marks: [marks.enabled_at, marks.window_days, marks.with_marks, marks.before], links: [scopedHashHref(buildCodebaseHash({ view: "marks" })), scopedHashHref("#analytics/metrics")],
+  });
+}
+
+function hotspotNodes(model) {
+  return [filtersNode(model), hotspotTable(model), notesNode(model)];
+}
+
+// ---- file -------------------------------------------------------------------
+
+function copyPath(path) {
+  const clipboard = globalThis.navigator && globalThis.navigator.clipboard;
+  if (!clipboard || typeof clipboard.writeText !== "function") return;
+  clipboard.writeText(path).then(() => {
+    view = { ...view, copied: path };
+    paint();
+  }, () => {});
+}
+
+function fileHead(model, path) {
+  const { dir, base } = splitPath(path);
+  const head = el("div", { class: "codebase-file-head" }, [
+    backLink(),
+    el("div", { class: "codebase-file-title" }, [
+      el("div", { class: "codebase-file-name" }, [
+        el("span", { class: "codebase-eyebrow", text: ROLLUP_NOUNS[model.data.rollup] || "Path" }),
+        el("span", { class: "codebase-path-dir codebase-file-dir", text: dir }),
+        el("h3", { id: "codebase-file-path", class: "codebase-path-base codebase-file-base", text: base }),
+      ]),
+      el("div", { class: "codebase-actions" }, [actionButton(view.copied === path ? "Copied" : "Copy path", () => copyPath(path), "small")]),
+    ]),
+  ]);
+  return keyed(head, "file-head", { path, rollup: model.data.rollup, copied: view.copied === path, back: buildCodebaseHash({ view: "hotspots" }) });
+}
+
+function fileTiles(model, path) {
+  const { data, signals, index, limit } = model;
+  const hits = index.get(path) || {};
+  const node = el("section", { class: "codebase-file-tiles", "aria-label": "Signals" });
+  const keys = signals.length ? signals : ["regressions", "footprint_misses", "blocked"];
+  for (const key of keys) {
+    const hit = hits[key];
+    const tile = el("div", { class: `codebase-file-tile${hit ? "" : " absent"}` }, [
+      el("span", { class: "codebase-tile-label" }, [signalDot(key), SIGNAL_INFO[key].label]),
+      el("span", { class: "codebase-tile-big", text: hit ? pct(hit.row.rate) : "—" }),
+      el("span", { class: "codebase-tile-sub" }, hit
+        ? [`${count(hit.row.numerator)} of ${count(hit.row.denominator)} ${SIGNAL_INFO[key].unit} · `, el("span", { class: "codebase-tile-rank", text: `#${hit.rank}` }), ` of ${count(rowsOf(data, key).length)}`]
+        : [`not in the top ${count(limit)}`]),
+    ]);
+    tile.dataset.signal = key;
+    node.appendChild(tile);
+  }
+  return keyed(node, "file-tiles", { path, keys, hits, limit, lengths: keys.map((key) => rowsOf(data, key).length) });
+}
+
+function regressedTaskNode(task, regressedPaths) {
+  const wide = regressedPaths.get(task.task_id) || 0;
+  const link = el("a", { class: "codebase-task-link", text: task.task_id });
+  link.setAttribute("href", taskHref(task.task_id));
+  const top = el("div", { class: "codebase-task-top" }, [
+    link,
+    el("span", { class: "codebase-crew", text: task.crew || "unassigned" }),
+    el("span", { class: "codebase-task-title", text: task.title || "" }),
+  ]);
+  if (wide >= WIDE_TASK_PATHS) {
+    top.appendChild(el("span", { class: "codebase-tag wide", text: `${count(wide)} ranked paths`, title: "This task regressed several ranked paths at once" }));
+  }
+  const item = el("li", { class: "codebase-task" }, [top]);
+  const links = Array.isArray(task.regressions) ? task.regressions : [];
+  for (const id of task.regression_tasks || []) {
+    const regression = el("a", { class: "codebase-task-link", text: id });
+    regression.setAttribute("href", taskHref(id));
+    const line = el("div", { class: "codebase-task-by" }, [el("span", { text: "regressed by" }), regression]);
+    line.dataset.task = id;
+    const found = links.find((entry) => entry.task_id === id);
+    if (found) {
+      for (const key of ["nature", "layer", "detected_by"]) {
+        const tag = el("span", { class: "codebase-by-dim", text: valueLabel(found[key]) });
+        if (key === "layer" && found.layer_source) {
+          tag.title = `Layer, from its ${found.layer_source === "landed" ? "landed diff" : found.layer_source === "footprint" ? "declared footprint" : "missing paths"}`;
+        }
+        tag.dataset.dimension = key;
+        tag.dataset.value = found[key];
+        line.appendChild(tag);
+      }
+    }
+    item.appendChild(line);
+  }
+  item.dataset.task = task.task_id;
+  if (wide >= WIDE_TASK_PATHS) item.dataset.wide = String(wide);
+  return item;
+}
+
+function fileTasks(model, path) {
+  const hit = model.index.get(path)?.regressions;
+  const tasks = hit ? hit.row.regressed_tasks || [] : [];
+  const head = el("div", { class: "codebase-box-head" }, [el("h4", { text: "Regressed tasks" })]);
+  if (tasks.length > TASKS_SHOWN) {
+    const toggle = actionButton(view.allTasks ? "Show fewer" : `All ${count(tasks.length)}`, () => {
+      view = { ...view, allTasks: !view.allTasks };
+      paint();
+    }, "link");
+    toggle.setAttribute("aria-expanded", String(view.allTasks));
+    head.appendChild(toggle);
+  }
+  const box = el("section", { class: "codebase-box codebase-file-tasks", "aria-label": "Regressed tasks" }, [head]);
+  const filters = activeFilters(model.data.regression_filter || {});
+  if (filters.length) {
+    box.appendChild(note(`Filtered to ${filters.map(({ label, key }) => `${label.toLowerCase()} ${valueLabel(model.data.regression_filter[key])}`).join(", ")}: only matching regressions are counted and listed.`, "codebase-filter-note"));
+  }
+  if (!hit) {
+    box.appendChild(note(`Not in the top ${count(model.limit)} regressed paths, so no regressed tasks are listed.`, "codebase-box-note"));
+  } else {
+    const shown = view.allTasks ? tasks : tasks.slice(0, TASKS_SHOWN);
+    const list = el("ul", { class: "codebase-tasks" });
+    for (const task of shown) list.appendChild(regressedTaskNode(task, model.regressedPaths));
+    box.appendChild(list);
+    if (Number(hit.row.numerator) > tasks.length) {
+      box.appendChild(note(tasks.length === 1
+        ? `Only the most recently done of ${count(hit.row.numerator)} regressed tasks is listed.`
+        : `The ${count(tasks.length)} most recently done of ${count(hit.row.numerator)} regressed tasks are listed.`, "codebase-box-note"));
+    }
+    if (shown.some((task) => (model.regressedPaths.get(task.task_id) || 0) >= WIDE_TASK_PATHS)) {
+      box.appendChild(note("A task marked with a path count regressed that many ranked paths at once, so a single fix there can lift several rows.", "codebase-box-note"));
+    }
+  }
+  return keyed(box, "file-tasks", {
+    path, filter: model.data.regression_filter || null, limit: model.limit, allTasks: view.allTasks, row: hit ? hit.row : null,
+    wide: tasks.map((task) => model.regressedPaths.get(task.task_id) || 0),
+  });
+}
+
+// Why no related file is listed, from the response's empty reason, with a
+// wider window or a lower minimum that can list one.
+function relatedEmpty(data) {
+  const reason = data.empty_reason || {};
+  const when = WINDOW_PHRASES[codebaseQuery.window] || "in this window";
+  const actions = [];
+  const lower = (support) => {
+    if (Number(support) >= 1 && Number(support) < Number(codebaseQuery.min_support)) {
+      actions.push(actionButton(`Lower minimum to ${count(support)}`, () => updateQuery({ min_support: Number(support) })));
+    }
+  };
+  const wider = () => { if (codebaseQuery.window !== "all") actions.push(actionButton("Use all time", () => updateQuery({ window: "all" }))); };
+  let text;
+  switch (reason.kind) {
+    case "no_landed_change":
+      text = `No landed task with a recorded landing changed this file ${when}.`;
+      wider();
+      break;
+    case "path_below_minimum":
+      text = `Only ${plural(reason.path_support, "landed task")} changed this file ${when}; ranking partners needs ${count(reason.min_support ?? data.min_support)}.`;
+      wider();
+      lower(reason.path_support);
+      break;
+    case "no_partner":
+      text = `Every landed task that changed this file ${when} changed it alone.`;
+      wider();
+      break;
+    case "partners_below_minimum":
+      text = `${plural(reason.partners, "file")} changed alongside it ${when}, but none in ${count(reason.min_support)} or more landed tasks; the most shared is ${count(reason.max_shared)}.`;
+      lower(reason.max_shared);
+      wider();
+      break;
+    default:
+      text = `No file changed alongside it in ${count(codebaseQuery.min_support)} or more landed tasks ${when}.`;
+      wider();
+  }
+  return [el("p", { class: "codebase-empty", text }), actions.length ? el("div", { class: "codebase-actions" }, actions) : null];
+}
+
+function relatedRow(row) {
+  const support = row.support || {};
+  const item = el("li", { class: "codebase-related-row" }, [
+    el("div", { class: "codebase-related-top" }, [
+      fileLink(row.path),
+      el("span", { class: "codebase-related-rate" }, [
+        el("span", { class: "codebase-rate", text: pct(row.jaccard) }),
+        el("span", { class: "codebase-frac", text: `${count(support.both)}/${count(support.either)}` }),
+      ]),
+    ]),
+    rateBar(row.jaccard),
+  ]);
+  item.dataset.path = row.path;
+  const tasks = Array.isArray(row.tasks) ? row.tasks : [];
+  if (tasks.length) {
+    const evidence = el("details", { class: "codebase-related-evidence" }, [el("summary", { text: `Changed together in ${plural(tasks.length, "task")}` })]);
+    for (const task of tasks) {
+      const link = el("a", { class: "codebase-task-link", text: task.title || task.task_id, title: task.commit || "" });
+      link.setAttribute("href", taskHref(task.task_id));
+      evidence.appendChild(link);
+    }
+    item.appendChild(evidence);
+  }
+  return item;
+}
+
+function fileRelated(path) {
+  const box = el("section", { class: "codebase-box codebase-file-related", "aria-label": "Changes with" }, [
+    el("div", { class: "codebase-box-head stacked" }, [el("h4", { text: "Changes with" }), el("span", { class: "codebase-extra", text: "files landed in the same tasks" })]),
+  ]);
+  const body = el("div", { class: "codebase-box-body" });
+  box.appendChild(body);
+  const done = (hash) => keyed(box, "file-related", hash);
+  if (path.endsWith("/")) {
+    body.appendChild(el("p", { class: "codebase-empty", text: "Changes with pairs single files. Group by file to see what lands alongside one." }));
+    body.appendChild(el("div", { class: "codebase-actions" }, [actionButton("Group by file", () => updateQuery({ rollup: "file" }))]));
+    return done({ path, rollup: true });
+  }
+  if (related.error) {
+    body.appendChild(el("p", { class: "codebase-empty", text: `Could not load related files: ${related.error}` }));
+    return done({ path, error: related.error });
+  }
+  const data = related.data;
+  if (!data) {
+    body.appendChild(el("p", { class: "codebase-empty", text: "Loading related files…" }));
+    return done({ path, loading: true });
+  }
+  const rows = Array.isArray(data.rows) ? data.rows : [];
+  if (rows.length) {
+    const list = el("ul", { class: "codebase-related-list" });
+    for (const row of rows) list.appendChild(relatedRow(row));
+    body.appendChild(list);
+  } else {
+    for (const node of relatedEmpty(data)) if (node) body.appendChild(node);
+  }
+  const unavailable = Number(data.unavailable_landed_tasks) || 0;
+  const parts = [`${plural(data.path_support, "landed task")} changed this file`];
+  if (Number(data.excluded_large)) parts.push(`${count(data.excluded_large)} bulk tasks over ${count(data.large_footprint_cap)} files left out`);
+  if (unavailable) parts.push(`${plural(unavailable, "done task")} without a recorded landing, finished by hand or before Orbit recorded landings`);
+  body.appendChild(note(`${parts.join(" · ")}.`, "codebase-related-note"));
+  return done({ path, data, window: codebaseQuery.window, min: codebaseQuery.min_support });
+}
+
+function fileNodes(model) {
+  const path = route.path;
+  return [fileHead(model, path), fileTiles(model, path), fileTasks(model, path), fileRelated(path)];
+}
+
+// The related query reads only the window and minimum support; a changed
+// payload refetches it too.
+function relatedFetchKey(path) {
+  return JSON.stringify([path, codebaseQuery.window, codebaseQuery.min_support, lastPayloadKey]);
+}
+
+function ensureRelated() {
+  if (route.view !== "file" || !route.path || route.path.endsWith("/") || isAggregateView() || !lastData) return;
+  const key = relatedFetchKey(route.path);
+  if (key === related.key && !related.error) return;
+  fetchRelated(route.path, key);
+}
+
+async function fetchRelated(path, key) {
+  const request = related.request + 1;
+  // Keep the last answer for the same file on screen while a refresh runs.
+  const keep = related.data && related.data.path === path ? related.data : null;
+  related = { key, data: keep, error: null, loading: true, request };
+  paint();
+  const visit = captureWorkspaceVisit();
+  const sp = new URLSearchParams({ path, window: codebaseQuery.window, min_support: String(codebaseQuery.min_support), top: String(RELATED_TOP) });
+  const current = () => request === related.request && visit.isCurrent() && route.view === "file" && route.path === path;
+  try {
+    const data = await fetchJson(`/api/codebase/related?${sp}`);
+    if (!current()) return;
+    related = { ...related, data: data && typeof data === "object" && !Array.isArray(data) ? data : { path, rows: [] }, loading: false };
+  } catch (error) {
+    if (!current()) return;
+    related = { ...related, data: null, error: error.message || String(error), loading: false };
+  }
+  paint();
+}
+
+// ---- coupling & locks -------------------------------------------------------
+
+function pairRow(pair) {
+  const [left, right] = pair.paths || [];
+  const item = el("li", { class: "codebase-pair-row" }, [
+    el("div", { class: "codebase-pair-paths" }, [
+      pathNode(left),
+      el("span", { class: "codebase-pair-second" }, [el("span", { class: "codebase-pair-arrow", text: "↔ " }), pathNode(right)]),
+      expectedPair(pair.paths) ? el("span", { class: "codebase-tag", text: "expected: its tests" }) : null,
+    ]),
+    el("div", { class: "codebase-pair-figure" }, [
+      el("span", {}, [el("span", { class: "codebase-rate", text: pct(pair.rate) }), " ", el("span", { class: "codebase-frac", text: `${count(pair.numerator)}/${count(pair.denominator)}` })]),
+      rateBar(pair.rate),
+    ]),
+  ]);
+  item.dataset.pair = (pair.paths || []).join("\n");
+  return item;
+}
+
+function releaseRow(pairs) {
+  const rates = pairs.map((pair) => Number(pair.rate) || 0);
+  const low = Math.min(...rates);
+  const high = Math.max(...rates);
+  const files = RELEASE_FILES.filter((file) => pairs.some((pair) => pair.paths.includes(file)));
+  const row = el("li", { class: "codebase-release-row" }, [
+    el("div", { class: "codebase-release-top" }, [
+      el("span", { class: "codebase-release-title", text: `Release bump set · ${plural(files.length, "file")}` }),
+      el("span", { class: "codebase-release-range", text: low === high ? pct(low) : `${pct(low)}–${pct(high)}` }),
+    ]),
+    el("span", { class: "codebase-release-files", text: `${files.join(" · ")} · ${plural(pairs.length, "pair")}` }),
+  ]);
+  row.dataset.pairs = String(pairs.length);
+  return row;
+}
+
+function pairsNode(model) {
+  const { data } = model;
+  const coupling = section(data, "change_coupling");
+  const pairs = rowsOf(data, "change_coupling");
+  const head = el("div", { class: "codebase-box-head" }, [
+    el("div", {}, [el("h4", { text: "Reserved together" }), el("span", { class: "codebase-extra", text: "tasks holding both ÷ tasks holding either" })]),
+  ]);
+  const box = el("section", { class: "codebase-box codebase-pairs", "aria-label": "Reserved together" }, [head]);
+  const release = pairs.filter((pair) => releasePair(pair.paths));
+  if (release.length) {
+    const toggle = el("input", { type: "checkbox", class: "codebase-check" });
+    toggle.checked = view.groupRelease;
+    toggle.addEventListener("change", () => {
+      view = { ...view, groupRelease: toggle.checked };
+      paint();
+    });
+    head.appendChild(el("label", { class: "codebase-toggle" }, [toggle, "Group release files"]));
+  }
+  const below = Number(coupling.below_support) || 0;
+  const large = Number(coupling.excluded_large) || 0;
+  const largeNote = large > 0 ? `${plural(large, "reservation")} naming more than ${count(coupling.large_footprint_cap)} files ${large === 1 ? "is" : "are"} left out of every pair.` : "";
+  if (!pairs.length) {
+    const nouns = { file: "files", dir: "directories", crate: "crates" };
+    const actions = [];
+    if (data.rollup !== "dir") actions.push(actionButton("Group by directory", () => updateQuery({ rollup: "dir" })));
+    const lower = lowerSupportButton(data, `Lower to ${LOWERED_SUPPORT}`);
+    if (lower) actions.push(lower);
+    box.appendChild(el("div", { class: "codebase-empty-state" }, [
+      el("p", { class: "codebase-empty-title", text: `No pair of ${nouns[data.rollup] || "paths"} is reserved together ${count(data.min_support)} or more times.` }),
+      note(`${plural(below, "pair")} fall${below === 1 ? "s" : ""} under the threshold.${data.rollup === "file" ? " Single files are rarely reserved together often enough to rank; directories pool them." : ""}`),
+      actions.length ? el("div", { class: "codebase-actions" }, actions) : null,
+      largeNote ? note(largeNote) : null,
+    ]));
+    return keyed(box, "pairs", { coupling, rollup: data.rollup, min: data.min_support });
+  }
+  const grouped = view.groupRelease && release.length > 0;
+  const list = el("ul", { class: "codebase-pair-list" });
+  if (grouped) list.appendChild(releaseRow(release));
+  for (const pair of pairs) if (!(grouped && releasePair(pair.paths))) list.appendChild(pairRow(pair));
+  box.appendChild(list);
+  const parts = [`${plural(below, "pair")} below ${count(data.min_support)} shared reservations ${below === 1 ? "is" : "are"} hidden.`];
+  if (largeNote) parts.push(largeNote);
+  box.appendChild(note(parts.join(" "), "codebase-box-note"));
+  return keyed(box, "pairs", { coupling, rollup: data.rollup, min: data.min_support, grouped: view.groupRelease });
+}
+
+function lockRow(row, byWait, maxTotal, recorded) {
+  const wait = row.wait && typeof row.wait === "object" ? row.wait : null;
+  const total = wait ? waitDuration(wait.total_ms) : "—";
+  const denied = `${count(row.numerator)} of ${count(row.denominator)} requesters denied`;
+  const line = recorded && wait ? `median wait ${waitDuration(wait.median_ms)} · ${denied}` : denied;
+  const item = el("li", { class: "codebase-lock-row" }, [
+    el("div", { class: "codebase-lock-top" }, [fileLink(row.path), el("span", { class: "codebase-lock-total", text: recorded ? total : pct(row.rate) })]),
+    rateBar(byWait ? (Number(wait?.total_ms) || 0) / (maxTotal || 1) : row.rate),
+    el("div", { class: "codebase-lock-line" }, [
+      el("span", { class: "codebase-extra", text: line }),
+      recorded && wait && Number(wait.waiting) > 0 ? el("span", { class: "codebase-tag", text: `${count(wait.waiting)} still waiting` }) : null,
+    ]),
+  ]);
+  item.dataset.path = row.path;
+  return item;
+}
+
+function locksNode(model) {
+  const { data } = model;
+  const lock = section(data, "lock_contention");
+  const recorded = lockWaitsRecorded(data);
+  const byWait = lockByWait(data);
+  const rows = byWait ? rowsByWait(data) : rowsOf(data, "lock_contention");
+  const head = el("div", { class: "codebase-box-head" }, [
+    el("div", {}, [el("h4", { text: "Lock waits" }), el("span", { class: "codebase-extra", text: recorded ? "time tasks spent denied a lock on the file" : "requesters denied a lock on the file" })]),
+  ]);
+  if (rowsByWait(data).length) {
+    const sorts = el("div", { class: "codebase-segs small", role: "group", "aria-label": "Sort locks" });
+    for (const [key, label] of [["wait", "Total wait"], ["rate", "Denial rate"]]) {
+      const on = (key === "wait") === byWait;
+      const button = el("button", { class: `codebase-seg${on ? " on" : ""}`, type: "button", text: label, "aria-pressed": String(on) });
+      button.dataset.value = key;
+      button.addEventListener("click", () => {
+        if (view.lockSort === key) return;
+        view = { ...view, lockSort: key };
+        paint();
+      });
+      sorts.appendChild(button);
+    }
+    head.appendChild(sorts);
+  }
+  const box = el("section", { class: "codebase-box codebase-locks", "aria-label": "Lock waits" }, [head]);
+  if (lockIsQuiet(data)) {
+    box.appendChild(el("div", { class: "codebase-empty-state good" }, [
+      el("p", { class: "codebase-empty-title", text: "No lock was refused in this window." }),
+      note(`Tasks took ${plural(lock.reservations, "file reservation")} and none was denied, so no path has contention to rank.`),
+    ]));
+  } else if (!rows.length) {
+    const below = Number(lock.below_support) || 0;
+    box.appendChild(el("p", { class: "codebase-empty", text: below ? `No path reaches minimum support ${count(data.min_support)}; ${count(below)} fall below it.` : "No path has lock data in this window." }));
+  } else {
+    const maxTotal = Math.max(0, ...rows.map((row) => Number(row.wait?.total_ms) || 0));
+    const list = el("ul", { class: "codebase-lock-list" });
+    for (const row of rows) list.appendChild(lockRow(row, byWait, maxTotal, recorded));
+    box.appendChild(list);
+  }
+  const foot = [];
+  if (Number(lock.below_support) > 0 && rows.length) foot.push(`${plural(lock.below_support, "path")} below minimum support ${count(data.min_support)} hidden.`);
+  if (!recorded) foot.push("Lock wait time is not recorded, so waits cannot be shown.");
+  else if (rowsByWait(data).length) foot.push("A wait runs from a task's first denial to its admission or its leaving the backlog; its retries add no wait. A wait still in progress is measured to now.");
+  if (foot.length) box.appendChild(note(foot.join(" "), "codebase-box-note"));
+  return keyed(box, "locks", { lock, min: data.min_support, byWait });
+}
+
+function couplingNodes(model) {
+  return [pairsNode(model), locksNode(model)];
+}
+
+// ---- marks ------------------------------------------------------------------
 
 // A rate with the counts behind it, so a small sample reads as one.
 function sampleNode(rates) {
@@ -803,12 +1173,16 @@ function sampleNode(rates) {
 
 /// Regression-risk marks: the marked paths' regression rate for tasks
 /// delivered with marks against the same paths before the first mark.
-function riskMarksNode(data) {
-  const marks = section(data, "regressions").risk_marks || {};
-  const block = el("div", { class: "codebase-slice codebase-risk-marks" }, [el("p", { class: "codebase-eyebrow", text: "Regression-risk marks: with marks vs before" })]);
+function marksNode(model) {
+  const marks = section(model.data, "regressions").risk_marks || {};
+  const box = el("section", { class: "codebase-box codebase-risk-marks", "aria-label": "Regression-risk marks" }, [
+    el("div", { class: "codebase-box-head" }, [el("h4", { text: "Regression-risk marks: with marks vs before" })]),
+  ]);
+  const body = el("div", { class: "codebase-box-body" });
+  box.appendChild(body);
   if (!marks.enabled_at) {
-    block.appendChild(note("No implement or review prompt has marked a regression-prone file yet, so there is nothing to compare."));
-    return block;
+    body.appendChild(note("No implement or review prompt has marked a regression-prone file yet, so there is nothing to compare."));
+    return keyed(box, "marks", { marks });
   }
   const header = (text, scope) => {
     const cell = el("th", { text });
@@ -817,409 +1191,25 @@ function riskMarksNode(data) {
   };
   const rowNode = (label, row, total) => {
     const name = header(total ? label : "", "row");
-    if (!total) name.appendChild(pathNode(label));
-    const item = el("tr", { class: total ? "codebase-risk-total" : "" }, [
-      name,
-      sampleNode(row.with_marks),
-      sampleNode(row.before),
-    ]);
+    if (!total) name.appendChild(viewLink({ view: "file", path: label }, [pathNode(label)], "codebase-path-link"));
+    const item = el("tr", { class: total ? "codebase-risk-total" : "" }, [name, sampleNode(row.with_marks), sampleNode(row.before)]);
     item.dataset.path = total ? "" : label;
     return item;
   };
-  const body = el("tbody", {}, [
+  const tbody = el("tbody", {}, [
     rowNode(`All ${plural(marks.marked_paths, "marked path")}`, marks, true),
     ...(Array.isArray(marks.rows) ? marks.rows : []).map((row) => rowNode(row.path, row, false)),
   ]);
   const head = el("tr", {}, [header("", "col"), header("With marks", "col"), header(`${count(marks.window_days)} days before`, "col")]);
-  block.appendChild(el("div", { class: "codebase-crosstab-scroll" }, [
-    el("table", { class: "codebase-risk-table", "aria-label": "Regression rate on marked paths with marks and before" }, [el("thead", {}, [head]), body]),
+  body.appendChild(el("div", { class: "codebase-hot-scroll" }, [
+    el("table", { class: "codebase-risk-table", "aria-label": "Regression rate on marked paths with marks and before" }, [el("thead", {}, [head]), tbody]),
   ]));
-  block.appendChild(note(`With marks: done tasks in this window whose implement or review prompt marked the path, regressed ÷ marked. Before: done tasks that touched the path in the ${count(marks.window_days)} days before the first mark (${String(marks.enabled_at).slice(0, 10)}). Recent tasks have had less time to be named by a regression.`));
-  return block;
+  body.appendChild(note(`With marks: done tasks in this window whose implement or review prompt marked the path, regressed ÷ marked. Before: done tasks that touched the path in the ${count(marks.window_days)} days before the first mark (${String(marks.enabled_at).slice(0, 10)}). Recent tasks have had less time to be named by a regression.`));
+  return keyed(box, "marks", { marks, query: buildCodebaseHash({ view: "hotspots" }) });
 }
 
-function definitionsNode() {
-  const list = el("dl", { class: "codebase-definitions-list" });
-  for (const [term, text] of REGRESSION_DEFINITIONS) {
-    list.appendChild(el("dt", { text: term }));
-    list.appendChild(el("dd", { text }));
-  }
-  return el("details", { class: "codebase-definitions" }, [el("summary", { text: "What nature, escape, layer and detected by mean" }), list]);
-}
-
-const CAUSE_LABELS = { run_failure: "Run failure", unclassified: "Unclassified", base_conflict: "Base conflict" };
-const CAUSE_KINDS = {
-  attributed: "counted against paths", base_conflict: "counted on its conflicting paths",
-  unclassified: "no cause found", infrastructure: "infrastructure", manual: "set by hand",
-};
-// The unclassified events a hint names.
-const HINT_EVENTS = 3;
-
-// A cause row's label; a manual block names the kind of actor that made it.
-function causeLabel(cause) {
-  const raw = cause && typeof cause === "object" ? cause.cause : cause;
-  const name = CAUSE_LABELS[raw] || String(raw || "").replace(/_/g, " ");
-  const label = name.charAt(0).toUpperCase() + name.slice(1);
-  return cause && cause.actor ? `${label} (${cause.actor})` : label;
-}
-
-function unclassifiedHint(data) {
-  const { causes, total, attributed, unclassified, events } = causeTotals(data);
-  if (unclassified <= 0) return null;
-  const largest = Math.max(0, ...causes.map((cause) => Number(cause.tasks) || 0));
-  const top = events.slice(0, HINT_EVENTS).map((entry) => `${entry.event} (${count(entry.tasks)})`);
-  const named = top.length ? ` Most entered blocked through ${top.join(", ")}.` : "";
-  const text = `${count(unclassified)} of ${count(total)} blocked tasks (${pct(unclassified / total)}) carry no recorded cause, so they count against no path.${named}`;
-  return unclassified === largest
-    ? hint(`${text} The rates below only reflect the ${count(attributed)} that a run failure explains.`, "warn")
-    : hint(text);
-}
-
-function causeNodes(data) {
-  const { causes, total, notFailures } = causeTotals(data);
-  const order = { attributed: 0, base_conflict: 1, unclassified: 2, infrastructure: 3, manual: 4 };
-  const ordered = [...causes].sort((a, b) => (order[a.kind] ?? 3) - (order[b.kind] ?? 3) || Number(b.tasks) - Number(a.tasks));
-  const shown = ordered.filter((cause) => Number(cause.tasks) > 0);
-  const nodes = [];
-  if (total > 0) {
-    const bar = el("div", {
-      class: "codebase-causebar",
-      role: "img",
-      "aria-label": `${shown.map((cause) => `${causeLabel(cause)} ${cause.tasks}`).join(", ")} of ${total} blocked tasks`,
-    });
-    for (const cause of shown) {
-      const segment = el("span", { title: `${causeLabel(cause)} ${cause.tasks}`, style: { flex: `${Number(cause.tasks)} 1 0` } });
-      segment.dataset.kind = cause.kind;
-      bar.appendChild(segment);
-    }
-    nodes.push(bar);
-  }
-  const legend = el("ul", { class: "codebase-legend" });
-  for (const cause of ordered) {
-    const item = el("li", { class: "codebase-cause" }, [
-      el("span", { class: "codebase-dot", "aria-hidden": "true" }),
-      `${causeLabel(cause)} `,
-      el("span", { class: "codebase-cause-count", text: count(cause.tasks) }),
-      el("span", { class: "codebase-cause-kind", text: CAUSE_KINDS[cause.kind] || cause.kind }),
-    ]);
-    item.dataset.cause = cause.cause;
-    item.dataset.kind = cause.kind;
-    if (cause.actor) item.dataset.actor = cause.actor;
-    legend.appendChild(item);
-  }
-  nodes.push(legend);
-  const unknown = unclassifiedHint(data);
-  if (unknown) nodes.push(unknown);
-  if (notFailures > 0) {
-    nodes.push(note(`${plural(notFailures, "task was", "tasks were")} held for review evidence or cancelled by an operator; those blocks are not failures and are left out.`, "codebase-not-failure"));
-  }
-  return nodes;
-}
-
-function couplingContent(model) {
-  const { data, pairs, selected } = model;
-  const coupling = section(data, "change_coupling");
-  const below = Number(coupling.below_support) || 0;
-  const large = Number(coupling.excluded_large) || 0;
-  const largeNote = large > 0 ? `${plural(large, "reservation")} naming more than ${count(coupling.large_footprint_cap)} files ${large === 1 ? "is" : "are"} left out of every pair.` : "";
-  if (pairs.length === 0) {
-    const nouns = { file: "files", dir: "directories", crate: "crates" };
-    const actions = [];
-    if (data.rollup !== "dir") actions.push(actionButton("Group by directory", () => updateQuery({ rollup: "dir" })));
-    const lower = lowerSupportButton(data, `Lower to ${LOWERED_SUPPORT}`);
-    if (lower) actions.push(lower);
-    return [el("div", { class: "codebase-empty-state" }, [
-      el("p", { class: "codebase-empty-title", text: `No pair of ${nouns[data.rollup] || "paths"} is reserved together ${count(data.min_support)} or more times.` }),
-      note(`${plural(below, "pair")} fall${below === 1 ? "s" : ""} under the threshold.${data.rollup === "file" ? " Single files are rarely reserved together often enough to rank; directories pool them." : ""}`),
-      actions.length ? el("div", { class: "codebase-actions" }, actions) : null,
-      largeNote ? note(largeNote) : null,
-    ])];
-  }
-  const expected = pairs.filter((pair) => pair.expected).length;
-  const visible = pairs.filter((pair) => !(view.hideExpected && pair.expected));
-  const content = [];
-  if (visible.length === 0) content.push(el("p", { class: "codebase-empty", text: "Every ranked pair is expected." }));
-  else {
-    content.push(rowList(visible.map((pair) => {
-      const [left, right] = pair.row.paths || [];
-      const cell = [pathNode(left), el("span", { class: "codebase-pair-second" }, [el("span", { class: "codebase-pair-arrow", text: "↔ " }), pathNode(right)])];
-      if (pair.expected) cell.push(el("span", { class: "codebase-chips" }, [el("span", { class: "codebase-tag", text: "expected: its tests" })]));
-      return rowButton(pairKey(pair.row.paths), selected, [
-        el("span", { class: "codebase-rank", text: String(pair.rank) }),
-        el("span", { class: "codebase-pathcell" }, cell),
-        metricNode(pair.row.rate, pair.row.numerator, pair.row.denominator),
-      ]);
-    })));
-  }
-  const parts = [`${plural(below, "pair")} below ${count(data.min_support)} shared reservations ${below === 1 ? "is" : "are"} hidden.`];
-  if (largeNote) parts.push(largeNote);
-  if (expected) parts.push(`${count(expected)} of these pairs ${expected === 1 ? "is a directory" : "are directories"} with ${expected === 1 ? "its" : "their"} own tests/.`);
-  content.push(listFoot([note(parts.join(" "))]));
-  return content;
-}
-
-// A row's waits: median and longest, total minutes and any still waiting.
-function waitChips(wait) {
-  if (!wait || typeof wait !== "object") return [];
-  const minutes = Math.round((Number(wait.total_ms) || 0) / 60000);
-  const chips = [el("span", {
-    class: "codebase-extra codebase-wait",
-    text: `wait median ${waitDuration(wait.median_ms)} · max ${waitDuration(wait.max_ms)} · ${count(minutes)} min total`,
-    title: `${plural(wait.episodes, "wait")} by tasks refused this lock`,
-  })];
-  if (Number(wait.waiting) > 0) chips.push(el("span", { class: "codebase-tag", text: `${count(wait.waiting)} still waiting` }));
-  return chips;
-}
-
-function lockContent(model) {
-  const { data, selected } = model;
-  const lock = section(data, "lock_contention");
-  const rows = lockRowsShown(data);
-  const recorded = lockWaitsRecorded(data);
-  const content = [];
-  if (lockIsQuiet(data)) {
-    content.push(el("div", { class: "codebase-empty-state good" }, [
-      el("p", { class: "codebase-empty-title", text: "No lock was refused in this window." }),
-      note(`Tasks took ${plural(lock.reservations, "file reservation")} and none was denied, so no path has contention to rank.`),
-    ]));
-  } else if (rows.length === 0) {
-    content.push(emptyRanking(data, "lock_contention"));
-  } else {
-    content.push(rowList(rows.map((row, at) => {
-      const waits = recorded ? waitChips(row.wait) : [];
-      return rowButton(pathKey(row.path), selected, [
-        el("span", { class: "codebase-rank", text: String(at + 1) }),
-        el("span", { class: "codebase-pathcell" }, [
-          pathNode(row.path),
-          el("span", { class: "codebase-chips" }, [el("span", { class: "codebase-extra", text: `${plural(row.reservations, "reservation")} · ${plural(row.denials, "denial")}` })]),
-          waits.length ? el("span", { class: "codebase-chips" }, waits) : null,
-        ]),
-        metricNode(row.rate, row.numerator, row.denominator),
-      ]);
-    })));
-  }
-  const foot = [];
-  if (Number(lock.below_support) > 0) foot.push(`${plural(lock.below_support, "path")} below minimum support ${count(data.min_support)} hidden.`);
-  if (!recorded) foot.push("Lock wait time is not recorded, so waits cannot be shown.");
-  else if (rowsByWait(data).length) {
-    foot.push("A wait runs from a task's first denial to its admission or its leaving the backlog; its retries add no wait. A wait still in progress is measured to now.");
-  }
-  if (foot.length) content.push(listFoot([note(foot.join(" "))]));
-  return content;
-}
-
-function listNode(model) {
-  const { data, pairs } = model;
-  const tile = view.tile;
-  const head = el("div", { class: "codebase-list-head" });
-  const titles = el("div", { class: "codebase-list-titles" }, [
-    withId(el("h3", { class: "codebase-list-title" }, [
-      el("span", { class: "codebase-dot", "aria-hidden": "true" }),
-      tile === "overlap" ? OVERLAP.title : RANKINGS[tile].label,
-    ]), "codebase-list-title"),
-    el("p", {
-      class: "codebase-definition",
-      text: tile === "overlap"
-        ? `Each ranking keeps its top ${count(model.limit)}. A path that turns up in several is a stronger lead than any single rate. Ordered by how many rankings, then by the highest rate outside Rejected.`
-        : RANKINGS[tile].definition,
-    }),
-  ]);
-  if (tile === "regressions") titles.appendChild(definitionsNode());
-  head.appendChild(titles);
-  if (tile === "change_coupling" && pairs.some((pair) => pair.expected)) {
-    const toggle = actionButton("Hide expected pairs", () => {
-      view = { ...view, hideExpected: !view.hideExpected };
-      paint();
-    }, `small toggle${view.hideExpected ? " on" : ""}`);
-    toggle.setAttribute("aria-pressed", String(view.hideExpected));
-    head.appendChild(toggle);
-  }
-  if (tile === "lock_contention" && rowsByWait(data).length) {
-    const toggle = actionButton("Sort by total wait", () => {
-      view = { ...view, lockByWait: !view.lockByWait };
-      paint();
-    }, `small toggle${view.lockByWait ? " on" : ""}`);
-    toggle.setAttribute("aria-pressed", String(view.lockByWait));
-    head.appendChild(toggle);
-  }
-  const content = tile === "overlap" ? overlapContent(model)
-    : tile === "change_coupling" ? couplingContent(model)
-      : tile === "lock_contention" ? lockContent(model)
-        : rankingContent(model, tile);
-  const node = withId(el("section", { class: "codebase-list", "aria-labelledby": "codebase-list-title" }, [head, ...content]), "codebase-list");
-  node.dataset.ranking = tile;
-  const hashed = tile === "overlap" ? [data.rollup, model.overlaps, PATH_RANKINGS.map((key) => rowsOf(data, key))]
-    : tile === "blocked" ? section(data, "blocked")
-      : section(data, tile);
-  // Path lists also render chips from the other rankings. A refreshed scan
-  // can change those memberships or rates without changing this section.
-  const chipRates = PATH_RANKINGS.includes(tile) ? rowsOf(data, tile).map((row) =>
-    PATH_RANKINGS.filter((key) => key !== tile).map((key) => {
-      const hit = model.index.get(row.path)?.[key];
-      return hit ? [key, hit.row.rate] : null;
-    })) : null;
-  return keyed(node, "list", { tile, filter: data.regression_filter || null, selected: model.selected, hideExpected: view.hideExpected, lockByWait: view.lockByWait, min: data.min_support, rollup: data.rollup, limit: model.limit, hashed, chipRates });
-}
-
-// ---- detail -----------------------------------------------------------------
-
-function regressedTaskNode(task, regressedPaths) {
-  const wide = regressedPaths.get(task.task_id) || 0;
-  const link = el("a", { class: "codebase-task-link", text: task.task_id });
-  link.setAttribute("href", taskHref(task.task_id));
-  const top = el("span", { class: "codebase-task-top" }, [link, el("span", { class: "codebase-crew", text: task.crew || "unassigned" })]);
-  if (wide >= WIDE_TASK_PATHS) {
-    top.appendChild(el("span", { class: "codebase-tag wide", text: `${count(wide)} ranked paths`, title: "This task regressed several ranked paths at once" }));
-  }
-  const by = el("span", { class: "codebase-task-by" }, ["regressed by"]);
-  const links = Array.isArray(task.regressions) ? task.regressions : [];
-  const dimensions = [];
-  for (const id of task.regression_tasks || []) {
-    const regression = el("a", { class: "codebase-task-link", text: id });
-    regression.setAttribute("href", taskHref(id));
-    by.append(" ");
-    by.appendChild(regression);
-    const link = links.find((entry) => entry.task_id === id);
-    if (!link) continue;
-    const tags = REGRESSION_DIMENSIONS.map(({ key, label }) => {
-      const tag = el("span", { class: "codebase-tag dim", text: valueLabel(link[key]), title: `${label}: ${valueLabel(link[key])}${key === "layer" && link.layer_source ? ` (from its ${link.layer_source === "landed" ? "landed diff" : link.layer_source === "footprint" ? "declared footprint" : "missing paths"})` : ""}` });
-      tag.dataset.dimension = key;
-      tag.dataset.value = link[key];
-      return tag;
-    });
-    const line = el("span", { class: "codebase-chips codebase-link-dims" }, [el("span", { class: "codebase-extra", text: id }), ...tags]);
-    line.dataset.task = id;
-    dimensions.push(line);
-  }
-  const item = el("li", { class: "codebase-task" }, [top, el("span", { class: "codebase-task-title", text: task.title || "" }), by, ...dimensions]);
-  item.dataset.task = task.task_id;
-  if (wide >= WIDE_TASK_PATHS) item.dataset.wide = String(wide);
-  return item;
-}
-
-function regressionDetail(model, row) {
-  const tasks = row.regressed_tasks || [];
-  const nodes = [];
-  const block = el("div", { class: "codebase-detail-block" });
-  const head = el("div", { class: "codebase-detail-head" }, [el("p", { class: "codebase-eyebrow", text: "Regressed tasks" })]);
-  if (tasks.length > TASKS_SHOWN) {
-    const toggle = actionButton(view.allTasks ? "Show fewer" : `All ${count(tasks.length)} →`, () => {
-      view = { ...view, allTasks: !view.allTasks };
-      paint();
-    }, "link");
-    toggle.setAttribute("aria-expanded", String(view.allTasks));
-    head.appendChild(toggle);
-  }
-  block.appendChild(head);
-  const filters = activeFilters(model.data.regression_filter || {});
-  if (filters.length) {
-    block.appendChild(note(`Filtered to ${filters.map(({ label, key }) => `${label.toLowerCase()} ${valueLabel(model.data.regression_filter[key])}`).join(", ")}: only matching regressions are counted and listed.`, "codebase-filter-note"));
-  }
-  const shown = view.allTasks ? tasks : tasks.slice(0, TASKS_SHOWN);
-  const list = el("ul", { class: "codebase-tasks" });
-  for (const task of shown) list.appendChild(regressedTaskNode(task, model.regressedPaths));
-  block.appendChild(list);
-  if (Number(row.numerator) > tasks.length) {
-    block.appendChild(note(`The ${count(tasks.length)} most recently done of ${count(row.numerator)} regressed tasks are listed.`));
-  }
-  if (shown.some((task) => (model.regressedPaths.get(task.task_id) || 0) >= WIDE_TASK_PATHS)) {
-    block.appendChild(note("A task marked with a path count regressed that many ranked paths at once, so a single fix there can lift several rows."));
-  }
-  nodes.push(block);
-  const crews = el("div", { class: "codebase-detail-block" }, [el("p", { class: "codebase-eyebrow", text: "Regressions by crew" })]);
-  const crewList = el("ul", { class: "codebase-crews" });
-  for (const crew of row.by_crew || []) {
-    const item = el("li", { class: "codebase-crew-row" }, [
-      el("span", { class: "codebase-crew-name", text: crew.crew || "unassigned" }),
-      rateBar(crew.rate),
-      el("span", { class: "codebase-rate", text: pct(crew.rate) }),
-      el("span", { class: "codebase-frac", text: `${count(crew.numerator)}/${count(crew.denominator)}` }),
-    ]);
-    item.dataset.crew = crew.crew || "unassigned";
-    crewList.appendChild(item);
-  }
-  crews.appendChild(crewList);
-  crews.appendChild(note("Crews take different complexity tiers, so their rates are not like for like."));
-  nodes.push(crews);
-  return nodes;
-}
-
-function copyPath(path) {
-  const clipboard = globalThis.navigator && globalThis.navigator.clipboard;
-  if (!clipboard || typeof clipboard.writeText !== "function") return;
-  clipboard.writeText(path).then(() => {
-    view = { ...view, copied: path };
-    paint();
-  }, () => {});
-}
-
-function pathDetail(model, path) {
-  const { data, index, limit } = model;
-  const hits = index.get(path) || {};
-  const nodes = [el("div", { class: "codebase-detail-block" }, [
-    withId(el("p", { class: "codebase-eyebrow", text: ROLLUP_NOUNS[data.rollup] || "Path" }), "codebase-detail-title"),
-    pathNode(path, "large"),
-    el("div", { class: "codebase-actions" }, [actionButton(view.copied === path ? "Copied" : "Copy path", () => copyPath(path), "small")]),
-  ])];
-  const rankings = el("ul", { class: "codebase-standings" });
-  for (const key of PATH_RANKINGS) {
-    const hit = hits[key];
-    const item = el("li", { class: `codebase-standing${hit ? "" : " absent"}` }, [
-      el("span", { class: "codebase-standing-label" }, [el("span", { class: "codebase-dot", "aria-hidden": "true" }), RANKINGS[key].label]),
-      el("span", { class: "codebase-standing-rank", text: hit ? `#${hit.rank} of ${rowsOf(data, key).length}` : `not in the top ${count(limit)}` }),
-    ]);
-    item.dataset.ranking = key;
-    if (hit) {
-      item.appendChild(el("span", { class: "codebase-metric" }, [
-        rateBar(hit.row.rate),
-        el("span", { class: "codebase-rate", text: pct(hit.row.rate) }),
-        el("span", { class: "codebase-frac", text: `${count(hit.row.numerator)} of ${count(hit.row.denominator)} ${RANKINGS[key].unit}` }),
-      ]));
-    }
-    rankings.appendChild(item);
-  }
-  nodes.push(el("div", { class: "codebase-detail-block" }, [el("p", { class: "codebase-eyebrow", text: "Rankings" }), rankings]));
-  if (hits.regressions) nodes.push(...regressionDetail(model, hits.regressions.row));
-  else nodes.push(note("Not in the regression ranking, so no regressed tasks are listed."));
-  return nodes;
-}
-
-function pairDetail(pair) {
-  const [left, right] = pair.row.paths || [];
-  const [leftCount, rightCount] = pair.row.reservations || [];
-  return [
-    el("div", { class: "codebase-detail-block" }, [
-      withId(el("p", { class: "codebase-eyebrow", text: "Coupled pair" }), "codebase-detail-title"),
-      pathNode(left, "large"),
-      el("span", { class: "codebase-pair-second" }, [el("span", { class: "codebase-pair-arrow", text: "↔ " }), pathNode(right, "large")]),
-      pair.expected ? el("span", { class: "codebase-chips" }, [el("span", { class: "codebase-tag", text: "expected: its tests" })]) : null,
-    ]),
-    el("div", { class: "codebase-detail-block" }, [
-      el("span", { class: "codebase-metric" }, [rateBar(pair.row.rate), el("span", { class: "codebase-rate", text: pct(pair.row.rate) })]),
-      el("p", { class: "codebase-pair-line", text: `Reserved together ${count(pair.row.numerator)} of ${count(pair.row.denominator)} reservations that held either.` }),
-      note(`${splitPath(left).base} was reserved ${plural(leftCount, "time")}; ${splitPath(right).base} ${plural(rightCount, "time")}.`),
-      note(pair.expected
-        ? "Expected: a directory and its tests move together by design. Hide expected pairs to see the surprising ones."
-        : "Tasks that change one keep needing the other, so a footprint that names one should probably name both."),
-    ]),
-  ];
-}
-
-function detailNode(model) {
-  const key = model.selected;
-  const entry = model.entries.find((candidate) => candidate.key === key);
-  const content = !entry
-    ? [note("Nothing is ranked here, so there is no row to show.")]
-    : entry.pair ? pairDetail(entry.pair)
-      : pathDetail(model, entry.path);
-  const node = withId(el("aside", { class: "codebase-detail", "aria-labelledby": entry ? "codebase-detail-title" : null, "aria-label": entry ? null : "Detail" }, content), "codebase-detail");
-  if (entry && entry.pair) node.dataset.ranking = "change_coupling";
-  const hits = entry && entry.path ? model.index.get(entry.path) : null;
-  return keyed(node, "detail", {
-    key, rollup: model.data.rollup, filter: model.data.regression_filter || null, limit: model.limit, allTasks: view.allTasks, copied: view.copied === (entry && entry.path),
-    hits, pair: entry && entry.pair ? entry.pair : null, lengths: PATH_RANKINGS.map((ranking) => rowsOf(model.data, ranking).length),
-    wide: hits && hits.regressions ? (hits.regressions.row.regressed_tasks || []).map((task) => model.regressedPaths.get(task.task_id) || 0) : null,
-  });
+function marksNodes(model) {
+  return [keyed(el("div", { class: "codebase-file-head" }, [backLink()]), "marks-head", { back: buildCodebaseHash({ view: "hotspots" }) }), marksNode(model)];
 }
 
 // ---- render -----------------------------------------------------------------
@@ -1228,137 +1218,29 @@ function paint() {
   const body = $(BODY_ID);
   if (!body || !lastData) return;
   const model = buildModel(lastData);
-  syncNodes(body, [tilesNode(model), listNode(model), detailNode(model)]);
+  const nodes = route.view === "file" ? fileNodes(model)
+    : route.view === "coupling" ? couplingNodes(model)
+      : route.view === "marks" ? marksNodes(model)
+        : hotspotNodes(model);
+  body.dataset.view = route.view;
+  syncNodes(body, nodes);
+  // Opening another view starts at its top, not where the last one scrolled.
+  const opened = `${route.view}\n${route.path ?? ""}`;
+  if (paintedView !== null && paintedView !== opened) {
+    const panel = $("codebase-panel");
+    if (panel && typeof panel.scrollIntoView === "function") panel.scrollIntoView({ block: "start" });
+  }
+  paintedView = opened;
 }
 
 function renderCodebase(data) {
   if (!data) return;
-  const payloadKey = JSON.stringify(data);
-  const payloadChanged = payloadKey !== lastPayloadKey;
   lastData = data;
-  lastPayloadKey = payloadKey;
+  lastPayloadKey = JSON.stringify(data);
   const computed = data.computed_at ? formatDateTime(data.computed_at) : "—";
-  const minutes = Math.round(Number(data.cache_ttl_seconds) / 60) || 0;
-  setMeta(`${plural(data.tasks_scanned, "task")} scanned · computed ${computed} · recomputed every ${minutes} min`);
+  setMeta(`${plural(data.tasks_scanned, "task")} scanned · computed ${computed}`);
   paint();
-  if (payloadChanged) renderPathOptions();
-  if (relatedPath) {
-    const key = relatedFetchKey(relatedPath);
-    if (key !== relatedKey || relatedRequestFailed) fetchRelated(relatedPath, key);
-  }
-}
-
-// The related files read only the window and minimum support.
-function relatedSelection() {
-  return JSON.stringify([codebaseQuery.window, codebaseQuery.min_support]);
-}
-
-function relatedFetchKey(path) {
-  return JSON.stringify([path, relatedSelection(), lastPayloadKey]);
-}
-
-function renderPathOptions() {
-  const options = $("codebase-path-options");
-  const search = $("codebase-path-search");
-  if (!options || !search) return;
-  options.textContent = "";
-  if (isAggregateView() || !search.value) return;
-  const paths = (lastData?.known_paths || []).filter(path => path.startsWith(search.value)).slice(0, 12);
-  for (const path of paths) {
-    const button = el("button", { class: "action", type: "button", text: path });
-    button.addEventListener("click", () => {
-      search.value = path;
-      options.textContent = "";
-      fetchRelated(path);
-    });
-    options.appendChild(button);
-  }
-}
-
-async function fetchRelated(path, key = relatedFetchKey(path)) {
-  const results = $("codebase-related-results");
-  if (!results || isAggregateView()) return;
-  relatedPath = path;
-  const request = ++relatedRequest;
-  relatedKey = key;
-  relatedRequestFailed = false;
-  const visit = captureWorkspaceVisit();
-  const selection = relatedSelection();
-  const sp = new URLSearchParams({ path, window: codebaseQuery.window, min_support: String(codebaseQuery.min_support), top: "100" });
-  results.textContent = "Loading related files…";
-  try {
-    const data = await fetchJson(`/api/codebase/related?${sp}`);
-    if (request !== relatedRequest || !visit.isCurrent() || selection !== relatedSelection()) return;
-    relatedData = data;
-    renderRelated();
-  } catch (error) {
-    if (request === relatedRequest && visit.isCurrent() && selection === relatedSelection()) {
-      relatedRequestFailed = true;
-      results.textContent = `Could not load related files: ${error.message}`;
-    }
-  }
-}
-
-// Why no related file is listed, from the response's empty reason, with a
-// rerun at a minimum that can list one.
-function relatedEmpty(data) {
-  const reason = data.empty_reason || {};
-  const rerun = (support) => Number(support) >= 1 && Number(support) < Number(data.min_support)
-    ? el("div", { class: "codebase-actions" }, [actionButton(`Rerun with minimum ${count(support)}`, () => updateQuery({ min_support: Number(support) }))])
-    : null;
-  const empty = (text, action = null) => [el("p", { class: "codebase-empty", text }), action].filter(Boolean);
-  switch (reason.kind) {
-    case "no_landed_change":
-      return empty(`No landed task with a recorded landing changed ${data.path} in this window.`);
-    case "path_below_minimum":
-      return empty(`${data.path} changed in ${plural(reason.path_support, "landed task")} in this window, fewer than the minimum of ${count(reason.min_support)} shared tasks, so no partner can qualify.`, rerun(reason.path_support));
-    case "no_partner":
-      return empty(`Every landed task in this window changed ${data.path} alone.`);
-    case "partners_below_minimum":
-      return empty(`${plural(reason.partners, "file")} changed alongside ${data.path}, but none in ${count(reason.min_support)} or more landed tasks; the most shared is ${count(reason.max_shared)}.`, rerun(reason.max_shared));
-    default:
-      return empty("No related files reach minimum shared support in this window.");
-  }
-}
-
-function renderRelated() {
-  const results = $("codebase-related-results");
-  if (!results || !relatedData) return;
-  results.textContent = "";
-  results.appendChild(el("h4", { text: relatedData.path }));
-  const unavailable = Number(relatedData.unavailable_landed_tasks) || 0;
-  results.appendChild(el("p", { class: "codebase-note", text: `${count(relatedData.path_support)} landed tasks changed this file · ${count(relatedData.excluded_large)} bulk tasks excluded (over ${count(relatedData.large_footprint_cap)} files) · ${count(unavailable)} done tasks without a recorded landing. File-level measures use the selected window and minimum shared tasks.` }));
-  if (unavailable > 0) results.appendChild(note("Done tasks without a recorded landing were finished by hand or before Orbit recorded landings, so the files they changed are unknown. Tasks tagged no-diff-expected are not counted."));
-  const rows = [...(relatedData.rows || [])];
-  if (!rows.length) {
-    for (const node of relatedEmpty(relatedData)) results.appendChild(node);
-    return;
-  }
-  const sorts = el("div", { class: "codebase-related-sorts", role: "group", "aria-label": "Sort related files" });
-  for (const [key, label] of [["jaccard", "Landed Jaccard"], ["conditional_rate", "Conditional rate"], ["reservation_coupling", "Reservation coupling"], ["footprint_miss_count", "Footprint misses"]]) {
-    const button = el("button", { class: "action", type: "button", text: label, "aria-pressed": String(relatedSort === key) });
-    button.addEventListener("click", () => { relatedSort = key; renderRelated(); });
-    sorts.appendChild(button);
-  }
-  results.appendChild(sorts);
-  const metric = row => relatedSort === "reservation_coupling" ? (row.reservation_coupling?.rate ?? -1) : Number(row[relatedSort]);
-  rows.sort((a, b) => metric(b) - metric(a) || b.support.both - a.support.both || a.path.localeCompare(b.path));
-  const list = el("ul", { class: "codebase-related-list" });
-  for (const row of rows) {
-    const item = el("li", { class: "codebase-related-row" }, [pathNode(row.path), el("p", { text: `Landed ${pct(row.jaccard)} · conditional ${pct(row.conditional_rate)} · shared ${row.support.both} / either ${row.support.either} · file ${row.support.path}, partner ${row.support.partner} · reserved ${row.reservation_coupling ? `${pct(row.reservation_coupling.rate)} (${row.reservation_coupling.numerator}/${row.reservation_coupling.denominator})` : "—"} · ${count(row.footprint_miss_count)} footprint misses` })]);
-    for (const [label, tasks] of [["Changed together", row.tasks], ["Reserved together", row.reservation_coupling?.tasks], ["Undeclared partner", row.footprint_miss_tasks]]) {
-      if (!tasks?.length) continue;
-      const evidence = el("details", {}, [el("summary", { text: `${label}: ${tasks.length} tasks` })]);
-      for (const task of tasks) {
-        const link = el("a", { class: "codebase-task-link", text: task.title, title: task.commit || "" });
-        link.setAttribute("href", taskHref(task.task_id));
-        evidence.appendChild(link);
-      }
-      item.appendChild(evidence);
-    }
-    list.appendChild(item);
-  }
-  results.appendChild(list);
+  ensureRelated();
 }
 
 export {
@@ -1366,6 +1248,7 @@ export {
   buildCodebaseHash,
   fetchAndRenderCodebase,
   getCodebaseQuery,
+  getCodebaseRoute,
   renderCodebase,
   wireCodebaseControls,
 };

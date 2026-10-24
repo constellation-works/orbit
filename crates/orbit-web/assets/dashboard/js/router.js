@@ -129,7 +129,8 @@ function agentsHash(ctx) {
 }
 
 /// The canonical hash of the Analytics view on screen. Codebase has its own
-/// window, so it serializes its own selection instead of the shared window.
+/// window, so it serializes its own view and selection instead of the shared
+/// window.
 function analyticsHash(ctx, query) {
   const sub = ctx.getAnalyticsSubtab();
   if (sub === "codebase") return ctx.buildCodebaseHash();
@@ -490,7 +491,9 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     const view = sub !== "reliability" || !segments[1] ? ctx.getReliabilityView()
       : segments[2] === "tools" ? "tools" : "pipeline";
     if (sub === "codebase") {
-      if (segments[1]) ctx.applyCodebaseHashQuery(query);
+      // `#analytics/codebase[/file|/coupling|/marks]`: the segment names the
+      // view; a bare `#analytics` keeps the remembered one.
+      if (segments[1]) ctx.applyCodebaseHashQuery(query, segments[2] || null);
     } else {
       adoptHashedWindow();
     }

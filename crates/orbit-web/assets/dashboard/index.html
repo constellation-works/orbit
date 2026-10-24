@@ -524,53 +524,35 @@
           <header><span>Codebase</span></header>
           <div class="codebase-head" id="codebase-controls">
             <div class="codebase-intro">
-              <p class="codebase-purpose">Which paths are costly for agents to change: how often the tasks that declared a path regressed, missed their footprint, got blocked or were rejected.</p>
-              <div class="codebase-meta-row">
-                <span class="codebase-meta" id="codebase-meta"></span>
-                <details class="codebase-how">
-                  <summary><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>“Declared” is not the landed diff</summary>
-                  <p>A task counts against a path when its <code>context_files</code> name it, widened selectors included. The path rankings do not read what the merged commit actually changed; the Repository file search does, and Agents › Pilots grades task-pilot selectors against it. Rates count distinct tasks, so a path does not lead just because many tasks touch it.</p>
-                </details>
-              </div>
+              <p class="codebase-purpose" id="codebase-purpose">Paths that are costly for agents to change. Rates are over tasks that declared the path, which is not always the landed diff.</p>
+              <span class="codebase-meta" id="codebase-meta"></span>
             </div>
-            <div class="codebase-controls">
-              <div class="codebase-ctl" role="group" aria-labelledby="codebase-window-label">
-                <span class="codebase-ctl-label" id="codebase-window-label">Window</span>
-                <div class="codebase-segs" id="codebase-window">
-                  <button type="button" class="codebase-seg" data-value="7d" aria-pressed="false">7d</button>
-                  <button type="button" class="codebase-seg" data-value="30d" aria-pressed="false">30d</button>
-                  <button type="button" class="codebase-seg on" data-value="90d" aria-pressed="true">90d</button>
-                  <button type="button" class="codebase-seg" data-value="all" aria-pressed="false">All</button>
-                </div>
+            <nav class="codebase-views" id="codebase-views" aria-label="Codebase views">
+              <a href="#analytics/codebase" data-view="hotspots" class="on" aria-current="page">Hotspots</a>
+              <a href="#analytics/codebase/coupling" data-view="coupling" aria-current="false">Coupling &amp; locks</a>
+            </nav>
+            <div class="codebase-controls" id="codebase-toolbar">
+              <div class="codebase-segs" id="codebase-window" role="group" aria-label="Window">
+                <button type="button" class="codebase-seg" data-value="7d" aria-pressed="false">7d</button>
+                <button type="button" class="codebase-seg" data-value="30d" aria-pressed="false">30d</button>
+                <button type="button" class="codebase-seg on" data-value="90d" aria-pressed="true">90d</button>
+                <button type="button" class="codebase-seg" data-value="all" aria-pressed="false">All</button>
               </div>
-              <div class="codebase-ctl" role="group" aria-labelledby="codebase-rollup-label">
-                <span class="codebase-ctl-label" id="codebase-rollup-label">Group by</span>
-                <div class="codebase-segs" id="codebase-rollup">
-                  <button type="button" class="codebase-seg on" data-value="file" aria-pressed="true">File</button>
-                  <button type="button" class="codebase-seg" data-value="dir" aria-pressed="false">Directory</button>
-                  <button type="button" class="codebase-seg" data-value="crate" aria-pressed="false">Crate</button>
-                </div>
+              <div class="codebase-segs" id="codebase-rollup" role="group" aria-label="Group by">
+                <button type="button" class="codebase-seg on" data-value="file" aria-pressed="true">File</button>
+                <button type="button" class="codebase-seg" data-value="dir" aria-pressed="false">Directory</button>
+                <button type="button" class="codebase-seg" data-value="crate" aria-pressed="false">Crate</button>
               </div>
-              <div class="codebase-ctl" role="group" aria-labelledby="codebase-min-label">
-                <span class="codebase-ctl-label" id="codebase-min-label">Min. tasks per path</span>
-                <div class="codebase-stepper">
-                  <button type="button" id="codebase-min-down" aria-label="Fewer tasks per path">−</button>
-                  <output id="codebase-min-support" aria-live="polite">15</output>
-                  <button type="button" id="codebase-min-up" aria-label="More tasks per path">+</button>
-                </div>
-              </div>
+              <label class="codebase-min">Min. tasks
+                <select class="codebase-select" id="codebase-min-support"><option value="15" selected>15</option></select>
+              </label>
+              <label class="codebase-search" id="codebase-search">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+                <span class="visually-hidden">Find a path</span>
+                <input id="codebase-path-search" type="search" autocomplete="off" placeholder="Find a path…">
+              </label>
             </div>
           </div>
-          <section class="codebase-related" aria-labelledby="codebase-related-title">
-            <h3 id="codebase-related-title">What changes alongside a file?</h3>
-            <form id="codebase-related-form" class="codebase-related-search">
-              <label for="codebase-path-search">Repository file</label>
-              <input id="codebase-path-search" type="search" autocomplete="off" placeholder="Start typing a path…" aria-controls="codebase-path-options">
-              <button type="submit" class="action">Find related files</button>
-            </form>
-            <div id="codebase-path-options" class="codebase-path-options" aria-label="Matching paths"></div>
-            <div id="codebase-related-results" aria-live="polite"></div>
-          </section>
           <div class="body codebase-body" id="codebase-body" tabindex="0" role="region" aria-label="Codebase analytics">
             <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
               <div class="skeleton skeleton-row"></div>

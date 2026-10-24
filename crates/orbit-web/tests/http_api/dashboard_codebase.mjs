@@ -1,7 +1,9 @@
-// Analytics › Codebase: its hash, the window / group-by segments and
-// minimum-support stepper, the ranking tiles, the cross-ranking overlap list,
-// each ranking's list and empty state, the detail panel, a poll that keeps
-// the reader's place; and the Health denial badge that opens Events filtered to
+// Analytics › Codebase: its hash and view routes, the window / group-by
+// segments and minimum-support select, the Hotspots table (flagged paths,
+// the top of each signal, Show all, the path search, hidden columns, the
+// regression filters and footnotes), the file view with its related files,
+// Coupling & locks, the regression-risk marks view and a poll that keeps the
+// reader's place; and the Health denial badge that opens Events filtered to
 // denials, with Events' default failure + denied filter.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -38,7 +40,9 @@ class Node {
   get lastElementChild() { return this.children.at(-1) || null; }
   append(child) {
     if (child == null) return;
-    if (typeof child === 'string') { this.own += child; return; }
+    // Text after an element child keeps its place, as a text node.
+    if (typeof child === 'string' && !this.children.length) { this.own += child; return; }
+    if (typeof child === 'string') { const text = new Node('#text'); text.own = child; child = text; }
     if (child.parentNode) child.parentNode.removeChild(child);
     child.parentNode = this;
     this.children.push(child);
@@ -79,7 +83,7 @@ class Node {
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
 }
 function matches(node, simple) {
-  const tag = simple.match(/^[a-z]+/i)?.[0];
+  const tag = simple.match(/^[a-z][a-z0-9]*/i)?.[0];
   if (tag && node.tagName !== tag.toUpperCase()) return false;
   for (const [, name] of simple.matchAll(/\.([^\s.#[]+)/g)) if (!classesOf(node).includes(name)) return false;
   const id = simple.match(/#([\w-]+)/)?.[1];
@@ -108,20 +112,22 @@ const layout = make('main', 'analytics-codebase-main', body);
 for (const id of ['audit-count', 'audit-body', 'codebase-controls', 'codebase-body', 'rail-count-denials', 'audit-search', 'audit-filter']) {
   make('div', id, layout);
 }
+make('p', 'codebase-purpose', byId['codebase-controls']);
 make('span', 'codebase-meta', byId['codebase-controls']);
+const views = make('nav', 'codebase-views', byId['codebase-controls']);
+for (const value of ['hotspots', 'coupling']) make('a', null, views).dataset.view = value;
+const toolbar = make('div', 'codebase-toolbar', byId['codebase-controls']);
 const segments = { 'codebase-window': ['7d', '30d', '90d', 'all'], 'codebase-rollup': ['file', 'dir', 'crate'] };
 for (const [id, values] of Object.entries(segments)) {
-  const group = make('div', id, byId['codebase-controls']);
+  const group = make('div', id, toolbar);
   for (const value of values) {
     const button = make('button', null, group);
     button.className = 'codebase-seg';
     button.dataset.value = value;
   }
 }
-make('button', 'codebase-min-down', byId['codebase-controls']);
-make('output', 'codebase-min-support', byId['codebase-controls']);
-make('button', 'codebase-min-up', byId['codebase-controls']);
-for (const [tag, id] of [['form', 'codebase-related-form'], ['input', 'codebase-path-search'], ['div', 'codebase-path-options'], ['div', 'codebase-related-results']]) make(tag, id, layout);
+make('select', 'codebase-min-support', toolbar);
+make('input', 'codebase-path-search', make('label', 'codebase-search', toolbar));
 const document = {
   activeElement: null,
   body,
@@ -158,19 +164,27 @@ const audit = modules.get('audit.js').namespace;
 const codebase = modules.get('codebase.js').namespace;
 const common = modules.get('common.js').namespace;
 const settle = async () => { for (let i = 0; i < 6; i += 1) await new Promise(resolve => setTimeout(resolve, 0)); };
-const shown = id => byId[id].style.display !== 'none';
 const view = () => byId['codebase-body'];
-const part = key => view().children.find(node => node.dataset.key === key);
+// The panel's live status note sits before the rendered sections.
+const parts = () => view().children.filter(node => !node.dataset.panelStatus);
+const part = key => parts().find(node => node.dataset.key === key);
 const click = node => { assert.ok(node, 'the control exists'); for (const listener of node.listeners.click || []) listener(); };
-const tiles = () => part('tiles').querySelectorAll('button.codebase-tile');
-const tile = key => tiles().find(button => button.dataset.tile === key);
-const rows = () => part('list').querySelectorAll('button.codebase-row');
-const rowPaths = () => rows().map(row => row.querySelector('span.codebase-path').textContent);
-const selectedRow = () => rows().find(row => row.getAttribute('aria-current') === 'true');
+const change = (node, value) => { assert.ok(node, 'the control exists'); if (value !== undefined) node.value = value; for (const listener of node.listeners.change || []) listener(); };
 const pressed = id => byId[id].children.filter(button => button.getAttribute('aria-pressed') === 'true').map(button => button.dataset.value);
 const button = (scope, label) => scope.querySelectorAll('button').find(node => node.textContent === label);
-const standings = () => Object.fromEntries(part('detail').querySelectorAll('li.codebase-standing')
-  .map(item => [item.dataset.ranking, item.querySelector('span.codebase-standing-rank').textContent]));
+const hotRows = () => part('hotspots').querySelectorAll('tr.codebase-hot-row');
+const hotPaths = () => hotRows().map(row => row.dataset.path);
+const sections = () => part('hotspots').querySelectorAll('td.codebase-hot-section').map(cell => cell.textContent);
+const columns = () => part('hotspots').querySelectorAll('th.codebase-hot-signal').map(cell => cell.dataset.signal);
+const cells = path => hotRows().find(row => row.dataset.path === path).querySelectorAll('td.codebase-cell-td')
+  .map(cell => [cell.dataset.signal, cell.querySelector('span.codebase-cell').textContent]);
+const notes = () => part('notes').querySelectorAll('p.codebase-note').map(node => node.textContent);
+const tiles = () => Object.fromEntries(part('file-tiles').querySelectorAll('div.codebase-file-tile')
+  .map(tile => [tile.dataset.signal, [tile.querySelector('span.codebase-tile-big').textContent, tile.querySelector('span.codebase-tile-sub').textContent]]));
+const tasks = () => part('file-tasks').querySelectorAll('li.codebase-task');
+const relatedBox = () => part('file-related');
+let hashes = 0;
+codebase.wireCodebaseControls(() => { hashes += 1; });
 async function serve(payload) {
   const request = codebase.fetchAndRenderCodebase();
   pending.at(-1).resolve(response(payload));
@@ -184,17 +198,28 @@ await settle();
 
 // The default selection writes a bare #analytics/codebase, and a hash restores
 // the window, minimum support and rollup into the controls and the request.
+// The segment after `codebase` names the view; a file view needs its path.
 assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase', 'the default selection writes a bare #analytics/codebase');
 codebase.applyCodebaseHashQuery(new URLSearchParams('window=30d&min_support=5&rollup=dir'));
 assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase?window=30d&min_support=5&rollup=dir');
 assert.deepEqual([pressed('codebase-window'), pressed('codebase-rollup'), byId['codebase-min-support'].value], [['30d'], ['dir'], '5']);
+codebase.applyCodebaseHashQuery(new URLSearchParams('window=30d&min_support=5&rollup=dir&path=src/a/'), 'file');
+assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase/file?window=30d&min_support=5&rollup=dir&path=src%2Fa%2F');
+assert.equal(byId['codebase-toolbar'].hidden, true, 'the file view has no toolbar');
+codebase.applyCodebaseHashQuery(new URLSearchParams('window=30d&min_support=5&rollup=dir'), 'coupling');
+assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase/coupling?window=30d&min_support=5&rollup=dir');
+assert.deepEqual([byId['codebase-toolbar'].hidden, byId['codebase-search'].hidden], [false, true], 'Coupling keeps the toolbar without the path search');
+assert.deepEqual(views.children.map(link => link.getAttribute('aria-current')), ['false', 'page']);
+assert.match(views.children[0].getAttribute('href'), /^\?.*workspace=ws-a.*#analytics\/codebase\?window=30d&min_support=5&rollup=dir$/, 'view tabs keep the scope and the selection');
+codebase.applyCodebaseHashQuery(new URLSearchParams('window=30d&min_support=5&rollup=dir'), 'file');
+assert.equal(codebase.getCodebaseRoute().view, 'hotspots', 'a file view without a path falls back to Hotspots');
+codebase.applyCodebaseHashQuery(new URLSearchParams('window=30d&min_support=5&rollup=dir'), 'bogus');
+assert.equal(codebase.getCodebaseRoute().view, 'hotspots', 'an unknown view falls back to Hotspots');
 
-// The fixture's four path rankings share five paths in two or more of them,
-// which the server lists in `overlap`: src/a/ in all four; src/c/ (footprint
-// 80%), src/b/ (regressions 50%), src/y/ (blocked 20%) and src/z/ (footprint
-// 10%) in two. src/z/ is also rejected at 95%, which does not lift it:
-// Rejected does not order the list. Task ORB-9 regressed all five ranked
-// regression paths.
+// The fixture's path signals share five paths in two or more of them, which
+// the server lists in `overlap`: src/a/ in all four; src/c/, src/b/, src/y/
+// and src/z/ in two. Regressions ranks four more paths, footprint misses one.
+// Task ORB-9 regressed all five of the first ranked regression paths.
 const rate = (numerator, denominator) => ({ rate: numerator / denominator, numerator, denominator });
 const regressed = (id, crew, by) => ({ task_id: id, title: `Task ${id}`, crew, regression_tasks: by });
 const wide = regressed('ORB-9', 'opus', ['ORB-90']);
@@ -208,6 +233,8 @@ const full = {
     { path: 'src/c/', ...rate(8, 20), regressed_tasks: [wide], by_crew: [] },
     { path: 'src/d/', ...rate(6, 20), regressed_tasks: [wide], by_crew: [] },
     { path: 'src/e/', ...rate(4, 20), regressed_tasks: [wide], by_crew: [] },
+    { path: 'src/f/', ...rate(3, 20), regressed_tasks: [], by_crew: [] },
+    { path: 'src/g/', ...rate(2, 20), regressed_tasks: [], by_crew: [] },
   ] },
   footprint_misses: { below_support: 1614, population: 900, rows: [
     { path: 'src/c/', ...rate(16, 20), widenings: 20 },
@@ -224,12 +251,7 @@ const full = {
     { cause: 'base_conflict', kind: 'base_conflict', tasks: 12 },
     { cause: 'unclassified', kind: 'unclassified', tasks: 189 },
     { cause: 'run_failure', kind: 'attributed', tasks: 129 },
-  ], unclassified_events: [
-    { event: 'claim_failed', tasks: 120 },
-    { event: 'claim_release_budget_exhausted', tasks: 50 },
-    { event: 'review_repair_after_merge', tasks: 15 },
-    { event: 'dependency_blocked', tasks: 4 },
-  ], not_failures: 3 },
+  ], unclassified_events: [{ event: 'claim_failed', tasks: 120 }], not_failures: 3 },
   rejected: { below_support: 105, rejected_with_run: 8, excluded_without_run: 88, rows: [
     { path: 'src/z/', ...rate(19, 20) },
     { path: 'src/b/', ...rate(2, 18) },
@@ -241,7 +263,7 @@ const full = {
     { paths: ['src/a/', 'src/b/'], ...rate(16, 40), reservations: [30, 26] },
   ] },
   lock_contention: { below_support: 0, reservations: 2557, denials: 0, wait_time_recorded: false, rows: [] },
-  overlap: { ranked_paths: 8, rows: [
+  overlap: { ranked_paths: 10, rows: [
     { path: 'src/a/', rankings: ['regressions', 'footprint_misses', 'blocked', 'rejected'], top_rate: 0.65 },
     { path: 'src/c/', rankings: ['regressions', 'footprint_misses'], top_rate: 0.8 },
     { path: 'src/b/', rankings: ['regressions', 'rejected'], top_rate: 0.5 },
@@ -256,201 +278,72 @@ assert.deepEqual(
   ['30d', '5', 'dir', 'ws-a'],
   'the request carries the selection and the workspace',
 );
-assert.match(byId['codebase-meta'].textContent, /^4,933 tasks scanned · computed .+ · recomputed every 5 min$/);
+assert.match(byId['codebase-meta'].textContent, /^4,933 tasks scanned · computed .+$/);
 
-// Seven tiles, each a toggle button; the overlap list is open by default.
-assert.deepEqual(tiles().map(node => node.dataset.tile),
-  ['overlap', 'regressions', 'footprint_misses', 'blocked', 'rejected', 'change_coupling', 'lock_contention']);
-assert.deepEqual(tiles().map(node => node.getAttribute('aria-pressed')), ['true', 'false', 'false', 'false', 'false', 'false', 'false']);
-assert.equal(tiles().every(node => node.tagName === 'BUTTON' && node.getAttribute('type') === 'button'), true);
-assert.equal(tile('overlap').querySelector('span.codebase-tile-big').textContent, '5 paths');
-assert.equal(tile('regressions').querySelector('span.codebase-tile-big').textContent, '65%');
-assert.equal(tile('regressions').querySelector('span.codebase-tile-sub').textContent, 'top: a/');
-assert.match(tile('regressions').querySelector('span.codebase-tile-foot').textContent, /^5 ranked · 1,775 /);
-assert.ok(tile('blocked').querySelector('span.codebase-tile-foot.warn'), 'Blocked warns about its unclassified blocks');
-assert.equal(tile('lock_contention').querySelector('span.codebase-tile-big').textContent, 'None');
-assert.ok(tile('lock_contention').querySelector('span.codebase-tile-foot.good'), 'nothing to rank is the good state');
+// Hotspots: filters, the table and its footnotes, nothing else. One column
+// per signal with data; paths flagged by two or more signals first, in the
+// server's order, then the top three of each signal that no other flags.
+assert.deepEqual(parts().map(node => node.dataset.key), ['filters', 'hotspots', 'notes']);
+assert.deepEqual(columns(), ['regressions', 'footprint_misses', 'blocked', 'rejected']);
+assert.deepEqual(sections(), ['Flagged by two or more signals · 5', 'One signal · top 3 of each']);
+assert.deepEqual(hotPaths(), ['src/a/', 'src/c/', 'src/b/', 'src/y/', 'src/z/', 'src/d/', 'src/e/', 'src/f/', 'src/x/']);
+assert.deepEqual(cells('src/a/'), [['regressions', '65%13/20'], ['footprint_misses', '30%6/20'], ['blocked', '25%5/20'], ['rejected', '5.0%1/20']]);
+assert.deepEqual(cells('src/d/'), [['regressions', '30%6/20'], ['footprint_misses', '—'], ['blocked', '—'], ['rejected', '—']], 'a signal that does not rank the path reads as a dash');
+assert.match(hotRows()[0].querySelector('a.codebase-path-link').getAttribute('href'), /#analytics\/codebase\/file\?window=30d&min_support=5&rollup=dir&path=src%2Fa%2F$/, 'a path opens its deep-linked file view');
+assert.equal(part('hotspots').querySelector('div.codebase-hot-foot').querySelector('span.codebase-extra').textContent, '9 of 10 ranked paths shown');
+click(button(part('hotspots'), 'Show all 10'));
+assert.deepEqual(hotPaths().slice(5), ['src/d/', 'src/e/', 'src/f/', 'src/g/', 'src/x/'], 'Show all lists every ranked path');
+assert.equal(sections()[1], 'One signal · 5');
+click(button(part('hotspots'), 'Show top 3 of each'));
+assert.equal(hotPaths().length, 9);
 
-// The overlap list: exactly the paths in two or more path rankings, by count,
-// then by the highest rate outside Rejected; one chip per ranking.
-assert.equal(part('list').dataset.ranking, 'overlap');
-assert.deepEqual(rowPaths(), ['src/a/', 'src/c/', 'src/b/', 'src/y/', 'src/z/']);
-assert.deepEqual(rows().map(row => row.querySelector('span.codebase-rank').textContent), ['4×', '2×', '2×', '2×', '2×']);
-assert.deepEqual(rows()[0].querySelectorAll('span.codebase-chip').map(node => [node.dataset.ranking, node.querySelector('span.codebase-chip-frac').textContent]),
-  [['regressions', '13/20'], ['footprint_misses', '6/20'], ['blocked', '5/20'], ['rejected', '1/20']]);
-assert.equal(part('list').querySelector('div.codebase-hint'), null, 'no crate-level hint at directory rollup');
+// Removed by design: no ranking tiles, cross-tabs, crew or complexity rates
+// and no standalone related-files search on the Codebase page.
+const everything = () => view().querySelectorAll('div, section, table, ul, ol, button');
+assert.equal(everything().filter(node => /codebase-(tile|crosstab|slice|crew-row|related-search)\b/.test(node.className) && !/codebase-file-tile/.test(node.className)).length, 0);
+assert.doesNotMatch(view().textContent, /by crew|by complexity|Nature × escape|Escape × layer|What changes alongside/i);
 
-// The detail panel defaults to the first row: its standing in every ranking,
-// its regressed tasks with links and the wide-task marker, and crew rates.
-assert.equal(selectedRow(), rows()[0], 'the first row is selected by default');
-assert.deepEqual(standings(), { regressions: '#1 of 5', footprint_misses: '#3 of 4', blocked: '#1 of 2', rejected: '#4 of 4' });
-const tasks = () => part('detail').querySelectorAll('li.codebase-task');
-assert.deepEqual(tasks().map(item => item.dataset.task), ['ORB-9', 'ORB-1', 'ORB-4'], 'three regressed tasks before All');
-assert.deepEqual(tasks().map(item => item.dataset.wide ?? null), ['5', null, null], 'the task that regressed five ranked paths is marked');
-assert.deepEqual(tasks()[1].querySelectorAll('a.codebase-task-link').map(link => link.textContent), ['ORB-1', 'ORB-2', 'ORB-3']);
-assert.match(tasks()[1].querySelector('a.codebase-task-link').getAttribute('href'), /#tasks\?open=ORB-1$/);
-assert.equal(tasks()[2].querySelector('span.codebase-crew').textContent, 'unassigned');
-const all = button(part('detail'), 'All 4 →');
-assert.equal(all.getAttribute('aria-expanded'), 'false');
-click(all);
-assert.equal(tasks().length, 4, 'All lists every regressed task');
-assert.deepEqual(part('detail').querySelectorAll('li.codebase-crew-row').map(item => [item.dataset.crew, item.querySelector('span.codebase-frac').textContent]),
-  [['opus', '12/16'], ['sol', '1/4']]);
-click(button(part('detail'), 'Copy path'));
-await settle();
-assert.deepEqual(copied, ['src/a/']);
-assert.ok(button(part('detail'), 'Copied'), 'the copy action confirms');
+// Footnotes: blocks that never count against a path, the marks and where
+// defect trends are. The defects link claims no crew or complexity rates.
+assert.deepEqual(notes().slice(0, 1), ['Blocks from infrastructure (7) and manual holds (40) never count against paths. Neither do 189 blocks with no recorded cause.']);
+assert.match(notes().at(-1), /^Defect trends are on Metrics › Defects\.$/);
+assert.match(part('notes').querySelectorAll('a').at(-1).getAttribute('href'), /#analytics\/metrics$/);
+assert.doesNotMatch(part('notes').textContent, /crew|complexity/i);
+assert.match(notes().at(-2), /nothing to compare/, 'before any mark there is nothing to compare');
 
-// Another row: rankings it is absent from read "not in the top 25".
-click(rows()[2]);
-assert.equal(selectedRow(), rows()[2]);
-assert.deepEqual(standings(), { regressions: '#2 of 5', footprint_misses: 'not in the top 25', blocked: 'not in the top 25', rejected: '#2 of 4' });
-assert.equal(tasks().length, 1, 'a new row starts collapsed');
-
-// A poll that answers the same payload keeps every node, so the tile, the row
-// and the reader's place stay; the selection survives.
-const before = view().children.slice();
+// A poll that answers the same payload keeps every node.
+const before = parts();
 await serve(full);
-assert.deepEqual(view().children.map((node, index) => node === before[index]), before.map(() => true), 'the same payload keeps every node');
-assert.equal(rowPaths()[rows().indexOf(selectedRow())], 'src/b/');
+assert.deepEqual(parts().map((node, index) => node === before[index]), before.map(() => true), 'the same payload keeps every node');
 
-// Selecting a tile swaps the list and keeps the row when the new list has it.
-click(tile('regressions'));
-assert.deepEqual(tiles().map(node => node.getAttribute('aria-pressed')), ['false', 'true', 'false', 'false', 'false', 'false', 'false']);
-assert.equal(part('list').dataset.ranking, 'regressions');
-assert.deepEqual(rowPaths(), ['src/a/', 'src/b/', 'src/c/', 'src/d/', 'src/e/']);
-assert.equal(rowPaths()[rows().indexOf(selectedRow())], 'src/b/');
-assert.deepEqual(rows()[0].querySelectorAll('span.codebase-chip').map(node => node.dataset.ranking), ['footprint_misses', 'blocked', 'rejected'],
-  'chips name the other rankings the path is in');
-assert.equal(rows()[0].querySelector('span.codebase-frac').textContent, '13 of 20');
-assert.equal(button(part('list'), 'Show paths with 5+ tasks'), undefined, 'already at 5, so no lower-support button');
-
-// A changed scan can change another ranking while the open section stays
-// identical. Its cross-ranking chips must update without losing selection.
-const changedRankings = JSON.parse(JSON.stringify(full));
-changedRankings.footprint_misses.rows = changedRankings.footprint_misses.rows.filter(row => row.path !== 'src/a/');
-changedRankings.blocked.rows[0] = { ...changedRankings.blocked.rows[0], ...rate(10, 20) };
-changedRankings.overlap.rows[0] = { path: 'src/a/', rankings: ['regressions', 'blocked', 'rejected'], top_rate: 0.65 };
-await serve(changedRankings);
-assert.deepEqual(rows()[0].querySelectorAll('span.codebase-chip').map(node => [node.dataset.ranking, node.querySelector('span.codebase-chip-rate').textContent]),
-  [['blocked', '50%'], ['rejected', '5.0%']], 'a poll removes absent rankings and updates rates in the open list’s chips');
-assert.equal(rowPaths()[rows().indexOf(selectedRow())], 'src/b/', 'a cross-ranking update keeps the selected path');
-const refreshedNodes = view().children.slice();
-await serve(changedRankings);
-assert.ok(view().children.every((node, index) => node === refreshedNodes[index]), 'an unchanged poll after the update keeps every node');
+// A signal with no data in the window is hidden and the footnote says why.
+const quiet = JSON.parse(JSON.stringify(full));
+quiet.rejected = { below_support: 0, rejected_with_run: 0, excluded_without_run: 3, rows: [] };
+quiet.overlap.rows = quiet.overlap.rows.map(row => ({ ...row, rankings: row.rankings.filter(key => key !== 'rejected') })).filter(row => row.rankings.length >= 2);
+await serve(quiet);
+assert.deepEqual(columns(), ['regressions', 'footprint_misses', 'blocked']);
+assert.equal(notes()[0], 'No task was rejected after a run in this window, so that column is hidden.');
+assert.deepEqual(hotPaths().slice(0, 2), ['src/a/', 'src/c/'], 'only paths two shown signals flag stay flagged');
+assert.ok(hotPaths().includes('src/b/') && hotPaths().includes('src/y/'), 'a path one shown signal ranks moves to One signal');
 await serve(full);
 
-click(tile('footprint_misses'));
-assert.equal(rowPaths()[rows().indexOf(selectedRow())], 'src/c/', 'a row the new list lacks falls back to its first');
-assert.ok(rows()[0].querySelector('span.codebase-extra'), 'widenings beyond the tasks show as an extra');
-assert.equal(rows()[1].querySelector('span.codebase-extra'), null);
-
-// Blocked: the cause bar and legend, base conflicts and manual blocks by
-// actor in their own buckets, and a warning because unclassified is the
-// largest share, naming its count and top events.
-click(tile('blocked'));
-const legend = part('list').querySelectorAll('li.codebase-cause').map(item => [item.dataset.cause, item.dataset.kind]);
-assert.deepEqual(legend, [['run_failure', 'attributed'], ['base_conflict', 'base_conflict'], ['unclassified', 'unclassified'], ['sandbox', 'infrastructure'], ['manual', 'manual']]);
-assert.deepEqual(part('list').querySelector('div.codebase-causebar').children.map(span => span.dataset.kind),
-  ['attributed', 'base_conflict', 'unclassified', 'infrastructure', 'manual']);
-const manualItem = part('list').querySelectorAll('li.codebase-cause').find(item => item.dataset.kind === 'manual');
-assert.equal(manualItem.dataset.actor, 'operator');
-assert.match(manualItem.textContent, /^Manual \(operator\) 40set by hand$/, 'a manual block names its actor kind');
-assert.match(part('list').querySelectorAll('li.codebase-cause')[1].textContent, /^Base conflict 12counted on its conflicting paths$/);
-const unknownHint = part('list').querySelector('div.codebase-hint.warn');
-assert.ok(unknownHint, 'unclassified is the largest share');
-assert.match(unknownHint.textContent,
-  /^189 of 377 blocked tasks \(50(\.\d)?%\) carry no recorded cause, so they count against no path\. Most entered blocked through claim_failed \(120\), claim_release_budget_exhausted \(50\), review_repair_after_merge \(15\)\. The rates below only reflect the 129 that a run failure explains\.$/);
-assert.match(part('list').querySelector('p.codebase-note.codebase-not-failure').textContent, /^3 tasks were held for review evidence or cancelled by an operator; those blocks are not failures and are left out\.$/);
-
-// Once unclassified is no longer the largest share, the hint still names the
-// remainder, without the warning.
-const fewUnknown = JSON.parse(JSON.stringify(full));
-fewUnknown.blocked.causes = fewUnknown.blocked.causes.map(cause => cause.cause === 'unclassified' ? { ...cause, tasks: 6 } : cause);
-fewUnknown.blocked.unclassified_events = [{ event: 'claim_failed', tasks: 6 }];
-fewUnknown.blocked.not_failures = 0;
-await serve(fewUnknown);
-assert.equal(part('list').querySelector('div.codebase-hint.warn'), null, 'a minor remainder does not warn');
-assert.match(part('list').querySelector('div.codebase-hint').textContent,
-  /^6 of 194 blocked tasks \(3(\.\d)?%\) carry no recorded cause, so they count against no path\. Most entered blocked through claim_failed \(6\)\.$/);
-assert.equal(part('list').querySelector('p.codebase-note.codebase-not-failure'), null);
+// The path search narrows the table to every ranked match and offers known
+// paths no signal ranks.
+const search = byId['codebase-path-search'];
+const type = value => { search.value = value; for (const listener of search.listeners.input) listener(); };
+await serve({ ...full, known_paths: ['src/b/', 'src/bz.rs', 'docs/b.md'] });
+type('src/b');
+assert.deepEqual(hotPaths(), ['src/b/']);
+assert.equal(part('hotspots').querySelector('div.codebase-hot-foot').querySelector('span.codebase-extra').textContent, '1 of 10 ranked paths match');
+assert.deepEqual(part('hotspots').querySelectorAll('ul.codebase-other-paths a').map(link => link.dataset.path), ['src/bz.rs'], 'an unranked known path can be opened');
+type('nothing-here');
+assert.match(part('hotspots').textContent, /No ranked path matches “nothing-here”\./);
+type('');
 await serve(full);
 
-// Rejected: the counts behind the ranking.
-click(tile('rejected'));
-assert.match(part('list').querySelector('div.codebase-hint').textContent, /^8 tasks were rejected after a run in this window; 88 rejected at proposal are left out\. The most on any one path is 19\.$/);
-
-// Change coupling: a directory and its own tests/ is an expected pair that a
-// toggle hides; a pair opens the pair view.
-click(tile('change_coupling'));
-assert.equal(rows().length, 2);
-assert.ok(rows()[0].querySelector('span.codebase-tag'), 'a directory and its tests is tagged as expected');
-assert.equal(rows()[1].querySelector('span.codebase-tag'), null);
-assert.ok(part('detail').querySelector('span.codebase-pair-second'), 'a pair opens the pair view');
-const hide = button(part('list'), 'Hide expected pairs');
-assert.equal(hide.getAttribute('aria-pressed'), 'false');
-click(hide);
-assert.equal(rows().length, 1, 'hiding expected pairs removes them');
-assert.equal(button(part('list'), 'Hide expected pairs').getAttribute('aria-pressed'), 'true');
-assert.match(part('detail').querySelector('p.codebase-pair-line').textContent, /^Reserved together 16 of 40 /);
-assert.equal(part('detail').dataset.ranking, 'change_coupling');
-
-// Lock contention with nothing refused is a positive state, not a table.
-click(tile('lock_contention'));
-assert.ok(part('list').querySelector('div.codebase-empty-state.good'), 'no refused lock is the good state');
-assert.equal(rows().length, 0);
-assert.match(part('list').textContent, /2,557 file reservations/);
-
-// Lock contention from a server that records no waits renders as it always
-// did: rate rows with their reservation and denial counts, no sort, and the
-// note that waits are not recorded.
-const lockRow = (path, numerator, denominator, extra) => ({ path, ...rate(numerator, denominator), contending_tasks: numerator, reservations: 9, denials: 40, ...extra });
-const legacyLock = JSON.parse(JSON.stringify(full));
-legacyLock.lock_contention = { below_support: 0, reservations: 30, denials: 80, wait_time_recorded: false, rows: [
-  lockRow('src/hot.rs', 3, 4, { wait_ms: null }), lockRow('src/slow.rs', 1, 5, { wait_ms: null }),
-] };
-await serve(legacyLock);
-assert.deepEqual(rowPaths(), ['src/hot.rs', 'src/slow.rs']);
-assert.match(rows()[0].textContent, /9 reservations · 40 denials/);
-assert.equal(part('list').querySelectorAll('span.codebase-wait').length, 0, 'a payload without waits shows none');
-assert.equal(button(part('list'), 'Sort by total wait'), undefined, 'nothing to sort by without waits');
-assert.match(part('list').querySelector('div.codebase-list-foot').textContent, /^Lock wait time is not recorded, so waits cannot be shown\.$/);
-
-// With waits, each row gives its median and longest wait and total wait
-// minutes, and a row still waiting says so. A row whose denials named no task
-// has no wait. Sorting by total wait reads the rows the server ranked by it.
-const waited = JSON.parse(JSON.stringify(full));
-const hot = lockRow('src/hot.rs', 3, 4, { wait: { episodes: 3, waiting: 0, median_ms: 120000, max_ms: 600000, total_ms: 840000 } });
-const slow = lockRow('src/slow.rs', 1, 5, { wait: { episodes: 1, waiting: 1, median_ms: 9000000, max_ms: 9000000, total_ms: 9000000 } });
-const runOnly = lockRow('src/run.rs', 1, 6, { wait: null });
-waited.lock_contention = { below_support: 0, reservations: 30, denials: 80, wait_time_recorded: true, rows: [hot, slow, runOnly], rows_by_wait: [slow, hot] };
-await serve(waited);
-const waitText = () => rows().map(row => row.querySelector('span.codebase-wait')?.textContent ?? null);
-const ranks = () => rows().map(row => row.querySelector('span.codebase-rank').textContent);
-assert.deepEqual(rowPaths(), ['src/hot.rs', 'src/slow.rs', 'src/run.rs'], 'rows keep the rate order by default');
-assert.deepEqual(waitText(), ['wait median 2 min · max 10 min · 14 min total', 'wait median 2 h 30 min · max 2 h 30 min · 150 min total', null]);
-assert.match(rows()[1].textContent, /1 still waiting/);
-assert.doesNotMatch(rows()[0].textContent, /still waiting/);
-assert.doesNotMatch(part('list').textContent, /not recorded/, 'recorded waits drop the note');
-assert.match(part('list').querySelector('div.codebase-list-foot').textContent, /first denial to its admission or its leaving the backlog/);
-const sortByWait = () => button(part('list'), 'Sort by total wait');
-assert.equal(sortByWait().getAttribute('aria-pressed'), 'false');
-click(sortByWait());
-assert.deepEqual(rowPaths(), ['src/slow.rs', 'src/hot.rs'], 'longest total wait first');
-assert.deepEqual(ranks(), ['1', '2']);
-assert.equal(sortByWait().getAttribute('aria-pressed'), 'true');
-await serve(waited);
-assert.deepEqual(rowPaths(), ['src/slow.rs', 'src/hot.rs'], 'a poll keeps the chosen sort');
-click(sortByWait());
-assert.deepEqual(rowPaths(), ['src/hot.rs', 'src/slow.rs', 'src/run.rs'], 'the toggle restores the rate order');
-// A row only lock contention ranks: the next tile falls back to its first row.
-click(rows()[0]);
-
-// Regressions: one chip row per dimension with its link counts (absent and
-// unclassified apart, zero counts hidden) and the definitions; the nature x
-// escape and escape x layer cross-tabs shaded against their largest count;
-// crew and complexity rates above minimum support; and each regressed task's
-// links with their four dimensions in the detail.
+// Regression filters: one select per dimension with each value's link count
+// (absent and unclassified apart, zero counts hidden). Choosing one sends it,
+// writes it to the hash and filters the Regressed column; Clear resets all.
 const link = (task_id, nature, escape, layer, detected_by, layer_source = 'landed') => ({ task_id, nature, escape, layer, layer_source, detected_by });
 const breakdown = counts => Object.entries(counts).map(([value, links]) => ({ value, links }));
 const noFilter = { nature: null, escape: null, layer: null, detected_by: null };
@@ -464,11 +357,7 @@ Object.assign(sliced.regressions, {
     layer: breakdown({ ci_tests: 0, dashboard: 4, store_migration: 2 }),
     detected_by: breakdown({ delivery_review: 5, operator: 1 }),
   },
-  cross_tabs: {
-    nature_escape: { row: 'nature', column: 'escape', rows: ['broke_existing', 'unclassified', 'absent'], columns: ['no_test', 'absent'], counts: [[3, 0], [1, 0], [0, 2]] },
-    escape_layer: { row: 'escape', column: 'layer', rows: ['no_test', 'absent'], columns: ['dashboard', 'store_migration'], counts: [[4, 0], [0, 2]] },
-  },
-  by_crew: { rows: [{ crew: 'opus', ...rate(3, 10), support: 10 }, { crew: 'sol', ...rate(1, 8), support: 8 }], below_support: 2 },
+  by_crew: { rows: [{ crew: 'opus', ...rate(3, 10), support: 10 }], below_support: 2 },
   by_complexity: { rows: [], below_support: 3 },
 });
 sliced.regressions.rows[0].regressed_tasks[1] = {
@@ -476,59 +365,17 @@ sliced.regressions.rows[0].regressed_tasks[1] = {
   regressions: [link('ORB-2', 'broke_existing', 'no_test', 'dashboard', 'delivery_review'), link('ORB-3', 'absent', 'absent', 'store_migration', 'operator', 'footprint')],
 };
 await serve(sliced);
-click(tile('regressions'));
-const facets = dimension => part('list').querySelectorAll('button.codebase-facet').filter(node => node.dataset.dimension === dimension);
-assert.deepEqual(facets('nature').map(node => [node.dataset.value, node.textContent, node.getAttribute('aria-pressed')]),
-  [['broke_existing', 'broke existing 3', 'false'], ['unclassified', 'unclassified 1', 'false'], ['absent', 'absent 2', 'false']],
-  'a value no link takes is hidden; absent and unclassified are separate chips');
-assert.deepEqual(facets('layer').map(node => node.textContent), ['dashboard 4', 'store/migration 2']);
-assert.deepEqual(facets('detected_by').map(node => node.dataset.value), ['delivery_review', 'operator']);
-assert.deepEqual(part('list').querySelector('details.codebase-definitions').querySelectorAll('dt').map(node => node.textContent),
-  ['Nature', 'Escape', 'Layer', 'Detected by', 'Counts'], 'the tile documents every dimension');
-const crossTab = name => part('list').querySelectorAll('table.codebase-crosstab').find(table => table.dataset.tab === name);
-const levels = name => crossTab(name).querySelectorAll('td').map(cell => [cell.dataset.row, cell.dataset.column, cell.textContent, cell.dataset.level]);
-assert.deepEqual(levels('nature_escape'), [
-  ['broke_existing', 'no_test', '3', '4'], ['broke_existing', 'absent', '·', '0'],
-  ['unclassified', 'no_test', '1', '2'], ['unclassified', 'absent', '·', '0'],
-  ['absent', 'no_test', '·', '0'], ['absent', 'absent', '2', '3'],
-]);
-assert.deepEqual(crossTab('escape_layer').querySelectorAll('thead th').map(cell => cell.textContent), ['', 'dashboard', 'store/migration']);
-const slice = title => part('list').querySelectorAll('div.codebase-slice').find(block => block.querySelector('p.codebase-eyebrow').textContent === title);
-assert.deepEqual(slice('Regression rate by crew').querySelectorAll('li.codebase-crew-row').map(item => [item.dataset.crew, item.querySelector('span.codebase-rate').textContent, item.querySelector('span.codebase-frac').textContent]),
-  [['opus', '30%', '3/10'], ['sol', '13%', '1/8']]);
-assert.match(slice('Regression rate by crew').textContent, /2 crews below minimum support 5 are hidden\./);
-assert.equal(slice('Regression rate by complexity').querySelector('p.codebase-note').textContent,
-  'No complexity has 5 or more done tasks in this window; 3 complexities fall below it.', 'an empty slice says why');
-assert.equal(selectedRow(), rows()[0]);
-const linkDims = () => tasks()[1].querySelectorAll('span.codebase-link-dims');
-assert.deepEqual(linkDims().map(line => [line.dataset.task, line.querySelectorAll('span.codebase-tag').map(tag => tag.dataset.value)]),
-  [['ORB-2', ['broke_existing', 'no_test', 'dashboard', 'delivery_review']], ['ORB-3', ['absent', 'absent', 'store_migration', 'operator']]]);
-assert.match(linkDims()[1].querySelectorAll('span.codebase-tag')[2].title, /declared footprint/, 'a layer read from the footprint says so');
-assert.equal(part('detail').querySelector('p.codebase-filter-note'), null, 'no filter, no filter note');
-
-// Regression-risk marks: the marked paths' rate with marks against the
-// window before the first mark, each with its counts, so a small sample
-// reads as one. Before any prompt marked a file there is nothing to compare.
-const riskTable = () => part('list').querySelector('table.codebase-risk-table');
-assert.equal(riskTable(), null, 'no comparison before any mark');
-assert.match(slice('Regression-risk marks: with marks vs before').querySelector('p.codebase-note').textContent, /nothing to compare/);
-const marked = JSON.parse(JSON.stringify(sliced));
-marked.regressions.risk_marks = {
-  enabled_at: '2026-10-01T00:00:00Z', before_since: '2026-09-01T00:00:00Z', window_days: 30, marked_paths: 2,
-  with_marks: rate(1, 4), before: rate(6, 10),
-  rows: [{ path: 'src/a/x.rs', with_marks: rate(1, 3), before: rate(5, 8) }, { path: 'src/b.rs', with_marks: rate(0, 1), before: rate(0, 0) }],
-};
-await serve(marked);
-assert.deepEqual(riskTable().querySelectorAll('tbody tr').map(row => [row.dataset.path, ...row.querySelectorAll('td').map(cell => cell.querySelector('span.codebase-frac')?.textContent ?? cell.textContent)]),
-  [['', '1/4', '6/10'], ['src/a/x.rs', '1/3', '5/8'], ['src/b.rs', '0/1', 'no tasks']], 'each rate shows its counts; an empty sample says so');
-assert.deepEqual(riskTable().querySelectorAll('thead th').map(cell => cell.textContent), ['', 'With marks', '30 days before']);
-await serve(sliced);
-
-// A chip filters: the request and the hash carry it, the tile names it, the
-// served ranking and its detail are the filtered ones, and the chip reads
-// pressed. Choosing it again clears it.
-click(facets('nature')[0]);
+const filter = dimension => part('filters').querySelectorAll('select.codebase-select').find(node => node.dataset.dimension === dimension);
+const options = dimension => filter(dimension).children.map(option => [option.value, option.textContent]);
+assert.deepEqual(options('nature'), [['', 'Any'], ['broke_existing', 'broke existing · 3'], ['unclassified', 'unclassified · 1'], ['absent', 'absent · 2']],
+  'a value no link takes is hidden; absent and unclassified are separate options');
+assert.deepEqual(options('layer').map(([, text]) => text), ['Any', 'dashboard · 4', 'store/migration · 2']);
+assert.deepEqual(options('detected_by').map(([value]) => value), ['', 'delivery_review', 'operator']);
+assert.doesNotMatch(view().textContent, /opus.*30%/, 'crew rates in the payload are not rendered');
+hashes = 0;
+change(filter('nature'), 'broke_existing');
 assert.equal(codebase.getCodebaseQuery().nature, 'broke_existing');
+assert.equal(hashes, 1, 'a filter asks for a new hash');
 assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase?window=30d&min_support=5&rollup=dir&nature=broke_existing');
 const narrowed = JSON.parse(JSON.stringify(sliced));
 narrowed.regression_filter = { ...noFilter, nature: 'broke_existing' };
@@ -537,224 +384,264 @@ Object.assign(narrowed.regressions, { matching_links: 3, regressed: 2 });
 const filteredRequest = await serve(narrowed);
 assert.equal(filteredRequest.searchParams.get('nature'), 'broke_existing', 'the filter goes to the server');
 assert.equal(filteredRequest.searchParams.get('escape'), null, 'an unset filter is not sent');
-assert.deepEqual(rowPaths(), ['src/a/']);
-assert.equal(facets('nature')[0].getAttribute('aria-pressed'), 'true');
-assert.equal(tile('regressions').querySelector('span.codebase-tile-foot.filter').textContent, 'filtered: broke existing');
-assert.match(part('list').querySelector('div.codebase-facets').textContent, /3 of 6 regression links on 2 regressed tasks/);
-assert.deepEqual(tasks().map(item => item.dataset.task), ['ORB-1']);
-assert.deepEqual(tasks()[0].querySelectorAll('a.codebase-task-link').map(node => node.textContent), ['ORB-1', 'ORB-2'], 'the detail lists only matching regressions');
-assert.match(part('detail').querySelector('p.codebase-filter-note').textContent, /^Filtered to nature broke existing: /);
-click(facets('nature')[0]);
-assert.equal(codebase.getCodebaseQuery().nature, null, 'choosing the chosen chip clears it');
-
-// Filters that leave no path: an empty state with Clear filters, which
-// resets every dimension. A hash with an unknown value keeps no filter.
-click(facets('layer')[1]);
-click(facets('detected_by')[1]);
-const nothing = JSON.parse(JSON.stringify(sliced));
-nothing.regression_filter = { ...noFilter, layer: 'store_migration', detected_by: 'operator' };
-nothing.regressions.rows = [];
-Object.assign(nothing.regressions, { matching_links: 0, regressed: 0, cross_tabs: { nature_escape: { row: 'nature', column: 'escape', rows: [], columns: [], counts: [] }, escape_layer: { row: 'escape', column: 'layer', rows: [], columns: [], counts: [] } } });
-const both = await serve(nothing);
-assert.deepEqual(['layer', 'detected_by'].map(name => both.searchParams.get(name)), ['store_migration', 'operator']);
-assert.equal(rows().length, 0);
-assert.equal(part('list').querySelector('p.codebase-empty-title').textContent, 'No path has a regression matching these filters.');
-assert.deepEqual(part('list').querySelectorAll('div.codebase-crosstab-block').map(block => block.querySelector('p.codebase-note')?.textContent),
-  ['No regression matches these filters.', 'No regression matches these filters.']);
-assert.equal(part('detail').querySelector('p.codebase-note').textContent, 'Nothing is ranked here, so there is no row to show.');
-click(button(part('list').querySelector('div.codebase-empty-state'), 'Clear filters'));
+assert.equal(filter('nature').value, 'broke_existing');
+assert.equal(part('filters').querySelector('span.codebase-filter-count').textContent, '3 of 6 regression links on 2 regressed tasks');
+assert.deepEqual(cells('src/a/')[0], ['regressions', '5.0%1/20'], 'the Regressed column is the filtered one');
+change(filter('layer'), 'store_migration');
+click(button(part('filters'), 'Clear filters'));
 assert.deepEqual(['nature', 'escape', 'layer', 'detected_by'].map(name => codebase.getCodebaseQuery()[name]), [null, null, null, null]);
-assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase?window=30d&min_support=5&rollup=dir');
 codebase.applyCodebaseHashQuery(new URLSearchParams('window=30d&min_support=5&rollup=dir&escape=no_test&layer=bogus'));
 assert.deepEqual([codebase.getCodebaseQuery().escape, codebase.getCodebaseQuery().layer], ['no_test', null], 'a hash restores known filters only');
 codebase.applyCodebaseHashQuery(new URLSearchParams('window=30d&min_support=5&rollup=dir'));
 
-// A window without any regression link says there is nothing to break down.
+// A filter that leaves no regressed path keeps the column, so the filter row
+// still says what it left; a window without links has nothing to filter.
+const nothing = JSON.parse(JSON.stringify(sliced));
+nothing.regression_filter = { ...noFilter, layer: 'store_migration' };
+nothing.regressions.rows = [];
+Object.assign(nothing.regressions, { matching_links: 0, regressed: 0 });
+await serve(nothing);
+assert.deepEqual(columns()[0], 'regressions');
+assert.ok(button(part('filters'), 'Clear filters'));
 const noLinks = JSON.parse(JSON.stringify(full));
 noLinks.regression_filter = noFilter;
-Object.assign(noLinks.regressions, { links: 0, matching_links: 0, regressed: 0, breakdowns: {}, cross_tabs: {}, by_crew: { rows: [], below_support: 0 }, by_complexity: { rows: [], below_support: 0 } });
+Object.assign(noLinks.regressions, { links: 0, matching_links: 0, regressed: 0, breakdowns: {} });
 await serve(noLinks);
-assert.equal(part('list').querySelectorAll('button.codebase-facet').length, 0);
-assert.match(part('list').querySelector('div.codebase-facets').textContent, /^No regression_from link targets a task done in this window/);
-assert.equal(part('list').querySelector('table.codebase-crosstab'), null, 'no cross-tab without links');
-await serve(full);
-click(tile('lock_contention'));
+assert.equal(part('filters').querySelectorAll('select').length, 0);
+assert.match(part('filters').textContent, /no regression link targets a task done in this window/);
 
-// The window and group-by segments and the stepper rewrite the selection and
+// Regression-risk marks: one footnote line against the 30 days before, and
+// a link to the per-path comparison, which is its own view.
+const marked = JSON.parse(JSON.stringify(sliced));
+marked.regressions.risk_marks = {
+  enabled_at: '2026-10-01T00:00:00Z', before_since: '2026-09-01T00:00:00Z', window_days: 30, marked_paths: 2,
+  with_marks: rate(1, 4), before: rate(6, 10),
+  rows: [{ path: 'src/a/x.rs', with_marks: rate(1, 3), before: rate(5, 8) }, { path: 'src/b.rs', with_marks: rate(0, 1), before: rate(0, 0) }],
+};
+await serve(marked);
+assert.equal(notes().at(-2), 'Regression-risk marks: 25% (1 of 4) of marked tasks regressed, against 60% (6 of 10) in the 30 days before marking. Per-path comparison');
+hashes = 0;
+click(part('notes').querySelectorAll('a').find(node => node.textContent === 'Per-path comparison'));
+assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase/marks?window=30d&min_support=5&rollup=dir');
+assert.equal(hashes, 1, 'opening a view asks for its hash');
+const riskTable = () => part('marks').querySelector('table.codebase-risk-table');
+assert.deepEqual(riskTable().querySelectorAll('tbody tr').map(row => [row.dataset.path, ...row.querySelectorAll('td').map(cell => cell.querySelector('span.codebase-frac')?.textContent ?? cell.textContent)]),
+  [['', '1/4', '6/10'], ['src/a/x.rs', '1/3', '5/8'], ['src/b.rs', '0/1', 'no tasks']], 'each rate shows its counts; an empty sample says so');
+assert.deepEqual(riskTable().querySelectorAll('thead th').map(cell => cell.textContent), ['', 'With marks', '30 days before']);
+click(view().querySelector('a.codebase-back'));
+assert.equal(codebase.getCodebaseRoute().view, 'hotspots', 'the back link returns to Hotspots');
+await serve(sliced);
+
+// The file view: the path with Copy path, a tile per signal with its rate,
+// counts and rank, and the regressed tasks with what regressed them. A
+// directory key has no file partners to rank.
+const requestsBeforeFile = pending.length;
+click(hotRows()[0].querySelector('a.codebase-path-link'));
+assert.deepEqual({ ...codebase.getCodebaseRoute() }, { view: 'file', path: 'src/a/' });
+assert.deepEqual(parts().map(node => node.dataset.key), ['file-head', 'file-tiles', 'file-tasks', 'file-related']);
+assert.equal(part('file-head').querySelector('h3').textContent, 'a/');
+assert.deepEqual(tiles(), {
+  regressions: ['65%', '13 of 20 done tasks · #1 of 7'],
+  footprint_misses: ['30%', '6 of 20 declared · #3 of 4'],
+  blocked: ['25%', '5 of 20 declared · #1 of 2'],
+  rejected: ['5.0%', '1 of 20 with a run · #4 of 4'],
+});
+assert.deepEqual(tasks().map(item => item.dataset.task), ['ORB-9', 'ORB-1', 'ORB-4'], 'three regressed tasks before All');
+assert.deepEqual(tasks().map(item => item.dataset.wide ?? null), ['5', null, null], 'the task that regressed five ranked paths is marked');
+assert.deepEqual(tasks()[1].querySelectorAll('a.codebase-task-link').map(node => node.textContent), ['ORB-1', 'ORB-2', 'ORB-3']);
+assert.match(tasks()[1].querySelector('a.codebase-task-link').getAttribute('href'), /#tasks\?open=ORB-1$/);
+assert.deepEqual(tasks()[1].querySelectorAll('div.codebase-task-by').map(line => [line.dataset.task, line.querySelectorAll('span.codebase-by-dim').map(tag => tag.dataset.value)]),
+  [['ORB-2', ['broke_existing', 'dashboard', 'delivery_review']], ['ORB-3', ['absent', 'store_migration', 'operator']]], 'each regression names its nature, layer and detector');
+assert.match(tasks()[1].querySelectorAll('span.codebase-by-dim')[4].title, /declared footprint/, 'a layer read from the footprint says so');
+assert.equal(tasks()[2].querySelector('span.codebase-crew').textContent, 'unassigned');
+const all = button(part('file-tasks'), 'All 4');
+assert.equal(all.getAttribute('aria-expanded'), 'false');
+click(all);
+assert.equal(tasks().length, 4, 'All lists every regressed task');
+click(button(part('file-head'), 'Copy path'));
+await settle();
+assert.deepEqual(copied, ['src/a/']);
+assert.ok(button(part('file-head'), 'Copied'), 'the copy action confirms');
+assert.match(relatedBox().textContent, /Group by file to see what lands alongside one/);
+assert.equal(pending.length, requestsBeforeFile, 'a directory key asks for no related files');
+assert.doesNotMatch(view().textContent, /Regressions by crew/);
+
+// A path no signal ranks under reads "not in the top 25"; a new path starts
+// with its tasks collapsed.
+codebase.applyCodebaseHashQuery(new URLSearchParams('window=30d&min_support=5&rollup=dir&path=src/b/'), 'file');
+assert.deepEqual(tiles().footprint_misses, ['—', 'not in the top 25']);
+assert.equal(tasks().length, 1, 'a new path starts collapsed');
+const fileNodes = parts();
+await serve(sliced);
+assert.ok(parts().every((node, index) => node === fileNodes[index]), 'a poll keeps the file view');
+
+// At file grouping the file view reads the related files at the selected
+// window and minimum, and lists the partners with their evidence.
+const fileRollup = { ...full, rollup: 'file', regressions: { ...full.regressions, rows: [{ path: 'src/a.rs', ...rate(3, 6), regressed_tasks: [], by_crew: [] }] }, overlap: { rows: [], ranked_paths: 1 } };
+codebase.applyCodebaseHashQuery(new URLSearchParams('window=30d&min_support=10&rollup=file&path=src/a.rs'), 'file');
+await serve(fileRollup);
+let relatedRequest = pending.at(-1);
+assert.equal(relatedRequest.url.pathname, '/api/codebase/related');
+assert.deepEqual(['path', 'window', 'min_support', 'top', 'workspace'].map(name => relatedRequest.url.searchParams.get(name)), ['src/a.rs', '30d', '10', '10', 'ws-a']);
+assert.match(relatedBox().textContent, /Loading related files/);
+relatedRequest.resolve(response({ path: 'src/a.rs', path_support: 12, min_support: 10, rows: [
+  { path: 'docs/design.md', jaccard: 0.5, conditional_rate: 1, support: { both: 10, path: 12, partner: 18, either: 20 }, footprint_miss_count: 1, tasks: [{ task_id: 'ORB-9', title: '<img src=x onerror=bad()>', commit: 'abc' }], footprint_miss_tasks: [] },
+  { path: 'src/b.rs', jaccard: 0.25, conditional_rate: 0.5, support: { both: 10, path: 12, partner: 38, either: 40 }, footprint_miss_count: 2, tasks: [], footprint_miss_tasks: [] },
+] }));
+await settle();
+assert.deepEqual(relatedBox().querySelectorAll('li.codebase-related-row').map(row => [row.dataset.path, row.querySelector('span.codebase-frac').textContent]), [['docs/design.md', '10/20'], ['src/b.rs', '10/40']]);
+assert.equal(relatedBox().querySelector('a.codebase-task-link').textContent, '<img src=x onerror=bad()>', 'task titles stay text');
+assert.match(relatedBox().querySelector('a.codebase-task-link').getAttribute('href'), /open=ORB-9$/);
+assert.match(relatedBox().querySelector('a.codebase-path-link').getAttribute('href'), /#analytics\/codebase\/file\?.*path=docs%2Fdesign\.md$/, 'a partner opens its own file view');
+
+// An unchanged poll leaves the related box and its open evidence in place,
+// without another request; a changed payload refetches.
+const evidence = relatedBox().querySelector('details');
+evidence.open = true;
+const relatedNode = relatedBox();
+const relatedRequests = () => pending.filter(request => request.url.pathname === '/api/codebase/related').length;
+const requestsBeforePoll = relatedRequests();
+await serve(fileRollup);
+assert.equal(relatedRequests(), requestsBeforePoll, 'an unchanged analytics poll does not refetch related files');
+assert.equal(relatedBox(), relatedNode, 'an unchanged analytics poll keeps the related box');
+assert.equal(evidence.open, true);
+await serve({ ...fileRollup, computed_at: '2026-10-10T12:05:00.000Z' });
+assert.equal(relatedRequests(), requestsBeforePoll + 1, 'a refreshed payload refreshes the related files');
+
+// Below the minimum, the box gives the real reason with the support numbers
+// and offers a wider window and a lower minimum.
+pending.at(-1).resolve(response({ path: 'src/a.rs', path_support: 3, min_support: 10, unavailable_landed_tasks: 2, large_footprint_cap: 20, rows: [], empty_reason: { kind: 'path_below_minimum', path_support: 3, min_support: 10 } }));
+await settle();
+assert.equal(relatedBox().querySelector('p.codebase-empty').textContent, 'Only 3 landed tasks changed this file in the last 30 days; ranking partners needs 10.');
+assert.match(relatedBox().textContent, /2 done tasks without a recorded landing, finished by hand or before Orbit recorded landings/);
+assert.ok(button(relatedBox(), 'Lower minimum to 3'));
+click(button(relatedBox(), 'Use all time'));
+assert.equal(codebase.getCodebaseQuery().window, 'all');
+const widerRequest = await serve({ ...fileRollup, window: 'all' });
+assert.equal(widerRequest.pathname, '/api/codebase/related');
+assert.equal(widerRequest.searchParams.get('window'), 'all', 'the wider window refetches the related files');
+pending.at(-1).resolve(response({ path: 'src/a.rs', path_support: 0, rows: [], empty_reason: { kind: 'no_landed_change' } }));
+await settle();
+assert.match(relatedBox().querySelector('p.codebase-empty').textContent, /^No landed task with a recorded landing changed this file in all recorded history\.$/);
+assert.equal(relatedBox().querySelectorAll('button').length, 0, 'nothing wider or lower can help a file with no landed change');
+
+// A failed related request is retried on the next poll even when its payload
+// has not changed; a late result cannot cross workspace visits.
+await serve({ ...fileRollup, window: 'all', computed_at: '2026-10-10T12:06:00.000Z' });
+pending.at(-1).resolve(response({ error: 'temporary failure' }, 503));
+await settle();
+assert.match(relatedBox().textContent, /Could not load related files: temporary failure/);
+const retry = await serve({ ...fileRollup, window: 'all', computed_at: '2026-10-10T12:06:00.000Z' });
+assert.equal(retry.pathname, '/api/codebase/related', 'a failed related request retries on the next poll');
+relatedRequest = pending.at(-1);
+common.setWorkspace('ws-b');
+relatedRequest.resolve(response({ path: 'src/a.rs', path_support: 4, rows: [] }));
+await settle();
+common.setWorkspace('ws-a');
+await settle();
+codebase.applyCodebaseHashQuery(new URLSearchParams('window=30d&min_support=5&rollup=dir'), 'coupling');
+
+// Coupling & locks: reserved-together pairs with the release-bump files
+// folded into one row by default, and lock waits.
+const coupled = JSON.parse(JSON.stringify(full));
+coupled.change_coupling.rows = [
+  { paths: ['Cargo.lock', 'Cargo.toml'], ...rate(20, 20), reservations: [20, 20] },
+  ...coupled.change_coupling.rows,
+  { paths: ['CHANGELOG.md', 'Cargo.toml'], ...rate(8, 19), reservations: [8, 20] },
+];
+await serve(coupled);
+assert.deepEqual(parts().map(node => node.dataset.key), ['pairs', 'locks']);
+const pairRows = () => part('pairs').querySelectorAll('li.codebase-pair-row').map(row => row.dataset.pair);
+const releaseRow = () => part('pairs').querySelector('li.codebase-release-row');
+assert.deepEqual(pairRows(), ['src/web/\nsrc/web/tests/', 'src/a/\nsrc/b/']);
+assert.equal(releaseRow().querySelector('span.codebase-release-title').textContent, 'Release bump set · 3 files');
+assert.equal(releaseRow().querySelector('span.codebase-release-range').textContent, '42%–100%');
+assert.ok(part('pairs').querySelectorAll('li.codebase-pair-row')[0].querySelector('span.codebase-tag'), 'a directory and its tests is tagged as expected');
+const groupRelease = part('pairs').querySelector('input.codebase-check');
+assert.equal(groupRelease.checked, true, 'release files are grouped by default');
+groupRelease.checked = false;
+change(groupRelease);
+assert.equal(releaseRow(), null);
+assert.equal(pairRows().length, 4, 'ungrouped, every pair is listed');
+assert.ok(part('locks').querySelector('div.codebase-empty-state.good'), 'no refused lock is the good state');
+assert.match(part('locks').textContent, /2,557 file reservations/);
+
+// Lock waits: total, median and denied of requesters per row, sorted by
+// total wait by default and switchable to the denial rate. A payload without
+// waits shows rates and no sort.
+const lockRow = (path, numerator, denominator, extra) => ({ path, ...rate(numerator, denominator), contending_tasks: numerator, reservations: 9, denials: 40, ...extra });
+const lockPaths = () => part('locks').querySelectorAll('li.codebase-lock-row').map(row => row.dataset.path);
+const lockLines = () => part('locks').querySelectorAll('li.codebase-lock-row').map(row => [row.querySelector('span.codebase-lock-total').textContent, row.querySelector('div.codebase-lock-line').textContent]);
+const legacyLock = JSON.parse(JSON.stringify(full));
+legacyLock.lock_contention = { below_support: 0, reservations: 30, denials: 80, wait_time_recorded: false, rows: [lockRow('src/hot.rs', 3, 4, {}), lockRow('src/slow.rs', 1, 5, {})] };
+await serve(legacyLock);
+assert.deepEqual(lockPaths(), ['src/hot.rs', 'src/slow.rs']);
+assert.deepEqual(lockLines()[0], ['75%', '3 of 4 requesters denied']);
+assert.equal(part('locks').querySelector('div.codebase-segs'), null, 'nothing to sort by without waits');
+assert.match(part('locks').textContent, /Lock wait time is not recorded, so waits cannot be shown\./);
+const waited = JSON.parse(JSON.stringify(full));
+const hot = lockRow('src/hot.rs', 3, 4, { wait: { episodes: 3, waiting: 0, median_ms: 120000, max_ms: 600000, total_ms: 840000 } });
+const slow = lockRow('src/slow.rs', 1, 5, { wait: { episodes: 1, waiting: 1, median_ms: 9000000, max_ms: 9000000, total_ms: 9000000 } });
+const runOnly = lockRow('src/run.rs', 1, 6, { wait: null });
+waited.lock_contention = { below_support: 0, reservations: 30, denials: 80, wait_time_recorded: true, rows: [hot, slow, runOnly], rows_by_wait: [slow, hot] };
+await serve(waited);
+const sort = label => button(part('locks'), label);
+assert.deepEqual(lockPaths(), ['src/slow.rs', 'src/hot.rs'], 'longest total wait first by default');
+assert.deepEqual(lockLines(), [['2 h 30 min', 'median wait 2 h 30 min · 1 of 5 requesters denied1 still waiting'], ['14 min', 'median wait 2 min · 3 of 4 requesters denied']]);
+assert.deepEqual([sort('Total wait').getAttribute('aria-pressed'), sort('Denial rate').getAttribute('aria-pressed')], ['true', 'false']);
+click(sort('Denial rate'));
+assert.deepEqual(lockPaths(), ['src/hot.rs', 'src/slow.rs', 'src/run.rs'], 'the denial rate restores the rate order');
+assert.deepEqual(lockLines()[2], ['—', '1 of 6 requesters denied'], 'a row whose denials named no task has no wait');
+await serve(waited);
+assert.deepEqual(lockPaths(), ['src/hot.rs', 'src/slow.rs', 'src/run.rs'], 'a poll keeps the chosen sort');
+click(sort('Total wait'));
+assert.match(part('locks').textContent, /first denial to its admission or its leaving the backlog/);
+
+// The window and group-by segments and the select rewrite the selection and
 // ask for a new hash; an unchanged one asks for nothing.
-let changes = 0;
-codebase.wireCodebaseControls(() => { changes += 1; });
+hashes = 0;
 const segment = (id, value) => byId[id].children.find(node => node.dataset.value === value);
 click(segment('codebase-rollup', 'crate'));
 click(segment('codebase-window', '7d'));
 click(segment('codebase-window', '7d'));
-assert.equal(changes, 2, 'an unchanged segment asks for no new hash');
+assert.equal(hashes, 2, 'an unchanged segment asks for no new hash');
 assert.deepEqual([pressed('codebase-window'), pressed('codebase-rollup')], [['7d'], ['crate']]);
-click(byId['codebase-min-up']);
-assert.equal(codebase.getCodebaseQuery().min_support, 10, 'the stepper walks to the next step');
-click(byId['codebase-min-down']);
-click(byId['codebase-min-down']);
-click(byId['codebase-min-down']);
-click(byId['codebase-min-down']);
-assert.equal(codebase.getCodebaseQuery().min_support, 1);
-assert.equal(byId['codebase-min-down'].disabled, true, 'the stepper stops at 1');
-assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase?window=7d&min_support=1&rollup=crate');
+change(byId['codebase-min-support'], '30');
+assert.equal(codebase.getCodebaseQuery().min_support, 30);
+assert.deepEqual(byId['codebase-min-support'].children.map(option => option.value), ['1', '2', '3', '5', '10', '15', '20', '30', '50', '100']);
+codebase.applyCodebaseHashQuery(new URLSearchParams('window=7d&min_support=7&rollup=crate'), 'coupling');
+assert.ok(byId['codebase-min-support'].children.some(option => option.value === '7'), 'a hashed minimum off the ladder is offered');
+assert.equal(byId['codebase-min-support'].value, '7');
+assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase/coupling?window=7d&min_support=7&rollup=crate');
 
 // An empty coupling ranking offers directory grouping and a lower minimum;
-// both rewrite the selection. Crate grouping warns that overlaps say little.
+// both rewrite the selection. Nothing ranked anywhere is its own state.
 const empty = {
-  window: '90d', rollup: 'crate', min_support: 15, touched: 'declared_footprint', tasks_scanned: 0,
+  window: '7d', rollup: 'crate', min_support: 15, touched: 'declared_footprint', tasks_scanned: 0,
   computed_at: '2026-10-10T12:00:00.000Z', cache_ttl_seconds: 300, row_limit: 25,
   regressions: { rows: [], below_support: 0, population: 0 },
   lock_contention: { rows: [], below_support: 0, reservations: 0, denials: 0, wait_time_recorded: false },
   footprint_misses: { rows: [], below_support: 0, population: 0 },
   change_coupling: { rows: [], below_support: 13051, reservations: 0, excluded_large: 250, large_footprint_cap: 12 },
-  blocked: { rows: [], below_support: 0, causes: [{ cause: 'unclassified', kind: 'unclassified', tasks: 0 }, { cause: 'run_failure', kind: 'attributed', tasks: 0 }] },
+  blocked: { rows: [], below_support: 0, causes: [] },
   rejected: { rows: [], below_support: 0, rejected_with_run: 0, excluded_without_run: 0 },
   overlap: { rows: [], ranked_paths: 0 },
 };
+codebase.applyCodebaseHashQuery(new URLSearchParams('window=7d&min_support=15&rollup=crate'), 'coupling');
 await serve(empty);
-assert.equal(part('list').dataset.ranking, 'lock_contention', 'the open tile survives a new payload');
-assert.equal(tile('lock_contention').querySelector('span.codebase-tile-big').textContent, 'None');
-assert.equal(rows().length, 0);
-assert.equal(part('detail').querySelector('p.codebase-note').textContent, 'Nothing is ranked here, so there is no row to show.');
-click(tile('overlap'));
-assert.ok(part('list').querySelector('div.codebase-hint'), 'crate grouping warns that the overlap list says little');
-assert.ok(part('list').querySelector('p.codebase-empty'));
-click(tile('regressions'));
-assert.ok(button(part('list'), 'Show paths with 5+ tasks'), 'a minimum above 5 offers to lower it');
-assert.ok(part('list').querySelector('p.codebase-empty'));
-click(tile('change_coupling'));
-assert.ok(part('list').querySelector('div.codebase-empty-state'));
-changes = 0;
-click(button(part('list'), 'Group by directory'));
+assert.ok(part('pairs').querySelector('div.codebase-empty-state'));
+hashes = 0;
+click(button(part('pairs'), 'Group by directory'));
 assert.equal(codebase.getCodebaseQuery().rollup, 'dir');
-click(button(part('list'), 'Lower to 5'));
+click(button(part('pairs'), 'Lower to 5'));
 assert.equal(codebase.getCodebaseQuery().min_support, 5);
-assert.equal(changes, 2, 'each action asks for a new hash');
-assert.deepEqual([pressed('codebase-rollup'), byId['codebase-min-support'].value], [['dir'], '5']);
-assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase?window=7d&min_support=5&rollup=dir');
-
-// Prefix suggestions include landed-only Markdown and submit the same file query.
-const pathPayload = { ...full, known_paths: ['docs/design.md', 'src/a.rs', 'src/b.rs'] };
-codebase.renderCodebase(pathPayload);
-const search = byId['codebase-path-search'];
-search.value = 'src/';
-for (const listener of search.listeners.input) listener();
-assert.deepEqual(byId['codebase-path-options'].children.map(node => node.textContent), ['src/a.rs', 'src/b.rs']);
-click(byId['codebase-path-options'].children[0]);
-assert.equal(byId['codebase-path-options'].children.length, 0);
-let relatedRequest = pending.at(-1);
-assert.equal(relatedRequest.url.pathname, '/api/codebase/related');
-assert.equal(relatedRequest.url.searchParams.get('path'), 'src/a.rs');
-assert.equal(relatedRequest.url.searchParams.get('workspace'), 'ws-a');
-relatedRequest.resolve(response({ path: 'src/a.rs', path_support: 2, rows: [
-  { path: 'docs/design.md', jaccard: 0.5, conditional_rate: 1, support: { both: 2, path: 2, partner: 4, either: 4 }, footprint_miss_count: 1, tasks: [{ task_id: 'ORB-9', title: '<img src=x onerror=bad()>', commit: 'abc' }], footprint_miss_tasks: [] },
-  { path: 'src/b.rs', jaccard: 0.25, conditional_rate: 0.5, support: { both: 1, path: 2, partner: 3, either: 4 }, reservation_coupling: { ...rate(1, 2), tasks: [{ task_id: 'ORB-8', title: 'Reserved together fixture' }] }, footprint_miss_count: 2, tasks: [], footprint_miss_tasks: [] },
-] }));
-await settle();
-const related = byId['codebase-related-results'];
-assert.deepEqual(related.querySelectorAll('span.codebase-path').map(node => node.textContent), ['docs/design.md', 'src/b.rs']);
-assert.equal(related.querySelector('a.codebase-task-link').textContent, '<img src=x onerror=bad()>', 'task titles stay text');
-assert.match(related.querySelector('a.codebase-task-link').getAttribute('href'), /open=ORB-9$/);
-assert.match(related.querySelectorAll('a.codebase-task-link')[1].getAttribute('href'), /open=ORB-8$/, 'reservation evidence links to its task');
-click(button(related, 'Footprint misses'));
-assert.deepEqual(related.querySelectorAll('span.codebase-path').map(node => node.textContent), ['src/b.rs', 'docs/design.md']);
-
-// An unchanged analytics poll leaves the related panel and its open evidence
-// nodes in place, without issuing another related-files request.
-const evidence = related.querySelector('details');
-assert.ok(evidence, 'related task evidence is displayed in a details element');
-evidence.open = true;
-const relatedNodes = related.children.slice();
-const relatedRequestCount = () => pending.filter(request => request.url.pathname === '/api/codebase/related').length;
-const requestsBeforePoll = relatedRequestCount();
-await serve(pathPayload);
-assert.equal(relatedRequestCount(), requestsBeforePoll, 'an unchanged analytics poll does not refetch related files');
-assert.deepEqual(related.children, relatedNodes, 'an unchanged analytics poll keeps the related panel DOM');
-assert.equal(evidence.open, true, 'an unchanged analytics poll keeps evidence open');
-
-// A changed window or minimum support still fetches and renders its result.
-click(segment('codebase-window', '30d'));
-const windowRequest = await serve(pathPayload);
-assert.equal(windowRequest.pathname, '/api/codebase/related');
-assert.equal(windowRequest.searchParams.get('window'), '30d');
-pending.at(-1).resolve(response({ path: 'src/a.rs', path_support: 7, rows: [] }));
-await settle();
-assert.match(related.querySelector('p.codebase-note').textContent, /7 landed tasks changed this file/);
-
-click(byId['codebase-min-up']);
-const supportRequest = await serve(pathPayload);
-assert.equal(supportRequest.pathname, '/api/codebase/related');
-assert.equal(supportRequest.searchParams.get('min_support'), '10');
-pending.at(-1).resolve(response({ path: 'src/a.rs', path_support: 8, rows: [] }));
-await settle();
-assert.match(related.querySelector('p.codebase-note').textContent, /8 landed tasks changed this file/);
-
-// A refreshed analytics payload also refreshes the related result.
-const refreshedPayload = { ...pathPayload, computed_at: '2026-10-10T12:05:00.000Z' };
-const refreshedRequest = await serve(refreshedPayload);
-assert.equal(refreshedRequest.pathname, '/api/codebase/related');
-pending.at(-1).resolve(response({ path: 'src/a.rs', path_support: 9, rows: [] }));
-await settle();
-assert.match(related.querySelector('p.codebase-note').textContent, /9 landed tasks changed this file/);
-
-// A file changed in fewer landed tasks than the minimum says why no partner
-// can qualify and reruns at its own support; done tasks without a recorded
-// landing are explained, and a file with no landed change offers no rerun.
-const belowPayload = { ...refreshedPayload, computed_at: '2026-10-10T12:06:00.000Z' };
-await serve(belowPayload);
-pending.at(-1).resolve(response({ path: 'CHANGELOG.md', path_support: 4, min_support: 10, unavailable_landed_tasks: 3, large_footprint_cap: 20, rows: [], empty_reason: { kind: 'path_below_minimum', path_support: 4, min_support: 10 } }));
-await settle();
-assert.equal(related.querySelector('p.codebase-empty').textContent, 'CHANGELOG.md changed in 4 landed tasks in this window, fewer than the minimum of 10 shared tasks, so no partner can qualify.');
-assert.match(related.textContent, /finished by hand or before Orbit recorded landings/, 'the unavailable count says what it covers');
-click(button(related, 'Rerun with minimum 4'));
-assert.equal(codebase.getCodebaseQuery().min_support, 4);
-const rerunRequest = await serve(belowPayload);
-assert.equal(rerunRequest.pathname, '/api/codebase/related');
-assert.equal(rerunRequest.searchParams.get('min_support'), '4', 'the rerun fetches at the path support');
-pending.at(-1).resolve(response({ path: 'CHANGELOG.md', path_support: 0, min_support: 4, unavailable_landed_tasks: 0, rows: [], empty_reason: { kind: 'no_landed_change' } }));
-await settle();
-assert.match(related.querySelector('p.codebase-empty').textContent, /No landed task .* changed CHANGELOG.md/);
-assert.equal(related.querySelectorAll('button').length, 0, 'no rerun can help a file with no landed change');
-assert.doesNotMatch(related.textContent, /finished by hand/, 'no explanation without unavailable tasks');
-
-// An explicit path change fetches, and a failed related request is retried on
-// the next analytics poll even when its payload has not changed.
-search.value = 'broken.rs';
-for (const listener of search.listeners.input) listener();
-for (const listener of byId['codebase-related-form'].listeners.submit) listener({ preventDefault() {} });
-let pathRequest = pending.at(-1);
-assert.equal(pathRequest.url.pathname, '/api/codebase/related');
-assert.equal(pathRequest.url.searchParams.get('path'), 'broken.rs');
-pathRequest.resolve(response({ error: 'temporary failure' }, 503));
-await settle();
-assert.match(related.textContent, /Could not load related files: temporary failure/);
-const retryRequest = await serve(refreshedPayload);
-assert.equal(retryRequest.pathname, '/api/codebase/related');
-assert.equal(retryRequest.searchParams.get('path'), 'broken.rs');
-pending.at(-1).resolve(response({ path: 'broken.rs', rows: [] }));
-await settle();
-assert.ok(related.querySelector('p.codebase-empty'), 'a failed related request retries on the next poll');
-
-search.value = 'missing.rs';
-for (const listener of search.listeners.input) listener();
-assert.equal(byId['codebase-path-options'].children.length, 0, 'an unknown prefix has no suggestions');
-for (const listener of byId['codebase-related-form'].listeners.submit) listener({ preventDefault() {} });
-const missingPathRequest = pending.at(-1);
-assert.equal(missingPathRequest.url.searchParams.get('path'), 'missing.rs');
-missingPathRequest.resolve(response({ path: 'missing.rs', rows: [] }));
-await settle();
-assert.ok(related.querySelector('p.codebase-empty'), 'empty search explains minimum support');
-// A late result cannot cross workspace visits.
-for (const listener of byId['codebase-related-form'].listeners.submit) listener({ preventDefault() {} });
-relatedRequest = pending.at(-1);
-common.setWorkspace('ws-b');
-relatedRequest.resolve(response({ path: 'missing.rs', rows: [] }));
-await settle();
-assert.equal(related.textContent, '');
-assert.equal(search.value, '');
-common.setWorkspace('ws-a');
+assert.equal(hashes, 2, 'each action asks for a new hash');
+assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase/coupling?window=7d&min_support=5&rollup=dir');
+codebase.applyCodebaseHashQuery(new URLSearchParams('window=7d&min_support=15&rollup=crate'));
+await serve(empty);
+assert.match(part('hotspots').querySelector('p.codebase-empty-title').textContent, /^No path reaches minimum support 15 under any signal in this window\.$/);
+assert.ok(button(part('hotspots'), 'Show paths with 5+ tasks'), 'a minimum above 5 offers to lower it');
+assert.match(part('notes').textContent, /At crate grouping nearly every crate clears the minimum/);
 
 // The aggregate view shows the placeholder instead of the codebase view.
 common.setWorkspace('');
@@ -762,7 +649,7 @@ await settle();
 const requests = pending.length;
 await codebase.fetchAndRenderCodebase();
 assert.equal(pending.length, requests, 'the aggregate view requests nothing');
-assert.deepEqual(view().children.map(node => node.dataset.key), ['aggregate-placeholder']);
+assert.deepEqual(parts().map(node => node.dataset.key), ['aggregate-placeholder']);
 assert.equal(byId['codebase-meta'].textContent, '');
 common.setWorkspace('ws-a');
 await settle();
