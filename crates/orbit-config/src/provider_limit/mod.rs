@@ -1,9 +1,10 @@
 //! When a provider's usage reading keeps delivery admission off its crews
 //! (`workflow.provider_limit_*`).
 //!
-//! The readings themselves live in the host's provider-limit store; these
-//! settings only say how close to a window's limit a provider may run before
-//! admission skips its crews, and what an explicitly crewed task does then.
+//! The readings themselves live in the host's provider-limit store. These
+//! settings define when admission skips a provider's crews, what happens to an
+//! explicitly crewed task, and the budgets declared in
+//! `workflow.provider_limit_budgets`.
 
 mod budget;
 mod policy;
