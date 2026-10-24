@@ -74,7 +74,7 @@ pub(crate) use hosts::PinnedHosts;
 
 pub(crate) use registry::RegistrySource;
 use registry::{CheckoutFingerprint, RegistryFingerprint, checkout_fingerprints};
-pub(crate) use request::{Pinned, RefreshFailure, Ws, WsRejection};
+pub(crate) use request::{ConfigFileWs, Pinned, RefreshFailure, Ws, WsRejection};
 
 /// Synthetic workspace id used by [`DashboardState::single`].
 pub(crate) const SINGLE_WORKSPACE_ID: &str = "default";

@@ -162,36 +162,21 @@ impl StateInner {
         }
 
         // Build outside the lock (no lock held across construction).
-        let runtime = match RegisteredRuntimeFactory::open_resolved_checkout_for(
-            &self.global_root,
-            &orbit_dir,
-            &orbit_dir,
-            binding.clone(),
-            HostLifetime::LongLived,
-        ) {
-            Ok(runtime) => Arc::new(runtime),
-            Err(error)
-                if matches!(
-                    error,
-                    OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. }
-                ) =>
-            {
-                // A broken layered config stays repairable through the file
-                // view, which reads the files directly and reports a 400 with
-                // the file path. Serve the stale runtime it was built from so
-                // that view is reachable instead of failing the workspace
-                // resolution itself with a 500.
-                let cache = self.lock_runtimes();
-                if let Some(cached) = cache.get(id)
-                    && cached.binding == binding
-                    && cached.orbit_dir == orbit_dir
-                {
-                    return Ok(cached.runtime.clone());
-                }
-                return Err(WsRejection::build_failed(id, &error));
-            }
-            Err(error) => return Err(WsRejection::build_failed(id, &error)),
-        };
+        // A broken layered config is an error here so aggregates stay
+        // explicit `unavailable` rows instead of silently serving the stale
+        // runtime. The config file view has its own stale-tolerant resolver
+        // (`resolve_runtime_for_config_file`) so a broken layer stays
+        // repairable there with its 400 + path.
+        let runtime = Arc::new(
+            RegisteredRuntimeFactory::open_resolved_checkout_for(
+                &self.global_root,
+                &orbit_dir,
+                &orbit_dir,
+                binding.clone(),
+                HostLifetime::LongLived,
+            )
+            .map_err(|error| WsRejection::build_failed(id, &error))?,
+        );
 
         // Test seam: pause between build and publish so a test can rebind +
         // refresh and prove this (now older-generation) build cannot republish.
@@ -199,6 +184,72 @@ impl StateInner {
         self.invoke_pre_publish_hook(id);
 
         Ok(self.publish_runtime(id, binding, orbit_dir, generation, config_stamp, runtime))
+    }
+
+    /// Stale-tolerant resolver for `GET /api/config/file` only.
+    ///
+    /// The strict [`Self::resolve_runtime`] reports a broken layered config
+    /// as an error so fleet and aggregate rows stay explicit `unavailable`
+    /// entries. The file view instead must stay reachable: it reads the files
+    /// directly and reports a 400 naming the file path. When the rebuild
+    /// fails with a layered-config input error and a cached runtime for the
+    /// same binding and orbit dir exists, serve that stale runtime so the
+    /// file view can render its 400; otherwise report the build failure.
+    pub(super) fn resolve_runtime_for_config_file(
+        &self,
+        snapshot: &Snapshot,
+        id: &str,
+    ) -> Result<Arc<OrbitRuntime>, WsRejection> {
+        let (binding, orbit_dir) = {
+            let entry = snapshot
+                .entries
+                .iter()
+                .find(|entry| entry.id == id)
+                .ok_or_else(|| WsRejection::unknown(id))?;
+            if !entry.active {
+                return Err(WsRejection::inactive(id));
+            }
+            let binding = entry
+                .binding
+                .clone()
+                .ok_or_else(|| WsRejection::missing_binding(id))?;
+            (binding, entry.orbit_dir.clone())
+        };
+        let generation = snapshot.generation;
+        let config_stamp = ConfigLayerStamp::read(&self.global_root, &orbit_dir);
+        if let Some(runtime) = self.cached_matching(id, &binding, &orbit_dir, &config_stamp)? {
+            return Ok(runtime);
+        }
+        match RegisteredRuntimeFactory::open_resolved_checkout_for(
+            &self.global_root,
+            &orbit_dir,
+            &orbit_dir,
+            binding.clone(),
+            HostLifetime::LongLived,
+        ) {
+            Ok(runtime) => {
+                let runtime = Arc::new(runtime);
+                #[cfg(test)]
+                self.invoke_pre_publish_hook(id);
+                Ok(self.publish_runtime(id, binding, orbit_dir, generation, config_stamp, runtime))
+            }
+            Err(error)
+                if matches!(
+                    error,
+                    OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. }
+                ) =>
+            {
+                let cache = self.lock_runtimes();
+                if let Some(cached) = cache.get(id)
+                    && cached.binding == binding
+                    && cached.orbit_dir == orbit_dir
+                {
+                    return Ok(cached.runtime.clone());
+                }
+                Err(WsRejection::build_failed(id, &error))
+            }
+            Err(error) => Err(WsRejection::build_failed(id, &error)),
+        }
     }
 
     /// Publish a freshly-built runtime under the cache lock with binding +
