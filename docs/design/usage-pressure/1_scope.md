@@ -70,26 +70,23 @@ it assumes every account's window is worth what its pool weight says it is.
 
 ### Pressure of a crew
 
-A crew can draw on several windows at once: its account's short window (`five_hour`, Codex
-`primary`), its long window (`seven_day`, Codex `secondary`, Muse `weekly`), and a model-scoped
-long window (`seven_day_opus`). Each token spent counts against all of them, so:
+Only **weekly** windows count: Claude `seven_day` and its model-scoped `seven_day_opus` /
+`seven_day_sonnet`, Codex's 7-day window (`secondary`, `window_minutes = 10080`) and Muse
+`weekly`. Every other window is ignored for pressure, the 5-hour ones (`five_hour`, Codex
+`primary`, Muse `window`) included.
 
-1. **Long windows set pressure.** The crew's pressure is the **minimum** over the longest
-   gating windows that cover it: the account-level one and any model-scoped one for its model.
-   The scarcest window binds. Spending a near-empty `seven_day_opus` is not free just because
-   `seven_day` has room.
-2. **Short windows only gate.** A 5-hour window renews about thirty times a week, so it never
-   decides whether capacity is lost at the weekly reset. If short windows counted, every fresh
-   5-hour window would hold pressure at about `1` and tie the two accounts in the example. Short
-   windows keep their existing job: the `provider_limit_max_used_pct` gate removes the crew as
-   one nears its limit, and pressure plays no part.
-3. **Unknown means neutral.** A crew with no live reading, a provider that reports nothing
-   (Gemini, Grok, Antigravity), a reading with no reset or window length that cannot be
-   inferred, an `error` reading, and a `ledger` budget all have pressure `1`. Muse's `weekly` is
-   7 days. Its `window` length is not reported, and is treated as short. Rolling budgets have no
-   reset cliff, so in v1 they are neutral.
-4. **Accounts follow [ORB-17288].** A crew that sets `env` uses only its own account's readings,
+1. **The scarcest weekly window binds.** A crew's pressure is the **minimum** over the weekly
+   windows that cover it: its account's, and the model-scoped one for its model, if any. Each
+   token spent counts against both, so spending a near-empty `seven_day_opus` is not free just
+   because `seven_day` has room.
+2. **Unknown means neutral.** A crew with no live weekly reading, a provider that reports
+   nothing (Gemini, Grok, Antigravity), a weekly reading with no reset, an `error` reading and a
+   `ledger` budget all have pressure `1`.
+3. **Accounts follow [ORB-17288].** A crew that sets `env` uses only its own account's readings,
    and the other crews use their provider's default login.
+
+The existing usage-limit gate is untouched. It still removes a crew whose window of any length
+reaches `provider_limit_max_used_pct`, before pressure weights what is left.
 
 ### Effective weight
 
@@ -165,15 +162,15 @@ Readings stay per host.
 ## Concerns and honest limitations
 
 - **Readings lag.** A window is read only after a run of that account. A drain that admits 15
-  Claude tasks in one pass draws all of them against the same reading. The overshoot is bounded
-  by the short-window gate, and the next reading corrects it.
-- **Herding is intended but blunt.** A high-pressure account takes most draws until its 5-hour
-  window gates it. Then the draw falls back to the pool's other members, as today. Under heavy
+  Claude tasks in one pass draws all of them against the same reading. The existing limit gate
+  bounds the overshoot, and the next reading corrects it.
+- **Herding is intended but blunt.** A high-pressure account takes most draws until the limit
+  gate removes it. Then the draw falls back to the pool's other members, as today. Under heavy
   load this alternates rather than spreading smoothly.
-- **Unreachable capacity is not modelled.** Ninety percent of a week with 6 hours left may not
-  be spendable at all once the 5-hour windows cap the rate. Pressure still says "spend as much
-  as you can", which is the right direction, but its size overstates what can be recovered. See
-  the feasibility question below.
+- **Weekly only.** Pressure ignores how fast the 5-hour windows let an account spend. Ninety
+  percent of a week with 6 hours left may not all be spendable. Pressure still points the right
+  way, but its size can overstate what is recoverable. This is accepted to keep the model to one
+  window per account.
 - **Re-drawing changes a long-standing behaviour.** Today a pool task's crew is fixed at
   creation. Operators reading `task.crew` before the run will see it change at admission when
   pressure is on.
@@ -194,17 +191,14 @@ Readings stay per host.
 
 ## Open questions
 
-1. **Feasibility cap.** Should long-window pressure be capped by what the short windows allow
-   before the reset? That needs the size of a 5-hour window in weekly units, which could be
-   estimated from paired readings: the ratio of their `used_percent` deltas across runs.
-2. **Admission order.** When the backlog is mostly hard tasks and the pressured account's crews
+1. **Admission order.** When the backlog is mostly hard tasks and the pressured account's crews
    sit only in the low pool, should pressure also promote low tasks ahead of hard ones? This
    trades priority for capacity and probably wants its own switch.
-3. **Rolling budgets.** Should a `ledger` budget get a pressure, using the share of the budget
+2. **Rolling budgets.** Should a `ledger` budget get a pressure, using the share of the budget
    that ages out within the next hour?
-4. **Follower offers (phase 4).** Is it enough for the follower to re-draw after the pull, or
+3. **Follower offers (phase 4).** Is it enough for the follower to re-draw after the pull, or
    must the owner know follower pressure to choose which task to offer?
-5. **Default.** After a trial, should `usage_pressure` become the default in `ws_orbit` only, or
+4. **Default.** After a trial, should `usage_pressure` become the default in `ws_orbit` only, or
    everywhere?
 
 ## Acceptance (feature level)
