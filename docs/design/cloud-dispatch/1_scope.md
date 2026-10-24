@@ -2,7 +2,7 @@
 type: design
 summary: "Scope: a cloud delivery mode that ships a task through a Claude Code cloud session, polls GitHub for its PR, and adopts that PR's number and summary onto the task"
 tags: [cloud, dispatch, claude, routines, pr, polling]
-last_validated: 2026-10-19
+last_validated: 2026-10-24
 ---
 
 # Scope: Cloud dispatch
@@ -74,8 +74,9 @@ Resume with: claude --teleport session_01Wrd4C2SNZ1qwdRbdbRuMoW
 ```
 
 Without a TTY it refuses with `Error: --cloud requires an interactive terminal` and exits 1.
-With `-p`, `--cloud` accepts only an existing session ID. So Orbit allocates a PTY, the same
-mechanism its deterministic steps already have, and parses the session ID from the
+With `-p`, `--cloud` accepts only an existing session ID. So Orbit allocates a PTY — new
+spawn plumbing, since nothing allocates one today (the macOS Seatbelt profiles only permit
+`openpty` for sandboxed children) — and parses the session ID from the
 `Resume with:` line. Checking the `View:` URL's ID against it catches an output-format
 change before anything is checkpointed.
 
@@ -419,7 +420,7 @@ two-variant action; §4.2 onward is unchanged.
 | External refs: `github-pr` | Add `claude-cloud-session` (ID and URL, never the token) |
 | `summary.rs` derives from local `git status` | Add a PR-diff source |
 | Review gate admits before `pr_open` | Admit against an adopted, fetched head (Phase 2) |
-| PTY used by deterministic steps | Run `claude --cloud` under a PTY from a clean worktree at `origin/<base_branch>`, with a strict output parser |
+| No PTY allocation today (sandbox profiles only permit `openpty`) | Run `claude --cloud` under a PTY from a clean worktree at `origin/<base_branch>`, with a strict output parser |
 | No HTTP client in engine VCS actions | Routine fallback only: one fire call; reuse the `orbit-web`/`reqwest` stack, or shell out to `curl` with the token on stdin |
 
 ## 8. Phases (each its own PR into agent-main)
