@@ -24,11 +24,15 @@ const run = { run_id: 'jrun-clock-1', job_id: 'task_pr_pipeline', state: 'succes
 
 const UTC = {
   history: '2026-10-07 06:40 UTC',
+  historyClock: '06:40:00',
+  historyDay: 'Wed, Oct 7',
   comment: '2026-10-07 06:45 UTC',
   run: '2026-10-07 06:50 UTC',
 };
 const LOCAL = {
   history: '2026-10-06 23:40 PDT',
+  historyClock: '23:40:00',
+  historyDay: 'Tue, Oct 6',
   comment: '2026-10-06 23:45 PDT',
   run: '2026-10-06 23:50 PDT',
 };
@@ -65,7 +69,9 @@ export async function assertClockRepaint(browser, origin, evidence) {
 
     const readTimes = () => detail.evaluate((node) => {
       return {
-        history: node.querySelector('.history-line')?.textContent.match(/^\[(.*)\]/)?.[1],
+        history: node.querySelector('.history-line .history-time')?.title,
+        historyClock: node.querySelector('.history-line .history-time')?.textContent,
+        historyDay: node.querySelector('.history-day-head')?.textContent,
         comment: node.querySelector('.comment-at')?.textContent,
         commentTitle: node.querySelector('.comment-age')?.title,
       };
@@ -73,7 +79,7 @@ export async function assertClockRepaint(browser, origin, evidence) {
     const runTitle = () => page.locator('#runs-body .when').first().getAttribute('title');
     const expectTimes = async (expected, when) => {
       const times = await readTimes();
-      const want = { history: expected.history, comment: expected.comment, commentTitle: expected.comment };
+      const want = { history: expected.history, historyClock: expected.historyClock, historyDay: expected.historyDay, comment: expected.comment, commentTitle: expected.comment };
       check(JSON.stringify(times) === JSON.stringify(want), `${when}: task detail times ${JSON.stringify(times)}, expected ${JSON.stringify(want)}`);
     };
     // A refresh starts synchronously in the click; it is done once the meta

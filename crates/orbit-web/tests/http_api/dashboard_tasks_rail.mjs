@@ -264,9 +264,11 @@ const historyTitle = byId['tasks-body'].querySelector('.row button.title');
 assert.ok(historyTitle, 'task title disclosure exists');
 clickTitle(historyTitle);
 const historyLines = paneBody.querySelectorAll('.history-line').map(line => line.textContent);
-assert.ok(historyLines.some(line => line.includes(': status proposed → backlog')), historyLines.join('\n'));
-assert.ok(historyLines.some(line => line.includes(': started backlog → in-progress')), historyLines.join('\n'));
-assert.ok(historyLines.some(line => line.includes(': status_changed')), historyLines.join('\n'));
+const flows = paneBody.querySelectorAll('.history-flow').map(flow => flow.querySelectorAll('.pill').map(pill => pill.textContent));
+assert.deepEqual(flows.sort(), [['backlog', 'in-progress'], ['proposed', 'backlog']], 'status transitions render from and to as pills');
+assert.ok(historyLines.some(line => line.includes('changed status') && line.includes('status_changed')), historyLines.join('\n'));
+assert.ok(historyLines.some(line => line.includes('started work') && line.includes('started')), historyLines.join('\n'));
+assert.ok(historyLines.some(line => line.includes('legacy') && line.includes('status_changed')), historyLines.join('\n'));
 
 // Drive comment presentation through the shipped task detail renderer and raw control.
 const openTask = fixture => {

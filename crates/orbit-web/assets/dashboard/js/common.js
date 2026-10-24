@@ -1466,6 +1466,25 @@ export function formatDate(value) {
   return `${parts.y}-${pad2(parts.mo)}-${pad2(parts.d)}`;
 }
 
+/// A day heading on the dashboard clock's calendar, "Sat, Oct 24"; a day in
+/// another year carries it ("Sat, Oct 24, 2025").
+export function formatDayHeading(value) {
+  const date = toDate(value);
+  if (!date) return value == null || value === "" ? "-" : String(value);
+  const utc = clockIsUtc();
+  const parts = dateParts(date, utc);
+  const thisYear = dateParts(new Date(), utc).y;
+  // The calendar day is already resolved on the dashboard clock, so it is
+  // spelled from a UTC date built from those parts.
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    ...(parts.y === thisYear ? {} : { year: "numeric" }),
+  }).format(new Date(Date.UTC(parts.y, parts.mo - 1, parts.d)));
+}
+
 /// A wall-clock time on the dashboard clock, "06:32:57 UTC"; `zone: false`
 /// drops the zone for dense columns whose title or header carries it.
 export function formatClock(value, { seconds = true, zone = true } = {}) {
