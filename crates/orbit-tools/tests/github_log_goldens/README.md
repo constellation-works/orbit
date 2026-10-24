@@ -174,6 +174,9 @@ target, not a hosted speedup or the whole-job 900-second budget.
 | `bounded_logs.rs` | `an_abbreviated_and_a_full_spelling_are_one_commit` | `streamed.golden.json` |
 | `bounded_logs.rs` | `merge_parents_quoted_in_a_checkout_subject_are_not_checkout_identity` | `streamed.golden.json` |
 | `bounded_logs.rs` | `two_checkout_steps_naming_different_commits_stay_two_commits` | `streamed.golden.json` |
+| `bounded_logs.rs` | `a_nested_helper_checkout_is_not_a_second_commit` | `streamed.golden.json` |
+| `bounded_logs.rs` | `two_checkouts_of_one_workspace_directory_stay_two_commits` | `streamed.golden.json` |
+| `bounded_logs.rs` | `a_checkout_directory_without_an_ancestor_is_kept` | `streamed.golden.json` |
 | `bounded_logs.rs` | `an_abbreviation_with_rival_expansions_is_not_resolved_to_a_guess` | `streamed.golden.json` |
 | `bounded_logs.rs` | `long_log_retains_complete_middle_command_independently_of_display` | `streamed.golden.json` |
 | `bounded_logs.rs` | `incomplete_ambiguous_and_source_limited_commands_are_not_complete_units` | `streamed.golden.json` |

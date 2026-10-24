@@ -29,8 +29,10 @@ pub(super) const WINDOW_TOKEN_CONTEXT_BYTES: usize = 16 * 1024;
 /// `sha`.
 pub struct CheckoutEvidence {
     /// The distinct commits the log named as checked out, with an
-    /// abbreviation collapsed into the full SHA it prefixes. More than one
-    /// entry means the log genuinely disagreed with itself.
+    /// abbreviation collapsed into the full SHA it prefixes. A checkout into
+    /// a directory nested under another checkout directory in the same log is
+    /// omitted: that is a side-path helper, not the workspace under test.
+    /// More than one remaining entry means those checkouts genuinely disagreed.
     pub commits: Vec<String>,
     pub lines: Vec<String>,
     /// False only when identity itself may have been missed: the source byte

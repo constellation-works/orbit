@@ -580,3 +580,200 @@ fn ci_retired_ref_candidates_do_not_starve_an_agent_main_failure() {
     assert_eq!(output["outcome"], json!("current_failures"), "{output:#}");
     assert_eq!(open_sweep_tasks(&workspace.runtime).len(), 1);
 }
+
+/// The merge commit the helper checkout lands, distinct from any workspace head
+/// these tests build.
+const HELPER_MERGE_COMMIT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const HELPER_MERGE_PARENT: &str = "cccccccccccccccccccccccccccccccccccccccc";
+
+fn gh_line(step: &str, payload: &str) -> String {
+    format!("{JOB_NAME}\t{step}\t2026-10-10T06:37:01.0000000Z {payload}\n")
+}
+
+/// A pull-request job log with the workspace checkout of `pr_head` and a second
+/// checkout of [`HELPER_MERGE_COMMIT`]. When `helper_nested` is set, the second
+/// checkout is the sparse helper under the workspace directory; otherwise both
+/// checkouts populate the workspace root and genuinely disagree.
+fn two_checkout_log(pr_head: &str, helper_nested: bool) -> String {
+    let workspace_dir = "/home/runner/work/orbit/orbit";
+    let helper_dir = if helper_nested {
+        "/home/runner/work/orbit/orbit/.orbit/tmp/workflow-ci"
+    } else {
+        workspace_dir
+    };
+    let mut log = String::new();
+    for (step, directory, sha) in [
+        ("Run actions/checkout@v4", workspace_dir, pr_head),
+        (
+            "Check out workflow CI helpers",
+            helper_dir,
+            HELPER_MERGE_COMMIT,
+        ),
+    ] {
+        if helper_nested && directory != workspace_dir {
+            log.push_str(&gh_line(step, "  path: .orbit/tmp/workflow-ci"));
+        }
+        log.push_str(&gh_line(
+            step,
+            &format!("Working directory is '{directory}'"),
+        ));
+        log.push_str(&gh_line(
+            step,
+            &format!("[command]/usr/bin/git init {directory}"),
+        ));
+        log.push_str(&gh_line(step, "##[group]Checking out the ref"));
+        log.push_str(&gh_line(
+            step,
+            &format!("[command]/usr/bin/git checkout --progress --force {sha}"),
+        ));
+        let subject = if sha == HELPER_MERGE_COMMIT {
+            format!("Merge {pr_head} into {HELPER_MERGE_PARENT}")
+        } else {
+            "pr head".to_string()
+        };
+        log.push_str(&gh_line(
+            step,
+            &format!("HEAD is now at {} {subject}", &sha[..7]),
+        ));
+        log.push_str(&gh_line(step, "[command]/usr/bin/git log -1 --format=%H"));
+        log.push_str(&gh_line(step, sha));
+    }
+    for line in [
+        "##[group]Run cargo test",
+        "##[endgroup]",
+        "thread 'repository_regression' panicked at src/lib.rs:9:5:",
+        "assertion `left == right` failed",
+        "error: test failed",
+        "##[error]Process completed with exit code 101.",
+    ] {
+        log.push_str(&gh_line(FAILED_STEP, line));
+    }
+    log
+}
+
+fn failure_by_run(evidence: &Value, run_id: u64) -> &Value {
+    ["current_failures", "branch_failures"]
+        .into_iter()
+        .find_map(|key| {
+            evidence[key]
+                .as_array()
+                .and_then(|runs| runs.iter().find(|run| run["run_id"] == run_id))
+        })
+        .unwrap_or_else(|| panic!("run {run_id} was not investigated: {evidence:#}"))
+}
+
+/// The PR-head checkout plus the nested helper checkout of the merge commit is
+/// one observed identity, the PR head. Filing must not record
+/// `job_evidence_identity` for that job.
+#[test]
+fn ci_pull_request_helper_checkout_is_admitted_as_the_workspace_head() {
+    if !isolated_with_fake_gh(
+        "sweep::ci_pull_request_helper_checkout_is_admitted_as_the_workspace_head",
+    ) {
+        return;
+    }
+    let mut workspace = Workspace::new();
+    let pr_head = workspace.head.clone();
+    git(
+        &workspace.repo,
+        &[
+            "push",
+            "-q",
+            "origin",
+            "HEAD:refs/heads/feature/helper-checkout",
+        ],
+    );
+    let log = two_checkout_log(&pr_head, true);
+    workspace.publish_red_run(
+        "feature/helper-checkout",
+        "pull_request",
+        &pr_head,
+        8_300,
+        &[9_300],
+        &log,
+    );
+
+    let (evidence, filed) = workspace.sweep();
+    let failure = failure_by_run(&evidence, 8_300);
+    assert_eq!(
+        failure["checkout_identity"]["state"],
+        json!("observed"),
+        "{failure:#}"
+    );
+    assert_eq!(
+        failure["actual_checkout_shas"],
+        json!([pr_head]),
+        "{failure:#}"
+    );
+    assert_eq!(
+        failure["checkout_identity"]["observed_shas"],
+        json!([pr_head]),
+        "{failure:#}"
+    );
+    let output = filed.expect("the helper checkout must not block filing");
+    let rendered = serde_json::to_string(&output).unwrap();
+    assert!(!rendered.contains("job_evidence_identity"), "{output:#}");
+    let tasks = open_sweep_tasks(&workspace.runtime);
+    assert_eq!(tasks.len(), 1, "{output:#}");
+    let checked_out = format!("Commit the runner actually checked out: `{pr_head}`");
+    assert!(
+        tasks[0].description.contains(&checked_out),
+        "{}",
+        tasks[0].description
+    );
+    assert!(
+        !tasks[0].description.contains(&format!(
+            "Commit the runner actually checked out: `{HELPER_MERGE_COMMIT}`"
+        )),
+        "{}",
+        tasks[0].description
+    );
+}
+
+/// Two checkouts of the workspace root that name different commits stay
+/// ambiguous, and filing still reports the retryable identity gap.
+#[test]
+fn ci_disagreeing_workspace_checkouts_stay_unobserved() {
+    if !isolated_with_fake_gh("sweep::ci_disagreeing_workspace_checkouts_stay_unobserved") {
+        return;
+    }
+    let mut workspace = Workspace::new();
+    let head = workspace.head.clone();
+    let log = two_checkout_log(&head, false);
+    workspace.push_red_run(8_301, 9_301, &log);
+
+    let (evidence, filed) = workspace.sweep();
+    let failure = failure_by_run(&evidence, 8_301);
+    assert_eq!(
+        failure["checkout_identity"]["state"],
+        json!("ambiguous"),
+        "{failure:#}"
+    );
+    assert_eq!(
+        failure["actual_checkout_shas"],
+        json!([head, HELPER_MERGE_COMMIT]),
+        "{failure:#}"
+    );
+    let message = filed.expect_err("disagreeing workspace checkouts stay retryable");
+    let (_, payload) = message
+        .split_once("ci_failure_sweep retryable: ")
+        .unwrap_or_else(|| panic!("expected a retryable sweep error, got {message}"));
+    let output: Value = serde_json::from_str(payload).expect(&message);
+    let reason = output["errors"]
+        .as_array()
+        .and_then(|errors| {
+            errors
+                .iter()
+                .find(|error| error["operation"] == "job_evidence_identity")
+        })
+        .unwrap_or_else(|| panic!("missing job_evidence_identity: {output:#}"));
+    assert_eq!(reason["stage"], json!("registration"), "{output:#}");
+    assert_eq!(reason["retryable"], json!(true), "{output:#}");
+    let text = reason["message"].as_str().unwrap();
+    assert!(
+        text.contains("state=ambiguous")
+            && text.contains("checkout_sha_count=2")
+            && text.contains("checkout_sha_count_is_one=false"),
+        "{output:#}"
+    );
+}
