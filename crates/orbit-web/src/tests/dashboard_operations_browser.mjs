@@ -1306,7 +1306,8 @@ try {
     await assertNoOverflow(`375x812 / ${destination}`);
     mobileEvidence.navigation.push({ destination, controls: selectors.length, subtabs: subtabs.length });
   }
-  // The widest readings the chips are sized for, with one resource held.
+  // A critical reading puts one warning chip in the top bar. The rail block
+  // is hidden at this width, so that chip is the alarm.
   const header = await page.evaluate(async () => {
     const { renderHostResources } = await import('/js/host-resources.js');
     renderHostResources({
@@ -1318,25 +1319,26 @@ try {
     const brand = document.querySelector('.rail-brand').getBoundingClientRect();
     const drain = document.getElementById('global-drain-state').getBoundingClientRect();
     const refresh = document.getElementById('refresh-btn').getBoundingClientRect();
-    const strip = document.getElementById('host-resource-chips');
-    const row = strip.getBoundingClientRect();
-    const chips = [...strip.querySelectorAll('.host-resource')].map(node => (
-      { resource: node.dataset.resource, box: node.getBoundingClientRect().toJSON(), clipped: node.scrollWidth > node.clientWidth }));
+    const bar = document.querySelector('.topbar').getBoundingClientRect();
+    const warn = document.getElementById('host-warn');
+    const warnBox = warn.getBoundingClientRect();
+    const blockHidden = document.getElementById('host-block').getClientRects().length === 0;
     return {
       // The phone layout (ORB-15232) puts the brand, Drain and Refresh on the
       // top bar's first row and gives the host and workspace pickers their own
       // row below it.
       actionsInHeader: [brand, drain, refresh].every(box => box.width > 0 && Math.abs(box.top + box.height / 2 - brand.top - brand.height / 2) < 1),
       pickersBelowActions: workspace.width > 0 && workspace.top >= Math.max(brand.bottom, drain.bottom, refresh.bottom) && workspace.right <= innerWidth,
-      chipsSingleRow: chips.length === 3 && chips.every(({ box }) => box.width > 0 && Math.abs(box.top - chips[0].box.top) < 1),
-      // All three readings are in view at 375px without scrolling the row.
-      chipsInView: chips.every(({ box, clipped }) => !clipped && box.left >= row.left - 0.5 && box.right <= Math.min(row.right, innerWidth) + 0.5),
-      chips,
+      blockHidden,
+      topbarHostChips: document.querySelectorAll('.topbar [data-resource]').length,
+      warnShown: !warn.hidden && warnBox.width > 0,
+      warnInView: !warn.hidden && warn.scrollWidth <= warn.clientWidth + 1 && warnBox.left >= bar.left - 0.5 && warnBox.right <= Math.min(bar.right, innerWidth) + 0.5,
+      warnText: `${warn.querySelector('#host-warn-label')?.textContent ?? ''} ${warn.querySelector('#host-warn-value')?.textContent ?? ''}`.trim(),
     };
   });
-  if (!header.actionsInHeader || !header.pickersBelowActions || !header.chipsSingleRow || !header.chipsInView) throw new Error(`Phone header or host chips wrapped or clipped: ${JSON.stringify(header)}`);
+  if (!header.actionsInHeader || !header.pickersBelowActions || !header.blockHidden || header.topbarHostChips !== 0 || !header.warnShown || !header.warnInView) throw new Error(`Phone header or host warning wrapped or clipped: ${JSON.stringify(header)}`);
   await page.screenshot({ path: path.join(evidence, 'topbar-375x812.png') });
-  for (const selector of ['#refresh-btn', '#global-drain-state', ...['cpu', 'memory', 'disk'].map(resource => `#host-resource-chips [data-resource="${resource}"]`)]) {
+  for (const selector of ['#refresh-btn', '#global-drain-state', '#host-warn']) {
     await page.locator(selector).focus();
     await page.locator(selector).scrollIntoViewIfNeeded();
     await page.locator(selector).click({ trial: true });

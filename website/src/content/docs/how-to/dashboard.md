@@ -75,8 +75,8 @@ When the serving machine has registered other hosts (see
 [Run Orbit across hosts](../multi-host/)), the left rail shows a **Host**
 picker above the workspace picker. It lists the serving host first, marked
 `(serving host)`, then each registered host by name. Choose one and every
-panel, action, log tail, and the load, memory, and disk chips show that host.
-The chips are labelled with its name. The workspace picker then lists that
+panel, action, log tail, and the rail's host readings show that host.
+The host picker names it; the readings do not repeat the name. The workspace picker then lists that
 host's workspaces: the workspace you had stays selected if the host also
 lists it, **All workspaces** stays the aggregate of that host's workspaces,
 and anything else falls back to that host's remembered workspace, a workspace
@@ -169,9 +169,11 @@ prove that a particular task or run succeeded.
 | **Plugins** | Installed plugins and the panels they add. |
 | **Settings** | Effective, Workspace file, Global file, Crews, Keys, System, and Hosts. |
 
-The top bar shows live load, memory, and disk readings for the serving host
-(plus disk I/O stall on Linux hosts), its provider usage with each provider's
-windows together (`claude 15% 5h | 32% 7d`), the drain state when a delivery window is active, and **Refresh**. Counts in
+The rail foot shows live load, memory, and disk readings for the serving host
+(plus disk I/O stall on Linux hosts) above the refresh line and the UTC/Local
+control. The top bar shows provider usage with each provider's windows together
+(`claude 15% 5h | 32% 7d`), the drain state when a delivery window is active,
+**Refresh**, and one warning chip only when a reading is elevated or worse. Counts in
 the selected window sit on the rail: failed, timed-out, and interrupted runs
 under **Runs**, and doctor warnings, policy denials, and failing routines under
 **Health**. Click a rail count to open the view behind it. The denial count

@@ -823,13 +823,13 @@ assert(drainReadinessFor('ORB-9017').title.includes('throttled') && drainReadine
 assert(!drainTasksOverride.some(task => /blocked/i.test(drainReadinessFor(task.task_id).label)), 'no pool label calls a readiness group blocked');
 drainTasksOverride = null;
 
-// The throttle note and the top bar's load chip state one CPU reading in one
+// The throttle note and the rail block's load row state one CPU reading in one
 // unit: 164% of cores is "1.6× cores" in both, and 75% is a bare 0.75× threshold.
 {
   const { renderHostResources } = await import('./js/host-resources.js');
   const reading = percent => ({ percent, severity: 'critical' });
   renderHostResources({ cpu: reading(164), memory: reading(40), disk: { path: '/', ...reading(50) }, throttle: true, pressures: [{ resource: 'cpu' }], reason: 'cpu high', thresholds: { enabled: true }, stale: false, sample_age_seconds: 1 });
-  const chip = get('host-resource-chips').querySelector('[data-resource="cpu"] .v');
+  const chip = get('host-block').querySelector('[data-resource="cpu"] .v');
   resourceThrottle = { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] };
   await fetchAndRenderAutoDrainPane();
   const note = drainBanner.querySelector('.drain-throttle-note').textContent;

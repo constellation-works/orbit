@@ -2279,11 +2279,12 @@ for example `io full 47% (throttled at ≥ 20% since …; resumes below 10%)`. A
 host without pressure stall information, such as macOS, has no I/O reading and
 admits as before.
 
-On the dashboard, the top bar's `load`, `mem` and `disk` chips show the
-serving host's readings, with an `io` chip on hosts that report I/O pressure;
-the chip of each held resource is outlined, and its tooltip gives the verdict,
-reason and sample age. Settings › System lists the I/O row too, on hosts that
-report it.
+On the dashboard, the rail foot's host block shows the serving host's `load`,
+`mem` and `disk` readings, with an `io` row on hosts that report I/O pressure.
+A critical or held reading washes the block red, and the detail panel gives
+the verdict, reason and sample age. The top bar shows one warning chip only
+while a reading is elevated or worse. Settings › System lists the I/O row too,
+on hosts that report it.
 
 - Sampling monitors share recent pressure history in
   `<global-root>/cache/host-resource-pressure.json`, independently of drain

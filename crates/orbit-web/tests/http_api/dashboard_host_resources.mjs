@@ -19,6 +19,7 @@ class Node {
   replaceChildren(...children) { this.text = ''; this.children = children; }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
   getAttribute(name) { return this.attributes.get(name) ?? null; }
+  removeAttribute(name) { this.attributes.delete(name); }
   set tabIndex(value) { this.setAttribute('tabindex', value); }
   get tabIndex() { return Number(this.getAttribute('tabindex') ?? -1); }
 }
@@ -64,13 +65,18 @@ function buildDOM(value) {
 }
 buildDOM(JSON.parse(parsed.stdout));
 const byId = id => elements.find(node => node.id === id);
-const host = byId('host-resource-chips');
+const host = byId('host-block');
 const descendants = node => node.children.filter(child => child instanceof Node).flatMap(child => [child, ...descendants(child)]);
-const chips = () => host.children.filter(child => child instanceof Node);
+const chips = () => descendants(host).filter(node => node.dataset.resource);
 const topbar = elements.find(node => node.tagName === 'header' && node.className === 'topbar');
-assert.ok(descendants(topbar).includes(host), 'live readings belong to the topbar');
+const railFoot = elements.find(node => node.className === 'rail-foot');
+assert.ok(railFoot && descendants(railFoot).includes(host), 'the host block sits in the rail foot');
+assert.ok(!descendants(topbar).includes(host), 'the host block is not in the top bar');
+assert.equal(byId('host-resource-chips'), undefined, 'the top bar no longer has host chips');
+assert.equal(byId('host-resource-name'), undefined, 'the top bar no longer names the host');
 assert.equal(byId('host-resources'), undefined, 'there is no standalone host panel');
-assert.deepEqual(chips().map(chip => chip.dataset.resource), ['cpu', 'memory', 'disk'], 'three host chips exist before the first fetch');
+assert.ok(byId('host-detail'), 'the detail panel is in the page');
+assert.deepEqual(chips().map(chip => chip.dataset.resource), ['cpu', 'memory', 'disk'], 'three host rows exist before the first fetch');
 const providerHost = byId('provider-usage-chips');
 const providerChips = () => providerHost.children.filter(child => child instanceof Node);
 assert.ok(descendants(byId('host-resource-group')).includes(providerHost), 'provider usage sits in the selected host\'s group, so it names the same host');
@@ -132,6 +138,18 @@ assert.deepEqual(heldWords(chip('cpu')), ['throttled'], 'the throttle verdict is
 assert.deepEqual(heldWords(chip('memory')), [], 'a resource that is not held carries no throttled text');
 assert.match(chip('cpu').title, /Throttle verdict: held on this resource/);
 assert.doesNotMatch(chip('memory').title, /on this resource/);
+const warn = byId('host-warn');
+const panel = byId('host-detail');
+assert.equal(warn.hidden, false, 'an elevated or worse reading shows one top-bar warning');
+assert.equal(warn.getAttribute('hidden'), null);
+assert.equal(byId('host-warn-label').textContent, 'load');
+assert.equal(byId('host-warn-value').textContent, '1.9×');
+assert.equal(warn.getAttribute('aria-expanded'), 'false');
+assert.equal(host.getAttribute('aria-expanded'), 'false');
+assert.equal(panel.getAttribute('role'), 'dialog');
+assert.equal(panel.hidden, true, 'the detail panel stays closed until the block is opened');
+assert.match(host.getAttribute('aria-label'), /holding work · load/);
+assert.equal(descendants(topbar).some(node => node.dataset && node.dataset.resource), false, 'the top bar shows no load, mem, disk or io row');
 
 // The verdict flipping changes each chip's state, never its visible text, so
 // the bar's width and height cannot move with it.
@@ -145,17 +163,18 @@ renderHostResources({ ...payload, pressures: [{ resource: 'memory' }] });
 assert.deepEqual(chips().map(node => node.className), ['host-resource critical', 'host-resource elevated throttled', 'host-resource critical'], 'the held resource is the one marked throttled');
 
 renderHostResources({ ...payload, disk: null });
-assert.deepEqual(readings()[2], { k: 'disk', v: '-' }, 'an unknown disk reads as a dash');
+assert.deepEqual(readings()[2], { k: 'disk', v: '–' }, 'an unknown disk reads as a dash');
 assert.equal(chip('disk').className, 'host-resource unknown throttled', 'a held resource stays marked while its reading is unknown');
 assert.match(chip('disk').title, /^disk unavailable/);
 assert.deepEqual(readings().slice(0, 2), [{ k: 'load', v: '1.9× cores' }, { k: 'mem', v: '82%' }], 'an unknown disk does not hide the known readings');
 renderHostResources({ ...payload, memory: { percent: null, severity: 'unknown', unknown_reason: 'meminfo unreadable' } });
-assert.deepEqual(readings()[1], { k: 'mem', v: '-' });
+assert.deepEqual(readings()[1], { k: 'mem', v: '–' });
 assert.match(chip('memory').title, /^memory meminfo unreadable/, 'the unknown reason reaches the title');
 renderHostResources({ ...payload, stale: true });
-assert.deepEqual(readings(), [{ k: 'load', v: '-' }, { k: 'mem', v: '-' }, { k: 'disk', v: '-' }]);
+assert.deepEqual(readings(), [{ k: 'load', v: '–' }, { k: 'mem', v: '–' }, { k: 'disk', v: '–' }]);
 assert.ok(chips().every(node => node.className === 'host-resource unknown'), 'a stale sample makes every chip unknown and none held');
 assert.ok(chips().every(node => /stale · .*Throttle verdict: unknown/.test(node.title)));
+assert.equal(warn.hidden, true, 'a stale sample leaves the top bar without a host warning');
 
 nextResponse = { ok: true, json: async () => payload };
 await fetchAndRenderHostResources();
@@ -166,7 +185,7 @@ nextResponse = new Promise(resolve => { resolvePending = resolve; });
 const pendingPoll = timers.get(5000)();
 now += 14000;
 timers.get(1000)();
-assert.deepEqual(readings(), [{ k: 'load', v: '-' }, { k: 'mem', v: '-' }, { k: 'disk', v: '-' }]);
+assert.deepEqual(readings(), [{ k: 'load', v: '–' }, { k: 'mem', v: '–' }, { k: 'disk', v: '–' }]);
 assert.match(chip('disk').title, /sampled 16s ago/);
 assert.match(chip('disk').title, /Throttle verdict: unknown.*Resource sample expired/);
 const recovered = { ...payload, throttle: false, severity: 'ok', cpu: reading(20), memory: reading(42), disk: { path: '/known', ...reading(50) }, pressures: [], reason: 'recovered' };
@@ -174,13 +193,14 @@ resolvePending({ ok: true, json: async () => recovered });
 await pendingPoll;
 assert.deepEqual(readings(), [{ k: 'load', v: '0.2× cores' }, { k: 'mem', v: '42%' }, { k: 'disk', v: '50%' }]);
 assert.ok(chips().every(node => node.className === 'host-resource ok'));
+assert.equal(warn.hidden, true, 'normal readings leave the top bar without a host element');
 assert.match(chip('disk').title, /Throttle verdict: open.*recovered/);
 renderHostResources({ ...recovered, thresholds: { enabled: false } });
 assert.match(chip('cpu').title, /Throttle verdict: disabled/);
 nextResponse = { ok: false, status: 503 };
 await assert.rejects(fetchAndRenderHostResources());
 assert.equal(chips().length, 3);
-assert.deepEqual(readings(), [{ k: 'load', v: '-' }, { k: 'mem', v: '-' }, { k: 'disk', v: '-' }]);
+assert.deepEqual(readings(), [{ k: 'load', v: '–' }, { k: 'mem', v: '–' }, { k: 'disk', v: '–' }]);
 assert.match(chip('disk').title, /age unknown.*Throttle verdict: unknown.*Resource API unavailable/);
 
 // Disk I/O stall: a host that reports it gains an io chip after disk. Once
@@ -193,7 +213,7 @@ assert.equal(chip('io').className, 'host-resource critical throttled', 'an io fu
 assert.equal(chip('disk').className, 'host-resource ok', 'io pressure does not mark the disk chip held');
 assert.match(chip('io').title, /stalled on disk I\/O .* Now 23\.4% \(critical\)/, 'the io title explains the measure');
 renderHostResources({ ...recovered, io: null });
-assert.deepEqual(readings()[3], { k: 'io', v: '-' }, 'a sample without io keeps the chip and reads a dash');
+assert.deepEqual(readings()[3], { k: 'io', v: '–' }, 'a sample without io keeps the chip and reads a dash');
 renderHostResources(null);
 assert.equal(chips().length, 4, 'a failed poll keeps the io chip');
 resetHostResources();

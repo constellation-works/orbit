@@ -42,11 +42,22 @@ try {
   assert.match(wide[1].title, /claude five_hour 5% · observed .* \(today\) · limit 90%\nclaude seven_day 10%/);
   const layout = await page.evaluate(() => {
     const divider = getComputedStyle(document.getElementById('provider-usage-chips'), '::before');
-    const host = document.getElementById('host-resource-chips').getBoundingClientRect();
+    const warn = document.getElementById('host-warn');
     const usage = document.querySelector('#provider-usage-chips .provider-usage-item').getBoundingClientRect();
-    return { divider: divider.content !== 'none' && parseFloat(divider.width) > 0, after: usage.left > host.right };
+    const warnShown = !!(warn && !warn.hidden && warn.getClientRects().length);
+    const dividerShown = divider.content !== 'none' && parseFloat(divider.width) > 0;
+    return {
+      hostChips: !!document.getElementById('host-resource-chips'),
+      hostName: !!document.getElementById('host-resource-name'),
+      dividerShown,
+      warnShown,
+      after: warnShown ? usage.left > warn.getBoundingClientRect().right : true,
+    };
   });
-  assert.deepEqual(layout, { divider: true, after: true }, 'a divider sets provider usage apart from the host readings');
+  assert.equal(layout.hostChips, false, 'host readings are not chips in the top bar');
+  assert.equal(layout.hostName, false, 'the top bar does not name the host');
+  assert.equal(layout.dividerShown, layout.warnShown, 'a divider sets provider usage apart only while the host warning chip is shown');
+  assert.equal(layout.after, true, 'provider usage sits to the right of the host warning chip');
   assert.ok(wide.every(chip => chip.label === chip.title), 'the accessible name is the title');
   await page.screenshot({ path: path.join(evidence, 'topbar-1920.png'), clip: { x: 0, y: 0, width: 1920, height: 64 } });
 
