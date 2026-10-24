@@ -17,6 +17,8 @@ use crate::contracts::{
     RetentionWorkspaceScope, StoreRetentionBackend, StoreSpace,
 };
 
+use super::codec::unsigned;
+
 /// Rows read per blob-reference chunk. Each chunk is its own read, so a scan
 /// never pins one snapshot across the whole history.
 const REFERENCE_SCAN_CHUNK: i64 = 2_000;
@@ -255,7 +257,7 @@ impl StoreRetentionBackend for Store {
             for row in rows {
                 let (journal_id, bytes) = row.map_err(sqlite_store_error)?;
                 candidates.journal_ids.push(journal_id);
-                candidates.bytes += u64::try_from(bytes).unwrap_or(0);
+                candidates.bytes += unsigned(bytes);
             }
         }
         Ok(candidates)
@@ -330,7 +332,7 @@ impl StoreRetentionBackend for Store {
         let conn = self.read()?;
         let pragma = |name: &str| -> Result<u64, OrbitError> {
             conn.query_row(&format!("PRAGMA {name}"), [], |row| row.get::<_, i64>(0))
-                .map(|value| u64::try_from(value).unwrap_or(0))
+                .map(unsigned)
                 .map_err(sqlite_store_error)
         };
         Ok(StoreSpace {
@@ -343,8 +345,8 @@ impl StoreRetentionBackend for Store {
 
 fn selection(rows: i64, bytes: i64) -> RetentionSelection {
     RetentionSelection {
-        rows: u64::try_from(rows).unwrap_or(0),
-        bytes: u64::try_from(bytes).unwrap_or(0),
+        rows: unsigned(rows),
+        bytes: unsigned(bytes),
     }
 }
 

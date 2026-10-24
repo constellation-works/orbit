@@ -6,7 +6,7 @@
 //! Timestamps are stored as fixed-width UTC RFC3339 text (microseconds, `Z`),
 //! so SQLite orders them by comparing the text.
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
@@ -16,9 +16,7 @@ use rusqlite::{TransactionBehavior, params};
 use crate::Store;
 use crate::contracts::ProviderLimitStoreBackend;
 
-fn stamp(at: DateTime<Utc>) -> String {
-    at.to_rfc3339_opts(SecondsFormat::Micros, true)
-}
+use super::codec::stamp;
 
 impl ProviderLimitStoreBackend for Store {
     fn record_provider_limit(

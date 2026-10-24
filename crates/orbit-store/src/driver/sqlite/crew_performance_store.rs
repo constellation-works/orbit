@@ -4,7 +4,6 @@
 //! Timestamps are stored as fixed-width UTC RFC3339 text (microseconds,
 //! `Z`), as in `provider_limit_store`.
 
-use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
@@ -12,9 +11,7 @@ use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use crate::Store;
 use crate::contracts::{CrewPerformanceCell, CrewPerformanceSnapshot, CrewPerformanceStoreBackend};
 
-fn stamp(at: DateTime<Utc>) -> String {
-    at.to_rfc3339_opts(SecondsFormat::Micros, true)
-}
+use super::codec::stamp;
 
 impl CrewPerformanceStoreBackend for Store {
     fn replace_crew_performance_snapshot(

@@ -5,7 +5,7 @@
 //! Timestamps are stored as fixed-width UTC RFC3339 text (microseconds, `Z`),
 //! so SQLite orders and compares them as text.
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{TransactionBehavior, params, params_from_iter};
@@ -17,17 +17,11 @@ use crate::contracts::{
     ResourceUsageStoreBackend, RunResourceMinute,
 };
 
-fn stamp(at: DateTime<Utc>) -> String {
-    at.to_rfc3339_opts(SecondsFormat::Micros, true)
-}
+use super::codec::{RUN_MINUTE_COLUMNS, host_minutes, run_minute_from_row, stamp, unsigned};
 
 /// SQLite integers are signed; a byte count past `i64::MAX` saturates.
 fn bytes(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
-}
-
-fn unsigned(value: i64) -> u64 {
-    u64::try_from(value).unwrap_or(0)
 }
 
 fn encode<T: serde::Serialize>(value: &T) -> Result<String, OrbitError> {
@@ -120,38 +114,15 @@ impl ResourceUsageStoreBackend for Store {
     ) -> Result<Vec<RunResourceMinute>, OrbitError> {
         let conn = self.read()?;
         let mut statement = conn
-            .prepare(
-                r#"
-                SELECT workspace_id, run_id, minute_index, minute_started_at, task_id,
-                       work_class, complexity, resumed, delivery_admitted_at,
-                       cpu_cores, memory_bytes, samples, cpu_accounting
-                FROM run_resource_minutes
-                WHERE workspace_id = ?1 AND run_id = ?2
-                ORDER BY minute_index
-                "#,
-            )
+            .prepare(&format!(
+                "SELECT {RUN_MINUTE_COLUMNS}
+                 FROM run_resource_minutes
+                 WHERE workspace_id = ?1 AND run_id = ?2
+                 ORDER BY minute_index",
+            ))
             .map_err(sqlite_store_error)?;
         let rows = statement
-            .query_map(params![workspace_id, run_id], |row| {
-                Ok(RunResourceMinute {
-                    workspace_id: row.get(0)?,
-                    run_id: row.get(1)?,
-                    minute_index: row.get(2)?,
-                    minute_started_at: crate::parse_timestamp(&row.get::<_, String>(3)?)?,
-                    task_id: row.get(4)?,
-                    work_class: row.get(5)?,
-                    complexity: row.get(6)?,
-                    resumed: row.get(7)?,
-                    delivery_admitted_at: row
-                        .get::<_, Option<String>>(8)?
-                        .map(|at| crate::parse_timestamp(&at))
-                        .transpose()?,
-                    cpu_cores: row.get(9)?,
-                    memory_bytes: unsigned(row.get(10)?),
-                    samples: row.get(11)?,
-                    cpu_accounting: row.get(12)?,
-                })
-            })
+            .query_map(params![workspace_id, run_id], run_minute_from_row)
             .map_err(sqlite_store_error)?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(sqlite_store_error)
@@ -250,33 +221,7 @@ impl ResourceUsageStoreBackend for Store {
         &self,
         since: DateTime<Utc>,
     ) -> Result<Vec<HostResourceMinute>, OrbitError> {
-        let conn = self.read()?;
-        let mut statement = conn
-            .prepare(
-                r#"
-                SELECT minute_at, cpu_cores, cpu_count, memory_bytes, memory_total_bytes,
-                       samples, recorded_by_run_id
-                FROM host_resource_minutes
-                WHERE minute_at >= ?1
-                ORDER BY minute_at
-                "#,
-            )
-            .map_err(sqlite_store_error)?;
-        let rows = statement
-            .query_map(params![stamp(since)], |row| {
-                Ok(HostResourceMinute {
-                    minute_at: crate::parse_timestamp(&row.get::<_, String>(0)?)?,
-                    cpu_cores: row.get(1)?,
-                    cpu_count: row.get(2)?,
-                    memory_bytes: unsigned(row.get(3)?),
-                    memory_total_bytes: unsigned(row.get(4)?),
-                    samples: row.get(5)?,
-                    recorded_by_run_id: row.get(6)?,
-                })
-            })
-            .map_err(sqlite_store_error)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(sqlite_store_error)
+        host_minutes(&*self.read()?, since)
     }
 
     fn record_admission_forecast(
