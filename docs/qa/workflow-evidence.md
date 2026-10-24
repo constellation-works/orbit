@@ -79,7 +79,7 @@ cargo test -p orbit-core --test runtime distributed_drain::
 cargo test -p orbit-core --lib application::job::tests::agent_invoke
 cargo test -p orbit-engine --lib activity_job::job_executor::tests
 cargo test -p orbit-engine --test engine v2_worktree_lifecycle::
-cargo test -p orbit-store --test store allocation_admission::
+cargo nextest run -p orbit-store --test store
 ```
 
 Graph evidence applies only to the paths and fixture substitutions each row
