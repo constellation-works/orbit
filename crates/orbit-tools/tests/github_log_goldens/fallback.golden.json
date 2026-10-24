@@ -4051,5 +4051,1163 @@
     "cwds": [
       "selected_workspace"
     ]
+  },
+  "line_context_primary_bearer": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 44,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 44,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 2,
+        "line_end": 4,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "line_context_primary_bearer_full_control": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "Bearer [REDACTED_AUTH]\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 35,
+      "total_bytes": 44,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 44,
+      "checkout_evidence_source_truncated": false
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "line_context_primary_bearer_step": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 81,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 81,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": "cargo test",
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 4,
+        "line_end": 6,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "line_context_primary_authorization": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 52,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 52,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 2,
+        "line_end": 4,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "line_context_primary_authorization_full_control": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "Authorization:\n[REDACTED_AUTH]\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 43,
+      "total_bytes": 52,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 52,
+      "checkout_evidence_source_truncated": false
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "line_context_primary_authorization_step": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 89,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 89,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": "cargo test",
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 4,
+        "line_end": 6,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "line_context_primary_api_key": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 46,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 46,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 2,
+        "line_end": 4,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "line_context_primary_api_key_full_control": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "api_key:\n[REDACTED_AUTH]\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 46,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 46,
+      "checkout_evidence_source_truncated": false
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "line_context_primary_api_key_step": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 83,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 83,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": "cargo test",
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 4,
+        "line_end": 6,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "line_context_primary_eof": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": false,
+      "truncated": false,
+      "returned_bytes": 24,
+      "total_bytes": 31,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 31,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 2,
+        "line_end": null,
+        "selected_bytes": 24,
+        "selected_lines": 1
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "line_context_primary_ordinary": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "line-two\nline-three\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 20,
+      "total_bytes": 39,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 39,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 2,
+        "line_end": 4,
+        "selected_bytes": 20,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "line_context_primary_capped": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "\n[... 21 bytes omitted; raise the byte budget for more ...]\n output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": true,
+      "returned_bytes": 68,
+      "total_bytes": 44,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 44,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 2,
+        "line_end": 4,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "line_context_primary_batch": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 4134,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 4134,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 2,
+        "line_end": 4,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "line_context_primary_overlong": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************\n**** ******\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": false,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 16428,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 16428,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 2,
+        "line_end": 4,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "line_context_fallback_bearer": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 44,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 44,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 2,
+        "line_end": 4,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "line_context_fallback_bearer_full_control": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "Bearer [REDACTED_AUTH]\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 35,
+      "total_bytes": 44,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 44,
+      "checkout_evidence_source_truncated": false
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "line_context_fallback_bearer_step": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 81,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 81,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": "cargo test",
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 4,
+        "line_end": 6,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "line_context_fallback_authorization": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 52,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 52,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 2,
+        "line_end": 4,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "line_context_fallback_authorization_full_control": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "Authorization:\n[REDACTED_AUTH]\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 43,
+      "total_bytes": 52,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 52,
+      "checkout_evidence_source_truncated": false
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "line_context_fallback_authorization_step": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 89,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 89,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": "cargo test",
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 4,
+        "line_end": 6,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "line_context_fallback_api_key": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 46,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 46,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 2,
+        "line_end": 4,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "line_context_fallback_api_key_full_control": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "api_key:\n[REDACTED_AUTH]\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 46,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 46,
+      "checkout_evidence_source_truncated": false
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "line_context_fallback_api_key_step": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 83,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 83,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": "cargo test",
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 4,
+        "line_end": 6,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "line_context_fallback_eof": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": false,
+      "truncated": false,
+      "returned_bytes": 24,
+      "total_bytes": 31,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 31,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 2,
+        "line_end": null,
+        "selected_bytes": 24,
+        "selected_lines": 1
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "line_context_fallback_ordinary": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "line-two\nline-three\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 20,
+      "total_bytes": 39,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 39,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 2,
+        "line_end": 4,
+        "selected_bytes": 20,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "line_context_fallback_capped": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "\n[... 21 bytes omitted; raise the byte budget for more ...]\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": true,
+      "returned_bytes": 72,
+      "total_bytes": 44,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 44,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 2,
+        "line_end": 4,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "line_context_fallback_batch": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************\nsafe output\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 4134,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 4134,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 2,
+        "line_end": 4,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "line_context_fallback_overlong": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "************************\n**** ******\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": false,
+      "truncated": false,
+      "returned_bytes": 37,
+      "total_bytes": 16428,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 16428,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 2,
+        "line_end": 4,
+        "selected_bytes": 37,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "line_context_primary_step_gap": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "test\tcargo test\tsafe output\ntest\tcargo test\tstill safe\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 55,
+      "total_bytes": 75,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 75,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": "cargo test",
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 1,
+        "line_end": 3,
+        "selected_bytes": 55,
+        "selected_lines": 2
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
   }
 }

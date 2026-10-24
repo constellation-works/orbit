@@ -17,7 +17,7 @@ pub const MAX_CHECKOUT_LOG_SCAN_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CHECKOUT_EVIDENCE_LINE_BYTES: usize = 16 * 1024;
 /// Bound and amortize work across small transport reads.
 const STREAM_BATCH_BYTES: usize = 4096;
-/// Original line-prefix/token context for byte-window cuts. Context beyond
+/// Original line-prefix/token context for selection cuts. Context beyond
 /// this bound is conservatively omitted rather than retaining a credential.
 const WINDOW_TOKEN_CONTEXT_BYTES: usize = 16 * 1024;
 
@@ -139,7 +139,7 @@ pub struct StreamedLog {
 /// retained boundary before redaction. A raw cut would otherwise keep a
 /// credential prefix or suffix that `redact_all` cannot match. Only the two
 /// windows, plus one byte beside each excerpt cut, a bounded 4 KiB input
-/// batch, and up to 16 KiB of original line-prefix context for byte selections,
+/// batch, and bounded original line-prefix context for selection boundaries,
 /// are retained. `finish` processes the last partial batch before rendering.
 pub struct StreamedLogCollector {
     max_bytes: usize,
@@ -160,6 +160,9 @@ pub struct StreamedLogCollector {
     nextest: super::nextest_regions::NextestRegions,
     selection: Option<LogSelection>,
     window_tokens: WindowBoundaryTokens,
+    line_tokens: WindowBoundaryTokens,
+    source_line_offset: usize,
+    selected_segment_start: Option<usize>,
     scoped_line: Vec<u8>,
     candidate_byte_offset: usize,
     candidate_line_index: usize,
@@ -227,6 +230,9 @@ impl StreamedLogCollector {
             ),
             selection: None,
             window_tokens: WindowBoundaryTokens::default(),
+            line_tokens: WindowBoundaryTokens::default(),
+            source_line_offset: 0,
+            selected_segment_start: None,
             scoped_line: Vec::new(),
             candidate_byte_offset: 0,
             candidate_line_index: 0,
@@ -311,23 +317,57 @@ impl StreamedLogCollector {
     }
 
     fn process_scoped_line(&mut self, line: &[u8], selection: &LogSelection) {
-        if let Some(step) = &selection.step
-            && !self.line_belongs_to_step(line, step)
-        {
-            return;
-        }
+        let in_step = selection
+            .step
+            .as_ref()
+            .is_none_or(|step| self.line_belongs_to_step(line, step));
         let index = self.candidate_line_index;
-        self.candidate_line_index = self.candidate_line_index.saturating_add(1);
-        if let Some((line_start, line_end)) = selection.line_window
-            && (index < line_start || index >= line_end.unwrap_or(usize::MAX))
-        {
+        if in_step {
+            self.candidate_line_index = self.candidate_line_index.saturating_add(1);
+        }
+        let in_window = selection
+            .line_window
+            .is_none_or(|(start, end)| index >= start && index < end.unwrap_or(usize::MAX));
+        let selected = in_step && in_window;
+        // Observe every original line before discarding it. A selected segment
+        // can start after a credential introducer, including across a step gap.
+        let start = self.source_line_offset;
+        self.source_line_offset = start.saturating_add(line.len());
+        let from = if selected {
+            *self.selected_segment_start.get_or_insert(start)
+        } else {
+            self.selected_segment_start = None;
+            usize::MAX
+        };
+        self.line_tokens.push(line, start, from, None);
+        // A final line need not end in whitespace.
+        self.line_tokens
+            .finish_token(self.source_line_offset, from, None);
+        if !selected {
             // A byte window combined with a line window counts candidate
             // bytes only for lines inside the line window.
-            if selection.byte_window.is_some() {
+            if in_step && selection.byte_window.is_some() {
                 self.candidate_byte_offset = self.candidate_byte_offset.saturating_add(line.len());
             }
             return;
         }
+        // Mask lost-context tokens in place before the head/tail cut. Keeping
+        // byte lengths and whitespace preserves source coordinates, excerpt
+        // budgets and ordinary text even for non-contiguous step selections.
+        let mask_until = self
+            .line_tokens
+            .omit_prefix_until
+            .saturating_sub(start)
+            .min(line.len());
+        let mut display = std::borrow::Cow::Borrowed(line);
+        if mask_until > 0 {
+            for byte in &mut display.to_mut()[..mask_until] {
+                if !byte.is_ascii_whitespace() {
+                    *byte = b'*';
+                }
+            }
+        }
+        let line = display.as_ref();
         if selection.byte_window.is_some() {
             let before = self.selected_bytes;
             self.process_scoped_bytes(line, selection);
