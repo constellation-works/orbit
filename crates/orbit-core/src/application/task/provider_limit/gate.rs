@@ -42,10 +42,11 @@ use orbit_types::workflow::{ProviderFailureClass, ProviderFailureHold, provider_
 
 use super::ledger::PARTIAL_NOTE;
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{
-    CapturedCrewPools, CrewCandidate, PROVIDER_LIMIT_REASSIGNMENT_PREFIX, PURPOSE_SOURCE_PREFIX,
-    auto_task_minted, automatic_crew_source,
+use crate::application::contracts::{
+    CrewCandidate, PROVIDER_LIMIT_REASSIGNMENT_PREFIX, PURPOSE_SOURCE_PREFIX, auto_task_minted,
+    automatic_crew_source,
 };
+use crate::application::task::{CrewPools, TaskJobPort};
 use crate::runtime::run_input::non_empty;
 use crate::runtime::task::provider_hold::{base_backoff, same_provider};
 
@@ -296,7 +297,7 @@ impl OrbitRuntime {
     /// legacy pin — rather than a purpose pool's, a complexity pool's, or the
     /// default's.
     pub(crate) fn explicit_task_crew(&self, task: &Task) -> Result<bool, OrbitError> {
-        let source = self.task_crew_source(task)?;
+        let source = self.recorded_crew_source(task)?;
         if source.as_deref().is_some_and(automatic_crew_source) {
             return Ok(false);
         }
@@ -308,10 +309,10 @@ impl OrbitRuntime {
 
     /// What `gate` leaves of `task`'s draw over `candidates`, which `source`
     /// produced and a standing `hold` has already narrowed.
-    pub(crate) fn provider_limited_candidates(
+    pub(in crate::application) fn provider_limited_candidates(
         &self,
         task: &Task,
-        pools: &CapturedCrewPools,
+        pools: &CrewPools,
         hold: Option<&ProviderFailureHold>,
         gate: &ProviderLimitGate,
         candidates: &[CrewCandidate],
@@ -384,7 +385,7 @@ impl OrbitRuntime {
             && !self.provider_limit_reassignment_overridden(task)?;
         if (gate.explicit_crews == ProviderLimitExplicitCrews::Pool || !explicit || auto_reassign)
             && let Some((pool, pool_source)) =
-                self.complexity_pool_candidates(task.complexity, pools)?
+                self.complexity_pool_members(task.complexity, pools)?
         {
             let permitted = pool.into_iter().filter(drawable).collect::<Vec<_>>();
             skipped.extend(
@@ -412,10 +413,10 @@ impl OrbitRuntime {
     /// none, [`Self::provider_backoff_deferral`] or
     /// [`Self::provider_limit_deferral`] reports why, and the draw stays as
     /// it was, so an operator's explicit ship still runs.
-    pub(crate) fn admissible_crew_candidates(
+    pub(in crate::application) fn admissible_crew_candidates(
         &self,
         task: &Task,
-        pools: &CapturedCrewPools,
+        pools: &CrewPools,
     ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
         let (candidates, source, hold) = self.held_crew_candidates(task, pools)?;
         let gate = self.provider_limit_gate(Utc::now());
@@ -436,10 +437,10 @@ impl OrbitRuntime {
 
     /// Why `task` waits out a provider limit at this admission: `Some` when
     /// every crew it may run as is limited, `None` when it may be drawn.
-    pub(crate) fn provider_limit_deferral(
+    pub(in crate::application) fn provider_limit_deferral(
         &self,
         task: &Task,
-        pools: &CapturedCrewPools,
+        pools: &CrewPools,
     ) -> Result<Option<String>, OrbitError> {
         let gate = self.provider_limit_gate(Utc::now());
         if gate.is_empty() {

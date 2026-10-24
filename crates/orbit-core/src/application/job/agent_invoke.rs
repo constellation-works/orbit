@@ -46,10 +46,9 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::RetryKey;
 use crate::application::job::log_best_effort;
-use crate::application::job::pipeline::{
-    PipelineInvokeResult, PipelineSubmission, RetryKey, input_hash,
-};
+use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission, input_hash};
 use crate::runtime::audit::run::RunProviderProcess;
 use crate::runtime::authorization::{AgentInvokeAdmission, AgentInvokeAuthorizer};
 

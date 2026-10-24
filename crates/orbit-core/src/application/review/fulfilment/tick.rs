@@ -14,9 +14,8 @@ use serde_json::{Value, json};
 
 use super::super::evidence::{evidence_hold, evidence_ready, hold_is_current};
 use crate::OrbitRuntime;
-use crate::application::job::pipeline::{
-    PipelineSubmission, ROUTINE_DISPATCH_ORBIT_DIR_FIELD, RetryKey,
-};
+use crate::application::contracts::RetryKey;
+use crate::application::job::pipeline::{PipelineSubmission, ROUTINE_DISPATCH_ORBIT_DIR_FIELD};
 use crate::application::task::SYSTEM_ACTOR_LABEL;
 
 use super::{

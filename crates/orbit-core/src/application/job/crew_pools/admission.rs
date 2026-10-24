@@ -4,6 +4,7 @@ use orbit_types::task::{Task, TaskComment, TaskComplexity, TaskHistoryEntry, Tas
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::{PROVIDER_LIMIT_REASSIGNMENT_PREFIX, auto_task_minted};
 use crate::application::task::provider_limit::ProviderLimit;
 use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::runtime::engine::crew::{CrewAllowlist, enforce_crew_allowlist};
@@ -14,7 +15,6 @@ use super::draw::{
     weighted_draw,
 };
 use super::types::{COMPLEXITIES, CapturedCrewPools, POLICY_PIPELINES, POOLS_KEY, SELECTION_KEY};
-use super::{PROVIDER_LIMIT_REASSIGNMENT_PREFIX, auto_task_minted};
 use crate::application::task::TaskRecords;
 
 /// A planned provider-limit reassignment of an auto-task's explicit crew

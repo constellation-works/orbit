@@ -6,7 +6,7 @@ use orbit_types::{
 };
 
 use crate::OrbitRuntime;
-use crate::application::review::reconciliation;
+use crate::application::task::TaskReviewPort;
 
 use super::execution::{HandoffPullRequest, pull_number};
 use super::validation::{bounded_text, criteria, invalid};
@@ -211,6 +211,6 @@ impl OrbitRuntime {
         if pull_request.head == accepted.handoff.candidate.candidate.commit {
             return Ok(None);
         }
-        reconciliation::merged_head_completion_refusal(self, task, accepted, pull_request)
+        self.merged_head_reconciliation_refusal(task, accepted, pull_request)
     }
 }

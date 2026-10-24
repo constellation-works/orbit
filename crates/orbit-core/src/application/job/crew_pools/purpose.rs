@@ -13,35 +13,11 @@ use orbit_types::task::{Task, TaskComplexity};
 use orbit_types::workflow::{CREW_PURPOSE_TAG_PREFIX, CrewPurpose};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::{CrewCandidate, PURPOSE_SOURCE_PREFIX};
 use crate::application::review::reconciliation::FOLLOW_UP_TAG_PREFIX;
 use crate::application::sweep_filing::ci_failure::filing::CI_FAILURE_TAG;
 use crate::application::sweep_filing::dependabot::filing::{CODE_TAG, DEPENDABOT_TAG};
 use crate::application::task::BASELINE_RED_REPAIR_TAG;
-
-use super::types::CrewCandidate;
-
-/// Prefix of the provenance a task records when its crew was drawn from its
-/// purpose's pool, as `purpose:<purpose>`.
-pub(crate) const PURPOSE_SOURCE_PREFIX: &str = "purpose:";
-
-/// Prefix of the task comment that records a provider-limit reassignment of
-/// an auto-task's explicit crew [ORB-17638].
-pub(crate) const PROVIDER_LIMIT_REASSIGNMENT_PREFIX: &str = "Provider-limit reassignment:";
-
-/// Whether `tags` mark a task minted by an auto-task (`auto-task:<name>`).
-pub(crate) fn auto_task_minted(tags: &[String]) -> bool {
-    tags.iter().any(|tag| {
-        tag.strip_prefix("auto-task:")
-            .is_some_and(|name| !name.is_empty())
-    })
-}
-
-/// Whether `source` is a system assignment — a purpose pool, a complexity
-/// pool, or the default — rather than an explicit pin or a legacy crew with
-/// no assignment evidence.
-pub(crate) fn automatic_crew_source(source: &str) -> bool {
-    source == "default" || source.starts_with("pool:") || source.starts_with(PURPOSE_SOURCE_PREFIX)
-}
 
 /// The purpose `tags` name for a task's crew: an explicit
 /// `crew-purpose:<purpose>` tag naming a `workflow.purpose_crews` purpose,

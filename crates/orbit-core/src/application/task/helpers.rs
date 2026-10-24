@@ -3,7 +3,7 @@ use orbit_common::OrbitError;
 use orbit_types::identity::{normalize_attribution_label, normalize_optional_attribution_label};
 use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskStatus};
 
-use crate::application::job::crew_pools::CreationCrewAssignment;
+use crate::application::contracts::CreationCrewAssignment;
 use crate::context::resolve_write_actor_label;
 
 pub(crate) const SYSTEM_ACTOR_LABEL: &str = "system";

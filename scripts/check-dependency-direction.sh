@@ -299,6 +299,50 @@ if {
   fail=1
 fi
 
+# [ORB-17936] `task` is the lowest of the nine modules above contracts. It
+# reaches `job`, `review`, `distributed`, `sweep_filing` and `workspace_auto`
+# only through the ports it owns (`TaskJobPort`, `TaskReviewPort`,
+# `TaskDistributedPort`, `TaskSweepFilingPort`, `TaskWorkspaceAutoPort`),
+# which those modules implement on `OrbitRuntime`. A path, a grouped tree, a
+# `super::` chain that climbs out of `task` into one of them, or a call to the
+# inherent methods and functions the ports wrap is a reintroduced edge.
+task_upper_modules='job|review|distributed|sweep_filing|workspace_auto'
+task_upper_calls='show_job_run_observed|creation_crew_assignment|submit_keyed_pipeline_run|host_validation_gates|task_crew_source|unbound_publication_on_record|complexity_pool_candidates|unheld_task_crew_candidates|running_run_has_verified_owner|run_owner_liveness|tags_route_through_pr_pipeline|task_review_projection|resume_evidence_hold|merged_head_completion_refusal|pilot_run_crew|piloted_elsewhere|read_live_leaf_runs'
+if rg -n "crate::application::(${task_upper_modules})\\b" \
+  "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
+  rg -n -U "crate::application::\\{[^}]*\\b(${task_upper_modules})\\b" \
+    "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
+  rg -n "\\b(${task_upper_calls})\\s*(::<[^>]*>)?\\s*\\(" \
+    "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
+  ! python3 - "$app_src" "$task_upper_modules" <<'PY'
+import pathlib
+import re
+import sys
+
+app = pathlib.Path(sys.argv[1])
+upper = set(sys.argv[2].split("|"))
+chain = re.compile(r"\b((?:super::)+)([a-z_][a-z0-9_]*)")
+failed = False
+for path in sorted((app / "task").rglob("*.rs")):
+    rel = path.relative_to(app)
+    if "tests" in rel.parts[:-1] or rel.name == "tests.rs":
+        continue
+    parts = ["application", *rel.with_suffix("").parts]
+    if parts[-1] == "mod":
+        parts.pop()
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        for match in chain.finditer(line):
+            ups = match.group(1).count("super::")
+            if parts[: len(parts) - ups] == ["application"] and match.group(2) in upper:
+                print(f"{path}:{number}:{line}")
+                failed = True
+sys.exit(1 if failed else 0)
+PY
+then
+  echo "orbit-core task must reach job, review, distributed, sweep_filing and workspace_auto through its task ports"
+  fail=1
+fi
+
 review_admission_items='admission|install_review_admission|admit_review_request|run_review_admission|input_run_review_admission|upgrade_resume_admission_mismatch|completion_admission_mismatch|local_route_run_option_refusal|review_layer_json'
 if rg -n "review::(${review_admission_items})\\b" \
   "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
@@ -308,7 +352,7 @@ if rg -n "review::(${review_admission_items})\\b" \
   fail=1
 fi
 
-shared_contracts='PULL_DRAIN_JOB|ESCALATION_TRIAGE_JOB|FINDING_VERIFICATION_JOB|DrainEntryPoint|PullSettlementEntry|PullSettlementOutcome|SUPERSEDED_BY_SOURCE|PilotFingerprints|review_layer_json'
+shared_contracts='PULL_DRAIN_JOB|ESCALATION_TRIAGE_JOB|FINDING_VERIFICATION_JOB|DrainEntryPoint|PullSettlementEntry|PullSettlementOutcome|SUPERSEDED_BY_SOURCE|PilotFingerprints|review_layer_json|CreationCrewAssignment|CrewCandidate|InspectionPool|PURPOSE_SOURCE_PREFIX|PROVIDER_LIMIT_REASSIGNMENT_PREFIX|auto_task_minted|automatic_crew_source|RetryKey'
 if rg -n "\\b(const|enum|struct|fn) (${shared_contracts})\\b" \
   "$repo_root/crates/orbit-core/src" -g '*.rs' -g "!**/application/contracts/**" ||
   rg -n "\\b(${app_modules})(::[a-z_]+)*::(${shared_contracts})\\b" \

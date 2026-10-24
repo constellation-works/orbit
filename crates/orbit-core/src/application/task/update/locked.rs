@@ -22,6 +22,7 @@ use super::super::params::TaskUpdateParams;
 use super::artifacts::admit_agent_artifact;
 use super::entry::{LockedTaskUpdate, StatusAuthority, TaskUpdateContext, task_field_writer};
 use crate::OrbitRuntime;
+use crate::application::task::TaskReviewPort;
 
 impl OrbitRuntime {
     /// Apply an update, holding the task's write lock across the whole
@@ -470,7 +471,7 @@ impl OrbitRuntime {
         })?;
 
         if evidence_attached {
-            crate::application::review::evidence::resume_evidence_hold(self, id)?;
+            self.resume_review_evidence(id)?;
             updated = self.get_task(id)?;
         }
         Ok(LockedTaskUpdate {

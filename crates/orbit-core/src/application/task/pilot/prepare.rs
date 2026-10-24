@@ -7,9 +7,8 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::OrbitRuntime;
-use crate::application::job::delivery::{PrForgeCheck, tags_route_through_pr_pipeline};
-use crate::application::task::TaskAutomationPort;
 use crate::application::task::TaskListFilter;
+use crate::application::task::{TaskAutomationPort, TaskJobPort};
 
 use super::input::{bounded_usize, requested_workspace_root, string_array};
 use super::persist::{no_target_assessment_marker, source_superseded};
@@ -109,10 +108,8 @@ pub(crate) fn prepare(
     // Shared with delivery admission: the workspace's own ship mode decides
     // whether a task would take the PR route.
     let ship_mode = runtime.automatic_delivery_ship_mode();
-    let forge = PrForgeCheck::default();
-    let forge_refused = |tags: &[String]| {
-        tags_route_through_pr_pipeline(tags, ship_mode) && forge.require(runtime).is_err()
-    };
+    let forge = <OrbitRuntime as TaskJobPort>::PrForge::default();
+    let forge_refused = |tags: &[String]| runtime.pr_route_lacks_forge(&forge, tags, ship_mode);
 
     // Apply proves that a newer owner superseded preparation from the history
     // past each task's `history_len`, so that boundary must not follow the

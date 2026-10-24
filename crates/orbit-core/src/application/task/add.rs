@@ -9,9 +9,8 @@ use orbit_types::task::{
 };
 
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{
-    CreationCrewAssignment, random_crew_ticket, seeded_crew_ticket,
-};
+use crate::application::contracts::CreationCrewAssignment;
+use crate::application::task::TaskJobPort;
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::helpers::{
@@ -185,12 +184,12 @@ impl OrbitRuntime {
         // transition. A caller-supplied crew is kept verbatim; otherwise the
         // purpose pool its tags name, then the complexity pools (then
         // `default_crew`), choose one for this task.
-        let mut crew_assignment = self.creation_crew_assignment(
+        let mut crew_assignment = self.creation_crew(
             Some(params.complexity),
             params.crew.as_deref(),
             &normalized_tags,
             &params.context_files,
-            &mut creation_crew_ticket(action_key),
+            &mut creation_crew_ticket(self, action_key),
         )?;
         // A crew the system chose from a setting records that setting rather
         // than `explicit` [ORB-15195].
@@ -343,13 +342,14 @@ impl OrbitRuntime {
 /// crew would be refused as a changed input. A keyed create therefore draws
 /// from the action key, which makes the retry reproduce the first draw; an
 /// ordinary create draws from the system RNG.
-fn creation_crew_ticket(
+fn creation_crew_ticket<'a>(
+    runtime: &'a OrbitRuntime,
     action_key: Option<&str>,
-) -> impl FnMut() -> Result<u64, OrbitError> + use<> {
-    let mut keyed = action_key.map(|key| seeded_crew_ticket(format!("crew:{key}")));
+) -> impl FnMut() -> Result<u64, OrbitError> + use<'a> {
+    let mut keyed = action_key.map(|key| runtime.seeded_crew_draw_tickets(format!("crew:{key}")));
     move || match &mut keyed {
         Some(ticket) => ticket(),
-        None => random_crew_ticket(),
+        None => runtime.random_crew_draw_ticket(),
     }
 }
 

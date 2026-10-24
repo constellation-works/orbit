@@ -20,8 +20,7 @@ use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::sweep_filing::ci_failure::admission as ci_failure_admission;
-use crate::application::task::TaskAutomationPort;
+use crate::application::task::{TaskAutomationPort, TaskSweepFilingPort};
 
 use super::drain_promotion::DrainAuthority;
 use super::requested_workspace_root;
@@ -209,7 +208,7 @@ fn authority<'a>(
         && selection.tasks.is_empty()
     {
         let task_id = filing.fields.task_id.non_empty("task_id", action)?;
-        ci_failure_admission::piloted_elsewhere(action, task_id, selection.prepared)?
+        runtime.ci_sweep_piloted_elsewhere(action, task_id, selection.prepared)?
     } else {
         None
     };

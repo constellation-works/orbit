@@ -16,7 +16,7 @@ use orbit_types::workflow::JobRunState;
 use std::collections::HashSet;
 
 use crate::OrbitRuntime;
-use crate::application::job::running_run_has_verified_owner;
+use crate::application::task::TaskJobPort;
 use crate::runtime::run_input::recorded_task_ids;
 
 use super::params::TaskUpdateParams;
@@ -270,7 +270,7 @@ pub(crate) fn ensure_completion_run_stopped(
         let Some(run) = runtime.get_job_run_backend(run_id)? else {
             continue;
         };
-        if Some(run_id) != calling_run_id && running_run_has_verified_owner(&run) {
+        if Some(run_id) != calling_run_id && runtime.run_owner_verified(&run) {
             return Err(OrbitError::TaskCompletionLiveRun {
                 task_id: task.id.clone(),
                 run_id: run_id.to_string(),

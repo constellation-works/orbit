@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::application::contracts::RetryKey;
 use crate::application::job::ReviewAdmissionHook;
 use crate::runtime::run_input::recorded_task_ids;
 
@@ -31,16 +32,6 @@ pub(crate) struct PipelineSubmission<'a> {
     pub(crate) reconciliation: bool,
     /// How this run was submitted [ORB-12255].
     pub(crate) trigger: JobRunTrigger,
-}
-
-/// Where a keyed submission's retry key lives and how far back it is matched.
-///
-/// The key is the string at `input[field]`; it is matched against the job's
-/// newest `scan_limit` runs in the same store transaction that would insert.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct RetryKey<'a> {
-    pub(crate) field: &'a str,
-    pub(crate) scan_limit: usize,
 }
 
 /// What a parent-authorized child submission produced.

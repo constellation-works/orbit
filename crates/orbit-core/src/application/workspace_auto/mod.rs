@@ -10,6 +10,7 @@ mod drains;
 mod limiters;
 mod mode;
 mod readiness;
+mod task_port;
 mod window;
 
 pub(crate) use adopt::adopt_orphaned_deliveries;

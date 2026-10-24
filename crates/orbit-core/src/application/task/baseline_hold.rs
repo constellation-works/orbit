@@ -47,8 +47,7 @@ use serde_json::{Value, json};
 use super::baseline_repair::{RepairIndex, RepairLink};
 use super::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::OrbitRuntime;
-use crate::application::job::pipeline::{PipelineSubmission, ROUTINE_DISPATCH_ORBIT_DIR_FIELD};
-use crate::application::task::TaskRecords;
+use crate::application::task::{TaskJobPort, TaskRecords};
 
 /// The job a clock tick dispatches to check holds whose base moved to a tip
 /// with no recorded result; at most one run per workspace is live.
@@ -143,19 +142,14 @@ impl OrbitRuntime {
         if refresh.unchecked.is_empty() || self.baseline_hold_refresh_live()? {
             return Ok(refresh);
         }
-        let input = json!({
-            ROUTINE_DISPATCH_ORBIT_DIR_FIELD: self.shared_root().to_string_lossy(),
-        });
-        let submission = PipelineSubmission {
-            trigger: JobRunTrigger::state_routine(TRIGGER_NAME, TRIGGER_CONSUMER),
-            ..PipelineSubmission::catalog(
-                BASELINE_HOLD_REFRESH_JOB,
-                input,
-                Some(SYSTEM_ACTOR_LABEL),
-            )
-        };
-        let (result, _) = self.submit_keyed_pipeline_run(submission)?;
-        refresh.dispatched = Some(result.run_id);
+        let run_id = self.submit_routine_run(
+            BASELINE_HOLD_REFRESH_JOB,
+            json!({}),
+            SYSTEM_ACTOR_LABEL,
+            None,
+            JobRunTrigger::state_routine(TRIGGER_NAME, TRIGGER_CONSUMER),
+        )?;
+        refresh.dispatched = Some(run_id);
         Ok(refresh)
     }
 

@@ -11,12 +11,13 @@ use orbit_types::workflow::{ActivityCrewDraw, ActivityCrewPoolMember};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::application::contracts::CrewCandidate;
 use crate::application::task::UsagePressure;
 use crate::application::task::provider_limit::UsagePressureRead;
 use crate::runtime::engine::crew::{CrewAllowlist, enforce_crew_allowlist};
 use crate::runtime::run_input::singular_task_id_from_input;
 
-use super::types::{COMPLEXITIES, CapturedCrewPools, CrewCandidate, POOLS_KEY};
+use super::types::{COMPLEXITIES, CapturedCrewPools, POOLS_KEY};
 
 pub(super) fn pools_from_input(input: &Value) -> Result<CapturedCrewPools, OrbitError> {
     input

@@ -71,8 +71,7 @@ use super::helpers::SYSTEM_ACTOR_LABEL;
 use super::lifecycle::EXTERNAL_MERGE_SETTLED_EVENT;
 use super::pr_closure::unsettled_claim_reason;
 use crate::OrbitRuntime;
-use crate::application::task::TaskRecords;
-use crate::application::workspace_auto::read_live_leaf_runs;
+use crate::application::task::{TaskRecords, TaskWorkspaceAutoPort};
 use crate::runtime::task_pr_forge::MergedPullRequest;
 
 /// The statuses a task settles from.
@@ -147,7 +146,7 @@ impl OrbitRuntime {
         &self,
     ) -> Result<Vec<ExternalMergeSettlement>, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        let carried = live_leaf_task_ids(self)?;
+        let carried = self.live_leaf_task_ids()?;
         let mut candidates = Vec::new();
         for status in SETTLEABLE_STATUSES {
             for task in self.stores().tasks().list_tasks_filtered(
@@ -211,7 +210,7 @@ impl OrbitRuntime {
         id: &str,
     ) -> Result<ExternalMergeSettlement, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        let carried = live_leaf_task_ids(self)?;
+        let carried = self.live_leaf_task_ids()?;
         let task = self.get_task(id)?;
         let candidate = self
             .settlement_candidate(task, &carried)
@@ -645,15 +644,6 @@ impl OrbitRuntime {
             merge_commit: landing.merge_commit.clone(),
         })
     }
-}
-
-/// Tasks a live `run auto` leaf carries. A leaf hands a task to its child
-/// before the task records the child's run.
-fn live_leaf_task_ids(runtime: &OrbitRuntime) -> Result<BTreeSet<String>, OrbitError> {
-    Ok(read_live_leaf_runs(runtime)?
-        .into_iter()
-        .flat_map(|run| run.task_ids)
-        .collect())
 }
 
 /// How the task landed (`pull request #N, merged into B as C outside Orbit`),
