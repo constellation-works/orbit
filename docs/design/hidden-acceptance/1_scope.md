@@ -40,10 +40,11 @@ check, but today the implementer writes the exam:
   builtins and 1 is a recorded coverage gap. A worker that changes a behaviour can
   change the test that checks it in the same diff.
 - **A guard forces that co-edit.** The inventory pins `surface_contracts.sha256` over
-  the sorted CLI, MCP, job and activity surface lists, and CI runs
+  the sorted CLI, MCP, job, activity, HTTP API and dashboard surface lists, and CI runs
   `scripts/test-qa-full-sweep.py --check` from `scripts/ci-guardrails.sh`, which fails
-  when the live surface no longer hashes to the pinned value. Every surface-changing feature therefore edits its own acceptance
-  entry to get green: the file has 142 commits on `agent-main`, and recent ones come
+  when the live surface of any of those kinds no longer hashes to its pinned value.
+  Every surface-changing feature therefore edits its own acceptance entry to get
+  green: the file has 142 commits on `agent-main`, and recent ones come
   from ordinary feature work ([ORB-17767], [ORB-17744], [ORB-17743], [ORB-17736]).
 - **Scenarios are derived from the code, not from the intent.** They describe what was
   built, so they confirm behaviour rather than test it against the task's acceptance
@@ -117,9 +118,13 @@ rest.
 
 ### Author lane
 
-A plugin auto-task, `acceptance-author`, runs on `deliveries_landed` (threshold 1,
-`max_wait_minutes` 120, matching `delivery-code-review`). For each landed delivery it
-writes new scenarios, updates or retires contradicted ones, or records a no-op reason.
+A plugin auto-task, `acceptance-author`, runs on `deliveries_landed` with threshold 1
+and `max_wait_minutes` 120. These values differ on purpose from `delivery-code-review`,
+whose schedule is threshold 3 and `max_wait_minutes` 360 (in
+`crates/orbit-core/assets/auto_tasks/delivery-code-review.yaml`). Each landed delivery
+needs its own author pass, and that pass must finish within 120 minutes of landing (see
+Acceptance), so it cannot wait for a batch of three. For each landed delivery it writes
+new scenarios, updates or retires contradicted ones, or records a no-op reason.
 
 - **Inputs:** the task's title, description and acceptance criteria, the design docs
   it cites, the public documentation, and the candidate binary's own `--help` and
@@ -133,8 +138,9 @@ writes new scenarios, updates or retires contradicted ones, or records a no-op r
 - **Writes through the plugin, not a worktree:** an `orbit.acceptance.scenario.put`
   tool commits to the store. That tool is granted only to author sessions.
 
-**Surface coverage moves here.** The runner computes the live CLI, MCP, job and
-activity surface lists from the candidate. A surface with no hidden scenario becomes
+**Surface coverage moves here.** The runner computes the live CLI, MCP, job, activity,
+HTTP API and dashboard surface lists from the candidate, the same six kinds the
+inventory hashes. A surface with no hidden scenario becomes
 an author obligation on the next pass. It never fails the implementer's CI. This
 replaces the `surface_contracts.sha256` guard as the coverage mechanism.
 
