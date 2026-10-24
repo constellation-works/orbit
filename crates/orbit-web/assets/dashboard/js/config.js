@@ -727,11 +727,14 @@ function systemResource(resource, rows, payload, host) {
     ...(reading.held ? [el("span", { class: "host-resource-held", text: "held" })] : []),
   ]);
   node.appendChild(el("div", { class: "config-sys-grid" }, [
-    el("span", { class: "config-key mono", text: resource }),
-    live,
-    high ? systemValueCell(high, payload) : el("span", { class: "config-value mono", text: NO_VALUE }),
-    resume ? systemValueCell(resume, payload) : el("span", { class: "config-value mono", text: NO_VALUE }),
-  ]));
+    ["Resource", el("span", { class: "config-key mono", text: resource })],
+    ["Live reading", live],
+    ["Throttle at", high ? systemValueCell(high, payload) : el("span", { class: "config-value mono", text: NO_VALUE })],
+    ["Resume below", resume ? systemValueCell(resume, payload) : el("span", { class: "config-value mono", text: NO_VALUE })],
+  ].map(([label, value]) => el("div", { class: "config-sys-cell-wrap" }, [
+    el("span", { class: "config-sys-label", text: label }),
+    value,
+  ]))));
   for (const row of [high, resume]) {
     const editor = openEditor(row, payload);
     if (editor) node.appendChild(editor);

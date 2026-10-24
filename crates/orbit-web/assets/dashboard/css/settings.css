@@ -183,10 +183,14 @@
 .config-sys-reading.elevated .config-sys-severity { color: var(--status-open); }
 .config-sys-reading.critical .config-sys-severity, .config-sys-reading.throttled .host-resource-held { color: var(--state-failed); }
 .config-sys-severity { color: var(--fg-mute); font-size: 11px; }
+.config-sys-cell-wrap { min-width: 0; }
+.config-sys-label { display: none; }
 
 @media (max-width: 900px) {
   .config-sys-grid { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .config-sys-head { display: none; }
+  .config-sys-cell-wrap { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+  .config-sys-label { display: block; color: var(--fg-dim); font-size: 11px; }
 }
 
 /* ORB-14451: Settings › Hosts. One row per host — the serving host first —
@@ -252,12 +256,16 @@
 .config-action.danger { color: var(--state-failed); border-color: var(--state-failed); }
 .host-add .config-action:focus-visible, .host-list .config-action:focus-visible,
 .host-editor .config-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.host-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.host-label { display: none; }
 @media (max-width: 900px) {
   .host-head { display: none; }
   .host-list, .host-row { display: block; }
   .host-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 12px; }
   .host-identity, .host-actions, .host-health { grid-column: 1 / -1; }
+  .host-grid > .host-cell:nth-child(1), .host-grid > .host-cell:nth-child(7) { grid-column: 1 / -1; }
   .host-actions { justify-content: flex-start; }
+  .host-label { display: block; color: var(--fg-dim); font-size: 11px; }
 }
 
 /* ORB-15430: Settings › Effective. A layer strip, callouts, the review steps,

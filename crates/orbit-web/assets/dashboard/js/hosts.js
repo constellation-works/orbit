@@ -228,10 +228,10 @@ function loadErrorBanner(payload) {
   return banner;
 }
 
+const HOST_COLUMNS = ["Host", "Reachable", "Version", "Protocol", "Skew", "Workspaces", "Health", ""];
+
 function headRow() {
-  const head = el("div", { class: "host-grid host-head col-head" }, [
-    "Host", "Reachable", "Version", "Protocol", "Skew", "Workspaces", "Health", "",
-  ].map((label) => el("span", { text: label })));
+  const head = el("div", { class: "host-grid host-head col-head" }, HOST_COLUMNS.map((label) => el("span", { text: label })));
   head.setAttribute("role", "row");
   for (const cell of head.children) cell.setAttribute("role", "columnheader");
   return head;
@@ -253,7 +253,10 @@ function hostRow(row, names) {
     workspacesCell(row, names),
     healthCell(row),
     actionsCell(row),
-  ]);
+  ].map((value, index) => index === HOST_COLUMNS.length - 1 ? value : el("div", { class: "host-cell" }, [
+    el("span", { class: "host-label", text: HOST_COLUMNS[index] }),
+    value,
+  ])));
   cells.setAttribute("role", "row");
   for (const cell of cells.children) cell.setAttribute("role", "cell");
   node.appendChild(cells);
