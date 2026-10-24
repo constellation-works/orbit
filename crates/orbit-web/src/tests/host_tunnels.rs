@@ -46,10 +46,20 @@ impl Stub {
     }
 
     fn calls(&self) -> Vec<Value> {
-        fs::read_to_string(self.dir.path().join("calls.jsonl"))
+        self.records("calls.jsonl")
+    }
+
+    /// One record per ssh child's bind syscall: `errno` is null for the child
+    /// that bound its `-L` port.
+    fn bind_events(&self) -> Vec<Value> {
+        self.records("bind-events.jsonl")
+    }
+
+    fn records(&self, file: &str) -> Vec<Value> {
+        fs::read_to_string(self.dir.path().join(file))
             .unwrap_or_default()
             .lines()
-            .map(|line| serde_json::from_str(line).expect("stub call record"))
+            .map(|line| serde_json::from_str(line).expect("stub record"))
             .collect()
     }
 }
@@ -153,6 +163,61 @@ fn pids(stub: &Stub) -> Vec<i64> {
         .collect()
 }
 
+/// Single-flight, read from ssh's own bind evidence rather than a spawn count.
+/// A proven local bind collision makes establish spawn ssh again on a fresh
+/// port, so one tunnel may start more than one child. The guarantee is that
+/// exactly one child reaches a bound forward, every other child lost its port
+/// to a listener already there (EADDRINUSE), and every request shares the
+/// bound port. A second child that binds is a second establishment.
+fn assert_single_flight(stub: &Stub, ports: &[u16]) {
+    let calls = stub.calls();
+    let bind_events = stub.bind_events();
+    assert_eq!(
+        bind_events.len(),
+        calls.len(),
+        "every ssh start reports its bind: {calls:?} {bind_events:?}"
+    );
+    let bound: Vec<&Value> = bind_events
+        .iter()
+        .filter(|event| event["errno"].is_null())
+        .collect();
+    assert_eq!(
+        bound.len(),
+        1,
+        "single-flight: exactly one ssh child reaches a bound forward: {bind_events:?}"
+    );
+    let bound_port = bound[0]["port"].as_u64().expect("stub port");
+    for event in bind_events.iter().filter(|event| !event["errno"].is_null()) {
+        assert_eq!(
+            event["errno"].as_i64(),
+            Some(i64::from(libc::EADDRINUSE)),
+            "a child that did not bind lost its port to another listener: {event}"
+        );
+    }
+    assert!(
+        ports.iter().all(|&port| u64::from(port) == bound_port),
+        "every request shares the bound child's port {bound_port}: {ports:?}"
+    );
+    for call in &calls {
+        assert_eq!(
+            call["mode"], "attach",
+            "single-flight starts only bare attach forwards: {call}"
+        );
+        assert_eq!(call["command"], "", "attach mode sends no remote command");
+        for option in ["BatchMode=yes", "ConnectTimeout=10"] {
+            assert!(
+                call["argv"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|arg| arg == option),
+                "a server has no terminal to prompt on: {option} in {}",
+                call["argv"]
+            );
+        }
+    }
+}
+
 #[test]
 fn concurrent_first_requests_share_one_attached_ssh() {
     let remote = fake_dashboard(MACHINE_ID);
@@ -181,37 +246,11 @@ fn concurrent_first_requests_share_one_attached_ssh() {
                 .expect("acquire succeeds")
         })
         .collect();
-    assert!(
-        ports.windows(2).all(|pair| pair[0] == pair[1]),
-        "every request shares one tunnel: {ports:?}"
-    );
-    let calls = stub.calls();
-    assert_eq!(
-        calls.len(),
-        1,
-        "single-flight establish runs ssh once: {calls:?}"
-    );
-    assert_eq!(calls[0]["mode"], "attach");
-    assert_eq!(
-        calls[0]["command"], "",
-        "attach mode sends no remote command"
-    );
-    for option in ["BatchMode=yes", "ConnectTimeout=10"] {
-        assert!(
-            calls[0]["argv"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|arg| arg == option),
-            "a server has no terminal to prompt on: {option} in {}",
-            calls[0]["argv"]
-        );
-    }
+    assert_single_flight(&stub, &ports);
     tunnels.shutdown_all();
-    assert!(
-        !alive(pids(&stub)[0]),
-        "shutdown stops the attached forward"
-    );
+    for pid in pids(&stub) {
+        assert!(!alive(pid), "shutdown stops every ssh child: {pid}");
+    }
 }
 
 #[test]
