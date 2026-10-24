@@ -1118,7 +1118,7 @@ input.field-editor-input {
 .cf-group-body { padding: 0 14px 8px 28px; min-width: 0; max-width: 100%; }
 .cf-dir { color: var(--fg-dim); font-size: 11px; padding: 4px 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cf-files { list-style: none; margin: 0; padding: 0; min-width: 0; max-width: 100%; }
-.cf-row { position: relative; display: flex; align-items: center; gap: 8px; min-height: 24px; box-sizing: border-box; padding: 2px 6px; border-radius: 4px; min-width: 0; max-width: 100%; }
+.cf-row, .row-detail .file-list .cf-row { position: relative; display: flex; align-items: center; gap: 8px; min-height: 24px; box-sizing: border-box; padding: 2px 34px 2px 6px; border-radius: 4px; min-width: 0; max-width: 100%; }
 .cf-row:hover { background: var(--bg-hover); }
 .row-detail .file-list .context-selector { display: inline-flex; align-items: baseline; gap: 5px; flex: 1 1 auto; min-width: 0; max-width: 100%; text-decoration: none; color: inherit; overflow: hidden; }
 .row-detail .file-list.cf-flat .context-selector { flex: 1 1 0; width: 0; white-space: nowrap; text-overflow: ellipsis; }
