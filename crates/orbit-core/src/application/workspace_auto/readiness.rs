@@ -870,6 +870,9 @@ pub fn explain_workspace_auto_readiness(
         "provider_limits": provider_limits.readings,
         "provider_pressures": provider_limits.providers,
         "crew_pressures": provider_limits.crew_pressures,
+        // The persisted crew-performance snapshot's age, window and type
+        // list, or the reason a draw would ignore it.
+        "crew_performance": runtime.crew_performance_readiness(),
         "provider_auth_failures": provider_auth_failures,
         "total": total,
         "tasks": tasks,

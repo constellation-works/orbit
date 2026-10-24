@@ -1,0 +1,14 @@
+# Non-interactive crew-performance snapshot refresh, run hourly by the
+# seeded `crew_performance_refresh` routine. The step no-ops without
+# scanning while `workflow.crew_performance` is `off`.
+schemaVersion: 2
+kind: Job
+metadata:
+  name: crew_performance_refresh_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 1
+  steps:
+    - id: refresh
+      target: activity:crew_performance_refresh

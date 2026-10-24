@@ -11,6 +11,108 @@ use crate::ConfigSnapshot;
 
 /// The key as written in `config.toml`.
 pub const CREW_PERFORMANCE_TYPES_KEY: &str = "workflow.crew_performance_types";
+/// The `workflow.crew_performance` key as written in `config.toml`.
+pub const CREW_PERFORMANCE_KEY: &str = "workflow.crew_performance";
+/// The `workflow.crew_performance_window_days` key as written in `config.toml`.
+pub const CREW_PERFORMANCE_WINDOW_DAYS_KEY: &str = "workflow.crew_performance_window_days";
+/// The default evidence window of a crew-performance snapshot, in days.
+pub const DEFAULT_CREW_PERFORMANCE_WINDOW_DAYS: u32 = 30;
+
+/// How crew draws use the performance snapshot (`workflow.crew_performance`).
+/// This task only persists the snapshot; `off` also stops the hourly refresh
+/// from scanning at all.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CrewPerformanceMode {
+    /// No snapshot is built and no draw reads one.
+    #[default]
+    Off,
+    /// Weight by each crew's absolute cell score.
+    Absolute,
+    /// Weight by each crew's cell score against its own tier mean.
+    Comparative,
+}
+
+impl CrewPerformanceMode {
+    /// Every admitted value, in the order errors name them.
+    pub const CHOICES: [&'static str; 3] = ["off", "absolute", "comparative"];
+
+    /// A mode by its configured name.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "off" => Some(Self::Off),
+            "absolute" => Some(Self::Absolute),
+            "comparative" => Some(Self::Comparative),
+            _ => None,
+        }
+    }
+
+    /// The mode's configured name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Absolute => "absolute",
+            Self::Comparative => "comparative",
+        }
+    }
+
+    /// Whether the snapshot refresh should scan and write.
+    #[must_use]
+    pub const fn is_on(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+}
+
+/// Admit `workflow.crew_performance`, `off` when unset.
+pub(crate) fn admit_crew_performance(raw: Option<String>) -> Result<String, OrbitError> {
+    let value = raw.as_deref().map_or("off", str::trim);
+    CrewPerformanceMode::parse(value)
+        .map(|mode| mode.as_str().to_string())
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "{CREW_PERFORMANCE_KEY} has invalid value '{value}'; expected one of: {}",
+                CrewPerformanceMode::CHOICES.join(", ")
+            ))
+        })
+}
+
+/// Admit `workflow.crew_performance_window_days`: 1..=90, default 30. The
+/// scorecard scan reaches 90 days, so a wider window could never be served.
+pub(crate) fn admit_crew_performance_window_days(raw: Option<u32>) -> Result<u32, OrbitError> {
+    let days = raw.unwrap_or(DEFAULT_CREW_PERFORMANCE_WINDOW_DAYS);
+    if (1..=90).contains(&days) {
+        Ok(days)
+    } else {
+        Err(OrbitError::InvalidInput(format!(
+            "{CREW_PERFORMANCE_WINDOW_DAYS_KEY} must be between 1 and 90, got {days}"
+        )))
+    }
+}
+
+/// A stable hash of the admitted type list, recorded on every snapshot so a
+/// reader can tell a snapshot built from a different list. The serialization
+/// is this function's own: entry order, then each entry's name, tags and
+/// paths in order, NUL-separated.
+#[must_use]
+pub fn crew_performance_types_hash(types: &[CrewPerformanceType]) -> String {
+    let mut canonical = String::new();
+    for entry in types {
+        canonical.push_str(&entry.name);
+        canonical.push('\0');
+        for tag in &entry.tags {
+            canonical.push_str(tag);
+            canonical.push('\0');
+        }
+        canonical.push('\0');
+        for path in &entry.paths {
+            canonical.push_str(path);
+            canonical.push('\0');
+        }
+        canonical.push('\0');
+    }
+    orbit_common::security::release::sha256_hex(canonical.as_bytes())
+}
 /// The fallback type for a task no configured type matches.
 pub const OTHER_TYPE: &str = "other";
 
@@ -138,5 +240,17 @@ impl ConfigSnapshot {
     #[must_use]
     pub fn crew_performance_types(&self) -> &[CrewPerformanceType] {
         &self.workflow_crew_performance_types
+    }
+
+    /// The admitted `workflow.crew_performance` mode.
+    #[must_use]
+    pub fn crew_performance(&self) -> CrewPerformanceMode {
+        CrewPerformanceMode::parse(&self.workflow_crew_performance).unwrap_or_default()
+    }
+
+    /// The admitted `workflow.crew_performance_window_days`.
+    #[must_use]
+    pub fn crew_performance_window_days(&self) -> u32 {
+        self.workflow_crew_performance_window_days
     }
 }

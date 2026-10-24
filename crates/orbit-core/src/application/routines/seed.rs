@@ -23,7 +23,9 @@
 //! same workspace name write byte-identical cron definitions, and differ only
 //! in the state trigger's owner. Seeded routines are disabled when written;
 //! they exist so a fresh workspace gets reviewable, opt-in schedules without
-//! silently enabling unattended work.
+//! silently enabling unattended work. The one exception is
+//! `crew_performance_refresh`, seeded enabled because its action no-ops
+//! without scanning while `workflow.crew_performance` is `off`.
 //!
 //! Provenance is byte-exact first and shape-aware second. The manifest records
 //! the digest Orbit last wrote; a file that still matches is Orbit's. A file
@@ -84,6 +86,10 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
     (
         "store_gc",
         include_str!("../../../assets/routines/store_gc.yaml"),
+    ),
+    (
+        "crew_performance_refresh",
+        include_str!("../../../assets/routines/crew_performance_refresh.yaml"),
     ),
 ];
 

@@ -230,6 +230,16 @@ impl OrbitRuntime {
         self.context.settings().crew_performance_types()
     }
 
+    /// `workflow.crew_performance` as admitted.
+    pub fn crew_performance(&self) -> orbit_config::CrewPerformanceMode {
+        self.context.settings().crew_performance()
+    }
+
+    /// `workflow.crew_performance_window_days` as admitted.
+    pub fn crew_performance_window_days(&self) -> u32 {
+        self.context.settings().crew_performance_window_days()
+    }
+
     /// The resolved `[operation]` review preferences (layered over the
     /// built-in no-review defaults) with per-field provenance [ORB-11333].
     pub fn operation_policy(&self) -> &orbit_config::OperationPolicy {

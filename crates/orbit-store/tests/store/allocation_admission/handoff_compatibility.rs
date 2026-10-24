@@ -157,8 +157,11 @@ fn persisted_handoffs_upgrade_atomically_without_changing_receipts_or_authority(
         [],
     )
     .unwrap();
-    conn.execute("DELETE FROM schema_meta WHERE key='migration.v0057'", [])
-        .unwrap();
+    conn.execute_batch(
+        "DELETE FROM schema_meta WHERE key='migration.v0057';
+         DELETE FROM schema_meta WHERE key='migration.v0058';",
+    )
+    .unwrap();
     conn.execute(
         "UPDATE schema_meta SET value=json_set(value,'$.version',56) WHERE key='migration.compat'",
         [],
@@ -316,7 +319,7 @@ fn already_open_inline_writers_are_refused_atomically_at_the_store_boundary() {
     let database = delivery.owner.root().join("state.sqlite");
     let stale_writer = Store::open(&database).unwrap();
     let conn = rusqlite::Connection::open(&database).unwrap();
-    conn.execute_batch("DROP TRIGGER handoff_settlement_insert_guard; DROP TRIGGER handoff_settlement_update_guard; DELETE FROM schema_meta WHERE key='migration.v0057';").unwrap();
+    conn.execute_batch("DROP TRIGGER handoff_settlement_insert_guard; DROP TRIGGER handoff_settlement_update_guard; DELETE FROM schema_meta WHERE key='migration.v0057'; DELETE FROM schema_meta WHERE key='migration.v0058';").unwrap();
     let migrated = Store::open(&database).unwrap();
     let before = delivery
         .owner
@@ -353,6 +356,9 @@ fn already_open_inline_writers_are_refused_atomically_at_the_store_boundary() {
             before
         );
     }
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(
+        migrated.schema_version().unwrap(),
+        SUPPORTED_SCHEMA_VERSION
+    );
     delivery.accept(Some(OWNER_POLICY)).unwrap();
 }

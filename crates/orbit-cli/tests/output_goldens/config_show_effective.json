@@ -371,7 +371,21 @@
         }
       ]
     },
+    "workflow.crew_performance": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.crew_performance_types": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_performance_window_days": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",

@@ -1,0 +1,20 @@
+# Hourly crew-performance snapshot refresh. Seeded enabled, unlike the
+# other defaults: the refresh no-ops without scanning while
+# `workflow.crew_performance` is `off` (the default), so an enabled routine
+# costs nothing until the feature is switched on, and then the snapshot a
+# draw reads is never more than an hour old.
+schemaVersion: 1
+name: __ORBIT_ROUTINE_NAME__
+description: >
+  Hourly rebuild of this workspace's crew-performance snapshot (the
+  implementer by-type cell matrix over
+  workflow.crew_performance_window_days) that crew draws read. No-ops
+  while workflow.crew_performance is off.
+enabled: true
+trigger:
+  cron: "23 * * * *"
+  missed_run: skip
+target: job:crew_performance_refresh_pipeline
+policy:
+  timeout_minutes: 30
+  overlap: forbid

@@ -295,6 +295,8 @@ crew_selection = "static"
 usage_pressure_cap = 8
 usage_pressure_strength = 1.0
 crew_performance_types = []
+crew_performance = "off"
+crew_performance_window_days = 30
 ```
 
 | Key | Default | What it does |
@@ -315,6 +317,8 @@ crew_performance_types = []
 | `workflow.usage_pressure_cap` | `8` | **Advanced.** Under `usage_pressure`, the weight multiplier is clamped to `[1/cap, cap]`. A number of at least `1`; `1` leaves every weight as configured. |
 | `workflow.usage_pressure_strength` | `1.0` | **Advanced.** Under `usage_pressure`, the exponent applied to pressure before the cap. A number of at least `0`; `0` disables weighting and the admission re-draw. |
 | `workflow.crew_performance_types` | `[]` | **Advanced.** Ordered task types for the implementer scorecard's by-type matrix, each a `[[workflow.crew_performance_types]]` table with `name`, `tags` and `paths`. See [crew performance types](#crew-performance-types). |
+| `workflow.crew_performance` | `off` | **Advanced.** Whether the hourly crew-performance snapshot is built: `off`, `absolute` or `comparative`. Independent of `workflow.crew_selection`. Crew draws do not use the snapshot yet; `off` also makes the seeded refresh routine no-op without scanning. See [crew performance snapshot](#crew-performance-snapshot). |
+| `workflow.crew_performance_window_days` | `30` | **Advanced.** Evidence window in days (`1`–`90`) the crew-performance snapshot is built from. Values outside that range are refused. |
 | `workflow.auto_ship` | `false` | Opt this workspace in to `orbit run ship-sweep`, the cross-workspace unattended ship command (skipped with `auto_ship_disabled` while `false`). The seeded `ship-sweep` routine ignores this key; its `enabled:` flag is its only switch. Neither grants `--complete` or `--approve-proposed`, and a `no-auto-approve` task is never auto-approved by either flag's drain or the CI sweep. |
 | `workflow.required_validation_commands` | `[]` | Commands every delivered candidate must pass before push or merge. Empty runs no required check. See [required validation](#required-validation). |
 | `workflow.distributed_completion` | `review` | How far this owner takes an accepted distributed-drain handoff: `review` waits for an operator's **Approve handoff**; `done` authorizes it on acceptance and lands it through `task_landing_pipeline`, rechecking this key before the merge. |
@@ -340,6 +344,12 @@ paths = ["web/**"]
 ```
 
 A task takes the first type whose `tags` it carries (any of) or whose `paths` globs match any of its `context_files` (any of); a task matching none is `other`. Names must be unique and non-empty, `other` is reserved, and an entry with neither `tags` nor `paths` is refused with a config error naming the entry. The list is a lens: the scorecard classifies historical tasks with the current list at scan time, so editing it re-sorts history. Orbit ships no types beyond `other`, so an empty list puts every task in `other`. The matrix is read with `orbit agents scorecard --role implementers --by-type`; crew selection does not use it yet.
+
+### Crew performance snapshot
+
+A crew draw must never run the scorecard scan, so the by-type cell matrix is persisted as a per-workspace snapshot: one row per `(crew, model, tier, type)` cell with its raw score, `n`, crew mean and shrunk score, plus the evidence window, a hash of the type list it was built with, and `computed_at`. The seeded `crew_performance_refresh` routine (hourly, seeded enabled) runs `job:crew_performance_refresh_pipeline` to rebuild it; each refresh replaces the previous snapshot atomically. Run it on demand with `orbit run job crew_performance_refresh_pipeline`.
+
+While `workflow.crew_performance` is `off` (the default) the refresh writes nothing, records `skipped: crew_performance_off`, and does not scan, so the enabled hourly routine costs nothing. Set it to `absolute` or `comparative` to start building snapshots over `workflow.crew_performance_window_days` (default `30`, `1`–`90`). A stored snapshot is usable only while fresh: a reader gets the typed reason `missing`, `stale` (older than 24 hours) or `type_list_changed` (built from a different `workflow.crew_performance_types` list) otherwise. `orbit run readiness` prints one line for the snapshot — its computed time, window and type list, or the unusable reason — and `--json` carries the same under `crew_performance`. Crew draws do not read the snapshot yet.
 
 ### Unlocked context paths
 

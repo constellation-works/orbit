@@ -744,7 +744,10 @@ pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
         .with_transaction(|tx| {
             tx.connection()
                 .execute_batch(
-                    "DROP TRIGGER handoff_settlement_insert_guard;
+                    "DROP TABLE IF EXISTS crew_performance_cells;
+             DROP TABLE IF EXISTS crew_performance_snapshot;
+             DELETE FROM schema_meta WHERE key = 'migration.v0058';
+             DROP TRIGGER handoff_settlement_insert_guard;
              DROP TRIGGER handoff_settlement_update_guard;
              DELETE FROM schema_meta WHERE key = 'migration.v0057';
              DROP TABLE provider_account_limit_observations;

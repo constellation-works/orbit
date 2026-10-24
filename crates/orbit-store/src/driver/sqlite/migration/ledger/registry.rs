@@ -545,12 +545,21 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::ReadCompatible,
         apply: super::super::apply_handoff_settlement_sidecars,
     },
+    // Crew performance phase 2: the persisted implementer by-type snapshot
+    // a crew draw reads instead of scanning. An older binary never reads
+    // or writes either table.
+    Migration {
+        version: 58,
+        name: "crew_performance_snapshot",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_crew_performance_snapshot,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 57;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 58;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

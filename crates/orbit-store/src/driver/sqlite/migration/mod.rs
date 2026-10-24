@@ -9,6 +9,7 @@ use crate::contracts::{ForwardCompatibleOpen, StateComponent, evaluate_newer_sta
 mod admission_reservations;
 mod audit_events;
 mod baseline;
+mod crew_performance;
 mod executor_census;
 mod feature;
 mod feature_ledgers;
@@ -37,6 +38,7 @@ use audit_events::{
     apply_v2_audit_event_type_ts_index,
 };
 use baseline::apply_baseline_schema;
+use crew_performance::apply_crew_performance_snapshot;
 use executor_census::apply_executor_census;
 use feature::apply_feature_schema_ledger;
 use feature_ledgers::apply_absorb_feature_ledgers;
