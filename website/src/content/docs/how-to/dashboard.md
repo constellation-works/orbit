@@ -171,9 +171,14 @@ prove that a particular task or run succeeded.
 
 The rail foot shows live load, memory, and disk readings for the serving host
 (plus disk I/O stall on Linux hosts) above the refresh line and the UTC/Local
-control. The top bar shows provider usage with each provider's windows together
-(`claude 15% 5h | 32% 7d`), the drain state when a delivery window is active,
-**Refresh**, and one warning chip only when a reading is elevated or worse. Counts in
+control. The top bar shows one chip per provider with its worst window's value, a
+meter and its weekly pressure (`claude 13% ×1.09`), the drain state when a
+delivery window is active, **Refresh**, and one warning chip only when a reading
+is elevated or worse. Hover, focus or click a provider chip to open a dialog with
+each of its windows, when they reset, the gate that holds crews back and what the
+pressure means; click or **Pin open** keeps it open, and Esc or a click outside
+closes it. `+N more` (and, on narrow screens, the single summary chip) lists
+every provider. Counts in
 the selected window sit on the rail: failed, timed-out, and interrupted runs
 under **Runs**, and doctor warnings, policy denials, and failing routines under
 **Health**. Click a rail count to open the view behind it. The denial count

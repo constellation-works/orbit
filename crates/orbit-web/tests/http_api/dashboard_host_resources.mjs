@@ -12,6 +12,21 @@ class Node {
     this.text = '';
     this.attributes = new Map();
     this.dataset = {};
+    this.listeners = {};
+  }
+  addEventListener(type, listener) { (this.listeners[type] ||= []).push(listener); }
+  // Run the listeners a browser would on this node; `target` defaults to it.
+  fire(type, event = {}) {
+    const fired = { type, target: this, preventDefault() { this.prevented = true; }, ...event };
+    for (const listener of this.listeners[type] || []) listener(fired);
+    return fired;
+  }
+  contains(other) { return other === this || this.children.some(child => child instanceof Node && child.contains(other)); }
+  focus() {
+    const previous = document.activeElement;
+    document.activeElement = this;
+    if (previous && previous !== this) previous.fire('blur', { relatedTarget: this });
+    this.fire('focus');
   }
   set textContent(value) { this.text = String(value); this.children = []; }
   get textContent() { return this.text + this.children.map(child => child.textContent ?? child).join(' '); }
@@ -87,7 +102,10 @@ let nextResponse;
 let resolvePending;
 const urls = [];
 const timers = new Map();
-const document = { hidden: false, createElement: tag => new Node(tag), getElementById: byId };
+const document = {
+  hidden: false, activeElement: null, createElement: tag => new Node(tag), getElementById: byId,
+  listeners: {}, addEventListener: Node.prototype.addEventListener, fire: Node.prototype.fire,
+};
 const context = vm.createContext({
   URLSearchParams, window: { location: { search: '?workspace=all', hash: '' } }, document, console,
   Date: class extends Date { static now() { return now; } },
@@ -96,9 +114,14 @@ const context = vm.createContext({
   fetch: async url => { urls.push(url); return nextResponse; },
 });
 const common = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/common.js', import.meta.url), 'utf8'), { context });
+const providerUsage = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/provider-usage.js', import.meta.url), 'utf8'), { context });
 const resource = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/host-resources.js', import.meta.url), 'utf8'), { context });
 await common.link(() => { throw new Error('unexpected common dependency'); });
-await resource.link(name => { assert.equal(name, './common.js'); return common; });
+await providerUsage.link(name => { assert.equal(name, './common.js'); return common; });
+await resource.link(name => {
+  assert.ok(['./common.js', './provider-usage.js'].includes(name), `unexpected dependency ${name}`);
+  return name === './common.js' ? common : providerUsage;
+});
 await resource.evaluate();
 const { renderHostResources, renderProviderUsage, fetchAndRenderHostResources, initHostResources, resetHostResources } = resource.namespace;
 const reading = (percent, severity = 'ok', unknown_reason = null) => ({ percent, severity, unknown_reason });
@@ -219,79 +242,249 @@ assert.equal(chips().length, 4, 'a failed poll keeps the io chip');
 resetHostResources();
 assert.deepEqual(chips().map(node => node.dataset.resource), ['cpu', 'memory', 'disk'], 'a host switch forgets the io chip');
 
-// Provider usage rides the same payload: one chip per provider holding each of
-// its windows, worst first, behind a summary chip that narrow bars show instead.
+// Provider usage rides the same payload: one button per provider with its name,
+// its worst window's value, a meter and the weekly pressure, worst first, behind
+// a summary chip that narrow bars show instead. Each opens a dialog.
 const observedToday = new Date().toISOString();
 const usage = extra => ({
   provider: 'claude', scope: null, window: 'five_hour', used_percent: 5, exhausted: false, threshold: 90, gating: true,
   gated: false, partial: false, stale: false, age_seconds: 30, observed_at: observedToday, until: '2026-10-18T03:00:00Z',
-  crews: ['opus'], ...extra,
+  resets_at: null, crews: ['opus'], ...extra,
 });
 const staleOff = usage({
   provider: 'codex', window: 'primary', used_percent: 100, exhausted: true, threshold: 'off', stale: true,
   age_seconds: 3 * 86400, observed_at: '2026-10-14T12:00:00Z', crews: [],
 });
 const unreported = usage({ scope: 'opus', window: 'seven_day', used_percent: null });
-const limits = [usage({}), usage({ window: 'seven_day', used_percent: 26 }), staleOff];
+const limits = [usage({}), usage({ window: 'seven_day', used_percent: 26, resets_at: '2099-01-02T03:04:00Z' }), staleOff];
+const classes = node => node.className;
 const line = node => descendants(node)
-  .filter(child => ['k', 'v', 'provider-usage-window', 'provider-usage-sep', 'provider-usage-flag'].includes(child.className))
+  .filter(child => ['k', 'v', 'provider-usage-pressure', 'provider-usage-flag', 'provider-usage-count'].includes(child.className))
   .map(child => child.textContent.trim()).join(' ');
 const kv = node => Object.fromEntries(['k', 'v'].map(name => [name, descendants(node).find(child => child.className === name)?.textContent.trim()]));
 const providerItems = () => providerChips().filter(node => node.className.includes('provider-usage-item'));
 const providerSummary = () => providerChips().find(node => node.className.includes('provider-usage-summary'));
+const dialog = byId('provider-usage-dialog');
+const dialogText = () => dialog.textContent.replace(/\s+/g, ' ').trim();
+const dialogRows = () => descendants(dialog).filter(node => node.className.startsWith('usage-row ')).map(node => node.textContent.replace(/\s+/g, ' ').trim());
+const pill = () => descendants(dialog).find(node => node.className.startsWith('usage-pill'));
+const pin = () => descendants(dialog).find(node => node.className === 'usage-pin');
+const expanded = () => providerChips().filter(node => node.getAttribute('aria-expanded') === 'true');
+const outsideClick = () => document.fire('click', { target: { closest: () => null } });
+// A click bubbles to the document, whose listener ignores a click on a chip.
+const clickChip = node => { node.fire('click'); document.fire('click', { target: { closest: () => node } }); };
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const base = 'host-resource provider-usage provider-usage-item';
 renderProviderUsage({ provider_limits: limits });
-assert.deepEqual(providerItems().map(line), ['codex 100% old', 'claude 5% 5h | 26% 7d'],
-  'one chip per provider with its windows side by side, worst provider first');
-assert.deepEqual(providerItems().map(node => node.className), [
+assert.deepEqual(providerItems().map(line), ['codex 100% old', 'claude 26%'],
+  'one chip per provider with its worst window\'s value, worst provider first');
+assert.deepEqual(providerItems().map(classes), [
   `${base} critical stale gating-off`, `${base} ok`,
-], 'stale and gating-off readings are marked in their chip class');
-const [codexChip, claudeChip] = providerItems();
-assert.deepEqual(descendants(codexChip).filter(node => node.className === 'provider-usage-flag').map(node => node.textContent), ['old'], 'a stale reading says so in visible text');
-assert.deepEqual(descendants(claudeChip).filter(node => node.className === 'provider-usage-flag'), [], 'a fresh reading carries no flag');
-assert.deepEqual(descendants(claudeChip).filter(node => node.className === 'provider-usage-sep').map(node => node.getAttribute('aria-hidden')), ['true'], 'the window divider is not read aloud');
-for (const node of providerItems()) {
-  assert.equal(node.getAttribute('role'), 'group');
-  assert.equal(node.getAttribute('aria-label'), node.title, 'assistive technology reads the same detail as the title');
+], 'stale and gating-off providers are marked in their chip class');
+for (const node of [...providerItems(), providerSummary()]) {
+  assert.equal(node.tagName, 'button', 'a chip is a real button');
+  assert.equal(node.getAttribute('aria-haspopup'), 'dialog');
+  assert.equal(node.getAttribute('aria-controls'), 'provider-usage-dialog');
+  assert.equal(node.getAttribute('aria-expanded'), 'false');
+  assert.equal(node.title, undefined, 'the dialog carries the detail, so there is no native tooltip');
+  assert.ok(node.getAttribute('aria-label'), 'the button has an accessible name');
 }
-assert.match(codexChip.title, /codex primary 100%/);
-assert.match(codexChip.title, /observed 2026-10-14T12:00:00Z \(3d old · stale\)/, 'the title carries the observed time and age');
-assert.match(codexChip.title, /gating off/, 'the title says gating is off');
-assert.deepEqual(claudeChip.title.split('\n').map(row => row.split(' · ')[0]), ['claude five_hour 5%', 'claude seven_day 26%'], 'the title has one line per window');
-assert.match(claudeChip.title, /claude five_hour 5% · observed .* \(today\) · limit 90%/);
-renderProviderUsage({ provider_limits: [usage({ window: 'seven_day', used_percent: 26 }), usage({})] });
-assert.deepEqual(providerItems().map(line), ['claude 5% 5h | 26% 7d'], 'the 5h window reads before the 7d window whatever the payload order');
-renderProviderUsage({ provider_limits: [unreported, usage({})] });
-assert.deepEqual(providerItems().map(line), ['claude 5% 5h', 'claude opus - 7d'], 'a scope is its own chip; a missing usage reads as a dash and sorts after known readings');
-assert.equal(providerItems()[1].className, `${base} unknown`);
-assert.match(providerItems()[1].title, /claude \[opus\] seven_day usage not reported/);
-renderProviderUsage({ provider_limits: limits });
-assert.deepEqual(kv(providerSummary()), { k: 'usage', v: '100%' }, 'the summary chip shows the worst reading');
-assert.equal(providerSummary().className, 'host-resource provider-usage provider-usage-summary critical stale gating-off');
-assert.equal(providerSummary().title.split('\n').length, 3, 'the summary title lists every reading');
-assert.equal(providerSummary().getAttribute('aria-label'), providerSummary().title);
+assert.match(providerItems()[1].getAttribute('aria-label'), /^claude: 26% used in the 7-day window/);
+assert.equal(dialog.hidden, true, 'the dialog stays closed until a chip opens it');
+const [codexChip, claudeChip] = providerItems();
+assert.equal(descendants(claudeChip).filter(node => node.className === 'provider-usage-flag').length, 0, 'a fresh provider carries no flag');
+// The meter is decoration: the value is in the chip's text.
+assert.equal(descendants(claudeChip).find(node => node.className === 'provider-usage-meter').getAttribute('aria-hidden'), 'true');
+assert.match(descendants(descendants(claudeChip).find(node => node.className === 'provider-usage-meter')).at(0).getAttribute('style'), /width: 26%/);
 
-// Near, at and over the limit; a gated reading names its crews. A provider's
-// chip takes its worst window's tint.
+// Click opens and pins; clicking the pinned chip closes; one dialog at a time.
+clickChip(claudeChip);
+assert.equal(dialog.hidden, false);
+assert.equal(dialog.getAttribute('role'), 'dialog');
+assert.deepEqual(expanded(), [claudeChip], 'aria-expanded tracks the open chip');
+assert.equal(dialog.getAttribute('aria-label'), 'claude usage');
+assert.equal(pill().textContent, 'within limits');
+assert.match(dialogText(), /^claude within limits observed .* · .* ago/, 'the header names the provider, its state and the observation');
+assert.match(dialogRows()[0], /^7-day 26% resets 2099-01-02 03:04 UTC · in \S+ \S+ gate at 90%$/, 'a window with a reset time says when, absolutely and relatively');
+assert.doesNotMatch(dialogRows()[1], /resets/, 'a window the payload gives no reset time omits it');
+const tick = descendants(dialog).find(node => node.className === 'usage-meter-tick');
+assert.match(tick.getAttribute('style'), /left: 90%/, 'the meter ticks at the gate threshold');
+assert.match(dialogText(), /No crews held back/);
+assert.equal(pin().textContent, 'Unpin', 'a click pinned it open');
+assert.equal(descendants(dialog).some(node => node.className === 'usage-pressure'), false, 'no pressure section without a pressure reading');
+clickChip(claudeChip);
+assert.equal(dialog.hidden, true, 'clicking the pinned chip closes it');
+assert.deepEqual(expanded(), []);
+
+// The gating-off provider: a "no gate" flag, a stale pill, and no gate on its row.
+assert.deepEqual(descendants(codexChip).filter(node => node.className === 'provider-usage-flag').map(node => node.textContent), ['old']);
+clickChip(codexChip);
+assert.deepEqual(expanded(), [codexChip], 'opening another chip closes the first: one dialog at a time');
+assert.match(pill().textContent, /^stale · 3d old$/);
+assert.match(dialogRows()[0], /^primary old 100% no gate$/);
+assert.equal(descendants(dialog).some(node => node.className === 'usage-meter-tick'), false, 'a window with no gate has no tick');
+// Esc and an outside click close it, whether or not it is pinned.
+document.fire('keydown', { key: 'Escape' });
+assert.equal(dialog.hidden, true, 'Esc closes the dialog');
+clickChip(codexChip);
+assert.equal(dialog.hidden, false);
+outsideClick();
+assert.equal(dialog.hidden, true, 'a click outside closes the dialog');
+// A click inside the dialog does not.
+clickChip(codexChip);
+document.fire('click', { target: { closest: () => dialog } });
+assert.equal(dialog.hidden, false);
+// The Pin button toggles the pin; the dialog follows the pointer once unpinned.
+pin().fire('click');
+assert.equal(pin().textContent, 'Pin open');
+assert.equal(pin().getAttribute('aria-pressed'), 'false');
+pin().fire('click');
+assert.equal(pin().textContent, 'Unpin');
+outsideClick();
+
+// Hover opens after an intent delay, keeps open while the pointer crosses to the
+// dialog, and closes once it leaves. Touch hover does nothing.
+claudeChip.fire('pointerenter', { pointerType: 'touch' });
+await sleep(220);
+assert.equal(dialog.hidden, true, 'a touch pointer does not hover');
+claudeChip.fire('pointerenter', { pointerType: 'mouse' });
+assert.equal(dialog.hidden, true, 'hover waits out the intent delay');
+await sleep(60);
+assert.equal(dialog.hidden, true);
+await sleep(200);
+assert.equal(dialog.hidden, false, 'hover previews the dialog');
+assert.equal(pin().textContent, 'Pin open', 'a hover preview is not pinned');
+claudeChip.fire('pointerleave', { pointerType: 'mouse' });
+await sleep(80);
+dialog.fire('pointerenter', { pointerType: 'mouse' });
+await sleep(400);
+assert.equal(dialog.hidden, false, 'moving into the dialog keeps it open');
+dialog.fire('pointerleave', { pointerType: 'mouse' });
+await sleep(400);
+assert.equal(dialog.hidden, true, 'leaving the dialog closes the preview');
+// A quick pass over a chip never opens it.
+claudeChip.fire('pointerenter', { pointerType: 'mouse' });
+await sleep(50);
+claudeChip.fire('pointerleave', { pointerType: 'mouse' });
+await sleep(300);
+assert.equal(dialog.hidden, true);
+// Clicking a hover preview pins it, and a pinned dialog survives the pointer leaving.
+claudeChip.fire('pointerenter', { pointerType: 'mouse' });
+await sleep(220);
+clickChip(claudeChip);
+claudeChip.fire('pointerleave', { pointerType: 'mouse' });
+await sleep(400);
+assert.equal(dialog.hidden, false);
+assert.equal(pin().textContent, 'Unpin');
+outsideClick();
+// Keyboard focus opens a preview, and moving focus away closes it.
+claudeChip.focus();
+assert.equal(dialog.hidden, false, 'focus opens the dialog');
+assert.deepEqual(expanded(), [claudeChip]);
+const tab = claudeChip.fire('keydown', { key: 'Tab' });
+assert.equal(tab.prevented, true, 'Tab from the chip moves into the open dialog');
+codexChip.focus();
+assert.deepEqual(expanded(), [codexChip], 'focusing another chip swaps the dialog');
+document.activeElement = null;
+codexChip.fire('blur', { relatedTarget: null });
+assert.equal(dialog.hidden, true, 'blurring a preview closes it');
+
+// A gated provider shows when it is held until, and which crews are held back.
 renderProviderUsage({ provider_limits: [
   usage({ used_percent: 5 }), usage({ window: 'seven_day', used_percent: 85 }),
-  usage({ provider: 'codex', window: 'primary', used_percent: 92, gated: true, crews: ['sol'] }),
+  usage({ provider: 'codex', window: 'primary', used_percent: 92, gated: true, crews: ['sol', 'luna'], until: '2099-10-18T03:00:00Z' }),
 ] });
-assert.deepEqual(providerItems().map(node => node.className), [`${base} critical`, `${base} elevated`]);
-assert.match(providerItems()[0].title, /gated at 92% ≥ 90% until 2026-10-18 03:00Z: sol skipped/);
-assert.deepEqual(providerItems().map(line), ['codex 92%', 'claude 5% 5h | 85% 7d']);
+assert.deepEqual(providerItems().map(classes), [`${base} critical`, `${base} elevated`]);
+assert.deepEqual(providerItems().map(line), ['codex 92%', 'claude 85%']);
+clickChip(providerItems()[0]);
+assert.equal(pill().textContent, 'gated until 2099-10-18 03:00 UTC');
+assert.match(dialogText(), /Held back: sol, luna/);
+assert.match(dialogRows()[0], /^primary gated 92% gate at 90%$/);
+outsideClick();
+clickChip(providerItems()[1]);
+assert.equal(pill().textContent, 'near limit');
+outsideClick();
 
-// Beyond three providers the rest fold into one chip, so the bar cannot grow.
-// Other windows follow 5h and 7d inside their provider's chip.
+// A scoped window is named by its scope, with the window as its sublabel; a
+// provider with many windows lists them all, most used first.
+const scoped = (scope, window, used) => usage({ provider: 'antigravity', scope, window, used_percent: used });
+renderProviderUsage({
+  provider_limits: [
+    scoped('argon', 'gemini-argon-wtu-weekly', 0), scoped('claude', '3p-weekly', 0), scoped('flash', 'gemini-weekly', 5),
+    scoped('gpt', '3p-weekly', 0), scoped('pro', 'gemini-weekly', 5.4),
+  ],
+  provider_pressures: [{ provider: 'antigravity', pressure: 1, pressure_window: null }],
+});
+assert.deepEqual(providerItems().map(line), ['antigravity 5% ×1']);
+clickChip(providerItems()[0]);
+assert.deepEqual(dialogRows().map(row => row.split(' gate')[0]), [
+  'pro gemini · weekly 5%', 'flash gemini · weekly 5%', 'argon gemini · wtu · weekly 0%', 'claude 3p · weekly 0%', 'gpt 3p · weekly 0%',
+], 'scope-named rows with the window as sublabel, most used first');
+assert.doesNotMatch(dialogText(), /gemini-argon-wtu-weekly/, 'no raw scoped window id');
+assert.match(dialogText(), /Weekly pressure ×1 Above ×1 this provider's weekly allowance would expire unused, so its crews are pulled sooner among otherwise equal work; below ×1 they are pulled later; at ×1 nothing changes\. It only orders work and never holds any back\. No live weekly usage, so this reads neutral\./);
+outsideClick();
+
+// The weekly pressure shows its basis.
+renderProviderUsage({ provider_limits: [usage({ window: 'seven_day', used_percent: 11 })], provider_pressures: [
+  { provider: 'claude', pressure: 1.09, pressure_window: { window: 'seven_day', used_percent: 11, resets_at: '2099-01-02T03:04:00Z' } },
+] });
+clickChip(providerItems()[0]);
+assert.match(dialogText(), /Weekly pressure ×1\.09 .* 7-day · 11% used · resets 2099-01-02 03:04 UTC · in \S+ \S+/);
+outsideClick();
+
+// A scope with a missing usage reads as a dash and sorts after known readings.
+renderProviderUsage({ provider_limits: [unreported, usage({})] });
+assert.deepEqual(providerItems().map(line), ['claude 5%', 'claude opus -']);
+assert.equal(providerItems()[1].className, `${base} unknown`);
+clickChip(providerItems()[1]);
+assert.equal(pill().textContent, 'no usage reported');
+assert.match(dialogRows()[0], /^opus 7-day -/);
+outsideClick();
+
+// The summary chip shows the worst provider and opens the all-providers
+// dialog, as does the `+N more` chip; every provider is listed worst first.
+renderProviderUsage({ provider_limits: limits });
+assert.deepEqual(kv(providerSummary()), { k: 'codex', v: '100%' }, 'the summary chip shows the worst provider');
+assert.equal(providerSummary().className, 'host-resource provider-usage provider-usage-summary critical stale gating-off');
+assert.match(providerSummary().getAttribute('aria-label'), /^Provider usage: 2 providers, worst codex: 100% used/);
+clickChip(providerSummary());
+assert.equal(dialog.getAttribute('aria-label'), 'Provider usage, every provider');
+assert.deepEqual(dialogRows(), ['codex old 100% primary', 'claude 26% 7-day'], 'every provider, worst first, with its worst window');
+assert.deepEqual(expanded(), [providerSummary()]);
+outsideClick();
+
+// Beyond three providers the rest fold into one chip that opens the same
+// dialog, and the dialog lists every provider, not just the hidden ones.
 renderProviderUsage({ provider_limits: [
   ...limits, unreported, usage({ window: 'weekly_extra', used_percent: 60 }),
   usage({ provider: 'gemini', window: 'primary', used_percent: 10 }),
 ] });
 assert.equal(providerItems().length, 4);
-assert.deepEqual(providerItems().slice(0, 3).map(line), ['codex 100% old', 'claude 5% 5h | 26% 7d | 60% weekly extra', 'gemini 10%']);
-assert.deepEqual(kv(providerItems().at(-1)), { k: '+1 more', v: undefined });
-assert.equal(providerItems().at(-1).className, `${base} provider-usage-more unknown`);
-assert.equal(providerItems().at(-1).title.split('\n').length, 6, 'the folded chip lists every reading');
+assert.deepEqual(providerItems().slice(0, 3).map(line), ['codex 100% old', 'claude 60%', 'gemini 10%']);
+const more = providerItems().at(-1);
+assert.deepEqual(kv(more), { k: '+1 more', v: undefined });
+assert.equal(more.className, `${base} provider-usage-more unknown`);
+clickChip(more);
+assert.deepEqual(dialogRows().map(row => row.split(' ')[0]), ['codex', 'claude', 'gemini', 'claude'], 'the dialog lists all providers');
+assert.equal(dialogRows().length, 4);
+assert.match(dialogRows()[1], /^claude 60% weekly extra$/);
+assert.deepEqual(expanded(), [more], 'only the chip that opened the dialog is expanded');
+outsideClick();
+
+// A poll that changes nothing leaves the chips (and focus and hover on them)
+// alone; one that changes the open provider's reading refreshes its dialog in place.
+renderProviderUsage({ provider_limits: limits });
+const stable = providerChips();
+clickChip(providerItems()[1]);
+renderProviderUsage({ provider_limits: limits });
+assert.ok(providerChips().every((node, index) => node === stable[index]), 'an unchanged poll keeps the same chips');
+renderProviderUsage({ provider_limits: [usage({}), usage({ window: 'seven_day', used_percent: 40 }), staleOff] });
+assert.equal(dialog.hidden, false, 'an open dialog survives a poll');
+assert.match(dialogRows()[0], /^7-day 40%/, 'and shows the new reading');
+assert.equal(expanded().length, 1);
+renderProviderUsage({ provider_limits: [staleOff] });
+assert.equal(dialog.hidden, true, 'a dialog whose provider is gone closes');
+outsideClick();
 
 // No readings keep one placeholder, and say why.
 const placeholder = payload => { renderProviderUsage(payload); const chips = providerChips(); assert.equal(chips.length, 1); assert.equal(chips[0].className, 'host-resource provider-usage unknown'); return chips[0].title; };
@@ -299,6 +492,10 @@ assert.match(placeholder({}), /not reported by this host/, 'an older host sends 
 assert.match(placeholder({ provider_limits: null }), /not reported by this host/);
 assert.match(placeholder({ provider_limits: [] }), /No provider usage readings/);
 assert.match(placeholder(null), /unavailable/);
+renderProviderUsage({ provider_limits: limits });
+clickChip(providerItems()[0]);
+renderProviderUsage(null);
+assert.equal(dialog.hidden, true, 'losing the readings closes the dialog');
 
 // The readings follow the host poll: a fetch fills them, the 1s staleness tick
 // leaves them alone, a failed poll or a host switch clears them.
@@ -327,7 +524,7 @@ await timers.get(5000)();
 assert.equal(urls.length, requests, 'a hidden tab does not poll host resources or provider usage');
 document.hidden = false;
 
-console.log('topbar host chips (load, mem, disk, io where reported): per-chip severity and held state, many paths, fixed text across throttle, unknown/stale and polling, and per-provider usage chips (windows together, stale, gating-off, missing usage, fold, host reset) passed');
+console.log('topbar host chips (load, mem, disk, io where reported): per-chip severity and held state, many paths, fixed text across throttle, unknown/stale and polling, and per-provider usage chips and dialogs (open, pin, close, hover, focus, windows, gate, reset, held crews, stale, gating-off, missing usage, fold, summary, host reset) passed');
 
 // Settings Hosts shares only a concurrent/fresh topbar read for the same host.
 const { fetchHostResourcePayloadFor } = resource.namespace;
@@ -378,18 +575,25 @@ const pressures = [
   { provider: 'gemini', pressure: 1, pressure_window: null },
 ];
 renderProviderUsage({ provider_limits: [usage({ used_percent: 10, window: 'seven_day' }), usage({ account: 'credits', used_percent: 50, window: 'seven_day' })], provider_pressures: pressures });
-assert.deepEqual(providerItems().map(line), ['claude ×25.2 10% 7d', 'claude/credits ×0.5 50% 7d', 'gemini ×1']);
-assert.match(providerItems()[0].title, /claude ×25.2 \(seven_day 10%, resets 2026-10-24 18:00Z\)/);
-assert.match(providerItems()[2].title, /no live weekly usage/);
-assert.deepEqual(kv(providerSummary()), { k: 'claude', v: '×25.2' });
-// A model-scoped window names its scope once: the chip's scope prefix stands in
-// for the scope its window key carries, so `seven_day_opus` reads `opus 7d`.
+assert.deepEqual(providerItems().map(line), ['claude 10% ×25.2', 'claude/credits 50% ×0.5', 'gemini - ×1'], 'one chip per account, with the raw pressure');
+clickChip(providerItems()[0]);
+assert.match(dialogText(), /Weekly pressure ×25\.2 .* 7-day · 10% used · resets 2026-10-24 18:00 UTC/);
+outsideClick();
+clickChip(providerItems()[2]);
+assert.match(dialogText(), /No live weekly usage/);
+assert.equal(pill().textContent, 'no usage reported');
+outsideClick();
+assert.deepEqual(kv(providerSummary()), { k: 'claude', v: '10%' });
+// A model-scoped window names its scope once: `seven_day_opus` under scope
+// `opus` is the row `opus`, sublabel `7-day`; an account-wide window keeps its name.
 renderProviderUsage({ provider_limits: [
   usage({ used_percent: 10, window: 'seven_day' }), usage({ scope: 'opus', used_percent: 40, window: 'seven_day_opus' }),
   usage({ account: 'credits', scope: 'sonnet', used_percent: 20, window: 'seven_day_sonnet' }),
 ], provider_pressures: pressures });
-assert.deepEqual(providerItems().map(line), ['claude ×25.2 10% 7d | 40% opus 7d', 'claude/credits ×0.5 20% sonnet 7d', 'gemini ×1'],
-  'a scoped window reads its scope once, and an account-wide window keeps its short label');
+assert.deepEqual(providerItems().map(line), ['claude 40% ×25.2', 'claude/credits 20% ×0.5', 'gemini - ×1']);
+clickChip(providerItems()[0]);
+assert.deepEqual(dialogRows().map(row => row.split(' gate')[0]), ['opus 7-day 40%', '7-day 10%']);
+outsideClick();
 renderProviderUsage({ provider_limits: [], provider_pressures: [{ provider: 'codex', pressure: 0, pressure_window: null }] });
-assert.deepEqual(providerItems().map(line), ['codex ×0'], 'zero pressure is displayed, not treated as missing');
+assert.deepEqual(providerItems().map(line), ['codex - ×0'], 'zero pressure is displayed, not treated as missing');
 console.log('weekly pressure: raw values, account isolation, neutral and zero display passed');

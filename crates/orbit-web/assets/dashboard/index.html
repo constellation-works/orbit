@@ -36,9 +36,10 @@
               <span id="host-warn-label"></span>
               <span id="host-warn-value"></span>
             </button>
-            <!-- The same host's provider usage, one chip per provider with each
-                 of its windows (a single summary chip on narrow bars). A divider
-                 shows only while the warning chip is visible. -->
+            <!-- The same host's provider usage, one chip per provider: its worst
+                 window, a meter and the weekly pressure (a single summary chip on
+                 narrow bars). Each opens #provider-usage-dialog. A divider shows
+                 only while the warning chip is visible. -->
             <div class="host-resource-chips provider-usage-chips" id="provider-usage-chips" role="group" aria-label="Provider usage of the selected host">
               <span class="host-resource provider-usage unknown" role="group" aria-label="Provider usage unavailable" title="Provider usage unavailable"><span class="k">usage</span><span class="v">-</span></span>
             </div>
@@ -132,6 +133,7 @@
         </div>
       </nav>
       <div class="host-detail" id="host-detail" role="dialog" aria-label="Host resources" hidden></div>
+      <div class="usage-dialog" id="provider-usage-dialog" role="dialog" aria-label="Provider usage" hidden></div>
 
       <div class="main-col">
         <!-- ORB-14680: the selected host's state. An unreachable, mismatched or
