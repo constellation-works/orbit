@@ -8621,6 +8621,37 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         Ok(())
     }
 
+    fn admit_final_recovery(
+        &self,
+        _: &str,
+        _: &orbit_engine::FinalRecoveryAdmissionRequest,
+    ) -> Result<orbit_engine::FinalRecoveryAdmission, OrbitError> {
+        Ok(
+            if self
+                .scripted
+                .lock()
+                .unwrap()
+                .contains_key("test_final_decision")
+            {
+                orbit_engine::FinalRecoveryAdmission::Admitted
+            } else {
+                orbit_engine::FinalRecoveryAdmission::Skipped {
+                    reason: "fixture has no recovery".into(),
+                }
+            },
+        )
+    }
+
+    fn apply_final_recovery(
+        &self,
+        _: &str,
+        _: &orbit_engine::FinalRecoveryApplication,
+    ) -> Result<orbit_engine::FinalRecoveryApplied, OrbitError> {
+        Ok(orbit_engine::FinalRecoveryApplied::Escalated {
+            outcome: "fixture".into(),
+        })
+    }
+
     fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
         Ok(None)
     }
@@ -8893,9 +8924,12 @@ check() {
         failure) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE"}' ;;
         # Two required failures. `test` then `lint`, or the reverse. Both
         # carry isRequired so the policy read does not tag only the last node.
-        paired_failure|paired_failure_reversed)
+        paired_pending|paired_failure|paired_failure_reversed)
             test_check='{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}'
             lint_check='{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}'
+            if [ "$1" = paired_pending ]; then
+                lint_check='{"__typename":"CheckRun","name":"lint","status":"IN_PROGRESS","conclusion":"","isRequired":true}'
+            fi
             if [ "$1" = paired_failure_reversed ]; then
                 printf '%s,%s' "$lint_check" "$test_check"
             else
@@ -8965,7 +8999,7 @@ status() {
         pending) merge_state=BLOCKED; rollup=$(check pending) ;;
         success) merge_state=CLEAN; rollup=$(check success) ;;
         failure) merge_state=BLOCKED; rollup=$(check failure) ;;
-        paired_failure|paired_failure_reversed) merge_state=BLOCKED; rollup=$(check "$observed") ;;
+        paired_pending|paired_failure|paired_failure_reversed) merge_state=BLOCKED; rollup=$(check "$observed") ;;
         aggregate_failure|aggregate_mixed_failure)
             merge_state=BLOCKED
             rollup='{"__typename":"CheckRun","name":"CodeQL","workflowName":"","status":"COMPLETED","conclusion":"FAILURE"},{"__typename":"CheckRun","name":"Analyze (rust)","workflowName":"CodeQL","status":"COMPLETED","conclusion":"SUCCESS"}'
@@ -9106,7 +9140,13 @@ commit_ci_log() {
     for dir in "$forge/commit-ci"/*; do
         [ -f "$dir/run_id" ] || continue
         if [ "$(cat "$dir/run_id")" = "$run" ]; then
-            cat "$dir/log"
+            job=""
+            previous=""
+            for arg in "$@"; do
+                if [ "$previous" = --job ]; then job="$arg"; fi
+                previous="$arg"
+            done
+            if [ -f "$dir/log-$job" ]; then cat "$dir/log-$job"; else cat "$dir/log"; fi
             return
         fi
     done

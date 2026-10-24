@@ -1566,7 +1566,7 @@ fn auto_fix_mixed_failure_wait_preserves_recovery_and_refusals() {
                                 ["contexts"]["nodes"];
                             nodes[0]["status"] = json!("COMPLETED");
                             nodes[0]["conclusion"] = json!("FAILURE");
-                            nodes.as_array_mut().unwrap().push(json!({"name":"other_required","isRequired":true,"status":"IN_PROGRESS"}));
+
                             host.script("ci.commit_jobs", json!({"jobs":[{"name":"test","conclusion":"failure","run_id":10,"job_id":11,"failed_step":"compile"}]}));
                             host.script(
                                 "ci.job_log",
@@ -2507,6 +2507,181 @@ fn auto_fix_does_not_repair_while_the_moved_base_ci_is_open() {
                 assert_eq!(fx.remote_tip(BASE), tip);
                 assert_eq!(host.status(TASK_ID), TaskStatus::Review);
             });
+        },
+    );
+}
+
+/// A second required failure must reach both repair admission and the job's
+/// independent final-recovery observation, even when the earlier error is stale.
+#[test]
+fn auto_fix_settles_staggered_required_failures_before_repair_and_final_recovery() {
+    isolated(
+        "auto_fix::auto_fix_settles_staggered_required_failures_before_repair_and_final_recovery",
+        |sandbox| {
+            for case in ["settled", "timeout", "policy_ahead"] {
+                in_fresh_row(sandbox, |row| {
+                    let fx = Fixture::new(row);
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                    open_for_completion(&fx, &host);
+                    plant_paired_commit_ci(
+                        &fx,
+                        &fx.candidate,
+                        11,
+                        &[("test", "failure"), ("lint", "failure")],
+                        "unused",
+                    );
+                    let logs = fx.forge.join("commit-ci").join(&fx.candidate);
+                    fs::write(logs.join("log-12"), "error: candidate compile failure\n").unwrap();
+                    fs::write(logs.join("log-13"), "error: candidate lint failure\n").unwrap();
+                    plant_commit_ci(&fx, &fx.base_sha, 21, "success", "passed");
+                    fx.script_checks(if case == "settled" {
+                        &["paired_pending", "paired_pending", "paired_failure"]
+                    } else {
+                        &["paired_pending"]
+                    });
+                    if case == "policy_ahead" {
+                        // The sibling concludes between the rollup and policy
+                        // reads; its newer failure must join repair evidence.
+                        fs::write(fx.forge.join("required-policy"), serde_json::to_vec(&json!({
+                            "data":{"repository":{"pullRequest":{"headRefOid":fx.candidate,
+                                "commits":{"nodes":[{"commit":{"oid":fx.candidate,
+                                    "statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[
+                                        {"name":"test","isRequired":true,"status":"COMPLETED","conclusion":"FAILURE"},
+                                        {"name":"lint","isRequired":true,"status":"COMPLETED","conclusion":"FAILURE"}
+                                    ]}}
+                                }}]}}
+                            }}
+                        })).unwrap()).unwrap();
+                    }
+                    let mut input = fx.complete_ungated_input();
+                    input["auto_fix"] = json!(true);
+                    input["completion"] = json!("review");
+                    input["max_wait_seconds"] = json!(15);
+                    let error = super::complete_with_logical_clock(&host, &input)
+                        .expect_err("failed checks cannot complete")
+                        .to_string();
+                    let attempts = pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER);
+                    assert_eq!(
+                        fx.status_reads(),
+                        if case == "policy_ahead" { 1 } else { 3 },
+                        "repair requires settled policy: {error}"
+                    );
+                    if case != "timeout" {
+                        assert_eq!(attempts.len(), 1);
+                        for diagnostic in ["candidate compile failure", "candidate lint failure"] {
+                            assert!(
+                                error.contains(diagnostic),
+                                "both signatures reach repair: {error}"
+                            );
+                        }
+                        for name in ["CI / test", "CI / lint"] {
+                            assert!(error.contains(name), "both jobs reach repair: {error}");
+                        }
+                    } else {
+                        assert!(attempts.is_empty(), "timeout spends no repair attempt");
+                        assert!(error.contains("timed out"), "{error}");
+                    }
+
+                    // Final recovery is a fresh public job-boundary read, rather
+                    // than a copy of the duplicate-admission error, which has no job logs.
+                    host.script(
+                        "test_checkpoint",
+                        json!({"workspace_path":fx.repo,"base_sha":fx.base_sha}),
+                    );
+                    host.script(
+                        "test_final_decision",
+                        json!({"decision":"escalate",
+                        "diagnosis":"inspect both failures", "human_action":"repair"}),
+                    );
+                    let mut job = job_asset(json!([
+                        {"id":"setup","target":"activity:checkpoint"},
+                        {"id":"complete_pr","target":"activity:pr_complete","default_input":input}
+                    ]));
+                    job.final_recovery_activity = Some("decide".into());
+                    let mut catalog = V2ActivityCatalog::new();
+                    for (name, action) in [
+                        ("checkpoint", "test_checkpoint"),
+                        ("pr_complete", "pr_complete"),
+                        ("decide", "test_final_decision"),
+                    ] {
+                        catalog.insert(
+                            name,
+                            ActivityV2 {
+                                description: name.into(),
+                                input_schema_json: Value::Null,
+                                output_schema_json: Value::Null,
+                                fs_profile: None,
+                                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                                    action: action.into(),
+                                    config: Value::Null,
+                                }),
+                            },
+                        );
+                    }
+                    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
+                    let audit = tempfile::tempdir().unwrap();
+                    let (writer, _, _) = build_writer_and_sinks(audit.path(), RUN_ID);
+                    let outcome = execute_job_with_resume(
+                        &job,
+                        json!({"task_ids":[TASK_ID]}),
+                        RUN_ID,
+                        writer,
+                        &host,
+                        None,
+                    );
+                    assert!(!outcome.is_ok_and(|outcome| outcome.success));
+                    let recovery = host
+                        .scripted_inputs
+                        .lock()
+                        .unwrap()
+                        .get("test_final_decision")
+                        .cloned();
+                    if case != "timeout" {
+                        let recovery =
+                            recovery.expect("settled checks authorize a complete diagnosis");
+                        let activity =
+                            load_activity_asset(
+                                &fs::read_to_string(workspace_root().join(
+                                    "crates/orbit-core/assets/activities/final_recovery.yaml",
+                                ))
+                                .unwrap(),
+                            )
+                            .unwrap();
+                        let schema =
+                            jsonschema::JSONSchema::compile(&activity.spec.input_schema_json)
+                                .unwrap();
+                        // The deterministic stand-in adds its dispatch step id;
+                        // an agent activity receives the original envelope.
+                        let mut agent_input = recovery.clone();
+                        agent_input.as_object_mut().unwrap().remove("step_id");
+                        if let Err(errors) = schema.validate(&agent_input) {
+                            panic!(
+                                "canonical recovery input: {:?}",
+                                errors.map(|error| error.to_string()).collect::<Vec<_>>()
+                            );
+                        }
+                        let evidence = &recovery["required_check_failures"];
+                        assert_eq!(evidence["head_sha"], fx.candidate);
+                        let failures = evidence["failed_checks"].as_array().unwrap();
+                        assert_eq!(failures.len(), 2);
+                        for (name, signature) in [
+                            ("test", "candidate compile failure"),
+                            ("lint", "candidate lint failure"),
+                        ] {
+                            let failure =
+                                failures.iter().find(|entry| entry["name"] == name).unwrap();
+                            assert!(failure["evidence"].as_str().unwrap().contains(signature));
+                        }
+                    } else {
+                        assert!(
+                            recovery.is_none(),
+                            "partial checks cannot authorize a base-only diagnosis"
+                        );
+                    }
+                    assert!(fx.merge_requests().is_empty());
+                    assert_eq!(fx.head(), fx.candidate);
+                });
+            }
         },
     );
 }

@@ -748,15 +748,35 @@ fn final_recovery_input(
         "crew_config_key": FINAL_RECOVERY_CREWS_KEY,
     });
     inject_recovery_evidence(ctx, &mut input)?;
-    if let JobV2StepBody::Target(target) = &step.body
-        && let Ok(rendered) = render_input(
+    if let JobV2StepBody::Target(target) = &step.body {
+        let completion = matches!(&target.spec, ActivityV2Spec::Deterministic(spec)
+            if spec.action == "pr_complete");
+        let rendered = render_input(
             target.default_input.as_ref(),
             &ctx.input,
             &ctx.template_ctx(),
             target.input_schema_json.as_ref(),
-        )
-    {
-        input["failed_step_input"] = bounded_recovery_input(&ctx.run_id, rendered);
+        );
+        if completion {
+            let rendered = rendered.as_ref().map_err(|error| {
+                format!("completion recovery input cannot be rendered: {error}")
+            })?;
+            if rendered.get("no_diff_expected").and_then(Value::as_bool) != Some(true) {
+                let checks = crate::executor::automation::vcs::completion_recovery_checks(
+                    ctx.host,
+                    std::path::Path::new(&worktree.workspace_path),
+                    rendered,
+                    task_id,
+                )?;
+                if checks.to_string().len() > MAX_RECOVERY_ERROR_MESSAGE_BYTES {
+                    return Err("completion recovery check evidence exceeds its input budget; refusing an incomplete diagnosis".into());
+                }
+                input["required_check_failures"] = checks;
+            }
+        }
+        if let Ok(rendered) = rendered {
+            input["failed_step_input"] = bounded_recovery_input(&ctx.run_id, rendered);
+        }
     }
     for (key, value) in [
         ("base_ref", &worktree.base_ref),
