@@ -12,9 +12,10 @@
   <body>
     <a class="skip-link" id="skip-link" href="#tasks-main">Skip to content</a>
     <div class="shell">
-      <!-- The bar spans the window: the brand, the selected host's live
-           readings, Drain and Refresh. When the dashboard last refreshed and
-           the UTC/Local clock sit at the foot of the rail. The destination
+      <!-- The bar spans the window: the brand, provider usage, Drain and
+           Refresh, plus one host warning when a reading is elevated or worse.
+           The host's readings, when the dashboard last refreshed, and the
+           UTC/Local clock sit at the foot of the rail. The destination
            heading stays for assistive tech. -->
       <header class="topbar">
           <div class="rail-brand">
@@ -24,22 +25,20 @@
             </svg>
           </div>
           <h1 class="crumb visually-hidden" id="topbar-crumb">Tasks</h1>
-          <!-- Live readings for the selected host: load relative to cores, memory,
-               disk and (where the host reports it) disk I/O stall, then, past a
-               divider, its provider usage. The group names that host. Each chip is sized for its
-               widest usual reading, so a new reading or a throttle verdict does
-               not move the bar. The counts sit on the rail (live runs
-               on Jobs, denials on Health). -->
-          <div class="host-resource-group" id="host-resource-group" role="group" aria-label="Live resources of the serving host">
-            <span class="host-resource-name" id="host-resource-name" aria-hidden="true">serving host</span>
-            <div class="host-resource-chips" id="host-resource-chips" aria-live="polite">
-              <span class="host-resource unknown" data-resource="cpu" role="group" aria-label="cpu unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">load</span><span class="v">-</span></span>
-              <span class="host-resource unknown" data-resource="memory" role="group" aria-label="memory unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">mem</span><span class="v">-</span></span>
-              <span class="host-resource unknown" data-resource="disk" role="group" aria-label="disk unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">disk</span><span class="v">-</span></span>
-            </div>
+          <!-- Provider usage for the selected host, and one warning chip when a
+               reading is elevated or worse. That chip opens the same detail as
+               the rail block, so the alarm stays visible when the rail is
+               hidden. The readings themselves sit in the rail foot. Counts sit
+               on the rail (live runs on Jobs, denials on Health). -->
+          <div class="host-resource-group" id="host-resource-group" role="group" aria-label="Provider usage of the serving host">
+            <button type="button" class="host-warn" id="host-warn" hidden aria-expanded="false" aria-haspopup="dialog" aria-controls="host-detail">
+              <svg class="host-warn-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3.2 17.6 16.8H2.4L10 3.2z"/><path d="M10 8.2v3.6"/><path d="M10 14.4h.01"/></svg>
+              <span id="host-warn-label"></span>
+              <span id="host-warn-value"></span>
+            </button>
             <!-- The same host's provider usage, one chip per provider with each
-                 of its windows (a single summary chip on narrow bars); it
-                 follows the host chips' poll. -->
+                 of its windows (a single summary chip on narrow bars). A divider
+                 shows only while the warning chip is visible. -->
             <div class="host-resource-chips provider-usage-chips" id="provider-usage-chips" role="group" aria-label="Provider usage of the selected host">
               <span class="host-resource provider-usage unknown" role="group" aria-label="Provider usage unavailable" title="Provider usage unavailable"><span class="k">usage</span><span class="v">-</span></span>
             </div>
@@ -109,9 +108,19 @@
           </div>
         </div>
 
-        <!-- The rail's foot: when the dashboard last refreshed, then the
-             UTC/Local clock every time on the page follows. -->
+        <!-- The rail's foot: the selected host's readings, then when the
+             dashboard last refreshed, then the UTC/Local clock every time
+             on the page follows. The block does not repeat the host name. -->
         <div class="rail-foot">
+          <button type="button" class="host-block stale" id="host-block" aria-expanded="false" aria-haspopup="dialog" aria-controls="host-detail" aria-live="polite" aria-label="Host resources: unknown">
+            <span class="host-block-head">
+              <span class="host-block-kicker">Host</span>
+              <span class="host-block-verdict"><span class="host-block-dot" aria-hidden="true"></span><span class="host-block-verdict-text">unknown</span></span>
+            </span>
+            <span class="host-resource unknown" data-resource="cpu" role="group" aria-label="cpu unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">load</span><span class="v">–</span></span>
+            <span class="host-resource unknown" data-resource="memory" role="group" aria-label="memory unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">mem</span><span class="v">–</span></span>
+            <span class="host-resource unknown" data-resource="disk" role="group" aria-label="disk unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">disk</span><span class="v">–</span></span>
+          </button>
           <div class="rail-conn">
             <span id="conn-status" class="status-dot orange"></span>
             <span class="conn-text"><span id="conn-host" class="conn-host"></span><span id="meta-text">connecting&hellip;</span></span>
@@ -122,6 +131,7 @@
           </div>
         </div>
       </nav>
+      <div class="host-detail" id="host-detail" role="dialog" aria-label="Host resources" hidden></div>
 
       <div class="main-col">
         <!-- ORB-14680: the selected host's state. An unreachable, mismatched or

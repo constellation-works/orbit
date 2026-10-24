@@ -370,7 +370,7 @@ function drainLine(reading, verdict) {
 }
 
 /// One line for every workspace's drain capacity, plus the admission verdict
-/// the top bar states. A failed capacity read is named; it does not become "idle".
+/// the rail block states. A failed capacity read is named; it does not become "idle".
 function drainSummary(reading, verdict) {
   const drains = reading.drains || [];
   const known = drains.filter((drain) => !drain.error);

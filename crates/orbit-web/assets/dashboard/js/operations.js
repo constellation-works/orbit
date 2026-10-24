@@ -2560,7 +2560,7 @@ function autoDrainPlural(n, word) {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
-// A throttle reading in the unit the top bar uses: CPU as load per core
+// A throttle reading in the unit the rail block uses: CPU as load per core
 // ("load 1.6× cores"), memory and disk as percentages. A threshold is bare
 // (no leading label) and keeps two decimals so 0.75× does not round to 0.8×.
 function throttleReading(resource, percent, threshold = false) {
@@ -2577,7 +2577,7 @@ function throttledResources(capacity) {
   return Array.isArray(resources) ? resources.filter(item => item && item.resource) : [];
 }
 
-// A throttled resource by the name the top bar gives it.
+// A throttled resource by the name the rail block gives it.
 function throttleName(resource) {
   return resource === "cpu" ? "load" : String(resource);
 }

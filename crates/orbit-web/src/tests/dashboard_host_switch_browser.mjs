@@ -250,10 +250,11 @@ async function switchHost(name) {
 async function assertNamed(label) {
   const select = await page.locator('#host-select').evaluate((node) => node.options[node.selectedIndex].textContent);
   assert(select.includes(label), `the rail picker names ${label}: ${select}`);
-  const chipName = await page.locator('#host-resource-name').textContent();
   const chipLabel = await page.locator('#host-resource-group').getAttribute('aria-label');
-  assert(chipName.includes(label) && chipLabel.includes(label), `the chip group names ${label}: ${chipName} / ${chipLabel}`);
-  assert(await page.locator('#host-resource-name').isVisible(), 'the chip group name is visible text');
+  const detailLabel = await page.locator('#host-detail').getAttribute('aria-label');
+  assert(chipLabel.includes(label), `provider usage names ${label}: ${chipLabel}`);
+  assert(detailLabel.includes(label), `the host detail names ${label}: ${detailLabel}`);
+  assert(await page.locator('#host-select').isVisible(), 'the host name stays visible on the rail');
   const conn = await page.locator('#conn-host').textContent();
   assert(conn.includes(label), `the connection line names ${label}: ${conn}`);
 }
@@ -383,7 +384,7 @@ try {
     if (FAILURES[host]) assert(text.includes(FAILURES[host].message), `${host} shows the forward's message: ${text}`);
     assert(!(await page.locator('.tab-pane.active').isVisible()), `${host} replaces the panels`);
     assert(await page.locator('.panel-placeholder.action-error:visible').count() === 0, `${host} shows no failed panels`);
-    assert(await page.locator('#host-resource-chips .host-resource.unknown').count() === 3, `${host} shows no other host's readings`);
+    assert(await page.locator('#host-block .host-resource.unknown').count() === 3, `${host} shows no other host's readings`);
     if (host === 'deadhost') await captureWidths('unreachable');
     const back = page.locator('.host-state-back');
     assert((await back.textContent()) === `Back to ${SERVING}`, 'the way back names the serving host');

@@ -145,20 +145,19 @@ function buildPicker() {
   container.replaceChildren(label, select);
 }
 
-/// Name the selected host on the top-bar chip group and the rail connection
-/// line, and keep the picker in step with it.
+/// Name the selected host on the provider-usage group, the resource dialog
+/// and the rail connection line, and keep the picker in step with it.
 export function renderHostChrome() {
   const name = hostDisplayName();
   const group = $("host-resource-group");
   if (group) {
-    group.setAttribute("aria-label", `Live resources of ${name}`);
+    group.setAttribute("aria-label", `Provider usage of ${name}`);
     group.classList.toggle("remote", !!getHost());
   }
-  const chipName = $("host-resource-name");
-  if (chipName) {
-    chipName.textContent = name;
-    chipName.title = getHost() ? `Readings from ${name}` : `Readings from ${name}, which serves this dashboard`;
-  }
+  const detailName = $("host-detail-name");
+  if (detailName) detailName.textContent = name;
+  const panel = $("host-detail");
+  if (panel) panel.setAttribute("aria-label", `${name} resources`);
   const conn = $("conn-host");
   if (conn) conn.textContent = name;
   const select = $("host-select");
