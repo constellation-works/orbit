@@ -150,7 +150,7 @@ pub(super) fn append_decided_event(
 
 /// [`append_decided_event`] by the actor `by`.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn append_row(
+pub(in super::super) fn append_row(
     fixture: &Fixture,
     task_id: &str,
     at: DateTime<Utc>,
@@ -613,6 +613,20 @@ pub(in super::super) fn pilot_receipt(
     before: &[&str],
     after: &[&str],
 ) {
+    pilot_receipt_with(fixture, task_id, at, run_id, before, after, json!({}));
+}
+
+/// [`pilot_receipt`] whose assessment also carries `findings`, such as
+/// `{"utility_warnings": [...]}`.
+pub(in super::super) fn pilot_receipt_with(
+    fixture: &Fixture,
+    task_id: &str,
+    at: DateTime<Utc>,
+    run_id: Option<&str>,
+    before: &[&str],
+    after: &[&str],
+    findings: Value,
+) {
     let dir = bundle_dir(fixture.path("").as_path(), task_id).expect("fixture task bundle");
     let path = dir.join(TASK_COMMENTS_FILE_NAME);
     let rows = fs::read_to_string(&path)
@@ -628,6 +642,9 @@ pub(in super::super) fn pilot_receipt(
         },
         "context_files_before": before,
     });
+    for (field, value) in findings.as_object().into_iter().flatten() {
+        body["assessment"][field] = value.clone();
+    }
     if let Some(run_id) = run_id {
         body["pilot_run_id"] = json!(run_id);
     }

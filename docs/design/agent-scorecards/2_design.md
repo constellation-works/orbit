@@ -116,7 +116,7 @@ One module computes every role's score. A role supplies its unit of work, its te
 
 ### 4.1 Rates and the raw score
 
-Each term's count is converted to a rate per 100 units of the role's work (§5). For roles without expectations, the **raw score** is `Σ weight × rate` over the role's terms. Positive weights are credit; negative weights are problems. Weights live in one table per role, shown in the view and returned in the payload.
+Each term's count is converted to a rate per 100 units of the role's work (§5). A role may give a term its own denominator instead: the pilots' warning terms are rated per 100 settled assessments, not per 100 assessed tasks (§5.4). Such a term also has its own minimum support; below it the term is **provisional**, rated and shown but left out of the raw score, so a handful of settlements cannot swing a rank. Every other term, and every other role, uses the role's units. For roles without expectations, the **raw score** is `Σ weight × rate` over the role's terms. Positive weights are credit; negative weights are problems. Weights live in one table per role, shown in the view and returned in the payload.
 
 Implementers instead start at 100 and sum weighted actual-minus-expected rates for their tier mix (§5.2).
 
@@ -134,7 +134,7 @@ Shrinking toward the average narrows a small row's lead but cannot reverse it: w
 
 ### 4.3 Minimum support
 
-Rows with fewer than 10 units (`min_support`, default 10, at least 1) are `below_support`. They are greyed, listed after every supported row, and have no rank. Their scores are still computed and shown.
+Rows with fewer than 10 units (`min_support`, default 10, at least 1) are `below_support`. They are greyed, listed after every supported row, and have no rank. Their scores are still computed and shown. A term with its own denominator (§4.1) has its own minimum support, which `min_support` does not change: the pilots' warning terms need 10 settled assessments (`warning_min_support`).
 
 ### 4.4 Windows and late evidence
 
@@ -335,17 +335,45 @@ The pilot's selectors are the newest receipt's `context_files_after`; the filer'
 | F1 lift | +1 | F1 points gained over the filer's own selectors from before any pilot ran, per task. A task's lift can be negative. |
 | Tier calibration | +0.25 | Tasks whose assessed complexity matches their observed tier, so per 100 tasks the percent on the tier. |
 | Costly misses | −1 | Landed files no pilot selector covered that a base-conflict block of the task, or a refused lock request of the task, named. |
+| Confirmed warnings | +3 | Held assessments the records proved right (below), per 100 settled assessments. |
+| Dismissed warnings | −1 | Held assessments overridden as harmless (below), per 100 settled assessments. |
+| Missed scope blocks | −3 | Clean assessments whose task was promoted, then blocked on a decision block triage proposed, per 100 settled assessments. |
 | Lock-wait hours | −1 | Hours other tasks waited, in lock-wait episodes, on paths the holder reserved through a pilot selector that covered none of the holder's landed files. |
 
 A lock-wait episode (Analytics › Codebase's lock contention) knows its holders: each refused request records which task or reservation held each conflicting path, and a reservation resolves to the tasks it named. A wait is charged to a holder's pilot when at least one of the holder's pilot selectors reserves the path and none of those selectors covered a landed file. A wait on a path that a useful selector reserved is not charged, and neither is a wait on a holder no pilot assessed. Both pilot problems count against the pilot run of the holder's newest receipt, in the window that receipt falls in.
 
 The **observed tier** ranks the window's assessed tasks that have an assessed tier (low, medium, hard or xhard) and a total implementation cost (every attempt's run priced) by that cost, cheapest first, and cuts the ranking into tiers in the same proportions the pilots assigned. The observed column totals therefore equal the assessed row totals. Calibration measures whether a pilot orders work correctly, not whether it guesses absolute cost (§11). Tasks without a tier or a priced implementation are not placed. Cost decides only the observed tier and is never a term.
 
-Shown, not scored (`stats`): recall, precision and F1 pooled over the row's tasks, the filer's F1, landed files no pilot selector covered, unused selectors, selectors per task, the share of placed tasks assessed within one tier, cost per assessment (null when a pilot run is missing or unpriced), median pilot run duration, and `tier_matrix`.
+**Pilot warnings.** F1 lift, tier calibration, costly misses and lock-wait hours grade done tasks; the three warning terms grade every assessment, held or clean, by how it settled. They live in `application/agents/roles/pilot_warnings.rs`. An assessment is one task-pilot receipt: the audit comment the apply step seals with the assessment it persisted. It is **held** when that assessment has at least one finding that holds promotion (`blocked_by`, `adr_conflicts`, `utility_warnings`, `surface_warnings` or `validation_tool_warnings`), and **clean** otherwise. A finding marked `holds_promotion: false` is advisory and never counts. A `blocked_by` finding is judged against the task's current dependency edges, never against which prerequisites are done now: the done state at assessment time is not stored, and a prerequisite finishing later must not turn a past hold clean. The receipt says only whether the assessment held. How it settled comes from task history (edits and status transitions) and block-triage markers, never from agent output.
+
+A **scope edit** is an `updated` history entry written by someone other than `task-pilot` or `system` whose note names `description` or `acceptance_criteria`. A **bare-note edit** is one whose note names no document. Every envelope-only write leaves that bare note: context files, dependencies and relations, but also tags, title, priority and crew. So history cannot tell a scope fix from bookkeeping there.
+
+Only an assessment written while the task was `proposed` is graded. The **window** of an assessment runs until the next assessment of the same task or until the task leaves `proposed`, whichever comes first.
+
+| Outcome | When |
+|---|---|
+| Confirmed | Within the window, a scope edit, or the task is rejected or archived. Or the task is approved with no scope edit and no bare-note edit in the window, and its delivery then blocks or the task is rejected. |
+| Dismissed | Approved with no scope edit and no bare-note edit, then `done` with no block. |
+| Missed scope block (clean assessments only) | Promoted, then a `blocked_task_triaged` marker records disposition `decision` (a `propose` from `orbit.task.block_triage` or the blocked-task triage routine). |
+| Settled clean (clean assessments only) | Promoted, then `done`, rejected or archived with no such marker. Counts in the denominator only. |
+| Excluded | Approved after a bare-note edit with no scope edit: neither credit nor charge, since it may be a dependency fix that answered the warning or only a tag change. Superseded by a later assessment with no scope edit in between (the later one is graded). Written outside `proposed`. Held and archived after approval. A clean assessment rejected or archived while still `proposed`. |
+| Pending | Still `proposed`, or the delivery has not finished. Reported with the excluded ones. |
+
+An outcome falls in the window in which the entry that settled it was written. The warning terms are rated per 100 **settled assessments**: confirmed, dismissed, missed and settled-clean ones. Excluded and pending assessments are not settled. A row with fewer than 10 settled assessments (`warning_min_support`) shows its three warning terms as provisional, outside the score (§4.1). At about 10 holds a day across crews, the warning terms of a 24-hour window are mostly provisional.
+
+Why these weights: at 3 : 1 a crew's warnings are net positive above 25% precision, and the evidence that motivated the terms measured about 55%. A hold costs one operator read, while a confirmed warning saves a failed delivery run. A missed scope block mirrors the confirmed credit, so staying silent is never free.
+
+Missed scope blocks have one source: block-triage markers. The blocked-task triage routine is disabled by default. When no `blocked_task_triaged` marker of any disposition falls in the window, the term reads 0 and the scorecard's `sources.missed_scope_blocks` reports `available: false`, with the reason. The view shows that as a banner, so the zero is not read as no misses.
+
+Each assessment counts against the crew and model of the pilot run its receipt names, through the same attribution as graded tasks (above), never the task's own crew. A row can therefore have settled assessments but no graded done task (`units` 0).
+
+The warning terms are not problems in the attribution strip (§3.3). They grade the pilot's warnings and do not reassign the block or edit, which keeps its own owner.
+
+Shown, not scored (`stats`): recall, precision and F1 pooled over the row's tasks, the filer's F1, landed files no pilot selector covered, unused selectors, selectors per task, the share of placed tasks assessed within one tier, cost per assessment (null when a pilot run is missing or unpriced), median pilot run duration, `tier_matrix`, warning precision (confirmed ÷ (confirmed + dismissed), null with neither), holds per 100 assessments written in the window, and the settled, excluded-or-pending and missed-scope-block counts.
 
 `tier_matrix` is `{tiers, rows, placed, not_placed, on_tier, too_easy, too_hard}`: `tiers` lists the tiers present in the window, cheapest first; each of `rows` is `{assessed, observed}` with one count per tier in `tiers`. Too easy counts tasks assessed below their observed tier and too hard those assessed above it.
 
-The role panel (`js/agents-pilots.js`) is that assessed-by-observed tier matrix for every pilot, the diagonal highlighted, with on-tier, too-easy, too-hard and not-placed counts. The detail column leaves structured stats to the panel.
+The role panel (`js/agents-pilots.js`) is that assessed-by-observed tier matrix for every pilot, the diagonal highlighted, with on-tier, too-easy, too-hard and not-placed counts. The detail column leaves structured stats to the panel. The ranking and detail column render the warning terms like any other. A term with its own unit names it in its header tooltip and detail line (`4 of 20 settled assessments`), and a provisional term is shown in italics and adds nothing to the breakdown. The panel adds the unmeasured-source banner and a "How the score works" paragraph on settlement.
 
 A landed file outside the declared context on a task no pilot assessed is not charged to anyone in v1 (§11).
 
@@ -369,13 +397,14 @@ GET /api/agents/attribution?window=
 - `status`: `ok`, or `not_computed` while a role's track has not landed. A `not_computed` role still returns its `terms`, with empty `rows`.
 - `unit` (label of the role's unit);
 - `fleet_average`;
-- `terms`: `key`, `label`, `weight`, `definition`, `group`;
+- `terms`: `key`, `label`, `weight`, `definition`, `group`, and `unit` on a term rated per 100 of its own unit (the pilots' warning terms);
 - `provisional`: for reviewers, the rows' provisional reviews in total; null for the other roles;
-- `rows`, best first.
+- `rows`, best first;
+- pilots only: `warning_min_support`, and `sources.missed_scope_blocks` as `{available, triage_records, detail}`.
 
-Each row carries `crew`, `model`, `units`, `below_support`, `rank` (null below support), `counts` and `per_100` (term key to number), `raw`, `score`, `runs_without_model`, `provisional` (reviewers), and `stats` (the not-scored context: key, label, value).
+Each row carries `crew`, `model`, `units`, `below_support`, `rank` (null below support), `counts` and `per_100` (term key to number), `raw`, `score`, `runs_without_model`, `provisional` (reviewers), and `stats` (the not-scored context: key, label, value). A row of a role with per-term denominators (pilots) also carries `term_units` (term key to its own units) and `provisional_terms` (the keys below their own minimum support).
 
-**Detail** carries the scorecard header, `fleet_average`, `provisional`, the selected `row`, and `terms`. Each term carries its key, label, weight, group, count, `per_100`, contribution and `tasks`, largest count first. Each task carries `task_id`, `title`, `status`, `count` and `occurrences` (`at`, `detail`, `run_id`).
+**Detail** carries the scorecard header, `fleet_average`, `provisional`, the selected `row`, and `terms`. Each term carries its key, label, weight, group, count, `per_100`, contribution and `tasks`, largest count first, plus `units` and `provisional` when it has its own denominator. Each task carries `task_id`, `title`, `status`, `count` and `occurrences` (`at`, `detail`, `run_id`).
 
 **Attribution** answers `window`, `requested_window`, `since`, `computed_at`, `cache_ttl_seconds`, `total`, `owners` and `charged`. `owners` maps each of `orchestrators`, `implementers`, `reviewers` and `pilots` to a count, plus `not_scored` as `{count, reasons}`. `charged` maps each role to its rows, each with `crew`, `model` and `problems`.
 
@@ -429,6 +458,7 @@ Tests follow the repository rules: behavior at public boundaries, no copy-matchi
   - Regressions filed after the window still count.
   - Reviewer provisional counts follow the 30-day lookback.
   - A reject the next run proved wrong is the reviewer's false reject, a reject whose cited path changed holds its finding, and rejecting more without being right never raises a reviewer's score.
+  - A pilot hold settles from history alone: a description edit before approval confirms it, an unedited approval delivered clean dismisses it, an approval after a bare-note edit is excluded, advisory findings never hold, and a superseded assessment gives way to the next. Warning terms are rated per 100 settled assessments and provisional below 10, and the missed-scope-block source reads unavailable until a block-triage marker is in the window.
 - **API** (`orbit-web` HTTP tests): the payload contract, `not_computed`, the 400 cases, and that one scan serves role and window changes.
 - **Dashboard**:
   - node DOM-stub tests and a Playwright fixture driven by contract-shaped JSON: ranking selection, detail, disclosure, empty and `not_computed` states, the Reviewers banner, `accepts often` tag and outcome bars, the redirect from `#analytics/orchestrators`, phone width;
@@ -466,6 +496,7 @@ Each track updates the docs its change makes stale in the same PR. That includes
 - **Orchestrator models are recorded, not observed.** Orchestrator sessions are not job runs, so a row's model is what the task recorded at creation: the orchestrator crew's configured model unless the filer passed `orchestrator_model`. A session that runs another model without saying so is ranked under its crew's model. The field is set once, so changing a task's `orchestrator` later keeps the model recorded for the original crew, and a task that gains its orchestrator after creation stays `model unknown`. Tasks filed before the field existed are never backfilled.
 - **The observed tier inherits cost differences between crews.** Work routed to a costlier crew looks harder. Ranking by cost within the window reduces this but does not remove it, so calibration should be read as a comparison between pilots on similar work.
 - **Footprint misses without a pilot are not charged.** When no pilot assessed a task, a landed file outside the filer's selectors counts against no one in v1. It could be an orchestrator spec defect, but nothing records whether the file was in scope.
+- **Pilot warnings are graded per assessment, not per finding.** An edit cannot be tied to one finding, so a hold with one right and one wrong warning counts once, as confirmed. History names only body documents in a field-edit note, so a context, dependency or relation fix after a hold is excluded rather than credited. Naming envelope fields in that note would let them count as scope edits. Overridden holds that then blocked are confirmed whatever the block's cause, since the block's cause is not tied to the warning either.
 - **The escape decides the owner.** An implementer whose visible defects pass a weak reviewer is not charged for them; the reviewer is. Reading the Implementers and Reviewers tabs together is part of the design, not an accident.
 - **Weights are judgment.** They are shown with every score and kept in one table per role so they can be changed in one place. Tests check how scores behave, not the weight values.
 - **Provisional scores move.** Reviewer scores for the last 30 days can fall when regressions are filed. The banner says so, but a ranking read on a given day is not final.

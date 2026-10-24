@@ -4,8 +4,9 @@
 // pilots assigned, so each row's matrix compares the tier a task was
 // assessed at with the tier its cost placed it in. The diagonal is the
 // calibration term; above it the pilot assessed too easy, below it too hard.
-// The counts are the rows' shown-not-scored `tier_matrix` stat. Every node
-// is built with `el()`.
+// The counts are the rows' shown-not-scored `tier_matrix` stat. The banner
+// says when the missed-scope-block source did not run in the window, so its
+// zero is not read as no misses. Every node is built with `el()`.
 
 import { el } from './common.js';
 
@@ -94,4 +95,22 @@ function render({ rows }) {
   ];
 }
 
-export const pilotsPanel = { title: "Tier calibration", render };
+// Block triage is what records a missed scope block; without one of its
+// records in the window the term reads 0 because nothing measured it.
+function banner({ scorecard }) {
+  const source = scorecard && scorecard.sources && scorecard.sources.missed_scope_blocks;
+  if (!source || source.available !== false) return null;
+  const node = el("p", {}, [
+    el("strong", { text: "Missed scope blocks unmeasured. " }),
+    el("span", { text: source.detail || "No blocked-task triage record in this window, so the term reads 0." }),
+  ]);
+  node.dataset.source = "missed_scope_blocks";
+  return node;
+}
+
+const HOW = [
+  "Warnings: an assessment holds when a finding holds promotion; advisory findings never do. A held assessment is confirmed when, before approval, someone other than the pilot or Orbit edits the description or acceptance criteria, or the task is rejected or archived, or when an unedited approval's delivery then blocks or is rejected. It is dismissed when the unedited approval is done with no block. An approval after a field edit that names no document (a dependency, tag or context change) is excluded, as are superseded and pending assessments.",
+  "A clean assessment whose task is promoted and later blocked on a decision that blocked-task triage proposed is a missed scope block. Confirmed, dismissed and missed warnings are rated per 100 settled assessments, held or clean, and stay provisional below the window's warning minimum support.",
+];
+
+export const pilotsPanel = { title: "Tier calibration", render, banner, how: HOW };

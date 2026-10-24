@@ -2,8 +2,9 @@
 //! activity in the last 90 days (envelope, history and comments), the
 //! implementation job runs that name those tasks, the review gate's
 //! settlement comments, the finding-verification verdicts on review-filed
-//! findings, the typed `regression_from` links and, from the codebase scan,
-//! each pilot assessment of a done task graded against its landed diff. The
+//! findings, the typed `regression_from` links, how each task-pilot
+//! assessment's warnings settled and, from the codebase scan, each pilot
+//! assessment of a done task graded against its landed diff. The
 //! scan keeps the records; [`super::attribution`] decides who each problem
 //! counts against, and the roles only slice the result by window.
 
@@ -25,9 +26,12 @@ use super::records::{
     Cause, block_cause, blocked_pr, bounded, cites_criteria, is_operator_requeue, landed,
     landing_pr, restart_cause, run_spans, spec_blocker_kind, spec_documents,
 };
+use super::roles::pilot_warnings::{Warnings, settle};
 use super::roles::pilots::{Graded, grade_all};
 use crate::OrbitRuntime;
-use crate::application::codebase::{PilotEvidence, failed_claim_settlements_of, pilot_evidence};
+use crate::application::codebase::{
+    PilotEvidence, PilotRuns, failed_claim_settlements_of, pilot_evidence,
+};
 use crate::application::task::{
     FindingSeverity, FindingVerdict, is_review_finding, latest_verification,
 };
@@ -307,6 +311,8 @@ pub(super) struct TaskFacts {
     pub(super) reviews: Vec<Review>,
     /// Set when the task is a finding a review job filed.
     pub(super) filed: Option<FiledFinding>,
+    /// How each task-pilot assessment's warnings settled.
+    pub(super) warnings: Warnings,
 }
 
 impl TaskFacts {
@@ -441,8 +447,21 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<AgentFacts, OrbitError> {
         facts.push(task_facts);
     }
 
+    let mut pilot_runs = None;
+    let mut pilots = grade_all(pilot_scan(runtime, &mut pilot_runs));
+    for task in &mut facts {
+        for assessment in &mut task.warnings.assessments {
+            let runs = pilot_runs.get_or_insert_with(|| PilotRuns::load(runtime));
+            assessment.run = runs.attribute(
+                runtime,
+                assessment.run_id.as_deref(),
+                assessment.at,
+                &assessment.operation_id,
+                computed_at,
+            );
+        }
+    }
     let scanned: BTreeSet<&str> = facts.iter().map(|task| task.id.as_str()).collect();
-    let mut pilots = grade_all(pilot_scan(runtime));
     pilots.retain(|graded| scanned.contains(graded.task_id.as_str()));
     let (charges, credits) = attribution::attribute(&facts, &regressions, &pilots);
     Ok(AgentFacts {
@@ -457,11 +476,12 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<AgentFacts, OrbitError> {
 }
 
 /// The pilot evidence of the codebase scan, which keeps each task's landed
-/// diff and receipts between scans. A scan that fails leaves the pilots
-/// unscored rather than failing every scorecard.
-fn pilot_scan(runtime: &OrbitRuntime) -> PilotEvidence {
+/// diff and receipts between scans. A scan that fails leaves the graded
+/// terms unscored rather than failing every scorecard. `runs` keeps the
+/// task-pilot runs once loaded.
+fn pilot_scan(runtime: &OrbitRuntime, runs: &mut Option<PilotRuns>) -> PilotEvidence {
     match runtime.codebase_scan() {
-        Ok(codebase) => pilot_evidence(runtime, &codebase),
+        Ok(codebase) => pilot_evidence(runtime, &codebase, runs),
         Err(error) => {
             tracing::warn!(%error, "agent scorecards: codebase scan failed; pilots unscored");
             PilotEvidence::default()
@@ -841,6 +861,7 @@ fn task_facts(
     });
 
     records.sort_by_key(|record| record.at);
+    let warnings = settle(task, history, comments);
     TaskFacts {
         id: task.id.to_string(),
         title: task.title.clone(),
@@ -870,6 +891,7 @@ fn task_facts(
         records,
         reviews,
         filed,
+        warnings,
     }
 }
 

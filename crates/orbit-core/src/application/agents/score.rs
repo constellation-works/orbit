@@ -1,10 +1,11 @@
 //! The one score every role uses. A role supplies its unit of work, its
 //! terms and their weights, and one [`RowInput`] per crew and model; this
-//! module turns each term's count into a rate per 100 units, sums the
-//! weighted rates into the raw score (or 100 plus weighted deviations when
-//! the role supplies expectations), pulls each row above the fleet average
-//! down toward it in proportion to how little work backs it, and ranks the
-//! rows that meet the minimum support.
+//! module turns each term's count into a rate per 100 units (or per 100 of
+//! the term's own [`Denominator`]), sums the weighted rates into the raw
+//! score (or 100 plus weighted deviations when the role supplies
+//! expectations), pulls each row above the fleet average down toward it in
+//! proportion to how little work backs it, and ranks the rows that meet the
+//! minimum support.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -87,6 +88,20 @@ pub(super) struct Stat {
     pub(super) value: Value,
 }
 
+/// A term rated per 100 of its own units rather than the row's.
+pub(super) struct Denominator {
+    pub(super) units: usize,
+    /// Below this many units the term is provisional: rated and shown, but
+    /// left out of the raw score.
+    pub(super) min_support: usize,
+}
+
+impl Denominator {
+    fn provisional(&self) -> bool {
+        self.units < self.min_support
+    }
+}
+
 /// One crew and model's work and term tallies in the window.
 pub(super) struct RowInput<'a> {
     pub(super) crew: String,
@@ -101,6 +116,25 @@ pub(super) struct RowInput<'a> {
     /// Implementer reference counts for the row's tier mix; other roles
     /// retain their uncentred score when absent.
     pub(super) expected: Option<BTreeMap<&'static str, f64>>,
+    /// Terms rated per 100 of their own units; every other term is rated
+    /// per 100 of `units`.
+    pub(super) denominators: BTreeMap<&'static str, Denominator>,
+}
+
+impl RowInput<'_> {
+    /// The units `key` is rated per 100 of.
+    fn units_of(&self, key: &str) -> usize {
+        self.denominators
+            .get(key)
+            .map_or(self.units, |denominator| denominator.units)
+    }
+
+    /// Whether `key` is below its own minimum support.
+    fn provisional_term(&self, key: &str) -> bool {
+        self.denominators
+            .get(key)
+            .is_some_and(Denominator::provisional)
+    }
 }
 
 /// A row with its rates and scores.
@@ -124,29 +158,20 @@ pub(super) fn score<'a>(
     let mut scored: Vec<Scored<'a>> = rows
         .into_iter()
         .map(|input| {
-            let units = input.units.max(1) as f64;
             let per_100: BTreeMap<&'static str, f64> = terms
                 .iter()
                 .map(|term| {
                     let count = input.tallies.get(term.key).map_or(0.0, |tally| tally.count);
-                    (term.key, count * 100.0 / units)
+                    (
+                        term.key,
+                        count * 100.0 / input.units_of(term.key).max(1) as f64,
+                    )
                 })
                 .collect();
             let raw = if input.expected.is_some() { 100.0 } else { 0.0 }
                 + terms
                     .iter()
-                    .map(|term| {
-                        term.weight
-                            * (per_100[term.key]
-                                - input
-                                    .expected
-                                    .as_ref()
-                                    .and_then(|expected| expected.get(term.key))
-                                    .copied()
-                                    .unwrap_or(0.0)
-                                    * 100.0
-                                    / units)
-                    })
+                    .map(|term| contribution(&input, &per_100, term))
                     .sum::<f64>();
             Scored {
                 below_support: input.units < min_support,
@@ -196,6 +221,21 @@ pub(super) fn score<'a>(
     (fleet_average, scored)
 }
 
+/// A term's part of the raw score: weight × (rate − expected rate), or 0
+/// while the term is below its own minimum support.
+fn contribution(input: &RowInput<'_>, per_100: &BTreeMap<&'static str, f64>, term: &Term) -> f64 {
+    if input.provisional_term(term.key) {
+        return 0.0;
+    }
+    let expected = input
+        .expected
+        .as_ref()
+        .and_then(|counts| counts.get(term.key))
+        .copied()
+        .unwrap_or(0.0);
+    term.weight * (per_100[term.key] - expected * 100.0 / input.units_of(term.key).max(1) as f64)
+}
+
 impl Scored<'_> {
     pub(super) fn is(&self, crew: &str, model: &str) -> bool {
         self.input.crew == crew && self.input.model == model
@@ -230,6 +270,23 @@ impl Scored<'_> {
                 "value": stat.value,
             })).collect::<Vec<_>>(),
         });
+        if !self.input.denominators.is_empty() {
+            payload["term_units"] = json!(
+                self.input
+                    .denominators
+                    .iter()
+                    .map(|(key, denominator)| ((*key).to_string(), json!(denominator.units)))
+                    .collect::<serde_json::Map<String, Value>>()
+            );
+            payload["provisional_terms"] = json!(
+                self.input
+                    .denominators
+                    .iter()
+                    .filter(|(_, denominator)| denominator.provisional())
+                    .map(|(key, _)| *key)
+                    .collect::<Vec<_>>()
+            );
+        }
         if let Some(expected) = &self.input.expected {
             payload["expected"] = json!(
                 expected
@@ -243,14 +300,7 @@ impl Scored<'_> {
     }
 
     fn contribution(&self, term: &Term) -> f64 {
-        let expected = self
-            .input
-            .expected
-            .as_ref()
-            .and_then(|counts| counts.get(term.key))
-            .copied()
-            .unwrap_or(0.0);
-        term.weight * (self.per_100[term.key] - expected * 100.0 / self.input.units.max(1) as f64)
+        contribution(&self.input, &self.per_100, term)
     }
 
     /// Each term's count, rate and contribution to the raw score, with the
@@ -273,7 +323,7 @@ impl Scored<'_> {
                         .unwrap_or(Ordering::Equal)
                         .then(right.task.created_at.cmp(&left.task.created_at))
                 });
-                json!({
+                let mut payload = json!({
                     "key": term.key,
                     "label": term.label,
                     "weight": term.weight,
@@ -292,7 +342,12 @@ impl Scored<'_> {
                             "run_id": occurrence.run_id,
                         })).collect::<Vec<_>>(),
                     })).collect::<Vec<_>>(),
-                })
+                });
+                if let Some(denominator) = self.input.denominators.get(term.key) {
+                    payload["units"] = json!(denominator.units);
+                    payload["provisional"] = json!(denominator.provisional());
+                }
+                payload
             })
             .collect()
     }
@@ -309,18 +364,23 @@ pub(super) fn provisional(role: AgentRole, rows: &[Scored<'_>]) -> Option<usize>
         .then(|| rows.iter().filter_map(|row| row.input.provisional).sum())
 }
 
-/// The role's terms as every response carries them.
-pub(super) fn terms_json(terms: &[Term]) -> Vec<Value> {
+/// The role's terms as every response carries them. A term in `units`,
+/// rated per 100 of its own denominator, also names that unit.
+pub(super) fn terms_json(terms: &[Term], units: &[(&str, &str)]) -> Vec<Value> {
     terms
         .iter()
         .map(|term| {
-            json!({
+            let mut payload = json!({
                 "key": term.key,
                 "label": term.label,
                 "weight": term.weight,
                 "definition": term.definition,
                 "group": term.group,
-            })
+            });
+            if let Some((_, unit)) = units.iter().find(|(key, _)| *key == term.key) {
+                payload["unit"] = json!(unit);
+            }
+            payload
         })
         .collect()
 }

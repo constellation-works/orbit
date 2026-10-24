@@ -52,14 +52,15 @@ struct RunRecord {
     models: Vec<Option<Option<String>>>,
 }
 
-/// The workspace's task-pilot runs, read once per scan without their steps.
-struct PilotRuns {
+/// The workspace's task-pilot runs, read once per scan without their steps:
+/// what every receipt, held or clean, is attributed to.
+pub(in crate::application) struct PilotRuns {
     runs: Vec<RunRecord>,
     apply_steps: Vec<String>,
 }
 
 impl PilotRuns {
-    fn load(runtime: &OrbitRuntime) -> Self {
+    pub(in crate::application) fn load(runtime: &OrbitRuntime) -> Self {
         let runs = runtime
             .stores()
             .jobs()
@@ -125,7 +126,7 @@ impl PilotRuns {
 
     /// Explicit run ids win. Legacy receipts use a unique active run, or
     /// disambiguate overlapping runs by exact operation id in an apply report.
-    fn attribute(
+    pub(in crate::application) fn attribute(
         &self,
         runtime: &OrbitRuntime,
         run_id: Option<&str>,
@@ -344,12 +345,13 @@ pub(in crate::application) struct PilotEvidence {
 /// Every done task with a landing receipt and a pilot assessment, apart
 /// from bulk tasks (more than [`LARGE_FOOTPRINT_CAP`] landed files) and
 /// `no-diff-expected` ones, each attributed to its pilot run, and every lock
-/// wait, whenever it happened, on a path one of them held.
+/// wait, whenever it happened, on a path one of them held. `runs` is loaded
+/// on first use and left for the caller to attribute other receipts with.
 pub(in crate::application) fn pilot_evidence(
     runtime: &OrbitRuntime,
     facts: &CodebaseFacts,
+    runs: &mut Option<PilotRuns>,
 ) -> PilotEvidence {
-    let mut runs = None;
     let mut assessments = Vec::new();
     for task in &facts.tasks {
         let (Some(landed), Some(inputs)) = (&task.landed, &task.pilot) else {

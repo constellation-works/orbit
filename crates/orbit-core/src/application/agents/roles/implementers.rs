@@ -19,7 +19,9 @@ use crate::application::agents::{AgentFacts, AgentRole};
 pub(super) const ROLE: RoleSpec = RoleSpec {
     unit: "implemented tasks",
     terms: TERMS,
+    term_units: &[],
     rows: Some(rows),
+    header: None,
 };
 
 const TERMS: &[Term] = &[
@@ -311,6 +313,7 @@ fn row_input<'a>(
         Some((durations[middle] + durations[(durations.len() - 1) / 2]) / 2.0)
     };
     RowInput {
+        denominators: BTreeMap::new(),
         crew: row.0,
         model: row.1,
         units: tasks.len(),

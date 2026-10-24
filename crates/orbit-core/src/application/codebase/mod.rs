@@ -48,7 +48,7 @@ pub(in crate::application) use facts::{
     Anchor, BlockCause, SettledFailure, actor_kind, classify_block, failed_claim_settlements_of,
 };
 pub(in crate::application) use pilot::{
-    Contest, HeldWait, PilotEvidence, PilotRun, pilot_evidence,
+    Contest, HeldWait, PilotEvidence, PilotRun, PilotRuns, pilot_evidence,
 };
 pub use regression::RegressionFilter;
 use sections::{Params, ROW_LIMIT, Rollup};

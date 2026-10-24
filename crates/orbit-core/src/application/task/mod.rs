@@ -101,7 +101,7 @@ pub(crate) use pilot::{
     HostOperationalHold, MachineRequirement, NativeOsHold, NativeOsRequirement, NoDiffClosure,
     OperatorValidationHold, OperatorValidationRequirement, PILOT_VERIFIED_NO_DIFF,
     PilotAdmissionHold, VerifiedNoDiff, normalize_pilot_self_blockers,
-    operator_validation_requirements, pilot_blocker_task_ids,
+    operator_validation_requirements, pilot_blocker_task_ids, warning_hold_findings,
 };
 pub(crate) use post_deploy::owed_criteria_json;
 pub use provider_limit::{

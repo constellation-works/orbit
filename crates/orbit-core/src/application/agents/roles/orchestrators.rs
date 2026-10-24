@@ -25,7 +25,9 @@ use crate::application::agents::{AgentFacts, AgentRole, MODEL_UNKNOWN};
 pub(super) const ROLE: RoleSpec = RoleSpec {
     unit: "owned tasks",
     terms: TERMS,
+    term_units: &[],
     rows: Some(rows),
+    header: None,
 };
 
 const TERMS: &[Term] = &[
@@ -174,6 +176,7 @@ fn row<'a>(
         ),
     ];
     RowInput {
+        denominators: BTreeMap::new(),
         crew: name.to_string(),
         model: model.to_string(),
         units: tasks.len(),
