@@ -20,17 +20,6 @@ struct Attempt {
 }
 
 impl Coordinated {
-    fn mutate(
-        &self,
-        auth: &ClaimInvocation,
-        mutation_id: &str,
-        mutation: &ClaimMutation,
-    ) -> Result<ClaimMutationResult, OrbitError> {
-        self.backends
-            .commit_boundary
-            .mutate_execution_claim(Some(auth), mutation_id, mutation)
-    }
-
     /// Pull `request_id` and bind the claim to a leaf run of its own.
     fn bound_attempt(&self, request_id: &str) -> Attempt {
         let request = owner_request(request_id);
