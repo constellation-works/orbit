@@ -5,6 +5,7 @@ mod dispatch;
 mod entry;
 mod environment;
 mod evidence;
+mod grok_usage;
 mod limit;
 mod policy;
 mod prepare;

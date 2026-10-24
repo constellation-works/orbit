@@ -79,7 +79,7 @@ fn project(stalled: bool, timed_out: bool) -> crate::DispatchOutcome {
         stalled,
         stall_window: Duration::from_secs(30),
         print_timeout: None,
-        codex_home: None,
+        usage_context: Default::default(),
         build_budget_waits: BuildBudgetWaits::default(),
     })
     .expect("project a provider exit")

@@ -1,7 +1,7 @@
 //! Projection of a finished provider subprocess: response and completion
 //! envelopes, invocation trace, failure diagnostics, and the step output.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use orbit_agent::{
@@ -39,7 +39,10 @@ use super::super::stdout_preview::{
     bounded_assistant_message, stdout_text_preview,
 };
 use super::super::supervisor::CapturedOutput;
-use super::limit::{record_limit, record_usage_windows, reported_limit, structured_provider_limit};
+use super::limit::{
+    UsageWindowContext, record_limit, record_usage_windows, reported_limit,
+    structured_provider_limit,
+};
 
 /// Everything a provider subprocess left behind once it exited, plus the
 /// run state its completion projection reads.
@@ -72,9 +75,8 @@ pub(super) struct ProviderExit<'a> {
     /// The provider-side time budget Orbit injected into argv, if the
     /// provider has one. [ORB-14683]
     pub(super) print_timeout: Option<Duration>,
-    /// The `CODEX_HOME` a Codex child ran with, where its session rollout
-    /// holds the usage windows. [ORB-14696]
-    pub(super) codex_home: Option<PathBuf>,
+    /// The account state resolved from the actual provider child environment.
+    pub(super) usage_context: UsageWindowContext,
     pub(super) build_budget_waits: BuildBudgetWaits,
 }
 
@@ -116,7 +118,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         stalled,
         stall_window,
         print_timeout,
-        codex_home,
+        usage_context,
         build_budget_waits,
     } = exit;
 
@@ -577,7 +579,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         host,
         &provider,
         stdout.bytes(),
-        codex_home.as_deref(),
+        &usage_context,
         run_id,
         crew,
         account,
