@@ -11,6 +11,7 @@ use serde_json::{Map, Value};
 
 use super::{TaskOsReadout, TaskRow, task_pilot_warnings};
 use crate::OrbitRuntime;
+use crate::application::task::TaskReviewPort;
 
 impl OrbitRuntime {
     /// `task` with its comment, history and artifact sidecars read from this
@@ -64,9 +65,7 @@ pub fn task_record_json(
         "artifacts".to_string(),
         task_artifact_manifest_json(&row.artifacts),
     );
-    if let Some(review) =
-        crate::application::review::task_review_projection(runtime, task, &row.artifacts)?
-    {
+    if let Some(review) = runtime.task_review_evidence(task, &row.artifacts)? {
         object.insert("review".to_string(), review);
     }
     runtime.task_crew_read(task).insert_into(&mut object);

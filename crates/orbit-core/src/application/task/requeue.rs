@@ -57,8 +57,7 @@ use serde_json::{Value, json};
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::helpers::SYSTEM_ACTOR_LABEL;
 use crate::OrbitRuntime;
-use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
-use crate::application::task::TaskRecords;
+use crate::application::task::{TaskJobPort, TaskRecords};
 use orbit_types::workflow::SourceRepairBinding;
 
 /// Status event of an operator's requeue of a blocked task.
@@ -286,7 +285,7 @@ impl OrbitRuntime {
         };
         if !run.state.is_terminal()
             || run.finished_at.is_none()
-            || (!foreign && run_owner_liveness(&run) != RunOwnerLiveness::Stopped)
+            || (!foreign && !self.run_owner_stopped(&run))
         {
             return Ok(Some(format!(
                 "run `{run_id}` has not conclusively stopped, so its failure handoff may still \
@@ -703,7 +702,7 @@ impl OrbitRuntime {
                  (`orbit.workflow.run.resume` with `source_repair`), or {discard_hint}."
             )));
         }
-        if self.unbound_publication_on_record(task)? {
+        if self.unbound_publication(task)? {
             return Err(OrbitError::InvalidInput(format!(
                 "the task has a pull request or preserved candidate on record that its stopped \
                  run's handoff does not bind, so its next run would refuse to start. Nothing \

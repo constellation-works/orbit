@@ -26,8 +26,8 @@ use serde_json::json;
 use super::TaskRecordUpdateParams;
 use crate::OrbitRuntime;
 use crate::application::contracts::FINDING_VERIFICATION_JOB;
-use crate::application::job::crew_pools::{InspectionPool, seeded_crew_ticket};
-use crate::application::task::TaskRecords;
+use crate::application::contracts::InspectionPool;
+use crate::application::task::{TaskJobPort, TaskRecords};
 
 /// The actor every verdict write is attributed to.
 pub(crate) const FINDING_VERIFICATION_ACTOR: &str = "finding-verification";
@@ -509,7 +509,7 @@ impl OrbitRuntime {
         };
         let source = format!("pool:{tier}");
         let mut ticket =
-            seeded_crew_ticket(format!("{FINDING_VERIFICATION_JOB}:{}:{tier}", task.id));
+            self.seeded_crew_draw_tickets(format!("{FINDING_VERIFICATION_JOB}:{}:{tier}", task.id));
         let draw = self.draw_crew_pool(candidates, &source, &mut ticket)?;
         Ok(Some(VerifierAssignment {
             crew: draw.crew.name,

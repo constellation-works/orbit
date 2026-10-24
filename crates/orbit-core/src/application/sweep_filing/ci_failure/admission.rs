@@ -13,14 +13,9 @@ use crate::application::task::pilot::input::{required_string, required_string_ar
 use crate::application::task::pilot::{
     PromotionFindings, auto_approval_opted_out, promotion_findings, recommendation_has_evidence,
 };
-use crate::application::task::{PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
+use crate::application::task::{CiSweepAdmission, PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
 
 use super::filing::CI_FAILURE_TAG;
-
-pub(crate) enum AdmissionOutcome {
-    Decision(Value),
-    Superseded(Value),
-}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn assess(
@@ -33,7 +28,7 @@ pub(crate) fn assess(
     promotion_authorized: bool,
     dependencies: &[String],
     is_done: &dyn Fn(&str) -> bool,
-) -> Result<AdmissionOutcome, DispatchError> {
+) -> Result<CiSweepAdmission, DispatchError> {
     let filed_task_id = required_string(filing, "task_id", action)?;
     if filed_task_id != task_id {
         return Err(DispatchError::action_failed(
@@ -63,7 +58,7 @@ pub(crate) fn assess(
         ));
     }
     if matches!(task.status, TaskStatus::Rejected | TaskStatus::Archived) {
-        return Ok(AdmissionOutcome::Superseded(json!({
+        return Ok(CiSweepAdmission::Superseded(json!({
             "task_id": task_id,
             "outcome": "superseded",
             "reason": "operator_rejected",
@@ -179,7 +174,7 @@ pub(crate) fn assess(
         )
     };
 
-    Ok(AdmissionOutcome::Decision(json!({
+    Ok(CiSweepAdmission::Decision(json!({
         "task_id": task_id,
         "decision": decision,
         "classification": classification,

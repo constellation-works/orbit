@@ -29,9 +29,8 @@ use super::{
     MAX_EPISODE_AGE_HOURS, RUN_SCAN_LIMIT, TRIGGER_CONSUMER, TRIGGER_NAME, recovery_checkout_path,
 };
 use crate::OrbitRuntime;
-use crate::application::job::pipeline::{
-    PipelineSubmission, ROUTINE_DISPATCH_ORBIT_DIR_FIELD, RetryKey,
-};
+use crate::application::contracts::RetryKey;
+use crate::application::task::TaskJobPort;
 
 impl OrbitRuntime {
     /// Why the backstop does not run on this runtime, if it does not.
@@ -90,24 +89,17 @@ impl OrbitRuntime {
         &self,
         now: DateTime<Utc>,
     ) -> Result<BlockedRecoveryTick, OrbitError> {
-        let orbit_dir = self.shared_root();
         self.run_blocked_task_recovery_tick_with(now, &mut |input| {
-            let mut input = input;
-            input[ROUTINE_DISPATCH_ORBIT_DIR_FIELD] = json!(orbit_dir.to_string_lossy());
-            let submission = PipelineSubmission {
-                retry_key: Some(RetryKey {
+            self.submit_routine_run(
+                BLOCKED_TASK_RECOVERY_JOB,
+                input,
+                SYSTEM_ACTOR_LABEL,
+                Some(RetryKey {
                     field: EPISODE_KEY_FIELD,
                     scan_limit: RUN_SCAN_LIMIT,
                 }),
-                trigger: JobRunTrigger::state_routine(TRIGGER_NAME, TRIGGER_CONSUMER),
-                ..PipelineSubmission::catalog(
-                    BLOCKED_TASK_RECOVERY_JOB,
-                    input,
-                    Some(SYSTEM_ACTOR_LABEL),
-                )
-            };
-            self.submit_keyed_pipeline_run(submission)
-                .map(|(result, _)| result.run_id)
+                JobRunTrigger::state_routine(TRIGGER_NAME, TRIGGER_CONSUMER),
+            )
         })
     }
 

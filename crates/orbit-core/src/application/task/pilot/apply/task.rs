@@ -8,8 +8,9 @@ use orbit_common::OrbitError;
 use orbit_types::task::{ContextCreationState, Task, TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 
-use crate::application::sweep_filing::ci_failure::admission as ci_failure_admission;
-use crate::application::task::{MachineRequirement, NativeOsRequirement};
+use crate::application::task::{
+    CiSweepAdmission, MachineRequirement, NativeOsRequirement, TaskSweepFilingPort,
+};
 
 use super::super::PostDeployRequirement;
 
@@ -404,25 +405,25 @@ fn admit(
                     ));
                 }
             }
-            ci_failure_admission::assess(
-                context.action,
-                task_id,
-                &admission_task,
-                &assessed.assessment,
-                &assessed.after,
-                filing,
-                *authorized,
-                &dependencies,
-                &is_done,
-            )
-            .map(|outcome| match outcome {
-                ci_failure_admission::AdmissionOutcome::Decision(decision) => {
-                    CheckedAdmission::Apply(Some(Admission::CiSweep(decision)))
-                }
-                ci_failure_admission::AdmissionOutcome::Superseded(outcome) => {
-                    CheckedAdmission::Superseded(outcome)
-                }
-            })
+            context
+                .runtime
+                .ci_sweep_admission(
+                    context.action,
+                    task_id,
+                    &admission_task,
+                    &assessed.assessment,
+                    &assessed.after,
+                    filing,
+                    *authorized,
+                    &dependencies,
+                    &is_done,
+                )
+                .map(|outcome| match outcome {
+                    CiSweepAdmission::Decision(decision) => {
+                        CheckedAdmission::Apply(Some(Admission::CiSweep(decision)))
+                    }
+                    CiSweepAdmission::Superseded(outcome) => CheckedAdmission::Superseded(outcome),
+                })
         }
         PromotionAuthority::Drain(drain) => drain_promotion::assess(
             context.action,

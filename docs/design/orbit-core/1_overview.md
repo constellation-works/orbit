@@ -11,7 +11,7 @@ summary: Directional runtime, application, adapter, bootstrap, and composition b
 tags: [orbit-core, orbit-cmd, architecture]
 paths: ["crates/orbit-core/**", "crates/orbit-runtime/**", "crates/orbit-cmd/**", "crates/orbit-registry/**"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10016, ORB-10886, ORB-17906, ORB-17924]
+related_artifacts: [ORB-10016, ORB-10886, ORB-17906, ORB-17924, ORB-17936]
 ---
 
 # Orbit Core — Overview
@@ -97,6 +97,7 @@ source scan, enforces the runtime direction.
 | Application operations and DTOs | `crates/orbit-core/src/application/` | [ORB-10886] |
 | Shared application constants and DTOs | `crates/orbit-core/src/application/contracts/` | [ORB-17924] |
 | Task-to-automation port | `crates/orbit-core/src/application/task/automation_port.rs` | [ORB-17924] |
+| Task-owned ports to job, review, distributed, sweep_filing and workspace_auto | `crates/orbit-core/src/application/task/*_port.rs`, implemented in each module's `task_port.rs` | [ORB-17936] |
 | Job review-admission hook | `crates/orbit-core/src/application/job/review_hook.rs` | [ORB-17924] |
 | Tool/engine/command adapters | `crates/orbit-core/src/adapter/` | [ORB-10886] |
 | Initialization and managed defaults | `crates/orbit-core/src/bootstrap/` | [ORB-10886] |
@@ -125,14 +126,20 @@ other in a direction too. Nine of them (`task`, `automation`, `job`, `review`,
 `distributed`, `admission`, `workspace_auto`, `pull_drain` and
 `sweep_filing`) used to form one strongly connected component. That cycle has
 to go before any of them can become its own crate (bearing 5 in
-[the decisions](4_decisions.md)). [ORB-17924] cut three edge families:
+[the decisions](4_decisions.md)). [ORB-17924] cut three edge families, and
+[ORB-17936] cut task's remaining upward edges except the two automation
+callers below:
 
 - **Contracts.** `application::contracts` holds the constants and DTOs that
   several of these modules name: the job names `PULL_DRAIN_JOB`,
   `ESCALATION_TRIAGE_JOB` and `FINDING_VERIFICATION_JOB`, `DrainEntryPoint`,
   `PullSettlementEntry` and `PullSettlementOutcome`, the pilot
   `SUPERSEDED_BY_SOURCE` reason, `PilotFingerprints` and the run
-  `review_layer` projection. It imports none of the nine modules, and every
+  `review_layer` projection; since [ORB-17936] also the crew-draw values
+  (`CreationCrewAssignment`, `CrewCandidate`, `InspectionPool`, the
+  `PURPOSE_SOURCE_PREFIX` and `PROVIDER_LIMIT_REASSIGNMENT_PREFIX` markers
+  and the `auto_task_minted` and `automatic_crew_source` predicates over
+  them) and the pipeline submission `RetryKey`. It imports none of the nine modules, and every
   consumer, including `orbit-cli` and `orbit-cmd`, imports these items from
   there. These shapes are still internal to Orbit, so they stay in Core rather
   than `orbit-types`. Their string values and serde shapes did not change.
@@ -147,17 +154,30 @@ to go before any of them can become its own crate (bearing 5 in
   `task/pilot/no_diff.rs` and `pilot_reservation::reserve` in
   `task/pilot/prepare.rs`. `job::ReviewAdmissionHook` gives job submission, replay and
   resume the review admission they install and compare, and `review`
-  implements it.
+  implements it. [ORB-17936] added one task-owned port per remaining upper
+  module, each implemented in that module's `task_port.rs`:
+  `task::TaskJobPort` (crew draws and the captured crew pools, the PR-route
+  forge check, routine run submission, run-owner liveness, the candidate's
+  validation gates and unbound owner publications; the pools and the forge
+  check are associated types, so task passes them through without naming
+  job's types), `task::TaskReviewPort` (the review projection, the evidence
+  hold resume and the merged-head reconciliation refusal),
+  `task::TaskDistributedPort` (the crew a pilot run drew),
+  `task::TaskSweepFilingPort` (CI-sweep admission) and
+  `task::TaskWorkspaceAutoPort` (the tasks live `run auto` leaves carry).
 - **Guard.** `scripts/check-dependency-direction.sh`, run by
   `make ci-guards`, fails when `task` names `automation` (outside those two
-  exact lines), when `job` names
+  exact lines), when `task` names `job`, `review`, `distributed`,
+  `sweep_filing` or `workspace_auto` by path, grouped tree or `super::` chain
+  or calls the inherent methods and functions its ports wrap, when `job` names
   `review::admission` or its items, when `contracts` imports any of the nine
   modules, or when a shared contract is defined or imported anywhere but
   `application::contracts`.
 
 The nine modules are still one strongly connected component. A module map
 that counts `crate::` paths, `super::` chains and calls into another module's
-inherent methods shows the cheapest acyclic order is `contracts < task < job <
+inherent methods (a lowercase `module::name(` path is a free function, not a
+method call) shows the cheapest acyclic order is `contracts < task < job <
 automation < review < distributed < pull_drain < admission < workspace_auto <
 sweep_filing`. The edges that remain against that order are tracked as
 chained follow-ups:
@@ -165,7 +185,6 @@ chained follow-ups:
 | Cluster | Remaining back edges | Task |
 |---|---|---|
 | Task's unlisted pilot callers | task → automation (`Source`, `pilot_reservation::reserve`) | [ORB-17943] |
-| Task's upward edges | task → job, review, distributed, sweep_filing, workspace_auto | [ORB-17936] |
 | Job's drain and pull settlement | job → distributed, pull_drain | [ORB-17937] |
 | Job's other upward edges | job → admission, automation, review (constants), sweep_filing (constants), workspace_auto | [ORB-17938] |
 | Upper-layer back edges | review → distributed, automation → review and distributed, distributed → admission, admission → workspace_auto | [ORB-17939] |
@@ -178,6 +197,7 @@ chained follow-ups:
 - [ORB-10886] — removed the internal command/runtime cycle and established the directional module graph.
 - [ORB-17906] — extracted the runtime kernel into the `orbit-runtime` crate behind the `OrbitRuntime` wrapper.
 - [ORB-17924] — added `application::contracts`, the task-to-automation port and the job review-admission hook, and guarded those cuts.
-- [ORB-17936], [ORB-17937], [ORB-17938], [ORB-17939], [ORB-17943] — follow-ups for the application-layer back edges that remain.
+- [ORB-17936] — cut task's edges to job, review, distributed, sweep_filing and workspace_auto through task-owned ports and crew-draw contracts, and guarded them.
+- [ORB-17937], [ORB-17938], [ORB-17939], [ORB-17943] — follow-ups for the application-layer back edges that remain.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

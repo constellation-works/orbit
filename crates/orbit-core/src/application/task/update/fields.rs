@@ -13,7 +13,8 @@ use super::super::paths::{
 use super::artifacts::validate_pr_status;
 use super::entry::{TaskFieldWriter, ValidatedTaskFieldEdits};
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{CreationCrewAssignment, random_crew_ticket};
+use crate::application::contracts::CreationCrewAssignment;
+use crate::application::task::TaskJobPort;
 
 impl OrbitRuntime {
     /// Re-check, under the task lock, the creation intent an operator
@@ -161,7 +162,7 @@ impl OrbitRuntime {
         if let Some(crew) = &mut params.crew {
             *crew = self.canonical_crew_name(crew.as_deref())?;
             if crew.is_none() {
-                crew_assignment = self.creation_crew_assignment(
+                crew_assignment = self.creation_crew(
                     params.complexity.or(task.complexity),
                     None,
                     params.tags.as_deref().unwrap_or(&task.tags),
@@ -169,7 +170,7 @@ impl OrbitRuntime {
                         .context_files
                         .as_deref()
                         .unwrap_or(&task.context_files),
-                    &mut random_crew_ticket,
+                    &mut || self.random_crew_draw_ticket(),
                 )?;
                 *crew = crew_assignment
                     .as_ref()

@@ -11,6 +11,7 @@ pub(crate) mod contention;
 mod context_repair;
 mod context_widening;
 mod desktop;
+mod distributed_port;
 pub(crate) mod escalation_triage_steps;
 mod external_merge;
 mod proposed;
@@ -22,6 +23,7 @@ mod final_recovery;
 mod finding_verification;
 pub(crate) mod finding_verification_steps;
 mod helpers;
+mod job_port;
 pub(crate) mod legacy_decisions;
 mod lifecycle;
 pub(crate) mod light_delivery;
@@ -40,13 +42,16 @@ mod records;
 mod requeue;
 mod resolves;
 mod retained_candidate;
+mod review_port;
 pub(crate) use retained_candidate::RetainedCandidate;
 mod screened;
 mod steering;
+mod sweep_filing_port;
 mod transient_infra;
 mod transitions;
 mod update;
 pub(crate) mod validation_tools;
+mod workspace_auto_port;
 mod write_response;
 
 /// The shared non-pruning footprint calculation. Task reads, projections,
@@ -71,6 +76,7 @@ pub use contention::{LockContentionHotspot, LockContentionReport};
 pub use context_repair::{
     CONTEXT_REPAIR_SWEEP_STATUSES, ContextFileRestoration, ContextRepairCandidate,
 };
+pub(in crate::application) use distributed_port::TaskDistributedPort;
 pub use escalation_triage_steps::{
     PILOT_WARNING_TRIAGED_EVENT, PilotWarningDecision, PilotWarningTriageRequest,
 };
@@ -87,6 +93,8 @@ pub(crate) use finding_verification::{
     UNVERIFIED_REVIEW_FINDING, VERIFIABLE_STATUSES, VerdictWrite, VerifierAssignment,
     finding_fingerprint, latest_verification, needs_verification, next_tier,
 };
+use job_port::CrewPools;
+pub(in crate::application) use job_port::TaskJobPort;
 pub use lint::{TaskLintFinding, TaskLintReport, TaskLintSeverity};
 pub use listing::{
     TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskListQuery, TaskPage,
@@ -113,9 +121,13 @@ pub use provider_limit::{
 pub use pull_request_links::PullRequestLinks;
 pub use record_json::{task_record_json, task_show_field_json, task_show_json};
 pub(crate) use records::TaskRecords;
+pub(in crate::application) use review_port::TaskReviewPort;
 pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskWriteScreen};
+pub(crate) use sweep_filing_port::CiSweepAdmission;
+pub(in crate::application) use sweep_filing_port::TaskSweepFilingPort;
 pub use transient_infra::TransientInfraBlockedTask;
 pub(crate) use validation_tools::positive_validation_tools;
+pub(in crate::application) use workspace_auto_port::TaskWorkspaceAutoPort;
 pub(crate) use write_response::task_reference_status_index;
 pub use write_response::{
     TaskWriteMetadata, TaskWriteResponsePolicy, job_run_is_locally_navigable, link_pull_requests,

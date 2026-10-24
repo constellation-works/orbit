@@ -8,6 +8,7 @@
 pub(crate) mod ci_failure;
 pub(crate) mod dependabot;
 mod duplicate_tasks;
+mod task_port;
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;

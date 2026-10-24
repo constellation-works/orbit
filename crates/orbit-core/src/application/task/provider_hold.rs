@@ -25,9 +25,8 @@ use orbit_types::task::Task;
 use orbit_types::workflow::{ProviderFailureClass, ProviderFailureHold};
 
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{
-    CapturedCrewPools, CrewCandidate, PURPOSE_SOURCE_PREFIX,
-};
+use crate::application::contracts::{CrewCandidate, PURPOSE_SOURCE_PREFIX};
+use crate::application::task::{CrewPools, TaskJobPort};
 use crate::runtime::task::provider_hold::same_provider;
 
 impl OrbitRuntime {
@@ -87,10 +86,10 @@ impl OrbitRuntime {
     /// `candidates` and `source` are the draw without the hold; the fallbacks
     /// are the task's purpose pool, then its complexity pool, then the
     /// workspace default.
-    pub(crate) fn provider_held_candidates(
+    pub(in crate::application) fn provider_held_candidates(
         &self,
         task: &Task,
-        pools: &CapturedCrewPools,
+        pools: &CrewPools,
         hold: &ProviderFailureHold,
         candidates: &[CrewCandidate],
         source: &str,
@@ -133,9 +132,7 @@ impl OrbitRuntime {
                 return Ok(Some((pool, held(&pool_source))));
             }
         }
-        if let Some((pool, pool_source)) =
-            self.complexity_pool_candidates(task.complexity, pools)?
-        {
+        if let Some((pool, pool_source)) = self.complexity_pool_members(task.complexity, pools)? {
             let pool = permitted(&pool);
             if drawable(&pool) {
                 return Ok(Some((pool, held(&pool_source))));
@@ -158,10 +155,10 @@ impl OrbitRuntime {
     /// Why `task` waits out a provider failure hold at this admission:
     /// `Some` when the hold excludes every crew it could run as, `None` when
     /// no hold stands or another crew may take it.
-    pub(crate) fn provider_backoff_deferral(
+    pub(in crate::application) fn provider_backoff_deferral(
         &self,
         task: &Task,
-        pools: &CapturedCrewPools,
+        pools: &CrewPools,
     ) -> Result<Option<String>, OrbitError> {
         let Some(hold) = self.admission_provider_hold(task) else {
             return Ok(None);
@@ -169,7 +166,7 @@ impl OrbitRuntime {
         // A hold that excludes no crew has no draw to narrow, so it defers
         // whatever the task would otherwise draw, even when that draw fails.
         if !hold.excluded_crews.is_empty() {
-            let (candidates, source) = self.unheld_task_crew_candidates(task, pools)?;
+            let (candidates, source) = self.crew_candidates_before_holds(task, pools)?;
             if self
                 .provider_held_candidates(task, pools, &hold, &candidates, &source)?
                 .is_some()
@@ -196,12 +193,12 @@ impl OrbitRuntime {
     /// The crews `task` is drawn from before this host's provider limits:
     /// its unheld draw, narrowed by a standing provider hold when the hold
     /// leaves any crew, and that hold.
-    pub(crate) fn held_crew_candidates(
+    pub(in crate::application) fn held_crew_candidates(
         &self,
         task: &Task,
-        pools: &CapturedCrewPools,
+        pools: &CrewPools,
     ) -> Result<(Vec<CrewCandidate>, String, Option<ProviderFailureHold>), OrbitError> {
-        let (candidates, source) = self.unheld_task_crew_candidates(task, pools)?;
+        let (candidates, source) = self.crew_candidates_before_holds(task, pools)?;
         let Some(hold) = self.admission_provider_hold(task) else {
             return Ok((candidates, source, None));
         };

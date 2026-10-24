@@ -7,7 +7,7 @@ use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use super::super::helpers::SYSTEM_ACTOR_LABEL;
 use super::super::params::TaskUpdateParams;
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::CreationCrewAssignment;
+use crate::application::contracts::CreationCrewAssignment;
 
 /// Which lifecycle rules a status change on this write must satisfy
 /// [ORB-12245].

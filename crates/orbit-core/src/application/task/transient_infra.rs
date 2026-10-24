@@ -51,7 +51,7 @@ use orbit_types::workflow::{
 use rusqlite::TransactionBehavior;
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
-use crate::application::task::TaskRecords;
+use crate::application::task::{TaskJobPort, TaskRecords};
 
 /// Transient authentication errors one block may take before it waits for an
 /// operator.
@@ -286,7 +286,7 @@ impl OrbitRuntime {
                 )?;
                 return Ok(None);
             }
-            None if self.unbound_publication_on_record(&task)? => {
+            None if self.unbound_publication(&task)? => {
                 self.refuse_transient_infra_requeue(
                     scanned,
                     "a pull request or preserved candidate is on record that no failure-handoff \

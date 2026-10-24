@@ -10,6 +10,7 @@ use orbit_types::{
 };
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskReviewPort;
 use crate::application::task::lifecycle::task_status_transition_allowed;
 
 use super::validation::invalid;
@@ -169,30 +170,30 @@ impl OrbitRuntime {
             artifacts,
             write_disabled_reason,
         } = self.stores().tasks().read_desktop_task(id)?;
-        let (review_projection, review_reason) =
-            match crate::application::review::task_review_projection(self, &task, &artifacts) {
-                Ok(Some(value)) => {
-                    let bytes = serde_json::to_string(&value)
-                        .map_err(|error| OrbitError::Execution(error.to_string()))?;
-                    let safe = redact_all(&bytes);
-                    if safe.len() > 32768 {
-                        (None, Some("structured review evidence exceeds the desktop 32 KiB limit; use the authoritative review artifact".into()))
-                    } else {
-                        (
-                            Some(
-                                serde_json::from_str(&safe)
-                                    .map_err(|error| OrbitError::Execution(error.to_string()))?,
-                            ),
-                            None,
-                        )
-                    }
+        let (review_projection, review_reason) = match self.task_review_evidence(&task, &artifacts)
+        {
+            Ok(Some(value)) => {
+                let bytes = serde_json::to_string(&value)
+                    .map_err(|error| OrbitError::Execution(error.to_string()))?;
+                let safe = redact_all(&bytes);
+                if safe.len() > 32768 {
+                    (None, Some("structured review evidence exceeds the desktop 32 KiB limit; use the authoritative review artifact".into()))
+                } else {
+                    (
+                        Some(
+                            serde_json::from_str(&safe)
+                                .map_err(|error| OrbitError::Execution(error.to_string()))?,
+                        ),
+                        None,
+                    )
                 }
-                Ok(None) => (
-                    None,
-                    Some("structured review gate evidence is unavailable".into()),
-                ),
-                Err(error) => (None, Some(error.to_string())),
-            };
+            }
+            Ok(None) => (
+                None,
+                Some("structured review gate evidence is unavailable".into()),
+            ),
+            Err(error) => (None, Some(error.to_string())),
+        };
         let comments_total = comments.len();
         let history_total = history.len();
         let artifacts_total = artifacts.len();

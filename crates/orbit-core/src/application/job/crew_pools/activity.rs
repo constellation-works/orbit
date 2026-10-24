@@ -11,13 +11,13 @@ use orbit_types::workflow::{
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::contracts::CrewCandidate;
 use crate::application::distributed::HostProviderHold;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::run_input::non_empty;
 
 use super::draw::{complexity_crews_key, permitted_candidates, sole_candidate};
 use super::purpose::activity_fallback_tier;
-use super::types::CrewCandidate;
 
 impl OrbitRuntime {
     /// The crew a `final_recovery` activity runs as: one draw from

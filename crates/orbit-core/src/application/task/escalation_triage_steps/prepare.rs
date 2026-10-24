@@ -13,13 +13,13 @@ use serde_json::{Value, json};
 
 use super::{HeldPilotWarnings, PilotWarningCandidacy};
 use crate::OrbitRuntime;
-use crate::application::task::TaskAutomationPort;
 use crate::application::task::TriageCandidacy;
 use crate::application::task::pilot::input::{
     bounded_usize, requested_workspace_root, string_array,
 };
 use crate::application::task::pilot::requested_base_branch;
 use crate::application::task::pilot::source::{SourceSnapshot, resolve_source_snapshot};
+use crate::application::task::{TaskAutomationPort, TaskDistributedPort};
 use crate::application::task::{TaskListFilter, VerifierAssignment};
 
 const DEFAULT_MAX_PARTITION_SIZE: usize = 5;
@@ -358,7 +358,7 @@ fn assessment_author(
     Ok(runtime
         .read_run_state(run_id)?
         .as_ref()
-        .and_then(crate::application::distributed::pilot_run_crew))
+        .and_then(|state| runtime.pilot_assessment_crew(state)))
 }
 
 /// `task`'s triager: a hard-tier draw that can inspect source natively,

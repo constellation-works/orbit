@@ -16,6 +16,7 @@ mod pr_repair;
 mod resume;
 mod review_hook;
 mod run;
+mod task_port;
 mod upgrade_resume;
 
 #[cfg(test)]

@@ -7,17 +7,18 @@ use orbit_types::task::{
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::contracts::{
+    CreationCrewAssignment, CrewCandidate, InspectionPool, PURPOSE_SOURCE_PREFIX,
+    automatic_crew_source,
+};
 use crate::runtime::run_input::non_empty;
 
 use super::draw::{
     INSPECTION_CREW_UNAVAILABLE, complexity_crews_key, permitted_candidates, pools_from_input,
     random_crew_ticket, seeded_crew_ticket, sole_candidate, weighted_candidates, weighted_draw,
 };
-use super::purpose::{PURPOSE_SOURCE_PREFIX, automatic_crew_source, task_crew_purpose};
-use super::types::{
-    COMPLEXITIES, CapturedCrewPool, CapturedCrewPools, CreationCrewAssignment, CrewCandidate,
-    InspectionPool, POOLS_KEY,
-};
+use super::purpose::task_crew_purpose;
+use super::types::{COMPLEXITIES, CapturedCrewPool, CapturedCrewPools, POOLS_KEY};
 
 impl OrbitRuntime {
     /// Recover legacy assignment provenance only from the latest assignment
