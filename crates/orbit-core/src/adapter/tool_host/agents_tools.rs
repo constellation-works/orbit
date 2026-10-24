@@ -19,7 +19,16 @@ pub(super) fn dispatch(
         input.optional_count("min_support")?,
     )?;
     let by_type = input.optional_bool("by_type")?.unwrap_or(false);
+    let shadow = input.optional_bool("shadow")?.unwrap_or(false);
     match verb {
+        AgentsVerb::Scorecard if shadow => {
+            if !by_type || role != AgentRole::Implementers {
+                return Err(OrbitError::InvalidInput(
+                    "shadow is only supported for implementers with by_type".to_string(),
+                ));
+            }
+            runtime.agent_shadow_scorecard(&query)
+        }
         AgentsVerb::Scorecard if by_type => {
             if role != AgentRole::Implementers {
                 return Err(OrbitError::InvalidInput(

@@ -659,6 +659,8 @@ fn crew_performance_weighs_the_worked_example_and_off_draws_as_before() {
         "",
         "crew_performance = \"off\"",
         "crew_performance = \"absolute\"\ncrew_performance_strength = 0",
+        "crew_performance = \"shadow_absolute\"\ncrew_performance_strength = 0",
+        "crew_performance = \"shadow_comparative\"\ncrew_performance_strength = 0",
     ] {
         fx.configure(&performance_config(EXAMPLE_POOL, extra));
         let admitted = fx.admit(json!({ "task_ids": [task.id] }));
@@ -692,6 +694,7 @@ fn crew_performance_weighs_the_worked_example_and_off_draws_as_before() {
     );
     let haiku = &pool_member(&admitted, "haiku")["performance"];
     assert_eq!(haiku["mode"], "absolute", "{admitted}");
+    assert_eq!(haiku["applied"], true, "{admitted}");
     assert_eq!(haiku["type"], "review", "{admitted}");
     assert_eq!(haiku["tier"], "low", "{admitted}");
     assert_eq!(haiku["score"], 115.0, "{admitted}");
@@ -715,6 +718,11 @@ fn crew_performance_weighs_the_worked_example_and_off_draws_as_before() {
             ("luna", 30, 1.35),
             ("gemini-flash", 30, 0.94),
         ],
+    );
+    assert_eq!(
+        pool_member(&admitted, "luna")["performance"]["applied"],
+        true,
+        "{admitted}"
     );
 
     // The assigned member stays: only usage pressure re-draws at admission.
@@ -759,6 +767,7 @@ fn crew_performance_composes_with_usage_pressure() {
         assert!(member["pressure"].as_f64().is_some(), "{admitted}");
         let recorded = member["performance"]["factor"].as_f64().unwrap();
         assert!((recorded - performance_factor).abs() < 1e-5, "{admitted}");
+        assert_eq!(member["performance"]["applied"], true, "{admitted}");
         let weight = member["weight"].as_u64().unwrap() as f64;
         let effective = (weight * pressure_factor * recorded * 1000.0).round() / 1000.0;
         assert_eq!(member["effective_weight"], effective, "{name}: {admitted}");
@@ -844,6 +853,7 @@ fn crew_performance_fallbacks_clamps_and_unusable_snapshots() {
         for name in ["haiku", "luna", "gemini-flash"] {
             let member = pool_member(&admitted, name);
             assert_eq!(member["performance"]["factor"], 1.0, "{admitted}");
+            assert_eq!(member["performance"]["applied"], true, "{admitted}");
             assert_eq!(member["performance"]["unusable"], reason, "{admitted}");
             assert!(member.get("effective_weight").is_none(), "{admitted}");
         }
@@ -894,6 +904,388 @@ fn crew_performance_fallbacks_clamps_and_unusable_snapshots() {
     );
 }
 
+/// Shadow modes compute the same factor as the live mode, record it with
+/// `applied: false`, and draw the crew `off` would draw. `absolute` applies
+/// the factor (`applied: true`) and can flip that crew. Pressure still
+/// scales a shadow draw, and the redraw note does not claim performance did.
+fn shadow_modes_record_the_factor_and_draw_like_off() {
+    substitute_worker();
+    let flip = r#"["haiku:1000000", "luna:1"]"#;
+    let cells = [
+        ("haiku", "haiku-model", "review", 40, 10.0, 100.0),
+        ("luna", "luna-model", "review", 40, 200.0, 100.0),
+    ];
+    let tuned = |mode: &str| {
+        format!("{mode}\ncrew_performance_strength = 100\ncrew_performance_cap = 1000000")
+    };
+    let fx = Fixture::new(&performance_config("[]", ""));
+    let task = fx.task("shadow.txt", TaskComplexity::Low, None, &["review"]);
+    assert_eq!(task.crew_source.as_deref(), Some("default"));
+
+    fx.configure(&performance_config(
+        flip,
+        &tuned("crew_performance = \"shadow_absolute\""),
+    ));
+    fx.snapshot(&cells, Duration::hours(1), None);
+    for name in ["s1.txt", "s2.txt", "s3.txt"] {
+        let created = fx.task(name, TaskComplexity::Low, None, &["review"]);
+        assert_eq!(
+            created.crew.as_deref(),
+            Some("haiku"),
+            "shadow creation matches the heavy configured weight"
+        );
+    }
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    assert_eq!(admitted["crew"], "haiku", "{admitted}");
+    let haiku = pool_member(&admitted, "haiku");
+    assert_eq!(
+        haiku["performance"]["mode"], "shadow_absolute",
+        "{admitted}"
+    );
+    assert_eq!(haiku["performance"]["applied"], false, "{admitted}");
+    assert!(
+        (haiku["performance"]["factor"].as_f64().unwrap() - 1e-6).abs() < 1e-12,
+        "{admitted}"
+    );
+    assert!(
+        haiku.get("effective_weight").is_none(),
+        "shadow does not rescale tickets: {admitted}"
+    );
+    let luna = pool_member(&admitted, "luna");
+    assert_eq!(luna["performance"]["applied"], false, "{admitted}");
+    assert_eq!(
+        luna["performance"]["factor"], 1_000_000.0,
+        "the live factor is recorded: {admitted}"
+    );
+
+    fx.configure(&performance_config(
+        flip,
+        &tuned("crew_performance = \"shadow_comparative\""),
+    ));
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    assert_eq!(admitted["crew"], "haiku", "{admitted}");
+    assert_eq!(
+        pool_member(&admitted, "haiku")["performance"]["mode"],
+        "shadow_comparative",
+        "{admitted}"
+    );
+    assert_eq!(
+        pool_member(&admitted, "haiku")["performance"]["applied"],
+        false,
+        "{admitted}"
+    );
+
+    fx.configure(&performance_config(
+        flip,
+        &tuned("crew_performance = \"absolute\""),
+    ));
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    assert_eq!(
+        admitted["crew"], "luna",
+        "absolute applies the factor and flips the winner: {admitted}"
+    );
+    assert_eq!(
+        pool_member(&admitted, "luna")["performance"]["applied"],
+        true,
+        "{admitted}"
+    );
+    assert!(
+        pool_member(&admitted, "luna")
+            .get("effective_weight")
+            .is_some(),
+        "{admitted}"
+    );
+    let created = fx.task("live.txt", TaskComplexity::Low, None, &["review"]);
+    assert_eq!(
+        created.crew.as_deref(),
+        Some("luna"),
+        "creation applies absolute"
+    );
+
+    fx.configure(&performance_config(flip, "crew_performance = \"off\""));
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    assert_eq!(admitted["crew"], "haiku", "{admitted}");
+    assert!(
+        pool_member(&admitted, "haiku").get("performance").is_none(),
+        "{admitted}"
+    );
+
+    let pressured = Fixture::new(&performance_config(r#"["luna"]"#, ""));
+    let assigned = pressured.task("pressed.txt", TaskComplexity::Low, None, &["review"]);
+    assert_eq!(assigned.crew.as_deref(), Some("luna"));
+    pressured.configure(&performance_config(
+        flip,
+        &tuned("crew_selection = \"usage_pressure\"\ncrew_performance = \"shadow_absolute\""),
+    ));
+    pressured.snapshot(&cells, Duration::hours(1), None);
+    pressured.week("claude", 10.0, Duration::hours(6));
+    pressured.week("codex", 0.0, Duration::days(7));
+    let admitted = pressured.admit(json!({ "task_ids": [assigned.id] }));
+    assert_eq!(
+        admitted["crew"], "haiku",
+        "pressure does not apply the shadow factor: {admitted}"
+    );
+    let haiku = pool_member(&admitted, "haiku");
+    assert_eq!(haiku["performance"]["applied"], false, "{admitted}");
+    let effective = haiku["effective_weight"].as_f64().unwrap();
+    assert!(
+        effective > 100_000.0,
+        "the tiny shadow factor was not multiplied in: {admitted}"
+    );
+    let luna_effective = pool_member(&admitted, "luna")["effective_weight"]
+        .as_f64()
+        .unwrap();
+    assert!(
+        luna_effective < 100.0,
+        "luna's cap factor was not applied: {admitted}"
+    );
+    let note = pressured.redraws(&assigned.id).join("\n");
+    assert!(note.contains("under usage pressure:"), "{note}");
+    assert!(
+        !note.contains("crew performance"),
+        "a shadow redraw does not claim the factor changed the crew: {note}"
+    );
+}
+
+/// The shadow scorecard reads implementation-run `crew_selection` only:
+/// per pool and type, draw counts and mean static, drawn and would-be
+/// shares. A record with no `applied` field counts as applied. Draws with
+/// no performance object are a separate static section. The coordinator
+/// job is not a draw.
+fn shadow_scorecard_reports_static_drawn_and_would_be_shares() {
+    substitute_worker();
+    let fx = Fixture::new(&performance_config("[]", ""));
+    let runtime = fx.runtime();
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        runtime.sqlite_store().unwrap(),
+        runtime.workspace_id().unwrap(),
+    );
+    let insert = |job: &str, selection: Value| {
+        jobs.insert_job_run(job, 1, Utc::now(), Some(selection), None)
+            .unwrap();
+    };
+    let pool = |source: &str, crew: &str, members: Value| {
+        json!({
+            "crew_selection": {
+                "crew": crew,
+                "source": source,
+                "eligible_pool": members,
+            }
+        })
+    };
+    let weighed = json!([
+        {"name": "haiku", "weight": 40, "performance": {"mode": "shadow_absolute", "applied": false, "type": "review", "factor": 2.0}},
+        {"name": "luna", "weight": 30, "performance": {"mode": "shadow_absolute", "applied": false, "type": "review", "factor": 1.0}},
+        {"name": "gemini-flash", "weight": 30, "performance": {"mode": "shadow_absolute", "applied": false, "type": "review", "factor": 1.0}},
+    ]);
+    insert(
+        "task_local_pipeline",
+        pool("workflow.low_complexity_crews", "haiku", weighed.clone()),
+    );
+    insert(
+        "task_pr_pipeline",
+        pool("workflow.low_complexity_crews", "luna", weighed),
+    );
+    insert(
+        "task_local_pipeline",
+        pool(
+            "workflow.low_complexity_crews; usage pressure",
+            "gemini-flash",
+            json!([
+                {"name": "haiku", "weight": 40, "effective_weight": 80.0, "performance": {"mode": "absolute", "applied": true, "type": "other", "factor": 2.0}},
+                {"name": "luna", "weight": 30, "effective_weight": 30.0, "performance": {"mode": "absolute", "applied": true, "type": "other", "factor": 1.0}},
+                {"name": "gemini-flash", "weight": 30, "effective_weight": 30.0, "performance": {"mode": "absolute", "applied": true, "type": "other", "factor": 1.0}},
+            ]),
+        ),
+    );
+    insert(
+        "task_local_pipeline",
+        pool(
+            "workflow.low_complexity_crews",
+            "haiku",
+            json!([
+                {"name": "haiku", "weight": 40, "effective_weight": 80.0, "performance": {"mode": "absolute", "type": "legacy", "factor": 2.0}},
+                {"name": "luna", "weight": 30, "effective_weight": 30.0, "performance": {"mode": "absolute", "type": "legacy", "factor": 1.0}},
+                {"name": "gemini-flash", "weight": 30, "effective_weight": 30.0, "performance": {"mode": "absolute", "type": "legacy", "factor": 1.0}},
+            ]),
+        ),
+    );
+    insert(
+        "task_claimed_pr_pipeline",
+        pool(
+            "workflow.hard_complexity_crews",
+            "haiku",
+            json!([
+                {"name": "haiku", "weight": 10, "effective_weight": 20.0, "performance": {"mode": "shadow_absolute", "applied": false, "type": "review", "factor": 2.0}},
+                {"name": "luna", "weight": 10, "effective_weight": 10.0, "performance": {"mode": "shadow_absolute", "applied": false, "type": "review", "factor": 1.0}},
+            ]),
+        ),
+    );
+    insert(
+        "task_claimed_local_pipeline",
+        pool(
+            "workflow.medium_complexity_crews",
+            "haiku",
+            json!([
+                {"name": "haiku", "weight": 40, "effective_weight": 80},
+                {"name": "luna", "weight": 30, "effective_weight": 30},
+                {"name": "gemini-flash", "weight": 30, "effective_weight": 15},
+            ]),
+        ),
+    );
+    insert(
+        "task_auto_pipeline",
+        pool(
+            "decoy-pool",
+            "haiku",
+            json!([{"name": "haiku", "weight": 1, "performance": {"applied": false, "type": "review", "factor": 9.0}}]),
+        ),
+    );
+    insert(
+        "task_local_pipeline",
+        json!({"crew_selection": "not-an-object"}),
+    );
+
+    let report = runtime
+        .run_tool(
+            "orbit.agents.scorecard",
+            json!({
+                "role": "implementers",
+                "by_type": true,
+                "shadow": true,
+                "window": "7d",
+            }),
+        )
+        .unwrap();
+    assert_eq!(report["shadow"], true, "{report}");
+    assert_eq!(report["by_type"], true, "{report}");
+    assert_eq!(report["window"], "7d", "{report}");
+    assert_eq!(report["requested_window"], "7d", "{report}");
+    assert!(report.get("cells").is_none(), "{report}");
+    assert!(report.get("rows").is_none(), "{report}");
+    assert!(report.get("min_support").is_none(), "{report}");
+    assert!(!report.to_string().contains("decoy-pool"), "{report}");
+
+    let crew = |pool: &str, ty: &str, name: &str| -> Value {
+        report["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|group| group["pool"] == pool && group["type"] == ty)
+            .unwrap_or_else(|| panic!("missing {pool}/{ty}: {report}"))["crews"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|crew| crew["crew"] == name)
+            .unwrap_or_else(|| panic!("missing {name} in {pool}/{ty}: {report}"))
+            .clone()
+    };
+    let close = |member: &Value, key: &str, expected: f64| {
+        let value = member[key].as_f64().unwrap();
+        assert!(
+            (value - expected).abs() < 1e-9,
+            "{key} {value} != {expected} in {member}"
+        );
+    };
+    let review = report["pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|group| group["pool"] == "workflow.low_complexity_crews" && group["type"] == "review")
+        .unwrap();
+    assert_eq!(review["draws"], 2, "{report}");
+    let haiku = crew("workflow.low_complexity_crews", "review", "haiku");
+    assert_eq!(haiku["draws"], 1, "{haiku}");
+    close(&haiku, "static_share", 0.4);
+    close(&haiku, "drawn_share", 0.4);
+    close(&haiku, "would_be_share", 0.5714);
+    let luna = crew("workflow.low_complexity_crews", "review", "luna");
+    assert_eq!(luna["draws"], 1, "{luna}");
+    close(&luna, "static_share", 0.3);
+    close(&luna, "would_be_share", 0.2143);
+    let flash = crew("workflow.low_complexity_crews", "review", "gemini-flash");
+    assert_eq!(flash["draws"], 0, "{flash}");
+    close(&flash, "would_be_share", 0.2143);
+
+    let other = crew("workflow.low_complexity_crews", "other", "haiku");
+    close(&other, "static_share", 0.4);
+    close(&other, "drawn_share", 0.5714);
+    close(&other, "would_be_share", 0.5714);
+    let legacy = crew("workflow.low_complexity_crews", "legacy", "haiku");
+    assert_eq!(legacy["draws"], 1, "{legacy}");
+    close(&legacy, "drawn_share", 0.5714);
+    close(&legacy, "would_be_share", 0.5714);
+
+    let pressured = crew("workflow.hard_complexity_crews", "review", "haiku");
+    assert_eq!(pressured["draws"], 1, "{pressured}");
+    close(&pressured, "static_share", 0.5);
+    close(&pressured, "drawn_share", 0.6667);
+    close(&pressured, "would_be_share", 0.8);
+    let pressured_luna = crew("workflow.hard_complexity_crews", "review", "luna");
+    close(&pressured_luna, "drawn_share", 0.3333);
+    close(&pressured_luna, "would_be_share", 0.2);
+
+    assert_eq!(report["static_draws"]["draws"], 1, "{report}");
+    let static_pool = &report["static_draws"]["pools"][0];
+    assert_eq!(
+        static_pool["pool"], "workflow.medium_complexity_crews",
+        "{report}"
+    );
+    assert_eq!(static_pool["draws"], 1, "{report}");
+    let static_haiku = static_pool["crews"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|crew| crew["crew"] == "haiku")
+        .unwrap();
+    assert!(
+        static_haiku.get("would_be_share").is_none(),
+        "{static_haiku}"
+    );
+    close(static_haiku, "static_share", 0.4);
+    close(static_haiku, "drawn_share", 0.64);
+    let static_luna = static_pool["crews"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|crew| crew["crew"] == "luna")
+        .unwrap();
+    close(static_luna, "drawn_share", 0.24);
+
+    let plain = runtime
+        .run_tool(
+            "orbit.agents.scorecard",
+            json!({"role": "implementers", "window": "7d"}),
+        )
+        .unwrap();
+    assert!(plain.get("shadow").is_none(), "{plain}");
+    assert!(plain.get("pools").is_none(), "{plain}");
+    let error = runtime
+        .run_tool(
+            "orbit.agents.scorecard",
+            json!({"role": "implementers", "shadow": true}),
+        )
+        .expect_err("shadow without by_type");
+    assert!(
+        error
+            .to_string()
+            .contains("shadow is only supported for implementers with by_type"),
+        "{error}"
+    );
+    let error = runtime
+        .run_tool(
+            "orbit.agents.scorecard",
+            json!({"role": "orchestrators", "by_type": true, "shadow": true}),
+        )
+        .expect_err("shadow on another role");
+    assert!(
+        error
+            .to_string()
+            .contains("shadow is only supported for implementers with by_type"),
+        "{error}"
+    );
+}
+
 crate::scenario_table!(
     usage_pressure_draw_scenarios,
     static_selection_draws_and_records_as_before,
@@ -903,5 +1295,7 @@ crate::scenario_table!(
     parked_members_stay_out_and_low_pressure_floors_without_gating,
     crew_performance_weighs_the_worked_example_and_off_draws_as_before,
     crew_performance_composes_with_usage_pressure,
-    crew_performance_fallbacks_clamps_and_unusable_snapshots
+    crew_performance_fallbacks_clamps_and_unusable_snapshots,
+    shadow_modes_record_the_factor_and_draw_like_off,
+    shadow_scorecard_reports_static_drawn_and_would_be_shares
 );

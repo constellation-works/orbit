@@ -28,6 +28,9 @@ pub const DEFAULT_CREW_PERFORMANCE_CAP: f64 = 4.0;
 
 /// How crew draws use the performance snapshot (`workflow.crew_performance`).
 /// `off` draws without it and also stops the hourly refresh from scanning.
+/// `shadow_absolute` and `shadow_comparative` compute and record the same
+/// factor as the live mode, and still refresh the snapshot, but the draw
+/// keeps the weights it would use with the mode off.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CrewPerformanceMode {
     /// No snapshot is built and no draw reads one.
@@ -37,11 +40,21 @@ pub enum CrewPerformanceMode {
     Absolute,
     /// Weight by each crew's cell score against its own tier mean.
     Comparative,
+    /// Record the absolute factor and draw without it.
+    ShadowAbsolute,
+    /// Record the comparative factor and draw without it.
+    ShadowComparative,
 }
 
 impl CrewPerformanceMode {
     /// Every admitted value, in the order errors name them.
-    pub const CHOICES: [&'static str; 3] = ["off", "absolute", "comparative"];
+    pub const CHOICES: [&'static str; 5] = [
+        "off",
+        "absolute",
+        "comparative",
+        "shadow_absolute",
+        "shadow_comparative",
+    ];
 
     /// A mode by its configured name.
     #[must_use]
@@ -50,6 +63,8 @@ impl CrewPerformanceMode {
             "off" => Some(Self::Off),
             "absolute" => Some(Self::Absolute),
             "comparative" => Some(Self::Comparative),
+            "shadow_absolute" => Some(Self::ShadowAbsolute),
+            "shadow_comparative" => Some(Self::ShadowComparative),
             _ => None,
         }
     }
@@ -61,6 +76,8 @@ impl CrewPerformanceMode {
             Self::Off => "off",
             Self::Absolute => "absolute",
             Self::Comparative => "comparative",
+            Self::ShadowAbsolute => "shadow_absolute",
+            Self::ShadowComparative => "shadow_comparative",
         }
     }
 
@@ -131,21 +148,35 @@ impl Default for CrewPerformancePolicy {
 }
 
 impl CrewPerformancePolicy {
-    /// Whether draws weigh performance: a mode other than `off` with a
-    /// positive strength.
+    /// Whether a draw records a performance factor: any mode other than
+    /// `off` with a positive strength, including the shadow modes.
     #[must_use]
-    pub fn applies(&self) -> bool {
+    pub fn records(&self) -> bool {
         self.mode.is_on() && self.strength > 0.0
     }
 
+    /// Whether draws weigh performance: `absolute` or `comparative` with a
+    /// positive strength. Shadow modes record the factor and leave the
+    /// tickets on the unweighted weights.
+    #[must_use]
+    pub fn applies(&self) -> bool {
+        matches!(
+            self.mode,
+            CrewPerformanceMode::Absolute | CrewPerformanceMode::Comparative
+        ) && self.strength > 0.0
+    }
+
     /// The advantage the mode reads from a cell: `score − 100` under
-    /// `absolute`, `score − crew_mean` under `comparative`, `0` when off.
+    /// `absolute` and `shadow_absolute`, `score − crew_mean` under
+    /// `comparative` and `shadow_comparative`, `0` when off.
     #[must_use]
     pub fn advantage(&self, score: f64, crew_mean: f64) -> f64 {
         match self.mode {
             CrewPerformanceMode::Off => 0.0,
-            CrewPerformanceMode::Absolute => score - 100.0,
-            CrewPerformanceMode::Comparative => score - crew_mean,
+            CrewPerformanceMode::Absolute | CrewPerformanceMode::ShadowAbsolute => score - 100.0,
+            CrewPerformanceMode::Comparative | CrewPerformanceMode::ShadowComparative => {
+                score - crew_mean
+            }
         }
     }
 

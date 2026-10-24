@@ -28,6 +28,9 @@ Options:
       --by-type
           Show implementers split by task type within each tier
 
+      --shadow
+          Compare recorded draw shares with the shares the recorded factor would have given
+
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)
 
@@ -50,3 +53,6 @@ Options:
 The table shows each row's units, score and term counts; --json carries every rate per 100
 units and the term definitions. Follow a row to its tasks with
 `orbit agents show --role <role> --crew <crew>`.
+
+`--by-type --shadow` (implementers only) replaces the cell matrix with each crew's static,
+drawn and would-be share from recorded draws in the window.

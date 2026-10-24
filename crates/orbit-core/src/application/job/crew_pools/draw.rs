@@ -201,6 +201,10 @@ const PRESSURE_TICKET_SCALE: f64 = 1000.0;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PerformanceFactor {
     mode: CrewPerformanceMode,
+    /// Whether the draw multiplied tickets by `factor`. Shadow modes record
+    /// the factor and leave it unapplied; a missing field on an older
+    /// record means it was applied.
+    applied: bool,
     tier: String,
     task_type: String,
     factor: f64,
@@ -225,6 +229,7 @@ impl PerformanceFactor {
     fn json(&self) -> Value {
         let mut value = json!({
             "mode": self.mode.as_str(),
+            "applied": self.applied,
             "tier": self.tier,
             "type": self.task_type,
             "factor": self.factor,
@@ -285,6 +290,13 @@ impl CrewPerformanceRead {
         self.snapshot.is_ok()
     }
 
+    /// Whether tickets are multiplied by the factor: a live mode with a
+    /// usable snapshot. Shadow modes, and an unusable snapshot, record the
+    /// factor and leave the weights alone.
+    fn weighs(&self) -> bool {
+        self.policy.applies() && self.usable()
+    }
+
     /// `crew`'s factor under its current model: its `(tier, type)` cell,
     /// else its crew mean for the tier, else 100. An unusable snapshot is
     /// factor 1 with the reason.
@@ -328,6 +340,7 @@ impl CrewPerformanceRead {
         });
         PerformanceFactor {
             mode: self.policy.mode,
+            applied: self.policy.applies(),
             tier: self.tier.clone(),
             task_type: self.task_type.clone(),
             factor,
@@ -339,10 +352,11 @@ impl CrewPerformanceRead {
 impl crate::OrbitRuntime {
     /// The crew-performance read of a task draw for a task of `complexity`
     /// carrying `tags` and `context_files`, or `None` when
-    /// `workflow.crew_performance` is off or its strength is 0. A snapshot
-    /// that is missing, stale, built from another type list or unreadable
-    /// is carried as its reason, so every factor is 1 and the record says
-    /// why; a draw never fails over it.
+    /// `workflow.crew_performance` is off or its strength is 0. Shadow
+    /// modes are included: they record the factor and do not apply it. A
+    /// snapshot that is missing, stale, built from another type list or
+    /// unreadable is carried as its reason, so every factor is 1 and the
+    /// record says why; a draw never fails over it.
     pub(super) fn crew_performance_read(
         &self,
         complexity: Option<TaskComplexity>,
@@ -350,7 +364,7 @@ impl crate::OrbitRuntime {
         context_files: &[String],
     ) -> Option<CrewPerformanceRead> {
         let policy = self.provider_limit_policy().crew_performance;
-        if !policy.applies() {
+        if !policy.records() {
             return None;
         }
         let task_type =
@@ -409,7 +423,19 @@ impl DrawWeighting {
             .map(PerformanceFactor::describe)
     }
 
-    /// The mode and task type of a performance-weighted draw.
+    /// Whether this draw multiplied tickets by the performance factor.
+    /// Shadow records the factor and returns false, so a pressure re-draw
+    /// does not claim performance changed the crew.
+    pub(crate) fn performance_applied(&self) -> bool {
+        self.members.values().any(|member| {
+            member
+                .performance
+                .as_ref()
+                .is_some_and(|factor| factor.applied)
+        })
+    }
+
+    /// The mode and task type of a draw that recorded a performance factor.
     pub(crate) fn performance_lens(&self) -> Option<(&'static str, &str)> {
         self.members
             .values()
@@ -451,12 +477,14 @@ impl DrawWeighting {
 /// to `weight × pressure_factor × performance_factor`, ×1000 and rounded to
 /// whole tickets. Pressure is `clamp(pressure^strength, 1/cap, cap)` from
 /// the crews' weekly usage [ORB-17770]; performance is the task draw's
-/// crew-performance factor, `None` for draws that take none. Apply it to a
-/// pool after hold and limit narrowing; membership is unchanged. Task
-/// admission applies its allowlist afterward; other draws keep their
-/// existing membership filters first. A weight of 0 stays 0 and a positive
-/// weight keeps at least one ticket. `None` leaves the draw as it was:
-/// neither factor applies or there is no choice to weigh.
+/// crew-performance factor, `None` for draws that take none. A shadow mode
+/// still records that factor, with `applied: false`, and does not multiply
+/// by it, so the tickets match the mode off; pressure still scales.
+/// Apply it to a pool after hold and limit narrowing; membership is
+/// unchanged. Task admission applies its allowlist afterward; other draws
+/// keep their existing membership filters first. A weight of 0 stays 0 and
+/// a positive weight keeps at least one ticket. `None` leaves the draw as
+/// it was: neither factor applies or there is no choice to weigh.
 pub(crate) fn weighted_candidates(
     candidates: &mut [CrewCandidate],
     pressure_policy: &UsagePressurePolicy,
@@ -471,10 +499,13 @@ pub(crate) fn weighted_candidates(
     if pressure.is_none() && performance.is_none() {
         return None;
     }
-    let scaled = pressure.is_some()
-        || performance
-            .as_ref()
-            .is_some_and(CrewPerformanceRead::usable);
+    // Shadow, and an unusable snapshot, record the factor without rescaling.
+    // Rescaling would change the rejection-sampling bound even at factor 1,
+    // so a shadow draw would no longer match `off` on the same tickets.
+    let weigh_performance = performance
+        .as_ref()
+        .is_some_and(CrewPerformanceRead::weighs);
+    let scaled = pressure.is_some() || weigh_performance;
     let mut members = BTreeMap::new();
     for candidate in candidates.iter_mut() {
         let crew_pressure = pressure.as_ref().map(|read| read.crew(&candidate.crew));
@@ -483,11 +514,16 @@ pub(crate) fn weighted_candidates(
             .map(|read| read.member(&candidate.crew));
         let configured = candidate.weight;
         if configured > 0 && scaled {
+            let performance_factor = if weigh_performance {
+                crew_performance
+                    .as_ref()
+                    .map_or(1.0, |performance| performance.factor)
+            } else {
+                1.0
+            };
             let multiplier = crew_pressure.as_ref().map_or(1.0, |pressure| {
                 pressure_policy.multiplier(pressure.pressure)
-            }) * crew_performance
-                .as_ref()
-                .map_or(1.0, |performance| performance.factor);
+            }) * performance_factor;
             let tickets = (f64::from(configured) * multiplier * PRESSURE_TICKET_SCALE)
                 .round()
                 .clamp(1.0, f64::from(u32::MAX));

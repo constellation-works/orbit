@@ -240,7 +240,7 @@
   },
   {
     "name": "orbit.agents.scorecard",
-    "description": "Rank one agent role's crews and models over the window: weighted outcome rates per 100 units of work, then pulled down toward the fleet average when above it. Implementers start at 100 and score actual counts against fleet expectations for the same tier mix; other roles sum weighted actual rates. Rows below the minimum support are listed last without a rank; a role whose terms are not computed yet answers status not_computed with its terms and no rows. With by_type, implementers instead return one cell per (crew, model, tier, type) with n, raw, crew_mean and score, plus the type list used. Scans the workspace once per call (cache_ttl_seconds 0). The payload the dashboard's Agents view reads.",
+    "description": "Rank one agent role's crews and models over the window: weighted outcome rates per 100 units of work, then pulled down toward the fleet average when above it. Implementers start at 100 and score actual counts against fleet expectations for the same tier mix; other roles sum weighted actual rates. Rows below the minimum support are listed last without a rank; a role whose terms are not computed yet answers status not_computed with its terms and no rows. With by_type, implementers instead return one cell per (crew, model, tier, type) with n, raw, crew_mean and score, plus the type list used. With shadow as well, implementers instead return each crew's draw count and its static, drawn and would-be share per pool and type over the window; draws with no performance record are counted separately as static. Calls without those switches keep this ranking. Scans the workspace once per call (cache_ttl_seconds 0), except the shadow report, which reads recorded draws only. The payload the dashboard's Agents view reads.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -267,6 +267,12 @@
       {
         "name": "by_type",
         "description": "Split implementers into (crew, model, tier, type) cells using workflow.crew_performance_types, with two-level shrinkage; implementers only.",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
+        "name": "shadow",
+        "description": "For implementers with by_type, report each crew's static, drawn and would-be share from recorded draws instead of the cell matrix. Draws without a performance record are counted separately as static.",
         "param_type": "boolean",
         "required": false
       },

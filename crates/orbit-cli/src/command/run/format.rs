@@ -413,7 +413,10 @@ pub(crate) fn format_child_dispatch_lines(state: Option<&PipelineState>) -> Vec<
 /// admitted before weights existed lists plain names, and is rendered as the
 /// bare names it was stored as. A performance-weighted draw appends each
 /// member's factor (`haiku:40×1.57`) and names the mode and task type, or
-/// the reason the snapshot was not used.
+/// the reason the snapshot was not used. A shadow record (`applied` false)
+/// keeps the configured weight and says `applied=false`, because the factor
+/// was not drawn. An older record with no `applied` field still shows the
+/// factor.
 pub(crate) fn format_crew_selection_line(input: Option<&serde_json::Value>) -> Option<String> {
     let selection = input?.get("crew_selection")?.as_object()?;
     let text = |key: &str| {
@@ -440,6 +443,7 @@ pub(crate) fn format_crew_selection_line(input: Option<&serde_json::Value>) -> O
                 };
                 if let Some(performance) = entry.get("performance")
                     && performance.get("unusable").is_none()
+                    && performance.get("applied") != Some(&serde_json::Value::Bool(false))
                     && let Some(factor) = performance
                         .get("factor")
                         .and_then(serde_json::Value::as_f64)
@@ -482,6 +486,12 @@ pub(crate) fn format_crew_selection_line(input: Option<&serde_json::Value>) -> O
             .and_then(serde_json::Value::as_str)
         {
             line.push_str(&format!(" performance_unusable={reason}"));
+        }
+        // An absent `applied` is a record from before shadow mode, whose
+        // factor is already in the weight. Only an explicit false is named,
+        // so the line does not read as if the factor was drawn.
+        if performance.get("applied") == Some(&serde_json::Value::Bool(false)) {
+            line.push_str(" applied=false");
         }
     }
     Some(line)
