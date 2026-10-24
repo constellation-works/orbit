@@ -2470,5 +2470,108 @@
     "checkout_evidence_scanned_bytes": 590,
     "checkout_evidence_source_truncated": false,
     "checkout_evidence_display_truncated": false
+  },
+  "later_workspace_checkout_after_helper_columns": {
+    "log": "CI\tCheckout\t2026-09-06T06:07:50.0000000Z Working directory is '/repo'\nCI\tCheckout\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git init /repo\nCI\tCheckout\t2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\nCI\tCheckout\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force 4968f137ab9969c35634496414fdc1637d22fe37\nCI\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 4968f13 workspace\nCI\tCheckout\t2026-09-06T06:07:50.0000000Z ##[endgroup]\nCI\tCheckout\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\nCI\tCheckout\t2026-09-06T06:07:50.0000000Z 4968f137ab9969c35634496414fdc1637d22fe37\nCI\tHelper\t2026-09-06T06:07:50.0000000Z Working directory is '/repo/.orbit/tmp/workflow-ci'\nCI\tHelper\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git init /repo/.orbit/tmp/workflow-ci\nCI\tHelper\t2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\nCI\tHelper\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force 4444444444444444444444444444444444444444\nCI\tHelper\t2026-09-06T06:07:50.0000000Z HEAD is now at 4444444 Merge 4968f137ab9969c35634496414fdc1637d22fe37 into abcdef0123456789abcdef0123456789abcdef01\nCI\tHelper\t2026-09-06T06:07:50.0000000Z ##[endgroup]\nCI\tHelper\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\nCI\tHelper\t2026-09-06T06:07:50.0000000Z 4444444444444444444444444444444444444444\nCI\tRevision\t2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\nCI\tRevision\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force cccccccccccccccccccccccccccccccccccccccc\nCI\tRevision\t2026-09-06T06:07:50.0000000Z HEAD is now at ccccccc another revision\nCI\tRevision\t2026-09-06T06:07:50.0000000Z ##[endgroup]\nCI\tRevision\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\nCI\tRevision\t2026-09-06T06:07:50.0000000Z cccccccccccccccccccccccccccccccccccccccc\n",
+    "truncated": false,
+    "total_bytes": 1893,
+    "returned_bytes": 1893,
+    "source_complete": true,
+    "diagnostic_unit": null,
+    "failure_regions": null,
+    "checkout_commits": [
+      "4968f137ab9969c35634496414fdc1637d22fe37",
+      "cccccccccccccccccccccccccccccccccccccccc"
+    ],
+    "checkout_evidence": [
+      "##[group]Checking out the ref",
+      "[command]/usr/bin/git checkout --progress --force 4968f137ab9969c35634496414fdc1637d22fe37",
+      "HEAD is now at 4968f13 workspace",
+      "/usr/bin/git log -1 --format=%H",
+      "4968f137ab9969c35634496414fdc1637d22fe37",
+      "##[group]Checking out the ref",
+      "[command]/usr/bin/git checkout --progress --force 4444444444444444444444444444444444444444",
+      "HEAD is now at 4444444 Merge 4968f137ab9969c35634496414fdc1637d22fe37 into abcdef0123456789abcdef0123456789abcdef01",
+      "/usr/bin/git log -1 --format=%H",
+      "4444444444444444444444444444444444444444",
+      "##[group]Checking out the ref",
+      "[command]/usr/bin/git checkout --progress --force cccccccccccccccccccccccccccccccccccccccc",
+      "HEAD is now at ccccccc another revision",
+      "/usr/bin/git log -1 --format=%H",
+      "cccccccccccccccccccccccccccccccccccccccc"
+    ],
+    "checkout_evidence_complete": true,
+    "checkout_evidence_scanned_bytes": 1893,
+    "checkout_evidence_source_truncated": false,
+    "checkout_evidence_display_truncated": false
+  },
+  "later_workspace_checkout_after_helper_plain_steps": {
+    "log": "2026-09-06T06:07:50.0000000Z ##[group]Run Checkout\n2026-09-06T06:07:50.0000000Z ##[endgroup]\n2026-09-06T06:07:50.0000000Z Working directory is '/repo'\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git init /repo\n2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force 4968f137ab9969c35634496414fdc1637d22fe37\n2026-09-06T06:07:50.0000000Z HEAD is now at 4968f13 workspace\n2026-09-06T06:07:50.0000000Z ##[endgroup]\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T06:07:50.0000000Z 4968f137ab9969c35634496414fdc1637d22fe37\n2026-09-06T06:07:50.0000000Z ##[group]Run Helper\n2026-09-06T06:07:50.0000000Z ##[endgroup]\n2026-09-06T06:07:50.0000000Z Working directory is '/repo/.orbit/tmp/workflow-ci'\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git init /repo/.orbit/tmp/workflow-ci\n2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force 4444444444444444444444444444444444444444\n2026-09-06T06:07:50.0000000Z HEAD is now at 4444444 Merge 4968f137ab9969c35634496414fdc1637d22fe37 into abcdef0123456789abcdef0123456789abcdef01\n2026-09-06T06:07:50.0000000Z ##[endgroup]\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T06:07:50.0000000Z 4444444444444444444444444444444444444444\n2026-09-06T06:07:50.0000000Z ##[group]Run Revision\n2026-09-06T06:07:50.0000000Z ##[endgroup]\n2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force cccccccccccccccccccccccccccccccccccccccc\n2026-09-06T06:07:50.0000000Z HEAD is now at ccccccc another revision\n2026-09-06T06:07:50.0000000Z ##[endgroup]\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T06:07:50.0000000Z cccccccccccccccccccccccccccccccccccccccc\n",
+    "truncated": false,
+    "total_bytes": 1922,
+    "returned_bytes": 1922,
+    "source_complete": true,
+    "diagnostic_unit": null,
+    "failure_regions": null,
+    "checkout_commits": [
+      "4968f137ab9969c35634496414fdc1637d22fe37",
+      "cccccccccccccccccccccccccccccccccccccccc"
+    ],
+    "checkout_evidence": [
+      "##[group]Checking out the ref",
+      "[command]/usr/bin/git checkout --progress --force 4968f137ab9969c35634496414fdc1637d22fe37",
+      "HEAD is now at 4968f13 workspace",
+      "/usr/bin/git log -1 --format=%H",
+      "4968f137ab9969c35634496414fdc1637d22fe37",
+      "##[group]Checking out the ref",
+      "[command]/usr/bin/git checkout --progress --force 4444444444444444444444444444444444444444",
+      "HEAD is now at 4444444 Merge 4968f137ab9969c35634496414fdc1637d22fe37 into abcdef0123456789abcdef0123456789abcdef01",
+      "/usr/bin/git log -1 --format=%H",
+      "4444444444444444444444444444444444444444",
+      "##[group]Checking out the ref",
+      "[command]/usr/bin/git checkout --progress --force cccccccccccccccccccccccccccccccccccccccc",
+      "HEAD is now at ccccccc another revision",
+      "/usr/bin/git log -1 --format=%H",
+      "cccccccccccccccccccccccccccccccccccccccc"
+    ],
+    "checkout_evidence_complete": true,
+    "checkout_evidence_scanned_bytes": 1922,
+    "checkout_evidence_source_truncated": false,
+    "checkout_evidence_display_truncated": false
+  },
+  "later_workspace_checkout_after_helper_plain_without_steps": {
+    "log": "2026-09-06T06:07:50.0000000Z Working directory is '/repo'\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git init /repo\n2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force 4968f137ab9969c35634496414fdc1637d22fe37\n2026-09-06T06:07:50.0000000Z HEAD is now at 4968f13 workspace\n2026-09-06T06:07:50.0000000Z ##[endgroup]\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T06:07:50.0000000Z 4968f137ab9969c35634496414fdc1637d22fe37\n2026-09-06T06:07:50.0000000Z Working directory is '/repo/.orbit/tmp/workflow-ci'\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git init /repo/.orbit/tmp/workflow-ci\n2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force 4444444444444444444444444444444444444444\n2026-09-06T06:07:50.0000000Z HEAD is now at 4444444 Merge 4968f137ab9969c35634496414fdc1637d22fe37 into abcdef0123456789abcdef0123456789abcdef01\n2026-09-06T06:07:50.0000000Z ##[endgroup]\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T06:07:50.0000000Z 4444444444444444444444444444444444444444\n2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force cccccccccccccccccccccccccccccccccccccccc\n2026-09-06T06:07:50.0000000Z HEAD is now at ccccccc another revision\n2026-09-06T06:07:50.0000000Z ##[endgroup]\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T06:07:50.0000000Z cccccccccccccccccccccccccccccccccccccccc\n",
+    "truncated": false,
+    "total_bytes": 1645,
+    "returned_bytes": 1645,
+    "source_complete": true,
+    "diagnostic_unit": null,
+    "failure_regions": null,
+    "checkout_commits": [
+      "4968f137ab9969c35634496414fdc1637d22fe37",
+      "4444444444444444444444444444444444444444",
+      "cccccccccccccccccccccccccccccccccccccccc"
+    ],
+    "checkout_evidence": [
+      "##[group]Checking out the ref",
+      "[command]/usr/bin/git checkout --progress --force 4968f137ab9969c35634496414fdc1637d22fe37",
+      "HEAD is now at 4968f13 workspace",
+      "/usr/bin/git log -1 --format=%H",
+      "4968f137ab9969c35634496414fdc1637d22fe37",
+      "##[group]Checking out the ref",
+      "[command]/usr/bin/git checkout --progress --force 4444444444444444444444444444444444444444",
+      "HEAD is now at 4444444 Merge 4968f137ab9969c35634496414fdc1637d22fe37 into abcdef0123456789abcdef0123456789abcdef01",
+      "/usr/bin/git log -1 --format=%H",
+      "4444444444444444444444444444444444444444",
+      "##[group]Checking out the ref",
+      "[command]/usr/bin/git checkout --progress --force cccccccccccccccccccccccccccccccccccccccc",
+      "HEAD is now at ccccccc another revision",
+      "/usr/bin/git log -1 --format=%H",
+      "cccccccccccccccccccccccccccccccccccccccc"
+    ],
+    "checkout_evidence_complete": true,
+    "checkout_evidence_scanned_bytes": 1645,
+    "checkout_evidence_source_truncated": false,
+    "checkout_evidence_display_truncated": false
   }
 }
