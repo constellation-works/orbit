@@ -543,7 +543,7 @@ function bindOnce() {
     // A breakpoint can swap the chip that opened it for another.
     const anchor = visibleChip(ui.key);
     if (!anchor) closeUsage();
-    else { ui.anchor = anchor; placeDialog(); }
+    else { ui.anchor = anchor; placeDialog(); syncExpanded(); }
   });
   window.addEventListener?.('scroll', reposition, true);
 }
