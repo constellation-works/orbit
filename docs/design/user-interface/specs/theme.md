@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Canon Refined Theme"
 tags: ["user-interface"]
-last_validated: 2026-10-19
+last_validated: 2026-10-24
 ---
 
 # Spec: Canon Refined Theme
@@ -39,7 +39,7 @@ Borders delineate structure without heavy contrast.
 - **Base Size:** `14px` with `1.5` line height.
 
 ### Text conventions
-The shared classes live in `css/components.css`; a view sets layout on them (padding, alignment, stickiness) but never font, case or tracking.
+The shared classes live in `crates/orbit-web/assets/dashboard/css/components.css`; a view sets layout on them (padding, alignment, stickiness) but never font, case or tracking.
 - **Column heads:** every `<th>` takes one style from the shared `th` rule, and every grid header row that stands in for a table head (Tasks, Runs, Automation, Settings crews, system and hosts) carries the same rule as `.col-head`: sans, `11px`, weight `600`, uppercase, `0.06em` tracking, `--fg-dim`. Numeric columns align right but keep the sans head; mono is for the cells.
 - **Titles:** sentence case: capitalize only the first word and proper names (`MCP vs CLI`, `Knowledge pack`, `Context files`). A panel header is `14px` sans, weight `600`. A section or card title inside a panel uses `.section-title`: `13px` sans, weight `600`, `--fg`. Titles are never `text-transform: capitalize`, which raises every word of generated text (`Average Implement_one Duration By Actor`). A title built from lowercase data raises only its first letter through `.section-title::first-letter`.
 - **Overlines:** the small uppercase style is for column heads and field labels inside a section, never for a title.

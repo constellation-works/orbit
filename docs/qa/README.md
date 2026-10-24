@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "This directory holds coverage records from QA passes."
-last_validated: 2026-10-20
+last_validated: 2026-10-24
 ---
 
 # QA evidence
