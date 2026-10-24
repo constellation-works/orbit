@@ -299,7 +299,7 @@
   font-family: var(--font-mono);
   font-size: 11.5px;
 }
-.token-models .token-models-label { font-family: var(--font-sans); font-size: 11px; color: var(--fg-disabled); }
+.token-models .token-models-label { font-family: var(--font-sans); font-size: 11px; }
 
 /* Read-only exploration: implement runs with and without explorer calls. */
 .scoreboard-explore-description {
