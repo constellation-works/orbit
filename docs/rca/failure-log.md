@@ -34,6 +34,41 @@ before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
 
+## 2026-10-24: Auto-fix and final recovery see only the first failed required check
+
+- **Where:** dk-server-2 (owner), `complete_pr` of ORB-17757's run
+  `jrun-20261024-0330-c4`, PR #5788 at head `0c169fc1e`, CI run 40059508529.
+- **Symptom:** `pr_auto_fix_check_repair` named one failed check,
+  `CI / Check / Clippy / Test`. Final recovery escalated it as a shared-base
+  dependency advisory only and advised resuming once the base was repaired.
+- **Cause:** auto-fix attempt 1 was admitted at 03:49:18Z.
+  `Check / Clippy / Test` had failed at 03:48:25Z on cargo-deny
+  (RUSTSEC-2026-0387, crypto-bigint 0.7.5, which was on the base too).
+  `Test shard 3/3` was still running and failed at 03:51:09Z on the
+  candidate's own regression,
+  `codebase_cli::pilot_cli_ranks_task_pilot_crews_against_the_landed_diff`:
+  the CLI fixture still seeded pilot invocations under `task_pilot`.
+  `repair_failed_checks` takes the rollup's failed list at the moment of
+  admission, so the repair evidence and the step error never named
+  shard 3/3; the 541 KB `complete_pr` log does not mention it. Final
+  recovery worked from that error and the one job it named, so it never saw
+  the candidate defect. Resuming after the base repair alone would have
+  failed again.
+- **Rescue:** the base fix landed with #5787. The operator found the shard
+  failure from the PR checks, pushed the one-line fixture fix to the PR
+  branch (`d13d28a0a`), and merged #5788 once every required check passed.
+  The task settled to `done` through `external_merge_settled`. Resumes of
+  the run are refused with `delivery_evidence_stale` once the head has
+  moved, as designed.
+- **Fix:** ORB-17772. Auto-fix admits no repair from a partial rollup, the
+  repair evidence names every failed required check on the head, and final
+  recovery receives all of them.
+- **Tasks:** ORB-17757; the base advisory also hit ORB-17758 (F2026-10-545,
+  resolved).
+- **Final recovery:** `escalate` on `jrun-20261024-0330-c4`, applied (task
+  blocked). The diagnosis was correct for the one check it was shown and
+  incomplete for the head.
+
 ## 2026-10-15: Supported Python lacks the mandatory fixture's PyYAML dependency
 
 - **Where:** mac-mini-1, ORB-16198's candidate `make ci-fast`, with base
