@@ -9,6 +9,10 @@ struct CachedRuntime {
     binding: WorkspaceRuntimeBinding,
     orbit_dir: PathBuf,
     generation: u64,
+    /// Config layers the runtime was built from, sampled before its build.
+    /// A later edit to either `config.toml` makes this stale so the next
+    /// request rebuilds instead of serving frozen settings indefinitely.
+    config_stamp: ConfigLayerStamp,
     runtime: Arc<OrbitRuntime>,
 }
 
@@ -147,9 +151,13 @@ impl StateInner {
             (binding, entry.orbit_dir.clone())
         };
         let generation = snapshot.generation;
+        // Sample before the build, as the registry fingerprint is: an edit
+        // during construction then makes the published entry stale on the
+        // next request rather than current beside older data.
+        let config_stamp = ConfigLayerStamp::read(&self.global_root, &orbit_dir);
 
         // Fast path: a cached runtime whose binding still matches this snapshot.
-        if let Some(runtime) = self.cached_matching(id, &binding, &orbit_dir)? {
+        if let Some(runtime) = self.cached_matching(id, &binding, &orbit_dir, &config_stamp)? {
             return Ok(runtime);
         }
 
@@ -169,7 +177,7 @@ impl StateInner {
         #[cfg(test)]
         self.invoke_pre_publish_hook(id);
 
-        Ok(self.publish_runtime(id, binding, orbit_dir, generation, runtime))
+        Ok(self.publish_runtime(id, binding, orbit_dir, generation, config_stamp, runtime))
     }
 
     /// Publish a freshly-built runtime under the cache lock with binding +
@@ -181,12 +189,18 @@ impl StateInner {
         binding: WorkspaceRuntimeBinding,
         orbit_dir: PathBuf,
         generation: u64,
+        config_stamp: ConfigLayerStamp,
         runtime: Arc<OrbitRuntime>,
     ) -> Arc<OrbitRuntime> {
         let mut cache = self.lock_runtimes();
         if let Some(existing) = cache.get(id) {
-            // Same binding: a concurrent build already won; it is idempotent.
-            if existing.binding == binding && existing.orbit_dir == orbit_dir {
+            // Same binding and config: a concurrent build already won; it is
+            // idempotent. A different stamp is stale, so it falls through to
+            // replacement under the generation rule below.
+            if existing.binding == binding
+                && existing.orbit_dir == orbit_dir
+                && existing.config_stamp == config_stamp
+            {
                 return existing.runtime.clone();
             }
             // Different binding at an equal-or-newer generation than ours means
@@ -204,6 +218,7 @@ impl StateInner {
                 binding,
                 orbit_dir,
                 generation,
+                config_stamp,
                 runtime: runtime.clone(),
             },
         );
@@ -219,27 +234,33 @@ impl StateInner {
         id: &str,
         binding: &WorkspaceRuntimeBinding,
         orbit_dir: &Path,
+        config_stamp: &ConfigLayerStamp,
     ) -> Result<Option<Arc<OrbitRuntime>>, WsRejection> {
-        let runtime = {
+        let (runtime, config_current) = {
             let cache = self.lock_runtimes();
-            cache.get(id).and_then(|cached| {
-                (cached.binding == *binding && cached.orbit_dir == orbit_dir)
-                    .then(|| cached.runtime.clone())
-            })
+            match cache.get(id) {
+                Some(cached) if cached.binding == *binding && cached.orbit_dir == orbit_dir => (
+                    Some(cached.runtime.clone()),
+                    cached.config_stamp == *config_stamp,
+                ),
+                _ => (None, false),
+            }
         };
         let Some(runtime) = runtime else {
             return Ok(None);
         };
-        if !runtime
-            .plugin_state_changed()
-            .map_err(|error| WsRejection::build_failed(id, &error))?
+        if config_current
+            && !runtime
+                .plugin_state_changed()
+                .map_err(|error| WsRejection::build_failed(id, &error))?
         {
             return Ok(Some(runtime));
         }
 
-        // A lifecycle verb rewrote the host plugin rows after this runtime's
-        // load pass. Remove only the exact stale entry observed above: a
-        // concurrent request may already have published its replacement.
+        // A config edit or a lifecycle verb rewrote state after this
+        // runtime's load pass. Remove only the exact stale entry observed
+        // above: a concurrent request may already have published its
+        // replacement.
         let mut cache = self.lock_runtimes();
         if cache
             .get(id)
@@ -257,14 +278,25 @@ impl StateInner {
         &self,
         snapshot: &Snapshot,
     ) -> Vec<(String, Arc<OrbitRuntime>)> {
+        // Sample config stamps before the cache lock, so the steady state
+        // stays a set of `stat` calls and no file I/O happens under it. A
+        // stale entry is not surfaced as current; the next per-workspace
+        // request rebuilds it through `resolve_runtime`.
+        let stamps: Vec<ConfigLayerStamp> = snapshot
+            .entries
+            .iter()
+            .map(|entry| ConfigLayerStamp::read(&self.global_root, &entry.orbit_dir))
+            .collect();
         let cache = self.lock_runtimes();
         snapshot
             .entries
             .iter()
-            .filter_map(|entry| {
+            .zip(stamps.iter())
+            .filter_map(|(entry, stamp)| {
                 cache.get(&entry.id).and_then(|cached| {
                     (entry.binding.as_ref() == Some(&cached.binding)
-                        && cached.orbit_dir == entry.orbit_dir)
+                        && cached.orbit_dir == entry.orbit_dir
+                        && cached.config_stamp == *stamp)
                         .then(|| (entry.id.clone(), cached.runtime.clone()))
                 })
             })
@@ -315,6 +347,9 @@ impl DashboardState {
         };
         let monitor = runtime.host_resource_monitor();
         let global_root = runtime.global_root();
+        // Match the stamp `resolve_runtime` samples for this entry's empty
+        // orbit dir, so the pre-built runtime stays current in single mode.
+        let config_stamp = ConfigLayerStamp::read(&global_root, Path::new(""));
         let mut runtimes = HashMap::new();
         runtimes.insert(
             SINGLE_WORKSPACE_ID.to_string(),
@@ -330,6 +365,7 @@ impl DashboardState {
                 },
                 orbit_dir: PathBuf::new(),
                 generation: INITIAL_GENERATION,
+                config_stamp,
                 runtime,
             },
         );

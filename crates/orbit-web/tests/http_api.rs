@@ -28,6 +28,8 @@ mod automation;
 mod codebase;
 #[path = "http_api/compression.rs"]
 mod compression;
+#[path = "http_api/crews.rs"]
+mod crews;
 #[path = "http_api/dashboard_assets.rs"]
 mod dashboard_assets;
 #[path = "http_api/diagnostics_errors.rs"]

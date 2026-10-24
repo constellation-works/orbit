@@ -33,6 +33,10 @@
 //! an `Arc` clone, not a serialized `load`. The fingerprint saved with each
 //! snapshot is sampled before its registry read, so a rewrite during startup
 //! or refresh makes the next `pin` reload instead of treating old data as current.
+//! Each cached runtime also carries a stat-based stamp of the global and
+//! workspace `config.toml` layers it was built from, sampled before its build;
+//! a mismatch evicts only that exact entry, so the next request for the
+//! workspace rebuilds from the new config without a server restart.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -44,7 +48,9 @@ use axum::extract::FromRequestParts;
 use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, workspace_runtime_binding};
+use orbit_cmd::registry_runtime::{
+    ConfigLayerStamp, RegisteredRuntimeFactory, workspace_runtime_binding,
+};
 use orbit_core::application::routines::ClockStatus;
 use orbit_core::runtime::{HostLifetime, WorkspaceRuntimeBinding};
 use orbit_core::{OrbitError, OrbitRuntime, ShipMode};
