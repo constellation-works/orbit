@@ -577,6 +577,12 @@ pub(crate) fn active_finding_verifications(
     active_preparations(runtime, crate::application::task::FINDING_VERIFICATION_JOB)
 }
 
+pub(crate) fn active_escalation_triages(
+    runtime: &OrbitRuntime,
+) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
+    active_preparations(runtime, crate::application::task::ESCALATION_TRIAGE_JOB)
+}
+
 /// The tasks each live run of `job_id` holds by a successful preparation
 /// checkpoint, keyed by task.
 fn active_preparations(

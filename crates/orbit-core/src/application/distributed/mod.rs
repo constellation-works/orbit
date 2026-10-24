@@ -57,6 +57,7 @@ mod serve;
 mod settlement;
 mod work_fit;
 
+pub(crate) use auth_failures::pilot_run_crew;
 pub use contract::{
     DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED, DeclaredCallerContract, OWNER_COMPLETION_POLICY,
     ensure_distributed_mutation_available, owner_binary_version,

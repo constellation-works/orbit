@@ -284,6 +284,9 @@ pub(super) const REQUEUE: TaskOperation = TaskOperation {
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
 
+const BLOCK_TRIAGE_SUBJECT_VALUES: &[EnumValue] =
+    &[EnumValue::plain("block"), EnumValue::plain("pilot_warning")];
+
 const BLOCK_TRIAGE_ACTION_VALUES: &[EnumValue] = &[
     EnumValue::plain("candidates"),
     EnumValue::plain("requeue"),
@@ -291,13 +294,14 @@ const BLOCK_TRIAGE_ACTION_VALUES: &[EnumValue] = &[
     EnumValue::plain("report"),
 ];
 
-/// Read the block episodes awaiting triage, or record one triage decision on
-/// a blocked task: the blocked-task triage's agent surface.
+/// Read the block episodes or pilot warning holds awaiting triage, or record
+/// one triage decision on one: the agent surface of the blocked-task triage
+/// and of the pilot-warning escalation triage.
 pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
     verb: TaskVerb::BlockTriage,
     cli_path: &[],
     tool_name: "orbit.task.block_triage",
-    tool_description: "Triage escalated blocks. `candidates` lists every blocked task with whether its current block episode awaits triage: its final-recovery decision escalated, or it has none and the backstop will never decide it; an episode already triaged or touched by a human after the block is excluded. Each other action records one decision on a qualifying episode, as one task comment plus a history marker, and refuses any other episode. `requeue` returns the task to the backlog as a final-recovery requeue, counted against the shared final-recovery requeue bound (2 per 24 hours): past the bound, for a task tagged security or security-review, or for a run another machine executed, it is recorded as refused and the task stays blocked; when the count cannot be read nothing is written. `propose` records the quoted blocker, two or three options with consequences and ready-to-apply replacement text, and a recommendation, and changes nothing else. `report` records the human action and changes nothing else. Never completes, rejects or archives a task.",
+    tool_description: "Triage escalated blocks. `candidates` lists every blocked task with whether its current block episode awaits triage: its final-recovery decision escalated, or it has none and the backstop will never decide it; an episode already triaged or touched by a human after the block is excluded. Each other action records one decision on a qualifying episode, as one task comment plus a history marker, and refuses any other episode. `requeue` returns the task to the backlog as a final-recovery requeue, counted against the shared final-recovery requeue bound (2 per 24 hours): past the bound, for a task tagged security or security-review, or for a run another machine executed, it is recorded as refused and the task stays blocked; when the count cannot be read nothing is written. `propose` records the quoted blocker, two or three options with consequences and ready-to-apply replacement text, and a recommendation, and changes nothing else. `report` records the human action and changes nothing else. Never completes, rejects or archives a task. With `subject` `pilot_warning`, the same actions read `proposed` tasks whose latest task-pilot assessment holds promotion on warning findings instead: `candidates` lists each held assessment not yet triaged and without an operator decision, quoting its holding findings; `propose` and `report` record one comment quoting those findings plus a `pilot_warning_triaged` history marker that excludes the assessment afterwards, and refuse a task that no longer qualifies; `requeue` is refused. A pilot warning triage never approves, promotes, clears a hold or edits any other task field.",
     cli_about: "",
     cli_help: CliHelp::NONE,
     // `candidates` only reads, but the decisions write.
@@ -311,14 +315,19 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
                 "candidates, requeue, propose, or report",
             )),
             mcp_only(
+                "subject",
+                ParamType::Enum(BLOCK_TRIAGE_SUBJECT_VALUES),
+                "what is triaged: block (default), a blocked task's block episode; pilot_warning, a proposed task's pilot warning hold",
+            ),
+            mcp_only(
                 "id",
                 ParamType::String,
-                "requeue, propose, report: the blocked task",
+                "requeue, propose, report: the blocked or pilot-held task",
             ),
             free_text(mcp_only(
                 "blocker",
                 ParamType::String,
-                "requeue, propose, report: the escalation reason, quoted in the comment",
+                "block requeue, propose, report: the escalation reason, quoted in the comment; pilot_warning quotes the holding findings itself and refuses it",
             )),
             free_text(mcp_only(
                 "reason",

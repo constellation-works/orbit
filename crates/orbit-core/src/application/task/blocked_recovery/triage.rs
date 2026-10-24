@@ -443,11 +443,7 @@ impl OrbitRuntime {
                 request.requested_by
             )
         };
-        let quoted = blocker
-            .lines()
-            .map(|line| format!("> {line}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let quoted = quote(blocker);
         Ok(match decision {
             BlockTriageDecision::Requeue { repair } => {
                 let refused = |reason: String, human_action: &str| TriageWrite {
@@ -512,31 +508,19 @@ impl OrbitRuntime {
             BlockTriageDecision::Propose {
                 options,
                 recommended,
-            } => {
-                let mut comment = format!("{}\nblocker:\n{quoted}", header("decision", "proposed"));
-                for (index, option) in options.iter().enumerate() {
-                    comment.push_str(&format!(
-                        "\n\nOption {}: {}\nConsequences: {}\nReplacement text:\n{}",
-                        index + 1,
-                        option.summary,
-                        option.consequences,
-                        option.replacement
-                    ));
-                }
-                comment.push_str(&format!(
-                    "\n\nRecommended: option {recommended} ({})\nNothing else on this task was \
-                     changed: apply the chosen replacement text with `orbit task update`, then \
-                     move the task back to backlog.",
-                    options[*recommended - 1].summary
-                ));
-                TriageWrite {
-                    disposition: "decision",
-                    outcome: "proposed",
-                    comment,
-                    requeue: None,
-                    refusal: None,
-                }
-            }
+            } => TriageWrite {
+                disposition: "decision",
+                outcome: "proposed",
+                comment: format!(
+                    "{}\nblocker:\n{quoted}{}\nNothing else on this task was changed: apply the \
+                     chosen replacement text with `orbit task update`, then move the task back to \
+                     backlog.",
+                    header("decision", "proposed"),
+                    proposal_text(options, *recommended)
+                ),
+                requeue: None,
+                refusal: None,
+            },
             BlockTriageDecision::Report { human_action } => TriageWrite {
                 disposition: "human_only",
                 outcome: "reported",
@@ -665,16 +649,7 @@ fn operator_only_requeue(runtime: &OrbitRuntime, task: &Task) -> Option<String> 
 }
 
 fn validated(decision: &BlockTriageDecision) -> Result<BlockTriageDecision, OrbitError> {
-    let text = |value: &str, field: &str| {
-        let value = redact_all(value.trim());
-        if value.is_empty() {
-            Err(OrbitError::InvalidInput(format!(
-                "block triage needs a non-empty `{field}`"
-            )))
-        } else {
-            Ok(value)
-        }
-    };
+    let text = triage_text;
     Ok(match decision {
         BlockTriageDecision::Requeue { repair } => BlockTriageDecision::Requeue {
             repair: text(repair, "reason")?,
@@ -685,34 +660,82 @@ fn validated(decision: &BlockTriageDecision) -> Result<BlockTriageDecision, Orbi
         BlockTriageDecision::Propose {
             options,
             recommended,
-        } => {
-            if !(2..=3).contains(&options.len()) {
-                return Err(OrbitError::InvalidInput(format!(
-                    "a decision proposal needs two or three `options`, not {}",
-                    options.len()
-                )));
-            }
-            if !(1..=options.len()).contains(recommended) {
-                return Err(OrbitError::InvalidInput(format!(
-                    "`recommended` must name one of the {} options (1-based)",
-                    options.len()
-                )));
-            }
-            BlockTriageDecision::Propose {
-                options: options
-                    .iter()
-                    .map(|option| {
-                        Ok(TriageOption {
-                            summary: text(&option.summary, "options[].summary")?,
-                            consequences: text(&option.consequences, "options[].consequences")?,
-                            replacement: text(&option.replacement, "options[].replacement")?,
-                        })
-                    })
-                    .collect::<Result<_, OrbitError>>()?,
-                recommended: *recommended,
-            }
-        }
+        } => BlockTriageDecision::Propose {
+            options: validated_proposal(options, *recommended)?,
+            recommended: *recommended,
+        },
     })
+}
+
+/// A decision proposal's options, trimmed and redacted: two or three, each
+/// with every text non-empty, and `recommended` naming one of them (1-based).
+/// Shared by every triage subject that proposes.
+pub(crate) fn validated_proposal(
+    options: &[TriageOption],
+    recommended: usize,
+) -> Result<Vec<TriageOption>, OrbitError> {
+    if !(2..=3).contains(&options.len()) {
+        return Err(OrbitError::InvalidInput(format!(
+            "a decision proposal needs two or three `options`, not {}",
+            options.len()
+        )));
+    }
+    if !(1..=options.len()).contains(&recommended) {
+        return Err(OrbitError::InvalidInput(format!(
+            "`recommended` must name one of the {} options (1-based)",
+            options.len()
+        )));
+    }
+    options
+        .iter()
+        .map(|option| {
+            Ok(TriageOption {
+                summary: triage_text(&option.summary, "options[].summary")?,
+                consequences: triage_text(&option.consequences, "options[].consequences")?,
+                replacement: triage_text(&option.replacement, "options[].replacement")?,
+            })
+        })
+        .collect()
+}
+
+/// `value` trimmed and redacted, refused when that leaves nothing.
+pub(crate) fn triage_text(value: &str, field: &str) -> Result<String, OrbitError> {
+    let value = redact_all(value.trim());
+    if value.is_empty() {
+        Err(OrbitError::InvalidInput(format!(
+            "block triage needs a non-empty `{field}`"
+        )))
+    } else {
+        Ok(value)
+    }
+}
+
+/// `text` as a Markdown quote, line by line.
+pub(crate) fn quote(text: &str) -> String {
+    text.lines()
+        .map(|line| format!("> {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The options and recommendation of a validated proposal, as a proposal
+/// comment lists them.
+pub(crate) fn proposal_text(options: &[TriageOption], recommended: usize) -> String {
+    let mut text = String::new();
+    for (index, option) in options.iter().enumerate() {
+        text.push_str(&format!(
+            "\n\nOption {}: {}\nConsequences: {}\nReplacement text:\n{}",
+            index + 1,
+            option.summary,
+            option.consequences,
+            option.replacement
+        ));
+    }
+    text.push_str(&format!(
+        "\n\nRecommended: option {recommended} ({})",
+        options[recommended - 1].summary
+    ));
+    text
 }
 
 /// `requeue n of 2 per 24h`, as the comment and the run summary state it.

@@ -14,7 +14,8 @@
 //!   otherwise seed the same names on one host [ORB-12107].
 //! - `__ORBIT_OWNER_MACHINE__` and `__ORBIT_BASE_BRANCH__` — a state trigger
 //!   names the one machine that evaluates it and the branch it observes, so
-//!   the seeded `task_pilot` and `finding_verification` definitions render
+//!   the seeded `task_pilot`, `finding_verification` and
+//!   `pilot_warning_triage` definitions render
 //!   this host's registered machine id and the workspace's registered base
 //!   branch [ORB-12745].
 //!
@@ -63,6 +64,10 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
     (
         "finding_verification",
         include_str!("../../../assets/routines/finding_verification.yaml"),
+    ),
+    (
+        "pilot_warning_triage",
+        include_str!("../../../assets/routines/pilot_warning_triage.yaml"),
     ),
     (
         "ship_sweep",

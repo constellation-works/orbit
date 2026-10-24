@@ -358,6 +358,37 @@ prerequisites in the pilot comment's **Blocked by** list, and
 to stderr and includes them in JSON `warnings`. A newer clean assessment clears
 the warning text; ordinary comments do not.
 
+**Pilot warning holds.** A holding warning finding waits in `proposed` until
+an operator decides it. The seeded `pilot-warning-triage-<workspace>` routine
+(state trigger `pilot_warnings_held`, job `escalation_triage_pipeline`) ships
+disabled; enabled on the owner, it reads each held assessment once with a
+hard-tier crew other than the one that wrote it, and records either a decision
+proposal (two or three options and a recommendation) or the human action that
+settles the hold. Each is one system comment headed `pilot_warning_triage`,
+quoting the holding findings, plus a `pilot_warning_triaged` history marker
+naming the assessment's operation id. Nothing else changes: the lane never
+approves, promotes, clears the hold or edits the task, and an agent's
+`task-pilot-admission:` comment decides nothing. Inspect before acting:
+
+```bash
+orbit routine list                       # find pilot-warning-triage-<workspace>
+orbit tool run orbit.task.block_triage \
+  --input '{"action":"candidates","subject":"pilot_warning"}'
+orbit task show <task-id>                # latest assessment and the triage comment
+```
+
+`candidates` lists the qualifying holds with their findings and pilot run, and
+names why each other held task is excluded: `operator_decided` (a trusted
+admission decision answers that assessment) or `triaged` (it already has a
+marker). To accept a disputed finding after reading the proposal, approve
+through the trusted path: `orbit task update <task-id> --approve --note
+"<evidence>"`. Otherwise edit the task as the chosen option says; the next
+pilot pass writes a new assessment, which is triaged afresh only if it still
+holds. A run that ends without a marker for a member records it failed
+(`no_triage_marker`) and retries within the routine's budget. A triage marker
+is not a drain-approval decision, so it does not make an `--approve-proposed`
+drain re-pilot the task.
+
 Task-pilot checks acceptance criteria for native host evidence requirements.
 It records each one as a typed finding, committed with the applied assessment
 as `native_os_hold`: `required_os` (the one-based criterion and the OS) for an

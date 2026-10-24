@@ -44,7 +44,8 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    NoDiffClosure, PILOT_VERIFIED_NO_DIFF, TaskListFilter, UNVERIFIED_REVIEW_FINDING, metadata_task,
+    NoDiffClosure, PILOT_VERIFIED_NO_DIFF, PILOT_WARNING_TRIAGED_EVENT, TaskListFilter,
+    UNVERIFIED_REVIEW_FINDING, metadata_task,
 };
 use crate::runtime::engine::crew::normalized_task_crew;
 
@@ -183,10 +184,12 @@ fn approval_snapshot(
             continue;
         }
         let history = runtime.get_task_history(&task.id)?;
-        let latest = history
-            .iter()
-            .rev()
-            .find(|entry| entry.event != CONTEXT_CREATION_AUTHORIZED_EVENT);
+        let latest = history.iter().rev().find(|entry| {
+            // Neither a context grant nor the triage of a warning hold
+            // changes what the latest pilot write decided.
+            entry.event != CONTEXT_CREATION_AUTHORIZED_EVENT
+                && entry.event != PILOT_WARNING_TRIAGED_EVENT
+        });
         if let Some(entry) = latest.filter(|entry| entry.event == "task_pilot_applied")
             && let Some(classification) = held_classification(runtime, entry)
         {

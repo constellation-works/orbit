@@ -76,7 +76,8 @@ use post_deploy::post_deploy;
 pub(crate) use prepare::prepare;
 pub use promotion::task_pilot_warnings;
 pub(crate) use promotion::{
-    PromotionFindings, auto_approval_opted_out, promotion_findings, recommendation_has_evidence,
+    HeldPilotWarnings, PromotionFindings, auto_approval_opted_out, held_pilot_warnings,
+    promotion_findings, recommendation_has_evidence,
 };
 pub(crate) use source::requested_base_branch;
 

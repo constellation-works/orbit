@@ -1,0 +1,87 @@
+# Turn escalated holds into ready-to-choose decisions or precise human
+# actions, one hard-tier read per hold. Propose-only: it never edits task
+# material, approves, promotes, clears a hold, rejects or archives.
+#
+# Today the job triages pilot warning holds: a `proposed` task whose latest
+# applied task-pilot assessment holds promotion on warning findings (the
+# findings `orbit task list --pilot-warnings` shows). Design:
+# docs/design/automation-triggers/2_design.md (`pilot_warnings_held`).
+#
+# Selection
+# - Explicit: `orbit run job escalation_triage_pipeline --input
+#   'task_ids=["<id>"]'` triages those tasks. A named task whose latest
+#   assessment no longer qualifies (it holds nothing on warnings, an operator
+#   decided it, it was already triaged, or another live run is triaging it)
+#   settles superseded with its reason.
+# - Automatic (no task_ids): every qualifying held assessment, oldest task
+#   first, up to max_tasks.
+# - State-triggered: the seeded `pilot_warning_triage` routine
+#   (`kind: pilot_warnings_held`) submits one crew-homogeneous batch per run.
+#
+# Prepare pins one landing-branch revision without touching the primary
+# checkout and fails before any agent call outside a Git work tree.
+#
+# Crew resolution
+# - Every triager is drawn from `workflow.hard_complexity_crews`, keeping
+#   only crews that can inspect source natively (a tier without one passes
+#   to xhard), or is the inspection-capable `workflow.default_crew` when no
+#   pool has one. The crew that wrote the held assessment (the pilot run's
+#   frozen draw) is passed over while the pool offers another. Prepare
+#   records every draw; the triager step names the crew of its partition, so
+#   tasks are partitioned by crew, at most five per partition.
+#
+# There is no apply step. Each triager records its decision through
+# `orbit.task.block_triage` (`subject: pilot_warning`), which writes one
+# comment and one `pilot_warning_triaged` history marker; the routine settles
+# each member from that marker, never from the agent's final message.
+
+schemaVersion: 2
+kind: Job
+metadata:
+  name: escalation_triage_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 3
+  default_input:
+    task_ids: []
+    workspace_path: .
+    max_tasks: 50
+    max_partition_size: 5
+    state_automation: null
+    source_revision: ""
+
+  steps:
+    - id: prepare
+      target: activity:prepare_escalation_triage
+      default_input:
+        state_automation: "{{ input.state_automation }}"
+        source_revision: "{{ input.source_revision }}"
+        task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ input.workspace_path }}"
+        base_branch: "{{ input.base_branch }}"
+        max_tasks: "{{ input.max_tasks }}"
+        max_partition_size: "{{ input.max_partition_size }}"
+
+    - id: triagers
+      when: "{{ steps.prepare.output.partition_count }} != 0"
+      fan_out:
+        items: "{{ steps.prepare.output.partitions }}"
+        max_workers: 5
+        worker:
+          id: triager
+          target: activity:triage_escalation
+          default_input:
+            task_ids: "{{ item.task_ids }}"
+            partition_index: "{{ item.partition_index }}"
+            workspace_path: "{{ steps.prepare.output.workspace_path }}"
+            base_branch: "{{ steps.prepare.output.source.base_branch }}"
+            source_revision: "{{ steps.prepare.output.source.source_revision }}"
+            inspection_revision: "{{ steps.prepare.output.source.source_revision }}"
+            # The crew prepare drew for this partition's tasks.
+            crew: "{{ item.crew }}"
+      fan_in:
+        join:
+          mode: any
+        collect: triage_results
+        errors: triage_errors

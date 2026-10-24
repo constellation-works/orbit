@@ -83,14 +83,14 @@ checkout already made the workspace a routine source; an older `.orbit/config.to
 may still carry a `[routines]` section, which is ignored with a warning and can
 be deleted.
 
-## The seven seeded routines
+## The eight seeded routines
 
-`orbit workspace init` seeds all seven, **all disabled**, with a workspace-unique
+`orbit workspace init` seeds all eight, **all disabled**, with a workspace-unique
 name (`<base>-<workspace>`) resolved at seed time. The five cron routines resolve
-nothing else per machine, so two hosts seed identical bytes. `task-pilot` and
-`finding-verification` are state-triggered and additionally resolve this host's
-machine id as `trigger.state.owner_machine` and the registered base branch as
-`trigger.state.branch`;
+nothing else per machine, so two hosts seed identical bytes. `task-pilot`,
+`finding-verification` and `pilot-warning-triage` are state-triggered and
+additionally resolve this host's machine id as `trigger.state.owner_machine` and
+the registered base branch as `trigger.state.branch`;
 a second host registering the same workspace seeds itself as owner of its own
 copy. Run `orbit routine list` to see their names on this host.
 
@@ -99,6 +99,7 @@ copy. Run `orbit routine list` to see their names on this host.
 | `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived, or has been parked in someday for `worktree.parked_reclaim_after_hours` (default 336), and prunes `.orbit/tmp` entries untouched for 24 hours (`scratch_older_than_hours`). |
 | `task-pilot` | state trigger (`preparation_eligible`) | `task_pilot_pipeline` | Fingerprints eligible proposed/backlog tasks each tick and preflights a batch whose material has no fresh assessment (seeded `batch_size` 5, mixed crews included); quiet while the backlog is unchanged. |
 | `finding-verification` | state trigger (`finding_unverified`) | `finding_verification_pipeline` | Disabled by default; verifies review-filed bug findings still owed a verdict in proposed, someday, or backlog, recording confirmation or rejection with evidence. |
+| `pilot-warning-triage` | state trigger (`pilot_warnings_held`) | `escalation_triage_pipeline` | Disabled by default; once per assessment, a hard-tier triager reads each proposed task whose task-pilot assessment holds promotion on warnings and records a decision proposal or the human action that settles the hold. It only proposes: it never approves, promotes, clears a hold or edits the task. Approve with `orbit task update <task-id> --approve --note "<evidence>"`. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
 | `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` (this workspace and workspace ids that are no longer registered) and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days` and the per-minute resource history older than 30 days. Another registered workspace keeps its own window. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). On a large store, consider `retention.runs_days = 30` first; smaller windows are refused to preserve 30-day reliability and forecast-accuracy evidence. |

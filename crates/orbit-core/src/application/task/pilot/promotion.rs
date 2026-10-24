@@ -211,18 +211,47 @@ pub fn task_pilot_warnings(
     dependencies: &[String],
     is_done: &dyn Fn(&str) -> bool,
 ) -> Vec<DrainHoldFinding> {
-    if status != TaskStatus::Proposed {
-        return Vec::new();
-    }
-    let Some((_, receipt)) = super::pilot_receipts(comments).next() else {
-        return Vec::new();
-    };
-    serde_json::from_str::<Value>(receipt.body)
-        .ok()
-        .and_then(|audit| {
-            audit
-                .get("assessment")
-                .map(|assessment| warning_hold_findings(assessment, dependencies, is_done))
-        })
+    held_pilot_warnings(status, comments, dependencies, is_done)
+        .map(|held| held.findings)
         .unwrap_or_default()
+}
+
+/// The assessment whose warning findings hold a `proposed` task's promotion:
+/// the receipt that persisted it, the pilot run that wrote it, and the
+/// findings that hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HeldPilotWarnings {
+    /// Operation id of the task-pilot receipt carrying the assessment.
+    pub(crate) operation_id: String,
+    /// The task-pilot run that wrote the assessment, when the audit names it.
+    pub(crate) pilot_run_id: Option<String>,
+    /// Every holding finding, never empty.
+    pub(crate) findings: Vec<DrainHoldFinding>,
+}
+
+/// [`task_pilot_warnings`] with the assessment it read: `None` unless the
+/// task is `proposed` and its latest pilot receipt holds promotion on at
+/// least one warning finding.
+pub(crate) fn held_pilot_warnings(
+    status: TaskStatus,
+    comments: &[TaskComment],
+    dependencies: &[String],
+    is_done: &dyn Fn(&str) -> bool,
+) -> Option<HeldPilotWarnings> {
+    if status != TaskStatus::Proposed {
+        return None;
+    }
+    let (_, receipt) = super::pilot_receipts(comments).next()?;
+    let audit = serde_json::from_str::<Value>(receipt.body).ok()?;
+    let findings = warning_hold_findings(audit.get("assessment")?, dependencies, is_done);
+    (!findings.is_empty()).then(|| HeldPilotWarnings {
+        operation_id: receipt.operation_id.to_string(),
+        pilot_run_id: audit
+            .get("pilot_run_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|run_id| !run_id.is_empty())
+            .map(str::to_string),
+        findings,
+    })
 }

@@ -52,6 +52,7 @@ macro_rules! deterministic_action_catalog {
                 PipelineSuccessGuard => "pipeline_success_guard",
                 PluginToolCall => "plugin.tool_call",
                 PrepareBlockedTaskRecovery => "prepare_blocked_task_recovery",
+                PrepareEscalationTriage => "prepare_escalation_triage",
                 PrepareFindingVerification => "prepare_finding_verification",
                 PrepareTaskPilot => "prepare_task_pilot",
                 PromoteAgentMain => "promote_agent_main",

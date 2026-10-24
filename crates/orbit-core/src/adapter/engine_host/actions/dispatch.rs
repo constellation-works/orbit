@@ -23,7 +23,9 @@ use crate::application::sweep_filing::dependabot::{
     consolidate as dependabot_consolidate, filing as dependabot_filing,
 };
 use crate::application::task::pilot as task_pilot;
-use crate::application::task::{blocked_recovery, finding_verification_steps};
+use crate::application::task::{
+    blocked_recovery, escalation_triage_steps, finding_verification_steps,
+};
 use crate::application::workspace_auto;
 use crate::runtime::task::locks::{
     EmptyTaskSurfacePolicy, ReservationOutcome, TaskLockIndex, emit_expired_reservation_events,
@@ -76,6 +78,7 @@ pub(crate) fn run_deterministic(
             | CoreDeterministicAction::ApplyTaskPilotResults
             | CoreDeterministicAction::PrepareFindingVerification
             | CoreDeterministicAction::ApplyFindingVerification
+            | CoreDeterministicAction::PrepareEscalationTriage
     ) {
         let claim_input = input.get("prepared").unwrap_or(input);
         let claim = crate::application::automation::members::claim(runtime, claim_input)
@@ -309,6 +312,15 @@ pub(crate) fn run_deterministic(
             finding_verification_steps::run_id(owner_run_id(&tool_context), input),
         ),
         CoreDeterministicAction::ApplyFindingVerification => finding_verification_steps::apply(
+            runtime,
+            action,
+            input,
+            finding_verification_steps::run_id(owner_run_id(&tool_context), input),
+        ),
+        // Select the held pilot assessments an escalation triage run reads
+        // and draw each one's hard-tier triager; the triager records its own
+        // decision through `orbit.task.block_triage`.
+        CoreDeterministicAction::PrepareEscalationTriage => escalation_triage_steps::prepare(
             runtime,
             action,
             input,

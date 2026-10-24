@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{Host, SUPERSEDED_BY_SOURCE, stale_tasks};
+use crate::application::task::escalation_triage_steps::{PilotWarningCandidacy, triaged_at};
 use crate::application::task::{VERIFIABLE_STATUSES, finding_fingerprint, needs_verification};
 
 impl MemberHost for Host<'_> {
@@ -84,6 +85,9 @@ impl MemberHost for Host<'_> {
             StateTriggerKind::FindingUnverified => {
                 preparation::active_finding_verifications(self.runtime)?
             }
+            StateTriggerKind::PilotWarningsHeld => {
+                preparation::active_escalation_triages(self.runtime)?
+            }
             StateTriggerKind::ExecutionFailed => BTreeMap::new(),
         };
         // One scan for the page. Admission of a member retained from an
@@ -145,6 +149,30 @@ impl MemberHost for Host<'_> {
                         fingerprint: finding_fingerprint(&task),
                         source: source.clone(),
                         evidence: json!({"task_id":task.id}),
+                        first_seen: now,
+                        changed_at: now,
+                        crew: bundle_crew(task.crew.as_deref()),
+                    });
+                }
+                StateTriggerKind::PilotWarningsHeld => {
+                    // Only an assessment that still holds on warnings and
+                    // awaits triage is a member, keyed by its receipt so
+                    // each assessment is read once.
+                    let PilotWarningCandidacy::Qualifies(held) =
+                        self.runtime.pilot_warning_candidacy_of(&task)?
+                    else {
+                        continue;
+                    };
+                    if let Some(run_ids) = active_preparations.get(&task.id) {
+                        withheld.insert(task.id, already_triaging(run_ids));
+                        continue;
+                    }
+                    candidates.push(StateMember {
+                        key: task.id.clone(),
+                        task_ids: vec![task.id.clone()],
+                        evidence: json!({"task_id":task.id, "operation_id":held.operation_id}),
+                        fingerprint: held.operation_id,
+                        source: source.clone(),
                         first_seen: now,
                         changed_at: now,
                         crew: bundle_crew(task.crew.as_deref()),
@@ -321,6 +349,42 @@ impl MemberHost for Host<'_> {
             return Ok(MemberAdmission::Admit);
         }
 
+        if self.trigger.kind == StateTriggerKind::PilotWarningsHeld {
+            let active = preparation::active_escalation_triages(self.runtime)?;
+            for id in &member.task_ids {
+                let candidacy = match self
+                    .runtime
+                    .get_task(id)
+                    .and_then(|task| self.runtime.pilot_warning_candidacy_of(&task))
+                {
+                    Ok(candidacy) => candidacy,
+                    Err(OrbitError::NotFound {
+                        kind: NotFoundKind::Task,
+                        ..
+                    }) => return Ok(MemberAdmission::Retire("task_deleted".into())),
+                    Err(error) => return Err(error.into()),
+                };
+                match candidacy {
+                    PilotWarningCandidacy::Qualifies(held)
+                        if held.operation_id == member.fingerprint => {}
+                    // A re-pilot wrote another assessment; it is its own member.
+                    PilotWarningCandidacy::Qualifies(_) => {
+                        return Ok(MemberAdmission::Retire("material_changed".into()));
+                    }
+                    other => {
+                        return Ok(MemberAdmission::Retire(format!(
+                            "pilot_warning_{}",
+                            other.as_str()
+                        )));
+                    }
+                }
+                if let Some(run_ids) = active.get(id) {
+                    return Ok(MemberAdmission::Withhold(already_triaging(run_ids)));
+                }
+            }
+            return Ok(MemberAdmission::Admit);
+        }
+
         for id in &member.task_ids {
             let task = self.runtime.get_task(id)?;
             let current = match super::super::incidents::observe(self.runtime, &task) {
@@ -352,7 +416,9 @@ impl MemberHost for Host<'_> {
             StateTriggerKind::ExecutionFailed => {
                 Some(self.incidents.borrow_mut().inventory(self.runtime)?)
             }
-            StateTriggerKind::PreparationEligible | StateTriggerKind::FindingUnverified => None,
+            StateTriggerKind::PreparationEligible
+            | StateTriggerKind::FindingUnverified
+            | StateTriggerKind::PilotWarningsHeld => None,
         };
 
         Ok(keys
@@ -401,6 +467,7 @@ impl MemberHost for Host<'_> {
             StateTriggerKind::PreparationEligible => "preparation",
             StateTriggerKind::ExecutionFailed => "execution_failure",
             StateTriggerKind::FindingUnverified => "finding_verification",
+            StateTriggerKind::PilotWarningsHeld => "escalation_triage",
         };
 
         // Every batch member travels as an explicit task id. Finding
@@ -528,6 +595,12 @@ impl MemberHost for Host<'_> {
         let stopped = run.state.is_terminal()
             && crate::application::job::run_owner_liveness(&run)
                 == crate::application::job::RunOwnerLiveness::Stopped;
+
+        // The triager records each decision itself; its durable marker, not
+        // the agent's final message, settles the member.
+        if self.trigger.kind == StateTriggerKind::PilotWarningsHeld {
+            return self.pilot_warning_outcome(attempt, id, stopped);
+        }
 
         // Only the exact canonical deterministic apply steps can provide this
         // record. Agent prose and unrelated output keys are never searched.
@@ -709,7 +782,82 @@ impl Host<'_> {
             StateTriggerKind::PreparationEligible => self.eligibility().statuses.clone(),
             StateTriggerKind::ExecutionFailed => vec![TaskStatus::Blocked],
             StateTriggerKind::FindingUnverified => VERIFIABLE_STATUSES.to_vec(),
+            StateTriggerKind::PilotWarningsHeld => vec![TaskStatus::Proposed],
         }
+    }
+
+    /// Settle an escalation triage attempt from the markers its triagers
+    /// recorded. A member whose assessment carries its
+    /// `pilot_warning_triaged` marker is applied; once the run stopped, one
+    /// that no longer qualifies (an operator decided, the task was approved,
+    /// edited and re-piloted, or deleted) is released, and one still held
+    /// without a marker failed.
+    fn pilot_warning_outcome(
+        &self,
+        attempt: &MemberAttempt,
+        action_id: &str,
+        stopped: bool,
+    ) -> Result<MemberOutcome, AutomationError> {
+        let mut applied = Vec::new();
+        let mut failed = BTreeMap::new();
+        let mut superseded = BTreeMap::new();
+        for member in attempt.members() {
+            let [task_id] = member.task_ids.as_slice() else {
+                failed.insert(member.key.clone(), "malformed_member".into());
+                continue;
+            };
+            let task = match self.runtime.get_task(task_id) {
+                Ok(task) => task,
+                Err(OrbitError::NotFound {
+                    kind: NotFoundKind::Task,
+                    ..
+                }) => {
+                    superseded.insert(member.key.clone(), "task_deleted".into());
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
+            let history = self.runtime.get_task_history(task_id)?;
+            if let Some(at) = triaged_at(&history, &member.fingerprint) {
+                applied.push(MemberEvidence {
+                    action_id: action_id.into(),
+                    attempt_id: attempt.id.clone(),
+                    member_key: member.key.clone(),
+                    input_fingerprint: member.fingerprint.clone(),
+                    resulting_fingerprint: member.fingerprint.clone(),
+                    ready: true,
+                    result: json!({
+                        "task_id": task_id,
+                        "operation_id": member.fingerprint,
+                        "triaged_at": at,
+                    }),
+                });
+                continue;
+            }
+            if !stopped {
+                return Ok(MemberOutcome::Pending);
+            }
+            match self.runtime.pilot_warning_candidacy_of(&task)? {
+                PilotWarningCandidacy::Qualifies(held)
+                    if held.operation_id == member.fingerprint =>
+                {
+                    failed.insert(member.key.clone(), "no_triage_marker".into());
+                }
+                other => {
+                    superseded.insert(
+                        member.key.clone(),
+                        format!("pilot_warning_{}", other.as_str()),
+                    );
+                }
+            }
+        }
+        Ok(MemberOutcome::Settled(MemberBatchEvidence {
+            action_id: action_id.into(),
+            attempt_id: attempt.id.clone(),
+            applied,
+            failed,
+            superseded,
+        }))
     }
 }
 
@@ -717,6 +865,14 @@ impl Host<'_> {
 fn already_verifying(run_ids: &BTreeSet<String>) -> String {
     format!(
         "already_verifying: {}",
+        run_ids.iter().cloned().collect::<Vec<_>>().join(", ")
+    )
+}
+
+/// A temporary hold diagnostic names every durable run the operator can inspect.
+fn already_triaging(run_ids: &BTreeSet<String>) -> String {
+    format!(
+        "already_triaging: {}",
         run_ids.iter().cloned().collect::<Vec<_>>().join(", ")
     )
 }
@@ -791,6 +947,15 @@ impl PilotSteps {
                 "apply_repairs",
                 "repair_count",
             ),
+            // Settled from triage markers, never from an apply checkpoint.
+            StateTriggerKind::PilotWarningsHeld => {
+                return Ok(Self {
+                    prepare: None,
+                    apply: None,
+                    repair_apply: None,
+                    follow_up_count: "repair_count",
+                });
+            }
         };
         // The run's pinned snapshot when it has one, otherwise the catalog
         // asset. A job no catalog ships any more (the retired triage job)

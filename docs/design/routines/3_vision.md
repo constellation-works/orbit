@@ -36,7 +36,8 @@ and validation evidence, not by drifting in.
    possible answer is owner placement for cron, which is not designed now.
    Automatic cross-host failover and state transfer remain unsupported for all variants.
 2. **Trigger extensions.** Delivery-trigger routines and auto-tasks, plus
-   `preparation_eligible` and `finding_unverified` state routines, evaluate on
+   `preparation_eligible`, `finding_unverified` and `pilot_warnings_held` state
+   routines, evaluate on
    the existing clock with durable batches and checkpoints. The current routine
    schema is in [2_design.md §1](./2_design.md#1-routine-definition), with persisted
    behavior in [§3.1](./2_design.md#31-delivery-and-state-evaluation); interval

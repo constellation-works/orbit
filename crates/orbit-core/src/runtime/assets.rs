@@ -247,6 +247,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/prepare_blocked_task_recovery.yaml"),
     ),
     (
+        "prepare_escalation_triage",
+        include_str!("../../assets/activities/prepare_escalation_triage.yaml"),
+    ),
+    (
         "prepare_finding_verification",
         include_str!("../../assets/activities/prepare_finding_verification.yaml"),
     ),
@@ -282,6 +286,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
     (
         "task_pilot",
         include_str!("../../assets/activities/task_pilot.yaml"),
+    ),
+    (
+        "triage_escalation",
+        include_str!("../../assets/activities/triage_escalation.yaml"),
     ),
     (
         "update_task",
@@ -341,6 +349,10 @@ pub(crate) const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
         "dependabot_alert_sweep_pipeline",
         include_str!("../../assets/jobs/dependabot_alert_sweep_pipeline.yaml"),
+    ),
+    (
+        "escalation_triage_pipeline",
+        include_str!("../../assets/jobs/escalation_triage_pipeline.yaml"),
     ),
     (
         "finding_verification_pipeline",
