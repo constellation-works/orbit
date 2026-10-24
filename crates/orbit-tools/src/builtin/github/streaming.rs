@@ -137,10 +137,13 @@ pub struct StreamedLog {
 ///
 /// A truncated excerpt drops a whitespace-delimited token split by either
 /// retained boundary before redaction. A raw cut would otherwise keep a
-/// credential prefix or suffix that `redact_all` cannot match. Only the two
-/// windows, plus one byte beside each excerpt cut, a bounded 4 KiB input
-/// batch, and bounded original line-prefix context for selection boundaries,
-/// are retained. `finish` processes the last partial batch before rendering.
+/// credential prefix or suffix that `redact_all` cannot match. The head cut
+/// keeps one adjacent byte. The tail cut keeps a bounded lookbehind of
+/// display bytes (at most 16 KiB) so a value whose introducer fell in the
+/// omitted middle is omitted with the cut token. Only the two windows, that
+/// lookbehind, a bounded 4 KiB input batch, and bounded original line-prefix
+/// context for selection boundaries are retained. `finish` processes the last
+/// partial batch before rendering.
 pub struct StreamedLogCollector {
     max_bytes: usize,
     /// How much of the budget the head window may keep; the rest is the tail.
@@ -152,9 +155,10 @@ pub struct StreamedLogCollector {
     /// First byte after `head` once that window is full. Absent when the
     /// head was never cut.
     head_following: Option<u8>,
-    /// Last byte discarded ahead of the retained tail. Absent until the tail
-    /// ring overflows.
-    tail_preceding: Option<u8>,
+    /// Display bytes immediately before the retained tail, capped at
+    /// [`WINDOW_TOKEN_CONTEXT_BYTES`]. This is the excerpt-cut lookbehind:
+    /// source coordinates and `window_tokens` stay on the selection boundary.
+    tail_dropped: Vec<u8>,
     evidence: CheckoutEvidenceCollector,
     diagnostic: diagnostic::DiagnosticCollector,
     nextest: super::nextest_regions::NextestRegions,
@@ -223,7 +227,7 @@ impl StreamedLogCollector {
             pending: Vec::with_capacity(STREAM_BATCH_BYTES),
             total_bytes: 0,
             head_following: None,
-            tail_preceding: None,
+            tail_dropped: Vec::new(),
             diagnostic: diagnostic::DiagnosticCollector::default(),
             nextest: super::nextest_regions::NextestRegions::default(),
             evidence: CheckoutEvidenceCollector::new(
@@ -455,24 +459,47 @@ impl StreamedLogCollector {
             return;
         }
         if tail_chunk.len() >= tail_limit {
-            self.tail_preceding = if tail_chunk.len() > tail_limit {
-                Some(tail_chunk[tail_chunk.len() - tail_limit - 1])
-            } else {
-                self.tail.back().copied().or(self.tail_preceding)
-            };
-            self.tail.clear();
-            self.tail
-                .extend(&tail_chunk[tail_chunk.len() - tail_limit..]);
+            let discarded_prefix = tail_chunk.len() - tail_limit;
+            // The previous tail sits immediately before this chunk. Keep it
+            // in the lookbehind, then the chunk bytes that did not fit.
+            let old_tail: Vec<u8> = self.tail.drain(..).collect();
+            self.remember_dropped_before_tail(&old_tail);
+            self.remember_dropped_before_tail(&tail_chunk[..discarded_prefix]);
+            self.tail.extend(&tail_chunk[discarded_prefix..]);
         } else {
             let drain_end = (self.tail.len() + tail_chunk.len()).saturating_sub(tail_limit);
             if drain_end > 0 {
-                self.tail_preceding = Some(self.tail[drain_end - 1]);
                 // A front drain advances the ring; it does not move the
                 // retained tail on every single-byte transport read.
-                self.tail.drain(..drain_end);
+                let discarded: Vec<u8> = self.tail.drain(..drain_end).collect();
+                self.remember_dropped_before_tail(&discarded);
             }
             self.tail.extend(tail_chunk);
         }
+    }
+
+    /// Remember display bytes that just fell out of the tail ring.
+    ///
+    /// Only the suffix that fits in [`WINDOW_TOKEN_CONTEXT_BYTES`] is kept.
+    /// An introducer older than that bound is outside the excerpt-cut
+    /// context; selection-boundary classification still applies its own
+    /// overlong rule.
+    fn remember_dropped_before_tail(&mut self, dropped: &[u8]) {
+        if dropped.is_empty() {
+            return;
+        }
+        let keep = WINDOW_TOKEN_CONTEXT_BYTES;
+        if dropped.len() >= keep {
+            self.tail_dropped.clear();
+            self.tail_dropped
+                .extend_from_slice(&dropped[dropped.len() - keep..]);
+            return;
+        }
+        let overflow = (self.tail_dropped.len() + dropped.len()).saturating_sub(keep);
+        if overflow > 0 {
+            self.tail_dropped.drain(..overflow);
+        }
+        self.tail_dropped.extend_from_slice(dropped);
     }
 
     pub fn finish(mut self) -> StreamedLog {
@@ -509,18 +536,29 @@ impl StreamedLogCollector {
             let omitted = display_total.saturating_sub(self.head.len() + self.tail.len());
             // Redact only after the cut token is gone. Joining the windows
             // would keep the omitted middle, which this collector must not
-            // buffer; one adjacent byte is enough to see the split.
+            // buffer. The head cut keeps one adjacent byte. The tail cut
+            // keeps a bounded display lookbehind so a value split from its
+            // introducer is omitted before redaction.
             let head = self.window_tokens.safe_slice(&self.head, 0, window_start);
             let head =
                 excerpt_without_partial_suffix(head, cut_continues_token(self.head_following));
             let tail_offset = display_total.saturating_sub(self.tail.len());
-            let tail = self.window_tokens.safe_slice(
-                self.tail.make_contiguous(),
-                tail_offset,
-                window_start,
-            );
-            let tail =
-                excerpt_without_partial_prefix(tail, cut_continues_token(self.tail_preceding));
+            let raw_tail = self.tail.make_contiguous();
+            let tail = self
+                .window_tokens
+                .safe_slice(raw_tail, tail_offset, window_start);
+            // `safe_slice` drops selection-boundary tokens in source
+            // coordinates. When that trim removes the start of the tail, the
+            // display lookbehind is no longer adjacent to the retained bytes;
+            // keep the existing one-byte partial-token drop for that case.
+            let tail_continues = cut_continues_token(self.tail_dropped.last().copied());
+            let prefix_kept =
+                tail.len() == raw_tail.len() || std::ptr::eq(tail.as_ptr(), raw_tail.as_ptr());
+            let tail = if prefix_kept {
+                excerpt_without_orphaned_tail_token(tail, &self.tail_dropped)
+            } else {
+                excerpt_without_partial_prefix(tail, tail_continues)
+            };
             format!(
                 "{}\n[... {omitted} bytes omitted; raise the byte budget for more ...]\n{}",
                 redact_all(&head),
@@ -789,6 +827,68 @@ fn excerpt_without_partial_prefix(bytes: &[u8], cut_token: bool) -> String {
         Some(index) => text[index..].to_string(),
         None => String::new(),
     }
+}
+
+/// Drop a partial tail token, then a following whole token whose introducer
+/// the excerpt cut left in the display lookbehind.
+///
+/// `redact_all` only matches a value while its introducer is still in the
+/// same window. A value that is already a whole token at the tail start
+/// (the preceding byte is whitespace, or the cut token was only the
+/// introducer's suffix) would otherwise be returned in clear. Tokens that
+/// the redactor or the assignment check recognize on their own stay, so a
+/// complete credential is masked in place instead of disappearing. A newline
+/// reset before that token drops the lookbehind, so ordinary text after a
+/// long non-credential span stays readable.
+fn excerpt_without_orphaned_tail_token(bytes: &[u8], lookbehind: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let continues = cut_continues_token(lookbehind.last().copied());
+    if continues && !text.contains(char::is_whitespace) {
+        return String::new();
+    }
+    let split_at = if continues {
+        text.find(char::is_whitespace).unwrap_or(0)
+    } else {
+        0
+    };
+    let partial = &text[..split_at];
+    let rest = &text[split_at..];
+    let Some(ws_len) = rest.find(|character: char| !character.is_whitespace()) else {
+        return rest.to_string();
+    };
+    let body = &rest[ws_len..];
+    let token_len = body.find(char::is_whitespace).unwrap_or(body.len());
+    let token = &body[..token_len];
+    let prefix = tail_token_prefix(lookbehind, partial, &rest[..ws_len]);
+    let sensitive_alone = WindowBoundaryTokens::context_redacts_token("", token);
+    let sensitive_with_introducer = WindowBoundaryTokens::context_redacts_token(&prefix, token);
+    // The visible lookbehind has to be what makes the token sensitive.
+    // Guessing at an introducer beyond the retained window would also drop
+    // ordinary tail markers from a long capped log.
+    if sensitive_alone || !sensitive_with_introducer {
+        return rest.to_string();
+    }
+    rest[ws_len + token_len..].to_string()
+}
+
+/// Line-prefix context that applies to the tail's first whole token.
+///
+/// `partial` is the cut token's suffix, already removed from the tail.
+/// `leading_ws` is the whitespace that separates it from the next token,
+/// including a newline that resets context unless the cut token is a
+/// pending introducer.
+fn tail_token_prefix(lookbehind: &[u8], partial: &str, leading_ws: &str) -> String {
+    let mut tokens = WindowBoundaryTokens::default();
+    if !lookbehind.is_empty() {
+        tokens.push(lookbehind, 0, 0, None);
+    }
+    let mut extra = Vec::with_capacity(partial.len() + leading_ws.len());
+    extra.extend_from_slice(partial.as_bytes());
+    extra.extend_from_slice(leading_ws.as_bytes());
+    if !extra.is_empty() {
+        tokens.push(&extra, lookbehind.len(), 0, None);
+    }
+    String::from_utf8_lossy(&tokens.context).into_owned()
 }
 
 struct CheckoutEvidenceCollector {

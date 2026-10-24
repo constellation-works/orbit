@@ -5713,5 +5713,41 @@
       "selected_workspace",
       "selected_workspace"
     ]
+  },
+  "line_context_primary_capped_in_selection_bearer_cut": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "all",
+      "log": "filler0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n\n[... 210 bytes omitted; raise the byte budget for more ...]\n\ntailend1234567890\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": true,
+      "returned_bytes": 121,
+      "total_bytes": 296,
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 296,
+      "checkout_evidence_source_truncated": false,
+      "selection": {
+        "step": null,
+        "byte_start": null,
+        "byte_end": null,
+        "line_start": 1,
+        "line_end": 10,
+        "selected_bytes": 296,
+        "selected_lines": 9
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
   }
 }
