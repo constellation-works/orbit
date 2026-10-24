@@ -10,7 +10,7 @@ use orbit_types::workflow::{DeliveryEvidenceGap, JobRun, JobRunState, JobRunStep
 
 use crate::OrbitRuntime;
 
-use super::delivery::DeliveryJobShape;
+use super::observation::DeliveryJobShape;
 
 /// Bound execution metadata independently of retry depth.
 const MAX_STEP_AUDIT_EVENTS: usize = 256;
@@ -21,7 +21,7 @@ impl OrbitRuntime {
     /// activity input, provider output, response envelopes or a display's
     /// synthetic terminal-state projection. Checkpoints remain the authority
     /// for commit/landing bytes; these records bind execution and timestamps.
-    pub(super) fn delivery_execution_records(
+    pub(crate) fn delivery_execution_records(
         &self,
         run: &JobRun,
         shape: &DeliveryJobShape,

@@ -56,17 +56,14 @@ use orbit_store::contracts::{JobRunOrder, JobRunQuery};
 use orbit_types::task::{
     NO_AUTO_APPROVE_TAG, TaskHistoryEntry, TaskStatus, names_task_delivery_pull_request,
 };
-use orbit_types::workflow::{
-    JobRun, JobRunState, PrAutoFixBlocker, PrAutoFixClaim, PrAutoFixDecision, decide_pr_auto_fix,
-    pr_auto_fix_attempts,
-};
+use orbit_types::workflow::{JobRun, JobRunState, PrAutoFixBlocker};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::orphan_adoption::AdoptionAuthority;
-use super::pr_auto_fix::pr_auto_fix_budget;
-use super::resume::{OUT_OF_RUN_AUTO_FIX_KEY, shelving_run_id};
-use super::{RunOwnerLiveness, run_owner_liveness};
+use super::super::orphan_adoption::AdoptionAuthority;
+use super::super::resume::{OUT_OF_RUN_AUTO_FIX_KEY, shelving_run_id};
+use super::super::{RunOwnerLiveness, run_owner_liveness};
+use super::ledger::{ledger_admits, run_recency};
 use crate::OrbitRuntime;
 use crate::application::task::SYSTEM_ACTOR_LABEL;
 use crate::runtime::run_input::carried_task_ids;
@@ -75,29 +72,32 @@ use crate::runtime::run_input::carried_task_ids;
 pub(crate) const PR_AUTO_FIX_OUT_OF_RUN_EVENT: &str = "pr_auto_fix_out_of_run";
 
 /// The delivery leaf that opens and watches a pull request.
-const DELIVERY_LEAF_JOB: &str = "task_pr_pipeline";
+pub(super) const DELIVERY_LEAF_JOB: &str = "task_pr_pipeline";
 
 /// Delivery leaves read for one candidate task, newest first, to find the
 /// newest one that carries only that task. A leaf that carries several tasks
 /// is no task's own, so a few are read past.
-const TASK_LEAF_SCAN: usize = 8;
+pub(super) const TASK_LEAF_SCAN: usize = 8;
 
 /// How long a pull request found without a blocker is not read again.
-const CLEAN_RECHECK: Duration = Duration::from_secs(300);
+pub(super) const CLEAN_RECHECK: Duration = Duration::from_secs(300);
 
 /// One out-of-run auto-fix, as recorded in the task's history.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct OutOfRunStart {
-    pr_number: String,
-    head_sha: String,
-    blocker: PrAutoFixBlocker,
-    source_run_id: String,
-    resumed_run_id: String,
-    drain_run_id: String,
+pub(super) struct OutOfRunStart {
+    pub(super) pr_number: String,
+    pub(super) head_sha: String,
+    pub(super) blocker: PrAutoFixBlocker,
+    pub(super) source_run_id: String,
+    pub(super) resumed_run_id: String,
+    pub(super) drain_run_id: String,
 }
 
 /// Every out-of-run auto-fix recorded for `pr_number`.
-fn out_of_run_starts(history: &[TaskHistoryEntry], pr_number: &str) -> Vec<OutOfRunStart> {
+pub(super) fn out_of_run_starts(
+    history: &[TaskHistoryEntry],
+    pr_number: &str,
+) -> Vec<OutOfRunStart> {
     history
         .iter()
         .filter(|entry| entry.event == PR_AUTO_FIX_OUT_OF_RUN_EVENT)
@@ -107,7 +107,7 @@ fn out_of_run_starts(history: &[TaskHistoryEntry], pr_number: &str) -> Vec<OutOf
 }
 
 /// A repair the pass decided to start.
-struct Repair {
+pub(super) struct Repair {
     task_id: String,
     status: TaskStatus,
     pr_number: String,
@@ -118,7 +118,7 @@ struct Repair {
 }
 
 /// What one pass does with one task's newest delivery leaf.
-enum Verdict {
+pub(super) enum Verdict {
     /// Not this pass's to report: the task has no Orbit pull request at
     /// rest, or its leaf is live, finished or someone else's.
     Ignore,
@@ -129,7 +129,7 @@ enum Verdict {
 
 /// Reads one pass shares across its candidates.
 #[derive(Default)]
-struct PassReads {
+pub(super) struct PassReads {
     /// The first forge read failure of this pass.
     forge_error: Option<String>,
     /// The delivery identities, once read.
@@ -141,12 +141,12 @@ struct PassReads {
 /// Facts learned before a candidate is refused. A policy hold can precede
 /// the forge read, so a missing blocker must remain unknown.
 #[derive(Default)]
-struct RepairObservation {
+pub(super) struct RepairObservation {
     pr_number: Option<String>,
     blocker: Option<PrAutoFixBlocker>,
 }
 
-enum BlockerRead {
+pub(super) enum BlockerRead {
     /// The forge could read the pull request's blockers (or determined it is
     /// no longer open).
     Complete(Option<crate::runtime::task_pr_forge::PullRequestBlockers>),
@@ -750,74 +750,4 @@ impl OrbitRuntime {
             })
             .collect())
     }
-}
-
-/// When a run last moved, as the store's recency order reads it.
-fn run_recency(run: &JobRun) -> chrono::DateTime<Utc> {
-    run.finished_at.or(run.started_at).unwrap_or(run.created_at)
-}
-
-/// `Err` with the skip when the pull request's ledger would not admit a
-/// repair of `head_sha` for `blocker`, or an out-of-run auto-fix already
-/// resumed delivery for it, or for as many heads as the budget allows.
-fn ledger_admits(
-    history: &[TaskHistoryEntry],
-    pr_number: &str,
-    head_sha: &str,
-    blocker: PrAutoFixBlocker,
-) -> Result<(), Verdict> {
-    let budget = pr_auto_fix_budget(history, pr_number)
-        .map_err(|error| Verdict::Skip("store_unreadable", error.to_string()))?;
-    let attempts = pr_auto_fix_attempts(history, pr_number);
-    let claim = PrAutoFixClaim {
-        pr_number,
-        head_sha,
-        blocker,
-        run_id: "",
-    };
-    match decide_pr_auto_fix(&attempts, &claim, budget, "", "") {
-        PrAutoFixDecision::Admit(_) | PrAutoFixDecision::Continue(_) => {}
-        PrAutoFixDecision::Duplicate(previous) => {
-            return Err(Verdict::Skip(
-                "already_repaired",
-                format!(
-                    "run {} already repaired {} on {head_sha} (attempt {} of {})",
-                    previous.run_id,
-                    blocker.as_str(),
-                    previous.attempt,
-                    previous.budget
-                ),
-            ));
-        }
-        PrAutoFixDecision::Exhausted(attempts) => {
-            return Err(Verdict::Skip(
-                "budget_exhausted",
-                format!("#{pr_number} spent its {} auto-fix repairs", attempts.len()),
-            ));
-        }
-    }
-    let starts = out_of_run_starts(history, pr_number);
-    if let Some(start) = starts
-        .iter()
-        .find(|start| start.head_sha == head_sha && start.blocker == blocker)
-    {
-        return Err(Verdict::Skip(
-            "already_started",
-            format!(
-                "run {} already resumed delivery to repair {} on {head_sha}",
-                start.resumed_run_id,
-                blocker.as_str()
-            ),
-        ));
-    }
-    if u32::try_from(starts.len()).unwrap_or(u32::MAX) >= budget {
-        return Err(Verdict::Skip(
-            "budget_exhausted",
-            format!(
-                "#{pr_number} was handed back to delivery {} times, its auto-fix budget",
-                starts.len()
-            ),
-        ));
-    }
-    Ok(())
 }

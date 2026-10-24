@@ -2,7 +2,6 @@ mod activity_tool_requirements;
 pub(crate) mod agent_explore;
 pub(crate) mod agent_invoke;
 pub(crate) mod catalog;
-pub(crate) mod catalog_layers;
 pub(crate) mod claimed;
 pub(crate) mod crew_pools;
 pub(crate) mod delivery;
@@ -13,8 +12,7 @@ mod forge_hold_resume;
 mod orphan_adoption;
 pub(crate) mod pipeline;
 pub(crate) mod pipeline_actions;
-mod pr_auto_fix;
-mod pr_repair_adoption;
+mod pr_repair;
 mod resume;
 mod run;
 mod upgrade_resume;
@@ -51,9 +49,9 @@ pub use agent_invoke::{
     AGENT_INVOKE_JOB_ID, AgentInvokeRequest, AgentInvokeResult, AgentInvokeSubmission,
     DEFAULT_AGENT_INVOKE_TIMEOUT_SECONDS, MAX_AGENT_INVOKE_TIMEOUT_SECONDS, agent_invoke_result,
 };
+pub use catalog::CatalogReferenceLayer;
 pub(crate) use catalog::{DEFAULT_JOB_FILES, seed_default_jobs};
 pub use catalog::{JobCatalogEntry, JobCatalogFilter, job_catalog_to_json_with_last_run};
-pub use catalog_layers::CatalogReferenceLayer;
 pub use exec::V2JobRunResult;
 pub use explore_analytics::{
     EXPLORE_COMPARISON_SCHEMA_VERSION, ExploreCohort, ExploreComparison, ExploreCrewComparison,

@@ -384,7 +384,7 @@ fn an_unreadable_tree_skips_that_sample_and_keeps_the_run() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_worker_records_a_spawned_child_tree() {
-    const TEST: &str = "application::job::pipeline::worker::tests::usage_tree::macos_worker_records_a_spawned_child_tree";
+    const TEST: &str = "application::job::pipeline::worker::tests::usage::tree::macos_worker_records_a_spawned_child_tree";
     if defer_unreadable_tree(TEST) {
         return;
     }
@@ -519,7 +519,7 @@ enum TreeSpawn {
 
 #[cfg(target_os = "macos")]
 fn spawn_child_tree(root: &TempDir) -> Result<orbit_common::process::OwnedChild, TreeSpawn> {
-    const CHILD: &str = "application::job::pipeline::worker::tests::usage_tree::hold_child_tree";
+    const CHILD: &str = "application::job::pipeline::worker::tests::usage::tree::hold_child_tree";
     orbit_common::test_env::assert_child_test_exists(CHILD);
     let ready = root.path().join("child-ready");
     let stderr_path = root.path().join("child-stderr.txt");
@@ -579,7 +579,7 @@ fn hold_with_grandchild() {
     let ready = dir.join("grandchild-ready");
     let stderr_path = dir.join("grandchild-stderr.txt");
     let stderr = std::fs::File::create(&stderr_path).unwrap();
-    const CHILD: &str = "application::job::pipeline::worker::tests::usage_tree::hold_child_tree";
+    const CHILD: &str = "application::job::pipeline::worker::tests::usage::tree::hold_child_tree";
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     command
         .args(["--exact", CHILD, "--ignored"])
@@ -630,7 +630,7 @@ fn hold_leaf(bytes: usize) {
 
 /// Native attribution, run explicitly on a Mac:
 /// `scripts/build-budget.py -- cargo test -p orbit-core --lib
-/// application::job::pipeline::worker::tests::usage_tree::native_tree_attributes_a_build_like_workload
+/// application::job::pipeline::worker::tests::usage::tree::native_tree_attributes_a_build_like_workload
 /// -- --ignored --exact --nocapture`.
 ///
 /// A re-executed worker leads its own session, as a pipeline worker does, and
@@ -706,12 +706,14 @@ mod attribution {
 
     use orbit_common::process::ancestry::{process_start_and_parent, process_tree};
 
-    use crate::application::job::pipeline::worker::usage_tree::{TreeSampler, session_tree_reader};
+    use crate::application::job::pipeline::worker::usage::tree::{
+        TreeSampler, session_tree_reader,
+    };
     use crate::runtime::host_resource::{RESOURCE_SAMPLE_INTERVAL, read_host_usage};
 
     pub(super) const ROLE: &str = "ORBIT_TREE_ATTRIBUTION_ROLE";
     const DIR: &str = "ORBIT_TREE_ATTRIBUTION_DIR";
-    const TEST: &str = "application::job::pipeline::worker::tests::usage_tree::native_tree_attributes_a_build_like_workload";
+    const TEST: &str = "application::job::pipeline::worker::tests::usage::tree::native_tree_attributes_a_build_like_workload";
     const JOBS: usize = 3;
     const COMPILES: usize = 16;
     const COMPILE_CPU: Duration = Duration::from_millis(750);

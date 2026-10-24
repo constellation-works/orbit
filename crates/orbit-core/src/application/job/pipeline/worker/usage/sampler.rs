@@ -15,7 +15,7 @@
 //!   linker peak is what triggers the OOM killer.
 //!
 //! macOS has no worker scope. The same thread sums the worker's process tree
-//! instead ([`super::usage_tree`]), with the orphans still in a session the
+//! instead ([`super::tree`]), with the orphans still in a session the
 //! worker leads: CPU deltas of processes seen in both samples, plus the full
 //! CPU time of processes that appeared, and the sum of each process's
 //! `ri_phys_footprint`. The first read is a baseline. An unreadable tree
@@ -43,9 +43,9 @@ use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use orbit_store::contracts::{HostResourceMinute, ResourceUsageStoreBackend, RunResourceMinute};
 use orbit_types::workflow::JobRun;
 
-use super::delivery_class::DeliveryResourceClass;
-use super::scope::{ScopeUsage, WorkerScopeCgroup};
-use super::usage_tree::TreeSampler;
+use super::super::delivery_class::DeliveryResourceClass;
+use super::super::scope::{ScopeUsage, WorkerScopeCgroup};
+use super::tree::TreeSampler;
 use crate::OrbitRuntime;
 use crate::runtime::host_resource::{
     HostUsageReading, RESOURCE_SAMPLE_INTERVAL as SAMPLE_INTERVAL, read_host_usage,
@@ -482,7 +482,7 @@ impl OrbitRuntime {
     /// scope and skips a worker that has none. macOS has no scopes and
     /// samples the worker's process tree. `adopted` marks a worker that took
     /// the run over mid-flight.
-    pub(super) fn start_resource_sampler(
+    pub(crate) fn start_resource_sampler(
         &self,
         run: &JobRun,
         adopted: bool,
@@ -515,7 +515,7 @@ impl OrbitRuntime {
         let workspace_id = self.workspace_id().ok()?;
         ResourceSamplerThread::spawn(RunResourceSampler::from_process_tree(
             store,
-            super::usage_tree::session_tree_reader(std::process::id()),
+            super::tree::session_tree_reader(std::process::id()),
             orbit_common::process::ancestry::process_start_and_parent,
             PathBuf::from("/proc"),
             workspace_id,
