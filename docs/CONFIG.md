@@ -294,6 +294,7 @@ provider_limit_explicit_crews = "wait"
 crew_selection = "static"
 usage_pressure_cap = 8
 usage_pressure_strength = 1.0
+crew_performance_types = []
 ```
 
 | Key | Default | What it does |
@@ -313,6 +314,7 @@ usage_pressure_strength = 1.0
 | `workflow.crew_selection` | `static` | **Advanced.** How task creation, complexity re-rate and admission draws weigh pool members: `static` uses the configured weights; `usage_pressure` scales each by its crew's weekly usage pressure and re-draws a system-chosen crew at admission. This is the policy key; the `crew_selection` object in `orbit run show` and run input is the recorded draw. See [usage-pressure draws](#usage-pressure-draws). |
 | `workflow.usage_pressure_cap` | `8` | **Advanced.** Under `usage_pressure`, the weight multiplier is clamped to `[1/cap, cap]`. A number of at least `1`; `1` leaves every weight as configured. |
 | `workflow.usage_pressure_strength` | `1.0` | **Advanced.** Under `usage_pressure`, the exponent applied to pressure before the cap. A number of at least `0`; `0` disables weighting and the admission re-draw. |
+| `workflow.crew_performance_types` | `[]` | **Advanced.** Ordered task types for the implementer scorecard's by-type matrix, each a `[[workflow.crew_performance_types]]` table with `name`, `tags` and `paths`. See [crew performance types](#crew-performance-types). |
 | `workflow.auto_ship` | `false` | Opt this workspace in to `orbit run ship-sweep`, the cross-workspace unattended ship command (skipped with `auto_ship_disabled` while `false`). The seeded `ship-sweep` routine ignores this key; its `enabled:` flag is its only switch. Neither grants `--complete` or `--approve-proposed`, and a `no-auto-approve` task is never auto-approved by either flag's drain or the CI sweep. |
 | `workflow.required_validation_commands` | `[]` | Commands every delivered candidate must pass before push or merge. Empty runs no required check. See [required validation](#required-validation). |
 | `workflow.distributed_completion` | `review` | How far this owner takes an accepted distributed-drain handoff: `review` waits for an operator's **Approve handoff**; `done` authorizes it on acceptance and lands it through `task_landing_pipeline`, rechecking this key before the merge. |
@@ -321,6 +323,23 @@ usage_pressure_strength = 1.0
 | `workflow.unlocked_path_validation_commands` | `[]` | Commands a repaired candidate runs instead of the full required list when its tree differs from the run's last fully validated tree only in `workflow.unlocked_context_paths`. Empty always runs the full list. See [revalidating an unlocked-path repair](#revalidating-an-unlocked-path-repair). |
 | `workflow.generated_paths` | `{}` | Generated files, as path glob = regenerate command. Conflict recovery regenerates a conflicting match instead of merging it. See [generated paths](#generated-paths-are-regenerated-not-merged). |
 | `workflow.light_delivery_paths` | `["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]` | Path globs a candidate must change only within for a `skip-review` or `skip-validation` task to skip agent review or local validation. A leading `!` excludes. `[]` disables both tags. See [light delivery](#light-delivery-skip-review-and-skip-validation). |
+
+### Crew performance types
+
+`workflow.crew_performance_types` is an ordered list of task types, one `[[workflow.crew_performance_types]]` table per type with a `name` and at least one of `tags` or `paths`:
+
+```toml
+[[workflow.crew_performance_types]]
+name = "review"
+tags = ["no-diff-expected"]
+
+[[workflow.crew_performance_types]]
+name = "ui"
+tags = ["ui"]
+paths = ["web/**"]
+```
+
+A task takes the first type whose `tags` it carries (any of) or whose `paths` globs match any of its `context_files` (any of); a task matching none is `other`. Names must be unique and non-empty, `other` is reserved, and an entry with neither `tags` nor `paths` is refused with a config error naming the entry. The list is a lens: the scorecard classifies historical tasks with the current list at scan time, so editing it re-sorts history. Orbit ships no types beyond `other`, so an empty list puts every task in `other`. The matrix is read with `orbit agents scorecard --role implementers --by-type`; crew selection does not use it yet.
 
 ### Unlocked context paths
 

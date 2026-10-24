@@ -30,6 +30,7 @@ impl Execute for AgentsCommand {
         let Invocation { spec, input } = self.command;
         let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
         let blocks = match spec.verb {
+            AgentsVerb::Scorecard if value["by_type"] == true => by_type_blocks(&value),
             AgentsVerb::Scorecard => scorecard_blocks(&value),
             AgentsVerb::Show => show_blocks(&value),
         };
@@ -103,6 +104,51 @@ pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
                 .collect::<Vec<_>>()
                 .join(", "),
         ));
+    }
+    vec![Block::table(table)]
+}
+
+/// The by-type matrix: one row per (crew, model, tier, type) cell.
+pub(crate) fn by_type_blocks(value: &Value) -> Vec<Block> {
+    let columns = vec![
+        Column::new("CREW").fixed(),
+        Column::new("MODEL"),
+        Column::new("TIER"),
+        Column::new("TYPE"),
+        Column::new("N").number(),
+        Column::new("RAW").number(),
+        Column::new("CREW MEAN").number(),
+        Column::new("SCORE").number(),
+    ];
+    let types = value["types"]
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|entry| text(&entry["name"]))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    let mut table = Table::new(columns)
+        .keep_all_columns()
+        .empty_message("no row in the window".to_string())
+        .trailing_notice(selection_line(value))
+        .trailing_notice(format!(
+            "Types: {}; tasks matching none are other. Score: two-level shrinkage toward the crew mean, then toward 100 (K = 30).",
+            if types.is_empty() { "none configured".to_string() } else { types },
+        ));
+    for cell in value["cells"].as_array().into_iter().flatten() {
+        table.add_row(vec![
+            text(&cell["crew"]),
+            text(&cell["model"]),
+            text(&cell["tier"]),
+            text(&cell["type"]),
+            number(&cell["n"]),
+            number(&cell["raw"]),
+            number(&cell["crew_mean"]),
+            number(&cell["score"]),
+        ]);
     }
     vec![Block::table(table)]
 }

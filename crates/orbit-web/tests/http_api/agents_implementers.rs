@@ -1,8 +1,12 @@
 //! Tier-normalised implementer scores through the public runtime and HTTP API.
 
 use chrono::{Duration, Utc};
+use orbit_core::CrewPerformanceType;
 use orbit_core::TaskStatus;
-use orbit_core::application::agents::{AgentQuery, AgentRole, agent_detail, agent_scorecard};
+use orbit_core::application::agents::{
+    AgentQuery, AgentRole, agent_by_type_scorecard, agent_detail, agent_scorecard,
+};
+use orbit_core::application::task::TaskAddParams;
 use orbit_types::task::{RegressionEscape, RegressionNature, TaskComplexity};
 use serde_json::{Value, json};
 
@@ -337,6 +341,96 @@ fn implementers_pool_sparse_tiers_without_amplifying_single_task_outliers() {
                 as_f64(&card["fleet_average"]),
                 100.0,
                 "pooling conserves the fleet's total expected outcomes"
+            );
+        },
+    );
+}
+
+#[test]
+fn by_type_cells_classify_n_and_shrink_empty_cells_to_the_crew_mean() {
+    isolated(
+        "agents_implementers::by_type_cells_classify_n_and_shrink_empty_cells_to_the_crew_mean",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let start = now - Duration::hours(3);
+            let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
+            for (crew, tagged) in [("alpha", true), ("beta", false)] {
+                for index in 0..3 {
+                    let id = fixture
+                        .runtime
+                        .add_task(TaskAddParams {
+                            title: "by-type fixture".into(),
+                            description: "by-type fixture".into(),
+                            complexity: TaskComplexity::Low,
+                            tags: if tagged {
+                                vec!["no-diff-expected".to_string()]
+                            } else {
+                                Vec::new()
+                            },
+                            ..Default::default()
+                        })
+                        .unwrap()
+                        .id
+                        .to_string();
+                    implementation_run(
+                        &fixture,
+                        &format!("jrun-{crew}-{index}"),
+                        &id,
+                        crew,
+                        Some("model"),
+                        start,
+                        now + Duration::hours(1),
+                    );
+                    append(
+                        &fixture,
+                        &id,
+                        start,
+                        "started",
+                        None,
+                        Some(TaskStatus::InProgress),
+                    );
+                }
+            }
+            let types = vec![CrewPerformanceType {
+                name: "review".into(),
+                tags: vec!["no-diff-expected".into()],
+                paths: Vec::new(),
+            }];
+            let facts = fixture.runtime.agent_scan().unwrap();
+            let card = agent_by_type_scorecard(&facts, &query, &types, std::time::Duration::ZERO);
+            assert_eq!(card["types"][0]["name"], "review", "{card}");
+            let cells = card["cells"].as_array().unwrap();
+            let cell = |crew: &str, type_name: &str| {
+                cells
+                    .iter()
+                    .find(|cell| cell["crew"] == crew && cell["type"] == type_name)
+                    .unwrap_or_else(|| panic!("cell {crew}/{type_name} in {card}"))
+            };
+            assert_eq!(cell("alpha", "review")["n"], 3);
+            assert_eq!(cell("alpha", "other")["n"], 0);
+            assert_eq!(cell("beta", "other")["n"], 3);
+            assert_eq!(cell("beta", "review")["n"], 0);
+            // An empty cell scores exactly its crew mean.
+            for crew in ["alpha", "beta"] {
+                let empty = if crew == "alpha" {
+                    cell(crew, "other")
+                } else {
+                    cell(crew, "review")
+                };
+                assert_eq!(empty["score"], empty["crew_mean"], "{empty}");
+                assert!(as_f64(&empty["score"]).is_finite());
+            }
+            // With no configured types every task is `other`.
+            let bare = agent_by_type_scorecard(&facts, &query, &[], std::time::Duration::ZERO);
+            assert_eq!(bare["types"].as_array().unwrap().len(), 0);
+            assert!(
+                bare["cells"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|cell| cell["type"] == "other"),
+                "{bare}"
             );
         },
     );

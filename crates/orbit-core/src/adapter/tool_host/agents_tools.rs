@@ -18,7 +18,16 @@ pub(super) fn dispatch(
         input.optional_string("window")?.as_deref(),
         input.optional_count("min_support")?,
     )?;
+    let by_type = input.optional_bool("by_type")?.unwrap_or(false);
     match verb {
+        AgentsVerb::Scorecard if by_type => {
+            if role != AgentRole::Implementers {
+                return Err(OrbitError::InvalidInput(
+                    "by_type is only supported for implementers".to_string(),
+                ));
+            }
+            runtime.agent_by_type_scorecard(&query)
+        }
         AgentsVerb::Scorecard => runtime.agent_role_scorecard(role, &query),
         AgentsVerb::Show => runtime.agent_role_detail(
             role,

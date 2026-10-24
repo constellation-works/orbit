@@ -68,7 +68,7 @@
   },
   {
     "name": "orbit_agents_scorecard",
-    "description": "Rank one agent role's crews and models over the window: weighted outcome rates per 100 units of work, then pulled down toward the fleet average when above it. Implementers start at 100 and score actual counts against fleet expectations for the same tier mix; other roles sum weighted actual rates. Rows below the minimum support are listed last without a rank; a role whose terms are not computed yet answers status not_computed with its terms and no rows. Scans the workspace once per call (cache_ttl_seconds 0). The payload the dashboard's Agents view reads.",
+    "description": "Rank one agent role's crews and models over the window: weighted outcome rates per 100 units of work, then pulled down toward the fleet average when above it. Implementers start at 100 and score actual counts against fleet expectations for the same tier mix; other roles sum weighted actual rates. Rows below the minimum support are listed last without a rank; a role whose terms are not computed yet answers status not_computed with its terms and no rows. With by_type, implementers instead return one cell per (crew, model, tier, type) with n, raw, crew_mean and score, plus the type list used. Scans the workspace once per call (cache_ttl_seconds 0). The payload the dashboard's Agents view reads.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -83,6 +83,10 @@
         "min_support": {
           "type": "integer",
           "description": "Units of the role's work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10."
+        },
+        "by_type": {
+          "type": "boolean",
+          "description": "Split implementers into (crew, model, tier, type) cells using workflow.crew_performance_types, with two-level shrinkage; implementers only."
         },
         "model": {
           "type": "string",

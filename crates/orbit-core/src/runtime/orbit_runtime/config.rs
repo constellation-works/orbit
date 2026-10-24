@@ -224,6 +224,12 @@ impl OrbitRuntime {
         self.context.settings().tag_instructions()
     }
 
+    /// `workflow.crew_performance_types` as admitted: the implementer
+    /// scorecard's task-type lens.
+    pub fn crew_performance_types(&self) -> &[orbit_config::CrewPerformanceType] {
+        self.context.settings().crew_performance_types()
+    }
+
     /// The resolved `[operation]` review preferences (layered over the
     /// built-in no-review defaults) with per-field provenance [ORB-11333].
     pub fn operation_policy(&self) -> &orbit_config::OperationPolicy {

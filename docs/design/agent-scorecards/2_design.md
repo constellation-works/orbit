@@ -264,6 +264,22 @@ whole tab. The existing **Score breakdown** shows the 100-point fleet reference
 and each term's actual and expected counts beside its contribution. It adds no
 new section or per-tier table.
 
+**By-type matrix.** `orbit agents scorecard --role implementers --by-type`
+(and its `--json`) splits the same evidence into one cell per `(crew, model,
+tier, type)`, where the type comes from the ordered
+`workflow.crew_performance_types` list: a task takes the first type whose
+`tags` it carries or whose `paths` globs match its `context_files`, else
+`other`. Each cell's raw score uses the formula above with the fleet
+expectation taken from the same `(tier, type)` fleet cell; a `(tier, type)`
+fleet cell under 30 observations falls back to the tier's rates. Cells are
+small, so the matrix applies a two-sided, two-level shrinkage with K = 30:
+`crew_mean = (n_tier × raw_tier + 30 × 100) / (n_tier + 30)`, then
+`score = (n_cell × raw_cell + 30 × crew_mean) / (n_cell + 30)`. A cell with
+no evidence scores its crew mean, and a crew with no tier evidence has crew
+mean 100. The matrix is separate from the ranking: the ranking keeps its
+one-sided `min(raw, …)` smoothing and is unchanged by `--by-type`, and the
+dashboard shows no by-type section.
+
 ### 5.3 Reviewers
 
 **Current.**

@@ -25,6 +25,15 @@ pub(super) struct RoleSpec {
     pub(super) rows: Option<Rows>,
 }
 
+/// The implementer `(crew, model, tier, type)` cell matrix.
+pub(super) fn implementer_by_type_cells(
+    facts: &AgentFacts,
+    since: DateTime<Utc>,
+    types: &[orbit_config::CrewPerformanceType],
+) -> Vec<serde_json::Value> {
+    implementers::by_type_cells(facts, since, types)
+}
+
 pub(super) fn spec(role: AgentRole) -> &'static RoleSpec {
     match role {
         AgentRole::Orchestrators => &orchestrators::ROLE,

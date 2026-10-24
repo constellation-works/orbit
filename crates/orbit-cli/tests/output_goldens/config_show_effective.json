@@ -371,6 +371,13 @@
         }
       ]
     },
+    "workflow.crew_performance_types": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.crew_selection": {
       "scope": "built-in",
       "state": "default",

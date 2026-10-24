@@ -26,6 +26,7 @@ use super::resolve::{
     resolve_unlocked_path_validation_commands, resolve_validation_path_mode,
     resolve_worker_tasks_max,
 };
+use crate::crew_performance::CrewPerformanceType;
 use crate::memory_limit::MemoryLimit;
 use crate::operation;
 
@@ -715,6 +716,13 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 112,
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<f64>| crate::provider_limit::admit_usage_pressure_strength(raw),
+    },
+    workflow_crew_performance_types: Vec<CrewPerformanceType> => Vec<CrewPerformanceType> {
+        key: "workflow.crew_performance_types", value_type: "array<table>",
+        description: "Ordered task types for the implementer scorecard: each entry's name, tags and context-file path globs.",
+        section: ConfigSection::Delivery, order: 113,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<Vec<CrewPerformanceType>>| crate::crew_performance::admit_crew_performance_types(raw),
     },
     workflow_purpose_crews_auto_fix: Vec<String> => Vec<String> {
         key: "workflow.purpose_crews.auto_fix", value_type: "array<string>",

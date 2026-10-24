@@ -52,6 +52,8 @@
 //!   source provenance.
 //! - `memory_limit` — the typed worker memory limit ([`MemoryLimit`]) and
 //!   its one parser [ORB-12913].
+//! - `crew_performance` — the ordered `workflow.crew_performance_types` list
+//!   and the one task-type classification the scorecard and draw share.
 //! - `operation` — typed review preferences (`[review]` and
 //!   `workflow.purpose_crews.review`, one crew or a pool) and their layered
 //!   resolution [ORB-11333] [ORB-13992] [ORB-15195].
@@ -68,6 +70,7 @@
 //! - `seed` — rendering and writing a fresh default `config.toml`.
 
 mod aliases;
+mod crew_performance;
 mod crew_pools;
 mod layering;
 mod memory_limit;
@@ -97,6 +100,9 @@ use orbit_common::security::redaction::redact_home_dir;
 
 pub use aliases::{
     ShellProbeMode, WorkerContainmentMode, deprecated_key_rewrites, translate_deprecated_keys,
+};
+pub use crew_performance::{
+    CREW_PERFORMANCE_TYPES_KEY, CrewPerformanceType, OTHER_TYPE, classify_task_type,
 };
 pub use crew_pools::{
     ComplexityCrewPools, CrewPoolEntry, PurposeCrewPools, canonical_crew_pool,
