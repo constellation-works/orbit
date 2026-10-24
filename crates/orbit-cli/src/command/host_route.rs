@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use orbit_cmd::hosts::{self, HostWorkspaceRoute, TaskIdRoute};
 use orbit_common::governance::authorization::{CallerCapabilities, CallerEnvelope};
 use orbit_common::governance::task::TaskVerb;
+use orbit_core::application::task::TaskArtifactRead;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_mcp::McpSessionAuthority;
 use orbit_mcp::federated::{MachineQualifiedSelector, is_id_routed_tool};
@@ -630,55 +631,30 @@ fn field_lines(value: &Value, fields: &[String]) -> String {
         .join("\n")
 }
 
-/// A routed `task artifact get`. Text crosses as text; any other payload
-/// arrives as base64, which this view does not decode, so it is read on the
-/// host that holds it.
+/// A routed `task artifact get`. `--out` writes the answer's bytes exactly as
+/// a local export does; without it only text prints, and any other payload is
+/// read on the host that holds it.
 fn artifact_output(value: Value, out: Option<PathBuf>, holder: &HostEntry) -> CommandOut {
-    let id = value
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let path = value
-        .get("path")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let Some(content) = value
-        .get("content")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-    else {
+    let read = TaskArtifactRead::from_answer(&value);
+    let written_to = out.as_ref().map(|out| out.display().to_string());
+    let mut doc = read.json(written_to.as_deref());
+    doc["host"] = host_json(holder);
+    let TaskArtifactRead { id, path, size, .. } = &read;
+    if let Some(out) = out {
+        read.export_to(&out)?;
+        let text = format!(
+            "Wrote {size} bytes of '{path}' from host '{}' to {}",
+            holder.name,
+            out.display()
+        );
+        return Ok(Payload::detail(doc, text).into());
+    }
+    let Some(content) = read.printable_text() else {
         return Err(OrbitError::InvalidInput(format!(
             "artifact '{path}' on task '{id}' is not text; read it on host '{}': `ssh {} orbit \
              task artifact get {id} {path} --out <FILE>`",
             holder.name, holder.ssh
         )));
     };
-    let mut doc = json!({
-        "id": id,
-        "path": path,
-        "media_type": value.get("media_type").cloned().unwrap_or(Value::Null),
-        "size": content.len(),
-        "presentation": "text",
-        "written_to": out.as_ref().map(|out| out.display().to_string()),
-    });
-    doc["host"] = host_json(holder);
-    if let Some(out) = out {
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "remote artifact exports must match local exports to user-selected files, symlinks or devices"
-        )]
-        std::fs::write(&out, content.as_bytes()).map_err(|error| {
-            OrbitError::Io(format!("write artifact to '{}': {error}", out.display()))
-        })?;
-        let text = format!(
-            "Wrote {} bytes of '{path}' from host '{}' to {}",
-            content.len(),
-            holder.name,
-            out.display()
-        );
-        return Ok(Payload::detail(doc, text).into());
-    }
-    Ok(Payload::detail(doc, content).into())
+    Ok(Payload::detail(doc, content.to_string()).into())
 }

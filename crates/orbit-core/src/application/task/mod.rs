@@ -1,6 +1,7 @@
 //! Task commands and coordinated record writes.
 
 mod add;
+mod artifact_export;
 mod baseline_hold;
 mod baseline_repair;
 pub(crate) use baseline_repair::BASELINE_RED_REPAIR_TAG;
@@ -51,6 +52,7 @@ mod write_response;
 /// reservations, status-derived locks, and the admission work that freezes a
 /// claim's footprint all resolve declarations through it.
 pub use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
+pub use artifact_export::TaskArtifactRead;
 pub(crate) use baseline_hold::refresh_baseline_holds_step;
 pub use baseline_hold::{BASELINE_HOLD_REFRESH_JOB, BaselineHoldRefresh};
 pub(crate) use blocked_recovery::{

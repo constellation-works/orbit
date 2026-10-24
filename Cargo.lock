@@ -1795,7 +1795,6 @@ name = "orbit-cli"
 version = "0.31.0"
 dependencies = [
  "assert_cmd",
- "base64",
  "chrono",
  "clap",
  "colored",
