@@ -623,3 +623,193 @@ fn prerequisite_covered_by_a_dependency_promotes_and_clears_pilot_warnings() {
         );
     }
 }
+
+#[test]
+fn prerequisite_lost_before_atomic_write_holds_both_authorities_and_replay() {
+    if crate::application::tests::run_isolated_test(
+        "application::task::pilot::tests::drain_promotion::prerequisite_lost_before_atomic_write_holds_both_authorities_and_replay",
+    ) {
+        return;
+    }
+    use super::super::persist::lock_hook::{self, Point};
+    for ci_sweep in [false, true] {
+        for deleted in [false, true] {
+            let workspace = workspace(None);
+            let runtime = &workspace.runtime;
+            let blocker = qualifying_task(runtime);
+            let mut task = qualifying_task(runtime);
+            if ci_sweep {
+                task = runtime
+                    .update_task(
+                        &task.id,
+                        TaskUpdateParams {
+                            tags: Some(vec![
+                                "ci-failure-sweep".into(),
+                                "ci-failure:fixture-key".into(),
+                            ]),
+                            ..Default::default()
+                        },
+                    )
+                    .expect("CI filing identity");
+            }
+            let prepared = action(
+                runtime,
+                "prepare_task_pilot",
+                json!({
+                    "task_ids": [task.id], "workspace_path": workspace.repo, "base_branch": "main"
+                }),
+            );
+            let warning = format!("Wait for {} to land", blocker.id);
+            let mut input = json!({
+                "workspace_path": workspace.repo, "prepared": prepared,
+                "promotion_authorized": true,
+                "results": [{"partition_index": 0, "task_ids": [task.id], "tasks": [{
+                    "task_id": task.id, "context_files_before": task.context_files,
+                    "context_files_after": ["file:README.md"], "disposition": "selectors",
+                    "recommended_crew": "opus", "recommended_complexity": "low",
+                    "confidence": "high", "assessment_rationale": "README holds the repair.",
+                    "validation_approach": "Apply through the public runtime action.",
+                    "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [warning],
+                    "adr_conflicts": [], "utility_warnings": [], "surface_warnings": [],
+                    "duplicate_of": null, "already_landed": null
+                }]}]
+            });
+            let field = if ci_sweep {
+                input["ci_sweep_filing"] = json!({
+                    "task_id": task.id, "failure_key": "fixture-key", "tested_commit": "0123abcd",
+                    "workflow": "ci", "job": "test", "step": "cargo test",
+                    "run_urls": ["https://github.com/example/repo/actions/runs/1"]
+                });
+                "ci_sweep_admission"
+            } else {
+                let (drain, pilot) = drain_with_pilot(runtime, &task.id);
+                input["drain_promotion"] = json!({"run_id": drain});
+                input["run_id"] = json!(pilot);
+                "drain_approval"
+            };
+            let paths = runtime.paths().clone();
+            let blocker_id = blocker.id.clone();
+            let mut changed = false;
+            lock_hook::set(Some(Box::new(move |point| {
+                if point == Point::Discovered && !changed {
+                    changed = true;
+                    let writer = OrbitRuntime::from_roots(&paths.global_dir, &paths.orbit_dir)
+                        .expect("writer");
+                    if deleted {
+                        writer
+                            .stores()
+                            .tasks()
+                            .delete_task(&blocker_id)
+                            .expect("remove prerequisite before locks");
+                    } else {
+                        writer
+                            .update_task(
+                                &blocker_id,
+                                TaskUpdateParams {
+                                    status: Some(TaskStatus::Someday),
+                                    ..Default::default()
+                                },
+                            )
+                            .expect("prerequisite leaves edge-eligible states before locks");
+                    }
+                }
+            })));
+            let applied = action(runtime, "apply_task_pilot_results", input.clone());
+            lock_hook::set(None);
+            let mut output = applied;
+            for replay in [false, true] {
+                if replay {
+                    // Becoming edge-eligible again cannot make a replay invent
+                    // the edge the first atomic write omitted.
+                    if !deleted {
+                        runtime
+                            .update_task(
+                                &blocker.id,
+                                TaskUpdateParams {
+                                    status: Some(TaskStatus::Proposed),
+                                    ..Default::default()
+                                },
+                            )
+                            .expect("restore prerequisite to an edge-eligible state");
+                    }
+                    output = action(runtime, "apply_task_pilot_results", input.clone());
+                    assert_eq!(
+                        output["task_outcomes"][0]["outcome"], "already_applied",
+                        "{output}"
+                    );
+                }
+                assert_eq!(output["status"], "succeeded", "{output}");
+                assert_eq!(output[field][0]["decision"], "withhold", "{output}");
+                assert_eq!(output[field][0]["classification"], "warnings", "{output}");
+                let current = runtime.get_task(&task.id).expect("task");
+                assert_eq!(current.status, TaskStatus::Proposed);
+                assert!(current.dependencies().is_empty());
+                assert_eq!(approvals(runtime, &task), 0);
+                let comments = runtime.get_task_comments(&task.id).expect("comments");
+                let warnings = crate::application::task::task_pilot_warnings(
+                    current.status,
+                    &comments,
+                    &current.dependencies(),
+                    &|_| false,
+                );
+                assert_eq!(warnings.len(), 1);
+                assert_eq!(warnings[0].text, warning);
+            }
+            if !ci_sweep {
+                assert_eq!(
+                    held_classification(runtime, &pilot_entry(runtime, &task.id)),
+                    Some("warnings")
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn completed_prerequisite_lost_before_approval_still_holds() {
+    if crate::application::tests::run_isolated_test(
+        "application::task::pilot::tests::drain_promotion::completed_prerequisite_lost_before_approval_still_holds",
+    ) {
+        return;
+    }
+    let workspace = workspace(None);
+    let runtime = &workspace.runtime;
+    let blocker = runtime
+        .add_task(TaskAddParams {
+            title: "completed prerequisite".into(),
+            status: Some(TaskStatus::Done),
+            ..Default::default()
+        })
+        .expect("done prerequisite");
+    let blocker_id = blocker.id.clone();
+    let task = qualifying_task(runtime);
+    let (drain, pilot) = drain_with_pilot(runtime, &task.id);
+    let applied = pilot_with_findings(
+        &workspace,
+        &task,
+        &drain,
+        &pilot,
+        Some(Box::new(move |runtime, _| {
+            // Fixture writer runs before any approval lock; no synthetic load.
+            runtime
+                .stores()
+                .tasks()
+                .delete_task(&blocker_id)
+                .expect("remove prerequisite");
+        })),
+        json!({"blocked_by": [format!("Wait for {} to land", blocker.id)]}),
+    );
+    assert_eq!(
+        applied["drain_approval"][0]["decision"], "withhold",
+        "{applied}"
+    );
+    assert_eq!(
+        applied["drain_approval"][0]["classification"], "warnings",
+        "{applied}"
+    );
+    assert_eq!(
+        runtime.get_task(&task.id).expect("task").status,
+        TaskStatus::Proposed
+    );
+    assert_eq!(approvals(runtime, &task), 0);
+}

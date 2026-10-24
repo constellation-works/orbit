@@ -63,7 +63,6 @@ struct Assessed {
     assessment: Value,
     after: Vec<String>,
     complexity: TaskComplexity,
-    current: Task,
     required_os: Vec<NativeOsRequirement>,
     required_machine: Option<MachineRequirement>,
     post_deploy: Vec<PostDeployRequirement>,
@@ -90,25 +89,13 @@ pub(super) fn settle_task(
     let scope = scope(context, task_id, assessment, snapshot)?;
     let assessed = assess(context, task_id, assessment, snapshot, scope)?;
     let operation_id = task_operation_id(context.prepared, task_id, &assessed.assessment);
-    let admission = admit(context, task_id, snapshot, &assessed, &operation_id)?;
-    // The CI sweep promotes inside the atomic pilot write; a drain approves
-    // afterwards through the approve transition, so its history names the
-    // drain.
-    let promote = matches!(
-        &admission,
-        Some(Admission::CiSweep(decision)) if decision["decision"] == "promote"
-    );
-    let history_decision = match &admission {
-        Some(Admission::Drain(decision)) => drain_promotion::hold_decision(decision),
-        _ => None,
-    };
     let validated = ValidatedTask {
         task_id: task_id.clone(),
         after: assessed.after,
         assessment: assessed.assessment,
-        admission,
-        promote,
-        history_decision,
+        admission: None,
+        promote: false,
+        history_decision: None,
         complexity: assessed.complexity,
         operation_id,
         required_os: assessed.required_os,
@@ -316,7 +303,6 @@ fn assess(
         assessment,
         after: scope.after,
         complexity,
-        current,
         required_os: native_os,
         required_machine: native_machine,
         post_deploy,
@@ -383,47 +369,21 @@ fn attach_host_findings(
 /// The promotion decision the apply's authority makes for this task.
 fn admit(
     context: &ApplyContext<'_>,
-    task_id: &str,
     snapshot: &PreparedTaskSnapshot,
-    assessed: &Assessed,
-    operation_id: &str,
+    current: &Task,
+    assessed: &ValidatedTask,
+    graph: &super::super::blockers::PilotDependencyGraph,
 ) -> Settled<Option<Admission>> {
-    // Prerequisites this assessment will record as edges in its atomic
-    // write already enforce themselves, so promotion decides against the
-    // dependencies the task will carry, not only the ones it carried at
-    // preparation. Missing and other-workspace IDs add no edge and are
-    // absent from the done lookup, so their findings keep holding.
-    let runtime = context.runtime;
-    let is_done = |id: &str| {
-        matches!(
-            runtime.stores().tasks().get_task(id),
-            Ok(Some(task)) if task.status == TaskStatus::Done
-        )
-    };
-    let mut dependencies = assessed.current.dependencies();
-    for id in crate::application::task::pilot_blocker_task_ids(&assessed.assessment) {
-        if dependencies.contains(&id) {
-            continue;
-        }
-        if let Ok(Some(target)) = runtime.stores().tasks().get_task(&id)
-            && matches!(
-                target.status,
-                TaskStatus::Proposed
-                    | TaskStatus::Backlog
-                    | TaskStatus::InProgress
-                    | TaskStatus::Blocked
-                    | TaskStatus::Review
-            )
-        {
-            dependencies.push(id);
-        }
-    }
+    // Only edges in the locked mutation (or already stored on replay) can
+    // cover a prerequisite. The done lookup reads that same locked graph.
+    let task_id = assessed.task_id.as_str();
+    let operation_id = assessed.operation_id.as_str();
+    let dependencies = current.dependencies();
+    let is_done = |id: &str| graph.is_done(id);
     let admission = match context.authority {
         PromotionAuthority::CiSweep(filing, authorized) => {
-            let mut admission_task = assessed.current.clone();
-            if snapshot.status == TaskStatus::Proposed
-                && assessed.current.status == TaskStatus::Backlog
-            {
+            let mut admission_task = current.clone();
+            if snapshot.status == TaskStatus::Proposed && current.status == TaskStatus::Backlog {
                 if operation_was_applied(context.runtime, task_id, operation_id)
                     .map_err(refused(task_id, "apply_failed"))?
                 {
@@ -439,7 +399,7 @@ fn admit(
                     return Err(super::super::superseded_outcome(
                         task_id,
                         "promoted_elsewhere",
-                        assessed.current.status,
+                        current.status,
                         "the CI-sweep task was promoted to backlog elsewhere before admission",
                     ));
                 }
@@ -468,7 +428,7 @@ fn admit(
             context.action,
             task_id,
             snapshot,
-            &assessed.current,
+            current,
             &assessed.assessment,
             &assessed.after,
             assessed.complexity,
@@ -500,6 +460,8 @@ fn write(
         &mut validated,
         context.prepared,
         context.policy,
+        matches!(context.authority, PromotionAuthority::CiSweep(..)),
+        |current, assessed, graph| admit(context, snapshot, current, assessed, graph),
     );
     let outcome = match (outcome, context.authority) {
         (
@@ -530,7 +492,9 @@ fn write(
         Ok(ApplyTaskOutcome::Invalid(detail)) => {
             return Err(task_outcome(&task_id, "invalid", Some(detail)));
         }
-        Ok(ApplyTaskOutcome::Superseded(outcome)) => return Err(outcome),
+        Ok(ApplyTaskOutcome::Superseded(outcome) | ApplyTaskOutcome::AdmissionRefused(outcome)) => {
+            return Err(outcome);
+        }
         Err(error) => return Err(refused(&task_id, "apply_failed")(error)),
     };
     if let Some(fingerprint) = fingerprint {

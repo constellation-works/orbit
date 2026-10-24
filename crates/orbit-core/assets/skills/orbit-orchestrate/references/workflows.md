@@ -207,8 +207,14 @@ task and retries matching tasks that a prior pilot left proposed, carrying
 explicit promotion authority into its deterministic apply boundary. Invalid or
 empty selectors, pilot failure, duplicates, already-landed
 work, conflicts, holding warnings and a `no-auto-approve` tag leave that task
-proposed without blocking other pilot children. `blocked_by`, `adr_conflicts`
-and deterministic `validation_tool_warnings` entries always hold. Surface and
+proposed without blocking other pilot children. A `blocked_by` finding holds
+unless it names prerequisites and every one is already done in this workspace
+or is enforced by a stored dependency edge. Free text, missing tasks and
+other-workspace prerequisites still hold. Admission decides from the edges in the atomic pilot
+write and completion statuses read under the dependency locks; replay uses
+only already stored edges. A drain rechecks named prerequisites under their
+locks before approval. `adr_conflicts` and deterministic
+`validation_tool_warnings` entries always hold. Surface and
 utility findings use `{text, holds_promotion}`: true holds for wrong behavior,
 contract conflicts or an unreachable validation requirement; false preserves an
 advisory observation without holding promotion or showing it as held. Legacy
