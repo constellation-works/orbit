@@ -310,11 +310,14 @@ fn explicit_task_pilot_refuses_unsupported_status_before_submission() {
                 )
                 .unwrap();
         }
+        let observed_revision = crate::git_repo::run(&fixture.work, &["rev-parse", "HEAD"]);
+        let observed_tree = crate::git_repo::run(&fixture.work, &["rev-parse", "HEAD^{tree}"]);
         fs::write(
             &response,
             serde_json::json!({
                 "schemaVersion": 1, "status": "success", "error": null,
-                "result": {"partition_index": 0, "task_ids": [task.id], "tasks": [{
+                "result": {"partition_index": 0, "observed_revision": observed_revision,
+                    "observed_tree": observed_tree, "task_ids": [task.id], "tasks": [{
                     "task_id": task.id, "context_files_after": ["file:README.md"],
                     "disposition": "selectors", "recommended_crew": "sol",
                     "recommended_complexity": "low", "confidence": "high",
