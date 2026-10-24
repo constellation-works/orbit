@@ -35,10 +35,6 @@ impl SkillCatalog {
         }
     }
 
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
     pub fn ensure_layout(&self) -> Result<(), OrbitError> {
         if self.global_root.is_none() {
             orbit_common::fs::io::create_private_dir_all(&self.root)?;

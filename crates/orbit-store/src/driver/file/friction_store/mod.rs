@@ -2,9 +2,8 @@
 //!
 //! ORB-10680 moved the live record store to SQLite
 //! (the live friction repository). What remains here is the Markdown
-//! layout itself: the reader the one-time import consumes, the writer the
-//! export/inspection route re-materializes with, and the tag taxonomy (a small
-//! configuration file that did not move).
+//! layout itself: the reader the one-time import consumes and the tag taxonomy
+//! (a small configuration file that did not move).
 //!
 //! Nothing in this module is on a live read or write path. Legacy trees are
 //! read-only rollback evidence for one release; no code here deletes them.
@@ -218,27 +217,6 @@ fn collect_tag_descriptions_from_yaml(
 fn normalize_tag(raw: &str) -> Option<String> {
     let value = raw.trim().to_ascii_lowercase();
     if value.is_empty() { None } else { Some(value) }
-}
-
-pub(crate) fn write_record_at(path: &Path, record: &FrictionRecord) -> Result<(), OrbitError> {
-    let frontmatter = FrictionFrontmatter {
-        id: record.id.clone(),
-        title: record.title.clone(),
-        model: record.model.clone(),
-        created_at: record.created_at,
-        status: record.status,
-        tags: record.tags.clone(),
-        resolved_at: record.resolved_at,
-        during_task: record.during_task.clone(),
-        resolved_by_task: record.resolved_by_task.clone(),
-        rehome_to: record.rehome_to.clone(),
-    };
-    let yaml = serialize_yaml_with(&frontmatter, |error| {
-        OrbitError::Store(format!("serialize friction frontmatter: {error}"))
-    })?;
-    let content = format!("---\n{}---\n{}\n", yaml, record.body.trim_end());
-    atomic_write_text(path, &content).map_err(|error| OrbitError::from_write_io(path, error))?;
-    Ok(())
 }
 
 pub(crate) fn read_record_at(path: &Path) -> Result<StoredFrictionRecord, OrbitError> {

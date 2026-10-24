@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use crate::Store;
 use crate::contracts::{
-    AuditEventStoreBackend, CrewPerformanceStoreBackend, ExecutorDefStoreBackend,
-    FrictionStoreBackend, InvocationStoreBackend, JobRunStoreBackend, PluginStoreBackend,
-    PolicyDefStoreBackend, ProviderLimitStoreBackend, RoutineStoreBackend, SessionLogStoreBackend,
-    TaskArtifactStoreBackend, TaskDocumentStoreBackend, TaskHistoryStoreBackend,
-    TaskReservationStoreBackend, TaskStoreBackend, ToolStoreBackend, V2AuditStoreBackend,
+    AuditEventStoreBackend, ExecutorDefStoreBackend, FrictionStoreBackend, InvocationStoreBackend,
+    JobRunStoreBackend, PluginStoreBackend, PolicyDefStoreBackend, ProviderLimitStoreBackend,
+    RoutineStoreBackend, SessionLogStoreBackend, TaskArtifactStoreBackend,
+    TaskDocumentStoreBackend, TaskHistoryStoreBackend, TaskReservationStoreBackend,
+    TaskStoreBackend, ToolStoreBackend, V2AuditStoreBackend,
 };
 use crate::driver::file::executor_def_store::ExecutorDefFileStore;
 use crate::driver::file::policy_def_store::PolicyDefFileStore;
@@ -136,12 +136,6 @@ pub fn invocation_store(
 /// [ORB-14695] Compose the host's provider usage limits over an
 /// already-opened host store.
 pub fn provider_limit_store_from_store(store: Store) -> Arc<dyn ProviderLimitStoreBackend> {
-    Arc::new(store)
-}
-
-/// Compose the crew-performance snapshot contract over an already-opened
-/// host store.
-pub fn crew_performance_store_from_store(store: Store) -> Arc<dyn CrewPerformanceStoreBackend> {
     Arc::new(store)
 }
 
