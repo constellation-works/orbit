@@ -19,7 +19,7 @@ use orbit_types::workflow::ReviewVerdict;
 use serde_json::{Map, Value, json};
 
 use super::facts::{Problem, Record, RegressionLink, Review, TaskFacts, filing_attempt};
-use super::records::{Cause, complexity_weight, label};
+use super::records::{Cause, label};
 use super::roles::pilots::{Graded, costly_charge_detail, wait_charge_detail};
 use super::{AgentFacts, AgentRole, MODEL_UNKNOWN};
 use crate::application::task::FindingVerdict;
@@ -67,7 +67,7 @@ pub struct Credit {
     pub crew: Option<String>,
     pub model: Option<String>,
     pub run_id: Option<String>,
-    /// The landed task's complexity weight.
+    /// Unit landed credit; retained for consumers of the scan's credits.
     pub weight: i64,
     /// When the task was done.
     pub at: Option<DateTime<Utc>>,
@@ -112,7 +112,7 @@ pub(super) fn attribute(
                 crew: attempt.runner.crew.clone(),
                 model: attempt.runner.model.clone(),
                 run_id: attempt.runner.run_id.clone(),
-                weight: complexity_weight(task.complexity),
+                weight: 1,
                 at: task.landed_at,
                 anchor: attempt.start,
             });

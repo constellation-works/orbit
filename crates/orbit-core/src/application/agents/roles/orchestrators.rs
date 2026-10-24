@@ -180,6 +180,7 @@ fn row<'a>(
         runs_without_model: 0,
         provisional: None,
         tallies,
+        expected: None,
         stats,
     }
 }

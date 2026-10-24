@@ -168,7 +168,7 @@ pub(super) fn implementation_run(
     });
 }
 
-fn comment(fixture: &Fixture, task_id: &str, message: &str) {
+pub(super) fn comment(fixture: &Fixture, task_id: &str, message: &str) {
     fixture
         .runtime
         .update_task_as_human(
@@ -195,7 +195,7 @@ pub(super) fn as_f64(value: &Value) -> f64 {
         .unwrap_or_else(|| panic!("a number: {value}"))
 }
 
-/// Costs and tier comparisons describe work without changing its score;
+/// Costs and durations describe work without changing its score;
 /// the same crew's models remain separate through runtime and HTTP reads.
 #[test]
 fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cost() {
@@ -306,19 +306,10 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
                 let weighted = as_f64(&row["counts"]["weighted_landed"]);
                 assert_eq!(stat(row, "cost_per_weighted_landed"), json!(6.0 / weighted));
                 assert_eq!(stat(row, "median_run_seconds"), 3600);
-                let tiers = stat(row, "tier_comparison");
-                assert_eq!(tiers[0]["tasks"], 1);
-                assert_eq!(tiers[0]["first_reviews"], 1);
-                assert_eq!(tiers[0]["fleet_needing_changes_percent"], 50);
+                assert_eq!(row["counts"]["weighted_landed"], 1);
+                assert_eq!(row["expected"]["first_pass_accepts"], json!(0.5));
+                assert_eq!(row["expected"]["reviewer_repairs"], json!(0.5));
             }
-            assert_eq!(
-                stat(accepted, "tier_comparison")[0]["needing_changes_percent"],
-                0
-            );
-            assert_eq!(
-                stat(repaired, "tier_comparison")[0]["needing_changes_percent"],
-                100
-            );
             fixture
                 .runtime
                 .insert_invocation_trace_record(&InvocationInsertParams {

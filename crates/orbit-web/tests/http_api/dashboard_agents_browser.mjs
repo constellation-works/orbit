@@ -30,7 +30,7 @@ const TERMS = {
     ['spec_rework', 'Spec-caused rework', -1, 'problem', 'Repeat runs, [BLOCKED] or unmerged PRs, and operator requeues whose cause is spec.'],
   ],
   implementers: [
-    ['weighted_landed', 'Weighted landed', 1, 'credit', 'Landed tasks whose final implementation run is the row\'s.'],
+    ['weighted_landed', 'Landed', 1, 'credit', 'Landed tasks whose final implementation run is the row\'s.'],
     ['first_pass_accepts', 'First-pass accepts', 1, 'credit', 'Reviewed tasks whose first review verdict was accept.'],
     ['review_rejects', 'Review rejects', -1, 'problem', 'reject verdicts on the row\'s candidates.'],
     ['reviewer_repairs', 'Reviewer repairs', -0.5, 'problem', 'accept_with_fixes verdicts on the row\'s candidates.'],
@@ -413,7 +413,10 @@ try {
   const implementersText = await body.textContent();
   assert.ok(!implementersText.includes('Score against cost') && !implementersText.includes('First reviews by tier'), 'no chart, frontier or tier copy');
   assert.equal(await body.evaluate(node => node.lastElementChild.classList.contains('agents-how')), true, 'nothing reserves space past the disclosure');
-  assert.match(await body.locator('.agents-stats').textContent(), /Cost per weighted landed task/, 'cost stays in Shown, not scored');
+  assert.match(await body.locator('.agents-stats').textContent(), /Cost per landed task/, 'cost stays in Shown, not scored');
+  assert.equal(await body.locator('.agents-term-context').count(), implementerCard().terms.length);
+  assert.equal(await body.locator('[data-term="weighted_landed"] .agents-term-context').textContent(), '22 actual · 19.1 expected');
+  await body.locator('#agents-detail').screenshot({ path: path.join(evidence, 'agents-implementers-detail-dark-1440.png'), animations: 'disabled' });
   const implementersTails = [await disclosureTail()];
   await shot('agents-implementers-dark-1440');
   await body.locator('.agents-how').evaluate(node => node.scrollIntoView({ block: 'end' }));
@@ -439,6 +442,9 @@ try {
   await body.locator('.agents-ranking').screenshot({ path: path.join(evidence, 'agents-implementers-table-dark-375.png'), animations: 'disabled' });
   await page.evaluate(() => window.scrollTo(0, 0));
   await shot('agents-implementers-dark-375');
+  await body.locator('#agents-detail').scrollIntoViewIfNeeded();
+  await shot('agents-implementers-detail-dark-375');
+  assert.equal(await body.locator('.agents-term-context').count(), implementerCard().terms.length);
   implementersTails.push(await disclosureTail());
   await body.locator('.agents-how').evaluate(node => node.scrollIntoView({ block: 'end' }));
   await shot('agents-implementers-disclosure-dark-375');

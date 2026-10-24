@@ -88,8 +88,13 @@ pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
         table.add_row(cells);
     }
     if computed {
+        let formula = if value["role"] == "implementers" {
+            "100 + weighted (actual − expected) per 100 tasks; expectations use the fleet's rates for the same tier mix"
+        } else {
+            "each term per 100 units, weighted and summed"
+        };
         table = table.trailing_notice(format!(
-            "Units: {}. Score: each term per 100 units, weighted and summed; a row above the fleet average ({}) is pulled down toward it.\nWeights: {}",
+            "Units: {}. Score: {formula}; a row above the fleet average ({}) is pulled down toward it.\nWeights: {}",
             text(&value["unit"]),
             number(&value["fleet_average"]),
             terms
@@ -122,22 +127,33 @@ pub(crate) fn show_blocks(value: &Value) -> Vec<Block> {
     ))];
 
     let terms = value["terms"].as_array().cloned().unwrap_or_default();
-    let mut table = Table::new(vec![
+    let normalised = row["expected"].is_object();
+    if normalised {
+        blocks.push(Block::text(format!("Raw score starts at {}; contributions compare actual with expected counts for the same tier mix.", number(&row["score_base"]))));
+    }
+    let mut columns = vec![
         Column::new("TERM").fixed(),
         Column::new("WEIGHT").number(),
         Column::new("COUNT").number(),
         Column::new("PER 100").number(),
         Column::new("CONTRIBUTION").number(),
-    ])
-    .keep_all_columns();
+    ];
+    if normalised {
+        columns.insert(3, Column::new("EXPECTED").number());
+    }
+    let mut table = Table::new(columns).keep_all_columns();
     for term in &terms {
-        table.add_row(vec![
+        let mut cells = vec![
             text(&term["label"]),
             number(&term["weight"]),
             number(&term["count"]),
             number(&term["per_100"]),
             number(&term["contribution"]),
-        ]);
+        ];
+        if normalised {
+            cells.insert(3, number(&row["expected"][text(&term["key"])]));
+        }
+        table.add_row(cells);
     }
     blocks.push(Block::table(table));
 

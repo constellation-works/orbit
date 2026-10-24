@@ -1,7 +1,8 @@
 //! The one score every role uses. A role supplies its unit of work, its
 //! terms and their weights, and one [`RowInput`] per crew and model; this
 //! module turns each term's count into a rate per 100 units, sums the
-//! weighted rates into the raw score, pulls each row above the fleet average
+//! weighted rates into the raw score (or 100 plus weighted deviations when
+//! the role supplies expectations), pulls each row above the fleet average
 //! down toward it in proportion to how little work backs it, and ranks the
 //! rows that meet the minimum support.
 
@@ -54,6 +55,11 @@ pub(super) struct Tally<'a> {
 }
 
 impl<'a> Tally<'a> {
+    /// Actual counts by task, for tier reference rates without rescanning.
+    pub(super) fn task_counts(&self) -> impl Iterator<Item = (&TaskFacts, f64)> {
+        self.tasks.values().map(|tally| (tally.task, tally.count))
+    }
+
     pub(super) fn add(&mut self, task: &'a TaskFacts, count: f64, occurrence: Option<Occurrence>) {
         self.count += count;
         let entry = self
@@ -87,6 +93,9 @@ pub(super) struct RowInput<'a> {
     pub(super) provisional: Option<usize>,
     pub(super) tallies: BTreeMap<&'static str, Tally<'a>>,
     pub(super) stats: Vec<Stat>,
+    /// Implementer reference counts for the row's tier mix; other roles
+    /// retain their uncentred score when absent.
+    pub(super) expected: Option<BTreeMap<&'static str, f64>>,
 }
 
 /// A row with its rates and scores.
@@ -118,10 +127,22 @@ pub(super) fn score<'a>(
                     (term.key, count * 100.0 / units)
                 })
                 .collect();
-            let raw = terms
-                .iter()
-                .map(|term| term.weight * per_100[term.key])
-                .sum();
+            let raw = if input.expected.is_some() { 100.0 } else { 0.0 }
+                + terms
+                    .iter()
+                    .map(|term| {
+                        term.weight
+                            * (per_100[term.key]
+                                - input
+                                    .expected
+                                    .as_ref()
+                                    .and_then(|expected| expected.get(term.key))
+                                    .copied()
+                                    .unwrap_or(0.0)
+                                    * 100.0
+                                    / units)
+                    })
+                    .sum::<f64>();
             Scored {
                 below_support: input.units < min_support,
                 input,
@@ -186,7 +207,7 @@ impl Scored<'_> {
             .iter()
             .map(|(key, rate)| ((*key).to_string(), number(*rate)))
             .collect();
-        json!({
+        let mut payload = json!({
             "crew": self.input.crew,
             "model": self.input.model,
             "units": self.input.units,
@@ -203,7 +224,28 @@ impl Scored<'_> {
                 "label": stat.label,
                 "value": stat.value,
             })).collect::<Vec<_>>(),
-        })
+        });
+        if let Some(expected) = &self.input.expected {
+            payload["expected"] = json!(
+                expected
+                    .iter()
+                    .map(|(key, count)| ((*key).to_string(), number(*count)))
+                    .collect::<serde_json::Map<String, Value>>()
+            );
+            payload["score_base"] = json!(100);
+        }
+        payload
+    }
+
+    fn contribution(&self, term: &Term) -> f64 {
+        let expected = self
+            .input
+            .expected
+            .as_ref()
+            .and_then(|counts| counts.get(term.key))
+            .copied()
+            .unwrap_or(0.0);
+        term.weight * (self.per_100[term.key] - expected * 100.0 / self.input.units.max(1) as f64)
     }
 
     /// Each term's count, rate and contribution to the raw score, with the
@@ -233,7 +275,7 @@ impl Scored<'_> {
                     "group": term.group,
                     "count": number(self.count(term.key)),
                     "per_100": number(self.per_100[term.key]),
-                    "contribution": number(term.weight * self.per_100[term.key]),
+                    "contribution": number(self.contribution(term)),
                     "tasks": tasks.iter().map(|tally| json!({
                         "task_id": tally.task.id,
                         "title": tally.task.title,
