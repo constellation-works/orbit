@@ -274,6 +274,10 @@ and memory per wall-clock minute in the same units, using the shared
 `runtime/host_resource/usage.rs` reader for history and forecast baselines.
 Linux measures busy cores from `/proc/stat` tick deltas (excluding idle and
 iowait, without double-counting guest), and `MemTotal − MemAvailable` bytes.
+The reader resolves the proc root, opens the fixed `stat` and `meminfo` leaves
+read-only without following leaf symlinks, and checks each opened descriptor is
+a regular file before reading it with a 1 MiB bound. Injected fixture roots keep this
+contract: a symlinked or non-regular leaf yields an unknown host sample.
 It does not use `/proc/loadavg`, which the throttle reads by default: load counts the run queue and runs
 far past 100% (load 36 on 15 cores at about 95% utilization on dk-server-1).
 Each worker offers every wall-clock minute it observed whole, and the first
