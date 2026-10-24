@@ -278,8 +278,10 @@ triaged. `None` skips like `Unchanged` — the slot is not consumed, the skip is
 recorded as `last_skip` with reason `no_blocked_candidates` and a `detail`
 naming how many blocked tasks were read, and the tick report says the same.
 `Qualifying` mints. A probe error or `Unknown` **fails open**: the definition
-mints and the tick report's reason says the precondition was inconclusive. The
-shipped `blocked-task-triage` default carries it.
+mints and the tick report's reason says the precondition was inconclusive. No
+shipped default carries it any more: the retired `blocked-task-triage` default
+did, and the seeded `blocked_task_triage` routine's `block_escalated` trigger
+now applies the same rule ([automation triggers §6.2](../automation-triggers/2_design.md#62-escalated-blocks-block_escalated)).
 
 The host tick calls `run_auto_task_scheduler_at` directly for every registered
 owner checkout after routine evaluation and under the host sweep lock. The pass

@@ -16,6 +16,7 @@ use super::managed_assets::{
 use super::routines::materialize::reconcile_default_routines;
 use super::routines::seed::RoutineSeedIdentity;
 use super::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
+use crate::application::auto_tasks::retired::retire_replaced_auto_tasks;
 use crate::application::auto_tasks::settings::migrate_settings_only_forks;
 use crate::application::auto_tasks::{
     DEFAULT_AUTO_TASK_FILES, auto_tasks_dir, cursor_state_path, render_default_auto_task,
@@ -222,6 +223,15 @@ fn reconcile_managed_artifacts(
     // restored body managed instead of preserving the fork [ORB-14909].
     let auto_tasks_root = auto_tasks_dir(workspace_orbit_root);
     let reconcile_auto_tasks = || {
+        // A seeded copy of a default a routine replaced is retired first, by
+        // its retired template's provenance, so a settings-only fork of it is
+        // not preserved as a local edit below.
+        let replaced = retire_replaced_auto_tasks(
+            &auto_tasks_root,
+            &workspace_orbit_root.join("routines"),
+            base_branch,
+            mode,
+        )?;
         let migrated = if mode.creates_only() {
             Vec::new()
         } else {
@@ -251,14 +261,15 @@ fn reconcile_managed_artifacts(
                 Ok(rendered)
             },
         )?;
-        // One row per migrated definition: in `Check` mode reconciliation still
-        // sees the fork and would also report it preserved.
+        // One row per migrated or replaced definition: in `Check` mode
+        // reconciliation still sees the file and would also report it.
         let (superseded, mut kept): (Vec<_>, Vec<_>) = std::mem::take(&mut auto_tasks.actions)
             .into_iter()
             .partition(|action| {
                 migrated
                     .iter()
-                    .any(|migration| migration.name == action.name)
+                    .chain(&replaced.actions)
+                    .any(|handled| handled.name == action.name)
             });
         auto_tasks.warnings.retain(|warning| {
             !superseded
@@ -266,7 +277,9 @@ fn reconcile_managed_artifacts(
                 .any(|action| action.detail.as_ref() == Some(warning))
         });
         kept.extend(migrated);
+        kept.extend(replaced.actions);
         auto_tasks.actions = kept;
+        auto_tasks.warnings.extend(replaced.warnings);
         Ok::<_, OrbitError>(auto_tasks)
     };
     let auto_tasks = if mode.writes() {

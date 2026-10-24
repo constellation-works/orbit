@@ -62,8 +62,9 @@ A definition has one typed trigger and one action. Supported candidate variants:
 | `execution_failed` | Retired (see §7): still parses, no shipped target job. | None. |
 | `finding_unverified` | Review-filed bug finding in proposed/someday/backlog has no CONFIRMED verdict for its current material ([finding-verification](../finding-verification/2_design.md)). | Per-task recorded verdict. |
 | `pilot_warnings_held` | Proposed task whose latest applied task-pilot assessment holds promotion on warning findings, with no trusted operator decision and no triage marker for that assessment ([§6.1](#61-pilot-warning-holds-pilot_warnings_held)). | Per-assessment `pilot_warning_triaged` marker. |
+| `block_escalated` | Blocked task whose current block episode final recovery escalated, or that has no decision past the backstop's 72 hours, with no human touch and no triage marker since the block ([§6.2](#62-escalated-blocks-block_escalated)). | Per-episode `blocked_task_triaged` marker. |
 
-The last four are the state-transition/eligibility vocabulary. They are not
+The last five are the state-transition/eligibility vocabulary. They are not
 arbitrary `on status = ...` subscriptions: a human block or routine metadata
 change must not invoke a model. Evaluation returns a stable reason code, such as
 `not_due`, `threshold_reached`, `debouncing` or `fresh_unready`, with source
@@ -528,6 +529,48 @@ for someone to notice it. `pilot_warnings_held` targets
   does not count as an operator decision. Drain approval and no-diff
   verification read past the marker, so recording a triage does not re-pilot
   the task.
+
+### 6.2 Escalated blocks (`block_escalated`)
+
+Final recovery, or the blocked-task backstop outside a pipeline, makes one
+decision on each block; what it escalates waits for a reader.
+`block_escalated` targets the same `job:escalation_triage_pipeline` with
+`subject: block`, so one hard-tier lane reads pilot warning holds and
+escalated blocks. It replaced the hourly `blocked-task-triage` auto-task
+([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)):
+
+- **Membership.** A `blocked` task is a member while `triage_candidacy`, the
+  one rule `orbit.task.block_triage` also applies, qualifies its current
+  episode: final recovery escalated it, or it has no decision and is older
+  than the backstop's 72 hours; no `blocked_task_triaged` marker records it;
+  and nobody outside Orbit's automation set the block or touched the task
+  since. The member key is the task ID; the freshness fingerprint is the
+  episode (the latest transition into `blocked`, to the nanosecond), so each
+  episode is read once and a later block on the same task is a new member.
+  The time-only backstop branch is re-read on every pass, so an undecided
+  block joins once it ages past the limit. Because candidacy needs final
+  recovery's decision first, the trigger never races in-pipeline recovery.
+- **Exit.** A member leaves when its episode is triaged, when it leaves
+  `blocked` (a requeue included), or when a human touch excludes it.
+- **Timing.** The seeded `blocked_task_triage` routine ships `enabled: false`
+  with debounce 2 minutes, max-wait 10 minutes, at most 50 candidates and
+  batches of 5 that share one stored crew.
+- **Pipeline.** `prepare_escalation_triage` checks that the claim is of the
+  `block` subject, re-checks each member against the shared rule and draws
+  one hard-tier triager per task exactly as for a pilot warning, with no
+  author to pass over. `triage_escalation` branches on the subject.
+- **Decision.** The triager calls `orbit.task.block_triage` without
+  `subject`: `requeue` as a final-recovery requeue counted against the shared
+  bound (2 per 24 hours) and refused for a run another machine executed or a
+  `security`/`security-review` tag; `propose` with one options comment; or
+  `report` naming the human action. A block whose cause is an Orbit defect
+  gets one friction record and is reported. Members settle applied from the
+  `blocked_task_triaged` marker; one the run left untriaged fails
+  `no_triage_marker` and is retried within the routine's budget.
+- **Auto-task retirement.** `orbit workspace sync` retires a seeded copy of
+  the `blocked-task-triage` auto-task by its retired template's provenance,
+  preserves an operator-edited copy and reports when an enabled copy is
+  replaced. It never enables the routine.
 
 ## 7. Retired: failed-run triage
 

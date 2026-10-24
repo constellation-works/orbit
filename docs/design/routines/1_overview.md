@@ -38,8 +38,8 @@ initialization and persisted debt. [3_vision.md](./3_vision.md) holds deferred w
 > catalog from `orbit-registry` with registered runtimes; Core keeps the registry-neutral
 > scheduler, validation, and dispatch kernels.
 
-`orbit workspace init` seeds eight default routine templates (`ci_failure_sweep`,
-`dependabot_alert_sweep`, `task_pilot`, `finding_verification`, `pilot_warning_triage`, `ship_sweep`, `worktree_gc`, and `store_gc`) under
+`orbit workspace init` seeds nine default routine templates (`ci_failure_sweep`,
+`dependabot_alert_sweep`, `task_pilot`, `finding_verification`, `pilot_warning_triage`, `blocked_task_triage`, `ship_sweep`, `worktree_gc`, and `store_gc`) under
 `.orbit/routines/`. Their routine names use hyphens and the registered workspace name as a
 suffix (for example, `task-pilot-<workspace-name>`). Every default is `enabled: false`:
 scheduled execution is an explicit checkout-local opt-in made by changing the
@@ -54,8 +54,8 @@ workspace's base branch. It assesses new/materially edited eligible tasks in
 bounded batches and stays quiet for fresh assessments, including unready ones.
 See [State routines and task-pilot configuration](./2_design.md#11-state-routines-and-task-pilot-configuration)
 for the loadable YAML, eligibility/freshness controls and preview commands.
-`finding_verification` uses `finding_unverified` and `pilot_warning_triage` uses
-`pilot_warnings_held`; failed-run triage's
+`finding_verification` uses `finding_unverified`, `pilot_warning_triage` uses
+`pilot_warnings_held` and `blocked_task_triage` uses `block_escalated`; failed-run triage's
 `execution_failed` kind is retained for compatibility and fires nothing.
 Delivery routine configuration and evidence requirements are in
 [Delivery routines](./2_design.md#12-delivery-routines).

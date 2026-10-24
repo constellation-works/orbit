@@ -121,8 +121,10 @@ applies. Otherwise the tick skips with reason `no_blocked_candidates` and a
 detail naming how many blocked tasks it read. The skip is reported and kept
 on the cursor like a `skip_if_unchanged` skip, and `orbit auto-task show
 <name>` displays both the precondition and the last skip. It fails open too:
-a probe that cannot read the blocked tasks mints and records why. The
-shipped `blocked-task-triage` default carries it.
+a probe that cannot read the blocked tasks mints and records why. No shipped
+default carries it: the `blocked-task-triage` routine, which replaced the
+retired auto-task of that name, applies the same rule itself
+([automation.md](automation.md#blocked-task-triage)).
 
 ## Managing definitions
 
@@ -423,14 +425,6 @@ plugin being removed.
   `no-diff-expected` so it holds a context lock while correcting drift.
 - **`backlog-hygiene`** (`medium`) — weekly. Writes one read-only report of
   stalled and untriaged tasks. It does not change task status or dispatch work.
-- **`blocked-task-triage`** (`medium`) — hourly, minted only when a block
-  episode awaits triage (`skip_unless_blocked_candidates`). Reads each
-  escalated block once and records one disposition through
-  `orbit.task.block_triage`: a mechanical block is requeued within the
-  final-recovery requeue bound it shares with final recovery, a decision
-  block gets one comment proposing two or three options with replacement
-  text, and a human-only block is reported. Tagged `no-diff-expected`; it
-  holds no operator-only tool. → [automation.md](automation.md#blocked-task-triage)
 - **`run-failure-patterns`** (`medium`) — weekly. Mines this workspace's run
   evidence, and on an owner the failure and release settlements its followers'
   claimed leaves sent (`orbit run settlements --no-reconcile`), for failures

@@ -5,28 +5,37 @@ metadata:
 spec:
   type: deterministic
   description: >
-    Select the held task-pilot assessments an escalation triage run reads and
-    assign each its triager. A task qualifies while it is proposed, its
-    latest applied task-pilot assessment holds promotion on warning findings,
-    no operator recorded a task-pilot admission decision on that assessment,
-    and no pilot_warning_triaged marker names it. With task_ids it triages
-    those tasks; a named task that does not qualify, or that another live
-    triage run holds, settles superseded with its reason. Without task_ids it
-    selects every qualifying task, oldest first, up to max_tasks, and counts
-    the rest in `excluded_by_reason`. It pins one landing-branch revision
-    without changing the primary HEAD, index or working files, and fails
-    before any agent call outside a Git work tree. Each task's triager is
-    drawn from the hard complexity pool's inspection-capable crews (or the
-    next tier up, or the inspection-capable default crew), passing over the
-    crew that wrote the held assessment when the pool offers another. Tasks
-    are partitioned by crew, at most max_partition_size per partition.
-    Nothing is written.
+    Select the escalated holds an escalation triage run reads and assign each
+    its triager. With subject pilot_warning (the default) a task qualifies
+    while it is proposed, its latest applied task-pilot assessment holds
+    promotion on warning findings, no operator recorded a task-pilot
+    admission decision on that assessment, and no pilot_warning_triaged
+    marker names it. With subject block a task qualifies while it is blocked
+    and its current block episode awaits triage under the shared rule: final
+    recovery escalated it, or it has no decision and is older than the
+    backstop's 72-hour limit, no blocked_task_triaged marker records it, and
+    nobody outside Orbit's automation touched it since the block. With
+    task_ids it triages those tasks; a named task that does not qualify, or
+    that another live triage run holds, settles superseded with its reason.
+    Without task_ids it selects every qualifying task of the subject, oldest
+    first, up to max_tasks, and counts the rest in `excluded_by_reason`. A
+    state claim must be of the subject's trigger kind. It pins one
+    landing-branch revision without changing the primary HEAD, index or
+    working files, and fails before any agent call outside a Git work tree.
+    Each task's triager is drawn from the hard complexity pool's
+    inspection-capable crews (or the next tier up, or the inspection-capable
+    default crew), passing over the crew that wrote a held assessment when
+    the pool offers another. Tasks are partitioned by crew, at most
+    max_partition_size per partition. Nothing is written.
   input_schema_json:
     type: object
     properties:
       state_automation: {}
       source_revision:
         type: string
+      subject:
+        type: string
+        enum: [pilot_warning, block]
       task_ids:
         type: array
         items:
@@ -55,7 +64,7 @@ spec:
         enum: [automatic, explicit]
       subject:
         type: string
-        enum: [pilot_warning]
+        enum: [pilot_warning, block]
       workspace_path:
         type: string
       source:
@@ -70,7 +79,9 @@ spec:
         type: array
         items:
           type: object
-          required: [task_id, operation_id, findings, crew, tier]
+          # A pilot warning row carries operation_id and findings; a block
+          # row carries episode, blocked_at, basis and run_id.
+          required: [task_id, crew, tier]
       partition_size:
         type: number
       partition_count:

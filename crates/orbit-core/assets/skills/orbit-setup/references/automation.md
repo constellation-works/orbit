@@ -83,12 +83,13 @@ checkout already made the workspace a routine source; an older `.orbit/config.to
 may still carry a `[routines]` section, which is ignored with a warning and can
 be deleted.
 
-## The eight seeded routines
+## The nine seeded routines
 
-`orbit workspace init` seeds all eight, **all disabled**, with a workspace-unique
+`orbit workspace init` seeds all nine, **all disabled**, with a workspace-unique
 name (`<base>-<workspace>`) resolved at seed time. The five cron routines resolve
 nothing else per machine, so two hosts seed identical bytes. `task-pilot`,
-`finding-verification` and `pilot-warning-triage` are state-triggered and
+`finding-verification`, `pilot-warning-triage` and `blocked-task-triage` are
+state-triggered and
 additionally resolve this host's machine id as `trigger.state.owner_machine` and
 the registered base branch as `trigger.state.branch`;
 a second host registering the same workspace seeds itself as owner of its own
@@ -100,6 +101,7 @@ copy. Run `orbit routine list` to see their names on this host.
 | `task-pilot` | state trigger (`preparation_eligible`) | `task_pilot_pipeline` | Fingerprints eligible proposed/backlog tasks each tick and preflights a batch whose material has no fresh assessment (seeded `batch_size` 5, mixed crews included); quiet while the backlog is unchanged. |
 | `finding-verification` | state trigger (`finding_unverified`) | `finding_verification_pipeline` | Disabled by default; verifies review-filed bug findings still owed a verdict in proposed, someday, or backlog, recording confirmation or rejection with evidence. |
 | `pilot-warning-triage` | state trigger (`pilot_warnings_held`) | `escalation_triage_pipeline` | Disabled by default; once per assessment, a hard-tier triager reads each proposed task whose task-pilot assessment holds promotion on warnings and records a decision proposal or the human action that settles the hold. It only proposes: it never approves, promotes, clears a hold or edits the task. Approve with `orbit task update <task-id> --approve --note "<evidence>"`. |
+| `blocked-task-triage` | state trigger (`block_escalated`) | `escalation_triage_pipeline` | Disabled by default; once per block episode, a hard-tier triager reads each blocked task whose block final recovery escalated (or that stayed undecided past 72 hours) and requeues, proposes or reports it — [Blocked-task triage](#blocked-task-triage). Replaces the retired `blocked-task-triage` auto-task. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
 | `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` (this workspace and workspace ids that are no longer registered) and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days` and the per-minute resource history older than 30 days. Another registered workspace keeps its own window. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). On a large store, consider `retention.runs_days = 30` first; smaller windows are refused to preserve 30-day reliability and forecast-accuracy evidence. |
@@ -135,18 +137,26 @@ it to `[]`; this also turns off final recovery inside the delivery pipelines.
 
 ### Blocked-task triage
 
-What final recovery escalates stays blocked for a human. The bundled
-`blocked-task-triage` auto-task (disabled until you enable it, hourly) re-reads
-those blocks once each. A block episode — the task's latest move to `blocked` —
-awaits triage when its final-recovery decision was an escalation, or when it
-has none and is older than the 72 hours after which the backstop above never
-decides it. An episode is skipped when a human set the block or commented,
-changed the status, attached an artifact or made an unattributed edit after
-it, and once triaged; a later block is a new episode. With nothing waiting the
-tick mints nothing and records a `no_blocked_candidates` skip
-([auto-tasks.md](auto-tasks.md#skipping-a-tick-when-nothing-is-blocked)).
+What final recovery escalates stays blocked for a human. The seeded
+`blocked-task-triage` routine (disabled until you set `enabled: true` in
+`.orbit/routines/blocked_task_triage.yaml`) reads those blocks once each,
+shortly after they appear. A block episode — the task's latest move to
+`blocked` — awaits triage when its final-recovery decision was an escalation,
+or when it has none and is older than the 72 hours after which the backstop
+above never decides it. An episode is skipped when a human set the block or
+commented, changed the status, attached an artifact or made an unattributed
+edit after it, and once triaged; a later block is a new episode. Its
+`block_escalated` trigger waits two minutes for an episode to settle, then
+submits up to five episodes that share one stored crew into one
+`escalation_triage_pipeline` run, whose triager is drawn from
+`workflow.hard_complexity_crews`. With nothing waiting it stays quiet.
 
-The minted task records exactly one disposition per episode through
+It replaces the `blocked-task-triage` auto-task, which Orbit no longer seeds.
+`orbit workspace sync` removes an unedited copy of that auto-task (with its
+settings), keeps a copy you edited, and, when the copy was enabled, tells you
+the routine replaces it. It never enables the routine for you.
+
+The triager records exactly one disposition per episode through
 `orbit.task.block_triage`, whose `candidates` action lists what qualifies:
 
 - **Mechanical** — a cause with a supported recovery. `requeue` moves the task
@@ -166,12 +176,12 @@ The minted task records exactly one disposition per episode through
   nothing else. The tool itself refuses to requeue a security-tagged task or
   one whose run executed on another machine.
 
-The triage holds no operator-only tool and no `--force` path: it never
-completes, rejects or archives a task, resumes a run, or merges or closes a
-pull request. A recovery that needs one of those is reported with the exact
-operator command. Its task's execution summary lists every block it read,
-with the block's age, the quoted escalation reason, the disposition and the
-action.
+The triager holds no task-update, requeue or run-resume tool and no `--force`
+path: it never completes, rejects or archives a task, resumes a run, or merges
+or closes a pull request. A recovery that needs one of those is reported with
+the exact operator command. To triage one blocked task now, run
+`orbit run job escalation_triage_pipeline --input 'subject="block"' --input
+'task_ids=["<task-id>"]'`.
 
 ## Built in: re-checking tasks held for a red base
 

@@ -21,6 +21,13 @@
 //! approves, promotes, clears a hold or edits any other task field. A
 //! material edit re-pilots the task; a new assessment that still holds is a
 //! new member.
+//!
+//! The same job reads escalated blocks (`subject: block`). The seeded
+//! `blocked_task_triage` routine (`kind: block_escalated`) admits each block
+//! episode the shared [`triage_candidacy`](super::triage_candidacy) rule
+//! qualifies, once, and the triager records its requeue, proposal or report
+//! through [`OrbitRuntime::record_block_triage`], whose
+//! `blocked_task_triaged` marker settles the member.
 
 mod prepare;
 
@@ -40,7 +47,7 @@ use super::pilot::{HeldPilotWarnings, held_pilot_warnings};
 use super::{TaskListFilter, TriageOption};
 use crate::OrbitRuntime;
 
-/// The job the `pilot_warnings_held` trigger submits.
+/// The job the `pilot_warnings_held` and `block_escalated` triggers submit.
 pub const ESCALATION_TRIAGE_JOB: &str = "escalation_triage_pipeline";
 
 /// History event that marks one pilot assessment's warning hold triaged.

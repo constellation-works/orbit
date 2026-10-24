@@ -222,12 +222,6 @@ definition of the same name.
   orphaned in-progress/review, aged proposed, and dependency-unblocked idle
   tasks. Its execution summary recommends human follow-up without changing task
   status or dispatching work.
-- `blocked-task-triage` — disabled-by-default hourly reader of escalated
-  blocks. Its `skip_unless_blocked_candidates` precondition mints only when a
-  block episode awaits triage and otherwise records a `no_blocked_candidates`
-  skip; the minted chore records one disposition per episode through
-  `orbit.task.block_triage`, whose requeue shares final recovery's requeue
-  bound ([distributed drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)).
 - `delivery-code-review` — disabled-by-default review of newly landed
   deliveries. Its `enabled` flag is the after-landing review switch
   [ORB-13992]; the deprecated `operation.review_policy = after-landing`
@@ -236,6 +230,19 @@ definition of the same name.
   value and keeps the raw flag as the compare-and-set token. The former `delivery-qa` default is retired and is not seeded;
   hands-on QA stays with `qa-sweep` (recent changes) and `qa-full-sweep`
   (the whole product at one commit).
+
+The former `blocked-task-triage` default (an hourly reader of escalated blocks)
+is retired and is not seeded. The seeded `blocked_task_triage` routine replaces
+it: its `block_escalated` state trigger admits each escalated block episode once
+into the hard-tier `escalation_triage_pipeline`
+([automation triggers §6.2](../automation-triggers/2_design.md#62-escalated-blocks-block_escalated),
+[distributed drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)).
+Its last template stays as retired provenance (`RETIRED_AUTO_TASK_FILES`), so
+`orbit workspace sync` retires a seeded copy, settings-only forks included,
+preserves an operator-edited one, and, when the copy was enabled, reports that
+the routine replaces it. Sync never enables the routine. The
+`skip_unless_blocked_candidates` precondition stays available to
+workspace-authored definitions.
 
 ## Workspace-authored definitions in this repo
 
@@ -284,6 +291,8 @@ encode this repository's branches and gates. Re-init preserves them:
   decision.
 - ORB-17245 — Added the disabled hourly `blocked-task-triage` default and the
   `skip_unless_blocked_candidates` precondition.
+- ORB-17744 — Retired the `blocked-task-triage` default in favour of the
+  `blocked_task_triage` routine on the escalation triage pipeline.
 - ORB-11115 / ORB-11383 — Retired the shipped CI-failure auto-task;
   runner workflows only emit fail-open run/job/commit provenance, while the
   host-owned `ci_failure_sweep` routine performs durable CI-failure filing.

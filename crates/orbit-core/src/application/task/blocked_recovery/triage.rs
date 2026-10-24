@@ -4,9 +4,10 @@
 //! Every block already gets one recovery decision — final recovery in the
 //! pipeline, or the backstop outside it. What stays blocked is what that
 //! decision escalated, plus blocks the backstop never decides (older than
-//! [`MAX_EPISODE_AGE_HOURS`]). The `blocked-task-triage` auto-task reads each
-//! such episode once and records one of three dispositions through
-//! [`OrbitRuntime::record_block_triage`]:
+//! [`MAX_EPISODE_AGE_HOURS`]). The seeded `blocked_task_triage` routine
+//! (`kind: block_escalated`) admits each such episode once into
+//! `escalation_triage_pipeline`, whose hard-tier triager records one of three
+//! dispositions through [`OrbitRuntime::record_block_triage`]:
 //!
 //! - **requeue** (mechanical): back to `backlog` as a final-recovery requeue,
 //!   counted against the same [`FinalRecoveryRequeueBound`] and recorded with
@@ -74,6 +75,38 @@ pub struct TriageEpisode {
     pub block_note: String,
     /// The escalation's recorded comment, when it wrote one.
     pub escalation: Option<String>,
+}
+
+impl TriageEpisode {
+    /// The episode's identity, as its triage marker records it: the time the
+    /// task last moved to `blocked`, to the nanosecond.
+    pub fn key(&self) -> String {
+        episode_key(self.blocked_at)
+    }
+}
+
+fn episode_key(blocked_at: DateTime<Utc>) -> String {
+    blocked_at.to_rfc3339_opts(SecondsFormat::Nanos, true)
+}
+
+/// When the triage marker for the episode whose [key](TriageEpisode::key) is
+/// `episode` was recorded. A requeue moves the task on, so this reads the
+/// marker itself rather than the task's current candidacy.
+pub(crate) fn block_triaged_at(
+    history: &[TaskHistoryEntry],
+    episode: &str,
+) -> Option<DateTime<Utc>> {
+    history
+        .iter()
+        .find(|entry| {
+            entry.event == BLOCKED_TASK_TRIAGED_EVENT
+                && entry.by == SYSTEM_ACTOR_LABEL
+                && entry.note.as_deref().is_some_and(|note| {
+                    note.split_whitespace()
+                        .any(|field| field.strip_prefix("episode=") == Some(episode))
+                })
+        })
+        .map(|entry| entry.at)
 }
 
 /// Whether a task's current block episode awaits triage, and why not.
@@ -307,6 +340,21 @@ struct TriageWrite {
 }
 
 impl OrbitRuntime {
+    /// `task`'s current block episode candidacy at `now`, from its current
+    /// history, comments and artifacts: [`triage_candidacy`], the one
+    /// definition the triage tool, the auto-task precondition and the
+    /// `block_escalated` trigger share.
+    pub fn block_triage_candidacy_of(
+        &self,
+        task: &Task,
+        now: DateTime<Utc>,
+    ) -> Result<TriageCandidacy, OrbitError> {
+        let history = self.get_task_history(&task.id)?;
+        let comments = self.get_task_comments(&task.id)?;
+        let artifacts = self.get_task_artifact_manifest(&task.id)?;
+        Ok(triage_candidacy(task, &history, &comments, &artifacts, now))
+    }
+
     /// Every blocked task with its current episode's triage candidacy,
     /// oldest block first.
     pub fn blocked_triage_view(
@@ -317,10 +365,7 @@ impl OrbitRuntime {
         for task in
             self.list_tasks_filtered(Some(TaskStatus::Blocked), None, None, None, None, None)?
         {
-            let history = self.get_task_history(&task.id)?;
-            let comments = self.get_task_comments(&task.id)?;
-            let artifacts = self.get_task_artifact_manifest(&task.id)?;
-            let candidacy = triage_candidacy(&task, &history, &comments, &artifacts, now);
+            let candidacy = self.block_triage_candidacy_of(&task, now)?;
             views.push(BlockedTriageView { task, candidacy });
         }
         views.sort_by_key(|view| match &view.candidacy {
@@ -391,24 +436,20 @@ impl OrbitRuntime {
         let mut answer = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
             let task = self.get_task(id)?;
-            let history = self.get_task_history(id)?;
-            let comments = self.get_task_comments(id)?;
-            let artifacts = self.get_task_artifact_manifest(id)?;
-            let episode =
-                match triage_candidacy(&task, &history, &comments, &artifacts, Utc::now()) {
-                    TriageCandidacy::Qualifies(episode) => episode,
-                    other => {
-                        return Err(OrbitError::InvalidInput(format!(
-                            "{id} has no block episode awaiting triage: {}; nothing was recorded",
-                            other.detail()
-                        )));
-                    }
-                };
+            let episode = match self.block_triage_candidacy_of(&task, Utc::now())? {
+                TriageCandidacy::Qualifies(episode) => episode,
+                other => {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "{id} has no block episode awaiting triage: {}; nothing was recorded",
+                        other.detail()
+                    )));
+                }
+            };
             let write = self.plan_triage(&task, &episode, &blocker, &decision, request)?;
             self.write_triage(&task, &episode, &write)?;
             answer = Some(json!({
                 "task_id": id,
-                "episode": episode.blocked_at.to_rfc3339_opts(SecondsFormat::Nanos, true),
+                "episode": episode.key(),
                 "disposition": write.disposition,
                 "outcome": write.outcome,
                 "status": if write.outcome == "requeued" { TaskStatus::Backlog } else { TaskStatus::Blocked },
@@ -555,9 +596,7 @@ impl OrbitRuntime {
                 "disposition={} outcome={} episode={}",
                 write.disposition,
                 write.outcome,
-                episode
-                    .blocked_at
-                    .to_rfc3339_opts(SecondsFormat::Nanos, true)
+                episode.key()
             )),
             from_status: None,
             to_status: None,

@@ -1305,24 +1305,36 @@ tell a seeded copy from an operator's (`RETIRED_ROUTINE_FILES` in
 
 A failed run parks its task in `blocked` with the failure and `job_run_machine` attached. Final
 recovery (or, outside a pipeline, the blocked-task backstop) makes one decision on each block;
-what it escalates waits for a reader. The bundled `blocked-task-triage` auto-task ([ORB-17245],
-shipped disabled) is that reader, not a classifier that re-backlogs on its own:
+what it escalates waits for a reader. The seeded `blocked_task_triage` routine ([ORB-17744],
+shipped disabled) is that reader, not a classifier that re-backlogs on its own. It replaced the
+hourly `blocked-task-triage` auto-task ([ORB-17245]) with an event trigger on the hard-tier
+`escalation_triage_pipeline` that also triages pilot warning holds:
 
-- **Which blocks.** It reads each block episode (the latest transition into `blocked`) once:
-  one whose final-recovery decision escalated, or one with no decision older than the backstop's
-  72 hours. An episode a human set or touched after the block is left alone. The scheduler's
-  `skip_unless_blocked_candidates` precondition evaluates the same rule
-  (`triage_candidacy` in `crates/orbit-core/src/application/task/blocked_recovery/triage.rs`), so
-  a quiet hour mints nothing and records a `no_blocked_candidates` skip.
-- **One decision per episode,** through `orbit.task.block_triage`, which writes a
-  `blocked_task_triaged` history marker. A mechanical block is requeued as a final-recovery
+- **Which blocks.** Its `block_escalated` state trigger
+  ([automation triggers §6.2](../automation-triggers/2_design.md#62-escalated-blocks-block_escalated))
+  admits each block episode (the latest transition into `blocked`) once, after debounce: one
+  whose final-recovery decision escalated, or one with no decision older than the backstop's
+  72 hours. An episode a human set or touched after the block, or one already triaged, is left
+  alone. Membership is exactly `triage_candidacy` in
+  `crates/orbit-core/src/application/task/blocked_recovery/triage.rs`, the rule the triage tool
+  applies too, so the trigger never races in-pipeline recovery: candidacy needs final recovery's
+  decision first. A later block on the same task is a new episode.
+- **One decision per episode,** by a triager drawn from `workflow.hard_complexity_crews`, through
+  `orbit.task.block_triage`, which writes a `blocked_task_triaged` history marker; the routine
+  settles each member from that marker. A mechanical block is requeued as a final-recovery
   requeue: the same `final_recovery_requeued` event and the same `FinalRecoveryRequeueBound`
   (2 per 24 hours), so triage and final recovery share one count, and an unreadable count
   refuses. A decision block gets one comment with options and replacement text. A human-only
-  block is reported.
+  block is reported, and an Orbit defect with no supported recovery gets one friction record.
 - **Host-specific failures stay visible.** The tool refuses to requeue a task whose run executed on
   another machine, or one tagged `security` or `security-review`, and records the human action.
-  The routine holds no operator-only tool, so it cannot reject, resume a run or force anything.
+  The triager's activity withholds task update, requeue and run-resume tools, so it cannot edit,
+  resume a run or force anything.
+- **The retired auto-task.** `blocked-task-triage` is no longer seeded. Its last template stays as
+  provenance (`RETIRED_AUTO_TASK_FILES` in `crates/orbit-core/src/application/auto_tasks/retired.rs`):
+  `orbit workspace sync` retires a seeded copy, settings-only forks included, with its
+  settings entry, and preserves an operator-edited copy. When the retired copy was enabled, sync
+  says the routine replaces it. It never enables the routine.
 
 ### 7.3 Ship sweep
 
@@ -1522,6 +1534,7 @@ Acceptance criteria, not reported as passing.
 - [ORB-16322] — handed an inherited check that still fails after the one branch update, on a base tip where the same job passes, to that same one automatic repair.
 - [ORB-16890] — returned a task whose spent repair's candidate still fails a required check at landing to the backlog with that candidate and stop, within a two-requeue budget, instead of leaving it in `review`.
 - [ORB-17245] — shipped the `blocked-task-triage` auto-task: one disposition per escalated block episode, requeues within the shared final-recovery bound (§7.2).
+- [ORB-17744] — replaced that auto-task with the `blocked_task_triage` routine: a `block_escalated` event trigger on the hard-tier escalation triage pipeline (§7.2).
 - [ORB-14938] — added owner-relative OS affinity and the expiring-batch boost to pull admission order (§2).
 - [ORB-17304] — ordered pull and owner-local admission against the live executor census (§2, §9).
 - [ORB-17292] — reported each claimed leaf's crew and model with its settlement and kept them on the owner's settlement record, handoffs included, for the agent scorecards.

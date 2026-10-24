@@ -1306,14 +1306,15 @@ reply never grants this read-only retry.
 **Escalated blocks.** A final-recovery `requeue` is bounded to two per task
 in 24 hours; past that the decision is refused and the task stays blocked.
 The bound has no configuration key. What final recovery escalates waits in
-`blocked` for a reader: the bundled `blocked-task-triage` auto-task (shipped
-disabled; `orbit auto-task toggle blocked-task-triage on`) re-reads each
-escalated block once, hourly, and requeues a mechanical one within the same
+`blocked` for a reader: the seeded `blocked_task_triage` routine (shipped
+disabled; set `enabled: true` in `.orbit/routines/blocked_task_triage.yaml`)
+admits each escalated block episode once, shortly after it appears, into the
+`escalation_triage_pipeline` job. A triager drawn from
+`workflow.hard_complexity_crews` requeues a mechanical block within the same
 two-per-24-hours count, proposes options for a decision, or reports a
-human-only block. Its `skip_unless_blocked_candidates: true` precondition
-mints nothing while no block awaits triage and records a
-`no_blocked_candidates` skip. Its minted task has no crew and draws from the
-`medium` complexity pool. See
+human-only block. It replaced the `blocked-task-triage` auto-task, which is no
+longer seeded: `orbit workspace sync` retires a seeded copy and never enables
+the routine for you. See
 [blocked-task triage](../plugin/skills/orbit-setup/references/automation.md#blocked-task-triage).
 
 ### PR auto-fix repairs
