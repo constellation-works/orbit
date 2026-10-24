@@ -922,7 +922,11 @@ const settleFeedback = get('auto-drain-operation-feedback');
 assert(settleFeedback.textContent.includes('No auto-delivery window was live'), `idle stop names what did not change: ${settleFeedback.textContent}`);
 assert(settleFeedback.textContent.includes('2 settlements delivered'), `delivered settlements are counted: ${settleFeedback.textContent}`);
 assert(settleFeedback.textContent.includes('1 waiting for the owner (unreachable)') && settleFeedback.textContent.includes('[ORB-3]'), `an unreachable owner is called out with its task: ${settleFeedback.textContent}`);
-assert(settleFeedback.textContent.includes('1 launch uncertain — needs manual recovery, see the distributed drain runbook') && settleFeedback.textContent.includes('[ORB-4]'), `an uncertain launch points at the runbook: ${settleFeedback.textContent}`);
+assert(settleFeedback.textContent.includes('[ORB-4]')
+  && settleFeedback.textContent.includes('launch uncertain')
+  && settleFeedback.textContent.includes('the leaf may still be running')
+  && settleFeedback.textContent.includes("recover the claim on the owner's dashboard")
+  && settleFeedback.textContent.includes('do not start another attempt'), `an uncertain launch explains its safe recovery: ${settleFeedback.textContent}`);
 assert(settleFeedback.className.includes('error') && !settleFeedback.className.includes('success'), 'unfinished settlements are not styled as success');
 stopSettlements = [{ owner: 'host:/owner', drain_run_id: 'jrun-old', task_id: 'ORB-1', leaf_run_id: 'jrun-leaf-1', outcome: 'settled' }];
 drainButton('Send pending results').click(); await tick(); await tick(); await tick();

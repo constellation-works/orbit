@@ -1266,7 +1266,7 @@ const SETTLEMENT_CLAUSES = [
   { outcomes: ["owner_unreachable"], attention: true, text: (n) => `${n} waiting for the owner (unreachable) — run Stop again once it is reachable` },
   { outcomes: ["pending_delivery", "pending"], attention: true, text: (n) => `${n} recorded but not delivered — run Stop again once the owner is reachable` },
   { outcomes: ["no_owner_route"], attention: true, text: (n) => `${n} without a route to the owner — check the workspace's owner connection` },
-  { outcomes: ["launch_uncertain"], attention: true, text: (n) => `${n} launch uncertain — needs manual recovery, see the distributed drain runbook` },
+  { outcomes: ["launch_uncertain"], attention: true, text: (n) => `${n} launch uncertain — the leaf may still be running; recover the claim on the owner's dashboard and do not start another attempt` },
 ];
 const SETTLEMENT_TASKS_SHOWN = 3;
 

@@ -542,7 +542,7 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
    under the Tasks dock's Start card (operations.js places it). */
 #side-dock > .operation-feedback:not(:empty) { margin-top: 12px; }
 #side-dock > .operation-feedback:not(:empty),
-.drain-col-side > .operation-feedback:not(:empty) { min-height: 0; padding: 8px 18px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel); white-space: pre-line; overflow-wrap: anywhere; }
+.drain-col-side > .operation-feedback:not(:empty) { flex: 0 0 auto; min-height: 0; padding: 8px 18px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel); white-space: pre-line; overflow-wrap: anywhere; }
 
 /* Settlement report shown on the runs table after cancelling a drain run. */
 .run-cancel-notice { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
