@@ -14,8 +14,10 @@
 //! facts at once while one background scan replaces them: the payload's
 //! `computed_at` and the `Age` header say how old they are. Analytics uses
 //! history receipts only; related-file scans have a separate cache entry per
-//! window so delivery fallback never observes tasks outside the requested
-//! window.
+//! resolved window so delivery fallback never observes tasks outside it.
+//! Related reads `path`, `window`, `min_support` and `top` only. Its omitted
+//! window (30 days) and partner cap (10) come from the shared related
+//! selection, which also keys that cache entry.
 
 use std::sync::Arc;
 
@@ -49,8 +51,32 @@ pub(super) struct CodebaseAnalyticsQuery {
     layer: Option<String>,
     #[serde(default)]
     detected_by: Option<String>,
+    /// Present so a non-string `path` is still rejected. Analytics does not read it.
+    #[serde(default)]
+    #[allow(dead_code)]
+    path: Option<String>,
+    /// Present so a non-numeric `top` is still rejected. Analytics does not read it.
+    #[serde(default)]
+    #[allow(dead_code)]
+    top: Option<usize>,
+}
+
+/// Query string for `GET /api/codebase/related`.
+///
+/// Rollup and regression filters are not parameters. An omitted window or
+/// `top` is resolved by [`orbit_core::application::codebase::RelatedQuery`].
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct CodebaseRelatedQuery {
+    /// `7d`, `30d`, `90d` or `all`.
+    #[serde(default)]
+    window: Option<String>,
+    /// Smallest shared landed-task count a partner needs (at least 1).
+    #[serde(default)]
+    min_support: Option<usize>,
+    /// Repository-relative file path. Required.
     #[serde(default)]
     path: Option<String>,
+    /// Maximum partners, from 1 to 100.
     #[serde(default)]
     top: Option<usize>,
 }
@@ -108,33 +134,40 @@ pub(super) async fn codebase_analytics(
 pub(super) async fn codebase_related(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
-    Query(query): Query<CodebaseAnalyticsQuery>,
+    Query(query): Query<CodebaseRelatedQuery>,
 ) -> Response {
-    let selection = match CodebaseQuery::parse(
-        Some(query.window.as_deref().unwrap_or("30d")),
+    let selection = match codebase::RelatedQuery::parse(
+        query.window.as_deref(),
         query.min_support,
-        Some("file"),
+        query.top,
     ) {
-        Ok(query) => query,
+        Ok(selection) => selection,
+        Err(orbit_core::OrbitError::InvalidInput(message)) => return bad_request(message),
         Err(error) => return map_runtime_error(error),
     };
     let Some(path) = query.path else {
         return bad_request("path is required".into());
     };
     let scan_runtime = Arc::clone(&runtime);
-    let window = query.window.unwrap_or_else(|| "30d".into());
     let facts = match state
         .codebase_memo()
-        .get_or_compute(&runtime, Some(window), CODEBASE_ANALYTICS_TTL, move || {
-            scan_runtime.codebase_related_scan(&selection)
-        })
+        .get_or_compute(
+            &runtime,
+            Some(selection.window().to_owned()),
+            CODEBASE_ANALYTICS_TTL,
+            move || {
+                let query = selection.codebase_query();
+                scan_runtime.codebase_related_scan(&query)
+            },
+        )
         .await
     {
         Ok(served) => served.body,
         Err(error) => return map_runtime_error(error),
     };
-    match codebase::codebase_related(&facts, &selection, &path, query.top.unwrap_or(10)) {
+    match codebase::codebase_related(&facts, &selection.codebase_query(), &path, selection.top()) {
         Ok(value) => Json(value).into_response(),
+        Err(orbit_core::OrbitError::InvalidInput(message)) => bad_request(message),
         Err(error) => map_runtime_error(error),
     }
 }
