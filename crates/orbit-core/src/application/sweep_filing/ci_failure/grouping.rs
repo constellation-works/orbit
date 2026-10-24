@@ -51,7 +51,7 @@ pub(super) fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
         let regions = valid_failure_regions(&failure["diagnostic_unit"]);
         // Partial command retention cannot prove an exhaustive compiler set.
         let compiler_cause = (!regions).then(|| compiler_cause(&log_excerpt)).flatten();
-        let legacy_key = compiler_cause.as_ref().map(|_| {
+        let legacy_key = (compiler_cause.is_some() || !test_identity.is_empty()).then(|| {
             let lines = classify_log_lines(&log_excerpt);
             let legacy = legacy_signature(&lines, &step);
             digest(&[&workflow, &job, &step, &legacy])

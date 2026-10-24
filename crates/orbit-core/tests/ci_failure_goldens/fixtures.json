@@ -250,5 +250,24 @@
         "Check / Clippy / Test\tTest\t2026-10-15T02:42:56Z error[E0433]: cannot find module `real`\nCheck / Clippy / Test\tTest\t2026-10-15T02:42:56Z  --> crates/sample/src/lib.rs:8:1\nCheck / Clippy / Test\tTest\t2026-10-15T02:42:56Z ##[error]Process completed with exit code 1.\n"
       ]
     ]
+  },
+  {
+    "name": "supply_chain_diagnostic_outranks_passing_guard_timings",
+    "logs": [
+      [
+        "##[group]Run make ci\n##[endgroup]\nci-guardrails: check-error-translation.sh 5.785 s\n",
+        {
+          "text": "passing guard output\n",
+          "repeat": 830
+        },
+        "error[vulnerability]: Multiple timing variability issues\nci-guardrails-phase: supply-chain wall_seconds=4 exit=1\n##[error]Process completed with exit code 1.\n"
+      ]
+    ]
+  },
+  {
+    "name": "guard_identifiers_after_diagnostic_do_not_replace_it",
+    "logs": [
+      "##[group]Run make ci\n##[endgroup]\nerror: supply-chain audit rejected advisory\nci-guardrails: check-error-translation.sh 5.785 s\nSCCACHE_IGNORE_SERVER_IO_ERROR: 1\nscripts/error/check.sh\n--no-fail-fast\n##[error]Process completed with exit code 1.\n"
+    ]
   }
 ]

@@ -185,6 +185,58 @@ fn compiler_log(code: &str, message: &str, path: &str, line: usize, column: usiz
 }
 
 #[test]
+fn ci_persisted_compiler_owner_keys_keep_first_substring_diagnostic() {
+    if !isolated("ci_persisted_compiler_owner_keys_keep_first_substring_diagnostic") {
+        return;
+    }
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_types::task::CI_FAILURE_KEY_TAG_PREFIX;
+
+    // Shipped CI/build/Run CI keys, before token matching and last-of-rank
+    // selection. A saved owner must still cover its original observation.
+    for (prefix, key) in [
+        (
+            "ci-guardrails: check-error-translation.sh 5.785 s",
+            "e8854db646a4fe9d",
+        ),
+        (
+            "error[vulnerability]: timing variability",
+            "2929103cafa315be",
+        ),
+        (
+            "error[E0062]: first\n --> crates/example/src/lib.rs:3:1",
+            "656050554f8e32a1",
+        ),
+    ] {
+        let (_root, runtime, commits) = operator_fixture("");
+        let owner = runtime
+            .add_task(TaskAddParams {
+                title: "Persisted compiler sweep owner".into(),
+                description: format!(
+                    "run `10` (id `910`) commit actually checked out: `{}`",
+                    commits[0]
+                ),
+                tags: vec![
+                    "ci-failure-sweep".into(),
+                    format!("{CI_FAILURE_KEY_TAG_PREFIX}{key}"),
+                ],
+                system_created: true,
+                ..Default::default()
+            })
+            .unwrap();
+        let log = format!(
+            "{prefix}\nerror[E0433]: cannot find module `real`\n --> crates/example/src/lib.rs:8:1\n##[error]Process completed with exit code 1."
+        );
+        let output = file(&runtime, vec![failure(&log, 0, &commits[0])]);
+        assert_eq!(
+            output["filed_count"], 0,
+            "persisted compiler owner lost for {prefix}: {output}"
+        );
+        assert_eq!(output["skipped_existing"][0]["task_id"], owner.id);
+    }
+}
+
+#[test]
 fn ci_open_compiler_owner_survives_checkout_and_coordinate_changes() {
     if !isolated("ci_open_compiler_owner_survives_checkout_and_coordinate_changes") {
         return;

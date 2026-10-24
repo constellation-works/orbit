@@ -40,6 +40,7 @@ pub(super) fn specific_error_anchors(log: &str, signature: &str) -> Vec<String> 
             LineKind::CompilerDiagnostic
                 | LineKind::ConcreteDiagnostic
                 | LineKind::ErrorAnnotated
+                | LineKind::LabelledDiagnostic
                 | LineKind::Marker
                 | LineKind::Content
         ) {
@@ -72,7 +73,7 @@ fn specific_error_text(value: &str) -> Option<String> {
     {
         return None;
     }
-    let diagnostic = ERROR_MARKERS.iter().any(|marker| lowered.contains(marker))
+    let diagnostic = is_error_marker_line(&lowered)
         || lowered.contains("missing")
         || lowered.contains("not found")
         || lowered.contains("cannot")
@@ -219,29 +220,93 @@ fn is_generic_command(tokens: &[&str]) -> bool {
     tokens.len() < 3 && !distinctive
 }
 
-/// Preserve the shipped signature algorithm only for looking up existing tags.
+/// Preserve the shipped signature algorithm only for looking up existing
+/// compiler and per-job test tags, including metadata-only test identities.
 pub(super) fn legacy_signature(lines: &[(LineKind, &str)], step: &str) -> String {
+    if lines
+        .last()
+        .is_some_and(|(kind, _)| matches!(kind, LineKind::RunCommand | LineKind::CommandBody))
+    {
+        return normalize_signature(&step.to_ascii_lowercase());
+    }
     let legacy: Vec<_> = lines
         .iter()
         .map(|(kind, line)| {
             let kind = match kind {
-                LineKind::CompilerDiagnostic | LineKind::CargoStatus => {
+                LineKind::CompilerDiagnostic
+                | LineKind::CargoStatus
+                | LineKind::LabelledDiagnostic => {
                     if signature_payload(line).contains("##[error]") {
                         LineKind::ErrorAnnotated
-                    } else if is_error_marker_line(signature_payload(line).trim()) {
+                    } else if legacy_marker_line(signature_payload(line).trim()) {
                         LineKind::Marker
                     } else {
                         LineKind::Content
                     }
+                }
+                LineKind::Content if legacy_marker_line(signature_payload(line).trim()) => {
+                    LineKind::Marker
                 }
                 other => *other,
             };
             (kind, *line)
         })
         .collect();
-    diagnostic_anchor(&legacy)
-        .map(|index| normalize_signature(&signature_payload(legacy[index].1)))
-        .unwrap_or_else(|| normalize_signature(&step.to_ascii_lowercase()))
+    // Do not use the current last-of-rank selector: these keys were persisted
+    // with the first diagnostic, including substring matches in guard names.
+    [
+        LineKind::ConcreteDiagnostic,
+        LineKind::ErrorAnnotated,
+        LineKind::Marker,
+    ]
+    .iter()
+    .find_map(|wanted| legacy.iter().position(|(kind, _)| kind == wanted))
+    .or_else(|| {
+        legacy.iter().enumerate().find_map(|(index, (kind, _))| {
+            if *kind != LineKind::GenericTrailer {
+                return None;
+            }
+            let previous = legacy[..index].iter().rposition(|(kind, line)| {
+                let payload = signature_payload(line);
+                *kind == LineKind::Content
+                    && payload.chars().any(char::is_alphanumeric)
+                    && !payload.trim().starts_with("##[")
+            })?;
+            (!legacy[previous + 1..index].iter().any(|(kind, _)| {
+                matches!(
+                    kind,
+                    LineKind::RunCommand | LineKind::CommandBody | LineKind::EndGroup
+                )
+            }))
+            .then_some(previous)
+        })
+    })
+    .map(|index| normalize_signature(&signature_payload(legacy[index].1)))
+    .unwrap_or_else(|| normalize_signature(&step.to_ascii_lowercase()))
+}
+
+/// Frozen substring matcher for the persisted compiler-owner key. Retain the
+/// original successful-test/header and assertion-payload exclusions when a
+/// current Content line is restored to its old Marker classification.
+fn legacy_marker_line(lowered: &str) -> bool {
+    let trimmed = lowered.trim();
+    let successful_test = trimmed
+        .strip_prefix("test ")
+        .and_then(|rest| rest.rsplit_once(" ... "))
+        .is_some_and(|(_, status)| {
+            let status = status.trim();
+            status == "ok"
+                || status.starts_with("ok ")
+                || status == "ignored"
+                || status.starts_with("ignored ")
+        });
+    !matches!(trimmed, "failures:" | "errors:" | "successes:")
+        && !trimmed.starts_with("test result:")
+        && !successful_test
+        && !["left:", "right:", "left =", "right ="]
+            .iter()
+            .any(|prefix| trimmed.starts_with(prefix))
+        && ERROR_MARKERS.iter().any(|marker| lowered.contains(marker))
 }
 
 /// A conservative proof for cross-job merging. Preserve diagnostic operands
