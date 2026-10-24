@@ -79,3 +79,34 @@ fn recording_mode_counts_a_held_child_separately_from_failures() {
     assert_eq!(output["succeeded_count"], 1, "{output}");
     assert_eq!(output["non_success_count"], 1, "{output}");
 }
+
+/// A persisted wait entry may still carry the legacy `succeeded` spelling
+/// [ORB-12255]: it counts as a success and is echoed as written. A status that
+/// is not a terminal wait outcome is refused, never coerced.
+#[test]
+fn recording_mode_reads_legacy_success_and_refuses_an_unknown_status() {
+    let (_root, runtime) = open();
+    let output = guard(
+        &runtime,
+        json!({"allow_non_success": true, "results": [
+            {"status": "succeeded", "run_id": "jrun-legacy"},
+            {"status": "timeout", "run_id": "jrun-late"},
+        ]}),
+    )
+    .expect("terminal outcomes are recorded");
+    assert_eq!(output["succeeded_count"], 1, "{output}");
+    assert_eq!(output["non_success_count"], 1, "{output}");
+    assert_eq!(output["results"][0]["status"], "succeeded", "{output}");
+
+    let error = guard(
+        &runtime,
+        json!({"allow_non_success": true, "results": [
+            {"status": "paused", "run_id": "jrun-odd"},
+        ]}),
+    )
+    .expect_err("an unknown status is not an observed outcome");
+    assert!(
+        error.contains("results[0] run jrun-odd has non-terminal status paused"),
+        "{error}"
+    );
+}

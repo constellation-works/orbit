@@ -385,7 +385,7 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
             .wait_pipeline_runs(&[id.to_string()], 10, 1, None)
             .unwrap();
         assert!(
-            waited.results[0].status == "success",
+            waited.results[0].status == orbit_core::PipelineWaitStatus::Success,
             "fixture worker must finish before handoff"
         );
     }

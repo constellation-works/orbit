@@ -25,9 +25,7 @@ use orbit_types::workflow::{ChildDispatch, ChildDispatchPhase};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::job::pipeline::{
-    pipeline_wait_status_is_held, pipeline_wait_status_is_success,
-};
+use crate::application::job::PipelineWaitStatus;
 
 /// Audit command for a child submission attempt, successful or not.
 const CHILD_DISPATCH_AUDIT: &str = "pipeline.child_dispatch";
@@ -184,14 +182,13 @@ pub(super) fn record_child_wait_outcome(
     action: &str,
     parent_run_id: Option<&str>,
     child_run_id: &str,
-    status: &str,
+    status: &PipelineWaitStatus,
     error_message: Option<&str>,
 ) -> Result<(), DispatchError> {
-    let message = (!pipeline_wait_status_is_success(status))
+    let message = (!status.is_success())
         .then(|| child_wait_message(runtime, child_run_id, status, error_message));
-    let settled = pipeline_wait_status_is_success(status)
-        || pipeline_wait_status_is_held(status)
-        || status == "cancelled";
+    let settled =
+        status.is_success() || status.is_held() || *status == PipelineWaitStatus::Cancelled;
     let audit_status = if settled {
         AuditEventStatus::Success
     } else {
@@ -221,7 +218,7 @@ pub(super) fn record_child_wait_outcome(
 fn child_wait_message(
     runtime: &OrbitRuntime,
     child_run_id: &str,
-    status: &str,
+    status: &PipelineWaitStatus,
     error_message: Option<&str>,
 ) -> String {
     if let Some(error) = error_message {
@@ -235,7 +232,7 @@ fn child_wait_message(
         })
         .unwrap_or_else(|| match status {
             // The wait projects its own deadline onto a child still running.
-            "timeout" => {
+            PipelineWaitStatus::Timeout => {
                 "no reason recorded; the wait deadline passed before the child settled".to_string()
             }
             _ => "the child recorded no reason".to_string(),

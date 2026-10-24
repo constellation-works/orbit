@@ -8,12 +8,12 @@ use orbit_common::text::floor_char_boundary;
 use orbit_engine::DispatchError;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::RunRootCause;
+use serde::de::{DeserializeOwned, IgnoredAny};
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::job::pipeline::{
-    pipeline_wait_status_is_held, pipeline_wait_status_is_success,
-};
+use crate::application::job::PipelineWaitStatus;
 use crate::runtime::audit::system::{
     AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
 };
@@ -43,24 +43,25 @@ pub(crate) fn pipeline_success_guard(
         .get("context")
         .and_then(Value::as_str)
         .unwrap_or("pipeline child run");
+    let checked = CheckedResults::parse(input);
     let mut entries = Vec::new();
-    if let Some(result) = input.get("result")
-        && !result.is_null()
-    {
-        entries.push(("result".to_string(), result));
+    if let Some(result) = &checked.result {
+        entries.push(("result".to_string(), CheckedEntry::parse(result)));
     }
-    if let Some(results) = input.get("results")
-        && !results.is_null()
-    {
-        let results = results.as_array().ok_or_else(|| {
-            DispatchError::action_failed(action, "`results` must be an array".to_string())
-        })?;
-        entries.extend(
+    match &checked.results {
+        Field::Absent => {}
+        Field::Valid(results) => entries.extend(
             results
                 .iter()
                 .enumerate()
-                .map(|(idx, entry)| (format!("results[{idx}]"), entry)),
-        );
+                .map(|(idx, entry)| (format!("results[{idx}]"), CheckedEntry::parse(entry))),
+        ),
+        Field::Invalid => {
+            return Err(DispatchError::action_failed(
+                action,
+                "`results` must be an array".to_string(),
+            ));
+        }
     }
     if entries.is_empty() {
         return Err(DispatchError::action_failed(
@@ -71,13 +72,18 @@ pub(crate) fn pipeline_success_guard(
 
     let held_count = entries
         .iter()
-        .filter(|(_, entry)| entry_is_held(entry))
+        .filter(|(_, entry)| {
+            entry
+                .status
+                .valid()
+                .is_some_and(PipelineWaitStatus::is_held)
+        })
         .count();
     let mut failures = Vec::new();
     let mut root_causes = Vec::new();
     let mut all_cancelled = true;
     for (label, entry) in &entries {
-        let cancelled = entry.get("status").and_then(Value::as_str) == Some("cancelled");
+        let cancelled = entry.status.valid() == Some(&PipelineWaitStatus::Cancelled);
         // [ORB-15202] A failed child stands for the leaf it echoes: name that
         // leaf instead of nesting its parents' copies of the leaf's text.
         let root_cause = (!cancelled)
@@ -130,15 +136,12 @@ fn parent_run_id(input: &Value) -> Option<&str> {
 /// The leaf failure a failed child entry stands for: the root cause its run
 /// recorded, else the child run itself. A child whose run is not recorded
 /// still stands for itself; an entry without a run id stands for nothing.
-fn entry_root_cause(runtime: &OrbitRuntime, entry: &Value) -> Option<RunRootCause> {
-    let status = entry.get("status").and_then(Value::as_str)?;
-    if pipeline_wait_status_is_success(status) || pipeline_wait_status_is_held(status) {
+fn entry_root_cause(runtime: &OrbitRuntime, entry: &CheckedEntry) -> Option<RunRootCause> {
+    let status = entry.status.valid()?;
+    if status.is_success() || status.is_held() {
         return None;
     }
-    let run_id = entry
-        .get("run_id")
-        .and_then(Value::as_str)
-        .filter(|run_id| !run_id.trim().is_empty())?;
+    let run_id = entry.run_id()?;
     let recorded = runtime.run_root_cause(run_id).unwrap_or_else(|error| {
         tracing::warn!(run_id, %error, "could not read a failed child's root cause");
         None
@@ -153,23 +156,14 @@ fn entry_root_cause(runtime: &OrbitRuntime, entry: &Value) -> Option<RunRootCaus
     // Its terminal outcome is the fallback, never its message body.
     if cause.leaf_run_id == run_id && cause.code.is_none() {
         cause.code = entry
-            .get("error_code")
-            .or_else(|| entry.get("failure_kind"))
-            .and_then(Value::as_str)
+            .error_code
+            .valid()
+            .or_else(|| entry.failure_kind.valid())
             .filter(|code| !code.trim().is_empty())
-            .map(str::to_string)
+            .cloned()
             .or_else(|| Some(status.to_string()));
     }
     Some(cause)
-}
-
-/// A held child is awaiting evidence or a forge, not failing: the parent
-/// guard passes and the held run's own task state carries the wait [ORB-14748].
-fn entry_is_held(entry: &Value) -> bool {
-    entry
-        .get("status")
-        .and_then(Value::as_str)
-        .is_some_and(pipeline_wait_status_is_held)
 }
 
 /// Validate and retain terminal child results without converting a child
@@ -181,16 +175,21 @@ fn entry_is_held(entry: &Value) -> bool {
 /// the exact entries it supplied. Structural problems remain errors because a
 /// missing run id or non-terminal status is not an observed leaf outcome.
 fn record_pipeline_results(action: &str, input: &Value) -> Result<Value, DispatchError> {
-    let results = input
-        .get("results")
-        .and_then(|value| (!value.is_null()).then_some(value))
-        .ok_or_else(|| {
-            DispatchError::action_failed(action, "expected `results` to record".to_string())
-        })?
-        .as_array()
-        .ok_or_else(|| {
-            DispatchError::action_failed(action, "`results` must be an array".to_string())
-        })?;
+    let results = match CheckedResults::parse(input).results {
+        Field::Valid(results) => results,
+        Field::Absent => {
+            return Err(DispatchError::action_failed(
+                action,
+                "expected `results` to record".to_string(),
+            ));
+        }
+        Field::Invalid => {
+            return Err(DispatchError::action_failed(
+                action,
+                "`results` must be an array".to_string(),
+            ));
+        }
+    };
     if results.is_empty() {
         return Err(DispatchError::action_failed(
             action,
@@ -203,32 +202,26 @@ fn record_pipeline_results(action: &str, input: &Value) -> Result<Value, Dispatc
     let mut held_count = 0usize;
     for (idx, entry) in results.iter().enumerate() {
         let label = format!("results[{idx}]");
-        let run_id = entry
-            .get("run_id")
-            .and_then(Value::as_str)
-            .filter(|run_id| !run_id.trim().is_empty())
-            .ok_or_else(|| {
-                DispatchError::action_failed(
-                    action,
-                    format!("{label} missing non-empty string run_id"),
-                )
-            })?;
-        let status = entry.get("status").and_then(Value::as_str).ok_or_else(|| {
+        let entry = CheckedEntry::parse(entry);
+        let run_id = entry.run_id().ok_or_else(|| {
+            DispatchError::action_failed(action, format!("{label} missing non-empty string run_id"))
+        })?;
+        let status = entry.status.valid().ok_or_else(|| {
             DispatchError::action_failed(action, format!("{label} missing string status"))
         })?;
-        if let Some(error) = entry.get("error")
-            && !error.is_null()
-            && !error.is_string()
-        {
+        if matches!(entry.error, Field::Invalid) {
             return Err(DispatchError::action_failed(
                 action,
                 format!("{label} run {run_id} has non-string error"),
             ));
         }
         match status {
-            status if pipeline_wait_status_is_success(status) => succeeded_count += 1,
-            status if pipeline_wait_status_is_held(status) => held_count += 1,
-            "failed" | "cancelled" | "interrupted" | "timeout" => non_success_count += 1,
+            PipelineWaitStatus::Success | PipelineWaitStatus::Succeeded => succeeded_count += 1,
+            PipelineWaitStatus::Held => held_count += 1,
+            PipelineWaitStatus::Failed
+            | PipelineWaitStatus::Cancelled
+            | PipelineWaitStatus::Interrupted
+            | PipelineWaitStatus::Timeout => non_success_count += 1,
             other => {
                 return Err(DispatchError::action_failed(
                     action,
@@ -310,20 +303,17 @@ pub(crate) fn record_pipeline_results_audit(
 
 fn pipeline_wait_entry_failure(
     label: &str,
-    entry: &Value,
+    entry: &CheckedEntry,
     root_cause: Option<&RunRootCause>,
 ) -> Option<String> {
-    let Some(status) = entry.get("status").and_then(Value::as_str) else {
+    let Some(status) = entry.status.valid() else {
         return Some(format!("{label} missing string status"));
     };
-    if pipeline_wait_status_is_success(status) || pipeline_wait_status_is_held(status) {
+    if status.is_success() || status.is_held() {
         return None;
     }
 
-    let run_id = entry
-        .get("run_id")
-        .and_then(Value::as_str)
-        .unwrap_or("<unknown>");
+    let run_id = entry.run_id.valid().map_or("<unknown>", String::as_str);
     if let Some(cause) = root_cause {
         let known = |value: &Option<String>| value.clone().unwrap_or_else(|| "-".to_string());
         return Some(format!(
@@ -336,18 +326,13 @@ fn pipeline_wait_entry_failure(
         ));
     }
     let error = entry
-        .get("error")
-        .and_then(Value::as_str)
+        .error
+        .valid()
+        .map(String::as_str)
         .filter(|value| !value.trim().is_empty());
-    if entry.get("partition_decisions").is_some() {
-        let applied = entry
-            .get("applied_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        let unresolved = entry
-            .get("unresolved_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
+    if entry.partition_decisions {
+        let applied = entry.applied_count.valid().copied().unwrap_or(0);
+        let unresolved = entry.unresolved_count.valid().copied().unwrap_or(0);
         let counts = format!("{applied} applied, {unresolved} unresolved");
         return Some(match error {
             // The apply step's own error already carries these counts.
@@ -365,6 +350,98 @@ fn pipeline_wait_entry_failure(
         ),
         None => format!("{label} run {run_id} status {status}"),
     })
+}
+
+/// The child results a guard step checks: one `result`, a `results` list, or
+/// both. A null either way is absent.
+#[derive(Default, Deserialize)]
+struct CheckedResults {
+    #[serde(default)]
+    result: Option<Value>,
+    #[serde(default)]
+    results: Field<Vec<Value>>,
+}
+
+impl CheckedResults {
+    fn parse(input: &Value) -> Self {
+        Self::deserialize(input).unwrap_or_default()
+    }
+}
+
+/// One child result a guard checks, parsed once: a wait entry, an
+/// `invoke_and_wait` summary, a synthetic admission stop or a task-pilot
+/// apply result. A field of the wrong JSON type reads as absent to the guard;
+/// the recording path still refuses a non-string `error`.
+#[derive(Default, Deserialize)]
+struct CheckedEntry {
+    #[serde(default)]
+    run_id: Field<String>,
+    #[serde(default)]
+    status: Field<PipelineWaitStatus>,
+    #[serde(default)]
+    error: Field<String>,
+    #[serde(default)]
+    error_code: Field<String>,
+    #[serde(default)]
+    failure_kind: Field<String>,
+    /// A task-pilot apply result, named by its counts instead of a run.
+    #[serde(default, deserialize_with = "present")]
+    partition_decisions: bool,
+    #[serde(default)]
+    applied_count: Field<u64>,
+    #[serde(default)]
+    unresolved_count: Field<u64>,
+}
+
+impl CheckedEntry {
+    /// A non-object entry has none of the fields.
+    fn parse(entry: &Value) -> Self {
+        if entry.is_object() {
+            Self::deserialize(entry).unwrap_or_default()
+        } else {
+            Self::default()
+        }
+    }
+
+    fn run_id(&self) -> Option<&str> {
+        self.run_id
+            .valid()
+            .map(String::as_str)
+            .filter(|run_id| !run_id.trim().is_empty())
+    }
+}
+
+/// An entry field that is absent or null, holds the expected type, or holds
+/// some other JSON value.
+#[derive(Default)]
+enum Field<T> {
+    #[default]
+    Absent,
+    Valid(T),
+    Invalid,
+}
+
+impl<T> Field<T> {
+    fn valid(&self) -> Option<&T> {
+        match self {
+            Self::Valid(value) => Some(value),
+            Self::Absent | Self::Invalid => None,
+        }
+    }
+}
+
+impl<'de, T: DeserializeOwned> Deserialize<'de> for Field<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match Value::deserialize(deserializer)? {
+            Value::Null => Self::Absent,
+            value => T::deserialize(value).map_or(Self::Invalid, Self::Valid),
+        })
+    }
+}
+
+/// Whether the field is present at all, null included.
+fn present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    IgnoredAny::deserialize(deserializer).map(|_| true)
 }
 
 /// Parent echoes stay bounded even for malformed identities or many children.

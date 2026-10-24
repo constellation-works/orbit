@@ -222,7 +222,11 @@ fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
                 )
                 .expect("wait for the actual CLI-submitted security sweep");
             assert_eq!(waited.results.len(), 1);
-            assert_eq!(waited.results[0].status, "success", "{waited:?}");
+            assert_eq!(
+                waited.results[0].status,
+                orbit_core::PipelineWaitStatus::Success,
+                "{waited:?}"
+            );
         }
         let shown = fixture.json(&[
             "run",

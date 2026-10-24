@@ -3,7 +3,9 @@ use std::fmt::Write as _;
 
 use clap::Args;
 use orbit_core::application::job::run_error_step;
-use orbit_core::{JobRunState, OrbitError, OrbitRuntime, PipelineWaitEntry, find_workflow};
+use orbit_core::{
+    JobRunState, OrbitError, OrbitRuntime, PipelineWaitEntry, PipelineWaitStatus, find_workflow,
+};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Payload};
@@ -52,8 +54,9 @@ pub(super) fn wait_for_run(
             OrbitError::Execution(format!("wait returned no result for run '{run_id}'"))
         })?;
     let run = runtime.show_job_run(run_id)?;
-    let wait_timeout = entry.status == "timeout" && run.state != JobRunState::Timeout;
-    entry.status = run.state.to_string();
+    let wait_timeout =
+        entry.status == PipelineWaitStatus::Timeout && run.state != JobRunState::Timeout;
+    entry.status = run.state.into();
     Ok((entry, wait_timeout))
 }
 
@@ -113,7 +116,7 @@ pub(crate) fn dispatch_workflow(
             workflow_alias,
             job_id: run.job_id,
             run_id: run.run_id,
-            state: wait_entry.status,
+            state: wait_entry.status.to_string(),
             wait_timeout,
             attempt: run.attempt,
             error_code: run_details

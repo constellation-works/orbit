@@ -150,6 +150,7 @@ pub use application::distributed::{
 pub use application::job::{
     AgentInvokeRequest, CatalogReferenceLayer, DrainAdmissionsStopRequest,
     DrainWindowExtensionRequest, DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry,
+    PipelineWaitStatus,
 };
 pub use application::routines::seed::{
     RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
