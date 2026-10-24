@@ -2485,13 +2485,15 @@ fn warnings_hold_findings_reach_run_show_and_readiness() {
         "prepare_task_pilot",
         serde_json::json!({"task_ids": [task.id], "workspace_path": fixture.work, "base_branch": "main"}),
     );
+    let observed_revision = git_repo::run(&fixture.work, &["rev-parse", "HEAD"]);
+    let observed_tree = git_repo::run(&fixture.work, &["rev-parse", "HEAD^{tree}"]);
     let first = "The operator should review the proposed approach.";
     let rest = "This second line stays in the audit only.";
     let surface = "The proposed change overlaps an open surface.";
     let applied = run_det(
         &runtime,
         "apply_task_pilot_results",
-        serde_json::json!({"run_id": pilot, "workspace_path": fixture.work, "prepared": prepared, "promotion_authorized": true, "drain_promotion": {"run_id": drain}, "results": [{"partition_index": 0, "task_ids": [task.id], "tasks": [{"task_id": task.id, "context_files_before": ["file:README.md"], "context_files_after": ["file:README.md"], "disposition": "selectors", "recommended_crew": "fixture", "recommended_complexity": "low", "confidence": "high", "assessment_rationale": "README.md holds the change.", "validation_approach": "Inspect README.md.", "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [], "adr_conflicts": [], "utility_warnings": [format!("{first}\n{rest}")], "surface_warnings": [surface], "duplicate_of": null, "already_landed": null}]}]}),
+        serde_json::json!({"run_id": pilot, "workspace_path": fixture.work, "prepared": prepared, "promotion_authorized": true, "drain_promotion": {"run_id": drain}, "results": [{"partition_index": 0, "observed_revision": observed_revision, "observed_tree": observed_tree, "task_ids": [task.id], "tasks": [{"task_id": task.id, "context_files_before": ["file:README.md"], "context_files_after": ["file:README.md"], "disposition": "selectors", "recommended_crew": "fixture", "recommended_complexity": "low", "confidence": "high", "assessment_rationale": "README.md holds the change.", "validation_approach": "Inspect README.md.", "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [], "adr_conflicts": [], "utility_warnings": [format!("{first}\n{rest}")], "surface_warnings": [surface], "duplicate_of": null, "already_landed": null}]}]}),
     );
     assert_eq!(applied["status"], "succeeded");
     assert_eq!(applied["drain_approval"][0]["classification"], "warnings");
