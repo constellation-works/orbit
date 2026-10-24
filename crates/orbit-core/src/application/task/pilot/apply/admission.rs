@@ -69,6 +69,22 @@ pub(in super::super) struct ValidatedTask {
     pub(in super::super) pilot_run_id: Option<String>,
 }
 
+impl ValidatedTask {
+    /// Keep the atomic status, typed history hold and apply report tied to the
+    /// admission decision made against the locked graph.
+    pub(in super::super) fn set_admission(&mut self, admission: Option<Admission>) {
+        self.promote = matches!(
+            &admission,
+            Some(Admission::CiSweep(decision)) if decision["decision"] == "promote"
+        );
+        self.history_decision = match &admission {
+            Some(Admission::Drain(decision)) => drain_promotion::hold_decision(decision),
+            _ => None,
+        };
+        self.admission = admission;
+    }
+}
+
 /// The pilot's authorized output, sealed in the same atomic mutation as its
 /// receipt. Selectors and complexity are already carried by `ValidatedTask`.
 #[derive(Serialize, Deserialize)]

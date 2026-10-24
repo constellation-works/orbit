@@ -230,6 +230,19 @@ Removing tests still passes with stale baseline entries; those entries do not ad
 
 Admitted unit tests:
 
+- `orbit-core`'s `pilot/tests/drain_promotion.rs::prerequisite_lost_before_atomic_write_holds_both_authorities_and_replay`
+  and `completed_prerequisite_lost_before_approval_still_holds` are criterion 2
+  regressions for ORB-17762. They drive the public runtime's pilot apply action
+  in isolated children. The first uses the graph-discovery hook to move or
+  delete a prerequisite before any task lock, proving drain and CI-sweep
+  warnings holds, stored warning readout, and safe same-operation replay even
+  when the prerequisite becomes edge-eligible again. The second deletes a
+  previously completed prerequisite at the approval hook and proves no
+  approval occurs. External integration callers cannot choose either
+  interleaving without the private test-only hooks. Existing public-boundary
+  scenarios retain normal dependency creation, completion and replay coverage;
+  the existing covered-edge/done promotion check remains unchanged.
+
 - `crates/orbit-core/src/application/automation/tests/source.rs::replay_moves_a_retained_exclusion_onto_its_canonical_commit` (criterion 3, fail-closed replay identity). A real Git divergence is replayed through the source adapter, using a provider lookup that panics. The test proves that a retained certificate exclusion is restated from its own record, so no fresh provider proof is needed. The store then accepts it onto its canonical commit with the certificate intact. The public `auto-task recover --replay-history` path cannot swap in that lookup without a live GitHub provider. The evaluator and store outcomes are covered at the public boundary in `crates/orbit-automation/tests/scheduling/delivery_recovery.rs`.
 
 - `crates/orbit-core/src/application/pull_drain/tests/drain.rs::claimed_leaf_settlement_carries_its_review_ledger` and `claimed_review_import_keeps_an_operator_decision` (criterion 3, durable review-state safety). The first exercises the production settlement path and proves an exhausted follower ledger reaches the owner under the claim lineage; the public escalation-and-requeue scenario starts from a prepared settlement and cannot prove that producer path. The second replays exhausted claim evidence after an operator reset and proves it cannot erase the reset decision; the public command scenario covers the escalation's requeue, not a later stale receipt.

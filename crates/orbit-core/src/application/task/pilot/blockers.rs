@@ -85,6 +85,14 @@ impl PilotDependencyGraph {
         self.tasks.keys()
     }
 
+    /// Whether a prerequisite was done in this graph snapshot. At publication
+    /// the caller holds every existing task in the snapshot locked.
+    pub(crate) fn is_done(&self, id: &str) -> bool {
+        self.tasks
+            .get(id)
+            .is_some_and(|task| task.status == TaskStatus::Done)
+    }
+
     /// Existing dependencies remain intact; only unfinished local tasks add
     /// edges, and the resulting graph must pass the ordinary cycle check.
     /// Reads nothing beyond this snapshot.

@@ -16,6 +16,8 @@
 //! holds it as `pilot_verified_no_diff`, ahead of the readiness gaps its
 //! empty selectors leave; the apply step then closes it when it qualifies.
 
+use std::collections::BTreeSet;
+
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
@@ -259,7 +261,9 @@ pub(super) enum Approval {
 /// before the check or waits behind the approval. A task tagged
 /// `no-auto-approve` since it was assessed is held, as is one whose
 /// pilot-assessed material changed after the pilot write: the next drain pass
-/// pilots it again.
+/// pilots it again. Named prerequisites without stored edges must still be
+/// done under their own locks; an unlocked earlier completion read cannot
+/// authorize approval.
 pub(super) fn approve(
     runtime: &OrbitRuntime,
     validated: &ValidatedTask,
@@ -268,43 +272,92 @@ pub(super) fn approve(
     authority_run_id: &str,
 ) -> Result<Approval, OrbitError> {
     let task_id = validated.task_id.as_str();
-    let mut lock_ids = vec![task_id.to_string()];
-    lock_ids.extend(runtime.get_task(task_id)?.dependencies());
-    lock_ids.sort();
-    lock_ids.dedup();
-    #[cfg(test)]
-    approval_hook::before_lock(runtime, task_id);
-    let mut approval = None;
-    with_task_locks(runtime, task_id, &lock_ids, 0, &mut || {
-        let task = runtime.get_task(task_id)?;
-        approval = Some(if task.status != TaskStatus::Proposed {
-            Approval::NotProposed
-        } else if auto_approval_opted_out(&task.tags) {
-            Approval::Held {
-                classification: NO_AUTO_APPROVE_TAG,
-                evidence: Value::Null,
+    for attempt in 0..4 {
+        let mut lock_ids = vec![task_id.to_string()];
+        lock_ids.extend(runtime.get_task(task_id)?.dependencies());
+        let named = crate::application::task::pilot_blocker_task_ids(&validated.assessment);
+        // A prerequisite that was done at the pilot write has no stored edge.
+        // Lock those named local tasks too before checking completion again.
+        for id in &named {
+            if runtime.stores().tasks().get_task(id)?.is_some() {
+                lock_ids.push(id.clone());
             }
-        } else if let Some(hold) = runtime.unverified_finding_hold(&task)? {
-            Approval::Held {
-                classification: UNVERIFIED_REVIEW_FINDING,
-                evidence: json!(hold.detail()),
+        }
+        lock_ids.sort();
+        lock_ids.dedup();
+        #[cfg(test)]
+        approval_hook::before_lock(runtime, task_id);
+        let mut approval = None;
+        let mut entered = false;
+        let result = with_task_locks(runtime, task_id, &lock_ids, 0, &mut || {
+            entered = true;
+            let task = runtime.get_task(task_id)?;
+            let mut done = BTreeSet::new();
+            for id in &named {
+                // A task absent during discovery is held conservatively without
+                // reading a newly appeared task outside the sorted lock set.
+                if lock_ids.contains(id)
+                    && runtime
+                        .stores()
+                        .tasks()
+                        .get_task(id)?
+                        .is_some_and(|target| target.status == TaskStatus::Done)
+                {
+                    done.insert(id.clone());
+                }
             }
-        } else if let Some((reason, detail)) =
-            assessed_material_drift(runtime, &task, snapshot, validated, policy)
-        {
-            Approval::Held {
-                classification: "changed_since_pilot",
-                evidence: json!({ "reason": reason, "detail": detail }),
-            }
-        } else {
-            runtime.approve_task(task_id, Some(approval_note(authority_run_id)), None)?;
-            Approval::Approved
+            let warnings = promotion_findings(
+                "apply_task_pilot_results",
+                task_id,
+                &validated.assessment,
+                &task.dependencies(),
+                &|id| done.contains(id),
+            )
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?
+            .warnings;
+            approval = Some(if task.status != TaskStatus::Proposed {
+                Approval::NotProposed
+            } else if auto_approval_opted_out(&task.tags) {
+                Approval::Held {
+                    classification: NO_AUTO_APPROVE_TAG,
+                    evidence: Value::Null,
+                }
+            } else if let Some(hold) = runtime.unverified_finding_hold(&task)? {
+                Approval::Held {
+                    classification: UNVERIFIED_REVIEW_FINDING,
+                    evidence: json!(hold.detail()),
+                }
+            } else if let Some((reason, detail)) =
+                assessed_material_drift(runtime, &task, snapshot, validated, policy)
+            {
+                Approval::Held {
+                    classification: "changed_since_pilot",
+                    evidence: json!({ "reason": reason, "detail": detail }),
+                }
+            } else if !warnings.is_empty() {
+                Approval::Held {
+                    classification: "warnings",
+                    evidence: json!(warnings),
+                }
+            } else {
+                runtime.approve_task(task_id, Some(approval_note(authority_run_id)), None)?;
+                Approval::Approved
+            });
+            Ok(())
         });
-        Ok(())
-    })?;
-    approval.ok_or_else(|| {
-        OrbitError::Execution("drain approval did not run under the task lock".to_string())
-    })
+        if !entered && matches!(&result, Err(OrbitError::NotFound { .. })) && attempt < 3 {
+            // A named prerequisite vanished before its lock. Rebuild the sorted
+            // set; absence now holds the finding without taking an absent lock.
+            continue;
+        }
+        result?;
+        return approval.ok_or_else(|| {
+            OrbitError::Execution("drain approval did not run under the task lock".to_string())
+        });
+    }
+    Err(OrbitError::Execution(
+        "drain approval lock discovery did not settle".to_string(),
+    ))
 }
 
 /// A test seam just before the drain's approval takes its locks, standing in
