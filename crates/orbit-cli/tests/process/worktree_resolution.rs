@@ -16,29 +16,167 @@ use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::tempdir;
 
+/// One private home and checkout per scenario; no registry or state is shared between rows.
+struct Fixture {
+    temp: tempfile::TempDir,
+    home: PathBuf,
+    repo: PathBuf,
+}
+
+impl Fixture {
+    fn new(repo_name: &str) -> Self {
+        let temp = tempdir().expect("fixture");
+        let base = fs::canonicalize(temp.path()).expect("canonical fixture");
+        let home = base.join("home");
+        let repo = base.join(repo_name);
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&repo).expect("repo");
+        Self { temp, home, repo }
+    }
+
+    fn seeded(repo_name: &str) -> Self {
+        let fixture = Self::new(repo_name);
+        Self::seed_repo(&fixture.repo);
+        fixture
+    }
+
+    fn seed_repo(repo: &Path) {
+        crate::git_repo::SeededRepo::new(repo)
+            .host_default_branch()
+            .readme("# orbit\n")
+            .build();
+    }
+
+    fn linked_worktree(&self, linked: &Path, branch: Option<&str>) {
+        let mut args = vec!["worktree", "add"];
+        if let Some(branch) = branch {
+            args.extend(["-b", branch]);
+        }
+        args.push(linked.to_str().expect("worktree path"));
+        crate::git_repo::run(&self.repo, &args);
+    }
+
+    fn init_worktree(&self, name: &str, branch: Option<&str>) -> PathBuf {
+        let linked = self.temp.path().join(name);
+        self.linked_worktree(&linked, branch);
+        self.init(&self.repo);
+        fs::canonicalize(linked).expect("linked worktree")
+    }
+
+    fn init(&self, repo: &Path) {
+        self.success(repo, &["workspace", "init"]);
+    }
+
+    fn command(&self, cwd: &Path, args: &[&str]) -> AssertCommand {
+        orbit_command(cwd, &self.home, args, None)
+    }
+
+    fn success(&self, cwd: &Path, args: &[&str]) {
+        self.command(cwd, args).assert().success();
+    }
+
+    fn json(&self, cwd: &Path, args: &[&str]) -> Value {
+        self.json_with_root(cwd, args, None)
+    }
+
+    fn json_with_root(&self, cwd: &Path, args: &[&str], root: Option<&Path>) -> Value {
+        let assert = orbit_command(cwd, &self.home, args, root)
+            .assert()
+            .success();
+        serde_json::from_slice(&assert.get_output().stdout).expect("orbit json output")
+    }
+
+    fn output(&self, cwd: &Path, args: &[&str]) -> std::process::Output {
+        self.output_with_root(cwd, args, None)
+    }
+
+    fn output_with_root(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+        root: Option<&Path>,
+    ) -> std::process::Output {
+        orbit_command(cwd, &self.home, args, root)
+            .output()
+            .expect("run orbit")
+    }
+
+    fn assert_workspace_commands_use_named_id(&self, repo: &Path, data_dir: &Path, id: &str) {
+        let data_dir_arg = data_dir.to_string_lossy().into_owned();
+        let listed = self.json(
+            repo,
+            &[
+                "--root",
+                &data_dir_arg,
+                "workspace",
+                "list",
+                "--format",
+                "json",
+            ],
+        );
+        let workspaces = listed
+            .as_array()
+            .unwrap_or_else(|| panic!("workspace list array: {listed}"));
+        assert!(
+            workspaces
+                .iter()
+                .any(|workspace| workspace["id"].as_str() == Some(id)),
+            "workspace list missing {id}: {listed}"
+        );
+        self.json(
+            repo,
+            &[
+                "--root",
+                &data_dir_arg,
+                "auto-task",
+                "list",
+                "--format",
+                "json",
+            ],
+        );
+    }
+
+    fn auto_task(&self, cwd: &Path, name: &str) -> Value {
+        self.json(cwd, &["auto-task", "show", name, "--json"])
+    }
+
+    fn selected_auto_task(&self, cwd: &Path, selector: &str) -> Value {
+        self.json(
+            cwd,
+            &[
+                "--workspace",
+                selector,
+                "auto-task",
+                "show",
+                "candidate-probe",
+                "--json",
+            ],
+        )
+    }
+
+    fn auto_tasks(&self, cwd: &Path, all: bool) -> Value {
+        let mut args = vec!["auto-task", "list", "--format", "json"];
+        if all {
+            args.push("--all");
+        }
+        self.json(cwd, &args)
+    }
+}
+
 fn tool_run_explicit_workspace_resolves_from_home_and_temp_directory() {
-    let temp = tempdir().expect("fixture");
-    let home = temp.path().join("home");
-    let repo = temp.path().join("repo");
+    let fixture = Fixture::seeded("repo");
+    let home = fixture.home.as_path();
+    let repo = fixture.repo.as_path();
     fs::create_dir_all(home.join(".orbit")).expect("global root");
-    fs::create_dir_all(&repo).expect("repo");
+
     fs::write(
         home.join(".orbit/config.toml"),
         "[machine]\nid = \"hm_cli_tool\"\nname = \"cli-tool\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("machine identity");
-    crate::git_repo::SeededRepo::new(&repo)
-        .host_default_branch()
-        .readme("# orbit\n")
-        .build();
-    run_orbit_success(&repo, &home, &["workspace", "init"], None);
+    fixture.init(repo);
 
-    let workspaces = run_orbit_json(
-        &repo,
-        &home,
-        &["workspace", "list", "--format", "json"],
-        None,
-    );
+    let workspaces = fixture.json(repo, &["workspace", "list", "--format", "json"]);
     let workspace_id = workspaces
         .as_array()
         .and_then(|rows| rows.first())
@@ -46,11 +184,10 @@ fn tool_run_explicit_workspace_resolves_from_home_and_temp_directory() {
         .expect("registered workspace ID");
 
     let temp_dir = std::env::temp_dir();
-    for cwd in [home.as_path(), temp_dir.as_path()] {
+    for cwd in [home, temp_dir.as_path()] {
         let by_id = serde_json::json!({"workspace": workspace_id, "limit": 1, "model": "codex"});
-        let listed = run_orbit_json(
+        let listed = fixture.json(
             cwd,
-            &home,
             &[
                 "tool",
                 "run",
@@ -58,7 +195,6 @@ fn tool_run_explicit_workspace_resolves_from_home_and_temp_directory() {
                 "--input",
                 &by_id.to_string(),
             ],
-            None,
         );
         assert!(
             listed["tasks"].is_array(),
@@ -71,9 +207,8 @@ fn tool_run_explicit_workspace_resolves_from_home_and_temp_directory() {
             "limit": 1,
             "model": "codex"
         });
-        let listed = run_orbit_json(
+        let listed = fixture.json(
             cwd,
-            &home,
             &[
                 "tool",
                 "run",
@@ -81,7 +216,6 @@ fn tool_run_explicit_workspace_resolves_from_home_and_temp_directory() {
                 "--input",
                 &qualified.to_string(),
             ],
-            None,
         );
         assert!(
             listed["tasks"].is_array(),
@@ -89,9 +223,8 @@ fn tool_run_explicit_workspace_resolves_from_home_and_temp_directory() {
             cwd.display()
         );
 
-        let listed = run_orbit_json(
+        let listed = fixture.json(
             cwd,
-            &home,
             &[
                 "--workspace",
                 workspace_id,
@@ -101,7 +234,6 @@ fn tool_run_explicit_workspace_resolves_from_home_and_temp_directory() {
                 "--input",
                 r#"{"limit":1,"model":"codex"}"#,
             ],
-            None,
         );
         assert!(
             listed["tasks"].is_array(),
@@ -117,9 +249,9 @@ fn tool_run_explicit_workspace_resolves_from_home_and_temp_directory() {
     });
     let mut command = cargo_bin_cmd!("orbit");
     command
-        .current_dir(&home)
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
+        .current_dir(home)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
         .args([
             "tool",
             "run",
@@ -138,46 +270,16 @@ fn tool_run_explicit_workspace_resolves_from_home_and_temp_directory() {
 }
 
 fn config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides() {
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    let main_repo = temp.path().join("repo");
-    let linked_worktree = temp.path().join("repo-worktree");
-    fs::create_dir_all(&home).expect("create home");
-    fs::create_dir_all(&main_repo).expect("create main repo");
-
-    crate::git_repo::run(&main_repo, &["init"]);
-    crate::git_repo::run(&main_repo, &["config", "user.name", "Orbit Test"]);
-    crate::git_repo::run(
-        &main_repo,
-        &["config", "user.email", "orbit-test@example.com"],
-    );
-    crate::git_repo::run(&main_repo, &["config", "commit.gpgsign", "false"]);
-    fs::write(main_repo.join("README.md"), "# orbit\n").expect("write readme");
-    crate::git_repo::run(&main_repo, &["add", "README.md"]);
-    crate::git_repo::run(&main_repo, &["commit", "-m", "initial"]);
-    crate::git_repo::run(
-        &main_repo,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            "orbit-worktree-resolution",
-            linked_worktree.to_str().expect("utf8 worktree path"),
-        ],
-    );
-
-    run_orbit_success(&main_repo, &home, &["workspace", "init"], None);
-
-    let main_repo = fs::canonicalize(&main_repo).expect("canonicalize main repo");
-    let linked_worktree = fs::canonicalize(&linked_worktree).expect("canonicalize linked worktree");
+    let fixture = Fixture::seeded("repo");
+    let main_repo = fixture.repo.as_path();
+    let linked_worktree = fixture.init_worktree("repo-worktree", Some("orbit-worktree-resolution"));
     let main_orbit = main_repo.join(".orbit");
     let linked_orbit = linked_worktree.join(".orbit");
 
-    let from_main = run_orbit_json(&main_repo, &home, &["config", "show", "--json"], None);
+    let from_main = fixture.json(main_repo, &["config", "show", "--json"]);
     assert_root_fields(&from_main, &main_orbit, &main_orbit);
 
-    let from_worktree =
-        run_orbit_json(&linked_worktree, &home, &["config", "show", "--json"], None);
+    let from_worktree = fixture.json(&linked_worktree, &["config", "show", "--json"]);
     assert_root_fields(&from_worktree, &main_orbit, &linked_orbit);
     assert!(
         !linked_orbit.exists(),
@@ -185,17 +287,14 @@ fn config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides() 
     );
 
     let explicit_root = main_orbit.to_string_lossy().to_string();
-    let from_root_override = run_orbit_json(
+    let from_root_override = fixture.json(
         &linked_worktree,
-        &home,
         &["--root", &explicit_root, "config", "show", "--json"],
-        None,
     );
     assert_root_fields(&from_root_override, &main_orbit, &main_orbit);
 
-    let from_env = run_orbit_json(
+    let from_env = fixture.json_with_root(
         &linked_worktree,
-        &home,
         &["config", "show", "--json"],
         Some(&main_orbit),
     );
@@ -219,18 +318,18 @@ fn check_submodule_roots(without_git: bool) {
     // Cover both legacy discovery before any workspace exists and bootstrap
     // with an initialized, registered superproject above the submodule.
     for initialize_superproject in [false, true] {
-        let temp = tempdir().expect("submodule fixture");
-        let home = temp.path().join("home");
-        let superproject = temp.path().join("superproject");
-        fs::create_dir_all(&home).expect("home");
-        let submodule = init_submodule_fixture(&superproject);
+        let fixture = Fixture::new("superproject");
+        let home = fixture.home.as_path();
+        let superproject = fixture.repo.as_path();
+
+        let submodule = init_submodule_fixture(superproject);
         let nested = submodule.join("nested");
         fs::create_dir_all(&nested).expect("nested working directory");
 
         if initialize_superproject {
-            run_orbit_success(&superproject, &home, &["workspace", "init"], None);
+            fixture.init(superproject);
         }
-        let mut bootstrap = orbit_command(&nested, &home, &["workspace", "init"], None);
+        let mut bootstrap = fixture.command(&nested, &["workspace", "init"]);
         if without_git {
             bootstrap.env("PATH", home.join("stub-bin"));
         }
@@ -245,7 +344,7 @@ fn check_submodule_roots(without_git: bool) {
             initialize_superproject,
             "submodule bootstrap must not create superproject state"
         );
-        let mut command = orbit_command(&nested, &home, &["config", "show", "--json"], None);
+        let mut command = fixture.command(&nested, &["config", "show", "--json"]);
         if without_git {
             command.env("PATH", home.join("stub-bin"));
         }
@@ -256,14 +355,14 @@ fn check_submodule_roots(without_git: bool) {
 }
 
 fn submodule_runtime_respects_its_registered_data_directory() {
-    let temp = tempdir().expect("submodule fixture");
-    let home = temp.path().join("home");
-    let superproject = temp.path().join("superproject");
-    fs::create_dir_all(&home).expect("home");
-    let submodule = init_submodule_fixture(&superproject);
-    run_orbit_success(&superproject, &home, &["workspace", "init"], None);
-    let data_dir = canonicalize_or_original(temp.path()).join("submodule-data");
-    run_orbit_success(&submodule, &home, &["workspace", "init"], None);
+    let fixture = Fixture::new("superproject");
+    let home = fixture.home.as_path();
+    let superproject = fixture.repo.as_path();
+
+    let submodule = init_submodule_fixture(superproject);
+    fixture.init(superproject);
+    let data_dir = canonicalize_or_original(fixture.temp.path()).join("submodule-data");
+    fixture.init(&submodule);
     fs::rename(submodule.join(".orbit"), &data_dir).expect("relocate submodule state");
     let registry_path = home.join(".orbit/workspaces.json");
     let mut registry: Value = serde_json::from_slice(&fs::read(&registry_path).expect("registry"))
@@ -280,8 +379,8 @@ fn submodule_runtime_respects_its_registered_data_directory() {
         serde_json::to_vec(&registry).expect("registry JSON"),
     )
     .expect("registered relocated data directory");
-    run_orbit_success(&submodule, &home, &["workspace", "init", "--force"], None);
-    let config = run_orbit_json(&submodule, &home, &["config", "show", "--json"], None);
+    fixture.success(&submodule, &["workspace", "init", "--force"]);
+    let config = fixture.json(&submodule, &["config", "show", "--json"]);
     assert_root_fields(&config, &data_dir, &data_dir);
     assert!(
         !submodule.join(".orbit").exists(),
@@ -291,23 +390,11 @@ fn submodule_runtime_respects_its_registered_data_directory() {
 
 #[cfg(unix)]
 fn linked_worktree_gitfile_fallback_checks_the_common_directory() {
-    let temp = tempdir().expect("worktree fixture");
-    let home = temp.path().join("home");
-    let main_repo = temp.path().join("repo");
-    let linked = temp.path().join("linked");
-    fs::create_dir_all(&home).expect("home");
-    fs::create_dir_all(&main_repo).expect("main repository");
-    crate::git_repo::SeededRepo::new(&main_repo)
-        .host_default_branch()
-        .readme("# orbit\n")
-        .build();
-    crate::git_repo::run(
-        &main_repo,
-        &["worktree", "add", linked.to_str().expect("worktree path")],
-    );
-    run_orbit_success(&main_repo, &home, &["workspace", "init"], None);
-    let main_repo = fs::canonicalize(main_repo).expect("main repository");
-    let linked = fs::canonicalize(linked).expect("linked worktree");
+    let fixture = Fixture::seeded("repo");
+    let home = fixture.home.as_path();
+    let main_repo = fixture.repo.as_path();
+
+    let linked = fixture.init_worktree("linked", None);
     let main_orbit = main_repo.join(".orbit");
     let local_orbit = linked.join(".orbit");
     let nested = linked.join("nested");
@@ -320,7 +407,7 @@ fn linked_worktree_gitfile_fallback_checks_the_common_directory() {
         "gitdir: ../repo/.git/worktrees/linked\n",
     ] {
         fs::write(linked.join(".git"), gitfile).expect("gitfile");
-        let mut command = orbit_command(&nested, &home, &["config", "show", "--json"], None);
+        let mut command = fixture.command(&nested, &["config", "show", "--json"]);
         command.env("PATH", home.join("stub-bin"));
         let output = command.assert().success();
         let config: Value = serde_json::from_slice(&output.get_output().stdout).expect("config");
@@ -342,7 +429,7 @@ fn linked_worktree_gitfile_fallback_checks_the_common_directory() {
             None => fs::remove_file(&commondir).expect("missing common directory"),
             Some(value) => fs::write(&commondir, value).expect("invalid common directory"),
         }
-        let mut command = orbit_command(&nested, &home, &["config", "show", "--json"], None);
+        let mut command = fixture.command(&nested, &["config", "show", "--json"]);
         command.env("PATH", home.join("stub-bin"));
         let output = command.assert().success();
         let config: Value = serde_json::from_slice(&output.get_output().stdout).expect("config");
@@ -354,14 +441,8 @@ fn init_submodule_fixture(superproject: &Path) -> PathBuf {
     let source = superproject.parent().expect("fixture root").join("source");
     fs::create_dir_all(&source).expect("submodule source");
     fs::create_dir_all(superproject).expect("superproject");
-    crate::git_repo::SeededRepo::new(&source)
-        .host_default_branch()
-        .readme("# orbit\n")
-        .build();
-    crate::git_repo::SeededRepo::new(superproject)
-        .host_default_branch()
-        .readme("# orbit\n")
-        .build();
+    Fixture::seed_repo(&source);
+    Fixture::seed_repo(superproject);
     crate::git_repo::run(
         superproject,
         &[
@@ -432,27 +513,17 @@ fn restore_permissions_guard_restores_the_mode_when_the_test_panics() {
 
 #[cfg(unix)]
 fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validation() {
-    let temp = tempdir().expect("fixture");
-    let home = temp.path().join("home");
-    let repo = temp.path().join("repo");
-    fs::create_dir_all(&home).expect("home");
-    fs::create_dir_all(&repo).expect("repo");
-    crate::git_repo::SeededRepo::new(&repo)
-        .host_default_branch()
-        .readme("# orbit\n")
-        .build();
-    run_orbit_success(&repo, &home, &["workspace", "init"], None);
+    let fixture = Fixture::seeded("repo");
+    let home = fixture.home.as_path();
+    let repo = fixture.repo.as_path();
+
+    fixture.init(repo);
     let global = home.join(".orbit");
     let lock = global.join(".workspaces.json.lock");
     if lock.exists() {
         fs::remove_file(&lock).expect("remove fixture lock before read-only check");
     }
-    let listed = run_orbit_json(
-        &repo,
-        &home,
-        &["workspace", "list", "--format", "json"],
-        None,
-    );
+    let listed = fixture.json(repo, &["workspace", "list", "--format", "json"]);
     assert!(listed.as_array().is_some_and(|rows| !rows.is_empty()));
     assert!(
         !lock.exists(),
@@ -462,18 +533,13 @@ fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validati
     // The first invocation prepared Orbit's enumerated global SQLite state.
     // A second list must work with the surrounding global directory read-only.
     let _restore_global = RestorePermissions::set_mode(&global, 0o555);
-    let listed_read_only = run_orbit_json(
-        &repo,
-        &home,
-        &["workspace", "list", "--format", "json"],
-        None,
-    );
+    let listed_read_only = fixture.json(repo, &["workspace", "list", "--format", "json"]);
     assert_eq!(listed_read_only, listed);
     assert!(!lock.exists(), "read-only list must not create a lock");
 
-    let moved_repo = temp.path().join("moved-repo");
-    fs::rename(&repo, &moved_repo).expect("make registered checkout missing");
-    let unrelated = temp.path().join("unrelated");
+    let moved_repo = fixture.temp.path().join("moved-repo");
+    fs::rename(repo, &moved_repo).expect("make registered checkout missing");
+    let unrelated = fixture.temp.path().join("unrelated");
     // Not the registered checkout. Its own lookup boundary keeps a TMPDIR
     // nested in a checkout from loading that checkout's config before the
     // registry validation this test expects to fail closed.
@@ -482,8 +548,8 @@ fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validati
     let mut command = cargo_bin_cmd!("orbit");
     command
         .current_dir(&unrelated)
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
         .args(["workspace", "list", "--format", "json"]);
     clear_inherited_authority_env(&mut command);
     set_orbit_root_env(&mut command, None);
@@ -510,7 +576,8 @@ fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validati
     fs::write(&lock, b"").expect("prepare existing registry lock");
     let _restore_global = RestorePermissions::set_mode(&global, 0o555);
     let selector = listed[0]["id"].as_str().expect("registered workspace id");
-    let failed = orbit_command(&unrelated, &home, &[], None)
+    let failed = fixture
+        .command(&unrelated, &[])
         .args(["--workspace", selector, "workspace", "show", "--json"])
         .assert()
         .failure();
@@ -527,26 +594,10 @@ fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validati
 }
 
 fn auto_task_show_keeps_alternate_extension_candidates_local() {
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    let main_repo = temp.path().join("repo");
-    let linked = temp.path().join("candidate");
-    fs::create_dir_all(&home).expect("home");
-    crate::git_repo::SeededRepo::new(&main_repo)
-        .host_default_branch()
-        .readme("# orbit\n")
-        .build();
-    crate::git_repo::run(
-        &main_repo,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            "candidate",
-            linked.to_str().unwrap(),
-        ],
-    );
-    run_orbit_success(&main_repo, &home, &["workspace", "init"], None);
+    let fixture = Fixture::seeded("repo");
+    let main_repo = fixture.repo.as_path();
+
+    let linked = fixture.init_worktree("candidate", Some("candidate"));
     let shared = fs::canonicalize(main_repo.join(".orbit")).unwrap();
     let local = fs::canonicalize(&linked).unwrap().join(".orbit");
     write_auto_task_fixture(&shared, "Shared enabled body");
@@ -565,62 +616,24 @@ fn auto_task_show_keeps_alternate_extension_candidates_local() {
             r#"{"schemaVersion":1,"definitions":{"candidate-probe":{"priority":"high"}}}"#,
         )
         .unwrap();
-        let shown = run_orbit_json(
-            &linked,
-            &home,
-            &["auto-task", "show", "candidate-probe", "--json"],
-            None,
-        );
+        let shown = fixture.auto_task(&linked, "candidate-probe");
         assert_eq!(
             shown["description"], "Local disabled body",
             "extension {extension}"
         );
         assert_eq!(shown["enabled"], false);
-        assert_eq!(
-            shown["definition_source"]["root"],
-            local.to_string_lossy().as_ref()
-        );
-        assert_eq!(
-            shown["definition_source"]["path"],
-            alternate.to_string_lossy().as_ref()
-        );
+        assert_definition_source(&shown, &local, &alternate);
         assert_eq!(shown["layering"]["settings"]["priority"], "high");
-        let listed = run_orbit_json(
-            &linked,
-            &home,
-            &["auto-task", "list", "--format", "json"],
-            None,
-        );
-        let rows: Vec<_> = listed
-            .as_array()
-            .unwrap()
+        let listed = fixture.auto_tasks(&linked, false);
+        let rows: Vec<_> = json_rows(&listed)
             .iter()
             .filter(|row| row["name"] == "candidate-probe")
             .collect();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["description"], shown["description"]);
         assert_eq!(rows[0]["enabled"], false);
-        for args in [
-            vec!["auto-task", "mint", "candidate-probe"],
-            vec![
-                "auto-task",
-                "update",
-                "candidate-probe",
-                "--description",
-                "forbidden",
-            ],
-            vec!["auto-task", "toggle", "candidate-probe", "on"],
-            vec![
-                "auto-task",
-                "recover",
-                "candidate-probe",
-                "--adopt-settings",
-                "--reason",
-                "probe",
-            ],
-            vec!["auto-task", "reset", "candidate-probe", "--reason", "probe"],
-        ] {
-            let mut command = orbit_command(&linked, &home, &args, None);
+        for args in local_write_commands("forbidden", "probe") {
+            let mut command = fixture.command(&linked, &args);
             if args[1] == "reset" {
                 command.env("ORBIT_OPERATOR", "1");
             }
@@ -642,83 +655,29 @@ fn auto_task_show_keeps_alternate_extension_candidates_local() {
             format!("# provenance: plugin:absent-probe@1.0.0\n{candidate_body}"),
         )
         .unwrap();
-        let plugin = run_orbit_json(
-            &linked,
-            &home,
-            &["auto-task", "show", "candidate-probe", "--json"],
-            None,
-        );
-        assert_eq!(plugin["inactive_plugin"]["namespace"], "absent-probe");
-        assert!(
-            plugin["skipped_reason"]
-                .as_str()
-                .unwrap()
-                .contains(alternate.to_str().unwrap())
-        );
-        let visible = run_orbit_json(
-            &linked,
-            &home,
-            &["auto-task", "list", "--format", "json"],
-            None,
-        );
-        assert!(
-            !visible
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|row| row["name"] == "candidate-probe")
-        );
-        let all = run_orbit_json(
-            &linked,
-            &home,
-            &["auto-task", "list", "--all", "--format", "json"],
-            None,
-        );
-        assert!(
-            all.as_array()
-                .unwrap()
-                .iter()
-                .any(|row| row["name"] == "candidate-probe"
-                    && row["inactive_plugin"]["namespace"] == "absent-probe")
-        );
+        assert_inactive_plugin(&fixture, &linked, "candidate-probe", &alternate);
         // A second file with the same stem must not choose an arbitrary body.
         write_auto_task_fixture(&local, "Ambiguous canonical body");
-        let duplicate = run_orbit_output(
-            &linked,
-            &home,
-            &["auto-task", "show", "candidate-probe", "--json"],
-            None,
-        );
+        let duplicate =
+            fixture.output(&linked, &["auto-task", "show", "candidate-probe", "--json"]);
         assert!(!duplicate.status.success());
         let refusal: Value = serde_json::from_slice(&duplicate.stderr).unwrap();
         assert_eq!(refusal["code"], "invalid_input");
         fs::remove_file(&canonical).unwrap();
         fs::write(&alternate, "name: [malformed").unwrap();
-        let malformed = run_orbit_output(
-            &linked,
-            &home,
-            &["auto-task", "show", "candidate-probe", "--json"],
-            None,
-        );
+        let malformed =
+            fixture.output(&linked, &["auto-task", "show", "candidate-probe", "--json"]);
         assert!(
             !malformed.status.success(),
             "malformed {extension} must shadow shared body"
         );
         let refusal: Value = serde_json::from_slice(&malformed.stderr).unwrap();
         assert_eq!(refusal["code"], "invalid_input");
-        let malformed_list = run_orbit_json(
-            &linked,
-            &home,
-            &["auto-task", "list", "--format", "json"],
-            None,
-        );
-        assert!(
-            !malformed_list
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|row| row["name"] == "candidate-probe"),
-            "list must not reveal the shared body either"
+        let malformed_list = fixture.auto_tasks(&linked, false);
+        assert_auto_task_hidden(
+            &malformed_list,
+            "candidate-probe",
+            "list must not reveal the shared body either",
         );
         assert_eq!(fs::read_to_string(&shared_path).unwrap(), shared_bytes);
         assert!(
@@ -730,30 +689,12 @@ fn auto_task_show_keeps_alternate_extension_candidates_local() {
 }
 
 fn auto_task_show_reports_and_honors_the_selected_definition_source() {
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    let main_repo = temp.path().join("repo");
-    let linked_worktree = temp.path().join("repo-candidate");
-    fs::create_dir_all(&home).expect("create home");
-    fs::create_dir_all(&main_repo).expect("create main repo");
-    crate::git_repo::SeededRepo::new(&main_repo)
-        .host_default_branch()
-        .readme("# orbit\n")
-        .build();
-    crate::git_repo::run(
-        &main_repo,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            "orbit-auto-task-candidate",
-            linked_worktree.to_str().expect("utf8 worktree path"),
-        ],
-    );
-    run_orbit_success(&main_repo, &home, &["workspace", "init"], None);
+    let fixture = Fixture::seeded("repo");
+    let main_repo = fixture.repo.as_path();
 
-    let main_repo = fs::canonicalize(&main_repo).expect("canonicalize main repo");
-    let linked_worktree = fs::canonicalize(&linked_worktree).expect("canonicalize worktree");
+    let linked_worktree =
+        fixture.init_worktree("repo-candidate", Some("orbit-auto-task-candidate"));
+
     let main_orbit = main_repo.join(".orbit");
     let linked_orbit = linked_worktree.join(".orbit");
     write_auto_task_fixture(&main_orbit, "Primary checkout definition");
@@ -769,7 +710,7 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
     .expect("workspace settings");
     {
         let args = ["auto-task", "show", "candidate-probe", "--json"];
-        let shown = run_orbit_json(&linked_worktree, &home, &args, None);
+        let shown = fixture.json(&linked_worktree, &args);
         assert_eq!(shown["description"], "Primary checkout definition");
         assert_eq!(shown["template"]["priority"], "high");
         assert_eq!(shown["layering"]["settings"]["priority"], "high");
@@ -777,40 +718,28 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
             shown["enabled"], false,
             "disabled definitions remain inspectable"
         );
-        assert_eq!(
-            shown["definition_source"]["root"],
-            main_orbit.to_string_lossy().as_ref()
-        );
-        assert_eq!(
-            shown["definition_source"]["path"],
-            main_orbit
-                .join("auto_tasks/candidate-probe.yaml")
-                .to_string_lossy()
-                .as_ref()
+        assert_definition_source(
+            &shown,
+            &main_orbit,
+            &main_orbit.join("auto_tasks/candidate-probe.yaml"),
         );
     }
     for args in [
         vec!["auto-task", "list", "--format", "json"],
         vec!["tool", "run", "orbit.auto_task.list", "--input", "{}"],
     ] {
-        let listed = run_orbit_json(&linked_worktree, &home, &args, None);
+        let listed = fixture.json(&linked_worktree, &args);
         assert!(
-            listed
-                .as_array()
-                .expect("definition rows")
-                .iter()
-                .any(|row| {
-                    row["name"] == "candidate-probe"
-                        && row["description"] == "Primary checkout definition"
-                }),
+            json_rows(&listed).iter().any(|row| {
+                row["name"] == "candidate-probe"
+                    && row["description"] == "Primary checkout definition"
+            }),
             "workspace definition missing from {listed}"
         );
     }
-    let missing = run_orbit_output(
+    let missing = fixture.output(
         &linked_worktree,
-        &home,
         &["auto-task", "show", "absent-probe", "--json"],
-        None,
     );
     assert!(!missing.status.success());
     let refusal: Value = serde_json::from_slice(&missing.stderr).expect("typed JSON refusal");
@@ -828,33 +757,8 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
         error.contains("orbit auto-task list"),
         "scope discovery command: {error}"
     );
-    for args in [
-        vec!["auto-task", "mint", "candidate-probe"],
-        vec![
-            "auto-task",
-            "update",
-            "candidate-probe",
-            "--description",
-            "must stay local",
-        ],
-        vec!["auto-task", "toggle", "candidate-probe", "on"],
-        vec![
-            "auto-task",
-            "recover",
-            "candidate-probe",
-            "--adopt-settings",
-            "--reason",
-            "lookup probe",
-        ],
-        vec![
-            "auto-task",
-            "reset",
-            "candidate-probe",
-            "--reason",
-            "lookup probe",
-        ],
-    ] {
-        let mut command = orbit_command(&linked_worktree, &home, &args, None);
+    for args in local_write_commands("must stay local", "lookup probe") {
+        let mut command = fixture.command(&linked_worktree, &args);
         // Exercise the operator-only reset on the disposable fixture, as the
         // lifecycle CLI fixtures do; no ambient authority reaches this child.
         if args[1] == "reset" {
@@ -895,13 +799,8 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
             .replace("candidate-probe", "workspace-only"),
     )
     .expect("shared-only definition for union listing");
-    let union = run_orbit_json(
-        &linked_worktree,
-        &home,
-        &["auto-task", "list", "--format", "json"],
-        None,
-    );
-    let rows = union.as_array().expect("union rows");
+    let union = fixture.auto_tasks(&linked_worktree, false);
+    let rows = json_rows(&union);
     let candidates: Vec<_> = rows
         .iter()
         .filter(|row| row["name"] == "candidate-probe")
@@ -914,111 +813,51 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
         "a local candidate must not hide other shared names"
     );
 
-    let workspaces = run_orbit_json(
-        &main_repo,
-        &home,
-        &["workspace", "list", "--format", "json"],
-        None,
-    );
+    let workspaces = fixture.json(main_repo, &["workspace", "list", "--format", "json"]);
     let workspace_id = workspaces
         .as_array()
         .and_then(|rows| rows.first())
         .and_then(|row| row["id"].as_str())
         .unwrap_or_else(|| panic!("expected registered workspace in {workspaces}"));
 
-    let from_worktree_logical = run_orbit_json(
-        &linked_worktree,
-        &home,
-        &[
-            "--workspace",
-            workspace_id,
-            "auto-task",
-            "show",
-            "candidate-probe",
-            "--json",
-        ],
-        None,
-    );
-    assert_eq!(
-        from_worktree_logical["description"],
-        "Linked candidate definition"
-    );
-    assert_eq!(
-        from_worktree_logical["layering"]["settings"]["priority"],
-        "low"
-    );
-    assert_eq!(
-        from_worktree_logical["definition_source"]["root"],
-        linked_orbit.to_string_lossy().as_ref()
-    );
-    assert_eq!(
-        from_worktree_logical["definition_source"]["path"],
-        linked_orbit
-            .join("auto_tasks/candidate-probe.yaml")
-            .to_string_lossy()
-            .as_ref()
-    );
-
-    let primary = run_orbit_json(
-        &main_repo,
-        &home,
-        &[
-            "--workspace",
-            workspace_id,
-            "auto-task",
-            "show",
-            "candidate-probe",
-            "--json",
-        ],
-        None,
-    );
-    assert_eq!(primary["description"], "Primary checkout definition");
-    assert_eq!(
-        primary["definition_source"]["root"],
-        main_orbit.to_string_lossy().as_ref()
-    );
-    assert_eq!(
-        primary["definition_source"]["path"],
-        main_orbit
-            .join("auto_tasks/candidate-probe.yaml")
-            .to_string_lossy()
-            .as_ref()
-    );
-
     let linked_selector = linked_worktree.to_string_lossy();
-    let candidate = run_orbit_json(
-        &main_repo,
-        &home,
-        &[
-            "--workspace",
-            &linked_selector,
-            "auto-task",
-            "show",
-            "candidate-probe",
-            "--json",
-        ],
-        None,
-    );
-    assert_eq!(candidate["description"], "Linked candidate definition");
-    assert_eq!(
-        candidate["definition_source"]["root"],
-        linked_orbit.to_string_lossy().as_ref()
-    );
-    assert_eq!(
-        candidate["definition_source"]["path"],
-        linked_orbit
-            .join("auto_tasks/candidate-probe.yaml")
-            .to_string_lossy()
-            .as_ref()
-    );
+    for (name, cwd, selector, description, root) in [
+        (
+            "logical selector in worktree",
+            linked_worktree.as_path(),
+            workspace_id,
+            "Linked candidate definition",
+            &linked_orbit,
+        ),
+        (
+            "logical selector in primary",
+            main_repo,
+            workspace_id,
+            "Primary checkout definition",
+            &main_orbit,
+        ),
+        (
+            "explicit linked selector",
+            main_repo,
+            linked_selector.as_ref(),
+            "Linked candidate definition",
+            &linked_orbit,
+        ),
+    ] {
+        let shown = fixture.selected_auto_task(cwd, selector);
+        assert_eq!(shown["description"], description, "{name}");
+        if name == "logical selector in worktree" {
+            assert_eq!(shown["layering"]["settings"]["priority"], "low", "{name}");
+        }
+        assert_definition_source(&shown, root, &root.join("auto_tasks/candidate-probe.yaml"));
+    }
     assert!(
         !linked_orbit.join("tasks").exists(),
         "candidate inspection must not create a worktree-local shadow store"
     );
 
-    run_orbit_success(
-        &main_repo,
-        &home,
+    fixture.success(
+        main_repo,
         &[
             "--workspace",
             &linked_selector,
@@ -1028,55 +867,18 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
             "--description",
             "Primary definition updated through authoritative routing",
         ],
-        None,
     );
-    let primary_after_update = run_orbit_json(
-        &main_repo,
-        &home,
-        &[
-            "--workspace",
-            workspace_id,
-            "auto-task",
-            "show",
-            "candidate-probe",
-            "--json",
-        ],
-        None,
-    );
+    let primary_after_update = fixture.selected_auto_task(main_repo, workspace_id);
     assert_eq!(
         primary_after_update["description"],
         "Primary definition updated through authoritative routing"
     );
-    let worktree_after_primary_update = run_orbit_json(
-        &linked_worktree,
-        &home,
-        &[
-            "--workspace",
-            workspace_id,
-            "auto-task",
-            "show",
-            "candidate-probe",
-            "--json",
-        ],
-        None,
-    );
+    let worktree_after_primary_update = fixture.selected_auto_task(&linked_worktree, workspace_id);
     assert_eq!(
         worktree_after_primary_update["description"], "Linked candidate definition",
         "a logical selector from the linked worktree must keep reading worktree YAML"
     );
-    let candidate_after_update = run_orbit_json(
-        &main_repo,
-        &home,
-        &[
-            "--workspace",
-            &linked_selector,
-            "auto-task",
-            "show",
-            "candidate-probe",
-            "--json",
-        ],
-        None,
-    );
+    let candidate_after_update = fixture.selected_auto_task(main_repo, &linked_selector);
     assert_eq!(
         candidate_after_update["description"], "Linked candidate definition",
         "writable explicit-linked-selector commands must not retarget definition mutations"
@@ -1091,29 +893,19 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
         "invalid: [",
     )
     .expect("broken candidate");
-    let broken = run_orbit_output(
+    let broken = fixture.output(
         &linked_worktree,
-        &home,
         &["auto-task", "show", "candidate-probe", "--json"],
-        None,
     );
     assert!(
         !broken.status.success(),
         "an invalid candidate must not fall back to the shared body"
     );
-    let listed = run_orbit_json(
-        &linked_worktree,
-        &home,
-        &["auto-task", "list", "--format", "json"],
-        None,
-    );
-    assert!(
-        !listed
-            .as_array()
-            .expect("rows")
-            .iter()
-            .any(|row| row["name"] == "candidate-probe"),
-        "a broken local entry must shadow the shared definition"
+    let listed = fixture.auto_tasks(&linked_worktree, false);
+    assert_auto_task_hidden(
+        &listed,
+        "candidate-probe",
+        "a broken local entry must shadow the shared definition",
     );
     // A shared plugin definition must carry its original inactive provenance.
     let plugin_body = String::from_utf8(primary_bytes)
@@ -1124,47 +916,7 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
         format!("# provenance: plugin:absent-probe@1.0.0\n{plugin_body}"),
     )
     .expect("shared plugin definition");
-    let plugin = run_orbit_json(
-        &linked_worktree,
-        &home,
-        &["auto-task", "show", "plugin-probe", "--json"],
-        None,
-    );
-    assert_eq!(plugin["inactive_plugin"]["namespace"], "absent-probe");
-    assert!(
-        plugin["skipped_reason"]
-            .as_str()
-            .expect("inactive reason")
-            .contains(main_orbit.to_str().expect("root")),
-        "inactive reason must name the supplying catalog"
-    );
-    let visible = run_orbit_json(
-        &linked_worktree,
-        &home,
-        &["auto-task", "list", "--format", "json"],
-        None,
-    );
-    assert!(
-        !visible
-            .as_array()
-            .expect("rows")
-            .iter()
-            .any(|row| row["name"] == "plugin-probe"),
-        "inactive plugin definitions stay hidden"
-    );
-    let all = run_orbit_json(
-        &linked_worktree,
-        &home,
-        &["auto-task", "list", "--all", "--format", "json"],
-        None,
-    );
-    assert!(
-        all.as_array()
-            .expect("rows")
-            .iter()
-            .any(|row| row["name"] == "plugin-probe"
-                && row["inactive_plugin"]["namespace"] == "absent-probe")
-    );
+    assert_inactive_plugin(&fixture, &linked_worktree, "plugin-probe", &main_orbit);
 
     #[cfg(unix)]
     {
@@ -1173,29 +925,19 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
             linked_orbit.join("auto_tasks/workspace-only.yaml"),
         )
         .expect("symlink candidate");
-        let confined = run_orbit_output(
+        let confined = fixture.output(
             &linked_worktree,
-            &home,
             &["auto-task", "show", "workspace-only", "--json"],
-            None,
         );
         assert!(
             !confined.status.success(),
             "a symlinked candidate cannot redirect or fall back"
         );
-        let listed = run_orbit_json(
-            &linked_worktree,
-            &home,
-            &["auto-task", "list", "--format", "json"],
-            None,
-        );
-        assert!(
-            !listed
-                .as_array()
-                .expect("rows")
-                .iter()
-                .any(|row| row["name"] == "workspace-only"),
-            "a symlinked local entry must not expose the shared definition"
+        let listed = fixture.auto_tasks(&linked_worktree, false);
+        assert_auto_task_hidden(
+            &listed,
+            "workspace-only",
+            "a symlinked local entry must not expose the shared definition",
         );
     }
 
@@ -1204,7 +946,7 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
         "invalid: [",
     )
     .expect("shared catalog fault");
-    let doctor = run_orbit_output(&linked_worktree, &home, &["doctor", "--json"], None);
+    let doctor = fixture.output(&linked_worktree, &["doctor", "--json"]);
     let checks: Vec<Value> = serde_json::from_slice(&doctor.stdout).expect("doctor rows");
     let auto_tasks = checks
         .iter()
@@ -1223,27 +965,19 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
         "worktree diagnostics must inspect the shared catalog: {auto_tasks}"
     );
 
-    let outside_checkout = temp.path().to_string_lossy().into_owned();
+    let outside_checkout = fixture.temp.path().to_string_lossy().into_owned();
     for rejected in ["no-such-workspace", outside_checkout.as_str()] {
-        let mut command = cargo_bin_cmd!("orbit");
-        command
-            .current_dir(&main_repo)
-            .env(
-                "PATH",
-                stub_first_path(&plant_agent_cli_stub(&home, "codex")),
-            )
-            .env("HOME", &home)
-            .env("USERPROFILE", &home)
-            .args([
+        let mut command = fixture.command(
+            main_repo,
+            &[
                 "--workspace",
                 rejected,
                 "auto-task",
                 "show",
                 "candidate-probe",
                 "--json",
-            ]);
-        clear_inherited_authority_env(&mut command);
-        set_orbit_root_env(&mut command, None);
+            ],
+        );
         let assert = command.assert().failure();
         let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
         assert!(
@@ -1254,40 +988,17 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
 }
 
 fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    let main_repo = temp.path().join("repo");
-    let linked_worktree = temp.path().join("repo-jrun");
-    let elsewhere = temp.path().join("elsewhere");
-    fs::create_dir_all(&home).expect("create home");
-    fs::create_dir_all(&main_repo).expect("create main repo");
-    fs::create_dir_all(&elsewhere).expect("create unrelated cwd");
-    crate::git_repo::SeededRepo::new(&main_repo)
-        .host_default_branch()
-        .readme("# orbit\n")
-        .build();
-    crate::git_repo::run(
-        &main_repo,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            "orbit-auto-task-worktree-write",
-            linked_worktree.to_str().expect("utf8 worktree path"),
-        ],
-    );
-    run_orbit_success(&main_repo, &home, &["workspace", "init"], None);
+    let fixture = Fixture::seeded("repo");
+    let main_repo = fixture.repo.as_path();
+    let elsewhere = fixture.temp.path().join("elsewhere");
 
-    let main_repo = fs::canonicalize(&main_repo).expect("canonicalize main repo");
-    let linked_worktree = fs::canonicalize(&linked_worktree).expect("canonicalize worktree");
+    fs::create_dir_all(&elsewhere).expect("create unrelated cwd");
+    let linked_worktree =
+        fixture.init_worktree("repo-jrun", Some("orbit-auto-task-worktree-write"));
+
     let main_orbit = main_repo.join(".orbit");
     let linked_orbit = linked_worktree.join(".orbit");
-    let workspaces = run_orbit_json(
-        &main_repo,
-        &home,
-        &["workspace", "list", "--format", "json"],
-        None,
-    );
+    let workspaces = fixture.json(main_repo, &["workspace", "list", "--format", "json"]);
     let workspace_id = workspaces
         .as_array()
         .and_then(|rows| rows.first())
@@ -1301,9 +1012,8 @@ fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
         .unwrap_or_else(|| panic!("expected registered workspace name in {workspaces}"))
         .to_string();
 
-    let added = run_orbit_json(
+    let added = fixture.json(
         &linked_worktree,
-        &home,
         &[
             "--workspace",
             &workspace_id,
@@ -1319,7 +1029,6 @@ fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
             "Written from the linked worktree",
             "--json",
         ],
-        None,
     );
     assert_eq!(added["name"], "worktree-crud");
     let worktree_yaml = linked_orbit.join("auto_tasks/worktree-crud.yaml");
@@ -1338,9 +1047,8 @@ fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
         "must not invent a worktree-local task store"
     );
 
-    run_orbit_success(
+    fixture.success(
         &linked_worktree,
-        &home,
         &[
             "--workspace",
             &workspace_name,
@@ -1350,11 +1058,9 @@ fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
             "--description",
             "Updated in the worktree",
         ],
-        None,
     );
-    run_orbit_success(
+    fixture.success(
         &linked_worktree,
-        &home,
         &[
             "--workspace",
             &workspace_id,
@@ -1363,7 +1069,6 @@ fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
             "worktree-crud",
             "off",
         ],
-        None,
     );
     let yaml = fs::read_to_string(&worktree_yaml).expect("read worktree yaml");
     assert!(
@@ -1379,9 +1084,8 @@ fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
         "update/toggle must not create primary YAML"
     );
 
-    let from_elsewhere = run_orbit_json(
+    let from_elsewhere = fixture.json(
         &elsewhere,
-        &home,
         &[
             "--workspace",
             &workspace_id,
@@ -1395,7 +1099,6 @@ fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
             "Primary from elsewhere",
             "--json",
         ],
-        None,
     );
     assert_eq!(from_elsewhere["name"], "primary-from-elsewhere");
     assert!(
@@ -1411,16 +1114,9 @@ fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
     );
 
     let worktree_root = linked_orbit.to_string_lossy().into_owned();
-    let mut shadowed = cargo_bin_cmd!("orbit");
-    shadowed
-        .current_dir(&linked_worktree)
-        .env(
-            "PATH",
-            stub_first_path(&plant_agent_cli_stub(&home, "codex")),
-        )
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .args([
+    let mut shadowed = fixture.command(
+        &linked_worktree,
+        &[
             "--root",
             &worktree_root,
             "auto-task",
@@ -1431,9 +1127,8 @@ fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
             "60",
             "--title",
             "Shadow store",
-        ]);
-    clear_inherited_authority_env(&mut shadowed);
-    set_orbit_root_env(&mut shadowed, None);
+        ],
+    );
     let assert = shadowed.assert().failure();
     let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
     assert!(
@@ -1443,19 +1138,9 @@ fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
         "--root at the worktree .orbit must be refused as a store shadow: {stderr}"
     );
 
-    let mut managed = cargo_bin_cmd!("orbit");
-    managed
-        .current_dir(&linked_worktree)
-        .env(
-            "PATH",
-            stub_first_path(&plant_agent_cli_stub(&home, "codex")),
-        )
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .env("ORBIT_WORKSPACE", &workspace_id)
-        .env("ORBIT_MANAGED_RUN_CONTEXT", "1")
-        .env("ORBIT_RUN_ID", "jrun-auto-task-worktree")
-        .args([
+    let mut managed = fixture.command(
+        &linked_worktree,
+        &[
             "auto-task",
             "add",
             "--name",
@@ -1465,9 +1150,8 @@ fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
             "--title",
             "Managed envelope",
             "--json",
-        ]);
-    clear_inherited_authority_env(&mut managed);
-    set_orbit_root_env(&mut managed, None);
+        ],
+    );
     managed.env("ORBIT_WORKSPACE", &workspace_id);
     managed.env("ORBIT_MANAGED_RUN_CONTEXT", "1");
     managed.env("ORBIT_RUN_ID", "jrun-auto-task-worktree");
@@ -1494,27 +1178,18 @@ fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
 /// unrelated WAL writer holds the already-current task registry. The parent
 /// keeps supervising the child; no fixture claims the run on its behalf.
 fn detached_worker_bootstraps_and_claims_while_registry_writer_is_held() {
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    let repo = temp.path().join("repo");
-    let custom_root = temp.path().join("custom-orbit");
-    fs::create_dir_all(&home).expect("create home");
-    fs::create_dir_all(&repo).expect("create repo");
-    crate::git_repo::SeededRepo::new(&repo)
-        .host_default_branch()
-        .readme("# orbit\n")
-        .build();
+    let fixture = Fixture::seeded("repo");
+    let repo = fixture.repo.as_path();
+    let custom_root = fixture.temp.path().join("custom-orbit");
 
-    run_orbit_success(
-        &repo,
-        &home,
+    fixture.success(
+        repo,
         &[
             "--root",
             custom_root.to_str().expect("utf8 custom root"),
             "workspace",
             "init",
         ],
-        None,
     );
     pin_default_crew_for_isolated_root(&custom_root);
 
@@ -1558,9 +1233,8 @@ spec:
 
     let custom_root_arg = custom_root.to_string_lossy().into_owned();
     let job_path_arg = job_path.to_string_lossy().into_owned();
-    let submitted = run_orbit_json(
-        &repo,
-        &home,
+    let submitted = fixture.json(
+        repo,
         &[
             "--root",
             &custom_root_arg,
@@ -1569,7 +1243,6 @@ spec:
             &job_path_arg,
             "--json",
         ],
-        None,
     );
     let run_id = submitted["run_id"]
         .as_str()
@@ -1597,28 +1270,10 @@ spec:
 }
 
 fn doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean() {
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    let main_repo = temp.path().join("repo");
-    let linked_worktree = temp.path().join("repo-doctor");
-    fs::create_dir_all(&home).expect("create home");
-    fs::create_dir_all(&main_repo).expect("create main repo");
+    let fixture = Fixture::seeded("repo");
+    let main_repo = fixture.repo.as_path();
 
-    crate::git_repo::SeededRepo::new(&main_repo)
-        .host_default_branch()
-        .readme("# orbit\n")
-        .build();
-    crate::git_repo::run(
-        &main_repo,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            "orbit-worktree-doctor",
-            linked_worktree.to_str().expect("utf8 worktree path"),
-        ],
-    );
-    run_orbit_success(&main_repo, &home, &["workspace", "init"], None);
+    let linked_worktree = fixture.init_worktree("repo-doctor", Some("orbit-worktree-doctor"));
 
     let local_marker = linked_worktree.join(".orbit/graph/local.db");
     let shared_marker = main_repo.join(".orbit/knowledge/graph/shared.db");
@@ -1627,41 +1282,27 @@ fn doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean() {
         fs::write(marker, b"retired").expect("write graph marker");
     }
 
-    let ordinary = run_orbit_json(&linked_worktree, &home, &["doctor", "--json"], None);
+    let ordinary = fixture.json(&linked_worktree, &["doctor", "--json"]);
     assert!(local_marker.exists());
     assert!(shared_marker.exists());
     assert!(
-        ordinary
-            .as_array()
-            .expect("doctor rows")
+        json_rows(&ordinary)
             .iter()
             .all(|row| row["check"] != "graph-index")
     );
 
-    let cleaned = run_orbit_json(
-        &linked_worktree,
-        &home,
-        &["doctor", "--remove-graph", "--json"],
-        None,
-    );
+    let cleaned = fixture.json(&linked_worktree, &["doctor", "--remove-graph", "--json"]);
     assert!(!local_marker.exists());
     assert!(!shared_marker.exists());
     assert!(
-        cleaned
-            .as_array()
-            .expect("doctor rows")
+        json_rows(&cleaned)
             .iter()
             .all(|row| row["check"] != "graph-index")
     );
 
     // Parsing succeeds again with no cleanup prose mixed into stdout, and
     // absence remains a successful no-op.
-    run_orbit_json(
-        &linked_worktree,
-        &home,
-        &["doctor", "--remove-graph", "--json"],
-        None,
-    );
+    fixture.json(&linked_worktree, &["doctor", "--remove-graph", "--json"]);
 }
 
 /// [ORB-12131, ORB-12143] `--fix-orphan-task-stores` deletes task data. It
@@ -1693,25 +1334,25 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
         return;
     }
 
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    write_machine_identity(&home);
+    let fixture = Fixture::new("live");
+    let home = fixture.home.as_path();
+    write_machine_identity(home);
     // The pre-written global config seeds no crews, so routing falls back to
     // the built-in claude-backed `opus` and `system` crews. Without their CLI
     // every `doctor` run fails its provider checks, and the refusal asserted
     // below would hold for the wrong reason.
-    plant_agent_cli_stub(&home, "claude");
+    plant_agent_cli_stub(home, "claude");
     let partitions = home.join(".orbit/tasks/workspaces");
-    let deleted_volume = temp.path().join("deleted-volume");
-    let file_volume = temp.path().join("file-volume");
-    let empty_mount = temp.path().join("empty-mount");
-    let removed_mount = temp.path().join("removed-mount");
+    let deleted_volume = fixture.temp.path().join("deleted-volume");
+    let file_volume = fixture.temp.path().join("file-volume");
+    let empty_mount = fixture.temp.path().join("empty-mount");
+    let removed_mount = fixture.temp.path().join("removed-mount");
     #[cfg(unix)]
-    let dangling_parent = temp.path().join("dangling-parent");
+    let dangling_parent = fixture.temp.path().join("dangling-parent");
 
     let mut partition_of = std::collections::BTreeMap::new();
     let checkouts = vec![
-        ("live", temp.path().join("live")),
+        ("live", fixture.temp.path().join("live")),
         ("gone", deleted_volume.join("gone")),
         ("unreachable", file_volume.join("unreachable")),
         ("empty-mount", empty_mount.join("proj")),
@@ -1724,16 +1365,11 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
         checkouts
     };
     for (name, repo) in checkouts {
-        fs::create_dir_all(&repo).expect("create checkout");
-        crate::git_repo::SeededRepo::new(&repo)
-            .host_default_branch()
-            .readme("# orbit\n")
-            .build();
+        Fixture::seed_repo(&repo);
         let before = task_store_partitions(&partitions);
-        run_orbit_success(&repo, &home, &["workspace", "init", "--name", name], None);
-        run_orbit_success(
+        fixture.success(&repo, &["workspace", "init", "--name", name]);
+        fixture.success(
             &repo,
-            &home,
             &[
                 "task",
                 "add",
@@ -1744,7 +1380,6 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
                 "--complexity",
                 "low",
             ],
-            None,
         );
         let created = task_store_partitions(&partitions)
             .into_keys()
@@ -1770,7 +1405,7 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
     #[cfg(unix)]
     {
         fs::remove_dir_all(&dangling_parent).expect("remove symlink parent checkout");
-        std::os::unix::fs::symlink(temp.path().join("offline-volume"), &dangling_parent)
+        std::os::unix::fs::symlink(fixture.temp.path().join("offline-volume"), &dangling_parent)
             .expect("create dangling parent symlink");
         assert!(fs::symlink_metadata(&dangling_parent).is_ok());
         assert_eq!(
@@ -1822,11 +1457,9 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
         );
     }
 
-    let refused = run_orbit_output(
-        &temp.path().join("live"),
-        &home,
+    let refused = fixture.output(
+        &fixture.temp.path().join("live"),
         &["doctor", "--fix-orphan-task-stores", "--json"],
-        None,
     );
     assert!(
         !refused.status.success(),
@@ -1839,16 +1472,12 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
         "an unconfirmed repair must not delete anything"
     );
 
-    let repaired = run_orbit_json(
-        &temp.path().join("live"),
-        &home,
+    let repaired = fixture.json(
+        &fixture.temp.path().join("live"),
         &["doctor", "--fix-orphan-task-stores", "--confirm", "--json"],
-        None,
     );
     assert!(
-        repaired
-            .as_array()
-            .expect("doctor rows")
+        json_rows(&repaired)
             .iter()
             .any(|row| row["check"] == "fix-orphan-task-stores" && row["status"] == "ok"),
         "the confirmed repair reports its outcome: {repaired}"
@@ -1890,15 +1519,10 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
 /// holds through the OS lock.
 #[cfg(unix)]
 fn doctor_stale_lock_repair_keeps_locks_a_live_process_holds() {
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    let repo = temp.path().join("repo");
-    fs::create_dir_all(&repo).expect("create repo");
-    crate::git_repo::SeededRepo::new(&repo)
-        .host_default_branch()
-        .readme("# orbit\n")
-        .build();
-    run_orbit_success(&repo, &home, &["workspace", "init"], None);
+    let fixture = Fixture::seeded("repo");
+    let repo = fixture.repo.as_path();
+
+    fixture.init(repo);
 
     let state_dir = repo.join(".orbit/state");
     let dead_pid = reaped_child_pid();
@@ -1915,17 +1539,11 @@ fn doctor_stale_lock_repair_keeps_locks_a_live_process_holds() {
         .expect("open held lock");
     held.lock().expect("hold the lock");
 
-    let rows = run_orbit_json(
-        &repo,
-        &home,
-        &["doctor", "--fix-stale-locks", "--json"],
-        None,
-    );
+    let rows = fixture.json(repo, &["doctor", "--fix-stale-locks", "--json"]);
     held.unlock().expect("release the lock");
 
     assert!(
-        rows.as_array()
-            .expect("doctor rows")
+        json_rows(&rows)
             .iter()
             .any(|row| row["check"] == "fix-stale-locks" && row["status"] == "ok"),
         "the repair reports its outcome: {rows}"
@@ -1952,18 +1570,13 @@ fn doctor_stale_lock_repair_keeps_locks_a_live_process_holds() {
 /// this real CLI refusal keeps the ancestor link and outside sentinels.
 #[cfg(unix)]
 fn doctor_graph_cleanup_never_deletes_through_symlinks() {
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    let repo = temp.path().join("repo");
-    fs::create_dir_all(&repo).expect("create repo");
-    crate::git_repo::SeededRepo::new(&repo)
-        .host_default_branch()
-        .readme("# orbit\n")
-        .build();
-    run_orbit_success(&repo, &home, &["workspace", "init"], None);
+    let fixture = Fixture::seeded("repo");
+    let repo = fixture.repo.as_path();
+
+    fixture.init(repo);
     let orbit_dir = repo.join(".orbit");
 
-    let outside = temp.path().join("outside");
+    let outside = fixture.temp.path().join("outside");
     fs::create_dir_all(&outside).expect("create outside");
     let outside_marker = outside.join("keep.db");
     fs::write(&outside_marker, b"keep").expect("write outside marker");
@@ -1977,7 +1590,7 @@ fn doctor_graph_cleanup_never_deletes_through_symlinks() {
     }
     std::os::unix::fs::symlink(&outside, &knowledge_link).expect("link knowledge outside");
 
-    let refused = run_orbit_output(&repo, &home, &["doctor", "--remove-graph", "--json"], None);
+    let refused = fixture.output(repo, &["doctor", "--remove-graph", "--json"]);
     assert!(
         !refused.status.success(),
         "a symlinked ancestor is refused: {}",
@@ -2013,47 +1626,21 @@ fn root_resolution_precedence() {
         expected: Option<(&'a Path, &'a Path)>,
     }
 
-    let temp = tempdir().expect("tempdir");
-    let base = fs::canonicalize(temp.path()).expect("canonical tempdir");
-    let home = base.join("home");
-    let main_repo = base.join("main");
+    let fixture = Fixture::seeded("main");
+    let base = fs::canonicalize(fixture.temp.path()).expect("canonical tempdir");
+    let home = fixture.home.as_path();
+    let main_repo = fixture.repo.as_path();
     let other_repo = base.join("other");
     let linked = base.join("main-linked");
     let outside = base.join("outside");
     let uninitialized = base.join("uninitialized");
-    for dir in [&home, &main_repo, &other_repo, &outside, &uninitialized] {
+    for dir in [home, main_repo, &other_repo, &outside, &uninitialized] {
         fs::create_dir_all(dir).expect("create fixture directory");
     }
-    crate::git_repo::SeededRepo::new(&main_repo)
-        .host_default_branch()
-        .readme("# orbit\n")
-        .build();
-    crate::git_repo::SeededRepo::new(&other_repo)
-        .host_default_branch()
-        .readme("# orbit\n")
-        .build();
-    crate::git_repo::run(
-        &main_repo,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            "root-precedence",
-            linked.to_str().expect("utf8 worktree path"),
-        ],
-    );
-    run_orbit_success(
-        &main_repo,
-        &home,
-        &["workspace", "init", "--name", "main"],
-        None,
-    );
-    run_orbit_success(
-        &other_repo,
-        &home,
-        &["workspace", "init", "--name", "other"],
-        None,
-    );
+    Fixture::seed_repo(&other_repo);
+    fixture.linked_worktree(&linked, Some("root-precedence"));
+    fixture.success(main_repo, &["workspace", "init", "--name", "main"]);
+    fixture.success(&other_repo, &["workspace", "init", "--name", "other"]);
     let subdirectory = main_repo.join("src/nested");
     fs::create_dir_all(&subdirectory).expect("create subdirectory");
 
@@ -2103,7 +1690,7 @@ fn root_resolution_precedence() {
         },
         Case {
             name: "--root must name an initialized workspace",
-            cwd: &main_repo,
+            cwd: main_repo,
             root_flag: Some(&uninitialized),
             env_root: None,
             workspace: None,
@@ -2111,7 +1698,7 @@ fn root_resolution_precedence() {
         },
         Case {
             name: "ORBIT_ROOT must name an initialized workspace",
-            cwd: &main_repo,
+            cwd: main_repo,
             root_flag: None,
             env_root: Some(&uninitialized),
             workspace: None,
@@ -2129,7 +1716,7 @@ fn root_resolution_precedence() {
         }
         args.extend(["config", "show", "--json"].map(String::from));
         let args = args.iter().map(String::as_str).collect::<Vec<_>>();
-        let output = run_orbit_output(case.cwd, &home, &args, case.env_root);
+        let output = fixture.output_with_root(case.cwd, &args, case.env_root);
         let stdout = String::from_utf8_lossy(&output.stdout);
         match case.expected {
             Some((shared_root, local_root)) => {
@@ -2298,32 +1885,6 @@ fn orbit_command(
     command
 }
 
-fn run_orbit_success(cwd: &Path, home: &Path, args: &[&str], orbit_root: Option<&Path>) {
-    orbit_command(cwd, home, args, orbit_root)
-        .assert()
-        .success();
-}
-
-fn run_orbit_json(cwd: &Path, home: &Path, args: &[&str], orbit_root: Option<&Path>) -> Value {
-    let assert = orbit_command(cwd, home, args, orbit_root)
-        .assert()
-        .success();
-    serde_json::from_slice(&assert.get_output().stdout).expect("orbit json output")
-}
-
-/// Run `orbit` and return its output whatever the exit status, for cases
-/// that assert a refusal.
-fn run_orbit_output(
-    cwd: &Path,
-    home: &Path,
-    args: &[&str],
-    orbit_root: Option<&Path>,
-) -> std::process::Output {
-    orbit_command(cwd, home, args, orbit_root)
-        .output()
-        .expect("run orbit")
-}
-
 fn write_machine_identity(home: &Path) {
     fs::create_dir_all(home.join(".orbit")).expect("create global root");
     fs::write(
@@ -2435,6 +1996,70 @@ fn stub_first_path(bin: &Path) -> std::ffi::OsString {
     std::env::join_paths(entries).expect("join PATH entries")
 }
 
+fn assert_inactive_plugin(fixture: &Fixture, cwd: &Path, name: &str, source: &Path) {
+    let plugin = fixture.auto_task(cwd, name);
+    assert_eq!(plugin["inactive_plugin"]["namespace"], "absent-probe");
+    assert!(
+        plugin["skipped_reason"]
+            .as_str()
+            .expect("inactive reason")
+            .contains(source.to_str().expect("source path")),
+        "inactive reason must name the supplying catalog: {plugin}"
+    );
+    let visible = fixture.auto_tasks(cwd, false);
+    assert_auto_task_hidden(&visible, name, "inactive plugin definitions stay hidden");
+    let all = fixture.auto_tasks(cwd, true);
+    assert!(json_rows(&all).iter().any(|row| row["name"] == name
+        && row["inactive_plugin"]["namespace"] == "absent-probe"));
+}
+
+fn json_rows(value: &Value) -> &[Value] {
+    value
+        .as_array()
+        .unwrap_or_else(|| panic!("expected JSON rows: {value}"))
+}
+
+fn assert_auto_task_hidden(listed: &Value, name: &str, reason: &str) {
+    assert!(
+        !json_rows(listed).iter().any(|row| row["name"] == name),
+        "{reason}: {name}: {listed}"
+    );
+}
+
+fn local_write_commands<'a>(description: &'a str, reason: &'a str) -> [Vec<&'a str>; 5] {
+    [
+        vec!["auto-task", "mint", "candidate-probe"],
+        vec![
+            "auto-task",
+            "update",
+            "candidate-probe",
+            "--description",
+            description,
+        ],
+        vec!["auto-task", "toggle", "candidate-probe", "on"],
+        vec![
+            "auto-task",
+            "recover",
+            "candidate-probe",
+            "--adopt-settings",
+            "--reason",
+            reason,
+        ],
+        vec!["auto-task", "reset", "candidate-probe", "--reason", reason],
+    ]
+}
+
+fn assert_definition_source(shown: &Value, root: &Path, path: &Path) {
+    assert_eq!(
+        shown["definition_source"]["root"],
+        root.to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        shown["definition_source"]["path"],
+        path.to_string_lossy().as_ref()
+    );
+}
+
 fn write_auto_task_fixture(orbit_dir: &Path, description: &str) {
     let directory = orbit_dir.join("auto_tasks");
     fs::create_dir_all(&directory).expect("create auto-task fixture directory");
@@ -2469,25 +2094,36 @@ updated_at: 2026-09-14T00:00:00Z
     .expect("write auto-task fixture");
 }
 
-/// [ORB-10981] `orbit --root <data-dir> doctor providers` from a cwd that is not
-/// the intended git checkout must not mint a checkout for `parent(data-dir)`.
-fn doctor_providers_with_explicit_root_does_not_bind_parent_of_data_dir() {
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    let data_dir = temp.path().join("qa-root");
-    let repo = temp.path().join("qa-ws");
-    fs::create_dir_all(&home).expect("create home");
-    fs::create_dir_all(&data_dir).expect("create data dir");
-    fs::create_dir_all(&repo).expect("create repo");
-    crate::git_repo::SeededRepo::new(&repo)
-        .host_default_branch()
-        .readme("# orbit\n")
-        .build();
+// The three historical setup paths share the same init -> bind -> list sequence.
+#[derive(Clone, Copy)]
+enum DataDirSetup {
+    Clean,
+    ProvidersFromHome,
+    SyntheticCheckout,
+}
 
+fn doctor_providers_with_explicit_root_does_not_bind_parent_of_data_dir() {
+    check_data_dir_checkout(DataDirSetup::ProvidersFromHome);
+}
+
+fn clean_root_workspace_init_then_auto_task_list_succeeds() {
+    check_data_dir_checkout(DataDirSetup::Clean);
+}
+
+fn workspace_init_force_rebinds_synthetic_data_dir_checkout() {
+    check_data_dir_checkout(DataDirSetup::SyntheticCheckout);
+}
+
+fn check_data_dir_checkout(setup: DataDirSetup) {
+    let fixture = Fixture::seeded("qa-ws");
+    let home = fixture.home.as_path();
+    let repo = fixture.repo.as_path();
+    let data_dir = fixture.temp.path().join("qa-root");
+    fs::create_dir_all(&data_dir).expect("create data dir");
     let data_dir_arg = data_dir.to_string_lossy().into_owned();
-    run_orbit_success(
-        &home,
-        &home,
+    let from_home = !matches!(setup, DataDirSetup::Clean);
+    fixture.success(
+        if from_home { home } else { repo },
         &[
             "init",
             "--non-interactive",
@@ -2498,220 +2134,61 @@ fn doctor_providers_with_explicit_root_does_not_bind_parent_of_data_dir() {
             "--root",
             &data_dir_arg,
         ],
-        None,
     );
-    run_orbit_success(
-        &home,
-        &home,
-        &[
-            "--root",
-            &data_dir_arg,
-            "doctor",
-            "providers",
-            "--format",
-            "json",
-        ],
-        None,
-    );
-
-    let parent = canonicalize_or_original(data_dir.parent().expect("data dir parent"));
-    for (workspace_id, repo_root, orbit_dir) in checkout_bindings(&data_dir) {
-        assert_ne!(
-            canonicalize_or_original(Path::new(&repo_root)),
-            parent,
-            "doctor providers bound parent(data-dir) as {workspace_id} repo_root={repo_root} orbit_dir={orbit_dir}"
+    if from_home {
+        fixture.success(
+            home,
+            &[
+                "--root",
+                &data_dir_arg,
+                "doctor",
+                "providers",
+                "--format",
+                "json",
+            ],
         );
     }
-
-    run_orbit_success(
-        &repo,
-        &home,
-        &[
-            "--root",
-            &data_dir_arg,
-            "workspace",
-            "init",
-            "--name",
-            "qa",
-            "--force",
-            "--format",
-            "json",
-        ],
-        None,
-    );
-    assert_workspace_commands_use_named_id(&repo, &home, &data_dir, "ws_qa");
-}
-
-/// [ORB-10981] Clean path: init + workspace init from the git checkout, no
-/// extra command from another cwd first.
-fn clean_root_workspace_init_then_auto_task_list_succeeds() {
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    let data_dir = temp.path().join("qa-root");
-    let repo = temp.path().join("qa-ws");
-    fs::create_dir_all(&home).expect("create home");
-    fs::create_dir_all(&data_dir).expect("create data dir");
-    fs::create_dir_all(&repo).expect("create repo");
-    crate::git_repo::SeededRepo::new(&repo)
-        .host_default_branch()
-        .readme("# orbit\n")
-        .build();
-
-    let data_dir_arg = data_dir.to_string_lossy().into_owned();
-    run_orbit_success(
-        &repo,
-        &home,
-        &[
-            "init",
-            "--non-interactive",
-            "--machine-name",
-            "qa",
-            "--task-prefix",
-            "QAZ",
-            "--root",
-            &data_dir_arg,
-        ],
-        None,
-    );
-    run_orbit_success(
-        &repo,
-        &home,
-        &[
-            "--root",
-            &data_dir_arg,
-            "workspace",
-            "init",
-            "--name",
-            "qa",
-            "--format",
-            "json",
-        ],
-        None,
-    );
-    assert_workspace_commands_use_named_id(&repo, &home, &data_dir, "ws_qa");
-}
-
-/// [ORB-10981] `--force` must rebind a leftover synthetic sqlite checkout so
-/// later commands are not split-brain against `workspaces.json`.
-fn workspace_init_force_rebinds_synthetic_data_dir_checkout() {
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    let data_dir = temp.path().join("qa-root");
-    let repo = temp.path().join("qa-ws");
-    fs::create_dir_all(&home).expect("create home");
-    fs::create_dir_all(&data_dir).expect("create data dir");
-    fs::create_dir_all(&repo).expect("create repo");
-    crate::git_repo::SeededRepo::new(&repo)
-        .host_default_branch()
-        .readme("# orbit\n")
-        .build();
-
-    let data_dir_arg = data_dir.to_string_lossy().into_owned();
-    run_orbit_success(
-        &home,
-        &home,
-        &[
-            "init",
-            "--non-interactive",
-            "--machine-name",
-            "qa",
-            "--task-prefix",
-            "QAZ",
-            "--root",
-            &data_dir_arg,
-        ],
-        None,
-    );
-    run_orbit_success(
-        &home,
-        &home,
-        &[
-            "--root",
-            &data_dir_arg,
-            "doctor",
-            "providers",
-            "--format",
-            "json",
-        ],
-        None,
-    );
-
-    seed_synthetic_data_dir_checkout(&data_dir);
-    run_orbit_success(
-        &repo,
-        &home,
-        &[
-            "--root",
-            &data_dir_arg,
-            "workspace",
-            "init",
-            "--name",
-            "qa",
-            "--force",
-            "--format",
-            "json",
-        ],
-        None,
-    );
-
-    let repo_canon = canonicalize_or_original(&repo);
-    let data_canon = canonicalize_or_original(&data_dir);
-    let bindings = checkout_bindings(&data_dir);
-    assert!(
-        bindings.iter().any(|(workspace_id, repo_root, orbit_dir)| {
-            workspace_id == "ws_qa"
-                && canonicalize_or_original(Path::new(repo_root)) == repo_canon
-                && canonicalize_or_original(Path::new(orbit_dir)) == data_canon
-        }),
-        "expected ws_qa checkout for the git repo; got {bindings:?}"
-    );
-    assert!(
-        bindings
-            .iter()
-            .all(|(workspace_id, _, orbit_dir)| workspace_id != "tmp-5b7149"
-                || canonicalize_or_original(Path::new(orbit_dir)) != data_canon),
-        "synthetic tmp-* row must not keep the data dir: {bindings:?}"
-    );
-    assert_workspace_commands_use_named_id(&repo, &home, &data_dir, "ws_qa");
-}
-
-fn assert_workspace_commands_use_named_id(repo: &Path, home: &Path, data_dir: &Path, id: &str) {
-    let data_dir_arg = data_dir.to_string_lossy().into_owned();
-    let listed = run_orbit_json(
-        repo,
-        home,
-        &[
-            "--root",
-            &data_dir_arg,
-            "workspace",
-            "list",
-            "--format",
-            "json",
-        ],
-        None,
-    );
-    let workspaces = listed
-        .as_array()
-        .unwrap_or_else(|| panic!("workspace list array: {listed}"));
-    assert!(
-        workspaces
-            .iter()
-            .any(|workspace| workspace["id"].as_str() == Some(id)),
-        "workspace list missing {id}: {listed}"
-    );
-    run_orbit_json(
-        repo,
-        home,
-        &[
-            "--root",
-            &data_dir_arg,
-            "auto-task",
-            "list",
-            "--format",
-            "json",
-        ],
-        None,
-    );
+    match setup {
+        DataDirSetup::ProvidersFromHome => {
+            let parent = canonicalize_or_original(data_dir.parent().expect("data dir parent"));
+            for (workspace_id, repo_root, orbit_dir) in checkout_bindings(&data_dir) {
+                assert_ne!(
+                    canonicalize_or_original(Path::new(&repo_root)),
+                    parent,
+                    "doctor providers bound parent(data-dir) as {workspace_id} repo_root={repo_root} orbit_dir={orbit_dir}"
+                );
+            }
+        }
+        DataDirSetup::SyntheticCheckout => seed_synthetic_data_dir_checkout(&data_dir),
+        DataDirSetup::Clean => {}
+    }
+    let mut bind = vec!["--root", &data_dir_arg, "workspace", "init", "--name", "qa"];
+    if from_home {
+        bind.push("--force");
+    }
+    bind.extend(["--format", "json"]);
+    fixture.success(repo, &bind);
+    if matches!(setup, DataDirSetup::SyntheticCheckout) {
+        let repo_canon = canonicalize_or_original(repo);
+        let data_canon = canonicalize_or_original(&data_dir);
+        let bindings = checkout_bindings(&data_dir);
+        assert!(
+            bindings.iter().any(|(workspace_id, repo_root, orbit_dir)| {
+                workspace_id == "ws_qa"
+                    && canonicalize_or_original(Path::new(repo_root)) == repo_canon
+                    && canonicalize_or_original(Path::new(orbit_dir)) == data_canon
+            }),
+            "expected ws_qa checkout for the git repo; got {bindings:?}"
+        );
+        assert!(
+            bindings
+                .iter()
+                .all(|(workspace_id, _, orbit_dir)| workspace_id != "tmp-5b7149"
+                    || canonicalize_or_original(Path::new(orbit_dir)) != data_canon),
+            "synthetic tmp-* row must not keep the data dir: {bindings:?}"
+        );
+    }
+    fixture.assert_workspace_commands_use_named_id(repo, &data_dir, "ws_qa");
 }
 
 fn checkout_bindings(data_dir: &Path) -> Vec<(String, String, String)> {
@@ -2773,121 +2250,65 @@ fn canonicalize_or_original(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
+// Keep failure output tied to the historical scenario name, including assertions in shared helpers.
+macro_rules! contract_rows {
+    ($( $(#[$meta:meta])* $check:ident ),+ $(,)?) => {
+        for (name, check) in [$( $(#[$meta])* (stringify!($check), $check as fn()),)+] {
+            tracing::info!(case = name, "CLI contract row");
+            assert!(std::panic::catch_unwind(check).is_ok(), "CLI contract row {name} failed");
+        }
+    };
+}
+
 #[test]
 fn checkout_routing_contracts_0() {
-    for (name, check) in [
-        (
-            "tool_run_explicit_workspace_resolves_from_home_and_temp_directory",
-            tool_run_explicit_workspace_resolves_from_home_and_temp_directory as fn(),
-        ),
-        (
-            "config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides",
-            config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides as fn(),
-        ),
-        (
-            "submodule_bootstrap_and_runtime_keep_the_submodule_workspace",
-            submodule_bootstrap_and_runtime_keep_the_submodule_workspace as fn(),
-        ),
+    contract_rows! {
+        tool_run_explicit_workspace_resolves_from_home_and_temp_directory,
+        config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides,
+        submodule_bootstrap_and_runtime_keep_the_submodule_workspace,
         #[cfg(unix)]
-        (
-            "submodule_roots_remain_independent_when_git_is_unavailable",
-            submodule_roots_remain_independent_when_git_is_unavailable as fn(),
-        ),
-    ] {
-        tracing::info!(case = name, "CLI contract row");
-        check();
+        submodule_roots_remain_independent_when_git_is_unavailable,
     }
 }
 
 #[test]
 fn checkout_routing_contracts_1() {
-    for (name, check) in [
-        (
-            "submodule_runtime_respects_its_registered_data_directory",
-            submodule_runtime_respects_its_registered_data_directory as fn(),
-        ),
+    contract_rows! {
+        submodule_runtime_respects_its_registered_data_directory,
         #[cfg(unix)]
-        (
-            "linked_worktree_gitfile_fallback_checks_the_common_directory",
-            linked_worktree_gitfile_fallback_checks_the_common_directory as fn(),
-        ),
+        linked_worktree_gitfile_fallback_checks_the_common_directory,
         #[cfg(unix)]
-        (
-            "workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validation",
-            workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validation
-                as fn(),
-        ),
-        (
-            "auto_task_show_keeps_alternate_extension_candidates_local",
-            auto_task_show_keeps_alternate_extension_candidates_local as fn(),
-        ),
-        (
-            "auto_task_show_reports_and_honors_the_selected_definition_source",
-            auto_task_show_reports_and_honors_the_selected_definition_source as fn(),
-        ),
-    ] {
-        tracing::info!(case = name, "CLI contract row");
-        check();
+        workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validation,
+        auto_task_show_keeps_alternate_extension_candidates_local,
+        auto_task_show_reports_and_honors_the_selected_definition_source,
     }
 }
 
 #[test]
 fn checkout_routing_contracts_2() {
-    for (name, check) in [
-        (
-            "auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root",
-            auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root as fn(),
-        ),
-        (
-            "detached_worker_bootstraps_and_claims_while_registry_writer_is_held",
-            detached_worker_bootstraps_and_claims_while_registry_writer_is_held as fn(),
-        ),
-        (
-            "doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean",
-            doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean as fn(),
-        ),
+    contract_rows! {
+        auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root,
+        detached_worker_bootstraps_and_claims_while_registry_writer_is_held,
+        doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean,
         #[cfg(unix)]
-        (
-            "doctor_stale_lock_repair_keeps_locks_a_live_process_holds",
-            doctor_stale_lock_repair_keeps_locks_a_live_process_holds as fn(),
-        ),
-    ] {
-        tracing::info!(case = name, "CLI contract row");
-        check();
+        doctor_stale_lock_repair_keeps_locks_a_live_process_holds,
     }
 }
 
 #[test]
 fn checkout_routing_contracts_3() {
-    for (name, check) in [
+    contract_rows! {
         #[cfg(unix)]
-        (
-            "doctor_graph_cleanup_never_deletes_through_symlinks",
-            doctor_graph_cleanup_never_deletes_through_symlinks as fn(),
-        ),
-        (
-            "root_resolution_precedence",
-            root_resolution_precedence as fn(),
-        ),
-        (
-            "doctor_providers_with_explicit_root_does_not_bind_parent_of_data_dir",
-            doctor_providers_with_explicit_root_does_not_bind_parent_of_data_dir as fn(),
-        ),
-        (
-            "clean_root_workspace_init_then_auto_task_list_succeeds",
-            clean_root_workspace_init_then_auto_task_list_succeeds as fn(),
-        ),
-    ] {
-        tracing::info!(case = name, "CLI contract row");
-        check();
+        doctor_graph_cleanup_never_deletes_through_symlinks,
+        root_resolution_precedence,
+        doctor_providers_with_explicit_root_does_not_bind_parent_of_data_dir,
+        clean_root_workspace_init_then_auto_task_list_succeeds,
     }
 }
 
 #[test]
 fn checkout_routing_contracts_4() {
-    tracing::info!(
-        case = "workspace_init_force_rebinds_synthetic_data_dir_checkout",
-        "CLI contract row"
-    );
-    workspace_init_force_rebinds_synthetic_data_dir_checkout();
+    contract_rows! {
+        workspace_init_force_rebinds_synthetic_data_dir_checkout,
+    }
 }
