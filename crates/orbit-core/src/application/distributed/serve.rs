@@ -800,6 +800,7 @@ impl crate::OrbitRuntime {
                 tag_instructions: Some(self.captured_tag_instructions(&request.ship)),
                 executor_host_os: self.executor_host_os_limits()?,
                 repairs_only,
+                crew_pools: self.dispatch_crew_pools(),
             },
             owner_binary_version(),
             &self.paths().repo_root,

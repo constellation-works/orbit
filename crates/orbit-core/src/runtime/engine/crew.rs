@@ -6,7 +6,7 @@ use orbit_types::identity::{
     Crew, CrewAssignment, all_agent_families, infer_agent_family_from_model, resolve_crew,
 };
 use orbit_types::record::{CREW_DISCOVERY_SCHEMA_VERSION, CrewDiscoveryEntryV1, CrewDiscoveryV1};
-use orbit_types::task::{Task, is_valid_orb_task_id};
+use orbit_types::task::{Task, TaskComplexity, is_valid_orb_task_id};
 use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, JobV2, JobV2Step, JobV2StepBody, ProviderSource,
 };
@@ -753,7 +753,18 @@ impl OrbitRuntime {
                 continue;
             }
             let crew = match claimed.filter(|snapshot| snapshot.id == task_id) {
-                Some(snapshot) => snapshot.crew().map(ToOwned::to_owned),
+                // [ORB-17773] An automatic assignment is re-drawn under
+                // this follower's own usage pressure; `None` keeps the
+                // owner's crew exactly as the snapshot carries it.
+                Some(snapshot) => self
+                    .claimed_leaf_redrawn_crew(
+                        input,
+                        &snapshot.id,
+                        snapshot.crew(),
+                        snapshot.crew_source.as_deref(),
+                        snapshot.complexity,
+                    )
+                    .or_else(|| snapshot.crew().map(ToOwned::to_owned)),
                 None => match self.stores().tasks().get_task(&task_id)? {
                     Some(task) => normalized_task_crew(task.crew.as_deref()),
                     None => continue,
@@ -844,6 +855,12 @@ struct ClaimedTaskSnapshot {
     id: String,
     #[serde(default)]
     crew: Option<String>,
+    /// How `crew` was assigned on the owner [ORB-17773]; absent on a leaf
+    /// created before it was carried, which reads as not automatic.
+    #[serde(default)]
+    crew_source: Option<String>,
+    #[serde(default)]
+    complexity: Option<TaskComplexity>,
 }
 
 impl ClaimedTaskSnapshot {
@@ -863,7 +880,7 @@ fn claimed_task_from_input(input: &Value) -> Result<Option<ClaimedTaskSnapshot>,
             .map_err(|error| {
                 OrbitError::InvalidInput(format!(
                     "`{CLAIMED_TASK_INPUT_KEY}` must be an object with a task `id` and optional \
-                     `crew`: {error}"
+                     `crew`, `crew_source` and `complexity`: {error}"
                 ))
             }),
     }

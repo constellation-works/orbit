@@ -215,6 +215,7 @@
         "application/job/tests/crew_pools/activity.rs::empty_final_recovery_pool_refuses_to_draw",
         "application/job/tests/crew_pools/activity.rs::final_recovery_crew_draw_honours_the_run_allowlist",
         "application/job/tests/crew_pools/activity.rs::final_recovery_crew_is_drawn_once_and_frozen_for_the_run",
+        "application/job/tests/crew_pools/admission.rs::a_claimed_leaf_redraws_an_automatic_crew_on_the_followers_own_pressure",
         "application/job/tests/crew_pools/admission.rs::a_limited_pool_member_is_never_drawn_until_its_reading_resets",
         "application/job/tests/exec.rs::a_claimed_leaf_provider_limit_holds_and_records_a_deferral",
         "application/job/tests/exec.rs::held_and_unsuccessful_runs_finalize_despite_summary_store_faults",

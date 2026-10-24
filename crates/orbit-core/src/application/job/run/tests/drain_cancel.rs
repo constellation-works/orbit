@@ -495,6 +495,7 @@ fn admission(
             title: "stop-time admission".into(),
             complexity: None,
             crew: None,
+            crew_source: None,
             context_files: vec![],
             resume_candidate: None,
         },

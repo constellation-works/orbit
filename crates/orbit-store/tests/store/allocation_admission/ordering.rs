@@ -9,10 +9,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{Duration as ChronoDuration, Utc};
 use orbit_store::contracts::{
-    AdmissionAffinityClass, AdmissionCrewCapability, ExecutorCapability, ExecutorCensus,
-    EXECUTOR_CENSUS_LIVENESS_SECONDS, ExecutorCensusEntry, TaskDocumentUpdateParams,
+    AdmissionAffinityClass, AdmissionCrewCapability, AdmissionCrewPressure, ExecutorCapability,
+    ExecutorCensus, EXECUTOR_CENSUS_LIVENESS_SECONDS, ExecutorCensusEntry,
+    TaskDocumentUpdateParams,
 };
-use orbit_types::task::{AdmissionAffinityReach, ExecutorOsLimit, HostOs, Task};
+use orbit_types::task::{
+    AdmissionAffinityReach, ExecutorOsLimit, HostOs, Task, TaskComplexity,
+};
 
 use super::*;
 
@@ -57,6 +60,7 @@ fn crews(runnable: &[&str]) -> AdmissionCrewCapability {
         runnable: Some(runnable.iter().map(ToString::to_string).collect()),
         default_crew: Some("codex".into()),
         excluded: Vec::new(),
+        usage_pressure: Vec::new(),
     }
 }
 
@@ -428,4 +432,140 @@ fn census_rows_land_with_receipts_and_stay_live_while_claiming() {
     older.run_id = "an older drain".into();
     boundary.record_executor_census(&older).unwrap();
     assert_eq!(live(now)[OWNER].run_id, "owner-drain", "older never replaces newer");
+}
+
+/// [ORB-17773] The requester's reported weekly pressure is the lowest
+/// ordering key above age: of two tasks tied on band, priority, expiry
+/// and census reach, the one whose pool contains the requester's
+/// highest-pressure crew is offered first. A higher priority and an
+/// expiring task still lead, and a requester reporting no pressure
+/// keeps age order exactly. The admitted receipt carries the task's
+/// automatic crew source for the follower's own re-draw.
+#[test]
+fn pressure_orders_tied_candidates_below_priority_and_expiry() {
+    if !allocation_admission_isolated(
+        "ordering::pressure_orders_tied_candidates_below_priority_and_expiry",
+    ) {
+        return;
+    }
+    use TaskPriority::{High, Medium};
+
+    fn pooled(
+        owner: &Coordinated,
+        index: usize,
+        title: &str,
+        priority: TaskPriority,
+        complexity: TaskComplexity,
+        source: &str,
+    ) -> Task {
+        let selector = format!("src/pressure_{index}.rs");
+        let task = owner.create_task_in(title, &[selector.as_str()]);
+        owner
+            .backends
+            .task
+            .document
+            .update_task_document(
+                &task.id,
+                TaskDocumentUpdateParams {
+                    actor: "codex".into(),
+                    priority: Some(priority),
+                    complexity: Some(complexity),
+                    crew: Some(Some("codex".to_string())),
+                    crew_source: Some(Some(source.to_string())),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        task
+    }
+
+    fn pools() -> BTreeMap<String, Vec<String>> {
+        BTreeMap::from([
+            ("low".to_string(), vec!["codex".to_string()]),
+            (
+                "hard".to_string(),
+                vec!["opus".to_string(), "codex".to_string()],
+            ),
+        ])
+    }
+
+    // (name, older priority, pressure reported, older expiring, takes older)
+    let cases = [
+        ("tied: the pressured pool leads age", Medium, true, false, false),
+        ("no pressure reported: age order", Medium, false, false, true),
+        ("higher priority still leads", High, true, false, true),
+        ("an expiring task still leads", Medium, true, true, true),
+    ];
+    for (name, older_priority, reported, expiring, takes_older) in cases {
+        let root = TempDir::new().unwrap();
+        let owner = Coordinated::open(root.path());
+        let older = pooled(
+            &owner,
+            0,
+            "older plain",
+            older_priority,
+            TaskComplexity::Low,
+            "pool:low",
+        );
+        let newer = pooled(
+            &owner,
+            1,
+            "newer pressured",
+            Medium,
+            TaskComplexity::Hard,
+            "pool:hard",
+        );
+        let mut request = request_from(DK, "pressure");
+        if reported {
+            request.crews.as_mut().unwrap().usage_pressure = vec![
+                AdmissionCrewPressure {
+                    crew: "opus".into(),
+                    pressure_milli: 25_000,
+                },
+                AdmissionCrewPressure {
+                    crew: "codex".into(),
+                    pressure_milli: 1_000,
+                },
+            ];
+        }
+        let ordering = AdmissionOrdering {
+            affinity: AdmissionAffinityReach::Band,
+            census: Some(ExecutorCensus::new(
+                DK,
+                ExecutorCapability::of_request(&request),
+                Vec::new(),
+            )),
+            expiring_tasks: expiring.then(|| older.id.clone()).into_iter().collect(),
+            crew_pools: pools(),
+            ..Default::default()
+        };
+        let AdmissionLookup::Found { receipt, .. } = owner
+            .try_pull_as(DK, &request, &ordering)
+            .unwrap()
+        else {
+            panic!("{name}: no receipt");
+        };
+        let expected = if takes_older { &older } else { &newer };
+        assert_eq!(
+            receipt.claim.as_ref().map(|claim| &claim.task_id),
+            Some(&expected.id),
+            "{name}"
+        );
+        let summary = receipt.task.as_ref().expect("task summary");
+        assert_eq!(summary.id, expected.id, "{name}");
+        assert_eq!(
+            summary.crew_source.as_deref(),
+            Some(if takes_older { "pool:low" } else { "pool:hard" }),
+            "{name}: the receipt carries the automatic source"
+        );
+        assert_eq!(
+            summary.complexity,
+            Some(if takes_older {
+                TaskComplexity::Low
+            } else {
+                TaskComplexity::Hard
+            }),
+            "{name}"
+        );
+    }
 }

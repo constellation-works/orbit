@@ -12,7 +12,8 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::{
-    AdmissionAffinityReach, DispatchAffinity, ExecutorOsLimit, HostOs, Task, TaskOsRequirement,
+    AdmissionAffinityReach, DispatchAffinity, ExecutorOsLimit, HostOs, NEUTRAL_PRESSURE_MILLI,
+    Task, TaskOsRequirement,
 };
 use serde::{Deserialize, Serialize};
 
@@ -204,12 +205,53 @@ impl ExecutorCensus {
             (eligible, true) => DispatchAffinity {
                 exclusive: eligible == 1,
                 eligible,
+                pressure_milli: 0,
             },
             (_, false) => DispatchAffinity {
                 exclusive: false,
                 eligible: usize::MAX,
+                pressure_milli: 0,
             },
         }
+    }
+
+    /// The highest weekly usage pressure the requester reported for a
+    /// member of `task`'s crew pool [ORB-17773], in milli-units. The pool
+    /// is the one the task's crew source names — `pool:<tier>` or
+    /// `purpose:<purpose>` — else its complexity tier's. A requester that
+    /// reported no pressure, a pool the owner did not supply, and a member
+    /// it did not name all read neutral, so pressure orders nothing.
+    #[must_use]
+    pub fn requester_pressure_milli(
+        &self,
+        task: &Task,
+        pools: &BTreeMap<String, Vec<String>>,
+    ) -> u64 {
+        let Some(crews) = self
+            .executors
+            .get(&self.requester)
+            .and_then(|capability| capability.crews.as_ref())
+            .filter(|crews| crews.has_pressure())
+        else {
+            return NEUTRAL_PRESSURE_MILLI;
+        };
+        let key = match task.crew_source.as_deref() {
+            Some(source) if source.starts_with("pool:") => {
+                source.strip_prefix("pool:").map(ToOwned::to_owned)
+            }
+            Some(source) if source.starts_with("purpose:") => Some(source.to_string()),
+            _ => task
+                .complexity
+                .map(|complexity| complexity.as_str().to_string()),
+        };
+        let Some(members) = key.and_then(|key| pools.get(&key)) else {
+            return NEUTRAL_PRESSURE_MILLI;
+        };
+        members
+            .iter()
+            .map(|crew| crews.pressure_milli_for(crew))
+            .max()
+            .unwrap_or(NEUTRAL_PRESSURE_MILLI)
     }
 
     /// What the receipt records for an admitted `task`.
@@ -242,20 +284,31 @@ impl ExecutorCensus {
 /// dispatch share, so the two cannot disagree for the same census.
 ///
 /// Without a census, or with `reach` off, this is the canonical band,
-/// priority, expiry, age and ID order.
+/// priority, expiry, age and ID order. The requester's reported usage
+/// pressure [ORB-17773] rides its census capability and scores each task
+/// by `pools` (see [`ExecutorCensus::requester_pressure_milli`]); it is
+/// the lowest key above age, under every reach, and a requester that
+/// reported none — owner-local dispatch included — orders as before.
 pub fn census_dispatch_order<T: Borrow<Task>>(
     tasks: &mut [T],
     expiring: impl Fn(&str) -> bool,
     census: Option<&ExecutorCensus>,
     reach: AdmissionAffinityReach,
     limits: &BTreeMap<String, ExecutorOsLimit>,
+    pools: &BTreeMap<String, Vec<String>>,
 ) {
     let affinities = match census {
-        Some(census) if reach != AdmissionAffinityReach::Off => tasks
+        Some(census) => tasks
             .iter()
             .map(|task| {
                 let task = task.borrow();
-                (task.id.clone(), census.affinity(task, limits))
+                let mut affinity = if reach != AdmissionAffinityReach::Off {
+                    census.affinity(task, limits)
+                } else {
+                    DispatchAffinity::default()
+                };
+                affinity.pressure_milli = census.requester_pressure_milli(task, pools);
+                (task.id.clone(), affinity)
             })
             .collect::<BTreeMap<_, _>>(),
         _ => BTreeMap::new(),

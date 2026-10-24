@@ -123,3 +123,137 @@ fn a_limited_pool_member_is_never_drawn_until_its_reading_resets() {
     );
     assert_eq!(drawn["sol"], 500, "an even split over the walked tickets");
 }
+
+/// [ORB-17773] A claimed leaf whose snapshot crew came from an automatic
+/// pool is re-drawn on the follower with the follower's own weekly
+/// readings: Claude at weekly pressure about 25 (10% used, six hours to
+/// reset) decisively outweighs the snapshot's Codex crew. The owner's
+/// opposite readings, recorded in the owner's own store, never reach the
+/// follower's draw. Under `static`, with an explicit source, and on a
+/// legacy snapshot carrying no source, the owner's crew is kept.
+#[test]
+fn a_claimed_leaf_redraws_an_automatic_crew_on_the_followers_own_pressure() {
+    use chrono::Duration;
+    use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
+
+    use crate::runtime::engine::crew::BundleCrews;
+
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_claimed_leaf_redraws_an_automatic_crew_on_the_followers_own_pressure,
+    )) {
+        return;
+    }
+    const TASK: &str = "ORB-17773";
+    let week = |provider: &str, used_percent: f64, resets_in: Duration| ProviderLimitObservation {
+        provider: provider.into(),
+        account: None,
+        model: None,
+        window: Some("seven_day".into()),
+        exhausted: false,
+        source: ProviderLimitSource::Event,
+        resets_at: Some(Utc::now() + resets_in),
+        used_percent: Some(used_percent),
+        window_minutes: Some(10080),
+        gating: true,
+        partial: false,
+        observed_at: Utc::now(),
+        run_id: None,
+        crew: None,
+        detail: String::new(),
+    };
+    // One host: its own roots and provider-limit store, seeded with the
+    // weekly readings the case names.
+    let host = |extra: &str, readings: &[ProviderLimitObservation]| {
+        let root = tempdir().expect("create tempdir");
+        let global = root.path().join("global");
+        let workspace = root.path().join("repo/.orbit");
+        std::fs::create_dir_all(&global).expect("create global root");
+        std::fs::create_dir_all(&workspace).expect("create workspace root");
+        std::fs::write(
+            workspace.join("config.toml"),
+            format!(
+                "[workflow]\ndefault_crew = \"sol\"\n\
+                 hard_complexity_crews = [\"opus\", \"sol\"]\n{extra}\n\
+                 [crews.opus]\nprovider = \"claude\"\nmodel = \"opus-model\"\n\n\
+                 [crews.sol]\nprovider = \"codex\"\nmodel = \"sol-model\"\n"
+            ),
+        )
+        .expect("write crew config");
+        let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
+        for reading in readings {
+            runtime
+                .record_provider_limit(reading)
+                .expect("seed reading");
+        }
+        (root, runtime)
+    };
+    let leaf = |source: Option<&str>| {
+        let mut claimed = json!({"id": TASK, "crew": "sol", "complexity": "hard"});
+        if let Some(source) = source {
+            claimed["crew_source"] = json!(source);
+        }
+        json!({"task_ids": [TASK], "claimed_task": claimed})
+    };
+    let resolved = |runtime: &OrbitRuntime, source: Option<&str>| {
+        runtime
+            .resolve_crew_for_run_input(&leaf(source), BundleCrews::Unanimous)
+            .expect("resolve the claimed leaf's crew")
+            .name
+    };
+
+    // The owner's readings favour Codex just as decisively; they live in
+    // the owner's store and are never the follower's to read.
+    let decisive = "crew_selection = \"usage_pressure\"\n\
+                    usage_pressure_cap = 1000000\nusage_pressure_strength = 10";
+    let (_owner_root, owner) = host(
+        decisive,
+        &[
+            week("claude", 89.0, Duration::days(7)),
+            week("codex", 0.0, Duration::hours(6)),
+        ],
+    );
+    assert_eq!(resolved(&owner, Some("pool:hard")), "sol", "owner fixture");
+
+    let (_follower_root, follower) = host(
+        decisive,
+        &[
+            week("claude", 10.0, Duration::hours(6)),
+            week("codex", 89.0, Duration::days(7)),
+        ],
+    );
+    assert_eq!(
+        resolved(&follower, Some("pool:hard")),
+        "opus",
+        "the follower re-draws on its own readings"
+    );
+    assert_eq!(
+        resolved(&follower, Some("pool:hard")),
+        "opus",
+        "every resolution of the leaf draws the same member"
+    );
+    assert_eq!(
+        resolved(&follower, Some("default")),
+        "opus",
+        "a default assignment re-draws from its complexity pool, as at owner admission"
+    );
+    assert_eq!(
+        resolved(&follower, Some("explicit")),
+        "sol",
+        "an explicit crew is never re-drawn"
+    );
+    assert_eq!(
+        resolved(&follower, None),
+        "sol",
+        "a legacy snapshot without a source keeps the owner's crew"
+    );
+
+    let (_static_root, statik) = host(
+        "crew_selection = \"static\"",
+        &[week("claude", 10.0, Duration::hours(6))],
+    );
+    assert_eq!(
+        resolved(&statik, Some("pool:hard")),
+        "sol",
+        "under static the claimed crew is unchanged"
+    );
+}

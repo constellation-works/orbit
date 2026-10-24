@@ -718,6 +718,10 @@ impl AdmissionAffinityReach {
 /// One candidate's standing against the live executor census, as the
 /// requesting executor sees it [ORB-17304]. The default is the standing every
 /// candidate shares when no census applies, so it never reorders.
+/// Neutral usage pressure, in milli-units (1000 = pressure 1.0), as an
+/// admission ordering key [ORB-17773].
+pub const NEUTRAL_PRESSURE_MILLI: u64 = 1000;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DispatchAffinity {
     /// The requester is the only live executor that can run the task.
@@ -726,17 +730,27 @@ pub struct DispatchAffinity {
     /// the requester itself cannot run carries `usize::MAX`, so it sorts
     /// after every task the requester can.
     pub eligible: usize,
+    /// The highest weekly usage pressure, in milli-units, the requester
+    /// reported for a member of the task's crew pool [ORB-17773]; higher
+    /// sorts first, below every affinity key and above age. The default
+    /// `0` is shared by every candidate of a pressure-free order, so it
+    /// never reorders.
+    pub pressure_milli: u64,
 }
 
 /// Automatic dispatch order for one requesting executor against the live
 /// executor census [ORB-17304].
 ///
-/// `band → exclusive → priority → expiry → fewer eligible executors → age →
-/// ID` under [`AdmissionAffinityReach::Band`]; exclusivity moves after
-/// priority under [`AdmissionAffinityReach::Priority`], and
+/// `band → exclusive → priority → expiry → fewer eligible executors → usage
+/// pressure → age → ID` under [`AdmissionAffinityReach::Band`]; exclusivity
+/// moves after priority under [`AdmissionAffinityReach::Priority`], and
 /// [`AdmissionAffinityReach::Off`] ignores both affinity keys. Each side is a
 /// task, whether its frozen batch is expiring, and its affinity. Exclusivity
-/// never crosses a band, so critical and corrective work still leads.
+/// never crosses a band, so critical and corrective work still leads. Usage
+/// pressure [ORB-17773] is the lowest-precedence key above age and ID: it
+/// only reorders tasks that tie on band, priority, expiry and affinity, it
+/// applies under every reach, and a requester that reported none leaves
+/// every candidate at the shared default, so the order is unchanged.
 pub fn automatic_dispatch_cmp_with_affinity(
     left: (&Task, bool, DispatchAffinity),
     right: (&Task, bool, DispatchAffinity),
@@ -766,7 +780,18 @@ pub fn automatic_dispatch_cmp_with_affinity(
     let (left, left_expiring, left_affinity) = left;
     let (right, right_expiring, right_affinity) = right;
     let (left_affinity, right_affinity) = match reach {
-        AdmissionAffinityReach::Off => (DispatchAffinity::default(), DispatchAffinity::default()),
+        // `Off` drops the affinity keys only; usage pressure is a separate,
+        // lowest-precedence key the reach does not govern [ORB-17773].
+        AdmissionAffinityReach::Off => (
+            DispatchAffinity {
+                pressure_milli: left_affinity.pressure_milli,
+                ..DispatchAffinity::default()
+            },
+            DispatchAffinity {
+                pressure_milli: right_affinity.pressure_milli,
+                ..DispatchAffinity::default()
+            },
+        ),
         _ => (left_affinity, right_affinity),
     };
     let exclusive_at = |at: AdmissionAffinityReach| {
@@ -783,6 +808,11 @@ pub fn automatic_dispatch_cmp_with_affinity(
         .then(exclusive_at(AdmissionAffinityReach::Priority))
         .then(right_expiring.cmp(&left_expiring))
         .then(left_affinity.eligible.cmp(&right_affinity.eligible))
+        .then(
+            right_affinity
+                .pressure_milli
+                .cmp(&left_affinity.pressure_milli),
+        )
         .then(left.created_at.cmp(&right.created_at))
         .then(left.id.cmp(&right.id))
 }

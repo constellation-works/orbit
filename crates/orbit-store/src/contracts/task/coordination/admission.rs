@@ -35,6 +35,13 @@ pub struct AdmissionOrdering {
     /// owner's own repair pull, which its `orbit run auto` drain starts once
     /// a repair's fallback window has passed.
     pub repairs_only: bool,
+    /// The owner's crew pools a candidate may draw from, by pool key: a
+    /// complexity tier (`hard`) or `purpose:<purpose>`, each naming its
+    /// member crews. Read only to score a candidate by the requester's
+    /// reported usage pressure [ORB-17773]; empty scores every candidate
+    /// neutral. Owner-side facts, like `executor_host_os`, so they do not
+    /// change the request fingerprint.
+    pub crew_pools: BTreeMap<String, Vec<String>>,
 }
 
 /// Authority supplied by the embedding runtime, never deserialized from tool input.
@@ -278,6 +285,17 @@ impl AdmissionRefusal {
 /// executor — its own `task.crew`, or `default_crew` for a task naming none —
 /// is runnable here. A task the executor cannot run is skipped, not refused:
 /// it stays in the backlog for the owner or another follower.
+/// One crew's weekly usage pressure on the pulling executor, in
+/// milli-units (1000 = pressure 1.0) [ORB-17773]. An integer keeps the
+/// capability `Eq` and the ordering key exact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AdmissionCrewPressure {
+    /// Configured crew name.
+    pub crew: String,
+    /// Raw weekly pressure ×1000, rounded; higher expires sooner unused.
+    pub pressure_milli: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AdmissionCrewCapability {
     /// Crews the executor's window preflight found runnable, by registry
@@ -292,6 +310,12 @@ pub struct AdmissionCrewCapability {
     /// Crews never admitted to this executor for the rest of its window.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub excluded: Vec<orbit_types::workflow::CrewExclusion>,
+    /// Per-crew weekly usage pressure from the executor's own readings
+    /// [ORB-17773]. Optional and additive: absent, or a crew it does not
+    /// name, reads as neutral pressure 1.0. The owner only orders by it;
+    /// it never gates admission.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub usage_pressure: Vec<AdmissionCrewPressure>,
 }
 
 impl AdmissionCrewCapability {
@@ -333,6 +357,25 @@ impl AdmissionCrewCapability {
         self.runnable.iter().flatten().any(|name| blank(name))
             || self.default_crew.as_deref().is_some_and(blank)
             || self.excluded.iter().any(|exclusion| blank(&exclusion.crew))
+            || self.usage_pressure.iter().any(|entry| blank(&entry.crew))
+    }
+
+    /// `crew`'s reported weekly usage pressure in milli-units, or neutral
+    /// (1000 = 1.0) when this capability reports none for it [ORB-17773].
+    #[must_use]
+    pub fn pressure_milli_for(&self, crew: &str) -> u64 {
+        self.usage_pressure
+            .iter()
+            .find(|entry| entry.crew == crew)
+            .map_or(orbit_types::task::NEUTRAL_PRESSURE_MILLI, |entry| {
+                entry.pressure_milli
+            })
+    }
+
+    /// Whether this capability reports any usage pressure at all.
+    #[must_use]
+    pub fn has_pressure(&self) -> bool {
+        !self.usage_pressure.is_empty()
     }
 }
 
@@ -507,6 +550,14 @@ pub struct AdmissionTaskSummary {
     pub title: String,
     pub complexity: Option<orbit_types::task::TaskComplexity>,
     pub crew: Option<String>,
+    /// How `crew` was assigned (`explicit`, `pool:<tier>`,
+    /// `purpose:<purpose>`, `default`), so a follower can tell an
+    /// automatic assignment it may re-draw under its own usage pressure
+    /// from an explicit pin it must keep [ORB-17773]. Absent on receipts
+    /// from an older owner and on legacy tasks with no recorded source:
+    /// both read as not automatic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_source: Option<String>,
     pub context_files: Vec<String>,
     /// [ORB-14257] The candidate an earlier claim of the task preserved,
     /// for this claim's leaf to resume instead of implementing afresh. The

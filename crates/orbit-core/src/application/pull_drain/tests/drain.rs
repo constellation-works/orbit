@@ -109,6 +109,7 @@ impl PullPeer for Peer {
                     title: "task".into(),
                     complexity: None,
                     crew: None,
+                    crew_source: None,
                     context_files: vec!["file:src.rs".into()],
                     resume_candidate: self.resume_candidate.borrow().clone(),
                 }),
