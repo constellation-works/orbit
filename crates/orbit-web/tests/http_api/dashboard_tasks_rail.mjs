@@ -143,8 +143,15 @@ class Event { constructor(type) { this.type = type; } }
 // Unanswered stub fetches keep their timeout behavior without keeping Node
 // alive for 30 seconds after the fixture has finished all its assertions.
 const setFixtureTimeout = (callback, delay) => setTimeout(callback, delay).unref();
+const localStorageEntries = new Map();
+const copiedTexts = [];
 const context = vm.createContext({
   URLSearchParams, URL, AbortController, console, setTimeout: setFixtureTimeout, clearTimeout, document, window, Node, Event,
+  localStorage: {
+    getItem: key => localStorageEntries.get(key) ?? null,
+    setItem: (key, value) => localStorageEntries.set(key, String(value)),
+  },
+  navigator: { clipboard: { writeText: async text => { copiedTexts.push(String(text)); } } },
   requestAnimationFrame: () => 0,
   fetch: () => new Promise(() => {}),
 });
@@ -507,6 +514,44 @@ assert.equal(contextRows.length, 3, 'renders 3 context files');
 assert.deepEqual(contextRows.map(li => li.querySelector('.selector-base').textContent), ['recovery.md', 'mod.rs', 'recovery.md'], 'grouped rows list basenames without duplicate disambiguation');
 assert.equal(contextDraftDetail.querySelectorAll('.context-duplicate-base').length, 0, 'grouping makes duplicate disambiguation unnecessary');
 assert.ok(contextRows[0].querySelector('.context-selector').title.startsWith('file:crates/orbit-core/assets/skills/recovery.md'), 'full selector is preserved in the row title');
+
+const rootSelectors = ['file:README.md', 'file:root/a/shared.rs', 'file:root/b/shared.rs'];
+contextDraftTask.context_files = rootSelectors;
+renderTasks(currentTasks, contextDraftContext);
+contextDraftDetail = paneBody.querySelector('#detail-ORB-37');
+const rootGroups = contextDraftDetail.querySelectorAll('.cf-group');
+assert.deepEqual(
+  rootGroups.map(group => `${group.querySelector('.cf-group-prefix')?.textContent || ''}${group.querySelector('.cf-group-name').textContent}`),
+  ['project root', 'root/a', 'root/b'],
+  'a literal root/ directory groups by its child folders separately from project-root files',
+);
+const rootRows = contextDraftDetail.querySelectorAll('.cf-row');
+assert.deepEqual(rootRows.map(row => row.querySelector('.selector-base').textContent), ['README.md', 'shared.rs', 'shared.rs']);
+assert.ok(rootRows.every((row, index) => row.querySelector('.context-selector').title.startsWith(rootSelectors[index])), 'grouping preserves each full selector');
+contextDraftDetail.querySelector('.cf-copy-all').dispatch('click');
+await Promise.resolve();
+await Promise.resolve();
+assert.deepEqual(copiedTexts, [rootSelectors.join('\n')], 'Copy selectors copies the unchanged full selectors');
+
+contextDraftDetail.querySelector('.cf-toggle-btn').parentNode.children[1].dispatch('click');
+assert.ok(contextDraftDetail.querySelector('.file-list').classList.contains('cf-flat'), 'Flat paths switches to the flat view');
+assert.deepEqual(
+  contextDraftDetail.querySelectorAll('.cf-row').map(row => row.querySelector('.context-selector').textContent),
+  ['README.md', 'root/a/shared.rs', 'root/b/shared.rs'],
+  'Flat paths retains each directory and basename',
+);
+assert.ok(contextDraftDetail.querySelectorAll('.cf-row').every((row, index) => row.querySelector('.context-selector').title.startsWith(rootSelectors[index])));
+contextDraftDetail.querySelector('.cf-toggle-btn').dispatch('click');
+assert.ok(contextDraftDetail.querySelector('.file-list').classList.contains('cf-grouped'), 'By folder restores the grouped view');
+
+contextDraftTask.context_files = ['file:README.md', 'file:root/c.rs'];
+renderTasks(currentTasks, contextDraftContext);
+contextDraftDetail = paneBody.querySelector('#detail-ORB-37');
+assert.deepEqual(
+  contextDraftDetail.querySelectorAll('.cf-group').map(group => group.querySelector('.cf-group-name').textContent),
+  ['project root', 'root'],
+  'a file inside root/ does not merge with files at the project root',
+);
 
 const repaints = [];
 const stopListening = drainWaits.onDrainReadinessChange(() => { repaints.push('changed'); paintBacklog(); });

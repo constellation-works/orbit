@@ -1811,6 +1811,7 @@ function buildCriteriaList(criteria) {
 
 const CF_VIEW_KEY = "orbit.contextFiles.view";
 const CF_COLLAPSED_KEY = "orbit.contextFiles.collapsed";
+const CF_ROOT_FILES_KEY = "\u0000project-root-files";
 
 function cfStoreGet(key) {
   try { return globalThis.localStorage ? globalThis.localStorage.getItem(key) : null; } catch (_) { return null; }
@@ -1907,36 +1908,13 @@ function cfPathForSelector(p) {
   return target;
 }
 
-function cfGroupFor(p) {
-  let target = p.target || "";
-  if (p.kind === "symbol") {
-    let gt = target.split("#")[0];
-    const ci = gt.indexOf("::");
-    if (ci > 0) gt = gt.slice(0, ci);
-    const g = cfGroupFor({ kind: "file", target: gt, base: gt.split("/").pop() || gt });
-    return { ...g, displayBase: target };
-  }
-  const segs = target.split("/").filter(Boolean);
-  if (segs.length >= 3) {
-    const rest = segs.slice(2).join("/");
-    const idx = rest.lastIndexOf("/");
-    return { key: `${segs[0]}/${segs[1]}`, prefix: `${segs[0]}/`, name: segs[1], subDir: idx >= 0 ? `${rest.slice(0, idx + 1)}` : "", displayBase: p.base || segs[segs.length - 1] || target };
-  }
-  if (segs.length >= 2) {
-    const rest = segs.slice(1).join("/");
-    const idx = rest.lastIndexOf("/");
-    return { key: segs[0], prefix: "", name: segs[0], subDir: idx >= 0 ? `${rest.slice(0, idx + 1)}` : "", displayBase: p.base || segs[segs.length - 1] || target };
-  }
-  return { key: "root", prefix: "", name: "root", subDir: "", displayBase: p.base || target };
-}
-
 function cfGroups(entries) {
   const normalized = entries.map((e) => {
     const entry = typeof e === "string" ? { selector: e, p: parseContextSelector(e), matches: [] } : e;
     const target = cfPathForSelector(entry.p);
     const segs = target.split("/").filter(Boolean);
     const isDirect = entry.p.kind === "dir" ? segs.length <= 1 : segs.length <= 2;
-    const topKey = segs.length <= 1 ? "root" : segs[0];
+    const topKey = segs.length <= 1 ? CF_ROOT_FILES_KEY : segs[0];
     return { entry, target, segs, isDirect, topKey };
   });
 
@@ -1951,12 +1929,12 @@ function cfGroups(entries) {
   const byKey = new Map();
 
   for (const [topKey, items] of byTop) {
-    const shouldSplit = topKey !== "root" && !items.some((it) => it.isDirect);
+    const shouldSplit = topKey !== CF_ROOT_FILES_KEY && !items.some((it) => it.isDirect);
     for (const it of items) {
       const { entry, segs, target } = it;
       let g;
-      if (topKey === "root") {
-        g = { key: "root", prefix: "", name: "root", subDir: "", displayBase: entry.p.kind === "symbol" ? entry.p.target : (entry.p.base || target) };
+      if (topKey === CF_ROOT_FILES_KEY) {
+        g = { key: CF_ROOT_FILES_KEY, prefix: "", name: "project root", subDir: "", displayBase: entry.p.kind === "symbol" ? entry.p.target : (entry.p.base || target) };
       } else if (shouldSplit) {
         const child = segs[1] || "";
         const rest = segs.slice(2).join("/");
@@ -2001,7 +1979,7 @@ function cfSummaryText(total, groups) {
   const fileLabel = `${total} file${total === 1 ? "" : "s"}`;
   if (!groups || groups.length === 0) return fileLabel;
   if (groups.length <= 3) {
-    const parts = groups.map((g) => g.key);
+    const parts = groups.map((g) => g.key === CF_ROOT_FILES_KEY ? "the project root" : g.key);
     return `${fileLabel} in ${parts.join(" and ")}`;
   }
   return `${fileLabel} in ${groups.length} folders`;
