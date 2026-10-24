@@ -960,6 +960,10 @@ impl OrbitRuntime {
                     params.complexity.or(task.complexity),
                     None,
                     params.tags.as_deref().unwrap_or(&task.tags),
+                    params
+                        .context_files
+                        .as_deref()
+                        .unwrap_or(&task.context_files),
                     &mut random_crew_ticket,
                 )?;
                 *crew = crew_assignment
@@ -986,6 +990,9 @@ impl OrbitRuntime {
             let mut rerated = task.clone();
             if let Some(tags) = &params.tags {
                 rerated.tags.clone_from(tags);
+            }
+            if let Some(context_files) = &params.context_files {
+                rerated.context_files.clone_from(context_files);
             }
             crew_redraw_history = self.rerate_task_crew(&mut rerated, Some(complexity))?;
             if crew_redraw_history.is_some() {

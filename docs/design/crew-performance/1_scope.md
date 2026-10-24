@@ -7,13 +7,13 @@ doc_role: scope
 type: design
 summary: "Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative)"
 tags: [crew-performance, crews, crew-pools, agent-scorecards, admission]
-last_updated: 2026-10-23
+last_updated: 2026-10-24
 last_validated: 2026-10-23
 ---
 
 # Scope: performance-weighted crew selection
 
-Status: phases 1–2 implemented (type list, classification, the by-type cell report, and the persisted hourly snapshot with its readiness line); phases 3–4 proposed.
+Status: phases 1–3 implemented (type list, classification, the by-type cell report, the persisted hourly snapshot with its readiness line, and performance-weighted draws with their provenance); phase 4 proposed.
 Bearing: complexity and purpose pools (`workflow.<complexity>_complexity_crews`,
 `workflow.purpose_crews.*`) decide which crews may run a task, and their weights express the
 operator's preference among them. [Usage pressure](../usage-pressure/1_scope.md) scales those

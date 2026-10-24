@@ -16,6 +16,8 @@ use orbit_config::ConfigScope;
 use orbit_config::ConfigSnapshot;
 use orbit_config::ConfigStore;
 use orbit_config::ConfigValueSourceKind;
+use orbit_config::CrewPerformanceMode;
+use orbit_config::CrewPerformancePolicy;
 use orbit_config::CrewPerformanceType;
 use orbit_config::CrewSelection;
 use orbit_config::OperationLayerSource;

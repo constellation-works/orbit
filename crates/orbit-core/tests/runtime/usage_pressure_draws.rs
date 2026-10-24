@@ -11,11 +11,18 @@
 //! Draws are random. Where a test needs one outcome, its config drives the
 //! losing member to one ticket against about a billion, so the outcome is
 //! fixed in practice without a seed hook.
+//!
+//! `workflow.crew_performance` multiplies the same draws by each crew's
+//! performance factor, read from a crew-performance snapshot seeded into the
+//! workspace store the way the hourly refresh writes it.
 
 use chrono::{Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{
     OrbitRuntime, ShipMode, Task, TaskComplexity, TaskStatus, WorkspaceRuntimeBinding,
+};
+use orbit_store::contracts::{
+    CrewPerformanceCell, CrewPerformanceSnapshot, CrewPerformanceStoreBackend as _,
 };
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::{JobRunState, JobRunTrigger};
@@ -540,11 +547,361 @@ fn parked_members_stay_out_and_low_pressure_floors_without_gating() {
     );
 }
 
+/// The crew-performance scope's worked example: a low pool of three crews,
+/// `review` tasks tagged `review`, and `extra` under `[workflow]`.
+fn performance_config(pool: &str, extra: &str) -> String {
+    format!(
+        "[workflow]\ndefault_crew = \"luna\"\nlow_complexity_crews = {pool}\n{extra}\n\n\
+         [[workflow.crew_performance_types]]\nname = \"review\"\ntags = [\"review\"]\n\n\
+         [crews.haiku]\nprovider = \"claude\"\nmodel = \"haiku-model\"\n\n\
+         [crews.luna]\nprovider = \"codex\"\nmodel = \"luna-model\"\n\n\
+         [crews.gemini-flash]\nprovider = \"gemini\"\nmodel = \"flash-model\"\n\n\
+         [review]\nbefore_pr = false\n"
+    )
+}
+
+const EXAMPLE_POOL: &str = r#"["haiku:40", "luna:30", "gemini-flash:30"]"#;
+
+/// A `low` cell of the snapshot: crew, model, type, `n`, score, crew mean.
+type Cell<'a> = (&'a str, &'a str, &'a str, u64, f64, f64);
+
+/// The worked example's cells: review scores 115/108/90 over tier means
+/// 114/98/92, and an `other` cell per crew so each has a tier mean.
+const EXAMPLE_CELLS: [Cell<'static>; 6] = [
+    ("haiku", "haiku-model", "review", 40, 115.0, 114.0),
+    ("haiku", "haiku-model", "other", 80, 113.5, 114.0),
+    ("luna", "luna-model", "review", 40, 108.0, 98.0),
+    ("luna", "luna-model", "other", 80, 93.0, 98.0),
+    ("gemini-flash", "flash-model", "review", 40, 90.0, 92.0),
+    ("gemini-flash", "flash-model", "other", 80, 93.0, 92.0),
+];
+
+impl Fixture {
+    /// Store a snapshot of `cells`, computed `age` ago, built from the
+    /// current type list unless `types_hash` names another.
+    fn snapshot(&self, cells: &[Cell<'_>], age: Duration, types_hash: Option<&str>) {
+        let runtime = self.runtime();
+        let current = orbit_config::crew_performance_types_hash(runtime.crew_performance_types());
+        runtime
+            .sqlite_store()
+            .unwrap()
+            .replace_crew_performance_snapshot(&CrewPerformanceSnapshot {
+                workspace_id: runtime.workspace_id().unwrap(),
+                computed_at: Utc::now() - age,
+                window_days: 30,
+                types_hash: types_hash.map_or(current, ToOwned::to_owned),
+                types_json: "[]".into(),
+                cells: cells
+                    .iter()
+                    .map(
+                        |(crew, model, task_type, n, score, crew_mean)| CrewPerformanceCell {
+                            crew: (*crew).into(),
+                            model: (*model).into(),
+                            tier: "low".into(),
+                            task_type: (*task_type).into(),
+                            n: *n,
+                            raw: *score,
+                            crew_mean: *crew_mean,
+                            score: *score,
+                        },
+                    )
+                    .collect(),
+            })
+            .unwrap();
+    }
+}
+
+/// `name`'s entry in an admitted run's recorded eligible pool.
+fn pool_member<'a>(admitted: &'a Value, name: &str) -> &'a Value {
+    admitted["crew_selection"]["eligible_pool"]
+        .as_array()
+        .unwrap_or_else(|| panic!("missing eligible pool: {admitted}"))
+        .iter()
+        .find(|member| member["name"] == name)
+        .unwrap_or_else(|| panic!("{name} missing from {admitted}"))
+}
+
+/// Assert each member's recorded performance factor to two places, and that
+/// it drew on `weight × factor` tickets.
+fn assert_factors(admitted: &Value, expected: &[(&str, u32, f64)]) {
+    for (name, weight, factor) in expected {
+        let member = pool_member(admitted, name);
+        let recorded = member["performance"]["factor"]
+            .as_f64()
+            .unwrap_or_else(|| panic!("{name} has no factor: {admitted}"));
+        assert!(
+            (recorded - factor).abs() < 0.005,
+            "{name} factor {recorded} is not ×{factor}: {admitted}"
+        );
+        assert_eq!(member["weight"], *weight, "{admitted}");
+        let effective = (f64::from(*weight) * recorded * 1000.0).round() / 1000.0;
+        assert_eq!(member["effective_weight"], effective, "{admitted}");
+    }
+}
+
+/// Criteria 1 and 2: off records the configured weights exactly as a static
+/// draw does, whatever the snapshot holds. The worked example's admission of
+/// a `review` task records ×1.57/×1.27/×0.74 under `absolute` and
+/// ×1.03/×1.35/×0.94 under `comparative`, with no pressure, and an assigned
+/// pool member is never re-drawn by performance alone.
+fn crew_performance_weighs_the_worked_example_and_off_draws_as_before() {
+    substitute_worker();
+    let fx = Fixture::new(&performance_config(r#"["luna"]"#, ""));
+    let assigned = fx.task("assigned.txt", TaskComplexity::Low, None, &["review"]);
+    assert_eq!(assigned.crew_source.as_deref(), Some("pool:low"));
+    fx.configure(&performance_config("[]", ""));
+    let task = fx.task("review.txt", TaskComplexity::Low, None, &["review"]);
+    assert_eq!(task.crew_source.as_deref(), Some("default"));
+    fx.configure(&performance_config(EXAMPLE_POOL, ""));
+    fx.snapshot(&EXAMPLE_CELLS, Duration::hours(1), None);
+
+    for extra in [
+        "",
+        "crew_performance = \"off\"",
+        "crew_performance = \"absolute\"\ncrew_performance_strength = 0",
+    ] {
+        fx.configure(&performance_config(EXAMPLE_POOL, extra));
+        let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+        assert_eq!(
+            admitted["crew_selection"]["eligible_pool"],
+            json!([
+                {"name": "gemini-flash", "weight": 30},
+                {"name": "haiku", "weight": 40},
+                {"name": "luna", "weight": 30},
+            ]),
+            "[{extra}] configured weights, no factor fields: {admitted}"
+        );
+    }
+
+    fx.configure(&performance_config(
+        EXAMPLE_POOL,
+        "crew_performance = \"absolute\"",
+    ));
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    assert_eq!(
+        admitted["crew_selection"]["source"], "workflow.low_complexity_crews",
+        "performance alone does not rename the source: {admitted}"
+    );
+    assert_factors(
+        &admitted,
+        &[
+            ("haiku", 40, 1.57),
+            ("luna", 30, 1.27),
+            ("gemini-flash", 30, 0.74),
+        ],
+    );
+    let haiku = &pool_member(&admitted, "haiku")["performance"];
+    assert_eq!(haiku["mode"], "absolute", "{admitted}");
+    assert_eq!(haiku["type"], "review", "{admitted}");
+    assert_eq!(haiku["tier"], "low", "{admitted}");
+    assert_eq!(haiku["score"], 115.0, "{admitted}");
+    assert_eq!(haiku["crew_mean"], 114.0, "{admitted}");
+    assert_eq!(haiku["n"], 40, "{admitted}");
+    assert!(haiku["computed_at"].is_string(), "{admitted}");
+    assert!(
+        pool_member(&admitted, "haiku").get("pressure").is_none(),
+        "no pressure without usage_pressure: {admitted}"
+    );
+
+    fx.configure(&performance_config(
+        EXAMPLE_POOL,
+        "crew_performance = \"comparative\"",
+    ));
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    assert_factors(
+        &admitted,
+        &[
+            ("haiku", 40, 1.03),
+            ("luna", 30, 1.35),
+            ("gemini-flash", 30, 0.94),
+        ],
+    );
+
+    // The assigned member stays: only usage pressure re-draws at admission.
+    let admitted = fx.admit(json!({ "task_ids": [assigned.id] }));
+    assert_eq!(
+        admitted["crew_selection"]["eligible_pool"],
+        json!([{"name": "luna", "weight": 1}]),
+        "{admitted}"
+    );
+    assert_eq!(
+        fx.runtime().get_task(&assigned.id).unwrap().crew.as_deref(),
+        Some("luna")
+    );
+    assert!(fx.redraws(&assigned.id).is_empty());
+}
+
+/// Criterion 3: with usage pressure too, each member draws on the product of
+/// both factors and records both, and a re-draw's history names both.
+fn crew_performance_composes_with_usage_pressure() {
+    substitute_worker();
+    let fx = Fixture::new(&performance_config(r#"["gemini-flash"]"#, ""));
+    let task = fx.task("both.txt", TaskComplexity::Low, None, &["review"]);
+    assert_eq!(task.crew.as_deref(), Some("gemini-flash"));
+    fx.configure(&performance_config(
+        EXAMPLE_POOL,
+        "crew_selection = \"usage_pressure\"\ncrew_performance = \"absolute\"",
+    ));
+    fx.snapshot(&EXAMPLE_CELLS, Duration::hours(1), None);
+    fx.week("claude", 10.0, Duration::hours(6));
+    fx.week("codex", 0.0, Duration::days(7));
+
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    assert_eq!(
+        admitted["crew_selection"]["source"], "workflow.low_complexity_crews; usage pressure",
+        "{admitted}"
+    );
+    // Claude's pressure (about 25) caps at ×8; Codex reads 1.
+    for (name, pressure_factor, performance_factor) in
+        [("haiku", 8.0, 1.568_312), ("luna", 1.0, 1.271_249)]
+    {
+        let member = pool_member(&admitted, name);
+        assert!(member["pressure"].as_f64().is_some(), "{admitted}");
+        let recorded = member["performance"]["factor"].as_f64().unwrap();
+        assert!((recorded - performance_factor).abs() < 1e-5, "{admitted}");
+        let weight = member["weight"].as_u64().unwrap() as f64;
+        let effective = (weight * pressure_factor * recorded * 1000.0).round() / 1000.0;
+        assert_eq!(member["effective_weight"], effective, "{name}: {admitted}");
+    }
+    let drawn = admitted["crew"].as_str().unwrap();
+    if drawn != "gemini-flash" {
+        let redraws = fx.redraws(&task.id);
+        let [note] = redraws.as_slice() else {
+            panic!("one crew_redrawn entry: {redraws:?}");
+        };
+        assert!(
+            note.contains("under usage pressure:")
+                && note.contains(
+                    "; crew performance absolute: `gemini-flash` ×0.74 (review score 90.0"
+                ),
+            "the entry names both factors: {note}"
+        );
+    }
+}
+
+/// Criteria 4 and 5: a crew with no cell for the type reads its crew mean,
+/// a crew with no evidence reads 100, factors clamp to `[1/cap, cap]`, a
+/// missing, stale or other-list snapshot gives every factor 1 with its
+/// reason and draws on the configured weights, a parked member holds no
+/// ticket, and creation draws weigh performance.
+fn crew_performance_fallbacks_clamps_and_unusable_snapshots() {
+    substitute_worker();
+    let fx = Fixture::new(&performance_config("[]", ""));
+    let task = fx.task("fallback.txt", TaskComplexity::Low, None, &["review"]);
+    let absolute = "crew_performance = \"absolute\"";
+
+    // Haiku has only an `other` cell (crew mean 120), luna has none; the
+    // `[1/cap, cap]` clamp at cap 1.5 holds haiku's ×1.82 to ×1.5.
+    fx.configure(&performance_config(
+        EXAMPLE_POOL,
+        &format!("{absolute}\ncrew_performance_cap = 1.5"),
+    ));
+    fx.snapshot(
+        &[("haiku", "haiku-model", "other", 50, 125.0, 120.0)],
+        Duration::hours(1),
+        None,
+    );
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    let haiku = &pool_member(&admitted, "haiku")["performance"];
+    assert_eq!(
+        haiku["score"], 120.0,
+        "a missing cell reads its crew mean: {admitted}"
+    );
+    assert_eq!(haiku["evidence"], "crew_mean", "{admitted}");
+    assert_eq!(haiku["factor"], 1.5, "clamped to the cap: {admitted}");
+    let luna = &pool_member(&admitted, "luna")["performance"];
+    assert_eq!(
+        luna["score"], 100.0,
+        "a crew with no evidence reads 100: {admitted}"
+    );
+    assert_eq!(luna["evidence"], "none", "{admitted}");
+    assert_eq!(luna["factor"], 1.0, "{admitted}");
+
+    // A low score floors at 1/cap.
+    fx.snapshot(
+        &[("luna", "luna-model", "review", 50, 40.0, 60.0)],
+        Duration::hours(1),
+        None,
+    );
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    let floor = pool_member(&admitted, "luna")["performance"]["factor"]
+        .as_f64()
+        .unwrap();
+    assert!((floor - 1.0 / 1.5).abs() < 1e-9, "{admitted}");
+
+    // Unusable snapshots: factor 1, the reason, and the configured weights.
+    fx.configure(&performance_config(EXAMPLE_POOL, absolute));
+    for (age, hash, reason) in [
+        (Duration::hours(25), None, "stale"),
+        (
+            Duration::hours(1),
+            Some("another-list"),
+            "type_list_changed",
+        ),
+    ] {
+        fx.snapshot(&EXAMPLE_CELLS, age, hash);
+        let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+        for name in ["haiku", "luna", "gemini-flash"] {
+            let member = pool_member(&admitted, name);
+            assert_eq!(member["performance"]["factor"], 1.0, "{admitted}");
+            assert_eq!(member["performance"]["unusable"], reason, "{admitted}");
+            assert!(member.get("effective_weight").is_none(), "{admitted}");
+        }
+    }
+    let empty = Fixture::new(&performance_config(EXAMPLE_POOL, absolute));
+    let fresh = empty.task("missing.txt", TaskComplexity::Low, None, &["review"]);
+    empty.configure(&performance_config("[]", ""));
+    let unpooled = empty.task("unpooled.txt", TaskComplexity::Low, None, &["review"]);
+    empty.configure(&performance_config(EXAMPLE_POOL, absolute));
+    let admitted = empty.admit(json!({ "task_ids": [unpooled.id] }));
+    assert_eq!(
+        pool_member(&admitted, "haiku")["performance"]["unusable"],
+        "missing",
+        "{admitted}"
+    );
+    assert_eq!(fresh.crew_source.as_deref(), Some("pool:low"));
+
+    // A parked member holds no ticket, and a decisive factor fixes the
+    // creation draw: haiku's +15 against luna's −10 at k = 100.
+    fx.configure(&performance_config(
+        r#"["haiku:1", "luna:1", "gemini-flash:0"]"#,
+        &format!("{absolute}\ncrew_performance_strength = 100\ncrew_performance_cap = 1000000"),
+    ));
+    fx.snapshot(
+        &[
+            ("haiku", "haiku-model", "review", 50, 115.0, 110.0),
+            ("luna", "luna-model", "review", 50, 90.0, 100.0),
+        ],
+        Duration::hours(1),
+        None,
+    );
+    for name in ["c1.txt", "c2.txt", "c3.txt"] {
+        let created = fx.task(name, TaskComplexity::Low, None, &["review"]);
+        assert_eq!(
+            created.crew.as_deref(),
+            Some("haiku"),
+            "creation weighs performance"
+        );
+        assert_eq!(created.crew_source.as_deref(), Some("pool:low"));
+    }
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    let pool = admitted["crew_selection"]["eligible_pool"]
+        .as_array()
+        .unwrap();
+    assert!(
+        pool.iter().all(|member| member["name"] != "gemini-flash"),
+        "the parked member holds no ticket: {admitted}"
+    );
+}
+
 crate::scenario_table!(
     usage_pressure_draw_scenarios,
     static_selection_draws_and_records_as_before,
     usage_pressure_weighs_the_admission_draw_and_redraws_a_pool_assignment,
     a_redraw_keeps_the_automatic_source_and_never_moves_an_explicit_crew,
     a_complexity_rerate_of_a_pool_task_draws_with_usage_pressure,
-    parked_members_stay_out_and_low_pressure_floors_without_gating
+    parked_members_stay_out_and_low_pressure_floors_without_gating,
+    crew_performance_weighs_the_worked_example_and_off_draws_as_before,
+    crew_performance_composes_with_usage_pressure,
+    crew_performance_fallbacks_clamps_and_unusable_snapshots
 );

@@ -17,10 +17,17 @@ pub const CREW_PERFORMANCE_KEY: &str = "workflow.crew_performance";
 pub const CREW_PERFORMANCE_WINDOW_DAYS_KEY: &str = "workflow.crew_performance_window_days";
 /// The default evidence window of a crew-performance snapshot, in days.
 pub const DEFAULT_CREW_PERFORMANCE_WINDOW_DAYS: u32 = 30;
+/// The `workflow.crew_performance_strength` key as written in `config.toml`.
+pub const CREW_PERFORMANCE_STRENGTH_KEY: &str = "workflow.crew_performance_strength";
+/// The `workflow.crew_performance_cap` key as written in `config.toml`.
+pub const CREW_PERFORMANCE_CAP_KEY: &str = "workflow.crew_performance_cap";
+/// `workflow.crew_performance_strength` when unset.
+pub const DEFAULT_CREW_PERFORMANCE_STRENGTH: f64 = 3.0;
+/// `workflow.crew_performance_cap` when unset.
+pub const DEFAULT_CREW_PERFORMANCE_CAP: f64 = 4.0;
 
 /// How crew draws use the performance snapshot (`workflow.crew_performance`).
-/// This task only persists the snapshot; `off` also stops the hourly refresh
-/// from scanning at all.
+/// `off` draws without it and also stops the hourly refresh from scanning.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CrewPerformanceMode {
     /// No snapshot is built and no draw reads one.
@@ -75,6 +82,87 @@ pub(crate) fn admit_crew_performance(raw: Option<String>) -> Result<String, Orbi
                 CrewPerformanceMode::CHOICES.join(", ")
             ))
         })
+}
+
+/// Admit `workflow.crew_performance_strength`: a finite number of at least 0.
+pub(crate) fn admit_crew_performance_strength(raw: Option<f64>) -> Result<f64, OrbitError> {
+    let strength = raw.unwrap_or(DEFAULT_CREW_PERFORMANCE_STRENGTH);
+    if strength.is_finite() && strength >= 0.0 {
+        Ok(strength)
+    } else {
+        Err(OrbitError::InvalidInput(format!(
+            "{CREW_PERFORMANCE_STRENGTH_KEY} must be a finite number of at least 0, got {strength}"
+        )))
+    }
+}
+
+/// Admit `workflow.crew_performance_cap`: a finite number of at least 1.
+pub(crate) fn admit_crew_performance_cap(raw: Option<f64>) -> Result<f64, OrbitError> {
+    let cap = raw.unwrap_or(DEFAULT_CREW_PERFORMANCE_CAP);
+    if cap.is_finite() && cap >= 1.0 {
+        Ok(cap)
+    } else {
+        Err(OrbitError::InvalidInput(format!(
+            "{CREW_PERFORMANCE_CAP_KEY} must be a finite number of at least 1, got {cap}"
+        )))
+    }
+}
+
+/// How task crew draws weigh crew performance (`workflow.crew_performance`,
+/// `workflow.crew_performance_strength`, `workflow.crew_performance_cap`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CrewPerformancePolicy {
+    /// Which advantage the factor reads, or `off`.
+    pub mode: CrewPerformanceMode,
+    /// `k`: the exponent's scale; `0` disables the factor.
+    pub strength: f64,
+    /// The factor is clamped to `[1 / cap, cap]`; at least 1.
+    pub cap: f64,
+}
+
+impl Default for CrewPerformancePolicy {
+    fn default() -> Self {
+        Self {
+            mode: CrewPerformanceMode::Off,
+            strength: DEFAULT_CREW_PERFORMANCE_STRENGTH,
+            cap: DEFAULT_CREW_PERFORMANCE_CAP,
+        }
+    }
+}
+
+impl CrewPerformancePolicy {
+    /// Whether draws weigh performance: a mode other than `off` with a
+    /// positive strength.
+    #[must_use]
+    pub fn applies(&self) -> bool {
+        self.mode.is_on() && self.strength > 0.0
+    }
+
+    /// The advantage the mode reads from a cell: `score − 100` under
+    /// `absolute`, `score − crew_mean` under `comparative`, `0` when off.
+    #[must_use]
+    pub fn advantage(&self, score: f64, crew_mean: f64) -> f64 {
+        match self.mode {
+            CrewPerformanceMode::Off => 0.0,
+            CrewPerformanceMode::Absolute => score - 100.0,
+            CrewPerformanceMode::Comparative => score - crew_mean,
+        }
+    }
+
+    /// The weight factor for `advantage` points:
+    /// `clamp(exp(strength × advantage / 100), 1 / cap, cap)`. A non-finite
+    /// advantage counts as neutral.
+    #[must_use]
+    pub fn factor(&self, advantage: f64) -> f64 {
+        let advantage = if advantage.is_finite() {
+            advantage
+        } else {
+            0.0
+        };
+        (self.strength * advantage / 100.0)
+            .exp()
+            .clamp(1.0 / self.cap, self.cap)
+    }
 }
 
 /// Admit `workflow.crew_performance_window_days`: 1..=90, default 30. The
@@ -261,5 +349,15 @@ impl ConfigSnapshot {
     #[must_use]
     pub fn crew_performance_window_days(&self) -> u32 {
         self.workflow_crew_performance_window_days
+    }
+
+    /// The admitted draw-weighting policy: mode, strength and cap.
+    #[must_use]
+    pub fn crew_performance_policy(&self) -> CrewPerformancePolicy {
+        CrewPerformancePolicy {
+            mode: self.crew_performance(),
+            strength: self.workflow_crew_performance_strength,
+            cap: self.workflow_crew_performance_cap,
+        }
     }
 }

@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
+use chrono::SecondsFormat;
 use orbit_common::OrbitError;
-use orbit_config::UsagePressurePolicy;
+use orbit_config::{CrewPerformanceMode, CrewPerformancePolicy, UsagePressurePolicy};
+use orbit_store::contracts::CrewPerformanceSnapshot;
 use orbit_types::identity::Crew;
 use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::activity_job::Provider;
@@ -63,7 +65,7 @@ impl CrewPoolDraw {
 
 impl crate::OrbitRuntime {
     /// Draw after the caller's existing membership filters, using the same
-    /// pressure helper as task draws. Static mode consumes the same tickets
+    /// weighting seam as task draws, with usage pressure only. Static mode consumes the same tickets
     /// over the same weights; explicit choices pass a singleton pool.
     pub(crate) fn draw_crew_pool(
         &self,
@@ -71,15 +73,18 @@ impl crate::OrbitRuntime {
         source: &str,
         random: &mut impl FnMut() -> Result<u64, OrbitError>,
     ) -> Result<CrewPoolDraw, OrbitError> {
-        let weighting = pressure_weighted_candidates(
+        // Activity pools take no performance factor: only implementer
+        // draws are scored for routing.
+        let weighting = weighted_candidates(
             &mut candidates,
             &self.provider_limit_policy().usage_pressure,
             || self.usage_pressure_read(chrono::Utc::now()),
+            || None,
         );
         let selected = weighted_draw(&candidates, source, random)?;
         Ok(CrewPoolDraw {
             crew: selected.crew.clone(),
-            source: if weighting.is_some() {
+            source: if weighting.as_ref().is_some_and(DrawWeighting::pressured) {
                 format!("{source}; usage pressure")
             } else {
                 source.to_string()
@@ -187,69 +192,303 @@ pub(super) fn permitted_candidates(
     Ok(permitted)
 }
 
-/// Tickets per unit of configured weight in a usage-pressure draw, so a
+/// Tickets per unit of configured weight in a weighted draw, so a
 /// weight-1 member at the `1/8` floor keeps 125 tickets [ORB-17770].
 const PRESSURE_TICKET_SCALE: f64 = 1000.0;
 
-/// What one usage-pressure weighting did to a draw's members [ORB-17770]:
-/// each member's configured weight and crew pressure, by crew name.
-pub(crate) struct PressureWeighting {
-    members: BTreeMap<String, (u32, UsagePressure)>,
+/// One member's crew-performance factor in a task draw: the cell it was
+/// read from, or why the snapshot could not be used.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PerformanceFactor {
+    mode: CrewPerformanceMode,
+    tier: String,
+    task_type: String,
+    factor: f64,
+    evidence: Result<PerformanceEvidence, String>,
 }
 
-impl PressureWeighting {
-    /// `crew`'s pressure in this draw.
-    pub(crate) fn pressure(&self, crew: &str) -> Option<&UsagePressure> {
-        self.members.get(crew).map(|(_, pressure)| pressure)
+/// The cell evidence behind a usable factor.
+#[derive(Debug, Clone, PartialEq)]
+struct PerformanceEvidence {
+    /// The cell score the advantage was read from: the cell's shrunk score,
+    /// its crew mean when the crew has no cell for this type, or 100.
+    score: f64,
+    crew_mean: f64,
+    n: u64,
+    /// `cell`, `crew_mean` (no cell for the type) or `none` (no evidence
+    /// for the crew's current model in this tier).
+    source: &'static str,
+    computed_at: String,
+}
+
+impl PerformanceFactor {
+    fn json(&self) -> Value {
+        let mut value = json!({
+            "mode": self.mode.as_str(),
+            "tier": self.tier,
+            "type": self.task_type,
+            "factor": self.factor,
+        });
+        match &self.evidence {
+            Ok(evidence) => {
+                value["score"] = json!(evidence.score);
+                value["crew_mean"] = json!(evidence.crew_mean);
+                value["n"] = json!(evidence.n);
+                value["evidence"] = json!(evidence.source);
+                value["computed_at"] = json!(evidence.computed_at);
+            }
+            Err(reason) => value["unusable"] = json!(reason),
+        }
+        value
     }
 
-    /// The `eligible_pool` entry of a weighted member: its configured
-    /// `weight`, raw `pressure` and the `effective_weight` it drew on.
-    pub(crate) fn member(&self, candidate: &CrewCandidate) -> Value {
-        json!(self.pool_member(candidate))
-    }
-
-    fn pool_member(&self, candidate: &CrewCandidate) -> ActivityCrewPoolMember {
-        let (weight, pressure) = self
-            .members
-            .get(&candidate.crew.name)
-            .map_or((candidate.weight, 1.0), |(weight, pressure)| {
-                (*weight, pressure.pressure)
-            });
-        ActivityCrewPoolMember {
-            name: candidate.crew.name.clone(),
-            weight,
-            pressure: Some(pressure),
-            effective_weight: Some(f64::from(candidate.weight) / PRESSURE_TICKET_SCALE),
+    /// `×1.57 (review score 115.0, crew mean 114.0)`, or `×1 (snapshot stale)`.
+    fn describe(&self) -> String {
+        match &self.evidence {
+            Ok(evidence) => format!(
+                "×{:.2} ({} score {:.1}, crew mean {:.1})",
+                self.factor, self.task_type, evidence.score, evidence.crew_mean
+            ),
+            Err(reason) => format!("×1 (snapshot {reason})"),
         }
     }
 }
 
-/// Scale `candidates`' tickets by their crews' weekly usage pressure:
-/// `weight × clamp(pressure^strength, 1/cap, cap)`, ×1000 and rounded to
-/// whole tickets [ORB-17770]. Apply it to a pool after hold and limit
-/// narrowing; membership is unchanged. Task admission applies its allowlist
-/// afterward; other draws keep their existing membership filters first.
-/// A weight of 0 stays 0 and a positive weight keeps at least one ticket.
-/// `None` leaves the draw as it was: the policy is off or there is no
-/// choice to weigh.
-pub(crate) fn pressure_weighted_candidates(
+/// What a task draw reads for crew performance: the policy, the task's
+/// tier and type, and the workspace snapshot or why it is unusable.
+pub(crate) struct CrewPerformanceRead {
+    policy: CrewPerformancePolicy,
+    tier: String,
+    task_type: String,
+    snapshot: Result<CrewPerformanceSnapshot, String>,
+}
+
+impl CrewPerformanceRead {
+    pub(crate) fn new(
+        policy: CrewPerformancePolicy,
+        complexity: Option<TaskComplexity>,
+        task_type: &str,
+        snapshot: Result<CrewPerformanceSnapshot, String>,
+    ) -> Self {
+        Self {
+            policy,
+            // The scorecard files a task with no complexity under this tier.
+            tier: complexity
+                .map_or("unassessed", TaskComplexity::as_str)
+                .to_string(),
+            task_type: task_type.to_string(),
+            snapshot,
+        }
+    }
+
+    fn usable(&self) -> bool {
+        self.snapshot.is_ok()
+    }
+
+    /// `crew`'s factor under its current model: its `(tier, type)` cell,
+    /// else its crew mean for the tier, else 100. An unusable snapshot is
+    /// factor 1 with the reason.
+    fn member(&self, crew: &Crew) -> PerformanceFactor {
+        let evidence = self
+            .snapshot
+            .as_ref()
+            .map_err(Clone::clone)
+            .map(|snapshot| {
+                let tier_cells = snapshot.cells.iter().filter(|cell| {
+                    cell.crew == crew.name
+                        && cell.model == crew.assignment.model
+                        && cell.tier == self.tier
+                });
+                let mut crew_mean = None;
+                let mut found = None;
+                for cell in tier_cells {
+                    crew_mean.get_or_insert(cell.crew_mean);
+                    if cell.task_type == self.task_type {
+                        found = Some(cell);
+                    }
+                }
+                let (score, crew_mean, n, source) = match (found, crew_mean) {
+                    (Some(cell), _) => (cell.score, cell.crew_mean, cell.n, "cell"),
+                    (None, Some(mean)) => (mean, mean, 0, "crew_mean"),
+                    (None, None) => (100.0, 100.0, 0, "none"),
+                };
+                PerformanceEvidence {
+                    score,
+                    crew_mean,
+                    n,
+                    source,
+                    computed_at: snapshot
+                        .computed_at
+                        .to_rfc3339_opts(SecondsFormat::Secs, true),
+                }
+            });
+        let factor = evidence.as_ref().map_or(1.0, |evidence| {
+            self.policy
+                .factor(self.policy.advantage(evidence.score, evidence.crew_mean))
+        });
+        PerformanceFactor {
+            mode: self.policy.mode,
+            tier: self.tier.clone(),
+            task_type: self.task_type.clone(),
+            factor,
+            evidence,
+        }
+    }
+}
+
+impl crate::OrbitRuntime {
+    /// The crew-performance read of a task draw for a task of `complexity`
+    /// carrying `tags` and `context_files`, or `None` when
+    /// `workflow.crew_performance` is off or its strength is 0. A snapshot
+    /// that is missing, stale, built from another type list or unreadable
+    /// is carried as its reason, so every factor is 1 and the record says
+    /// why; a draw never fails over it.
+    pub(super) fn crew_performance_read(
+        &self,
+        complexity: Option<TaskComplexity>,
+        tags: &[String],
+        context_files: &[String],
+    ) -> Option<CrewPerformanceRead> {
+        let policy = self.provider_limit_policy().crew_performance;
+        if !policy.applies() {
+            return None;
+        }
+        let task_type =
+            orbit_config::classify_task_type(self.crew_performance_types(), tags, context_files);
+        let snapshot = match self.usable_crew_performance_snapshot() {
+            Ok(Ok(snapshot)) => Ok(snapshot),
+            Ok(Err(reason)) => Err(reason.as_str().to_string()),
+            Err(error) => {
+                tracing::warn!("could not read the crew-performance snapshot: {error}");
+                Err("unreadable".to_string())
+            }
+        };
+        Some(CrewPerformanceRead::new(
+            policy, complexity, task_type, snapshot,
+        ))
+    }
+}
+
+/// One weighted member: its configured weight and the factors applied.
+struct WeightedMember {
+    weight: u32,
+    pressure: Option<UsagePressure>,
+    performance: Option<PerformanceFactor>,
+}
+
+/// What one weighting did to a draw's members, by crew name: each member's
+/// configured weight, its crew's usage pressure [ORB-17770] when that
+/// applies, and its crew-performance factor when that applies.
+pub(crate) struct DrawWeighting {
+    members: BTreeMap<String, WeightedMember>,
+    /// Whether tickets were rescaled. An unusable performance snapshot with
+    /// pressure off leaves the configured weights, so it draws as static.
+    scaled: bool,
+}
+
+impl DrawWeighting {
+    /// Whether usage pressure weighed this draw.
+    pub(crate) fn pressured(&self) -> bool {
+        self.members
+            .values()
+            .any(|member| member.pressure.is_some())
+    }
+
+    /// `crew`'s pressure in this draw.
+    pub(crate) fn pressure(&self, crew: &str) -> Option<&UsagePressure> {
+        self.members
+            .get(crew)
+            .and_then(|member| member.pressure.as_ref())
+    }
+
+    /// `crew`'s performance factor in this draw, described for history.
+    pub(crate) fn performance_description(&self, crew: &str) -> Option<String> {
+        self.members
+            .get(crew)
+            .and_then(|member| member.performance.as_ref())
+            .map(PerformanceFactor::describe)
+    }
+
+    /// The mode and task type of a performance-weighted draw.
+    pub(crate) fn performance_lens(&self) -> Option<(&'static str, &str)> {
+        self.members
+            .values()
+            .find_map(|member| member.performance.as_ref())
+            .map(|factor| (factor.mode.as_str(), factor.task_type.as_str()))
+    }
+
+    /// The `eligible_pool` entry of a weighted member: its configured
+    /// `weight`, raw `pressure`, `performance` factor and the
+    /// `effective_weight` it drew on.
+    pub(crate) fn member(&self, candidate: &CrewCandidate) -> Value {
+        let mut value = json!(self.pool_member(candidate));
+        if let Some(performance) = self
+            .members
+            .get(&candidate.crew.name)
+            .and_then(|member| member.performance.as_ref())
+        {
+            value["performance"] = performance.json();
+        }
+        value
+    }
+
+    fn pool_member(&self, candidate: &CrewCandidate) -> ActivityCrewPoolMember {
+        let member = self.members.get(&candidate.crew.name);
+        ActivityCrewPoolMember {
+            name: candidate.crew.name.clone(),
+            weight: member.map_or(candidate.weight, |member| member.weight),
+            pressure: member
+                .and_then(|member| member.pressure.as_ref())
+                .map(|pressure| pressure.pressure),
+            effective_weight: self
+                .scaled
+                .then(|| f64::from(candidate.weight) / PRESSURE_TICKET_SCALE),
+        }
+    }
+}
+
+/// The one weighting seam of crew pool draws: scale `candidates`' tickets
+/// to `weight × pressure_factor × performance_factor`, ×1000 and rounded to
+/// whole tickets. Pressure is `clamp(pressure^strength, 1/cap, cap)` from
+/// the crews' weekly usage [ORB-17770]; performance is the task draw's
+/// crew-performance factor, `None` for draws that take none. Apply it to a
+/// pool after hold and limit narrowing; membership is unchanged. Task
+/// admission applies its allowlist afterward; other draws keep their
+/// existing membership filters first. A weight of 0 stays 0 and a positive
+/// weight keeps at least one ticket. `None` leaves the draw as it was:
+/// neither factor applies or there is no choice to weigh.
+pub(crate) fn weighted_candidates(
     candidates: &mut [CrewCandidate],
-    policy: &UsagePressurePolicy,
-    read: impl FnOnce() -> UsagePressureRead,
-) -> Option<PressureWeighting> {
-    if !policy.applies() || candidates.len() < 2 {
+    pressure_policy: &UsagePressurePolicy,
+    pressure_read: impl FnOnce() -> UsagePressureRead,
+    performance_read: impl FnOnce() -> Option<CrewPerformanceRead>,
+) -> Option<DrawWeighting> {
+    if candidates.len() < 2 {
         return None;
     }
-    let read = read();
+    let pressure = pressure_policy.applies().then(pressure_read);
+    let performance = performance_read();
+    if pressure.is_none() && performance.is_none() {
+        return None;
+    }
+    let scaled = pressure.is_some()
+        || performance
+            .as_ref()
+            .is_some_and(CrewPerformanceRead::usable);
     let mut members = BTreeMap::new();
     for candidate in candidates.iter_mut() {
-        let pressure = read.crew(&candidate.crew);
+        let crew_pressure = pressure.as_ref().map(|read| read.crew(&candidate.crew));
+        let crew_performance = performance
+            .as_ref()
+            .map(|read| read.member(&candidate.crew));
         let configured = candidate.weight;
-        if configured > 0 {
-            let tickets = (f64::from(configured)
-                * policy.multiplier(pressure.pressure)
-                * PRESSURE_TICKET_SCALE)
+        if configured > 0 && scaled {
+            let multiplier = crew_pressure.as_ref().map_or(1.0, |pressure| {
+                pressure_policy.multiplier(pressure.pressure)
+            }) * crew_performance
+                .as_ref()
+                .map_or(1.0, |performance| performance.factor);
+            let tickets = (f64::from(configured) * multiplier * PRESSURE_TICKET_SCALE)
                 .round()
                 .clamp(1.0, f64::from(u32::MAX));
             // In range by the clamp above.
@@ -258,9 +497,16 @@ pub(crate) fn pressure_weighted_candidates(
                 candidate.weight = tickets as u32;
             }
         }
-        members.insert(candidate.crew.name.clone(), (configured, pressure));
+        members.insert(
+            candidate.crew.name.clone(),
+            WeightedMember {
+                weight: configured,
+                pressure: crew_pressure,
+                performance: crew_performance,
+            },
+        );
     }
-    Some(PressureWeighting { members })
+    Some(DrawWeighting { members, scaled })
 }
 
 /// Draw one ticket in `[0, total_weight)` and walk the cumulative weights.

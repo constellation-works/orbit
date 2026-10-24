@@ -726,10 +726,24 @@ define_config_settings! {
     },
     workflow_crew_performance: String => String {
         key: "workflow.crew_performance", value_type: "string",
-        description: "Whether the hourly crew-performance snapshot is built: off, absolute or comparative.",
+        description: "How task crew draws weigh crew performance: off, absolute or comparative.",
         section: ConfigSection::Delivery, order: 114,
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| crate::crew_performance::admit_crew_performance(raw),
+    },
+    workflow_crew_performance_strength: f64 => f64 {
+        key: "workflow.crew_performance_strength", value_type: "number",
+        description: "Scale of the crew-performance factor's exponent; 0 disables it.",
+        section: ConfigSection::Delivery, order: 116,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<f64>| crate::crew_performance::admit_crew_performance_strength(raw),
+    },
+    workflow_crew_performance_cap: f64 => f64 {
+        key: "workflow.crew_performance_cap", value_type: "number",
+        description: "Largest factor crew performance scales a crew's draw weight up or down by.",
+        section: ConfigSection::Delivery, order: 117,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<f64>| crate::crew_performance::admit_crew_performance_cap(raw),
     },
     workflow_crew_performance_window_days: u32 => u32 {
         key: "workflow.crew_performance_window_days", value_type: "integer",

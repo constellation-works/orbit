@@ -12,7 +12,7 @@ use orbit_types::identity::Crew;
 use orbit_types::workflow::Provider;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::{ConfigSnapshot, ProviderLimitBudget};
+use crate::{ConfigSnapshot, CrewPerformancePolicy, ProviderLimitBudget};
 
 /// What one `workflow.provider_limit_budgets` or
 /// `workflow.provider_limit_overrides` entry covers [ORB-17288].
@@ -241,6 +241,11 @@ pub struct ProviderLimitPolicy {
     /// How task crew draws weigh weekly usage pressure
     /// (`workflow.crew_selection`, `workflow.usage_pressure_*`).
     pub usage_pressure: UsagePressurePolicy,
+    /// How task crew draws weigh crew performance
+    /// (`workflow.crew_performance`, `workflow.crew_performance_*`). It
+    /// rides here beside usage pressure so both factors of one draw are
+    /// read from the same admission policy snapshot.
+    pub crew_performance: CrewPerformancePolicy,
 }
 
 impl Default for ProviderLimitPolicy {
@@ -252,6 +257,7 @@ impl Default for ProviderLimitPolicy {
             explicit_crews: ProviderLimitExplicitCrews::Wait,
             budgets: Vec::new(),
             usage_pressure: UsagePressurePolicy::default(),
+            crew_performance: CrewPerformancePolicy::default(),
         }
     }
 }
@@ -415,6 +421,7 @@ impl ConfigSnapshot {
                 cap: self.workflow_usage_pressure_cap,
                 strength: self.workflow_usage_pressure_strength,
             },
+            crew_performance: self.crew_performance_policy(),
         }
     }
 }
