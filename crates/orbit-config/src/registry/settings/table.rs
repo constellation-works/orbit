@@ -674,7 +674,7 @@ define_config_settings! {
         description: "Rolling spend budgets for providers, or crew accounts, that report no usage.",
         section: ConfigSection::Delivery, order: 109,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<Vec<String>>| crate::provider_limit_budget::admit_budgets(raw),
+        resolve: |raw: Option<Vec<String>>| crate::provider_limit::admit_budgets(raw),
     },
     workflow_provider_limit_explicit_crews: String => String {
         key: "workflow.provider_limit_explicit_crews", value_type: "string",

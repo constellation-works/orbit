@@ -54,6 +54,8 @@
 //!   its one parser [ORB-12913].
 //! - `crew_performance` — the ordered `workflow.crew_performance_types` list
 //!   and the one task-type classification the scorecard and draw share.
+//! - `provider_limit` — provider/account admission policy, with threshold and draw
+//!   policy in `policy`, budget declarations in `budget`, and shared targets in `target`.
 //! - `operation` — typed review preferences (`[review]` and
 //!   `workflow.purpose_crews.review`, one crew or a pool) and their layered
 //!   resolution [ORB-11333] [ORB-13992] [ORB-15195].
@@ -79,7 +81,6 @@ mod persistence;
 mod plugin_enablement;
 mod plugins;
 mod provider_limit;
-mod provider_limit_budget;
 mod raw;
 mod registry;
 mod resolved;
@@ -129,10 +130,10 @@ pub use plugin_enablement::{
 pub use plugins::{PluginConfigSchema, register_plugin_config_schemas};
 pub use provider_limit::{
     CrewSelection, DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT, DEFAULT_USAGE_PRESSURE_CAP,
-    DEFAULT_USAGE_PRESSURE_STRENGTH, ProviderLimitExplicitCrews, ProviderLimitPolicy,
-    ProviderLimitTarget, ProviderLimitThreshold, UsagePressurePolicy,
+    DEFAULT_USAGE_PRESSURE_STRENGTH, ProviderLimitBudget, ProviderLimitBudgetUnit,
+    ProviderLimitExplicitCrews, ProviderLimitPolicy, ProviderLimitTarget, ProviderLimitThreshold,
+    UsagePressurePolicy,
 };
-pub use provider_limit_budget::{ProviderLimitBudget, ProviderLimitBudgetUnit};
 pub use registry::{
     AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigKeyTier,
     ConfigSection, ConfigSnapshot, ExploreSettings, MachineSettings, MidRunSteeringSettings,
