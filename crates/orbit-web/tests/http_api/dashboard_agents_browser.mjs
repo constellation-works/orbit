@@ -3,7 +3,8 @@
 // contract-shaped `/api/agents` payloads: `#analytics/orchestrators` opening
 // `#agents/orchestrators`, the role tabs and their counts, row selection
 // driving the detail column, the disclosure surviving a refresh, no
-// Implementers role panel, the Reviewers provisional
+// Implementers role panel or the empty grid row and gap that track would
+// reserve (16px at 1440, 12px at 375), the Reviewers provisional
 // banner, `accepts often` tag and verdict-outcome bars, the Pilots
 // tier-calibration matrices, the empty state, and the 375px layout (ranking
 // scrolling in its own box, detail stacked below, 44px touch targets).
@@ -243,6 +244,76 @@ try {
     };
   });
 
+  // Space between the disclosure's border box and the body's padding edge.
+  // Desktop keeps one gap for the detail column's trailing stretch row. A
+  // panel track with no panel adds a second gap: the 16px desktop gap, or
+  // the 12px gap used at the phone breakpoint.
+  const disclosureTail = () => page.evaluate(() => {
+    const node = document.querySelector('#agents-body');
+    const how = node.querySelector('.agents-how').getBoundingClientRect();
+    const box = node.getBoundingClientRect();
+    const style = getComputedStyle(node);
+    const paddingBottom = parseFloat(style.paddingBottom);
+    const rowGap = parseFloat(style.rowGap);
+    const areas = style.gridTemplateAreas;
+    const rowHeights = style.gridTemplateRows.split(/\s+/).filter(Boolean).map(value => parseFloat(value));
+    const spaceAfterDisclosure = box.bottom - paddingBottom - how.bottom;
+    const phone = window.innerWidth <= 900;
+    const expectedSpace = phone ? 0 : rowGap;
+    return {
+      width: window.innerWidth,
+      areas,
+      rowGap,
+      paddingBottom,
+      spaceAfterDisclosure,
+      expectedSpace,
+      excess: spaceAfterDisclosure - expectedSpace,
+      zeroRows: rowHeights.filter(height => height < 1).length,
+      panelAreas: (areas.match(/panel/g) || []).length,
+      phone,
+    };
+  });
+
+  const assertNoEmptyPanelTrack = tail => {
+    assert.equal(tail.panelAreas, 0, `implementers reserve no panel area: ${JSON.stringify(tail)}`);
+    assert.equal(tail.zeroRows, tail.phone ? 0 : 1, `an empty panel row is a trailing 0px track: ${JSON.stringify(tail)}`);
+    assert.ok(Math.abs(tail.excess) <= 1,
+      `an empty panel track adds the row gap after the disclosure (16px at desktop, 12px at 375px); measured excess ${tail.excess}px: ${JSON.stringify(tail)}`);
+  };
+
+  // A rendered panel occupies the row under the disclosure, one gap below it.
+  // A banner, when that role has one, sits one gap under the strip.
+  const assertPanelOccupiesItsRow = async label => {
+    const placed = await page.evaluate(() => {
+      const node = document.querySelector('#agents-body');
+      const style = getComputedStyle(node);
+      const how = node.querySelector('.agents-how').getBoundingClientRect();
+      const panel = node.querySelector('.agents-role-panel');
+      const panelBox = panel ? panel.getBoundingClientRect() : null;
+      const banner = node.querySelector('.agents-banner');
+      const strip = node.querySelector('.agents-strip').getBoundingClientRect();
+      const ranking = node.querySelector('.agents-ranking').getBoundingClientRect();
+      const bannerBox = banner ? banner.getBoundingClientRect() : null;
+      return {
+        areas: style.gridTemplateAreas,
+        rowGap: parseFloat(style.rowGap),
+        panelHeight: panelBox ? panelBox.height : 0,
+        panelGap: panelBox ? panelBox.top - how.bottom : null,
+        bannerGap: bannerBox ? bannerBox.top - strip.bottom : null,
+        rankingGap: bannerBox ? ranking.top - bannerBox.bottom : null,
+        width: window.innerWidth,
+      };
+    });
+    assert.ok(placed.areas.includes('panel'), `${label} keeps a panel area: ${JSON.stringify(placed)}`);
+    assert.ok(placed.panelHeight > 20, `${label} panel has content height: ${JSON.stringify(placed)}`);
+    assert.ok(Math.abs(placed.panelGap - placed.rowGap) <= 1, `${label} panel sits one gap under the disclosure: ${JSON.stringify(placed)}`);
+    if (placed.bannerGap != null) {
+      assert.ok(Math.abs(placed.bannerGap - placed.rowGap) <= 1, `${label} banner sits one gap under the strip: ${JSON.stringify(placed)}`);
+      assert.ok(Math.abs(placed.rankingGap - placed.rowGap) <= 1, `${label} ranking sits one gap under the banner: ${JSON.stringify(placed)}`);
+    }
+    return placed;
+  };
+
   // The retired Analytics › Orchestrators link opens Agents › Orchestrators.
   await page.goto(`${origin}#analytics/orchestrators?window=30d`);
   await body.locator('.agents-row').first().waitFor();
@@ -297,7 +368,7 @@ try {
   assert.equal(await body.locator('.agents-how').evaluate(node => node.open), true, 'the disclosure keeps its state across a poll');
   assert.equal(await body.locator('.agents-row-select[aria-pressed="true"] .agents-crew').textContent(), 'codex-orchestrator', 'the selection survives a poll');
   await shot('agents-orchestrators-how-dark-1440');
-  pass('disclosure survives a refresh');
+  pass('disclosure survives a refresh', { panel: await assertPanelOccupiesItsRow('orchestrators') });
 
   // Reviewers: the provisional banner under the strip, the ranking with the
   // `accepts often` tag, the detail and each reviewer's verdict outcomes.
@@ -325,7 +396,7 @@ try {
   assert.deepEqual(await outcomeRows.nth(1).locator('.agents-cause-seg').evaluateAll(nodes => nodes.map(node => node.dataset.outcome)),
     ['outcome_held_up', 'outcome_caught', 'outcome_false_alarm', 'outcome_missed', 'outcome_unresolved']);
   assert.equal(await outcomeRows.nth(0).locator('.agents-cause-total').textContent(), '64 reviews');
-  pass('reviewers banner, tag, detail and outcomes');
+  pass('reviewers banner, tag, detail and outcomes', { panel: await assertPanelOccupiesItsRow('reviewers') });
   await page.evaluate(() => window.scrollTo(0, 0));
   await shot('agents-reviewers-dark-1440');
   await body.locator('.agents-role-panel-reviewers').scrollIntoViewIfNeeded();
@@ -342,7 +413,11 @@ try {
   assert.ok(!implementersText.includes('Score against cost') && !implementersText.includes('First reviews by tier'), 'no chart, frontier or tier copy');
   assert.equal(await body.evaluate(node => node.lastElementChild.classList.contains('agents-how')), true, 'nothing reserves space past the disclosure');
   assert.match(await body.locator('.agents-stats').textContent(), /Cost per weighted landed task/, 'cost stays in Shown, not scored');
+  const implementersTails = [await disclosureTail()];
   await shot('agents-implementers-dark-1440');
+  await body.locator('.agents-how').evaluate(node => node.scrollIntoView({ block: 'end' }));
+  await shot('agents-implementers-disclosure-dark-1440');
+  await page.evaluate(() => window.scrollTo(0, 0));
   const desktopRanking = await rankingVisibility();
   assert.deepEqual(desktopRanking.headersInside.filter(([, visible]) => !visible), [], `rank, crew · model and score are visible without scrolling at 1440px: ${JSON.stringify(desktopRanking)}`);
   assert.equal(desktopRanking.scoreInsideEveryRow, true, 'every row shows its score at 1440px');
@@ -363,8 +438,14 @@ try {
   await body.locator('.agents-ranking').screenshot({ path: path.join(evidence, 'agents-implementers-table-dark-375.png'), animations: 'disabled' });
   await page.evaluate(() => window.scrollTo(0, 0));
   await shot('agents-implementers-dark-375');
+  implementersTails.push(await disclosureTail());
+  await body.locator('.agents-how').evaluate(node => node.scrollIntoView({ block: 'end' }));
+  await shot('agents-implementers-disclosure-dark-375');
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.setViewportSize({ width: 1440, height: 1100 });
-  pass('implementers ranking and detail without a role panel at desktop and phone widths');
+  fs.writeFileSync(path.join(evidence, 'implementers-track.json'), JSON.stringify(implementersTails, null, 2));
+  for (const tail of implementersTails) assertNoEmptyPanelTrack(tail);
+  pass('implementers ranking and detail without a role panel at desktop and phone widths', { tails: implementersTails });
 
   // Pilots: the shared ranking and detail, then one tier matrix per row with
   // its diagonal and its too-easy and too-hard counts, at both widths.
@@ -380,6 +461,7 @@ try {
   assert.equal(await body.locator('.agents-tier-matrix').count(), 2, 'a row with nothing placed has no matrix');
   assert.deepEqual(await body.locator('.agents-tier-card').first().locator('.agents-tier-cell.is-on').allTextContents(), ['3', '4', '2']);
   assert.deepEqual(await body.locator('.agents-tier-card').first().locator('.agents-tier-counts dd').allTextContents(), ['9', '2', '2', '1']);
+  const pilotsDesktop = await assertPanelOccupiesItsRow('pilots');
   await shot('agents-pilots-dark-1440');
   await body.locator('.agents-role-panel h3').evaluate(node => node.scrollIntoView({ block: 'start' }));
   await page.evaluate(() => window.scrollBy(0, -80));
@@ -394,13 +476,14 @@ try {
     }),
   }));
   assert.deepEqual(pilotsPhone, { pageOverflow: false, cardsInside: true }, 'pilots fit 375px');
+  const pilotsPhonePanel = await assertPanelOccupiesItsRow('pilots at 375px');
   await page.evaluate(() => window.scrollTo(0, 0));
   await shot('agents-pilots-dark-375');
   await body.locator('.agents-role-panel h3').evaluate(node => node.scrollIntoView({ block: 'start' }));
   await page.evaluate(() => window.scrollBy(0, -80));
   await shot('agents-pilots-panel-dark-375');
   await page.setViewportSize({ width: 1440, height: 1100 });
-  pass('pilots ranking, detail and tier matrices at desktop and phone widths', pilotsPhone);
+  pass('pilots ranking, detail and tier matrices at desktop and phone widths', { pilotsPhone, pilotsDesktop, pilotsPhonePanel });
 
   // An empty window says so.
   await page.locator('#agents-roles [data-view="orchestrators"]').click();
@@ -408,6 +491,8 @@ try {
   await body.locator('.agents-state-empty').waitFor();
   assert.match(await body.locator('.agents-state').textContent(), /No owned tasks in the 1h window/);
   assert.equal(new URL(page.url()).hash, '#agents/orchestrators?window=1h');
+  const emptyTail = await disclosureTail();
+  assertNoEmptyPanelTrack(emptyTail);
   await shot('agents-orchestrators-empty-dark-1440');
   await page.locator('#agents-window-selector [data-window="all"]').click();
   await body.locator('.agents-row').first().waitFor();
@@ -444,7 +529,7 @@ try {
   for (const [name, list] of Object.entries({ rowButtons: phone.rowButtons, roleTabs: phone.roleTabs, legend: phone.legend, summary: phone.summary })) {
     assert.ok(list.length && list.every(height => height >= 44), `${name} are at least 44px: ${list}`);
   }
-  pass('phone layout', phone);
+  pass('phone layout', { phone, panel: await assertPanelOccupiesItsRow('orchestrators at 375px') });
   await page.evaluate(() => window.scrollTo(0, 0));
   await shot('agents-orchestrators-dark-375');
   await page.locator('#agents-detail').scrollIntoViewIfNeeded();
@@ -460,7 +545,7 @@ try {
   assert.equal(reviewersPhone.pageOverflow, false, `reviewers fit 375px: ${JSON.stringify(reviewersPhone)}`);
   assert.equal(reviewersPhone.bannerFits, true);
   assert.ok(reviewersPhone.outcomeBars.every(width => width > 200), `outcome bars take the row's width on a phone: ${reviewersPhone.outcomeBars}`);
-  pass('reviewers phone layout', reviewersPhone);
+  pass('reviewers phone layout', { reviewersPhone, panel: await assertPanelOccupiesItsRow('reviewers at 375px') });
   await page.evaluate(() => window.scrollTo(0, 0));
   await shot('agents-reviewers-dark-375');
   await page.evaluate(() => document.querySelector('.agents-banner').scrollIntoView({ block: 'center' }));

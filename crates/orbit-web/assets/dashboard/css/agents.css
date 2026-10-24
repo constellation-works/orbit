@@ -1,7 +1,8 @@
 /* Observe › Agents: role tabs, the attribution strip, the ranking with its
    detail column, "How the score works" and the role panel. The body is one
    grid: the detail column sits right of the ranking on a wide screen and
-   under it on a phone. */
+   under it on a phone. The panel row is reserved only while a role panel is
+   rendered, so a role without one leaves no empty track and no gap for it. */
 .agents-role-count {
   margin-left: 6px;
   font-size: 12px;
@@ -27,9 +28,8 @@
     "strip strip"
     "ranking detail"
     "how detail"
-    "panel detail"
     ". detail";
-  grid-template-rows: auto auto auto auto 1fr;
+  grid-template-rows: auto auto auto 1fr;
   gap: 16px;
   align-items: start;
 }
@@ -42,8 +42,27 @@
 /* Without rows there is no detail column for the disclosure to sit beside. */
 .agents-state ~ .agents-how { grid-column: 1 / -1; }
 .agents-role-panel { grid-area: panel; }
+/* The panel row exists only with a panel, or its empty track keeps a gap. */
+.agents-body:has(> .agents-role-panel) {
+  grid-template-areas:
+    "strip strip"
+    "ranking detail"
+    "how detail"
+    "panel detail"
+    ". detail";
+  grid-template-rows: auto auto auto auto 1fr;
+}
 /* A role's banner sits under the strip; the row exists only with a banner. */
 .agents-body:has(> .agents-banner) {
+  grid-template-areas:
+    "strip strip"
+    "banner banner"
+    "ranking detail"
+    "how detail"
+    ". detail";
+  grid-template-rows: auto auto auto auto 1fr;
+}
+.agents-body:has(> .agents-banner):has(> .agents-role-panel) {
   grid-template-areas:
     "strip strip"
     "banner banner"
@@ -260,10 +279,18 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 @media (max-width: 900px) {
   .agents-body {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "strip" "ranking" "detail" "how";
+    grid-template-rows: none;
+  }
+  .agents-body:has(> .agents-role-panel) {
     grid-template-areas: "strip" "ranking" "detail" "how" "panel";
     grid-template-rows: none;
   }
   .agents-body:has(> .agents-banner) {
+    grid-template-areas: "strip" "banner" "ranking" "detail" "how";
+    grid-template-rows: none;
+  }
+  .agents-body:has(> .agents-banner):has(> .agents-role-panel) {
     grid-template-areas: "strip" "banner" "ranking" "detail" "how" "panel";
     grid-template-rows: none;
   }
