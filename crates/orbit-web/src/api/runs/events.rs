@@ -4,9 +4,8 @@ use crate::state::Ws;
 use axum::extract::{Path, Query};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_common::security::redaction::redact_all;
 use orbit_core::V2AuditEventFilter;
-use orbit_core::runtime::audit::run::RunCliInvocationRecord;
+use orbit_core::runtime::audit::run_logs::RunCliInvocationProfile;
 use serde_json::{Value, json};
 
 use super::super::{
@@ -21,10 +20,6 @@ pub(in crate::api) const RUN_EVENTS_MAX_SCAN_LINES: usize = 50_000;
 /// the caller-supplied `limit` so the allocation size never derives from
 /// request input, regardless of how large a `limit` a caller requests.
 const RUN_EVENTS_PAGE_CAPACITY_HINT: usize = 64;
-/// Maximum bytes included in stdout/stderr previews returned by run-log APIs.
-pub(in crate::api) const RUN_LOG_PREVIEW_MAX_BYTES: usize = 8192;
-/// Maximum lines included in stdout/stderr previews returned by run-log APIs.
-const RUN_LOG_PREVIEW_MAX_LINES: usize = 120;
 
 pub(in crate::api) async fn list_run_events(
     Ws(runtime): Ws,
@@ -146,83 +141,18 @@ pub(in crate::api) async fn list_run_logs(
         runtime.collect_run_cli_invocations_bounded(
             &run_id,
             Some(limit),
-            Some(RUN_LOG_PREVIEW_MAX_BYTES),
+            RunCliInvocationProfile::HttpPreview.blob_read_max_bytes(),
         )
     })
     .await
     {
         Ok(records) => Json(Value::Array(
             records
-                .into_iter()
-                .map(run_cli_invocation_to_json)
+                .iter()
+                .map(|record| record.to_profile_json(RunCliInvocationProfile::HttpPreview))
                 .collect(),
         ))
         .into_response(),
         Err(response) => *response,
-    }
-}
-
-fn run_cli_invocation_to_json(record: RunCliInvocationRecord) -> Value {
-    let stdout_preview = bounded_preview(&record.stdout);
-    let stderr_preview = bounded_preview(&record.stderr);
-    let stdout_truncated = stdout_preview.truncated || record.stdout_blob_truncated;
-    let stderr_truncated = stderr_preview.truncated || record.stderr_blob_truncated;
-    json!({
-        "run_id": record.run_id,
-        "event_id": record.event_id,
-        "ts": record.ts.map(|ts| ts.to_rfc3339()),
-        "step_id": record.step_id,
-        "step_index": record.step_index,
-        "provider": record.provider,
-        "stdout_blob_ref": record.stdout_blob_ref,
-        "stderr_blob_ref": record.stderr_blob_ref,
-        "stdout_preview": stdout_preview.text,
-        "stderr_preview": stderr_preview.text,
-        "stdout_truncated": stdout_truncated,
-        "stderr_truncated": stderr_truncated,
-        "exit_code": record.exit_code,
-        "timed_out": record.timed_out,
-        "duration_ms": record.duration_ms,
-    })
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Preview {
-    text: String,
-    truncated: bool,
-}
-
-fn bounded_preview(raw: &str) -> Preview {
-    let mut out = String::new();
-    let mut truncated = false;
-    for (index, line) in raw.lines().enumerate() {
-        if index >= RUN_LOG_PREVIEW_MAX_LINES {
-            truncated = true;
-            break;
-        }
-        let needed = line.len() + usize::from(!out.is_empty());
-        if out.len().saturating_add(needed) > RUN_LOG_PREVIEW_MAX_BYTES {
-            if out.is_empty() {
-                for ch in line.chars() {
-                    if out.len().saturating_add(ch.len_utf8()) > RUN_LOG_PREVIEW_MAX_BYTES {
-                        break;
-                    }
-                    out.push(ch);
-                }
-            }
-            truncated = true;
-            break;
-        }
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(line);
-    }
-    if raw.ends_with('\n') && !out.is_empty() && out.len() < RUN_LOG_PREVIEW_MAX_BYTES {
-        out.push('\n');
-    }
-    Preview {
-        text: redact_all(&out),
-        truncated,
     }
 }
