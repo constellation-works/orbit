@@ -49,7 +49,7 @@ pub fn task_record_json(
             task.status,
             &row.comments,
             &task.dependencies(),
-            &|id: &str| status_by_id.get(id).copied() == Some(TaskStatus::Done),
+            &|id: &str| task_is_done(runtime, Some(status_by_id), id),
         )),
     );
     object.insert(
@@ -133,13 +133,7 @@ pub fn task_show_field_json(
             task.status,
             &runtime.get_task_comments(&task.id)?,
             &task.dependencies(),
-            &|id: &str| match status_by_id {
-                Some(index) => index.get(id).copied() == Some(TaskStatus::Done),
-                None => matches!(
-                    runtime.get_task(id),
-                    Ok(found) if found.status == TaskStatus::Done
-                ),
-            },
+            &|id: &str| task_is_done(runtime, status_by_id, id),
         ))),
         "os_requirement" => Ok(TaskOsReadout::new(runtime)?.requirement(task)),
         "comments" => serde_json::to_value(runtime.get_task_comments(&task.id)?)
@@ -163,4 +157,20 @@ pub fn task_show_field_json(
 
 fn serialize_error(label: &'static str) -> impl FnOnce(serde_json::Error) -> OrbitError {
     move |error| OrbitError::Execution(format!("serialize task {label}: {error}"))
+}
+
+fn task_is_done(
+    runtime: &OrbitRuntime,
+    status_by_id: Option<&BTreeMap<String, TaskStatus>>,
+    id: &str,
+) -> bool {
+    status_by_id
+        .and_then(|index| index.get(id).copied())
+        .map(|status| status == TaskStatus::Done)
+        .unwrap_or_else(|| {
+            matches!(
+                runtime.get_task(id),
+                Ok(found) if found.status == TaskStatus::Done
+            )
+        })
 }

@@ -1202,7 +1202,7 @@ fn task_payloads_expose_durable_holding_pilot_warnings() {
             };
             use orbit_types::workflow::{JobRunState, PipelineState};
             use std::io::Write;
-            let fixture = Fixture::new();
+            let fixture = Fixture::host("orbit", "ORB");
             let id = fixture
                 .runtime
                 .add_task(TaskAddParams {
@@ -1283,6 +1283,11 @@ fn task_payloads_expose_durable_holding_pilot_warnings() {
                     )
                     .unwrap();
                 assert_eq!(&shown, expected);
+                let full_shown = fixture
+                    .runtime
+                    .run_tool("orbit.task.show", json!({"id": id}))
+                    .unwrap();
+                assert_eq!(&full_shown["pilot_warnings"], expected);
                 let listed = fixture
                     .runtime
                     .run_tool("orbit.task.list", json!({}))
@@ -1377,6 +1382,142 @@ fn task_payloads_expose_durable_holding_pilot_warnings() {
                 json!({}),
             ));
             assert_payloads(&json!([]));
+
+            // Non-dependency prerequisite tasks:
+            // A finished prerequisite holds nothing and clears pilot warnings on every read surface.
+            let done_prereq = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Done prerequisite".into(),
+                    status: Some(TaskStatus::Done),
+                    ..Default::default()
+                })
+                .unwrap();
+            let unfin_prereq = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Unfinished prerequisite".into(),
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                })
+                .unwrap();
+
+            let prereq_task = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Prerequisite check task".into(),
+                    complexity: TaskComplexity::Low,
+                    description: "Prerequisite verification".into(),
+                    acceptance_criteria: vec!["Acceptance".into()],
+                    ..Default::default()
+                })
+                .unwrap()
+                .id;
+
+            let record_prereq = |operation: char, assessment: Value| {
+                fixture
+                    .runtime
+                    .update_task_as_human(
+                        &prereq_task,
+                        TaskUpdateParams {
+                            comment: Some(format!(
+                                "operation_id={}\n{}",
+                                operation.to_string().repeat(64),
+                                json!({"assessment": assessment})
+                            )),
+                            ..Default::default()
+                        },
+                        "task-pilot".into(),
+                    )
+                    .unwrap();
+                let dir = super::codebase::bundle_dir(&fixture.path(""), &prereq_task).unwrap();
+                let path = dir.join(TASK_EVENTS_FILE_NAME);
+                let count = fs::read_to_string(&path).unwrap().lines().count();
+                let event = TaskEventRowV2 {
+                    schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                    event_id: format!("EV-{:04}", count + 1),
+                    at: Utc::now(),
+                    by: "task-pilot".into(),
+                    event_type: "task_pilot_applied".into(),
+                    note: None,
+                    from_status: None,
+                    to_status: None,
+                    operation_id: Some(operation.to_string().repeat(64)),
+                    decision: Some(TaskDecision::DrainApprovalHeld {
+                        classification: "warnings".into(),
+                    }),
+                };
+                let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+                writeln!(file, "{}", serde_json::to_string(&event).unwrap()).unwrap();
+            };
+
+            let assert_prereq_payloads = |expected: &Value| {
+                let detail = json_ok(server.get(&format!(
+                    "/api/tasks/{prereq_task}?workspace=ws_http_fixture"
+                )));
+                assert_eq!(&detail["pilot_warnings"], expected);
+                let page = json_ok(server.get("/api/tasks?workspace=ws_http_fixture"));
+                let rows = page["items"]
+                    .as_array()
+                    .or_else(|| page.as_array())
+                    .unwrap();
+                let row = rows.iter().find(|row| row["id"] == prereq_task).unwrap();
+                assert_eq!(&row["pilot_warnings"], expected);
+                let shown = fixture
+                    .runtime
+                    .run_tool(
+                        "orbit.task.show",
+                        json!({"id": prereq_task, "fields": ["pilot_warnings"]}),
+                    )
+                    .unwrap();
+                assert_eq!(&shown, expected);
+                let full_shown = fixture
+                    .runtime
+                    .run_tool("orbit.task.show", json!({"id": prereq_task}))
+                    .unwrap();
+                assert_eq!(&full_shown["pilot_warnings"], expected);
+                let listed = fixture
+                    .runtime
+                    .run_tool("orbit.task.list", json!({}))
+                    .unwrap();
+                let row = listed["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["id"] == prereq_task)
+                    .unwrap();
+                assert_eq!(&row["pilot_warnings"], expected);
+            };
+
+            // 1. Proposed task whose receipt names only a done task that is not a dependency has empty pilot_warnings
+            record_prereq(
+                'd',
+                json!({
+                    "blocked_by": [format!("Wait for {} to land", done_prereq.id)],
+                }),
+            );
+            assert_prereq_payloads(&json!([]));
+
+            // 2. Proposed task whose receipt names a missing task still reports the finding on full show record
+            let missing_expected =
+                json!([{"kind": "blocked_by", "text": "Wait for ORB-99999 to land"}]);
+            record_prereq(
+                'e',
+                json!({
+                    "blocked_by": ["Wait for ORB-99999 to land"],
+                }),
+            );
+            assert_prereq_payloads(&missing_expected);
+
+            // 3. Proposed task whose receipt names an unfinished task that is not a dependency still reports the finding
+            let unfin_expected = json!([{"kind": "blocked_by", "text": format!("Wait for {} to land", unfin_prereq.id)}]);
+            record_prereq(
+                'f',
+                json!({
+                    "blocked_by": [format!("Wait for {} to land", unfin_prereq.id)],
+                }),
+            );
+            assert_prereq_payloads(&unfin_expected);
         },
     );
 }
