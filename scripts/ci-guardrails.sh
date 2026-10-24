@@ -533,6 +533,7 @@ fi
   run_guard "$repo_root/scripts/test-installer-security.sh"
   run_guard "$repo_root/scripts/test-mcp-registry-publish-workflow.sh"
   run_guard "$repo_root/scripts/test-check-unused-dependencies.py"
+  run_guard "$repo_root/scripts/test-check-dependency-direction.py"
   run_guard "$repo_root/scripts/test-release-workflow.py"
   run_guard "$repo_root/scripts/test-release-promotion.py"
   run_guard "$repo_root/scripts/test-pr-state-workflows.py"
