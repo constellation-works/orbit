@@ -201,20 +201,7 @@ pub fn run_sweep_core(
             reports.push(skipped(routine, "tick_deadline"));
             continue;
         }
-        let same_target = collection
-            .routines
-            .iter()
-            .filter(|other| {
-                other.source_orbit_dir == routine.source_orbit_dir
-                    && other.definition.target == routine.definition.target
-                    && other.definition.enabled
-            })
-            .collect::<Vec<_>>();
-        if same_target.len() > 1
-            && same_target
-                .iter()
-                .any(|other| other.definition.trigger.state.is_some())
-        {
+        if duplicate_ownership_skipped(&collection.routines, routine) {
             reports.push(skipped(routine, "duplicate_routine_ownership"));
             continue;
         }
@@ -228,6 +215,38 @@ pub fn run_sweep_core(
     }
 
     Ok(reports)
+}
+
+/// Whether the sweep skips `routine` as a duplicate owner of its job: an
+/// enabled peer from the same source `.orbit` dir and target conflicts with it.
+/// A disabled routine owns nothing, so it is never skipped this way. Status
+/// reporting calls this too, so `routine show` names the skip the sweep records.
+pub fn duplicate_ownership_skipped(routines: &[LoadedRoutine], routine: &LoadedRoutine) -> bool {
+    routine.definition.enabled
+        && routines.iter().any(|other| {
+            !std::ptr::eq(other, routine)
+                && other.definition.enabled
+                && other.source_orbit_dir == routine.source_orbit_dir
+                && other.definition.target == routine.definition.target
+                && ownership_conflicts(routine, other)
+        })
+}
+
+/// Whether two routines on one target would both own its job. A temporal (cron)
+/// routine and a state routine conflict: the migration guard [ORB-11331] keeps
+/// a definition and its state replacement from both running. Two state routines
+/// conflict only on the same trigger kind, since each kind selects its own
+/// consumer and member set [ORB-17918]. Two routines with no state trigger never
+/// conflict.
+fn ownership_conflicts(left: &LoadedRoutine, right: &LoadedRoutine) -> bool {
+    match (
+        &left.definition.trigger.state,
+        &right.definition.trigger.state,
+    ) {
+        (Some(a), Some(b)) => a.kind == b.kind,
+        (None, None) => false,
+        _ => true,
+    }
 }
 
 fn sweep_routine(
