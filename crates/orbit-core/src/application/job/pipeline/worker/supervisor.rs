@@ -115,7 +115,7 @@ impl PipelineRunHost for OrbitRuntime {
         self.worker_invocation().is_some()
     }
     fn register_worker_process(&self, pid: u32) -> Result<(), OrbitError> {
-        OrbitRuntime::register_worker_process(self, pid)
+        crate::runtime::RuntimeKernel::register_worker_process(self, pid)
     }
 
     fn reconciled_run(&self, run_id: &str) -> Result<JobRun, OrbitError> {

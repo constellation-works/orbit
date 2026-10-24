@@ -48,6 +48,7 @@ use super::helpers::{SYSTEM_ACTOR_LABEL, is_automation_actor};
 use super::pilot::{HeldPilotWarnings, held_pilot_warnings};
 use super::{TaskListFilter, TriageOption};
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecords;
 
 /// The job the `pilot_warnings_held` and `block_escalated` triggers submit.
 pub const ESCALATION_TRIAGE_JOB: &str = "escalation_triage_pipeline";

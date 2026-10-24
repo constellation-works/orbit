@@ -48,6 +48,7 @@ use super::baseline_repair::{RepairIndex, RepairLink};
 use super::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::{PipelineSubmission, ROUTINE_DISPATCH_ORBIT_DIR_FIELD};
+use crate::application::task::TaskRecords;
 
 /// The job a clock tick dispatches to check holds whose base moved to a tip
 /// with no recorded result; at most one run per workspace is live.

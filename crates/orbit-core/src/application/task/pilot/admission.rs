@@ -19,6 +19,7 @@ use super::super::positive_validation_tools;
 use super::super::helpers::is_automation_actor;
 use super::super::legacy_decisions;
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecords;
 
 /// The trusted history events an operator decision on a hold records.
 const OPERATOR_VALIDATION_RESOLVED: &str = "operator_validation_resolved";

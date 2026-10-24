@@ -19,6 +19,7 @@ use super::lifecycle::{
 };
 use super::params::TaskUpdateParams;
 use super::update::admit_agent_artifact;
+use crate::application::task::TaskRecords;
 
 /// Status event recorded when `orbit task recheck-blocked --confirm` returns a
 /// task blocked by a missing provider launcher to backlog because the launcher

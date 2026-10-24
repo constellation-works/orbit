@@ -20,6 +20,7 @@ use crate::application::task::{
 };
 
 use super::validation::{bounded_text, criteria, invalid};
+use crate::application::task::TaskRecords;
 
 fn sanitize(fields: &mut DesktopTaskFields) {
     fields.title = fields.title.as_ref().map(|v| redact_all(v));

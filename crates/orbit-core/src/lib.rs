@@ -3,8 +3,8 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-//! Directional application operations, runtime mechanisms, adapters,
-//! bootstrap, and composition.
+//! Directional application operations, adapters, bootstrap, and composition
+//! over the `orbit-runtime` kernel.
 //!
 //! This is the library crate that assembles all subsystems into the
 //! [`OrbitRuntime`] — the single entry point used by the CLI, Web, and
@@ -17,8 +17,10 @@
 //! kernels below this layer do not import from `orbit-core`.
 //!
 //! Shared use cases live in [`application`]. Tool-host and engine-host protocol
-//! translation lives in [`adapter`]. Runtime code owns mechanisms and imports
-//! neither application nor adapter modules.
+//! translation lives in [`adapter`]. The runtime kernel is the `orbit-runtime`
+//! crate, which owns mechanisms and cannot import application or adapter
+//! modules; [`runtime`] re-exports it and defines [`OrbitRuntime`], which owns
+//! the kernel and implements the application port it calls back through.
 //!
 //! # Root re-export policy (ORB-10016)
 //! Every root `pub use` below is justified by a real import in a consumer
@@ -37,7 +39,7 @@
 //!
 //! # Dependency direction
 //! orbit-common, orbit-store, orbit-policy, orbit-tools, orbit-search, orbit-engine
-//! → `orbit-core` → orbit-cmd / orbit-web / orbit-cli
+//! → orbit-runtime → `orbit-core` → orbit-cmd / orbit-web / orbit-cli
 
 #[cfg(test)]
 #[path = "../tests/support/git.rs"]
@@ -51,10 +53,10 @@ pub mod adapter;
 pub mod application;
 pub mod bootstrap;
 pub mod composition;
-pub mod context;
 pub mod metrics;
-mod paths;
 pub mod runtime;
+pub use orbit_runtime::context;
+use orbit_runtime::paths;
 
 /// Allow this production Orbit binary to re-execute itself as a pipeline
 /// worker. Call once from its `main` before it can submit any runs. Tests in

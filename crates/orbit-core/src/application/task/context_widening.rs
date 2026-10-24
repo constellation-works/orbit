@@ -16,6 +16,7 @@ use orbit_types::task::{
 
 use super::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecords;
 
 impl OrbitRuntime {
     /// Append `file:<path>` to `task_id` for each of `paths` no selector of

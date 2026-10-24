@@ -33,7 +33,7 @@ Sometimes phrased as "parse, don't validate": validate once at construction so n
 - **The "primitive" is already typed.** `PathBuf`, `Uuid`, `chrono::DateTime` already wear their domain.
 - **The primitive really is free-form.** A user-facing note, comment, or description has no contract to enforce.
 
-`PluginSecretValue` (`crates/orbit-core/src/runtime/plugin/secrets.rs`) is a current production example: its `new` constructor rejects empty values, values above `MAX_PLUGIN_SECRET_BYTES`, and NUL bytes.
+`PluginSecretValue` (`crates/orbit-runtime/src/plugin/secrets.rs`) is a current production example: its `new` constructor rejects empty values, values above `MAX_PLUGIN_SECRET_BYTES`, and NUL bytes.
 
 ---
 

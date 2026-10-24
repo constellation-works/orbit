@@ -25,6 +25,7 @@ REQUIRED_GUIDE_CRATES=(
   orbit-core
   orbit-engine
   orbit-mcp
+  orbit-runtime
   orbit-store
   orbit-types
 )

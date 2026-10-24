@@ -20,6 +20,7 @@ use super::helpers::{
 };
 use super::params::TaskAddParams;
 use super::paths::normalize_context_files_for_write;
+use crate::application::task::TaskRecords;
 
 const AUTO_TASK_TITLE_PREFIX: &str = "[auto-task] ";
 

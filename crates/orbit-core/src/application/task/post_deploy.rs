@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 use super::TaskRecordUpdateParams;
 use super::helpers::SYSTEM_ACTOR_LABEL;
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecords;
 
 /// The `owed_criteria` section of a task record: each criterion the current
 /// delivery owes after deploy, with its state (`owed`, `met` or `failed`).

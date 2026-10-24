@@ -45,7 +45,7 @@ The distinction between family and crew also lets future workflows ask two diffe
 
 - Orbit internal: [1_overview.md](./1_overview.md), [2_design.md](./2_design.md), [4_decisions.md](./4_decisions.md)
 - Orbit internal: `crates/orbit-types/src/identity/agent_pair.rs`
-- Orbit internal: `crates/orbit-core/src/runtime/engine/crew.rs`
+- Orbit internal: `crates/orbit-runtime/src/engine/crew.rs`
 
 ## Task References
 

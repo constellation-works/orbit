@@ -33,7 +33,7 @@ use crate::runtime::task::locks::{
 
 /// The ship mode an unattended drain delivers in.
 ///
-/// [`OrbitRuntime::automatic_delivery_ship_mode`]: the workspace binding's
+/// [`crate::runtime::RuntimeKernel::automatic_delivery_ship_mode`]: the workspace binding's
 /// mode, local when the workspace is unregistered. Readiness and doctor call
 /// the same method.
 pub(crate) fn workspace_ship_mode(runtime: &OrbitRuntime) -> ShipMode {

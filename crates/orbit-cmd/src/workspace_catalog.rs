@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use orbit_common::OrbitError;
+use orbit_core::runtime::RuntimeKernel;
 use orbit_core::{FederatedWorkspaceTarget, OrbitRuntime, WorkspaceCatalog, WorkspaceScope};
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus};
@@ -171,13 +172,14 @@ impl WorkspaceCatalog for RegistryWorkspaceCatalog {
         Ok(targets)
     }
 
-    fn open(&self, target: &FederatedWorkspaceTarget) -> Result<OrbitRuntime, OrbitError> {
+    fn open(&self, target: &FederatedWorkspaceTarget) -> Result<RuntimeKernel, OrbitError> {
         let resolved = self.resolve_target(target)?;
         RegisteredRuntimeFactory::open_registered_checkout(
             &self.global_root,
             &resolved.workspace,
             &resolved.checkout,
         )
+        .map(OrbitRuntime::into_kernel)
     }
 }
 

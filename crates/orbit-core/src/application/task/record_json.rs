@@ -31,7 +31,7 @@ impl OrbitRuntime {
 /// The full task record: the shared base ([`task_base_json`]), the
 /// `comments`, `history` and `artifacts` sidecars, the settled before-PR
 /// `review` gate when one exists [ORB-11333], and the host-local crew
-/// enrichment ([`OrbitRuntime::task_crew_read`]).
+/// enrichment ([`crate::runtime::RuntimeKernel::task_crew_read`]).
 ///
 /// A single-task show serves [`task_show_json`], which is this record plus
 /// `block`, `next_step` and `final_recovery`. Writes and list rows stay on this record.

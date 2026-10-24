@@ -58,6 +58,7 @@ use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::helpers::SYSTEM_ACTOR_LABEL;
 use crate::OrbitRuntime;
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
+use crate::application::task::TaskRecords;
 use orbit_types::workflow::SourceRepairBinding;
 
 /// Status event of an operator's requeue of a blocked task.

@@ -22,10 +22,10 @@ use crate::bootstrap::task_migration::apply_configured_id_start;
 use crate::runtime::run_input::managed_dispatch_context_from_env;
 use crate::runtime::run_input::managed_run_context_from_env;
 use crate::runtime::{
-    HostLifetime, OrbitRuntime, OrbitRuntimeRoots, ResolvedOrbitRoots, RuntimeConfigLoader,
-    WorkspaceRootHint, WorkspaceRuntimeBinding, resolve_bootstrap_roots,
-    resolve_bootstrap_roots_with_hint, resolve_global_root, resolve_initialize_roots,
-    resolve_initialize_roots_with_hint,
+    APPLICATION_PORT, HostLifetime, OrbitRuntime, OrbitRuntimeRoots, ResolvedOrbitRoots,
+    RuntimeConfigLoader, RuntimeKernel, WorkspaceRootHint, WorkspaceRuntimeBinding,
+    resolve_bootstrap_roots, resolve_bootstrap_roots_with_hint, resolve_global_root,
+    resolve_initialize_roots, resolve_initialize_roots_with_hint,
 };
 
 impl OrbitRuntime {
@@ -232,7 +232,7 @@ impl OrbitRuntime {
         let _generation = pin_executable_generation(global_root, true)?;
         let layout_report = observe_or_upgrade_layout(shared_root, true)?;
         let config = ResolvedConfig::load(&ConfigRoots::new(global_root, shared_root))?;
-        Self::build_from_resolved_config_write_free(
+        RuntimeKernel::build_from_resolved_config_write_free(
             &OrbitRuntimeRoots {
                 global_root: global_root.to_path_buf(),
                 shared_root: shared_root.to_path_buf(),
@@ -243,7 +243,9 @@ impl OrbitRuntime {
             layout_report,
             HostLifetime::ShortLived,
             runtime_config_loader(global_root, shared_root),
+            &APPLICATION_PORT,
         )
+        .map(Self::from_kernel)
     }
 
     pub fn in_memory() -> Result<Self, OrbitError> {
@@ -254,13 +256,15 @@ impl OrbitRuntime {
         let data_root = temp_dir.path().to_path_buf();
         let workspace_root = data_root.join(".orbit");
         let runtime_config = prepare_resolved_config(&data_root, &workspace_root)?;
-        Self::build_in_memory_from_resolved_config(
+        RuntimeKernel::build_in_memory_from_resolved_config(
             &data_root,
             &workspace_root,
             &runtime_config,
             temp_dir,
             runtime_config_loader(&data_root, &workspace_root),
+            &APPLICATION_PORT,
         )
+        .map(Self::from_kernel)
     }
 }
 
@@ -348,17 +352,18 @@ fn build_runtime(
         shared_root: shared_root.to_path_buf(),
         local_root: local_root.to_path_buf(),
     };
-    let runtime = if write_free {
-        OrbitRuntime::build_from_resolved_config_write_free(
+    let kernel = if write_free {
+        RuntimeKernel::build_from_resolved_config_write_free(
             &roots,
             binding,
             &runtime_config,
             layout_report,
             host_lifetime,
             config_loader,
+            &APPLICATION_PORT,
         )?
     } else {
-        OrbitRuntime::build_from_resolved_config(
+        RuntimeKernel::build_from_resolved_config(
             &roots,
             binding,
             &runtime_config,
@@ -366,8 +371,10 @@ fn build_runtime(
             host_lifetime,
             read_only,
             config_loader,
+            &APPLICATION_PORT,
         )?
     };
+    let runtime = OrbitRuntime::from_kernel(kernel);
     let _generation = generation;
     if reconcile_stale_runs && !write_free && !managed_run_context_from_env() {
         runtime.reconcile_stale_job_runs_on_open();

@@ -22,6 +22,7 @@ use super::paths::{
     pruned_selectors_from_note,
 };
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecords;
 use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
 
 /// What a history-backed restoration would add to one task, or did add.

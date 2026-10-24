@@ -5,7 +5,7 @@ summary: "Design: a per-run host broker runs plugin backends for sandboxed agent
 owner: claude
 status: Draft
 tags: [plugins, security, sandbox, secrets, ipc]
-paths: ["crates/orbit-core/src/adapter/engine_host/actions/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/runtime/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
+paths: ["crates/orbit-core/src/adapter/engine_host/actions/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-runtime/src/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
 related_artifacts: [ORB-13038, ORB-13008, ORB-13009, ORB-14017, ORB-14194, F2026-09-230]
 last_updated: 2026-10-21
@@ -304,7 +304,7 @@ processes too, so a bearer token would authenticate nothing.
 
 - **Linux.** Bubblewrap gives every agent run its own PID namespace (`--unshare-all`). When the
   host spawns the agent it already records that namespace (`bind_worker_namespace` in
-  `crates/orbit-core/src/runtime/recovery_authority/worker.rs`). On accept, the broker reads the peer's
+  `crates/orbit-runtime/src/recovery_authority/worker.rs`). On accept, the broker reads the peer's
   UID and host-namespace PID (`SO_PEERCRED`; `SO_PEERPIDFD` where the kernel has it, so a
   recycled PID cannot be substituted). It accepts the connection only if the UID is its own and
   `/proc/<pid>/ns/pid` is the run's recorded namespace, with the leader's start time and boot
@@ -323,7 +323,7 @@ processes too, so a bearer token would authenticate nothing.
 A refused connection is closed with no reply, and the refusal is logged with the peer PID and
 the reason. Nothing reveals whether the socket belongs to a live run.
 
-**As implemented** (`crates/orbit-core/src/runtime/plugin/broker/`, started from
+**As implemented** (`crates/orbit-runtime/src/plugin/broker/`, started from
 `crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs`):
 
 - `run_cli_backend` asks the host for a broker through `RuntimeHost::start_plugin_broker`
@@ -394,7 +394,7 @@ deadline plus a fixed grace. If the client disconnects, the broker kills the bac
 group. A rotation the backend already reported is still applied, because it happened on the
 service side regardless.
 
-**As implemented** (`crates/orbit-core/src/runtime/plugin/broker/` for the server,
+**As implemented** (`crates/orbit-runtime/src/plugin/broker/` for the server,
 `crates/orbit-core/src/adapter/command/dispatch/brokered.rs` for execution):
 
 - The step runner hands `RuntimeHost::start_plugin_broker` a `PluginBrokerRun` built from its

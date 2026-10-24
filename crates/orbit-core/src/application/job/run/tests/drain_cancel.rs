@@ -27,6 +27,7 @@ use super::{
     test_runtime, worker_checkpoint,
 };
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecords;
 use crate::application::test_support::{admission_receipt, admission_request};
 use crate::application::tests::run_isolated_test;
 

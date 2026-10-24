@@ -1,0 +1,10 @@
+# orbit-runtime
+
+The runtime kernel `orbit-core` builds `OrbitRuntime` on: `RuntimeKernel` and the mechanisms it owns (tool dispatch, audit, plugins, workspace binding, host probes, worker coordination), plus the actor context, root paths and cost types. It's an internal crate, split out so an application or adapter edit doesn't recompile the kernel. `orbit-core` re-exports it as `orbit_core::runtime`, and consumers keep using that path.
+
+- Never depends on `orbit-core`, `orbit-cmd`, `orbit-web`, `orbit-cli` or `orbit-registry`; `scripts/check-dependency-direction.sh` encodes the allowed list. The kernel may not load config: composition resolves it and hands it in.
+- The kernel reaches application and adapter code only through `ApplicationPort` (`src/application_port.rs`), which `orbit-core` implements and passes to the `build_*` constructors. Each port method has a same-named `pub(crate)` forwarder on `RuntimeKernel`. Prefer moving a mechanism into this crate over adding a port method; add one only for an operation that must stay a use case.
+- Keep the public surface to what `orbit-core` uses. `orbit-core` adds methods on its `OrbitRuntime` wrapper, never on `RuntimeKernel`, and the wrapper re-declares a kernel builder or a name shadowed by one of its trait impls (see `crates/orbit-core/src/runtime.rs`).
+- `assets.rs` embeds the bundled catalog from `../orbit-core/assets/`, and that tree stays canonical there.
+- Test-only seams are gated `#[cfg(any(test, feature = "test-support"))]` so `orbit-core`'s tests can reach them; `test-support` is enabled only from `[dev-dependencies]` or `orbit-core`'s own `test-support` feature. Unit tests sit in sibling `tests/` dirs. A test that needs a composed `OrbitRuntime` lives under `orbit-core`'s `src/runtime/tests/`.
+- Two roots, always: global `~/.orbit/` plus nearest workspace `.orbit/`, scoped per [`ARCHITECTURE.md`](../../ARCHITECTURE.md). Retired paths (`src/orbit_tool_host`, `src/engine/runtime_host.rs`) must not reappear.
