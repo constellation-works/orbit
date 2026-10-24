@@ -11,8 +11,8 @@ use orbit_types::workflow::{
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::contracts::CrewCandidate;
-use crate::application::distributed::HostProviderHold;
+use crate::application::contracts::{CrewCandidate, HostProviderHold};
+use crate::application::job::JobDrainPort;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::run_input::non_empty;
 
@@ -79,7 +79,7 @@ impl OrbitRuntime {
         let holds = if self.frozen_activity_draw(input, &key)?.is_some() {
             Vec::new()
         } else {
-            self.standing_host_provider_holds(now)
+            self.host_provider_holds(now)
         };
         self.frozen_activity_crew(input, &key, &mut |allowlist| {
             let (candidates, source) =
@@ -130,7 +130,7 @@ impl OrbitRuntime {
         let holds = if frozen {
             Vec::new()
         } else {
-            self.standing_host_provider_holds(now)
+            self.host_provider_holds(now)
         };
         self.frozen_activity_crew(input, key, &mut |allowlist| {
             let (candidates, source) =
@@ -331,7 +331,7 @@ impl OrbitRuntime {
     /// configuration problem itself. A pool that still has a crew the hold
     /// does not cover returns `None`, and the draw skips the held crews.
     pub(crate) fn task_pilot_provider_withhold(&self, now: DateTime<Utc>) -> Option<String> {
-        let holds = self.standing_host_provider_holds(now);
+        let holds = self.host_provider_holds(now);
         if holds.is_empty() {
             return None;
         }

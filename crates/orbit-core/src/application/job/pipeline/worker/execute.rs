@@ -1,6 +1,7 @@
 //! The child process's own work: execute the run it was handed.
 
 use super::*;
+use crate::application::job::JobPullSettlementPort;
 
 impl OrbitRuntime {
     pub fn execute_pipeline_run_worker(&self, run_id: &str) -> Result<(), OrbitError> {
@@ -201,7 +202,7 @@ impl OrbitRuntime {
         )?;
         // A claimed leaf's settlement that did not reach its owner is retried
         // here, after the run is final, rather than in terminalization.
-        self.retry_own_claimed_leaf_settlement(&run.run_id);
+        self.retry_leaf_settlement(&run.run_id);
         outcome.map(|_| ())
     }
 }

@@ -20,6 +20,7 @@ use orbit_types::workflow::{
 use serde_json::json;
 
 use crate::OrbitRuntime;
+use crate::application::job::JobDrainPort;
 use crate::application::job::crew_pools::{complexity_crews_key, random_crew_ticket};
 use crate::runtime::engine::crew::enforce_crew_allowlist;
 
@@ -242,7 +243,7 @@ impl OrbitRuntime {
             candidate: accepted.handoff.candidate.clone(),
             footprint_widening: accepted.handoff.footprint_widening.clone(),
             required_commands: self.workflow_required_validation_commands().to_vec(),
-            owner_completion_authority: self.owner_completion_authority(),
+            owner_completion_authority: self.handoff_completion_authority(),
             review: None,
             known_red: vec![],
             // Approval and landing recompute this owner's judgement of the
@@ -258,7 +259,7 @@ impl OrbitRuntime {
             "owner-base-update".into(),
         )
         .with_handoff_observation(observation);
-        self.admission_boundary()?
+        self.owner_commit_boundary()?
             .reserve_handoff_base_update(&auth, request)
     }
 

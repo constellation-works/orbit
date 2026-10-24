@@ -20,6 +20,7 @@ use orbit_types::workflow::{JobRun, JobRunState, PipelineState, RunStateUpdate};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::job::{JobDrainPort, JobPullSettlementPort};
 use crate::application::workflow::{AUTO_WORKFLOW_ALIAS, find_workflow};
 
 const STOP_REQUEST_AUDIT: &str = "pipeline.run.admissions_stop.requested";
@@ -192,7 +193,7 @@ impl OrbitRuntime {
             return Ok(DrainAdmissionsStopResult {
                 outcome: DrainAdmissionsStopOutcome::Idle,
                 coordinators: Vec::new(),
-                pull_settlements: self.settle_pending_pulls(),
+                pull_settlements: self.settle_workspace_pulls(),
                 replica_owner_machine_id: self.coordination_write_owner().map(str::to_owned),
             });
         }
@@ -258,7 +259,7 @@ impl OrbitRuntime {
         Ok(DrainAdmissionsStopResult {
             outcome,
             coordinators: changes,
-            pull_settlements: self.settle_pending_pulls(),
+            pull_settlements: self.settle_workspace_pulls(),
             replica_owner_machine_id: self.coordination_write_owner().map(str::to_owned),
         })
     }
@@ -383,7 +384,7 @@ impl OrbitRuntime {
     /// as pull admissions).
     fn remaining_children(&self, run_id: &str) -> Result<Vec<RemainingDrainChild>, OrbitError> {
         let mut remaining = self
-            .pull_drain_claimed_leaves(run_id)?
+            .drain_claimed_leaves(run_id)?
             .into_iter()
             .map(|leaf| RemainingDrainChild {
                 run_id: leaf.leaf_run_id,

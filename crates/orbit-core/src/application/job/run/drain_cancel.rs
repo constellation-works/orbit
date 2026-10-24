@@ -48,6 +48,7 @@ use super::owner::{
 use super::types::{JobRunCancelOutcome, JobRunCancelResult, UnstoppedChild, UnstoppedLeaf};
 use crate::OrbitRuntime;
 use crate::application::contracts::PULL_DRAIN_JOB;
+use crate::application::job::{JobDrainPort, JobPullSettlementPort};
 
 /// The local auto drain, whose leaves its cancel detaches.
 const LOCAL_DRAIN_JOB: &str = "workspace_auto_pipeline";
@@ -251,8 +252,8 @@ impl OrbitRuntime {
         );
         // Settlements already recorded go out now; the drain releases its
         // own unlaunched claims on its next pass.
-        result.pull_settlements = self.settle_pending_pulls();
-        result.waiting_leaves = self.pull_drain_claimed_leaves(&run.run_id)?;
+        result.pull_settlements = self.settle_workspace_pulls();
+        result.waiting_leaves = self.drain_claimed_leaves(&run.run_id)?;
         Ok(result)
     }
 
@@ -343,7 +344,7 @@ impl OrbitRuntime {
         F: FnOnce(&JobRun) -> Result<String, OrbitError>,
     {
         let carried = self
-            .pull_drain_admissions(&run.run_id)?
+            .drain_carried_admissions(&run.run_id)?
             .into_iter()
             .map(|record| (record.destination, record.request.request_id))
             .collect::<Vec<_>>();
@@ -417,7 +418,7 @@ impl OrbitRuntime {
         // Whatever never launched goes back to the owner's backlog under the
         // same cause; recorded settlements, the releases above among them,
         // are delivered.
-        result.pull_settlements = self.carry_settlements_for(still_carried()?, &cause);
+        result.pull_settlements = self.settle_carried_pulls(still_carried()?, &cause);
         Ok(result)
     }
 
@@ -451,7 +452,7 @@ impl OrbitRuntime {
             ));
         }
         let settling = self
-            .record_forced_leaf_release(
+            .record_stopped_leaf_release(
                 record,
                 leaf,
                 &format!("{cause}; its leaf {} was stopped", leaf.run_id),

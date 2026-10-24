@@ -14,7 +14,8 @@ use super::crew_window::{
     CapacityFailures, OwnerBusyReleases, OwnerBusyVerdict, PullCrewWindow, phase_guidance,
     phase_name,
 };
-use super::entries::{ClaimedLeafStage, DrainClaimedLeaf, PullLeafClaim, RefusedPullSettlement};
+use super::entries::{PullLeafClaim, RefusedPullSettlement};
+use crate::application::contracts::{ClaimedLeafStage, DrainClaimedLeaf};
 
 /// A raw weekly pressure as milli-units for the pull capability
 /// [ORB-17773]. Non-finite or negative readings read neutral; the clamp

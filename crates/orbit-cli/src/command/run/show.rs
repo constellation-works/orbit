@@ -1,7 +1,7 @@
 use clap::Args;
 use std::collections::HashSet;
 
-use orbit_core::application::distributed::{ClaimedLeafStage, DrainClaimedLeaf};
+use orbit_core::application::contracts::{ClaimedLeafStage, DrainClaimedLeaf};
 use orbit_core::application::job::agent_invoke_result;
 use orbit_core::runtime::audit::run::RunProviderProcess;
 use orbit_core::{CatalogReferenceLayer, JobRun, OrbitError, OrbitRuntime};

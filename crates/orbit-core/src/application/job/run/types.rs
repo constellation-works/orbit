@@ -86,7 +86,7 @@ pub struct JobRunCancelResult {
     /// run.
     pub pull_settlements: Vec<crate::application::contracts::PullSettlementEntry>,
     /// The claimed leaves a `cancelling` pull drain is waiting for.
-    pub waiting_leaves: Vec<crate::application::distributed::DrainClaimedLeaf>,
+    pub waiting_leaves: Vec<crate::application::contracts::DrainClaimedLeaf>,
     /// Runs a forced cancel stopped besides this one: a pull drain's live
     /// claimed leaves, or a local drain's detached children.
     pub forced_runs: Vec<String>,

@@ -49,6 +49,7 @@ mod entry;
 mod final_recovery;
 mod follower;
 mod host_provider_hold;
+mod job_port;
 mod leaf_settlements;
 mod owner_repair;
 mod probe;
@@ -65,7 +66,6 @@ pub use contract::{
 pub(crate) use contract::{owner_protocol_error, probe_pull_contract};
 pub use entry::{DrainEntryAdmission, DrainEntryRefusal, RESOURCE_THROTTLED};
 pub use follower::WorkspacePullRequest;
-pub(crate) use host_provider_hold::HostProviderHold;
 pub use leaf_settlements::LeafSettlement;
 pub(crate) use owner_repair::OwnerRepairDrain;
 pub use probe::{
@@ -73,12 +73,11 @@ pub use probe::{
 };
 pub(crate) use pull_waiting::OwnerAnswer;
 pub use serve::TaskPullResponse;
-pub use settlement::{
-    ClaimedLeafStage, DrainClaimedLeaf, OwnerBusyBackoff, PendingPullSettlements, PullCrewWindow,
-    PullLeafClaim, RefusedPullSettlement,
-};
 pub(crate) use settlement::{
     OWNER_BUSY_EPISODE_LIMIT, is_owner_refusal, is_owner_transport_failure,
     settlement_refusal_backoff,
+};
+pub use settlement::{
+    OwnerBusyBackoff, PendingPullSettlements, PullCrewWindow, PullLeafClaim, RefusedPullSettlement,
 };
 pub(crate) use work_fit::PullWorkFit;

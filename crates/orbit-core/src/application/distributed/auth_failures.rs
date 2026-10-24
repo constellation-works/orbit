@@ -14,7 +14,7 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{JobRunOrder, JobRunQuery};
 use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::{
-    CrewPurpose, FINAL_RECOVERY_CREWS_KEY, JobRun, JobRunState, PipelineState, Provider,
+    CrewPurpose, FINAL_RECOVERY_CREWS_KEY, JobRun, JobRunState, PipelineState,
     ProviderFailureClass, failed_account, failed_provider,
 };
 use serde::Serialize;
@@ -22,7 +22,7 @@ use serde_json::Value;
 
 use super::auth_recovery::relogin_hint;
 use crate::OrbitRuntime;
-use crate::application::contracts::ESCALATION_TRIAGE_JOB;
+use crate::application::contracts::{ESCALATION_TRIAGE_JOB, canonical_provider};
 use crate::application::job::crew_pools::complexity_crews_key;
 
 /// How far back the drain card looks for an authentication failure or the
@@ -305,13 +305,6 @@ fn named(value: &Option<String>) -> Option<String> {
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map(str::to_string)
-}
-
-pub(crate) fn canonical_provider(raw: &str) -> String {
-    let trimmed = raw.trim();
-    Provider::parse(trimmed)
-        .map(|provider| provider.as_str().to_string())
-        .unwrap_or_else(|_| trimmed.to_ascii_lowercase())
 }
 
 /// Recorded agent assignments for jobs whose task crew is not their agent crew.

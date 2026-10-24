@@ -299,6 +299,37 @@ if {
   fail=1
 fi
 
+# Print every `super::` chain in production code under application module
+# `$2` that climbs out of it to `application` and names one of the
+# `|`-separated modules `$3`; exit nonzero when one is found.
+super_chains_into() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import pathlib
+import re
+import sys
+
+app = pathlib.Path(sys.argv[1])
+module = sys.argv[2]
+upper = set(sys.argv[3].split("|"))
+chain = re.compile(r"\b((?:super::)+)([a-z_][a-z0-9_]*)")
+failed = False
+for path in sorted((app / module).rglob("*.rs")):
+    rel = path.relative_to(app)
+    if "tests" in rel.parts[:-1] or rel.name == "tests.rs":
+        continue
+    parts = ["application", *rel.with_suffix("").parts]
+    if parts[-1] == "mod":
+        parts.pop()
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        for match in chain.finditer(line):
+            ups = match.group(1).count("super::")
+            if parts[: len(parts) - ups] == ["application"] and match.group(2) in upper:
+                print(f"{path}:{number}:{line}")
+                failed = True
+sys.exit(1 if failed else 0)
+PY
+}
+
 # [ORB-17936] `task` is the lowest of the nine modules above contracts. It
 # reaches `job`, `review`, `distributed`, `sweep_filing` and `workspace_auto`
 # only through the ports it owns (`TaskJobPort`, `TaskReviewPort`,
@@ -314,32 +345,27 @@ if rg -n "crate::application::(${task_upper_modules})\\b" \
     "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
   rg -n "\\b(${task_upper_calls})\\s*(::<[^>]*>)?\\s*\\(" \
     "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
-  ! python3 - "$app_src" "$task_upper_modules" <<'PY'
-import pathlib
-import re
-import sys
-
-app = pathlib.Path(sys.argv[1])
-upper = set(sys.argv[2].split("|"))
-chain = re.compile(r"\b((?:super::)+)([a-z_][a-z0-9_]*)")
-failed = False
-for path in sorted((app / "task").rglob("*.rs")):
-    rel = path.relative_to(app)
-    if "tests" in rel.parts[:-1] or rel.name == "tests.rs":
-        continue
-    parts = ["application", *rel.with_suffix("").parts]
-    if parts[-1] == "mod":
-        parts.pop()
-    for number, line in enumerate(path.read_text().splitlines(), 1):
-        for match in chain.finditer(line):
-            ups = match.group(1).count("super::")
-            if parts[: len(parts) - ups] == ["application"] and match.group(2) in upper:
-                print(f"{path}:{number}:{line}")
-                failed = True
-sys.exit(1 if failed else 0)
-PY
-then
+  ! super_chains_into "$app_src" task "$task_upper_modules"; then
   echo "orbit-core task must reach job, review, distributed, sweep_filing and workspace_auto through its task ports"
+  fail=1
+fi
+
+# [ORB-17937] `job` reaches the distributed drain and pull settlement only
+# through the ports it owns (`JobDrainPort`, `JobPullSettlementPort`), which
+# `distributed` and `pull_drain` implement on `OrbitRuntime`; the shapes they
+# share (`DrainClaimedLeaf`, `HostProviderHold`) are contracts. A path, a
+# grouped tree, a `super::` chain out of `job` into either, or a call to the
+# inherent methods the ports wrap is a reintroduced edge.
+job_drain_modules='distributed|pull_drain'
+job_drain_calls='drain_entry_admission|preflight_git_protection|admission_resource_throttle|standing_host_provider_holds|pull_drain_claimed_leaves|pull_drain_admissions|owner_completion_authority|admission_boundary|settle_pending_pulls|carry_settlements_for|deliver_claimed_leaf_settlement|retry_own_claimed_leaf_settlement|record_forced_leaf_release'
+if rg -n "crate::application::(${job_drain_modules})\\b" \
+  "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
+  rg -n -U "crate::application::\\{[^}]*\\b(${job_drain_modules})\\b" \
+    "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
+  rg -n "\\b(${job_drain_calls})\\s*(::<[^>]*>)?\\s*\\(" \
+    "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
+  ! super_chains_into "$app_src" job "$job_drain_modules"; then
+  echo "orbit-core job must reach distributed and pull_drain through job::JobDrainPort and job::JobPullSettlementPort"
   fail=1
 fi
 
@@ -352,7 +378,7 @@ if rg -n "review::(${review_admission_items})\\b" \
   fail=1
 fi
 
-shared_contracts='PULL_DRAIN_JOB|ESCALATION_TRIAGE_JOB|FINDING_VERIFICATION_JOB|DrainEntryPoint|PullSettlementEntry|PullSettlementOutcome|SUPERSEDED_BY_SOURCE|PilotFingerprints|review_layer_json|CreationCrewAssignment|CrewCandidate|InspectionPool|PURPOSE_SOURCE_PREFIX|PROVIDER_LIMIT_REASSIGNMENT_PREFIX|auto_task_minted|automatic_crew_source|RetryKey'
+shared_contracts='PULL_DRAIN_JOB|DrainClaimedLeaf|ClaimedLeafStage|HostProviderHold|ESCALATION_TRIAGE_JOB|FINDING_VERIFICATION_JOB|DrainEntryPoint|PullSettlementEntry|PullSettlementOutcome|SUPERSEDED_BY_SOURCE|PilotFingerprints|review_layer_json|CreationCrewAssignment|CrewCandidate|InspectionPool|PURPOSE_SOURCE_PREFIX|PROVIDER_LIMIT_REASSIGNMENT_PREFIX|auto_task_minted|automatic_crew_source|RetryKey'
 if rg -n "\\b(const|enum|struct|fn) (${shared_contracts})\\b" \
   "$repo_root/crates/orbit-core/src" -g '*.rs' -g "!**/application/contracts/**" ||
   rg -n "\\b(${app_modules})(::[a-z_]+)*::(${shared_contracts})\\b" \
