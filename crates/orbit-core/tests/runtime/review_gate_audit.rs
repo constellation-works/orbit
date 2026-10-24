@@ -36,12 +36,12 @@ impl Fixture {
 
     /// The fixture with `review` appended to its `[review]` table.
     pub(super) fn new_with_config(required: &[&str], review: &str) -> Self {
-        Self::build(required, review, ReviewTiming::BeforePr, 10, false)
+        Self::build(required, review, ReviewTiming::BeforePr, 10, None)
     }
 
     /// The fixture whose captured `review.minutes` is `minutes` [ORB-15094].
     pub(super) fn new_with_review_minutes(minutes: u32) -> Self {
-        Self::build(&[], "", ReviewTiming::BeforePr, minutes, false)
+        Self::build(&[], "", ReviewTiming::BeforePr, minutes, None)
     }
 
     /// The fixture for a run that captured `review.before_landing` instead
@@ -53,14 +53,14 @@ impl Fixture {
     /// [`Self::before_landing`] with `review` appended to its `[review]`
     /// table.
     pub(super) fn before_landing_with_config(review: &str) -> Self {
-        Self::build(&[], review, ReviewTiming::BeforeLanding, 10, false)
+        Self::build(&[], review, ReviewTiming::BeforeLanding, 10, None)
     }
 
     /// The fixture whose task the `implementer` crew implemented, for a run
     /// that captured `operation.review_crew = ["implementer", "reviewers"]`
     /// whole [ORB-15195].
     pub(super) fn review_pool() -> Self {
-        Self::build(&[], "", ReviewTiming::BeforePr, 10, true)
+        Self::build(&[], "", ReviewTiming::BeforePr, 10, Some(""))
     }
 
     fn build(
@@ -68,8 +68,10 @@ impl Fixture {
         review: &str,
         timing: ReviewTiming,
         review_minutes: u32,
-        pool: bool,
+        selection: Option<&str>,
     ) -> Self {
+        let pool = selection.is_some();
+        let selection = selection.unwrap_or_default();
         let switch = match timing {
             ReviewTiming::BeforeLanding => "before_landing",
             _ => "before_pr",
@@ -87,8 +89,12 @@ impl Fixture {
         };
         let (implementer, review_crew) = if pool {
             (
-                "[crews.implementer]\nmodel = \"impl-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n",
-                "[\"implementer\", \"reviewers\"]",
+                "[crews.implementer]\nmodel = \"impl-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[crews.alternative]\nprovider = \"claude\"\nmodel = \"fixture-claude\"\n[crews.parked]\nprovider = \"claude\"\nmodel = \"fixture-parked\"\n",
+                if selection.is_empty() {
+                    "[\"implementer\", \"reviewers\"]"
+                } else {
+                    "[\"implementer:1\", \"reviewers:3\", \"alternative:1\", \"parked:0\"]"
+                },
             )
         } else {
             ("", "\"reviewers\"")
@@ -96,7 +102,7 @@ impl Fixture {
         std::fs::write(
             workspace.join("config.toml"),
             format!(
-                "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n{implementer}[workflow]\ndefault_crew = \"reviewers\"\n{required_commands}[operation]\nreview_crew = {review_crew}\n[review]\n{switch} = true\n{review}"
+                "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n{implementer}[workflow]\ndefault_crew = \"reviewers\"\n{selection}\n{required_commands}[operation]\nreview_crew = {review_crew}\n[review]\n{switch} = true\n{review}"
             ),
         )
         .unwrap();
@@ -149,8 +155,13 @@ impl Fixture {
                     .value
                     .iter()
                     .map(|name| ReviewCrewPoolMember {
-                        name: name.clone(),
-                        weight: 1,
+                        name: name
+                            .split_once(':')
+                            .map_or(name.as_str(), |(name, _)| name)
+                            .into(),
+                        weight: name
+                            .split_once(':')
+                            .map_or(1, |(_, weight)| weight.parse().unwrap()),
                     })
                     .collect()
             } else {
@@ -285,6 +296,35 @@ fn a_captured_pool_reviews_with_a_crew_that_did_not_implement_the_task() {
     assert_eq!(
         admission["reviewer"]["crew_source"], "workspace pool",
         "{admission}"
+    );
+}
+
+/// A reviewer pool is narrowed for independence before weighting; pressure
+/// and configured/effective weights survive the public gate admission.
+fn review_pool_admission_records_pressure_after_independence_filtering() {
+    let mut fixture = Fixture::build(
+        &[],
+        "",
+        ReviewTiming::BeforePr,
+        10,
+        Some("crew_selection = \"usage_pressure\""),
+    );
+    crate::usage_pressure_draws::record_week(
+        &fixture.runtime,
+        "claude",
+        10.0,
+        chrono::Duration::hours(6),
+    );
+    crate::usage_pressure_draws::record_week(
+        &fixture.runtime,
+        "codex",
+        0.0,
+        chrono::Duration::days(7),
+    );
+    fixture.admit();
+    crate::usage_pressure_draws::assert_pool(
+        &fixture.input["admission"]["reviewer"]["eligible_pool"],
+        &[("alternative", 1, 8.0), ("reviewers", 3, 3.0)],
     );
 }
 
@@ -475,6 +515,7 @@ fn execution_failures_have_messages_and_remain_unexpected() {
 crate::scenario_table!(
     settled_negative_verdicts_are_successful_calls_with_decision_detail_scenarios,
     settled_negative_verdicts_are_successful_calls_with_decision_detail,
+    review_pool_admission_records_pressure_after_independence_filtering,
     uncovered_landings_succeed_and_exhausted_admissions_are_denied,
     execution_failures_have_messages_and_remain_unexpected
 );

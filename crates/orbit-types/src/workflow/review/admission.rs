@@ -439,7 +439,7 @@ pub struct ReviewGateAdmitted {
 
 /// The reviewer an admitted gate names. A held review names the reviewer
 /// that reviewed it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReviewGateReviewer {
     /// Canonical crew name.
     pub crew: String,
@@ -451,6 +451,10 @@ pub struct ReviewGateReviewer {
     pub model: String,
     /// The crew's reasoning effort; `null` when it sets none.
     pub reasoning_effort: Option<String>,
+    /// Eligible members and their draw weights; absent on older records or
+    /// when the reviewer was pinned rather than drawn.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub eligible_pool: Vec<crate::workflow::ActivityCrewPoolMember>,
 }
 
 impl ReviewGateReviewer {

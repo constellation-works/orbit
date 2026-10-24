@@ -373,6 +373,7 @@ fn triager(
     Ok(VerifierAssignment {
         crew: crew.name,
         tier: TRIAGE_TIER,
+        eligible_pool: Vec::new(),
     })
 }
 

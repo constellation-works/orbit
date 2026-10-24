@@ -276,7 +276,7 @@ pub(super) fn contract(
                     )),
                 )
                 .map_err(unavailable)?;
-            (chosen.name, pool_source(crew.source.label()))
+            (chosen.crew.name, pool_source(crew.source.label()))
         }
     };
     Ok(ReconciliationContract {

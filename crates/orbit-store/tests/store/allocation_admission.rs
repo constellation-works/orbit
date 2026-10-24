@@ -790,6 +790,7 @@ fn checkpoint_landing_review(jobs: &dyn JobRunStoreBackend, run_id: &str, applie
                     provider: "codex".into(),
                     model: "review-model".into(),
                     reasoning_effort: None,
+                    eligible_pool: Vec::new(),
                 },
                 owed_evidence: Vec::new(),
                 owner_owed_evidence: Vec::new(),

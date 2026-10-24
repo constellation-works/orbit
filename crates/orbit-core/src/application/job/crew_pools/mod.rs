@@ -11,7 +11,9 @@
 //! "usage_pressure"` [ORB-17770]: creation, re-rate and admission draws weigh
 //! each member by its crew's weekly usage pressure, and admission draws a
 //! system-chosen crew again from its whole pool, persisting a changed crew
-//! under the task's existing automatic source.
+//! under the task's existing automatic source. Activity, review, verifier and
+//! explorer pools use the same helper through `draw_crew_pool`, after their
+//! existing membership filters, and carry each member's draw provenance.
 
 mod activity;
 mod admission;
@@ -22,8 +24,8 @@ mod types;
 
 pub(crate) use admission::strip_auto_crew_admission;
 pub(crate) use draw::{
-    complexity_crews_key, complexity_of_crews_key, random_crew_ticket, seeded_crew_ticket,
-    weighted_draw,
+    CrewPoolDraw, complexity_crews_key, complexity_of_crews_key, random_crew_ticket,
+    seeded_crew_ticket,
 };
 pub(crate) use purpose::{
     PROVIDER_LIMIT_REASSIGNMENT_PREFIX, PURPOSE_SOURCE_PREFIX, auto_task_minted,

@@ -268,6 +268,9 @@ pub(crate) fn apply(
                 "partition_index": partition_index,
                 "task_ids": entries.iter().map(|entry| &entry["task_id"]).collect::<Vec<_>>(),
                 "crew": crew,
+                "draws": entries.iter().map(|entry| json!({
+                    "task_id": entry["task_id"], "eligible_pool": entry["eligible_pool"],
+                })).collect::<Vec<_>>(),
             })
         })
         .collect::<Vec<_>>();

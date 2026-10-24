@@ -15,9 +15,7 @@ use crate::application::distributed::HostProviderHold;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::run_input::non_empty;
 
-use super::draw::{
-    activity_crew_draw, complexity_crews_key, permitted_candidates, sole_candidate, weighted_draw,
-};
+use super::draw::{complexity_crews_key, permitted_candidates, sole_candidate};
 use super::purpose::activity_fallback_tier;
 use super::types::CrewCandidate;
 
@@ -41,8 +39,9 @@ impl OrbitRuntime {
         self.frozen_activity_crew(input, FINAL_RECOVERY_CREWS_KEY, &mut |allowlist| {
             let candidates = self.final_recovery_candidates()?;
             let candidates = permitted_candidates(candidates, source, allowlist)?;
-            let selected = weighted_draw(&candidates, source, random)?;
-            Ok(activity_crew_draw(selected, source, &candidates))
+            Ok(self
+                .draw_crew_pool(candidates, source, random)?
+                .into_activity_draw())
         })
     }
 
@@ -86,8 +85,9 @@ impl OrbitRuntime {
             let (candidates, source) =
                 self.activity_draw_candidates(complexity, inspection, allowlist, now)?;
             let (candidates, source) = skip_held_candidates(candidates, source, &holds, now);
-            let selected = weighted_draw(&candidates, &source, random)?;
-            Ok(activity_crew_draw(selected, &source, &candidates))
+            Ok(self
+                .draw_crew_pool(candidates, &source, random)?
+                .into_activity_draw())
         })
     }
 
@@ -136,8 +136,9 @@ impl OrbitRuntime {
             let (candidates, source) =
                 self.purpose_draw_candidates(purpose, tier, inspection, allowlist, now)?;
             let (candidates, source) = skip_held_candidates(candidates, source, &holds, now);
-            let selected = weighted_draw(&candidates, &source, random)?;
-            Ok(activity_crew_draw(selected, &source, &candidates))
+            Ok(self
+                .draw_crew_pool(candidates, &source, random)?
+                .into_activity_draw())
         })
     }
 

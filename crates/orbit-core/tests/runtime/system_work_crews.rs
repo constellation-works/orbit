@@ -13,7 +13,7 @@ use orbit_core::{
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::JobRunStoreBackend;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
-use orbit_types::workflow::{ActivityCrewDraw, PipelineState};
+use orbit_types::workflow::{ActivityCrewDraw, FINAL_RECOVERY_CREWS_KEY, PipelineState};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -398,10 +398,62 @@ fn an_inspecting_draw_falls_through_to_the_next_tier_then_the_default_then_fails
     assert!(fx.draws(&run).is_empty());
 }
 
+/// Activity complexity, purpose and recovery draws must use the task draw's
+/// multiplier, preserve configured weights, and freeze the full record.
+fn activity_draws_record_pressure_without_changing_filters_or_frozen_choices() {
+    let config = CONFIG
+        .replace(
+            "[workflow]",
+            "[workflow]\ncrew_selection = \"usage_pressure\"",
+        )
+        .replace("low_parked:1", "low_parked:0");
+    let config = format!(
+        "{config}\n[workflow.purpose_crews]\ntask_pilot = [\"low_claude:1\", \"low_codex:3\", \"low_parked:0\"]\nfinal_recovery = [\"low_claude:1\", \"low_codex:3\", \"low_parked:0\"]\n"
+    );
+    let fx = fixture_with(&config);
+    crate::usage_pressure_draws::record_week(&fx.runtime, "claude", 10.0, Duration::hours(6));
+    crate::usage_pressure_draws::record_week(&fx.runtime, "codex", 0.0, Duration::days(7));
+    for key in [
+        LOW,
+        "workflow.purpose_crews.task_pilot",
+        FINAL_RECOVERY_CREWS_KEY,
+    ] {
+        let run = fx.run("task_pilot_pipeline");
+        let input = json!({"job_run_id": run, "crew_config_key": key});
+        fx.model_for(input.clone());
+        let draws = fx.draws(&run);
+        let draw = draws.values().next().unwrap();
+        crate::usage_pressure_draws::assert_pool(
+            &json!(draw.eligible_pool),
+            &[("low_claude", 1, 8.0), ("low_codex", 3, 3.0)],
+        );
+        assert!(draw.source.ends_with("; usage pressure"));
+        fx.model_for(input);
+        assert_eq!(fx.draws(&run), draws, "the full draw is frozen");
+    }
+    let run = fx.run("task_pilot_pipeline");
+    fx.model_for(
+        json!({"job_run_id": run, "crew_config_key": LOW, "allowed_crews": ["low_codex"]}),
+    );
+    let draw = fx.draws(&run)[LOW].clone();
+    assert_eq!(
+        json!(draw.eligible_pool),
+        json!([{"name": "low_codex", "weight": 3}])
+    );
+    assert_eq!(draw.crew, "low_codex");
+    // A pre-pressure run-state record still deserializes and freezes its crew.
+    let legacy: ActivityCrewDraw = serde_json::from_value(json!({
+        "crew": "low_codex", "source": LOW, "eligible_pool": [{"name": "low_codex", "weight": 3}],
+    }))
+    .unwrap();
+    assert_eq!(legacy, draw);
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     auto_task_templates_without_a_crew_draw_the_pool_for_their_complexity_scenarios,
     auto_task_templates_without_a_crew_draw_the_pool_for_their_complexity,
+    activity_draws_record_pressure_without_changing_filters_or_frozen_choices,
     an_activity_pool_draw_is_frozen_per_run_and_skips_disabled_and_limited_crews,
     an_empty_pool_falls_back_to_the_default_crew_and_the_run_says_so,
     the_retired_system_route_draws_from_the_medium_pool,

@@ -39,6 +39,7 @@ pub(crate) fn admitted_review(attempt_id: &str, lineage: &str, head_sha: &str) -
                 provider: "codex".into(),
                 model: "review-model".into(),
                 reasoning_effort: None,
+                eligible_pool: Vec::new(),
             },
             owed_evidence: Vec::new(),
             owner_owed_evidence: Vec::new(),

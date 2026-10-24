@@ -456,6 +456,106 @@ fn an_implement_run_delegates_to_a_sandboxed_pool_explorer_in_its_worktree() {
     );
 }
 
+/// Automatic exploration records the same pressure weights as other pools;
+/// a named crew stays pinned and an idempotent retry keeps the original draw.
+fn explorer_draws_record_pressure_and_retries_keep_the_original_pool() {
+    let crews = TWO_EXPLORER_CREWS
+        .replace(
+            "[workflow]",
+            "[workflow]\ncrew_selection = \"usage_pressure\"",
+        )
+        .replace(
+            "explorer = [\"haiku\", \"sonnet\"]",
+            "explorer = [\"haiku:1\", \"sonnet:3\", \"opus:0\"]",
+        )
+        .replace(
+            "[crews.sonnet]\nprovider = \"claude\"",
+            "[crews.sonnet]\nprovider = \"codex\"",
+        );
+    let fx = fixture_with(&crews, BUDGETS);
+    as_managed_agent(&fx.parent.run_id, "agent_implement");
+    crate::usage_pressure_draws::record_week(
+        &fx.runtime,
+        "claude",
+        10.0,
+        chrono::Duration::hours(6),
+    );
+    crate::usage_pressure_draws::record_week(&fx.runtime, "codex", 0.0, chrono::Duration::days(7));
+    let session = agent_session();
+    let cwd = fx.worktree.display().to_string();
+    let submission = explore(
+        &fx.runtime,
+        AgentInvokeRequest {
+            idempotency_key: Some("weighted"),
+            ..ask(&cwd, &session)
+        },
+    );
+    // Compare the persisted JSON representation, including its float decode.
+    let recorded: Value =
+        serde_json::from_slice(&serde_json::to_vec(&submission).unwrap()).unwrap();
+    crate::usage_pressure_draws::assert_pool(
+        &recorded["eligible_pool"],
+        &[("haiku", 1, 8.0), ("opus", 0, 0.0), ("sonnet", 3, 3.0)],
+    );
+    assert_eq!(
+        input_of(&fx.runtime, &submission.run_id)["eligible_pool"],
+        recorded["eligible_pool"]
+    );
+    crate::usage_pressure_draws::record_week(
+        &fx.runtime,
+        "claude",
+        80.0,
+        chrono::Duration::days(6),
+    );
+    let retried = explore(
+        &fx.runtime,
+        AgentInvokeRequest {
+            idempotency_key: Some("weighted"),
+            crew: Some("sonnet"),
+            ..ask(&cwd, &session)
+        },
+    );
+    assert!(retried.deduplicated);
+    assert_eq!(retried.crew, submission.crew);
+    assert_eq!(json!(retried)["eligible_pool"], recorded["eligible_pool"]);
+    let response = fx
+        .runtime
+        .run_tool(
+            "orbit.agent.invoke",
+            json!({
+                "prompt": "inspect the retry budget", "cwd": cwd, "crew": "sonnet",
+                "idempotency_key": "weighted",
+            }),
+        )
+        .unwrap();
+    assert_eq!(
+        response["eligible_pool"], recorded["eligible_pool"],
+        "the governed tool exposes the frozen draw too"
+    );
+
+    let current = jobs(&fx.runtime)
+        .get_job_run(&submission.run_id)
+        .expect("read explorer before finishing")
+        .expect("explorer exists");
+    if current.state == JobRunState::Pending {
+        // The substitute worker can win the enqueue race and interrupt the
+        // run before this fixture gets to its manual start.
+        finish(&fx.runtime, &submission.run_id);
+    }
+    let pinned = explore(
+        &fx.runtime,
+        AgentInvokeRequest {
+            crew: Some("sonnet"),
+            ..ask(&cwd, &session)
+        },
+    );
+    assert_eq!(pinned.crew, "sonnet");
+    assert_eq!(
+        json!(pinned)["eligible_pool"],
+        json!([{"name": "sonnet", "weight": 3}])
+    );
+}
+
 fn an_out_of_pool_crew_and_a_foreign_cwd_are_refused() {
     let fx = fixture(BUDGETS);
     let (other, other_worktree) = live_run(&fx.runtime, &fx.repo, "T-EXPLORE-2");
@@ -887,6 +987,7 @@ crate::scenario_table!(
     agent_explore_admission_scenarios,
     an_implement_run_delegates_to_a_sandboxed_pool_explorer_in_its_worktree,
     an_out_of_pool_crew_and_a_foreign_cwd_are_refused,
+    explorer_draws_record_pressure_and_retries_keep_the_original_pool,
     explorer_budgets_refuse_with_the_setting_named,
     the_switch_off_refuses_every_caller,
     other_agents_and_explorers_themselves_are_refused,

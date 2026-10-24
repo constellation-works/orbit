@@ -382,11 +382,7 @@ fn admit(
     };
     let reviewer = match &received {
         Some((_, certificate)) => held_reviewer(&certificate.reviewer),
-        None => {
-            let (crew, source) =
-                resolve_reviewer_crew(runtime, admission, context, &candidate.head.commit)?;
-            admitted_reviewer(&crew, source)
-        }
+        None => resolve_reviewer_crew(runtime, admission, context, &candidate.head.commit)?,
     };
     // [ORB-15630] Linux CodeQL a macOS host cannot run, whose rule names the
     // pull request's hosted check that runs it [ORB-15677], is owed to the
@@ -562,7 +558,7 @@ fn resolve_reviewer_crew(
     admission: &ReviewAdmission,
     context: &GateContext,
     head: &str,
-) -> Result<(Crew, String), OrbitError> {
+) -> Result<ReviewGateReviewer, OrbitError> {
     let run = runtime.get_job_run_backend(&context.run_id)?;
     let run_input = run.and_then(|run| run.input).unwrap_or(Value::Null);
     let allowlist = runtime.crew_allowlist_from_input(&run_input)?;
@@ -609,12 +605,14 @@ fn resolve_reviewer_crew(
                     .map(str::to_string),
             )
             .collect();
-        let crew = runtime.draw_review_crew(
+        let draw = runtime.draw_review_crew(
             permitted,
             &implementers,
             &mut seeded_crew_ticket(format!("review:{}:{head}", context.run_id)),
         )?;
-        return Ok((crew, pool_source(&admission.crew_source)));
+        let mut reviewer = admitted_reviewer(&draw.crew, pool_source(&admission.crew_source));
+        reviewer.eligible_pool = draw.eligible_pool;
+        return Ok(reviewer);
     }
     let name = admission.crew.as_deref().ok_or_else(|| {
         OrbitError::CapabilityDenied(format!(
@@ -639,7 +637,7 @@ fn resolve_reviewer_crew(
             ))
         },
     )?;
-    Ok((crew, admission.crew_source.clone()))
+    Ok(admitted_reviewer(&crew, admission.crew_source.clone()))
 }
 
 fn admitted_reviewer(crew: &Crew, source: String) -> ReviewGateReviewer {
@@ -649,6 +647,7 @@ fn admitted_reviewer(crew: &Crew, source: String) -> ReviewGateReviewer {
         provider: crew.assignment.provider.clone(),
         model: crew.assignment.model.clone(),
         reasoning_effort: crew.assignment.effort.map(|effort| effort.to_string()),
+        eligible_pool: Vec::new(),
     }
 }
 
@@ -660,6 +659,7 @@ fn held_reviewer(reviewer: &ReviewerIdentity) -> ReviewGateReviewer {
         provider: reviewer.provider.clone(),
         model: reviewer.model.clone(),
         reasoning_effort: reviewer.reasoning_effort.clone(),
+        eligible_pool: Vec::new(),
     }
 }
 

@@ -189,7 +189,10 @@ pub(crate) fn prepare(
         })
         .enumerate()
         .map(|(partition_index, (crew, task_ids))| {
-            json!({"partition_index": partition_index, "task_ids": task_ids, "crew": crew})
+            let draws = tasks.iter().filter(|task| task_ids.iter().any(|id| task["task_id"] == *id))
+                .map(|task| json!({"task_id": task["task_id"], "eligible_pool": task["eligible_pool"]}))
+                .collect::<Vec<_>>();
+            json!({"partition_index": partition_index, "task_ids": task_ids, "crew": crew, "draws": draws})
         })
         .collect::<Vec<_>>();
     let task_ids = tasks
@@ -230,6 +233,7 @@ pub(super) fn task_snapshot(
         "finding_fingerprint": finding_fingerprint(task),
         "crew": verifier.crew,
         "tier": verifier.tier,
+        "eligible_pool": verifier.eligible_pool,
         "prior": prior,
     })
 }
