@@ -894,8 +894,10 @@ main.task-pane-resizing { cursor: col-resize; user-select: none; }
   top: 0;
   z-index: 3;
   padding: 16px 20px 14px;
-  border-bottom: 1px solid var(--hair);
-  background: var(--bg-elev);
+  /* The head is the top of the detail's darker band; the edge keeps the
+     head's height and shows only where the band's colour ends. */
+  border-bottom: 1px solid var(--bg);
+  background: var(--bg);
 }
 .task-pane-bar { display: flex; align-items: center; gap: 10px; min-height: 32px; }
 .task-pane-bar .id { font-size: 13px; color: var(--fg-dim); }

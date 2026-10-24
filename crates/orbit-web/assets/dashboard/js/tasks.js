@@ -3032,14 +3032,20 @@ function buildTaskDetail(task, context, drain = null) {
       content: commentsContent,
     },
   ], context);
-  detail.appendChild(metaBlock);
+  // Everything above the tab content (state, callouts, delivery progress and
+  // the tab strip) shares one band, so the strip reads apart from the content.
+  const [tabStrip, ...tabPanels] = sections;
+  const band = el("div", { class: "detail-band" });
+  band.appendChild(metaBlock);
   const blockCallout = buildTaskBlockCallout(task, context, detail);
-  if (blockCallout) detail.appendChild(blockCallout);
+  if (blockCallout) band.appendChild(blockCallout);
   const pilotCallout = buildPilotWarnings(task);
-  if (pilotCallout) detail.appendChild(pilotCallout);
-  detail.appendChild(attentionSlot);
-  detail.appendChild(progressSlot);
-  for (const section of sections) detail.appendChild(section);
+  if (pilotCallout) band.appendChild(pilotCallout);
+  band.appendChild(attentionSlot);
+  band.appendChild(progressSlot);
+  band.appendChild(tabStrip);
+  detail.appendChild(band);
+  for (const panel of tabPanels) detail.appendChild(panel);
   if (actionFooter) detail.appendChild(actionFooter);
   delivery.appendChild(buildDeliveryPanel(task.id, {
     onTaskChanged: () => refreshTasks(context),
