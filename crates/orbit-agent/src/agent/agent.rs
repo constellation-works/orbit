@@ -90,6 +90,26 @@ impl AgentConfig {
         })
     }
 
+    pub fn from_provider_and_cli_config(
+        provider: &str,
+        command: impl Into<String>,
+        model: Option<&str>,
+        config: &HashMap<String, String>,
+    ) -> Result<Self, OrbitError> {
+        let command = command.into();
+        let registry = ProviderRegistry::default();
+        let factory = registry
+            .factory_for_provider(provider)
+            .or_else(|_| registry.factory_for_cli(&command))?;
+        Ok(Self {
+            command,
+            model: model.map(ToString::to_string),
+            reasoning_effort: None,
+            provider_key: factory.key(),
+            provider_options: factory.options_from_config(config)?,
+        })
+    }
+
     pub fn with_model(mut self, model: Option<&str>) -> Self {
         self.model = model.map(ToString::to_string);
         self

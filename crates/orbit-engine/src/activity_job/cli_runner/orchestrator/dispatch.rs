@@ -296,7 +296,8 @@ pub(crate) fn run_cli_backend_for_step(
     // Config parse / agent construction failures are deterministic — the
     // same spec fails identically on every attempt, so they are classified
     // permanent and skip the step retry wrapper (ORB-10006).
-    let config = AgentConfig::from_cli_config(
+    let config = AgentConfig::from_provider_and_cli_config(
+        &provider,
         cli_executor.command.clone(),
         spec.model.as_deref(),
         &provider_config,
@@ -734,6 +735,7 @@ pub(crate) fn run_cli_backend_for_step(
     let usage_context = UsageWindowContext {
         antigravity: (provider == "antigravity").then(|| AntigravityUsageRequest {
             program: resolved_program.clone(),
+            args: cli_executor.args.clone(),
             environment: child_env.clone(),
             cwd: subprocess_cwd.clone(),
         }),

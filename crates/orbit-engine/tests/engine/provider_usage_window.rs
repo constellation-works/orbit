@@ -42,6 +42,8 @@ const GROK_BILLING: &str =
 struct UsageHost {
     provider: CapacityHost,
     store: orbit_store::Store,
+    cli_command: Option<String>,
+    cli_args: Vec<String>,
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for UsageHost {
@@ -50,7 +52,14 @@ impl orbit_engine::test_support::NullRuntimeHost for UsageHost {
     }
 
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        RuntimeHost::resolve_cli_executor(&self.provider, provider)
+        let mut executor = RuntimeHost::resolve_cli_executor(&self.provider, provider)?;
+        if let Some(command) = &self.cli_command {
+            executor.command = command.clone();
+        }
+        if !self.cli_args.is_empty() {
+            executor.args = self.cli_args.clone();
+        }
+        Ok(executor)
     }
 
     fn record_provider_limit(
@@ -79,6 +88,18 @@ fn dispatch_with_prelude(
     agent_env: &[(&str, &Path)],
     prelude: &str,
 ) -> (DispatchOutcome, Vec<ProviderLimitObservation>) {
+    dispatch_with_prelude_and_launcher(binary, provider, stdout, agent_env, prelude, None, &[])
+}
+
+fn dispatch_with_prelude_and_launcher(
+    binary: &str,
+    provider: Provider,
+    stdout: &str,
+    agent_env: &[(&str, &Path)],
+    prelude: &str,
+    interpreter: Option<&str>,
+    extra_args: &[String],
+) -> (DispatchOutcome, Vec<ProviderLimitObservation>) {
     let fake = FakeProvider::with_usage_command(binary, stdout, "", 0, "", prelude);
     let audit = tempfile::tempdir().unwrap();
     let mut host = CapacityHost::new(&fake.path, audit.path());
@@ -86,9 +107,18 @@ fn dispatch_with_prelude(
         .iter()
         .map(|(key, value)| (key.to_string(), value.display().to_string()))
         .collect();
+    let (cli_command, cli_args) = if let Some(interpreter) = interpreter {
+        let mut args = vec![fake.path.display().to_string()];
+        args.extend(extra_args.iter().cloned());
+        (Some(interpreter.to_string()), args)
+    } else {
+        (None, extra_args.to_vec())
+    };
     let host = UsageHost {
         provider: host,
         store: orbit_store::Store::open_in_memory().unwrap(),
+        cli_command,
+        cli_args,
     };
     let mut spec = agent_spec(provider);
     spec.require_response_envelope = true;
@@ -129,6 +159,93 @@ fi
     let env = [("HOME", home.path())];
     let run =
         |stdout: &str| dispatch_with_prelude("agy", Provider::Antigravity, stdout, &env, prelude);
+    let (outcome, limits) = run(&success);
+    assert!(outcome.success, "{:?}", outcome.message);
+    assert_eq!(limits.len(), 9);
+    for reading in &limits {
+        assert_eq!(reading.provider, "antigravity");
+        assert_eq!(reading.source, ProviderLimitSource::Event);
+        assert_eq!(reading.run_id.as_deref(), Some("usage-run"));
+        assert_eq!(reading.crew.as_deref(), Some("fixture-crew"));
+        assert!(
+            reading.used_percent.is_some()
+                && reading.window_minutes.is_some()
+                && reading.resets_at.is_some()
+        );
+    }
+    let flash = limits
+        .iter()
+        .find(|reading| {
+            reading.model.as_deref() == Some("flash")
+                && reading.window.as_deref() == Some("gemini-5h")
+        })
+        .unwrap();
+    assert_eq!(flash.used_percent, Some(9.81));
+    assert_eq!(flash.window_minutes, Some(300));
+    assert_eq!(
+        flash.resets_at,
+        Some("2026-10-24T08:49:02Z".parse().unwrap())
+    );
+    let (failed, failed_limits) = run("no completion envelope");
+    assert!(!failed.success);
+    assert_eq!(failed_limits.len(), 9, "failed runs also record usage");
+    for body in ["not json".to_string(), "{}".to_string(), "x".repeat(65537)] {
+        fs::write(&response, body).unwrap();
+        let (outcome, limits) = run(&success);
+        assert!(
+            outcome.success,
+            "advisory quota read: {:?}",
+            outcome.message
+        );
+        assert!(limits.is_empty());
+    }
+    fs::rename(&response, home.path().join("saved-usage.json")).unwrap();
+    let (outcome, limits) = run(&success);
+    assert!(
+        outcome.success,
+        "an unavailable quota command cannot fail a run"
+    );
+    assert!(limits.is_empty());
+}
+
+fn antigravity_preserves_launcher_prefix_arguments_in_quota_reads() {
+    let home = tempfile::tempdir().unwrap();
+    let response = home.path().join("usage.json");
+    let fixture = include_str!(
+        "../../../orbit-agent/tests/provider_invocation/fixtures/antigravity_usage.json"
+    );
+    fs::write(&response, fixture).unwrap();
+    let prelude = r#"
+if [ "$1" = '--print' ]; then
+  [ "$#" = 6 ] && [ "$2" = '/usage' ] && [ "$3" = '--output-format' ] && [ "$4" = 'json' ] && [ "$5" = '--print-timeout' ] && [ "$6" = '3s' ] || exit 9
+  cat "$HOME/usage.json"
+  exit $?
+fi
+"#;
+    let success = json!({"event":"result", "result": {
+        "status":"SUCCESS", "response":super::provider_capacity::SUCCESS_ENVELOPE,
+        "usage":{"input_tokens":12, "output_tokens":4}
+    }})
+    .to_string();
+    let env = [("HOME", home.path())];
+    // Configured executor uses an interpreter (/bin/sh) with the provider script
+    // prefix as well as turn-specific flags that must be replaced by quota flags.
+    let run = |stdout: &str| {
+        dispatch_with_prelude_and_launcher(
+            "agy-wrapper.sh",
+            Provider::Antigravity,
+            stdout,
+            &env,
+            prelude,
+            Some("/bin/sh"),
+            &[
+                "--output-format".to_string(),
+                "stream-json".to_string(),
+                "--print-timeout".to_string(),
+                "10m".to_string(),
+            ],
+        )
+    };
     let (outcome, limits) = run(&success);
     assert!(outcome.success, "{:?}", outcome.message);
     assert_eq!(limits.len(), 9);
@@ -523,6 +640,10 @@ fn usage_window_contracts_1() {
             (
                 "antigravity_records_native_quota_and_unavailable_readings_are_advisory",
                 antigravity_records_native_quota_and_unavailable_readings_are_advisory,
+            ),
+            (
+                "antigravity_preserves_launcher_prefix_arguments_in_quota_reads",
+                antigravity_preserves_launcher_prefix_arguments_in_quota_reads,
             ),
             (
                 "grok_records_billing_and_unavailable_or_unrecognized_readings_are_advisory",
