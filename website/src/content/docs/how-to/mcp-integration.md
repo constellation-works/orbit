@@ -122,7 +122,8 @@ Established sessions remain connected while idle, until the client disconnects.
 
 ## Response shapes
 
-`orbit tool list` shows every tool. Each one advertises MCP annotations
+`orbit tool list` shows available tools; `--all` also includes inactive tools.
+Each one advertises MCP annotations
 (`readOnlyHint`, `destructiveHint`, and so on) so a client can decide what to
 auto-approve; Orbit still enforces authority on every call.
 

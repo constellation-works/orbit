@@ -46,8 +46,8 @@ orbit task publication status
 ```
 
 `bind` is a one-time, machine-local record and contacts nothing. Each
-`publish` adds a new snapshot to the same history and never force-pushes over
-another writer. `status` should report `current`, with matching local and
+`publish` writes snapshots to the same history, reusing an unchanged snapshot,
+and never force-pushes over another writer. `status` should report `current`, with matching local and
 remote generations and commits.
 
 Attachments are opt-in. By default, `publish` refuses if any task has one and

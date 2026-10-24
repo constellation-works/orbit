@@ -35,7 +35,8 @@ spec:
 ```
 
 A `deterministic` activity names a registered `action` and passes it optional
-`config`. An `agent_loop` activity gives the agent an instruction, its tools,
+`config`. `example_action` above is a placeholder: replace it with a registered
+action before running the job. An `agent_loop` activity gives the agent an instruction, its tools,
 and a provider instead:
 
 ```yaml
