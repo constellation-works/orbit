@@ -5,18 +5,25 @@
 //! Orbit workspace. Only the workspace registry in that root knows the pair,
 //! and these tests pin that both setup commands resolve the checkout through
 //! it: the client config lands in the repository, carries the registered
-//! `ws_*` binding, and is removed again — while a root that names no single
-//! registered checkout refuses instead of writing somewhere else (ORB-12121).
+//! `ws_*` binding and, when that catalog is not the host-global default, the
+//! `--root` the generated process needs to open it. A root that names no
+//! single registered checkout refuses instead of writing somewhere else
+//! (ORB-12121).
 
 #![allow(missing_docs)]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc::{Receiver, channel};
+use std::time::Duration;
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_cmd::mcp_clients::{McpClient, McpClientScope, client_config_paths};
 use orbit_common::test_env;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 use toml_edit::DocumentMut;
 
@@ -145,6 +152,8 @@ impl ExternalRootFixture {
             .current_dir(cwd)
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
+            .env_remove("ORBIT_ROOT")
+            .env_remove("ORBIT_WORKSPACE")
             .args(args);
         for (name, value) in env {
             command.env(name, value);
@@ -289,7 +298,7 @@ fn mcp_setup_expands_tilde_and_anchors_relative_roots_for_flags_and_environment(
             selected(&["mcp", "init", "--claude"]).success();
             assert_eq!(
                 generated_server_args(&fixture.claude_config()),
-                vec!["mcp", "serve", "--workspace", "ws_wsname"],
+                expected_local_args(&fixture, "ws_wsname"),
                 "{raw} must bind the checkout registered at the expanded root"
             );
             fixture.assert_no_client_config_outside_the_checkout();
@@ -402,6 +411,10 @@ fn federated_home_setup_works_outside_a_workspace_and_reports_no_binding() {
         !written.contains("--workspace"),
         "the federated entry is unbound: {written}"
     );
+    assert!(
+        !written.contains("--root"),
+        "a default federated entry does not carry a local root: {written}"
+    );
 
     let (text, json) = federated_setup_outputs(
         &fixture,
@@ -453,6 +466,24 @@ fn federated_setup_inside_a_registered_checkout_reports_no_binding() {
                 json["workspace_id"].is_null(),
                 "federated {action} --scope {scope} json binding: {json}"
             );
+            if action == "init" {
+                let config = match scope {
+                    "home" => fixture.home.join(".codex").join("config.toml"),
+                    "workspace" => fixture.checkout.join(".codex").join("config.toml"),
+                    other => panic!("unexpected federated scope {other}"),
+                };
+                let written = fs::read_to_string(&config).expect("federated codex config");
+                assert_eq!(
+                    toml_server_args(&written, "orbit-federated"),
+                    vec![
+                        "mcp".to_string(),
+                        "serve".to_string(),
+                        "--mode".to_string(),
+                        "federated".to_string()
+                    ],
+                    "federated {scope} must not receive the local catalog root: {written}"
+                );
+            }
         }
     }
 }
@@ -502,15 +533,16 @@ fn mcp_init_binds_an_external_root_checkout_and_remove_reverses_it() {
         )
         .success();
 
+    let launch_args = expected_local_args(&fixture, "ws_wsname");
     assert_eq!(
         generated_server_args(&fixture.claude_config()),
-        vec!["mcp", "serve", "--workspace", "ws_wsname"],
-        "the generated server must carry the registered workspace binding"
+        launch_args,
+        "the generated server must carry the registered workspace binding and catalog root"
     );
     let mut expected_mcp = original_mcp.clone();
     expected_mcp["mcpServers"]["orbit"] = serde_json::json!({
         "command": "orbit",
-        "args": ["mcp", "serve", "--workspace", "ws_wsname"],
+        "args": launch_args,
     });
     assert_eq!(read_json(&fixture.claude_config()), expected_mcp);
     let settings = read_json(&fixture.claude_settings());
@@ -594,7 +626,7 @@ fn mcp_init_resolves_the_registered_checkout_from_an_unrelated_directory() {
 
     assert_eq!(
         generated_server_args(&fixture.claude_config()),
-        vec!["mcp", "serve", "--workspace", "ws_wsname"]
+        expected_local_args(&fixture, "ws_wsname")
     );
     fixture.assert_no_client_config_outside_the_checkout();
 
@@ -633,7 +665,13 @@ fn explicit_root_outranks_a_different_registered_cwd_checkout() {
     assert!(!fixture.checkout_a.join(".mcp.json").exists());
     assert_eq!(
         generated_server_args(&fixture.checkout_b.join(".mcp.json")),
-        vec!["mcp", "serve", "--workspace", "ws_beta"]
+        vec![
+            "mcp".to_string(),
+            "serve".to_string(),
+            "--workspace".to_string(),
+            "ws_beta".to_string()
+        ],
+        "a repo-local .orbit is not the catalog, so the launch keeps the default root"
     );
 
     let env = [("ORBIT_ROOT", root.as_path())];
@@ -675,7 +713,7 @@ fn shared_root_mcp_setup_uses_cwd_checkout_for_init_and_remove() {
         .success();
     assert_eq!(
         generated_server_args(&fixture.checkout_a.join(".mcp.json")),
-        vec!["mcp", "serve", "--workspace", "ws_alpha"]
+        expected_local_args_for_root(&fixture.orbit_root, "ws_alpha")
     );
     assert!(!fixture.checkout_b.join(".mcp.json").exists());
 
@@ -687,7 +725,7 @@ fn shared_root_mcp_setup_uses_cwd_checkout_for_init_and_remove() {
         .success();
     assert_eq!(
         generated_server_args(&fixture.checkout_b.join(".mcp.json")),
-        vec!["mcp", "serve", "--workspace", "ws_beta"]
+        expected_local_args_for_root(&fixture.orbit_root, "ws_beta")
     );
 
     fixture
@@ -1016,6 +1054,8 @@ impl SharedRootCheckoutPairFixture {
             .current_dir(cwd)
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
+            .env_remove("ORBIT_ROOT")
+            .env_remove("ORBIT_WORKSPACE")
             .args(args)
             .assert()
     }
@@ -1111,6 +1151,8 @@ impl RegisteredCheckoutPairFixture {
             .current_dir(cwd)
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
+            .env_remove("ORBIT_ROOT")
+            .env_remove("ORBIT_WORKSPACE")
             .args(args)
             .assert()
     }
@@ -1129,6 +1171,8 @@ impl RegisteredCheckoutPairFixture {
             .current_dir(cwd)
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
+            .env_remove("ORBIT_ROOT")
+            .env_remove("ORBIT_WORKSPACE")
             .args(args);
         for (name, value) in env {
             command.env(name, value);
@@ -1149,6 +1193,259 @@ fn canonical_str(path: &Path) -> String {
         .to_string()
 }
 
+fn canonical_root(path: &Path) -> String {
+    fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_str()
+        .expect("utf8 root")
+        .to_string()
+}
+
+fn expected_local_args_for_root(root: &Path, workspace: &str) -> Vec<String> {
+    vec![
+        "--root".to_string(),
+        canonical_root(root),
+        "mcp".to_string(),
+        "serve".to_string(),
+        "--workspace".to_string(),
+        workspace.to_string(),
+    ]
+}
+
+/// Args for an external-root fixture. A root that is the host-global
+/// `~/.orbit` stays off the argv, matching a normal default-root launch.
+fn expected_local_args(fixture: &ExternalRootFixture, workspace: &str) -> Vec<String> {
+    let default_root = fixture.home.join(".orbit");
+    if canonical_root(&fixture.orbit_root) == canonical_root(&default_root) {
+        vec![
+            "mcp".to_string(),
+            "serve".to_string(),
+            "--workspace".to_string(),
+            workspace.to_string(),
+        ]
+    } else {
+        expected_local_args_for_root(&fixture.orbit_root, workspace)
+    }
+}
+
+fn toml_server_args(document: &str, server_id: &str) -> Vec<String> {
+    let parsed: toml::Value = document.parse().expect("parse toml client config");
+    parsed["mcp_servers"][server_id]["args"]
+        .as_array()
+        .expect("toml args")
+        .iter()
+        .map(|value| value.as_str().expect("toml arg").to_string())
+        .collect()
+}
+
+fn read_registered_args(path: &Path, server_id: &str) -> Vec<String> {
+    let raw =
+        fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    if path
+        .extension()
+        .is_some_and(|extension| extension == "toml")
+    {
+        return toml_server_args(&raw, server_id);
+    }
+    let config: Value = serde_json::from_str(&raw).expect("parse json client config");
+    let servers = config
+        .get("mcpServers")
+        .or_else(|| config.get("servers"))
+        .unwrap_or_else(|| panic!("no server table in {}", path.display()));
+    servers[server_id]["args"]
+        .as_array()
+        .expect("json args")
+        .iter()
+        .map(|value| value.as_str().expect("json arg").to_string())
+        .collect()
+}
+
+fn without_root_arg(args: &[String]) -> Vec<String> {
+    let mut omitted = Vec::new();
+    let mut skip_value = false;
+    for arg in args {
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        if arg == "--root" {
+            skip_value = true;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--root=") {
+            if value.is_empty() {
+                skip_value = true;
+            }
+            continue;
+        }
+        omitted.push(arg.clone());
+    }
+    omitted
+}
+
+const MCP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Speak one stdio MCP session to `orbit` launched with `args`.
+///
+/// `ORBIT_ROOT` is removed so the session can reach a custom catalog only
+/// through the argv the registration emitted.
+fn mcp_tool_result(home: &Path, cwd: &Path, args: &[String], tool: &str) -> Value {
+    let mut command = Command::new(assert_cmd::cargo::cargo_bin!("orbit"));
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(cwd)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env_remove("ORBIT_ROOT")
+        .env_remove("ORBIT_WORKSPACE")
+        .env_remove("RUST_LOG")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = crate::child_guard::ChildGuard::spawn(&mut command)
+        .expect("spawn the emitted orbit mcp serve");
+    let mut stdin = child.stdin.take().expect("server stdin");
+    let stdout = child.stdout.take().expect("server stdout");
+    let stderr = child.stderr.take().expect("server stderr");
+    let (stdout_tx, stdout_rx) = channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if stdout_tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let (stderr_tx, stderr_rx) = channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    if stderr_tx.send(line.clone()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    let initialize = mcp_request(
+        &mut stdin,
+        &stdout_rx,
+        1,
+        "initialize",
+        json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "orbit-mcp-root-regression", "version": "0" }
+        }),
+    );
+    assert!(
+        initialize.get("error").is_none(),
+        "initialize failed: {initialize}; stderr: {}",
+        drain_stderr(&stderr_rx)
+    );
+    mcp_notify(&mut stdin, "notifications/initialized");
+    let response = mcp_request(
+        &mut stdin,
+        &stdout_rx,
+        2,
+        "tools/call",
+        json!({ "name": tool, "arguments": {} }),
+    );
+    drop(child);
+    response.get("result").cloned().unwrap_or_else(|| {
+        panic!(
+            "tools/call returned no result: {response}; stderr: {}",
+            drain_stderr(&stderr_rx)
+        )
+    })
+}
+
+fn mcp_notify(stdin: &mut dyn Write, method: &str) {
+    let mut line = serde_json::to_string(&json!({ "jsonrpc": "2.0", "method": method }))
+        .expect("serialize notification");
+    line.push('\n');
+    stdin
+        .write_all(line.as_bytes())
+        .expect("write notification");
+    stdin.flush().expect("flush notification");
+}
+
+fn mcp_request(
+    stdin: &mut dyn Write,
+    stdout: &Receiver<String>,
+    id: i64,
+    method: &str,
+    params: Value,
+) -> Value {
+    let mut line = serde_json::to_string(&json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": method,
+        "params": params,
+    }))
+    .expect("serialize request");
+    line.push('\n');
+    stdin.write_all(line.as_bytes()).expect("write request");
+    stdin.flush().expect("flush request");
+    let started = std::time::Instant::now();
+    loop {
+        let remaining = MCP_RESPONSE_TIMEOUT.saturating_sub(started.elapsed());
+        let line = stdout.recv_timeout(remaining).unwrap_or_else(|error| {
+            panic!("no response to `{method}` within {MCP_RESPONSE_TIMEOUT:?}: {error}")
+        });
+        if line.trim().is_empty() {
+            continue;
+        }
+        let response: Value = serde_json::from_str(line.trim())
+            .unwrap_or_else(|error| panic!("server emitted invalid JSON ({error}): {line}"));
+        if response.get("id").and_then(Value::as_i64) == Some(id) {
+            return response;
+        }
+    }
+}
+
+fn drain_stderr(stderr: &Receiver<String>) -> String {
+    let mut lines = Vec::new();
+    while let Ok(line) = stderr.try_recv() {
+        lines.push(line);
+    }
+    lines.join("")
+}
+
+fn seed_operator_registration(path: &Path, args: &[&str], key: &str) {
+    fs::create_dir_all(path.parent().expect("config parent")).expect("config directory");
+    let content = if path
+        .extension()
+        .is_some_and(|extension| extension == "toml")
+    {
+        format!(
+            "# preserve formatting\n[mcp_servers.orbit]\ncommand = '/custom/orbit'\nargs = {}\nenabled = true\n",
+            serde_json::to_string(args).expect("seed args")
+        )
+    } else {
+        json!({
+            key: {
+                "orbit": {
+                    "command": "/custom/orbit",
+                    "args": args,
+                    "env": { "CUSTOM_SETTING": "keep" }
+                }
+            }
+        })
+        .to_string()
+    };
+    fs::write(path, content).expect("seed operator registration");
+}
+
 fn generated_server_args(config_path: &Path) -> Vec<String> {
     let config: Value = serde_json::from_str(
         &fs::read_to_string(config_path).expect("read generated client config"),
@@ -1160,6 +1457,195 @@ fn generated_server_args(config_path: &Path) -> Vec<String> {
         .iter()
         .map(|value| value.as_str().expect("arg is a string").to_string())
         .collect()
+}
+
+#[test]
+fn emitted_external_root_launch_lists_tasks_without_inherited_orbit_root() {
+    let fixture = ExternalRootFixture::init();
+    // Grok's shared reader is on unless its config says otherwise. Force the
+    // native TOML writer so this pass covers both config families.
+    fs::create_dir_all(fixture.home.join(".grok")).expect("grok home");
+    fs::write(
+        fixture.home.join(".grok/config.toml"),
+        "[claude_compat]\nimported = true\n",
+    )
+    .expect("force grok's native toml writer");
+
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["mcp", "init", "--all"]),
+        )
+        .success();
+
+    let expected = expected_local_args(&fixture, "ws_wsname");
+    assert!(
+        expected.first().is_some_and(|arg| arg == "--root"),
+        "a non-default catalog must be on the launch: {expected:?}"
+    );
+    for client in McpClient::ALL {
+        let paths = client_config_paths(
+            McpClientScope::Workspace,
+            client,
+            &fixture.checkout,
+            Some(&fixture.home),
+        )
+        .expect("client config paths");
+        let args = read_registered_args(&paths.mcp_path, "orbit");
+        assert_eq!(args, expected, "{client:?} registration");
+        assert!(
+            !args.iter().any(|arg| arg == "--operator"),
+            "{client:?} mcp init must stay agent-only"
+        );
+        let raw = fs::read_to_string(&paths.mcp_path).expect("read registration");
+        assert!(
+            !raw.contains("ORBIT_ROOT"),
+            "{client:?} must select the catalog by argv: {raw}"
+        );
+    }
+
+    let emitted = read_registered_args(&fixture.claude_config(), "orbit");
+    let listed = mcp_tool_result(
+        &fixture.home,
+        &fixture.checkout,
+        &emitted,
+        "orbit_task_list",
+    );
+    assert_eq!(listed["isError"], false, "task-list failed: {listed}");
+    assert!(
+        listed["structuredContent"]["tasks"].is_array(),
+        "task-list did not reach the bound workspace: {listed}"
+    );
+
+    let omitted = without_root_arg(&emitted);
+    let missed = mcp_tool_result(
+        &fixture.home,
+        &fixture.elsewhere,
+        &omitted,
+        "orbit_task_list",
+    );
+    assert_eq!(
+        missed["isError"], true,
+        "omitted root unexpectedly listed tasks: {missed}"
+    );
+    assert!(
+        missed.to_string().contains("unknown workspace selector"),
+        "omitted root must miss the external catalog: {missed}"
+    );
+
+    let operator_args = [
+        "mcp",
+        "serve",
+        "--operator",
+        "--workspace",
+        "ws_existing",
+        "--orchestrator",
+        "custom",
+    ];
+    let claude = fixture.claude_config();
+    let codex = fixture.checkout.join(".codex").join("config.toml");
+    seed_operator_registration(&claude, &operator_args, "mcpServers");
+    seed_operator_registration(&codex, &operator_args, "mcp_servers");
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["mcp", "init", "--claude", "--codex"]),
+        )
+        .success();
+    let mut rooted_operator = vec!["--root".to_string(), canonical_root(&fixture.orbit_root)];
+    rooted_operator.extend(operator_args.iter().map(|arg| (*arg).to_string()));
+    let claude_config: Value =
+        serde_json::from_slice(&fs::read(&claude).expect("read reconciled claude config"))
+            .expect("parse reconciled claude config");
+    assert_eq!(
+        claude_config["mcpServers"]["orbit"]["command"],
+        "/custom/orbit"
+    );
+    assert_eq!(
+        claude_config["mcpServers"]["orbit"]["args"],
+        json!(rooted_operator)
+    );
+    assert_eq!(
+        claude_config["mcpServers"]["orbit"]["env"]["CUSTOM_SETTING"],
+        "keep"
+    );
+    let codex_raw = fs::read_to_string(&codex).expect("read reconciled codex config");
+    assert!(
+        codex_raw.contains("# preserve formatting"),
+        "reconciliation rewrote the operator document: {codex_raw}"
+    );
+    assert!(
+        codex_raw.contains("/custom/orbit"),
+        "reconciliation replaced the operator command: {codex_raw}"
+    );
+    assert_eq!(toml_server_args(&codex_raw, "orbit"), rooted_operator);
+
+    let claude_bytes = fs::read(&claude).expect("snapshot claude config");
+    let codex_bytes = fs::read(&codex).expect("snapshot codex config");
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["mcp", "init", "--claude", "--codex"]),
+        )
+        .success();
+    assert_eq!(
+        fs::read(&claude).expect("reread claude config"),
+        claude_bytes,
+        "repeat reconciliation must leave the rooted operator entry unchanged"
+    );
+    assert_eq!(
+        fs::read(&codex).expect("reread codex config"),
+        codex_bytes,
+        "repeat reconciliation must leave the rooted operator entry unchanged"
+    );
+
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["mcp", "init", "--federated", "--codex"]),
+        )
+        .success();
+    let federated = fs::read_to_string(&codex).expect("read federated codex config");
+    assert_eq!(
+        toml_server_args(&federated, "orbit-federated"),
+        vec![
+            "mcp".to_string(),
+            "serve".to_string(),
+            "--mode".to_string(),
+            "federated".to_string()
+        ],
+        "federated registration must not take the local catalog: {federated}"
+    );
+    assert_eq!(
+        toml_server_args(&federated, "orbit"),
+        rooted_operator,
+        "federated registration must leave the local operator entry in place"
+    );
+
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["mcp", "remove", "--all"]),
+        )
+        .success();
+    fs::create_dir_all(fixture.checkout.join(".claude")).expect("detect claude");
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["workspace", "init", "--name", "wsname", "--force", "--mcp"]),
+        )
+        .success();
+    let mut operator_launch = expected_local_args(&fixture, "ws_wsname");
+    let workspace_at = operator_launch
+        .iter()
+        .position(|arg| arg == "--workspace")
+        .expect("workspace flag");
+    operator_launch.insert(workspace_at, "--operator".to_string());
+    assert_eq!(
+        generated_server_args(&fixture.claude_config()),
+        operator_launch,
+        "workspace init --mcp must keep operator authority and the catalog root"
+    );
 }
 
 #[test]

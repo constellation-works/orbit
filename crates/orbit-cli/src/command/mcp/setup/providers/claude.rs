@@ -11,7 +11,9 @@ use crate::command::mcp::{ORBIT_MCP_SERVER_ID, safe_mcp_tool_names};
 use super::super::args::ScopeArg;
 use super::super::dispatch::ConfigTarget;
 use super::super::format::*;
-use super::common::{ServerLaunch, preserve_json_operator, server_args, server_id};
+use super::common::{
+    ServerLaunch, preserve_json_operator, server_args, server_id, supply_json_root,
+};
 
 pub(in crate::command::mcp::setup) fn apply_claude_init(
     target: &ConfigTarget,
@@ -29,14 +31,22 @@ pub(in crate::command::mcp::setup) fn apply_claude_init_with_legacy(
     let update_mcp = || {
         let mut root = load_json_object(&target.mcp_path)?;
         let mcp_servers = ensure_json_object(&mut root, "mcpServers")?;
-        if mcp_servers
+        let preserved = mcp_servers
             .get(server_id)
-            .is_some_and(|entry| preserve_json_operator(launch, entry))
-        {
+            .is_some_and(|entry| preserve_json_operator(launch, entry));
+        if preserved {
+            let changed = mcp_servers
+                .get_mut(server_id)
+                .is_some_and(|entry| supply_json_root(entry, launch));
+            if changed {
+                return write_json_object(&target.mcp_path, &root);
+            }
             return Ok(());
         }
         if let Some(entry) = inherited.filter(|entry| preserve_json_operator(launch, entry)) {
-            mcp_servers.insert(server_id.to_string(), entry.clone());
+            let mut entry = entry.clone();
+            supply_json_root(&mut entry, launch);
+            mcp_servers.insert(server_id.to_string(), entry);
             return write_json_object(&target.mcp_path, &root);
         }
         // Carry authority forward before removing an obsolete config path.
@@ -47,7 +57,9 @@ pub(in crate::command::mcp::setup) fn apply_claude_init_with_legacy(
                 .and_then(|servers| servers.get(server_id))
                 .filter(|entry| preserve_json_operator(launch, entry))
             {
-                mcp_servers.insert(server_id.to_string(), entry.clone());
+                let mut entry = entry.clone();
+                supply_json_root(&mut entry, launch);
+                mcp_servers.insert(server_id.to_string(), entry);
                 return write_json_object(&target.mcp_path, &root);
             }
         }
