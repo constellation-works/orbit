@@ -2577,8 +2577,8 @@ fn codebase_related_reads_completion_and_settlement_landings_and_explains_empty_
 }
 
 /// A task-pilot run of `crew` and `model`, active from `started` to
-/// `finished`, with its frozen activity draw and invocation evidence.
-pub(super) fn seed_pilot_run(
+/// `finished`, with its frozen activity draw, before invocation evidence.
+pub(super) fn pilot_run(
     fixture: &Fixture,
     run_id: &str,
     crew: &str,
@@ -2625,12 +2625,24 @@ pub(super) fn seed_pilot_run(
         },
     );
     fixture.runtime.write_run_state(run_id, &state).unwrap();
+}
+
+/// A pilot run with invocation evidence under its actual worker step id.
+pub(super) fn seed_pilot_run(
+    fixture: &Fixture,
+    run_id: &str,
+    crew: &str,
+    model: &str,
+    started: DateTime<Utc>,
+    finished: DateTime<Utc>,
+) {
+    pilot_run(fixture, run_id, crew, model, started, finished);
     fixture
         .runtime
         .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
             job_run_id: run_id.into(),
             account: None,
-            activity_id: "task_pilot".into(),
+            activity_id: "pilot".into(),
             agent: "fixture".into(),
             provider: None,
             model: Some(model.into()),
@@ -2675,7 +2687,9 @@ pub(super) fn pilot_receipt(
         at,
         by: "task-pilot".into(),
         body: body.to_string(),
-        operation_id: Some(format!("{:064x}", rows + 1 + task_id.len() * 1000)),
+        operation_id: Some(orbit_common::security::release::sha256_hex(
+            format!("{task_id}:{}", rows + 1).as_bytes(),
+        )),
     };
     let mut file = fs::OpenOptions::new()
         .create(true)
