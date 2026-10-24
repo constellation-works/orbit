@@ -187,7 +187,7 @@ holds, pull-drain auth exclusions and probes are its own, and
 (`opus-credits:200usd/30d`). Details: `docs/CONFIG.md`, "Per-crew credentials".
 
 `orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `haiku`, `fable`;
-Codex: `astra`, `sol`, `luna`; one crew each for Antigravity, Gemini,
+Codex: `astra`, `sol`, `luna`; `antigravity` and `argon` for Antigravity; one crew each for Gemini,
 Grok, Copilot, Cursor, Pi, OpenCode, Muse), with `enabled = true` on the crews whose
 agent CLI it detects and `enabled = false` on the rest, and points
 `workflow.default_crew` at the preferred family's default (`opus` on a Claude
@@ -197,7 +197,7 @@ table, nor a system-crew key: system work draws from the pools. The four
 `workflow.*_complexity_crews` pools are seeded from the detected families
 (Claude only: `haiku` / `sonnet` / `opus` / `opus`; Codex only: `luna` / `sol` /
 `sol` / `astra`; both: `haiku, luna` / `sol, sonnet` / `opus` / `opus, astra`;
-grok joins `medium`, `antigravity` or else `gemini` joins `low`; other families
+grok joins `medium`, `antigravity` or else `gemini` joins `low`, and `argon` joins `hard` when `agy` is present; other families
 leave them `[]`). A user-authored
 legacy `qa` crew remains loadable, but init never creates it. To move system
 work, set its `workflow.purpose_crews.<purpose>` pool, or edit the complexity

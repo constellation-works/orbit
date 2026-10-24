@@ -225,7 +225,7 @@ enable a crew.
 detected providers. Claude only: `haiku` / `sonnet` / `opus` / `opus`. Codex
 only: `luna` / `sol` / `sol` / `astra`. Both: `haiku, luna` / `sol, sonnet` /
 `opus` / `opus, astra`. Grok adds `grok` to `medium`; a Google CLI adds
-`antigravity` (when `agy` is present) or else `gemini` to `low`. Other
+`antigravity` (when `agy` is present) or else `gemini` to `low`; with `agy` present, `argon` also joins `hard`. Other
 providers leave the pools empty, which routes to `default_crew`. Init only
 seeds a new file; an existing config is not rewritten.
 

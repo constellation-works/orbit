@@ -54,6 +54,11 @@ pub const GEMINI_CREW_MODEL: &str = "gemini-3.8-flash";
 /// `gemini-3.8-flash` are not remapped. [ORB-11299]
 pub const ANTIGRAVITY_DEFAULT_MODEL: &str = "gemini-3.8-flash-high";
 
+/// Antigravity (`agy`) model for the built-in `argon` crew: a slug from
+/// `agy models`, verified against Antigravity CLI 1.4.7 (`agy --version`),
+/// which lists `gemini-4-argon-high` alongside the Gemini 3.8 Flash slugs.
+pub const ANTIGRAVITY_ARGON_MODEL: &str = "gemini-4-argon-high";
+
 /// Default Grok Build model (the canonical model listed by `grok models`).
 pub const GROK_DEFAULT_MODEL: &str = "grok-4.7";
 
