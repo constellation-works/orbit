@@ -777,6 +777,10 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
    every row at once. The compact layout above places its action on its own
    line and is left alone. */
 @container tasks-panel (min-width: 621px) {
+  /* Keep the crew and action edges consistent across task groups. The host
+     provenance uses this width too and truncates when its label is longer. */
+  #tasks-body { --task-action-width: 108px; }
+  #tasks-body > .row .task-quick-cell { justify-content: flex-start; }
   #tasks-body[data-quick-actions="none"] .row {
     grid-template-columns: minmax(0, 1fr) var(--task-crew-width, 120px);
   }
@@ -784,8 +788,6 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
   /* A card with no action in any row (Blocked) does the same for itself. */
   #tasks-body > .row.no-quick { grid-template-columns: minmax(0, 1fr) var(--task-crew-width, 120px); }
   #tasks-body > .row.no-quick .task-quick-cell { display: none; }
-  /* In progress, the action is the run's link, or the host it runs on. */
-  #tasks-body > .row[data-group="in-progress"] { --task-action-width: 108px; }
 }
 
 /* The list, then the Drain dock (the Auto-drain status card, Start a window,
