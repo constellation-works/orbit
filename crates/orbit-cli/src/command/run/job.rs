@@ -84,8 +84,7 @@ fn render_wait(
         "pipeline": entry.pipeline,
     });
     let payload = Payload::detail(doc, wait_lines(invoke, entry, wait_timeout).join("\n"));
-    // Match core's canonical success token and its legacy wait-envelope alias.
-    if wait_timeout || !matches!(entry.status.as_str(), "success" | "succeeded") {
+    if wait_timeout || !entry.status.is_success() {
         return Ok(payload.with_exit_code(1).into());
     }
     Ok(payload.into())

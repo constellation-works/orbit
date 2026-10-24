@@ -659,7 +659,7 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
             .runtime
             .wait_pipeline_runs(std::slice::from_ref(&hold.run_id), 1, 1, None)
             .unwrap();
-        assert_eq!(wait.results[0].status, "held");
+        assert_eq!(wait.results[0].status, orbit_core::PipelineWaitStatus::Held);
         assert!(wait.results[0].error.is_none());
         let reliability = fixture
             .runtime

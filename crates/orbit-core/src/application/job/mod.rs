@@ -60,8 +60,8 @@ pub use explore_analytics::{
 };
 pub(crate) use orphan_adoption::AdoptionAuthority;
 pub use pipeline::{
-    PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult, PipelineWorkerLogSnapshot,
-    SubmissionKind, SubmissionNotices,
+    PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult, PipelineWaitStatus,
+    PipelineWorkerLogSnapshot, SubmissionKind, SubmissionNotices,
 };
 pub(crate) use resume::PublishedResume;
 pub(crate) use run::CodebaseDeliveryScan;

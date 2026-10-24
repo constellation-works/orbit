@@ -848,7 +848,7 @@ impl OwnerLocal {
             .unwrap();
         assert_eq!(
             observed.results[0].status,
-            terminal.to_string(),
+            orbit_core::PipelineWaitStatus::from(terminal),
             "{observed:?}"
         );
         assert_eq!(

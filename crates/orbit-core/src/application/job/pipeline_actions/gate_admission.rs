@@ -10,6 +10,7 @@ use orbit_types::workflow::JobRunState;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::job::PipelineWaitStatus;
 use crate::runtime::audit::system::{
     AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
 };
@@ -191,7 +192,7 @@ pub(crate) fn gate_admission_stop(
         )?;
         return Ok(Some(gate_admission_stop_output(
             input,
-            "failed",
+            &PipelineWaitStatus::Failed,
             "withdrawn",
             &reason,
             &task_statuses,
@@ -221,7 +222,7 @@ pub(crate) fn gate_admission_stop(
         )?;
         return Ok(Some(gate_admission_stop_output(
             input,
-            "failed",
+            &PipelineWaitStatus::Failed,
             "admission_refused",
             &reason,
             &task_statuses,
@@ -297,8 +298,8 @@ fn summarize_statuses(statuses: &[(String, String)]) -> String {
 /// Canonical wait-envelope success token. Skip and stale-noop emitters, and
 /// the admission-stop `error` branch, share this so a spelling change cannot
 /// attach `error` to a successful stop.
-pub(crate) fn wait_success_status() -> String {
-    JobRunState::Success.to_string()
+pub(crate) fn wait_success_status() -> PipelineWaitStatus {
+    JobRunState::Success.into()
 }
 
 /// Build the synthetic child-run result an admission stop reports in place of a
@@ -307,7 +308,7 @@ pub(crate) fn wait_success_status() -> String {
 /// `release_reservation` has run, and `error` is what the guard quotes.
 fn gate_admission_stop_output(
     input: &Value,
-    status: &str,
+    status: &PipelineWaitStatus,
     outcome: &str,
     reason: &str,
     task_statuses: &[Value],
@@ -323,7 +324,7 @@ fn gate_admission_stop_output(
         "reason": reason,
         "task_statuses": task_statuses,
     });
-    if status != wait_success_status() {
+    if *status != wait_success_status() {
         output["error"] = Value::String(reason.to_string());
     }
     output
