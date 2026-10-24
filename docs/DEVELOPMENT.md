@@ -403,12 +403,14 @@ The test gate in `ci.yml` runs on parallel runners from one build:
 - `Test build` runs `ci-guardrails.sh --test-archive PATH`. It runs the folded
   workflow test build, then `cargo nextest archive` of the workspace's lib, bin
   and test targets under the same lint environment, so the archive costs no
-  compile. `ci-repack-nextest.py pack SOURCE DESTINATION` re-encodes the same
-  tar stream with zstd level 6 and a 512 MiB history window for transfer.
+  compile. `ci-repack-nextest.py pack SOURCE DESTINATION --parts N` re-encodes
+  the same tar stream with zstd level 6, a 512 MiB history window and every
+  core for transfer, then splits it into `DESTINATION.1` to `DESTINATION.N`
+  (`NEXTEST_ARCHIVE_PARTS` in `ci.yml`).
   This captures repeated linked executable sections beyond the native
   archive's 2 MiB window. It requires the runner's `zstd` CLI; the decoder
-  is capped at the same 512 MiB window the encoder may emit. The job uploads this
-  transfer archive as a one-day artifact, then runs
+  is capped at the same 512 MiB window the encoder may emit. The job uploads
+  each part as its own one-day artifact, then runs
   `ci-guardrails.sh --test-partitions PATH`:
   [check-nextest-partitions.py](../scripts/check-nextest-partitions.py) lists
   the archive once unpartitioned and once per `--partition count:k/N`
@@ -420,15 +422,17 @@ The test gate in `ci.yml` runs on parallel runners from one build:
 - `Test shard k/N` jobs, one per shard, start beside the build and set up
   their runner. Each waits through
   [ci-await-jobs.py](../scripts/ci-await-jobs.py) `--step` for the build's
-  `Upload nextest archive` step rather than the whole job, downloads the
-  archive, restores a native small-window encoding with
-  `ci-repack-nextest.py unpack SOURCE DESTINATION`, and runs
+  last `Upload nextest archive part N/N` step rather than the whole job,
+  downloads every part at once (one stream per artifact; a single stream ran
+  at 3–10 MB/s on some runners), restores a native small-window encoding of
+  their concatenation with
+  `ci-repack-nextest.py unpack SOURCE DESTINATION --parts N`, and runs
   `cargo nextest run --profile ci --partition count:k/N`
   from it. A build that fails before the upload fails the wait at once.
   Repacking preserves every tar byte; it never extracts members or replaces
   an existing destination. Both zstd stages must succeed before publishing
-  the destination, and corrupt input, missing zstd or encoder failure fails
-  the job. Download artifact digest verification still precedes conversion;
+  the destination, and corrupt input, a missing part, missing zstd or encoder
+  failure fails the job. Download artifact digest verification still precedes conversion;
   nextest retains responsibility for safe extraction. The original build-side
   archive remains the input to the partition proof. The transfer's larger
   window cannot be passed directly to nextest's default decoder.

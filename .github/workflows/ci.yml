@@ -39,6 +39,11 @@ env:
   # Check job's wait read this value; the literal "Test shard k/N" jobs must
   # match it (scripts/test-pr-state-workflows.py).
   NEXTEST_SHARDS: "3"
+  # The nextest transfer travels as this many artifacts, which each shard
+  # downloads in parallel. One stream from the artifact store ran at 3-10 MB/s
+  # on some runners (153 s for 448 MB); the "Upload nextest archive part k/N"
+  # steps must match it (scripts/test-pr-state-workflows.py).
+  NEXTEST_ARCHIVE_PARTS: "4"
   NEXTEST_LINUX_SHA256: a098eed56f2dd88c7fdca1e554a6b99fa1ffbd2a7a1c41b865700112981f6f52
   CARGO_DENY_VERSION: 0.19.9
   CARGO_DENY_LINUX_SHA256: f1f8eedc2a3ac297c540873f93785d4104b102c0079506b2a6b3221b7ec956af
@@ -660,18 +665,47 @@ jobs:
           ls -l "$RUNNER_TEMP/nextest-archive.tar.zst"
 
       # Repeated linked executables extend beyond nextest's default 2 MiB
-      # compression window. Use a larger window only for transfer; the
-      # original archive remains here for the partition proof below.
+      # compression window. Use a larger window only for transfer, split into
+      # NEXTEST_ARCHIVE_PARTS byte ranges; the original archive remains here
+      # for the partition proof below.
       - name: Pack nextest archive for transfer
-        run: python3 .orbit/tmp/workflow-ci/scripts/ci-repack-nextest.py pack "$RUNNER_TEMP/nextest-archive.tar.zst" "$RUNNER_TEMP/nextest-transfer.tar.zst"
+        run: python3 .orbit/tmp/workflow-ci/scripts/ci-repack-nextest.py pack "$RUNNER_TEMP/nextest-archive.tar.zst" "$RUNNER_TEMP/nextest-transfer.tar.zst" --parts "$NEXTEST_ARCHIVE_PARTS"
 
-      # The transfer is already zstd-compressed. The shards start on this
-      # step's success, so keep its name in step with their wait.
-      - name: Upload nextest archive
+      # The transfer is already zstd-compressed. The steps run in order and
+      # the shards start on the last one's success, so keep its name in step
+      # with their wait.
+      - name: Upload nextest archive part 1/4
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: nextest-archive
-          path: ${{ runner.temp }}/nextest-transfer.tar.zst
+          name: nextest-archive-1
+          path: ${{ runner.temp }}/nextest-transfer.tar.zst.1
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload nextest archive part 2/4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nextest-archive-2
+          path: ${{ runner.temp }}/nextest-transfer.tar.zst.2
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload nextest archive part 3/4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nextest-archive-3
+          path: ${{ runner.temp }}/nextest-transfer.tar.zst.3
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload nextest archive part 4/4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nextest-archive-4
+          path: ${{ runner.temp }}/nextest-transfer.tar.zst.4
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
@@ -867,18 +901,22 @@ jobs:
       - name: Await the nextest archive
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .orbit/tmp/workflow-ci/scripts/ci-await-jobs.py --job "Test build" --step "Upload nextest archive"
+        run: python3 .orbit/tmp/workflow-ci/scripts/ci-await-jobs.py --job "Test build" --step "Upload nextest archive part 4/4"
 
+      # A pattern downloads every matching artifact concurrently, one stream
+      # each, and verifies each artifact's digest.
       - name: Download nextest archive
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: nextest-archive
+          pattern: nextest-archive-*
+          merge-multiple: true
           path: ${{ runner.temp }}
 
       # Native nextest decoders cap their history below the transfer window.
-      # Re-encode the identical tar stream; leave safe extraction to nextest.
+      # Re-encode the identical tar stream from every part in order (a missing
+      # part fails); leave safe extraction to nextest.
       - name: Restore native nextest archive
-        run: python3 .orbit/tmp/workflow-ci/scripts/ci-repack-nextest.py unpack "$RUNNER_TEMP/nextest-transfer.tar.zst" "$RUNNER_TEMP/nextest-archive.tar.zst"
+        run: python3 .orbit/tmp/workflow-ci/scripts/ci-repack-nextest.py unpack "$RUNNER_TEMP/nextest-transfer.tar.zst" "$RUNNER_TEMP/nextest-archive.tar.zst" --parts "$NEXTEST_ARCHIVE_PARTS"
 
       # The archive extracts to target/ under this checkout, the path the test
       # build compiled against, so `env!("CARGO_BIN_EXE_orbit")` and fixture
