@@ -12,8 +12,10 @@
 //! dashboard) answers another selection without rescanning.
 //!
 //! Every role shares one score: each term's count per 100 units of the
-//! role's work, weighted and summed, then, above the fleet average, pulled
-//! down toward it with K = 30. Cost is never a term.
+//! role's work (or of the term's own denominator, as the pilots' warning
+//! terms are rated per 100 settled assessments), weighted and summed, then,
+//! above the fleet average, pulled down toward it with K = 30. Cost is never
+//! a term.
 
 mod attribution;
 mod candidates;
@@ -216,7 +218,12 @@ fn role_header(
     } else {
         "not_computed"
     });
-    payload["terms"] = json!(score::terms_json(spec.terms));
+    payload["terms"] = json!(score::terms_json(spec.terms, spec.term_units));
+    if let Some(header) = spec.header {
+        for (key, value) in header(facts, since) {
+            payload[key] = value;
+        }
+    }
     payload
 }
 

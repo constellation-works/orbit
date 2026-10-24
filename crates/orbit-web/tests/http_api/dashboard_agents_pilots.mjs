@@ -2,6 +2,9 @@
 // the detail column (structured stats left to the panel, the biggest
 // penalty's tasks), and the tier-calibration panel with one assessed-by-
 // observed matrix per row, its diagonal and its too-easy and too-hard counts.
+// The warning terms are rated per 100 settled assessments, provisional ones
+// read as such and add nothing, and an unmeasured missed-scope-block source
+// gets a banner instead of passing for no misses.
 import assert from 'node:assert/strict';
 import { agents, common, answer, takeAll, response, settle, part, click, selectButton, byId, notComputed, attribution } from './dashboard_agents.mjs';
 import { pilotCard, pilotDetail } from './agents_pilots_fixture.mjs';
@@ -21,7 +24,28 @@ assert.equal(byId['agents-count-pilots'].textContent, '2', 'two ranked crews; th
 assert.equal(part('ranking').querySelectorAll('tr.agents-row').length, 3);
 assert.equal(part('detail').querySelector('h3').textContent, 'luna');
 
-assert.deepEqual(part('detail').querySelectorAll('span.agents-term-weight').map(node => node.textContent), ['× +1', '× +0.25', '× −1', '× −1'], 'a fractional weight reads as configured');
+assert.deepEqual(part('detail').querySelectorAll('span.agents-term-weight').map(node => node.textContent), ['× +1', '× +0.25', '× +3', '× −1', '× −3', '× −1', '× −1'], 'a fractional weight reads as configured');
+
+const banner = part('banner');
+assert.ok(banner, 'an unmeasured missed-scope-block source has a banner');
+assert.equal(banner.querySelector('p').dataset.source, 'missed_scope_blocks');
+assert.match(banner.textContent, /Missed scope blocks unmeasured\. Unavailable: no blocked-task triage record/);
+
+const headTitle = key => part('ranking').querySelectorAll('thead th').find(th => th.textContent === key).title;
+assert.match(headTitle('Confirmed warnings'), /^Confirmed warnings per 100 settled assessments \(weight \+3\)/, 'a warning term names its own unit');
+assert.match(headTitle('F1 lift'), /per 100 assessed tasks/);
+const rowNamed = crew => part('ranking').querySelectorAll('tr.agents-row').find(row => row.dataset.row.startsWith(`${crew}\0`));
+const cell = (crew, key) => rowNamed(crew).querySelectorAll('td').find(td => td.dataset.term === key);
+assert.equal(cell('luna', 'confirmed_warnings').textContent, '40', 'eight of 20 settled assessments');
+assert.ok(!cell('luna', 'confirmed_warnings').classList.contains('agents-term-provisional'));
+assert.ok(cell('haiku', 'confirmed_warnings').classList.contains('agents-term-provisional'), 'six settled assessments are provisional');
+assert.match(cell('haiku', 'missed_scope_blocks').title, /provisional, too few settled assessments to score/);
+const breakdown = () => Object.fromEntries(part('detail').querySelectorAll('ul.agents-breakdown li').map(item => [item.dataset.term, item]));
+assert.equal(breakdown().confirmed_warnings.querySelector('span.agents-term-value').textContent, '+120');
+assert.equal(breakdown().dismissed_warnings.querySelector('small.agents-term-context').textContent, '4 of 20 settled assessments');
+const how = part('how').textContent;
+assert.match(how, /Confirmed warnings, Dismissed warnings, Missed scope blocks are rated per 100 settled assessments instead/);
+assert.match(how, /An approval after a field edit that names no document/);
 
 const panel = part('panel');
 const cards = panel.querySelectorAll('article.agents-tier-card');
@@ -47,6 +71,11 @@ assert.ok(!detail.textContent.includes('[object Object]'), 'the tier matrix is l
 const stats = Object.fromEntries(detail.querySelectorAll('dt').map((dt, at) => [dt.textContent, detail.querySelectorAll('dd')[at].textContent]));
 assert.equal(stats['Recall (%)'], '88.9', 'rounded as every agents number is');
 assert.equal(stats['Cost per assessment (USD)'], '—', 'an unpriced cost is no number');
+assert.equal(stats['Warning precision (%)'], '66.7');
+assert.equal(stats['Holds per 100 assessments'], '40');
+assert.equal(stats['Settled assessments'], '20');
+assert.equal(stats['Excluded or pending assessments'], '5');
+assert.equal(stats['Missed scope blocks'], '0');
 assert.equal(detail.querySelector('section.agents-penalty').dataset.term, 'lock_wait_hours');
 assert.deepEqual(detail.querySelectorAll('li.agents-task').map(item => item.dataset.taskId), ['ORB-41'], 'the wait is listed under its holder');
 
@@ -57,5 +86,7 @@ assert.equal(requests[0].url.searchParams.get('model'), 'claude-haiku-5-5');
 requests[0].resolve(response(pilotDetail('haiku', 'claude-haiku-5-5')));
 await settle();
 assert.equal(part('detail').querySelector('h3').textContent, 'haiku');
-assert.equal(part('detail').querySelector('section.agents-penalty').dataset.term, 'costly_misses');
+assert.equal(part('detail').querySelector('section.agents-penalty').dataset.term, 'costly_misses', 'a provisional missed scope block is no penalty');
+assert.equal(breakdown().missed_scope_blocks.querySelector('span.agents-term-value').textContent, '+0');
+assert.match(breakdown().missed_scope_blocks.querySelector('small.agents-term-context').textContent, /1 of 6 settled assessments · provisional, not scored/);
 console.log('dashboard pilots ok');

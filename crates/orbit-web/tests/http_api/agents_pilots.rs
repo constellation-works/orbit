@@ -14,8 +14,8 @@ use serde_json::{Value, json};
 
 use super::agents::implementation_run;
 use super::codebase::{
-    add, add_with_status, append_event, init_repo, land, pilot_receipt, pilot_run, reserve,
-    reserve_request, seed_pilot_run,
+    add, add_with_status, append_event, append_row, init_repo, land, pilot_receipt,
+    pilot_receipt_with, pilot_run, reserve, reserve_request, seed_pilot_run,
 };
 use super::support::{Fixture, isolated, json_ok};
 
@@ -912,6 +912,360 @@ fn pilots_charge_wasted_reservations_costly_misses_and_calibrate_tiers() {
                 json!([{"crew": "pilot-a", "model": "model-a", "problems": 2}]),
                 "{strip}"
             );
+        },
+    );
+}
+
+/// Held assessments settle from task history alone, attributed to the pilot
+/// run their receipt names: a description edit before approval confirms the
+/// warning, an unedited approval delivered clean dismisses it, and an
+/// approval after only a bare-note field edit is excluded. Advisory findings
+/// never hold, a superseded assessment gives way to the next one, and the
+/// warning terms are rated per 100 settled assessments, provisional below
+/// ten. With no block-triage record in the window the missed-scope-block
+/// source reads as unavailable; a decision triage after a clean assessment is
+/// then a miss.
+#[test]
+fn pilots_settle_held_warnings_from_history() {
+    isolated(
+        "agents_pilots::pilots_settle_held_warnings_from_history",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let run = "jrun-pilot-warden";
+            seed_pilot_run(
+                &fixture,
+                run,
+                "warden",
+                "warden-model",
+                now - Duration::minutes(5),
+                now,
+            );
+            let proposed =
+                |title: &str| add_with_status(&fixture, title, &[], vec![], TaskStatus::Proposed);
+            // Every task exists before its records: the receipt and history
+            // rows follow its creation.
+            let tasks: Vec<String> = [
+                "confirmed",
+                "dismissed",
+                "bare note",
+                "advisory",
+                "superseded",
+                "pending",
+            ]
+            .into_iter()
+            .map(proposed)
+            .collect();
+            let [confirmed, dismissed, bare, advisory, superseded, pending] =
+                <[String; 6]>::try_from(tasks).unwrap();
+            let base = Utc::now() + Duration::minutes(1);
+            let at = |seconds: i64| base + Duration::seconds(seconds);
+            let held = json!({"utility_warnings": [
+                {"text": "criterion 2 contradicts the description", "holds_promotion": true},
+                {"text": "an advisory note", "holds_promotion": false},
+            ]});
+            let receipt = |task: &str, seconds: i64, findings: &Value| {
+                pilot_receipt_with(
+                    &fixture,
+                    task,
+                    at(seconds),
+                    Some(run),
+                    &[],
+                    &["file:src/pilot.rs"],
+                    findings.clone(),
+                );
+            };
+            let row_at = |task: &str,
+                          seconds: i64,
+                          by: &str,
+                          event: &str,
+                          note: Option<&str>,
+                          to: Option<TaskStatus>| {
+                append_row(
+                    &fixture,
+                    task,
+                    at(seconds),
+                    by,
+                    event,
+                    note.map(str::to_string),
+                    to,
+                    None,
+                );
+            };
+            let approve = |task: &str, seconds: i64| {
+                row_at(
+                    task,
+                    seconds,
+                    "human:operator",
+                    "proposal_approved",
+                    None,
+                    Some(TaskStatus::Backlog),
+                );
+            };
+            let deliver = |task: &str, seconds: i64| {
+                row_at(
+                    task,
+                    seconds,
+                    "system",
+                    "started",
+                    None,
+                    Some(TaskStatus::InProgress),
+                );
+                row_at(
+                    task,
+                    seconds + 1,
+                    "system",
+                    "landing_completed",
+                    None,
+                    Some(TaskStatus::Done),
+                );
+            };
+
+            // Confirmed: the filer rewrites the description, then approves.
+            receipt(&confirmed, 1, &held);
+            row_at(
+                &confirmed,
+                2,
+                "task-pilot",
+                "updated",
+                Some("task fields updated: description"),
+                None,
+            );
+            row_at(
+                &confirmed,
+                3,
+                "claude",
+                "updated",
+                Some("task fields updated: description, plan"),
+                None,
+            );
+            approve(&confirmed, 4);
+            // Dismissed: approved unedited, then delivered with no block.
+            receipt(
+                &dismissed,
+                1,
+                &json!({"surface_warnings": ["legacy plain warning"]}),
+            );
+            row_at(
+                &dismissed,
+                2,
+                "system",
+                "updated",
+                Some("task fields updated"),
+                None,
+            );
+            approve(&dismissed, 3);
+            deliver(&dismissed, 4);
+            // Excluded: a field edit naming no document, then approval.
+            receipt(&bare, 1, &held);
+            row_at(
+                &bare,
+                2,
+                "claude",
+                "updated",
+                Some("task fields updated"),
+                None,
+            );
+            approve(&bare, 3);
+            deliver(&bare, 4);
+            // Advisory findings only: clean, and settled once it is done.
+            receipt(
+                &advisory,
+                1,
+                &json!({"utility_warnings": [{"text": "advisory", "holds_promotion": false}]}),
+            );
+            approve(&advisory, 2);
+            deliver(&advisory, 3);
+            // The first assessment is superseded with no edit between; the
+            // second is confirmed when its unedited approval blocks.
+            receipt(&superseded, 1, &held);
+            receipt(&superseded, 2, &held);
+            approve(&superseded, 3);
+            row_at(
+                &superseded,
+                4,
+                "system",
+                "started",
+                None,
+                Some(TaskStatus::InProgress),
+            );
+            row_at(
+                &superseded,
+                5,
+                "system",
+                "blocked",
+                Some("blocked by agent"),
+                Some(TaskStatus::Blocked),
+            );
+            // Pending: still proposed.
+            receipt(&pending, 1, &held);
+
+            let card = scorecard(&fixture, "30d");
+            assert_eq!(card["status"], "ok", "{card}");
+            assert_eq!(card["warning_min_support"], 10);
+            let source = &card["sources"]["missed_scope_blocks"];
+            assert_eq!(
+                (&source["available"], &source["triage_records"]),
+                (&json!(false), &json!(0)),
+                "with no block-triage record the source is reported unavailable: {card}"
+            );
+            for key in [
+                "confirmed_warnings",
+                "dismissed_warnings",
+                "missed_scope_blocks",
+            ] {
+                let term = card["terms"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|term| term["key"] == key)
+                    .unwrap_or_else(|| panic!("{key}: {card}"));
+                assert_eq!(term["unit"], "settled assessments", "{term}");
+            }
+            let warden = row(&card, "warden", "warden-model");
+            assert_eq!(warden["units"], 0, "no graded done task: {warden}");
+            assert_eq!(
+                (
+                    &warden["counts"]["confirmed_warnings"],
+                    &warden["counts"]["dismissed_warnings"],
+                    &warden["counts"]["missed_scope_blocks"],
+                ),
+                (&json!(2), &json!(1), &json!(0)),
+                "the description edit and the blocked delivery confirm; the clean delivery dismisses: {warden}"
+            );
+            assert_eq!(
+                stat(warden, "settled_assessments"),
+                4,
+                "confirmed, dismissed, superseded's successor and the advisory one"
+            );
+            assert_eq!(
+                stat(warden, "excluded_assessments"),
+                3,
+                "bare note, superseded and pending"
+            );
+            assert_eq!(stat(warden, "warning_precision_percent"), 66.67);
+            assert_eq!(
+                stat(warden, "holds_per_100_assessments"),
+                85.71,
+                "six of seven held"
+            );
+            assert_eq!(stat(warden, "missed_scope_block_count"), 0);
+            assert_eq!(warden["term_units"]["confirmed_warnings"], 4);
+            assert_eq!(
+                warden["per_100"]["confirmed_warnings"], 50,
+                "per 100 settled assessments"
+            );
+            assert_eq!(
+                warden["provisional_terms"],
+                json!([
+                    "confirmed_warnings",
+                    "dismissed_warnings",
+                    "missed_scope_blocks"
+                ]),
+                "four settled assessments are below the minimum of ten"
+            );
+            assert_eq!(
+                warden["raw"], 0,
+                "provisional terms stay out of the score: {warden}"
+            );
+
+            let facts = fixture.runtime.agent_scan().unwrap();
+            let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
+            let detail = agent_detail(
+                &facts,
+                AgentRole::Pilots,
+                &query,
+                "warden",
+                Some("warden-model"),
+                StdDuration::ZERO,
+            )
+            .unwrap();
+            let confirming = &term(&detail, "confirmed_warnings")["tasks"];
+            let mut ids: Vec<&str> = confirming
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|task| task["task_id"].as_str().unwrap())
+                .collect();
+            ids.sort_unstable();
+            let mut expected = vec![confirmed.as_str(), superseded.as_str()];
+            expected.sort_unstable();
+            assert_eq!(ids, expected, "{confirming}");
+            let edit = confirming
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|task| task["task_id"] == confirmed)
+                .unwrap();
+            assert_eq!(
+                edit["occurrences"][0]["detail"],
+                "held on utility_warnings; description edited by claude"
+            );
+            assert_eq!(edit["occurrences"][0]["run_id"], run);
+            assert_eq!(term(&detail, "confirmed_warnings")["provisional"], true);
+            assert_eq!(
+                term(&detail, "dismissed_warnings")["tasks"][0]["task_id"],
+                dismissed
+            );
+
+            // A decision triage after a clean assessment is a miss, and the
+            // source is then available. Ten settled assessments score.
+            let missed = proposed("missed");
+            let clean: Vec<String> = (0..5).map(|n| proposed(&format!("clean {n}"))).collect();
+            receipt(&missed, 10, &json!({}));
+            approve(&missed, 11);
+            row_at(
+                &missed,
+                12,
+                "system",
+                "started",
+                None,
+                Some(TaskStatus::InProgress),
+            );
+            row_at(
+                &missed,
+                13,
+                "system",
+                "blocked",
+                Some("blocked by agent"),
+                Some(TaskStatus::Blocked),
+            );
+            row_at(
+                &missed,
+                14,
+                "system",
+                "blocked_task_triaged",
+                Some(&format!(
+                    "disposition=decision outcome=proposed episode={}",
+                    at(13).to_rfc3339()
+                )),
+                None,
+            );
+            for task in &clean {
+                receipt(task, 10, &json!({}));
+                approve(task, 11);
+                deliver(task, 12);
+            }
+            let card = scorecard(&fixture, "30d");
+            assert_eq!(
+                card["sources"]["missed_scope_blocks"]["available"], true,
+                "{card}"
+            );
+            let warden = row(&card, "warden", "warden-model");
+            assert_eq!(warden["counts"]["missed_scope_blocks"], 1, "{warden}");
+            assert_eq!(stat(warden, "settled_assessments"), 10);
+            assert_eq!(warden["provisional_terms"], json!([]));
+            assert_eq!(
+                warden["raw"], 20,
+                "3 × 20 confirmed − 1 × 10 dismissed − 3 × 10 missed per 100 settled: {warden}"
+            );
+
+            let server = fixture.server(false);
+            let http = json_ok(server.get(&format!(
+                "/api/agents/pilots/scorecard?{WS}&window=30d&min_support=1"
+            )));
+            assert_eq!(http["rows"], card["rows"]);
+            assert_eq!(http["sources"], card["sources"]);
         },
     );
 }

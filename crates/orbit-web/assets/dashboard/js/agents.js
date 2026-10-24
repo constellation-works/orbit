@@ -301,7 +301,20 @@ function roleHref(forRole) {
   return `#analytics/agents/${forRole}?window=${encodeURIComponent(getWindow())}`;
 }
 
+// A term rated per 100 of its own unit (the pilots' warning terms, per 100
+// settled assessments) names that unit; every other term uses the role's.
+function termUnit(term) {
+  return term.unit || scorecard.unit;
+}
+
+// A term below its own minimum support on the row: rated and shown, but
+// left out of the score.
+function provisionalTerm(term, row) {
+  return Array.isArray(row.provisional_terms) && row.provisional_terms.includes(term.key);
+}
+
 function contribution(term, row) {
+  if (provisionalTerm(term, row)) return 0;
   const rate = row.per_100 ? row.per_100[term.key] : null;
   const expected = row.expected && typeof row.expected[term.key] === "number" ? row.expected[term.key] * 100 / Math.max(1, row.units) : 0;
   return typeof rate === "number" ? term.weight * (rate - expected) : null;
@@ -449,7 +462,7 @@ function rankingNode(ranking) {
     ...terms().map((term) => el("th", {
       class: "agents-num",
       text: term.label,
-      title: `${term.label} per 100 ${scorecard.unit} (weight ${weight(term.weight)}): ${term.definition}`,
+      title: `${term.label} per 100 ${termUnit(term)} (weight ${weight(term.weight)}): ${term.definition}`,
     })),
   ]);
   const body = ranking.map((row) => {
@@ -472,10 +485,12 @@ function rankingNode(ranking) {
     const support = el("td", { class: "agents-num agents-support" }, [el("span", { text: String(row.units) })]);
     if (row.below_support) support.append(el("span", { class: "agents-below", text: `below ${scorecard.min_support}` }));
     const cells = terms().map((term) => {
+      const provisional = provisionalTerm(term, row);
       const td = el("td", {
-        class: "agents-num",
+        class: provisional ? "agents-num agents-term-provisional" : "agents-num",
         text: number(row.per_100 && row.per_100[term.key]),
-        title: `${term.label}: ${number(row.counts && row.counts[term.key])} (${number(row.per_100 && row.per_100[term.key])} per 100 ${scorecard.unit})`,
+        title: `${term.label}: ${number(row.counts && row.counts[term.key])} (${number(row.per_100 && row.per_100[term.key])} per 100 ${termUnit(term)})`
+          + (provisional ? `; provisional, too few ${termUnit(term)} to score` : ""),
       });
       td.dataset.term = term.key;
       return td;
@@ -543,11 +558,20 @@ function detailNode(row) {
     if (row.expected && typeof row.expected[term.key] === "number") {
       label.append(el("small", { class: "agents-term-context", text: `${number(row.counts[term.key])} actual · ${number(row.expected[term.key])} expected` }));
     }
+    const ownUnits = row.term_units && typeof row.term_units[term.key] === "number" ? row.term_units[term.key] : null;
+    if (ownUnits != null) {
+      const provisional = provisionalTerm(term, row);
+      const context = el("small", {
+        class: provisional ? "agents-term-context agents-term-provisional" : "agents-term-context",
+        text: `${number(row.counts && row.counts[term.key])} of ${plural(ownUnits, termUnit(term).replace(/s$/, ""), termUnit(term))}${provisional ? " · provisional, not scored" : ""}`,
+      });
+      label.append(context);
+    }
     const item = el("li", {}, [
       label,
       el("span", { class: "agents-term-weight", text: `× ${weight(term.weight)}`, title: "weight" }),
       el("span", { class: "agents-bar agents-bar-centered", "aria-hidden": "true" }, [fill, el("span", { class: "agents-bar-zero", style: { left: "50%" } })]),
-      el("span", { class: "agents-term-value", text: signed(value), title: `${number(row.counts && row.counts[term.key])} counted, ${number(row.per_100 && row.per_100[term.key])} per 100 ${scorecard.unit}` }),
+      el("span", { class: "agents-term-value", text: signed(value), title: `${number(row.counts && row.counts[term.key])} counted, ${number(row.per_100 && row.per_100[term.key])} per 100 ${termUnit(term)}` }),
     ]);
     item.dataset.term = term.key;
     breakdown.append(item);
@@ -669,6 +693,7 @@ function howNode() {
     el("p", { text: role === "implementers"
       ? `The raw score starts at 100, then adds weight × (actual − expected) per 100 ${unit} for every term. Expected counts use the fleet's rates on the row's tier mix. Tiers with fewer than 30 fleet tasks pool with the largest tier. Landings count one each at every complexity.`
       : `Each term's count becomes a rate per 100 ${unit}. The raw score is the sum of weight × rate over the terms; positive weights are credit and negative weights are problems.` }),
+    ...ownUnitText(),
     el("p", { class: "agents-formula", text: `score = min(raw, (${unit} × raw + ${SMOOTHING} × fleet average) ÷ (${unit} + ${SMOOTHING}))` }),
     el("p", { text: `A row above the fleet average, the mean raw score weighted by ${unit}, is pulled down toward it, the more the less work backs it; a row below keeps its raw score. So a small row never rises on the fleet's evidence, and at an equal raw score the row with more ${unit} ranks higher. Rows with fewer than ${scorecard.min_support} ${unit} are greyed, unranked and listed last. Every problem counts against one role only, and cost and time are shown, never scored.` }),
     ...(panel && Array.isArray(panel.how) ? panel.how.map((text) => el("p", { text })) : []),
@@ -678,6 +703,18 @@ function howNode() {
   details.dataset.key = "how";
   details.dataset.hash = JSON.stringify([role, scorecard.terms, unit, scorecard.min_support]);
   return details;
+}
+
+// Terms rated per 100 of their own unit, grouped by that unit.
+function ownUnitText() {
+  const byUnit = new Map();
+  for (const term of terms()) {
+    if (!term.unit) continue;
+    byUnit.set(term.unit, [...(byUnit.get(term.unit) || []), term.label]);
+  }
+  return [...byUnit].map(([unit, labels]) => el("p", {
+    text: `${labels.join(", ")} ${labels.length === 1 ? "is" : "are"} rated per 100 ${unit} instead. On a row with too few ${unit} ${labels.length === 1 ? "it is" : "they are"} provisional: shown in italics and left out of the score.`,
+  }));
 }
 
 function rolePanelNode(panel) {

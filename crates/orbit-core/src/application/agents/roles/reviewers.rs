@@ -27,7 +27,9 @@ use crate::application::task::{FindingSeverity, FindingVerdict};
 pub(super) const ROLE: RoleSpec = RoleSpec {
     unit: "settled reviews",
     terms: TERMS,
+    term_units: &[],
     rows: Some(rows),
+    header: None,
 };
 
 /// How long after a review a `review_missed` regression is still expected;
@@ -335,6 +337,7 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
         .map(|((key, row), peers)| {
             let stats = stats(&row, peers);
             RowInput {
+                denominators: BTreeMap::new(),
                 crew: key.0,
                 model: key.1,
                 units: row.units,
