@@ -403,6 +403,25 @@ certifies the repaired head as both the original head and publication lease.
 - `only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair`
 - `an_owed_hosted_check_must_pass_before_the_owner_merges`
 
+### `handoff_landing::handoff_landing_contracts_3`
+
+- `owner_landing_waits_for_exact_required_checks_before_one_verified_merge`
+- `owner_landing_waits_for_required_checks_the_head_has_not_reported`
+- `owner_landing_pending_evidence_never_extends_refusal_or_merge_authority`
+
+### `handoff_landing::handoff_landing_contracts_4`
+
+- `a_cached_branch_update_requires_a_fresh_landing_base`
+- `a_required_aggregate_after_recovery_is_classified_without_waiting`: labelled rows `after rerun` (retired `a_required_aggregate_after_rerun_is_classified_without_waiting`) and `after branch update` (retired `a_required_aggregate_after_branch_update_is_classified_without_waiting`)
+- `a_transient_rerun_waits_for_queued_replacement_jobs`
+- `owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evidence`
+
+### `handoff_landing::handoff_landing_contracts_5`
+
+- `adopted_provider_head_accepts_readable_empty_policy`
+- `adopted_provider_head_accepts_authentic_legacy_success`
+- `adopted_provider_head_refuses_unavailable_or_unsatisfied_policy`
+
 ### `forge_hold::forge_hold_contracts_1`
 
 - `a_forge_wrapper_refuses_a_non_local_origin_before_pushing`
