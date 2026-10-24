@@ -500,8 +500,8 @@ contextDraftTask.context_files = [
 renderTasks(currentTasks, contextDraftContext);
 contextDraftDetail = paneBody.querySelector('#detail-ORB-37');
 const contextGroups = contextDraftDetail.querySelectorAll('.cf-group');
-assert.equal(contextGroups.length, 2, 'groups selectors by crate and top-level root');
-assert.deepEqual(contextGroups.map(g => g.querySelector('.cf-group-name').textContent), ['orbit-core', 'plugin'], 'group heads name each root');
+assert.equal(contextGroups.length, 2, 'groups selectors by folder');
+assert.deepEqual(contextGroups.map(g => g.querySelector('.cf-group-name').textContent), ['orbit-core', 'skills'], 'group heads name each folder');
 const contextRows = contextDraftDetail.querySelectorAll('.cf-row');
 assert.equal(contextRows.length, 3, 'renders 3 context files');
 assert.deepEqual(contextRows.map(li => li.querySelector('.selector-base').textContent), ['recovery.md', 'mod.rs', 'recovery.md'], 'grouped rows list basenames without duplicate disambiguation');

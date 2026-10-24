@@ -1831,7 +1831,7 @@ function cfSetCollapsed(key, collapsed) {
 function buildFileList(task) {
   const wrap = el("div", { class: "context-files-view" });
   const summary = el("span", { class: "cf-summary" });
-  const groupedBtn = el("button", { class: "cf-toggle-btn", type: "button", text: "By crate" });
+  const groupedBtn = el("button", { class: "cf-toggle-btn", type: "button", text: "By folder" });
   const flatBtn = el("button", { class: "cf-toggle-btn", type: "button", text: "Flat paths" });
   groupedBtn.setAttribute("aria-pressed", "true");
   flatBtn.setAttribute("aria-pressed", "false");
@@ -1896,6 +1896,17 @@ function formatDirectory(dirPath) {
   return span;
 }
 
+function cfPathForSelector(p) {
+  let target = p.target || "";
+  if (p.kind === "symbol") {
+    let gt = target.split("#")[0];
+    const ci = gt.indexOf("::");
+    if (ci > 0) gt = gt.slice(0, ci);
+    target = gt;
+  }
+  return target;
+}
+
 function cfGroupFor(p) {
   let target = p.target || "";
   if (p.kind === "symbol") {
@@ -1906,42 +1917,94 @@ function cfGroupFor(p) {
     return { ...g, displayBase: target };
   }
   const segs = target.split("/").filter(Boolean);
-  if (segs.length >= 2 && segs[0] === "crates") {
+  if (segs.length >= 3) {
     const rest = segs.slice(2).join("/");
     const idx = rest.lastIndexOf("/");
-    return { key: `crates/${segs[1]}`, prefix: "crates/", name: segs[1], isCrate: true, subDir: idx >= 0 ? `${rest.slice(0, idx + 1)}` : "", displayBase: p.base || segs[segs.length - 1] || target };
+    return { key: `${segs[0]}/${segs[1]}`, prefix: `${segs[0]}/`, name: segs[1], subDir: idx >= 0 ? `${rest.slice(0, idx + 1)}` : "", displayBase: p.base || segs[segs.length - 1] || target };
   }
   if (segs.length >= 2) {
     const rest = segs.slice(1).join("/");
     const idx = rest.lastIndexOf("/");
-    return { key: segs[0], prefix: "", name: segs[0], isCrate: false, subDir: idx >= 0 ? `${rest.slice(0, idx + 1)}` : "", displayBase: p.base || segs[segs.length - 1] || target };
+    return { key: segs[0], prefix: "", name: segs[0], subDir: idx >= 0 ? `${rest.slice(0, idx + 1)}` : "", displayBase: p.base || segs[segs.length - 1] || target };
   }
-  return { key: "root", prefix: "", name: "root", isCrate: false, subDir: "", displayBase: p.base || target };
+  return { key: "root", prefix: "", name: "root", subDir: "", displayBase: p.base || target };
 }
 
 function cfGroups(entries) {
+  const normalized = entries.map((e) => {
+    const entry = typeof e === "string" ? { selector: e, p: parseContextSelector(e), matches: [] } : e;
+    const target = cfPathForSelector(entry.p);
+    const segs = target.split("/").filter(Boolean);
+    const isDirect = entry.p.kind === "dir" ? segs.length <= 1 : segs.length <= 2;
+    const topKey = segs.length <= 1 ? "root" : segs[0];
+    return { entry, target, segs, isDirect, topKey };
+  });
+
+  const byTop = new Map();
+  for (const item of normalized) {
+    let list = byTop.get(item.topKey);
+    if (!list) { list = []; byTop.set(item.topKey, list); }
+    list.push(item);
+  }
+
   const groups = [];
   const byKey = new Map();
-  for (const entry of entries) {
-    const g = cfGroupFor(entry.p);
-    entry.groupKey = g.key; entry.subDir = g.subDir; entry.displayBase = g.displayBase;
-    let group = byKey.get(g.key);
-    if (!group) { group = { ...g, dirs: new Map() }; byKey.set(g.key, group); groups.push(group); }
-    if (!group.dirs.has(g.subDir)) group.dirs.set(g.subDir, []);
-    group.dirs.get(g.subDir).push(entry);
+
+  for (const [topKey, items] of byTop) {
+    const shouldSplit = topKey !== "root" && !items.some((it) => it.isDirect);
+    for (const it of items) {
+      const { entry, segs, target } = it;
+      let g;
+      if (topKey === "root") {
+        g = { key: "root", prefix: "", name: "root", subDir: "", displayBase: entry.p.kind === "symbol" ? entry.p.target : (entry.p.base || target) };
+      } else if (shouldSplit) {
+        const child = segs[1] || "";
+        const rest = segs.slice(2).join("/");
+        const idx = rest.lastIndexOf("/");
+        g = {
+          key: `${topKey}/${child}`,
+          prefix: `${topKey}/`,
+          name: child,
+          subDir: idx >= 0 ? `${rest.slice(0, idx + 1)}` : "",
+          displayBase: entry.p.kind === "symbol" ? entry.p.target : (entry.p.base || segs[segs.length - 1] || target),
+        };
+      } else {
+        const rest = segs.slice(1).join("/");
+        const idx = rest.lastIndexOf("/");
+        g = {
+          key: topKey,
+          prefix: "",
+          name: topKey,
+          subDir: idx >= 0 ? `${rest.slice(0, idx + 1)}` : "",
+          displayBase: entry.p.kind === "symbol" ? entry.p.target : (entry.p.base || segs[segs.length - 1] || target),
+        };
+      }
+      entry.groupKey = g.key;
+      entry.subDir = g.subDir;
+      entry.displayBase = g.displayBase;
+      let group = byKey.get(g.key);
+      if (!group) {
+        group = { ...g, dirs: new Map() };
+        byKey.set(g.key, group);
+        groups.push(group);
+      }
+      if (!group.dirs.has(g.subDir)) group.dirs.set(g.subDir, []);
+      group.dirs.get(g.subDir).push(entry);
+    }
   }
+
   for (const g of groups) g.count = [...g.dirs.values()].reduce((n, a) => n + a.length, 0);
   return groups;
 }
 
 function cfSummaryText(total, groups) {
-  const crates = groups.filter((g) => g.isCrate);
-  const others = groups.filter((g) => !g.isCrate);
   const fileLabel = `${total} file${total === 1 ? "" : "s"}`;
-  const parts = [];
-  if (crates.length) parts.push(`${crates.length} crate${crates.length === 1 ? "" : "s"}`);
-  for (const g of others) parts.push(g.name);
-  return parts.length ? `${fileLabel} in ${parts.join(" and ")}` : fileLabel;
+  if (!groups || groups.length === 0) return fileLabel;
+  if (groups.length <= 3) {
+    const parts = groups.map((g) => g.key);
+    return `${fileLabel} in ${parts.join(" and ")}`;
+  }
+  return `${fileLabel} in ${groups.length} folders`;
 }
 
 function cfHolderLabel(holder) { return `${holder.id} · ${String(holder.status || "").replaceAll("-", " ")}`; }
