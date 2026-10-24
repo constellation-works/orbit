@@ -554,13 +554,25 @@ mod unix {
         }
     }
 
+    /// Register stdin with Tokio's reactor.
+    ///
+    /// # Safety
+    /// File descriptor 0 must stay open and refer to the same file while the
+    /// returned `AsyncFd` is alive.
+    unsafe fn register_stdin() -> std::io::Result<AsyncFd<StdinFd>> {
+        // SAFETY: forwarded to this function's caller.
+        unsafe { Ok(AsyncFd::register(StdinFd)?) }
+    }
+
     pub(super) struct NonBlockingStdin(AsyncFd<StdinFd>);
 
     impl NonBlockingStdin {
         /// `None` when stdin cannot be polled (a regular file, `/dev/null`).
         pub(super) fn new() -> Option<Self> {
             set_nonblocking(true)?;
-            match AsyncFd::new(StdinFd) {
+            // SAFETY: the input session keeps process stdin open and unchanged;
+            // `pump` wraps its borrowed `File` in `ManuallyDrop` and only reads it.
+            match unsafe { register_stdin() } {
                 Ok(fd) => Some(Self(fd)),
                 Err(_) => {
                     set_nonblocking(false);
@@ -580,7 +592,9 @@ mod unix {
             return false;
         };
         let _entered = runtime.enter();
-        AsyncFd::new(StdinFd).is_ok()
+        // SAFETY: fd 0 remains open and unchanged during this synchronous probe;
+        // the temporary `AsyncFd` is dropped before the runtime.
+        unsafe { register_stdin() }.is_ok()
     }
 
     fn set_nonblocking(enabled: bool) -> Option<()> {
