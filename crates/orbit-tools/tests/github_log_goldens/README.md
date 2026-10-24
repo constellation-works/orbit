@@ -55,8 +55,10 @@ are conservatively omitted until the next context reset.
 
 Registered line-window fixtures exercise the same introducers on both primary
 and fallback job logs, with full-log controls and step-plus-line selections.
-Discarded lines still contribute bounded original token context. Values whose
-introducer falls outside the selection are masked with asterisks before excerpt
+Discarded lines still contribute bounded original payload token context. Runner
+timestamps and job/step columns are excluded from that context and remain
+readable when a credential value on the following selected line is masked. Values
+whose introducer falls outside the selection are masked with asterisks before excerpt
 retention, preserving raw selected byte/line counts and source coordinates.
 EOF, collector batch boundaries, overlong context, capped displays and ordinary
 line/step selections are covered without live GitHub access or authentication.

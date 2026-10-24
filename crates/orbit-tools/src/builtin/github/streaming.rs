@@ -161,7 +161,9 @@ pub struct StreamedLogCollector {
     selection: Option<LogSelection>,
     window_tokens: WindowBoundaryTokens,
     line_tokens: WindowBoundaryTokens,
-    source_line_offset: usize,
+    /// Coordinates in the payload-only stream used by `line_tokens`.
+    /// Display selection and accounting continue to use original source bytes.
+    payload_line_offset: usize,
     selected_segment_start: Option<usize>,
     scoped_line: Vec<u8>,
     candidate_byte_offset: usize,
@@ -231,7 +233,7 @@ impl StreamedLogCollector {
             selection: None,
             window_tokens: WindowBoundaryTokens::default(),
             line_tokens: WindowBoundaryTokens::default(),
-            source_line_offset: 0,
+            payload_line_offset: 0,
             selected_segment_start: None,
             scoped_line: Vec::new(),
             candidate_byte_offset: 0,
@@ -331,18 +333,20 @@ impl StreamedLogCollector {
         let selected = in_step && in_window;
         // Observe every original line before discarding it. A selected segment
         // can start after a credential introducer, including across a step gap.
-        let start = self.source_line_offset;
-        self.source_line_offset = start.saturating_add(line.len());
+        let payload = runner_log_payload(line);
+        let payload_start = line.len() - payload.len();
+        let start = self.payload_line_offset;
+        self.payload_line_offset = start.saturating_add(payload.len());
         let from = if selected {
             *self.selected_segment_start.get_or_insert(start)
         } else {
             self.selected_segment_start = None;
             usize::MAX
         };
-        self.line_tokens.push(line, start, from, None);
+        self.line_tokens.push(payload, start, from, None);
         // A final line need not end in whitespace.
         self.line_tokens
-            .finish_token(self.source_line_offset, from, None);
+            .finish_token(self.payload_line_offset, from, None);
         if !selected {
             // A byte window combined with a line window counts candidate
             // bytes only for lines inside the line window.
@@ -358,10 +362,10 @@ impl StreamedLogCollector {
             .line_tokens
             .omit_prefix_until
             .saturating_sub(start)
-            .min(line.len());
+            .min(payload.len());
         let mut display = std::borrow::Cow::Borrowed(line);
         if mask_until > 0 {
-            for byte in &mut display.to_mut()[..mask_until] {
+            for byte in &mut display.to_mut()[payload_start..payload_start + mask_until] {
                 if !byte.is_ascii_whitespace() {
                     *byte = b'*';
                 }
@@ -943,6 +947,32 @@ impl CheckoutEvidenceCollector {
         } else {
             self.display_truncated = true;
         }
+    }
+}
+
+/// Exclude runner metadata from credential context, retaining the original
+/// payload bytes (including invalid UTF-8 and line endings) for byte accounting.
+fn runner_log_payload(line: &[u8]) -> &[u8] {
+    let line = line.strip_prefix(b"\xef\xbb\xbf").unwrap_or(line);
+    let without_timestamp = |bytes: &[u8]| {
+        bytes
+            .iter()
+            .position(|byte| *byte == b' ')
+            .filter(|&space| bytes[..space].contains(&b'T') && bytes[..space].ends_with(b"Z"))
+    };
+    // Raw job-API lines may contain tabs in their payload. Recognize their
+    // timestamp before interpreting tabs as job/step column separators.
+    if let Some(space) = without_timestamp(line) {
+        return &line[space + 1..];
+    }
+    let mut columns = line.splitn(3, |byte| *byte == b'\t');
+    let rest = match (columns.next(), columns.next(), columns.next()) {
+        (Some(_job), Some(_step), Some(rest)) => rest,
+        _ => line,
+    };
+    match without_timestamp(rest) {
+        Some(space) => &rest[space + 1..],
+        None => rest,
     }
 }
 
