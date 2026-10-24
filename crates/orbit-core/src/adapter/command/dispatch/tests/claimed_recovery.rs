@@ -176,6 +176,7 @@ impl Leaf {
                 title: "Claimed work".into(),
                 complexity: None,
                 crew: None,
+                crew_source: None,
                 context_files: vec![],
                 resume_candidate: None,
             },

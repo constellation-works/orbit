@@ -2,13 +2,13 @@
 type: design
 summary: "Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not"
 tags: [usage-pressure, crews, crew-pools, provider-limits, admission]
-last_updated: 2026-10-23
-last_validated: 2026-10-23
+last_updated: 2026-10-24
+last_validated: 2026-10-24
 ---
 
 # Scope: usage-pressure crew selection
 
-Status: phase 1 pressure view and phase 2 task draws ([`workflow.crew_selection`](../../CONFIG.md#usage-pressure-draws)) implemented; phases 3–4 remain proposed.
+Status: phase 1 pressure view, phase 2 task draws and phase 4 pull drains ([`workflow.crew_selection`](../../CONFIG.md#usage-pressure-draws)) implemented; phase 3 remains proposed.
 Bearing: [provider usage limits](../../CONFIG.md#provider-usage-limits) already record every
 window a provider reports ([ORB-14695] failures, [ORB-14696] post-run readings, [ORB-17644] Muse)
 and gate crews that reach a threshold ([ORB-14697]). Weighted pools
@@ -153,8 +153,10 @@ Readings stay per host.
 
 - **Changing pool membership or complexity routing.** Pressure never sends a hard task to a
   crew outside the hard pool.
-- **Admission order.** Pressure does not change which ready task is admitted next. See Open
-  questions.
+- **Owner-local admission order.** Pressure does not change which ready task an owner admits
+  next locally. Pull offer order is the one exception (phase 4): a follower's reported pressure
+  is the lowest ordering key for its offers, below band, priority, expiry and census affinity.
+  See Open questions.
 - **Concurrency.** Admitting more work while pressure is high belongs to
   [auto-concurrency](../auto-concurrency/1_overview.md), not here.
 - **Absolute capacity.** No conversion of percentages into tokens across providers.
@@ -196,10 +198,17 @@ Readings stay per host.
    trades priority for capacity and probably wants its own switch.
 2. **Rolling budgets.** Should a `ledger` budget get a pressure, using the share of the budget
    that ages out within the next hour?
-3. **Follower offers (phase 4).** Is it enough for the follower to re-draw after the pull, or
-   must the owner know follower pressure to choose which task to offer?
-4. **Default.** After a trial, should `usage_pressure` become the default in `ws_orbit` only, or
+3. **Default.** After a trial, should `usage_pressure` become the default in `ws_orbit` only, or
    everywhere?
+
+Settled: **follower offers (phase 4).** Both parts shipped [ORB-17773]: the follower re-draws a
+claimed leaf's automatic assignment on its own readings, and it reports per-crew pressure in its
+pull capability so the owner offers it first, among tasks tied on band, priority, expiry and
+census affinity, the ones whose pools hold its highest-pressure crews. Neither alone was
+enough: the re-draw can only choose within the pool of the task already offered, and offer
+order alone would still spend the owner's draw on the follower's login. Owner and followers
+run the same exact version, and the capability field is additive and optional — absent reads
+as neutral 1.0 — so an older or `static` follower orders exactly as before.
 
 ## Acceptance (feature level)
 

@@ -301,6 +301,7 @@ impl TaskCommitBoundary {
                 ordering.census.as_ref(),
                 ordering.affinity,
                 &ordering.executor_host_os,
+                &ordering.crew_pools,
             );
             let dependencies = backlog.iter().flat_map(Task::dependencies).collect();
             // `Host` reaches every partition, so it reads every dependency.

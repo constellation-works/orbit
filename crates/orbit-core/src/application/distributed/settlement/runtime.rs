@@ -16,6 +16,19 @@ use super::crew_window::{
 };
 use super::entries::{ClaimedLeafStage, DrainClaimedLeaf, PullLeafClaim, RefusedPullSettlement};
 
+/// A raw weekly pressure as milli-units for the pull capability
+/// [ORB-17773]. Non-finite or negative readings read neutral; the clamp
+/// keeps the conversion exact and the ordering key bounded.
+fn pressure_milli(pressure: f64) -> u64 {
+    if !pressure.is_finite() || pressure < 0.0 {
+        return orbit_types::task::NEUTRAL_PRESSURE_MILLI;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        (pressure * 1000.0).round().clamp(0.0, 1.0e12) as u64
+    }
+}
+
 impl crate::OrbitRuntime {
     /// The admissions a pull drain carries that still hold a slot: every one
     /// it made itself and, while it is live, those for its owner whose own
@@ -426,6 +439,30 @@ impl crate::OrbitRuntime {
                     .collect(),
             }),
         };
+        // [ORB-17773] Per-crew weekly pressure from this host's own
+        // readings, recomputed each pass like the limit gate above. Under
+        // `static` nothing is reported, so admission and offer order are
+        // unchanged.
+        let usage_pressure = if self.provider_limit_policy().usage_pressure.applies() {
+            let read = self.usage_pressure_read(now);
+            let mut crews: Vec<_> = self
+                .context
+                .settings()
+                .crews()
+                .values()
+                .filter(|crew| crew.enabled)
+                .collect();
+            crews.sort_by(|left, right| left.name.cmp(&right.name));
+            crews
+                .into_iter()
+                .map(|crew| orbit_store::contracts::AdmissionCrewPressure {
+                    crew: crew.name.clone(),
+                    pressure_milli: pressure_milli(read.crew(crew).pressure),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         Ok(PullCrewWindow {
             checked_at: preflight.as_ref().map(|preflight| preflight.checked_at),
             runnable,
@@ -443,6 +480,7 @@ impl crate::OrbitRuntime {
             host_suppressed,
             host_suppressed_by_busy_owner,
             owner_busy_backoff,
+            usage_pressure,
         })
     }
 

@@ -1,7 +1,9 @@
 use orbit_common::OrbitError;
 use orbit_config::{canonical_crew_pool, canonical_crew_pool_entries, executor_host_os};
 use orbit_types::identity::Crew;
-use orbit_types::task::{Task, TaskComplexity, TaskHistoryEntry, TaskOsRequirement};
+use orbit_types::task::{
+    Task, TaskComplexity, TaskHistoryEntry, TaskOsRequirement, TaskPriority, TaskStatus, TaskType,
+};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -9,8 +11,8 @@ use crate::runtime::run_input::non_empty;
 
 use super::draw::{
     INSPECTION_CREW_UNAVAILABLE, can_inspect, complexity_crews_key, permitted_candidates,
-    pools_from_input, pressure_weighted_candidates, random_crew_ticket, sole_candidate,
-    weighted_draw,
+    pools_from_input, pressure_weighted_candidates, random_crew_ticket, seeded_crew_ticket,
+    sole_candidate, weighted_draw,
 };
 use super::purpose::{PURPOSE_SOURCE_PREFIX, automatic_crew_source, task_crew_purpose};
 use super::types::{
@@ -147,6 +149,38 @@ impl OrbitRuntime {
             .map_err(|error| OrbitError::Store(error.to_string()))
     }
 
+    /// This host's crew pools by ordering key [ORB-17773]: each complexity
+    /// tier and each configured `purpose:<purpose>` pool, naming its
+    /// member crews. Admission ordering scores a candidate by the
+    /// requester's reported pressure over these members. Best effort: a
+    /// pool that cannot be read is omitted, which scores its candidates
+    /// neutral rather than refusing an admission over an ordering hint.
+    pub(crate) fn dispatch_crew_pools(&self) -> std::collections::BTreeMap<String, Vec<String>> {
+        let mut pools = std::collections::BTreeMap::new();
+        if let Ok(captured) = self.capture_auto_crew_pools(&Value::Null) {
+            for (tier, pool) in captured {
+                pools.insert(
+                    tier,
+                    pool.crews.into_iter().map(|entry| entry.name).collect(),
+                );
+            }
+        }
+        let settings = self.context.settings();
+        for purpose in orbit_types::workflow::CrewPurpose::ALL {
+            let names = settings.purpose_crews().pool(purpose);
+            if names.is_empty() {
+                continue;
+            }
+            if let Ok(pool) = canonical_crew_pool(names, settings.crews(), purpose.config_key()) {
+                pools.insert(
+                    format!("purpose:{}", purpose.as_str()),
+                    pool.entries.into_iter().map(|entry| entry.name).collect(),
+                );
+            }
+        }
+        pools
+    }
+
     /// Classifiers use the coordinator's frozen policy, including CLI overrides.
     /// A read-only call without a run uses the current configuration.
     pub(crate) fn auto_crew_pools_for_input(
@@ -228,6 +262,132 @@ impl OrbitRuntime {
         redraw.crew = None;
         redraw.crew_source = Some(source);
         Ok(Some(redraw))
+    }
+
+    /// The crew a claimed leaf runs as under this follower's own usage
+    /// pressure [ORB-17773], or `None` to keep the owner's crew from the
+    /// claimed-task snapshot.
+    ///
+    /// The re-draw is the [ORB-17770] admission re-draw over a view built
+    /// from the snapshot (`crew`, its automatic `crew_source` and
+    /// `complexity`): the whole pool its source names, as this follower
+    /// captures that pool, narrowed by this host's holds and provider
+    /// limits and by the run's crew allowlist, then weighed by this
+    /// host's weekly readings. The owner's readings never reach it. An
+    /// explicit or legacy crew (no automatic source), `static` policy, a
+    /// draw with no pool to weigh, and any failure to
+    /// compute the draw all keep the snapshot crew: a leaf that the owner
+    /// admitted must not fail because an optional re-draw could not run.
+    /// Nothing is persisted — the task lives in the owner's store — and
+    /// the ticket is seeded from the claim, so every resolution of the
+    /// leaf's crew in this run draws the same member.
+    pub(crate) fn claimed_leaf_redrawn_crew(
+        &self,
+        input: &Value,
+        task_id: &str,
+        crew: Option<&str>,
+        crew_source: Option<&str>,
+        complexity: Option<TaskComplexity>,
+    ) -> Option<String> {
+        if !self.provider_limit_policy().usage_pressure.applies() {
+            return None;
+        }
+        let original = crew.and_then(non_empty)?;
+        let source = crew_source
+            .and_then(non_empty)
+            .filter(|source| automatic_crew_source(source))?;
+        match self.claimed_leaf_redraw(input, task_id, original, source, complexity) {
+            Ok(drawn) => drawn,
+            Err(error) => {
+                tracing::warn!(
+                    task_id,
+                    "could not re-draw the claimed task's crew under this host's usage \
+                     pressure; keeping the owner's crew `{original}`: {error}"
+                );
+                None
+            }
+        }
+    }
+
+    fn claimed_leaf_redraw(
+        &self,
+        input: &Value,
+        task_id: &str,
+        original: &str,
+        source: &str,
+        complexity: Option<TaskComplexity>,
+    ) -> Result<Option<String>, OrbitError> {
+        let pools = if input.get(POOLS_KEY).is_some() {
+            pools_from_input(input)?
+        } else {
+            self.capture_auto_crew_pools(input)?
+        };
+        let now = chrono::Utc::now();
+        let tags = source
+            .strip_prefix(PURPOSE_SOURCE_PREFIX)
+            .map(|purpose| {
+                vec![format!(
+                    "{}{purpose}",
+                    orbit_types::workflow::CREW_PURPOSE_TAG_PREFIX
+                )]
+            })
+            .unwrap_or_default();
+        let view = Task {
+            id: task_id.to_string(),
+            title: String::new(),
+            description: String::new(),
+            acceptance_criteria: Vec::new(),
+            tags,
+            required_tools: Vec::new(),
+            plan: String::new(),
+            execution_summary: String::new(),
+            context_files: Vec::new(),
+            created_by: None,
+            planned_by: None,
+            implemented_by: None,
+            status: TaskStatus::Backlog,
+            priority: TaskPriority::Medium,
+            complexity,
+            task_type: TaskType::Chore,
+            pr_status: None,
+            external_refs: Vec::new(),
+            relations: Vec::new(),
+            job_run_id: None,
+            job_run_machine: None,
+            crew: Some(original.to_string()),
+            crew_source: Some(source.to_string()),
+            orchestrator: None,
+            orchestrator_model: None,
+            orchestrator_model_source: None,
+            origin: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let Some(redraw) = self.usage_pressure_redraw_view(&view)? else {
+            return Ok(None);
+        };
+        let (mut crews, draw_source) = self.admissible_crew_candidates(&redraw, &pools)?;
+        let weighting = pressure_weighted_candidates(
+            &mut crews,
+            &self.provider_limit_policy().usage_pressure,
+            || self.usage_pressure_read(chrono::Utc::now()),
+        );
+        if weighting.is_none() {
+            return Ok(None);
+        }
+        let allowlist = self.crew_allowlist_from_input(input)?;
+        let candidates = permitted_candidates(crews, &draw_source, allowlist.as_ref())?;
+        let mut ticket = seeded_crew_ticket(format!("claimed:{task_id}:{source}:{original}"));
+        let selected = weighted_draw(&candidates, &draw_source, &mut ticket)?;
+        if selected.crew.name != original {
+            tracing::info!(
+                task_id,
+                "crew redrawn from {source} (`{original}`) to {source} (`{}`) for the \
+                 claimed leaf under this host's usage pressure",
+                selected.crew.name
+            );
+        }
+        Ok(Some(selected.crew.name.clone()))
     }
 
     /// The task's validated pool assignment or explicit pin, else its complexity

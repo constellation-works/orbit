@@ -654,7 +654,10 @@ pub(super) fn mutate(
                 // in place of a local task lookup, so the leaf runs on the
                 // owner task's crew rather than this host's `default_crew`.
                 let task = record.receipt.as_ref().and_then(|r| r.task.as_ref()).filter(|task| task.id == claim.task_id).ok_or_else(|| invalid("claimed task snapshot missing"))?;
-                let mut input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == CLAIMED_LOCAL_PIPELINE {"local"} else {"remote"}, "claimed_task": {"id": task.id, "crew": task.crew}});
+                // [ORB-17773] `crew_source` and `complexity` ride the
+                // snapshot so the follower can re-draw an automatic
+                // assignment under its own usage pressure.
+                let mut input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == CLAIMED_LOCAL_PIPELINE {"local"} else {"remote"}, "claimed_task": {"id": task.id, "crew": task.crew, "crew_source": task.crew_source, "complexity": task.complexity}});
                 // Carry the profile key already chosen by admission into the
                 // queued leaf. The host forecast then exchanges its reservation
                 // for a run with the same price before the worker starts.

@@ -26,6 +26,7 @@ pub(crate) struct DispatchOrder {
     census: Option<ExecutorCensus>,
     reach: AdmissionAffinityReach,
     limits: BTreeMap<String, ExecutorOsLimit>,
+    pools: BTreeMap<String, Vec<String>>,
 }
 
 impl DispatchOrder {
@@ -42,6 +43,7 @@ impl DispatchOrder {
             self.census.as_ref(),
             self.reach,
             &self.limits,
+            &self.pools,
         );
     }
 }
@@ -55,11 +57,22 @@ impl OrbitRuntime {
         requester: &str,
         capability: ExecutorCapability,
     ) -> Option<ExecutorCensus> {
-        if self.admission_affinity() == AdmissionAffinityReach::Off {
+        // [ORB-17773] Usage pressure rides the requester's census input
+        // and is not governed by the affinity reach, so a requester that
+        // reported pressure still gets a census to carry it when affinity
+        // is off or the live rows cannot be read.
+        let pressure = capability
+            .crews
+            .as_ref()
+            .is_some_and(|crews| crews.has_pressure());
+        if self.admission_affinity() == AdmissionAffinityReach::Off && !pressure {
             return None;
         }
-        let live = self.live_census()?;
-        Some(ExecutorCensus::new(requester, capability, live))
+        match self.live_census() {
+            Some(live) => Some(ExecutorCensus::new(requester, capability, live)),
+            None if pressure => Some(ExecutorCensus::new(requester, capability, Vec::new())),
+            None => None,
+        }
     }
 
     /// The owner-local dispatch order: the owner is the requester, declared
@@ -86,6 +99,7 @@ impl OrbitRuntime {
             census,
             reach,
             limits: limits.clone(),
+            pools: self.dispatch_crew_pools(),
         }
     }
 
@@ -131,7 +145,15 @@ impl OrbitRuntime {
             return;
         };
         let crews = match crate::application::pull_drain::crew_window(self, run_id) {
-            Ok(window) => Some(window.capability()),
+            // [ORB-17773] The owner's own row never carries usage pressure:
+            // owner-local dispatch reads this row as its requester, and it
+            // must order exactly as before. Only a follower's pull request
+            // declares pressure, for the owner to order that follower's
+            // offers by.
+            Ok(window) => Some(window.capability()).map(|mut capability| {
+                capability.usage_pressure.clear();
+                capability
+            }),
             Err(error) => {
                 tracing::warn!(
                     target: "orbit.core.admission",

@@ -518,6 +518,7 @@ impl TaskCommitBoundary {
                         title: task.title.clone(),
                         complexity: task.complexity,
                         crew: task.crew.clone(),
+                        crew_source: task.crew_source.clone(),
                         context_files: footprint.clone(),
                         resume_candidate: resume_candidate.clone(),
                     });
