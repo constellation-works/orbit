@@ -43,6 +43,10 @@ pub(super) fn workspace(config_toml: Option<&str>) -> Workspace {
 }
 
 fn git(repo: &Path, args: &[&str]) {
+    git_out(repo, args);
+}
+
+pub(super) fn git_out(repo: &Path, args: &[&str]) -> String {
     let output = crate::git_test_support::command()
         .args(args)
         .current_dir(repo)
@@ -58,6 +62,22 @@ fn git(repo: &Path, args: &[&str]) {
         args.join(" "),
         String::from_utf8_lossy(&output.stderr)
     );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+/// The observed-revision proof a pilot that read `prepared`'s checkout
+/// reports: the prepared `source_revision` and its tree.
+pub(super) fn proof(prepared: &Value) -> (String, String) {
+    let revision = prepared["source"]["source_revision"]
+        .as_str()
+        .expect("prepared source revision")
+        .to_string();
+    let repo = prepared["workspace_path"].as_str().expect("workspace path");
+    let tree = git_out(
+        Path::new(repo),
+        &["rev-parse", &format!("{revision}^{{tree}}")],
+    );
+    (revision, tree)
 }
 
 fn add_task(runtime: &OrbitRuntime, title: &str, status: TaskStatus) -> Task {
@@ -116,6 +136,7 @@ fn apply_naming_blockers(
         "duplicate_of": Value::Null,
         "already_landed": Value::Null,
     });
+    let (revision, tree) = proof(prepared);
     runtime
         .run_deterministic(
             "apply_task_pilot_results",
@@ -125,6 +146,8 @@ fn apply_naming_blockers(
                 "prepared": prepared,
                 "results": [{
                     "partition_index": 0,
+                    "observed_revision": revision,
+                    "observed_tree": tree,
                     "task_ids": [task_id],
                     "tasks": [assessment],
                 }],

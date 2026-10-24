@@ -109,6 +109,31 @@ impl SourceSnapshot {
         }))
     }
 
+    /// The tree id of the pinned revision. An inspection result proves it
+    /// read the pinned source by reporting this value as `observed_tree`
+    /// (`git rev-parse HEAD^{tree}` in its checkout): the envelope carries
+    /// the commit id, which a blind result could echo back, but never the
+    /// tree id, which only reading the commit object yields. Never include
+    /// the expected tree id in agent-visible output (a repair attempt reads
+    /// the validation errors and could echo it).
+    pub(crate) fn tree_id(&self, action: &str, workspace: &Path) -> Result<String, DispatchError> {
+        let spec = format!("{}^{{tree}}", self.source_revision);
+        let output = git(action, workspace, &["rev-parse", "--verify", &spec])?;
+        let tree = output.stdout.trim();
+        if !output.success || !is_commit_id(tree) {
+            return Err(DispatchError::action_failed(
+                action,
+                format!(
+                    "prepared source revision {} ({}) has no readable tree in this repository: {}",
+                    self.source_revision,
+                    self.source_ref,
+                    output.stderr.trim()
+                ),
+            ));
+        }
+        Ok(tree.to_string())
+    }
+
     pub(crate) fn ensure_commit(
         &self,
         action: &str,
@@ -241,6 +266,44 @@ impl SourceSnapshot {
             _ => GitPathKind::Other,
         })
     }
+}
+
+/// Why an inspection result's observed-revision proof does not establish
+/// that it read the pinned source, or `None` when it does. `observed_revision`
+/// is the `HEAD` the result reports from its checkout; `observed_tree` is
+/// that checkout's `HEAD^{tree}`, checked against the tree of the pinned
+/// `source_revision` recomputed host-side. The expected tree is never named
+/// in the message: the pilot repair loop feeds these errors back to the
+/// agent, which must re-derive the tree from its checkout, not echo it.
+pub(crate) fn inspection_proof_error(
+    observed_revision: Option<&str>,
+    observed_tree: Option<&str>,
+    source_revision: &str,
+    source_tree: &str,
+) -> Option<String> {
+    let observed_revision = observed_revision.map(str::trim).filter(|v| !v.is_empty());
+    let observed_tree = observed_tree.map(str::trim).filter(|v| !v.is_empty());
+    let (Some(observed_revision), Some(observed_tree)) = (observed_revision, observed_tree) else {
+        return Some(
+            "inspection proof missing: report observed_revision (`git rev-parse HEAD`) and \
+             observed_tree (`git rev-parse 'HEAD^{tree}'`) from the inspection checkout"
+                .to_string(),
+        );
+    };
+    if observed_revision != source_revision {
+        return Some(format!(
+            "inspection proof mismatch: observed_revision {observed_revision} differs from \
+             the pinned source_revision {source_revision}"
+        ));
+    }
+    if observed_tree != source_tree {
+        return Some(
+            "inspection proof mismatch: observed_tree is not the tree of the pinned \
+             source_revision; report `git rev-parse 'HEAD^{tree}'` from the inspection checkout"
+                .to_string(),
+        );
+    }
+    None
 }
 
 pub(crate) fn resolve_source_snapshot(

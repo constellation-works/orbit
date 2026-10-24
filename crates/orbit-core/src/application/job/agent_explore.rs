@@ -450,7 +450,7 @@ impl OrbitRuntime {
     /// pool there is no explorer.
     fn explore_crew(&self, requested: Option<&str>) -> Result<CrewPoolDraw, OrbitError> {
         let Some((candidates, source)) =
-            self.purpose_pool_candidates(CrewPurpose::Explorer, false)?
+            self.purpose_pool_candidates(CrewPurpose::Explorer)?
         else {
             return Err(OrbitError::CapabilityDenied(format!(
                 "no explorer crew can run on this host: `{}` is unset, disabled, or excluded \
@@ -481,7 +481,7 @@ impl OrbitRuntime {
     pub(crate) fn explore_delegation_offered(&self) -> bool {
         self.explore_settings().enabled
             && matches!(
-                self.purpose_pool_candidates(CrewPurpose::Explorer, false),
+                self.purpose_pool_candidates(CrewPurpose::Explorer),
                 Ok(Some(_))
             )
     }

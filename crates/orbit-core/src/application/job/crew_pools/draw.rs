@@ -4,7 +4,6 @@ use orbit_common::OrbitError;
 use orbit_config::UsagePressurePolicy;
 use orbit_types::identity::Crew;
 use orbit_types::task::TaskComplexity;
-use orbit_types::workflow::activity_job::Provider;
 use orbit_types::workflow::{ActivityCrewDraw, ActivityCrewPoolMember};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -100,15 +99,6 @@ impl crate::OrbitRuntime {
                 .collect(),
         })
     }
-}
-
-/// The reason an inspection-requiring activity names when no crew it may
-/// draw can inspect [ORB-15792].
-pub(crate) const INSPECTION_CREW_UNAVAILABLE: &str = "inspection_crew_unavailable";
-
-/// Whether `crew`'s provider has a native file-read and command surface.
-pub(crate) fn can_inspect(crew: &Crew) -> bool {
-    Provider::parse(&crew.assignment.provider).is_ok_and(Provider::has_native_inspection)
 }
 
 pub(super) fn sole_candidate(crew: Crew) -> CrewCandidate {

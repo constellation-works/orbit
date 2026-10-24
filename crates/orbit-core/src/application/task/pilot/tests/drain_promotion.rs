@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use super::super::drain_promotion::approval_hook::{self, Hook};
 use super::super::drain_promotion::held_classification;
-use super::persist::{Workspace, workspace};
+use super::persist::{Workspace, proof, workspace};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
@@ -153,6 +153,7 @@ fn pilot_with_findings(
     for (field, value) in findings.as_object().expect("findings") {
         assessment[field] = value.clone();
     }
+    let (revision, tree) = proof(&prepared);
     approval_hook::set_before_lock(race);
     let applied = runtime.run_deterministic(
         "apply_task_pilot_results",
@@ -161,7 +162,10 @@ fn pilot_with_findings(
             "run_id": pilot,
             "workspace_path": workspace.repo,
             "prepared": prepared,
-            "results": [{"partition_index": 0, "task_ids": [task.id], "tasks": [assessment]}],
+            "results": [{
+                "partition_index": 0, "observed_revision": revision, "observed_tree": tree,
+                "task_ids": [task.id], "tasks": [assessment],
+            }],
             "promotion_authorized": true,
             "drain_promotion": {"run_id": drain},
         }),
@@ -660,10 +664,13 @@ fn prerequisite_lost_before_atomic_write_holds_both_authorities_and_replay() {
                 }),
             );
             let warning = format!("Wait for {} to land", blocker.id);
+            let (revision, tree) = proof(&prepared);
             let mut input = json!({
                 "workspace_path": workspace.repo, "prepared": prepared,
                 "promotion_authorized": true,
-                "results": [{"partition_index": 0, "task_ids": [task.id], "tasks": [{
+                "results": [{
+                    "partition_index": 0, "observed_revision": revision, "observed_tree": tree,
+                    "task_ids": [task.id], "tasks": [{
                     "task_id": task.id, "context_files_before": task.context_files,
                     "context_files_after": ["file:README.md"], "disposition": "selectors",
                     "recommended_crew": "opus", "recommended_complexity": "low",

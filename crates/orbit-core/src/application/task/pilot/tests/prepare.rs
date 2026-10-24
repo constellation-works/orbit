@@ -5,7 +5,7 @@ use orbit_tools::ToolContext;
 use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
-use super::persist::{Workspace, workspace};
+use super::persist::{Workspace, proof, workspace};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
@@ -49,6 +49,7 @@ fn prepare_racing(
 
 /// Apply one assessment per prepared task, partition by partition.
 fn apply(workspace: &Workspace, prepared: &Value) -> Value {
+    let (revision, tree) = proof(prepared);
     let results = prepared["partitions"]
         .as_array()
         .expect("partitions")
@@ -83,6 +84,8 @@ fn apply(workspace: &Workspace, prepared: &Value) -> Value {
                 .collect::<Vec<_>>();
             json!({
                 "partition_index": partition["partition_index"],
+                "observed_revision": revision,
+                "observed_tree": tree,
                 "task_ids": partition["task_ids"],
                 "tasks": tasks,
             })

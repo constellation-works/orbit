@@ -239,6 +239,11 @@ pub(super) struct ExcludedTask {
 #[serde(default)]
 pub(super) struct PartitionResult {
     pub(super) partition_index: Field<u64>,
+    /// The `HEAD` and `HEAD^{tree}` the pilot observed in its inspection
+    /// checkout: the proof it read the pinned source, checked against the
+    /// prepared revision in [`super::partition`]. Absent reads as missing.
+    pub(super) observed_revision: Field<String>,
+    pub(super) observed_tree: Field<String>,
     pub(super) task_ids: Field<Strings>,
     /// Each assessment stays JSON for the validators that read it.
     pub(super) tasks: Field<Vec<Record<AssessedTask>>>,

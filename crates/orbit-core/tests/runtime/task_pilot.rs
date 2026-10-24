@@ -344,9 +344,44 @@ impl Workspace {
     }
 
     fn action(&self, action: &str, input: Value) -> Value {
+        let input = if action == "apply_task_pilot_results" {
+            self.with_inspection_proof(input)
+        } else {
+            input
+        };
         self.runtime
             .run_deterministic(action, &json!({}), &input, ToolContext::default())
             .unwrap_or_else(|error| panic!("{action}: {error}"))
+    }
+
+    /// Fill in the pilot's observed-revision proof on every partition
+    /// result that does not carry one, as a pilot that read its checkout
+    /// reports it: the prepared `source_revision` and that revision's tree.
+    /// A result that sets either field itself is left as it is, so a case
+    /// can still present a wrong or partial proof.
+    fn with_inspection_proof(&self, mut input: Value) -> Value {
+        let Some(revision) = input["prepared"]["source"]["source_revision"]
+            .as_str()
+            .map(str::to_string)
+        else {
+            return input;
+        };
+        let tree = self
+            .git(&["rev-parse", &format!("{revision}^{{tree}}")])
+            .trim()
+            .to_string();
+        if let Some(results) = input["results"].as_array_mut() {
+            for result in results {
+                if result.is_object()
+                    && result.get("observed_revision").is_none()
+                    && result.get("observed_tree").is_none()
+                {
+                    result["observed_revision"] = json!(revision);
+                    result["observed_tree"] = json!(tree);
+                }
+            }
+        }
+        input
     }
 
     fn prepare(&self, task_ids: &[&str]) -> Value {

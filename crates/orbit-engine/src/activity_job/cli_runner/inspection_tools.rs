@@ -5,6 +5,13 @@ use serde_json::Value;
 
 use super::super::dispatcher::DispatchError;
 
+/// The one instruction every provider gets for a native inspection run:
+/// each agent CLI ships its own file-read and shell tools, separate from
+/// the Orbit MCP tool list. Read-only stays enforced by the `reviewer`
+/// filesystem profile, and the apply step's observed-revision proof — not
+/// the provider name — establishes that the run read the pinned source.
+const GENERIC_INSTRUCTION: &str = "Provider inspection surface: use this CLI's own native file-read and shell/command tools to read files and run read-only git/rg commands in the checkout. These native tools are separate from the Orbit MCP tool list.";
+
 /// Prepare native tools before allocating a checkout or starting a session.
 /// A null revision still denotes a non-Git inspection.
 pub(super) fn prepare_inspection_tools(
@@ -27,23 +34,20 @@ pub(super) fn prepare_inspection_tools(
             "native inspection requires the reviewer filesystem profile",
         ));
     }
-    // Crew selection draws only providers with a native surface for these
-    // activities; this refusal covers an explicit or run crew without one.
-    let native = Provider::parse(provider)
+    let parsed = Provider::parse(provider)
         .ok()
-        .filter(|provider| provider.has_native_inspection());
-    let surface = match native {
-        Some(Provider::Codex) => InspectionTools {
+        .filter(|provider| provider.has_cli_runtime());
+    let args = match parsed {
+        Some(Provider::Codex) => {
             // Invocation overrides also cover a user config that disables
             // the shell. The outer reviewer sandbox remains authoritative.
-            args: vec![
+            vec![
                 "--config".into(),
                 "features.shell_tool=true".into(),
                 "--config".into(),
                 "features.unified_exec=true".into(),
-            ],
-            instruction: "Provider inspection surface: Codex native shell tools are enabled. Use the native shell announced by this harness to read files with cat or sed and run read-only git/rg commands. These native tools are separate from the Orbit MCP tool list.",
-        },
+            ]
+        }
         Some(Provider::Claude) => {
             let selected = option_values(static_args, &["--tools"]);
             if let Some(selected) = &selected
@@ -64,22 +68,23 @@ pub(super) fn prepare_inspection_tools(
             {
                 return Err(unavailable("Claude executor disallows Read or Bash"));
             }
-            InspectionTools {
-                args: if selected.is_none() {
-                    vec!["--tools".into(), "Read,Bash,Glob,Grep".into()]
-                } else {
-                    vec![]
-                },
-                instruction: "Provider inspection surface: Claude native Read and Bash tools are enabled. Use Read for candidate files and Bash for read-only git/rg commands. These native tools are separate from the Orbit MCP tool list.",
+            if selected.is_none() {
+                vec!["--tools".into(), "Read,Bash,Glob,Grep".into()]
+            } else {
+                vec![]
             }
         }
-        _ => {
+        Some(_) => vec![],
+        None => {
             return Err(unavailable(
-                "this provider has no supported native file-read and command surface; configure a Codex or Claude inspection crew",
+                "this provider has no CLI runtime to inspect with; configure a crew whose provider has one",
             ));
         }
     };
-    Ok(Some(surface))
+    Ok(Some(InspectionTools {
+        args,
+        instruction: GENERIC_INSTRUCTION,
+    }))
 }
 
 pub(super) struct InspectionTools {

@@ -59,6 +59,7 @@ pub(crate) fn apply(
         DispatchError::action_failed(action, "prepared.source must pin a revision")
     })?;
     source.ensure_commit(action, &workspace_root)?;
+    let source_tree = source.tree_id(action, &workspace_root)?;
     let claim =
         crate::application::automation::members::claim(runtime, prepared).map_err(failed)?;
     let escalation_round = prepared.get("round").and_then(Value::as_str) == Some("escalation");
@@ -120,6 +121,23 @@ pub(crate) fn apply(
             .get(position)
             .and_then(|result| result.get("tasks"))
             .and_then(Value::as_array);
+        // The proof the verifier read the pinned source, checked before any
+        // verdict in this partition is trusted: a crew whose native tools
+        // never ran cannot report the pinned revision's tree, which the
+        // envelope never carries. Every task it held stays unverified.
+        let proof_error = reports.and_then(|_| {
+            let result = results.get(position);
+            crate::application::task::pilot::source::inspection_proof_error(
+                result
+                    .and_then(|result| result.get("observed_revision"))
+                    .and_then(Value::as_str),
+                result
+                    .and_then(|result| result.get("observed_tree"))
+                    .and_then(Value::as_str),
+                &source.source_revision,
+                &source_tree,
+            )
+        });
         for task_id in &task_ids {
             let snapshot = snapshots.get(task_id).ok_or_else(|| {
                 DispatchError::action_failed(
@@ -135,6 +153,14 @@ pub(crate) fn apply(
                         snapshot.crew
                     ),
                 ));
+            }
+            if let Some(error) = &proof_error {
+                task_outcomes.push(unverified(
+                    task_id,
+                    "inspection_revision_mismatch",
+                    error.clone(),
+                ));
+                continue;
             }
             let Some(report) = reports.and_then(|reports| {
                 reports

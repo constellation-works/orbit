@@ -92,6 +92,10 @@ spec:
     properties:
       partition_index:
         type: number
+      observed_revision:
+        type: [string, "null"]
+      observed_tree:
+        type: [string, "null"]
       task_ids:
         type: array
         items:
@@ -273,12 +277,18 @@ spec:
        criteria, plan, tags, relations, status, and exact current
        `context_files`. Use `orbit.search` for the task ID and relevant design
        terms; inspect linked decision docs when a result points to one.
-    2. Use the native inspection surface named in the host's appended
-       provider instruction to run only read-only `git`/`rg` commands and
-       read candidate files. The Orbit MCP tool list is separate from these
-       native tools. Verify the
+    2. Use the native tools named in the host's appended provider
+       instruction (this CLI's own file-read and shell tools) to run only
+       read-only `git`/`rg` commands and read candidate files. The Orbit
+       MCP tool list is separate from these native tools. Verify the
        workspace Git top-level and confirm HEAD equals `source_revision`
-       when set. Read candidate files only under this supplied checkout.
+       when set. Report the inspection proof at partition level:
+       `observed_revision` is `git rev-parse HEAD` and `observed_tree` is
+       `git rev-parse 'HEAD^{tree}'`, both run in this checkout. Apply
+       refuses a result whose proof is missing or does not match the
+       pinned `source_revision` and its tree, so read both values from
+       git; never copy a tree value from the input or a validation error.
+       For a non-Git workspace (`source_revision` null), report both null. Read candidate files only under this supplied checkout.
        If `source_revision` is a commit id, inspect
        that exact snapshot (`git rev-parse`, `git ls-tree`, `git show
        <source_revision>:<path>`) and treat it as the source of truth for
@@ -556,7 +566,7 @@ spec:
        is `medium` or `low`, list those rating-changing unknowns in `evidence_gaps`.
        Explicitly exclude 'validation not executed in this read-only assessment'
        style entries: this lane is a read-only preflight and never builds, tests,
-       or runs validation commands. The native inspection surface permits
+       or runs validation commands. The native tools permit
        read-only inspection only. The structural absence of test
        execution is never an evidence gap and must not be listed in `evidence_gaps`,
        nor used to return `unassessed`. Name the checks that would establish the repair
@@ -613,6 +623,8 @@ spec:
     Return exactly one Orbit response envelope:
     {"schemaVersion":1,"status":"success","result":{
       "partition_index":0,
+      "observed_revision":"<git rev-parse HEAD, or null for a non-Git workspace>",
+      "observed_tree":"<git rev-parse 'HEAD^{tree}', or null for a non-Git workspace>",
       "task_ids":["ORB-NNNNN"],
       "tasks":[{
         "task_id":"ORB-NNNNN",

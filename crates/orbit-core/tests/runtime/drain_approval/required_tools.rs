@@ -88,9 +88,17 @@ fn approval_drain_runs_a_pilot_with_a_disallowed_implementer_requirement() {
     // Only the provider response is scripted: admission, preparation, fan-out,
     // result application and drain promotion use the shipped job and runtime.
     let provider = workspace._root.path().join("codex");
+    // The scripted pilot read its checkout: its static answer carries the
+    // observed-revision proof of the revision prepare pins (the fixture's
+    // `main` HEAD, which nothing moves during the run).
+    let revision = workspace.git(&["rev-parse", "HEAD"]);
+    let tree = workspace.git(&["rev-parse", "HEAD^{tree}"]);
     let response = json!({
         "schemaVersion": 1, "status": "success", "error": null,
-        "result": {"partition_index": 0, "task_ids": [task.id], "tasks": [assessment(&task)]},
+        "result": {
+            "partition_index": 0, "observed_revision": revision, "observed_tree": tree,
+            "task_ids": [task.id], "tasks": [assessment(&task)],
+        },
     });
     std::fs::write(
         &provider,

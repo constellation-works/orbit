@@ -212,8 +212,9 @@ fn an_explicit_crew_beats_the_purpose_pool() {
 fn a_purpose_pool_beats_the_complexity_pool() {
     let fx = fixture(PURPOSES);
 
-    // The pilot draws from its purpose pool, once per run, keeping only the
-    // members that can inspect natively and their weights.
+    // The pilot draws from its purpose pool, once per run, over every
+    // member whatever its provider: the gemini crew the pool weights
+    // highest is eligible like the others and no filter is named.
     let run = fx.run("task_pilot_pipeline");
     let model = fx.model_for(pilot_input(&run));
     let draw = fx.draws(&run)[PILOT].clone();
@@ -223,12 +224,13 @@ fn a_purpose_pool_beats_the_complexity_pool() {
             .iter()
             .map(|member| (member.name.as_str(), member.weight))
             .collect::<Vec<_>>(),
-        [("purpose_claude", 1), ("purpose_codex", 1)],
+        [
+            ("purpose_claude", 1),
+            ("purpose_codex", 1),
+            ("purpose_gemini", 500)
+        ],
     );
-    assert_eq!(
-        draw.source,
-        format!("{PILOT}; native inspection, skipped: purpose_gemini")
-    );
+    assert_eq!(draw.source, PILOT);
     for _ in 0..4 {
         assert_eq!(fx.model_for(pilot_input(&run)), model);
     }
@@ -281,10 +283,7 @@ fn an_unset_purpose_resolves_as_it_did_before_purposes() {
 
     let run = fx.run("task_pilot_pipeline");
     assert_eq!(fx.model_for(pilot_input(&run)), "fixture-low");
-    assert_eq!(
-        fx.draws(&run)[PILOT].source,
-        format!("{LOW}; native inspection")
-    );
+    assert_eq!(fx.draws(&run)[PILOT].source, LOW);
 
     let run = fx.run("task_pr_pipeline");
     assert_eq!(

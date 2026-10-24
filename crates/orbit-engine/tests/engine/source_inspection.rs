@@ -16,7 +16,7 @@ use orbit_types::workflow::activity_job::{ActivityV2Spec, Provider, V2AuditEvent
 use serde_json::{Value, json};
 
 #[test]
-fn codex_and_claude_pilots_inspect_the_pinned_checkout_with_native_tools() {
+fn pilots_of_any_provider_inspect_the_pinned_checkout_with_native_tools() {
     let temp = tempfile::tempdir().unwrap();
     let repo = temp.path().join("repo");
     fs::create_dir(&repo).unwrap();
@@ -32,6 +32,12 @@ fn codex_and_claude_pilots_inspect_the_pinned_checkout_with_native_tools() {
         (Provider::Claude, "claude", vec!["-p"]),
         (Provider::Claude, "claude", vec!["-p", "--tools", "default"]),
         (Provider::Claude, "claude", vec!["-p", "--tools=Read,Bash"]),
+        // Providers beyond Codex and Claude inspect with their own CLI's
+        // native tools and the one generic instruction; nothing refuses
+        // them for their provider.
+        (Provider::Gemini, "gemini", vec![]),
+        (Provider::Grok, "grok", vec![]),
+        (Provider::Muse, "muse", vec![]),
     ] {
         let cli = temp.path().join(name);
         executable(&cli, NATIVE_PROVIDER);
@@ -60,7 +66,7 @@ fn codex_and_claude_pilots_inspect_the_pinned_checkout_with_native_tools() {
             run_id: "inspection-fixture",
             host: Some(&host),
         })
-        .unwrap();
+        .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         assert!(outcome.success, "{name}: {:?}", outcome.message);
         assert_eq!(outcome.output["content"], "pinned candidate\n");
         assert_eq!(outcome.output["head"], revision);
@@ -86,8 +92,13 @@ fn unavailable_inspection_surface_is_a_typed_non_retryable_dispatch_error() {
     let temp = tempfile::tempdir().unwrap();
     let calls = temp.path().join("calls");
     let cases = [
-        (Provider::Gemini, "gemini", vec![], Some("reviewer")),
-        (Provider::Grok, "grok", vec![], Some("reviewer")),
+        // No CLI runtime exists for this provider, so no session can start.
+        (
+            Provider::OpenaiCompat,
+            "openai_compat",
+            vec![],
+            Some("reviewer"),
+        ),
         (
             Provider::Claude,
             "claude",
@@ -153,7 +164,7 @@ fn unavailable_inspection_surface_is_a_typed_non_retryable_dispatch_error() {
         );
         assert!(
             !calls.exists(),
-            "a provider with no inspection surface must never start"
+            "a refused inspection configuration must never start a provider"
         );
         assert!(
             audit
@@ -262,13 +273,14 @@ if provider == 'codex':
     config = dict(arg.split('=', 1) for i, arg in enumerate(args) if i and args[i-1] in ('--config', '-c'))
     assert config['features.shell_tool'] == 'true'
     assert config['features.unified_exec'] == 'true'
-else:
+elif provider == 'claude':
     selected = []
     for i, arg in enumerate(args):
         if arg == '--tools': selected = args[i+1].split(',')
         elif arg.startswith('--tools='): selected = arg.split('=', 1)[1].split(',')
     assert 'default' in selected or {'Read', 'Bash'} <= set(selected)
-envelope = json.loads(sys.stdin.read().split('Execution envelope:\n', 1)[1])
+prompt = pathlib.Path(args[args.index('--prompt-file') + 1]).read_text() if '--prompt-file' in args else sys.stdin.read()
+envelope = json.loads(prompt.split('Execution envelope:\n', 1)[1])
 assert 'proc.spawn' not in envelope['tools']
 root = pathlib.Path(envelope['input']['workspace_path']).resolve()
 assert root == pathlib.Path.cwd().resolve()
@@ -277,5 +289,10 @@ content = pathlib.Path('candidate.rs').read_text()
 head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
 matches = subprocess.check_output(['rg', '-n', 'pinned', 'candidate.rs'], text=True).strip()
 assert head == envelope['input']['source_revision']
-print(json.dumps({'schemaVersion': 1, 'status': 'success', 'result': {'content': content, 'head': head, 'matches': matches, 'root': str(root)}, 'error': None}))
+answer = json.dumps({'schemaVersion': 1, 'status': 'success', 'result': {'content': content, 'head': head, 'matches': matches, 'root': str(root)}, 'error': None})
+if provider == 'muse':
+    # Muse answers in its JSONL stream: only the terminal record's text counts.
+    print(json.dumps({'payload_type': 'run.terminal.completed', 'payload': {'terminal': 'completed', 'text': answer}}))
+else:
+    print(answer)
 "#;

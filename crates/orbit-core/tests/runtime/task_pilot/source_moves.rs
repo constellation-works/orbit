@@ -44,6 +44,13 @@ pub(super) fn claimed(
     action: &str,
     input: Value,
 ) -> Value {
+    // Claimed applies simulate the pilot's own output, observed proof
+    // included, as `Workspace::action` fills it in.
+    let input = if action == "apply_task_pilot_results" {
+        workspace.with_inspection_proof(input)
+    } else {
+        input
+    };
     let context = ToolContext {
         reservation_owner: Some(ReservationOwnerContext {
             owner_run_id: attempt.action_id.clone().unwrap(),

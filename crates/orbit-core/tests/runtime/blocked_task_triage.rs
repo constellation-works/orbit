@@ -645,3 +645,52 @@ fn the_block_escalated_trigger_admits_each_escalated_episode_once() {
     let fresh = pending(Utc::now() + Duration::minutes(5));
     assert_ne!(fresh[&escalated].fingerprint, episode, "a new episode");
 }
+
+#[test]
+fn a_decision_with_a_bad_inspection_proof_records_nothing() {
+    // The escalation triager inspects a pinned checkout and passes the
+    // observed pair with each decision. Echoing the pinned revision is
+    // not proof (its envelope carries it); only the revision's tree,
+    // recomputed by the tool, settles it.
+    let fx = fixture();
+    let git = |args: &[&str]| -> String {
+        let output = crate::git_test_support::command()
+            .args(args)
+            .current_dir(&fx.repo)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.name", "Orbit Test"]);
+    git(&["config", "user.email", "orbit-test@example.com"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    std::fs::write(fx.repo.join("README.md"), "fixture\n").unwrap();
+    git(&["add", "README.md"]);
+    git(&["commit", "-m", "seed"]);
+    let revision = git(&["rev-parse", "HEAD"]);
+    let tree = git(&["rev-parse", "HEAD^{tree}"]);
+
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    let decide = |observed_tree: &str| {
+        fx.triage(json!({
+            "action": "report",
+            "id": task,
+            "blocker": "the worker crashed while the host was rebooting",
+            "reason": "the operator checks the host",
+            "source_revision": revision,
+            "observed_revision": revision,
+            "observed_tree": observed_tree,
+        }))
+    };
+    let refused = decide(&"0".repeat(40)).expect_err("a tree the caller invented proves nothing");
+    assert!(refused.contains("inspection proof"), "{refused}");
+    assert!(fx.triage_comments(&task).is_empty(), "nothing was recorded");
+    assert_eq!(fx.qualifying(), std::slice::from_ref(&task));
+
+    let reported = decide(&tree).unwrap();
+    assert_eq!(reported["outcome"], "reported");
+    assert_eq!(fx.triage_comments(&task).len(), 1);
+}
