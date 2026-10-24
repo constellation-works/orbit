@@ -18,9 +18,9 @@ related_artifacts: [ORB-10003, ORB-10012, ORB-11994, ORB-12078, ORB-12434]
 
 Orbit versions two pieces of durable workspace state: the `.orbit/` layout
 (a marker file plus a migration registry) and the store database schema (the
-`schema_meta` ledger). Both auto-apply pending migrations when a workspace
-opens. This feature covers the other direction — an **older binary meeting
-newer state** — and defines what it may do with it.
+`schema_meta` ledger). A binary applies pending migrations when their versions
+are within its supported range. This feature covers the other direction — an
+**older binary meeting newer state** — and defines what it may do with it.
 
 ## 1 Motivation
 
