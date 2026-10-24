@@ -61,6 +61,18 @@ globalThis.dockReview = {
   },
   posts: () => requests.filter(r => r.method === 'POST' && r.path === '/api/workflows/auto').length,
   lastBody: () => requests.filter(r => r.method === 'POST' && r.path === '/api/workflows/auto').at(-1)?.body,
+  showUncertainStop: async () => {
+    replicaWorkspace = false;
+    stopOutcome = 'stopped';
+    stopSettlements = [{ task_id: 'ORB-4', outcome: 'launch_uncertain' }];
+    drainRunId = null;
+    drainPhase = 'idle';
+    pullDrainRunId = null;
+    await fetchAndRenderOperations();
+    drainButton('Send pending results').click();
+    await tick(); await tick(); await tick();
+    setActiveTab('auto-drain');
+  },
   hold: () => { delayPost = true; releasePost = null; },
   held: () => releasePost !== null,
   release: () => { delayPost = false; const resolve = releasePost; releasePost = null; resolve?.(); },
@@ -356,6 +368,35 @@ try {
   await page.waitForTimeout(350);
   await page.screenshot({ path: path.join(evidence, 'drain-feedback-lost-dark-375.png'), animations: 'disabled' });
   await page.evaluate(() => globalThis.dockReview.next('success'));
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.evaluate(() => globalThis.dockReview.showUncertainStop());
+  await page.waitForFunction(() => location.hash.startsWith('#drain'));
+  const uncertainDrainStatus = page.locator('#drain-main #auto-drain-operation-feedback.error');
+  await uncertainDrainStatus.waitFor({ state: 'visible' });
+  const uncertainDrainText = await uncertainDrainStatus.textContent();
+  if (!uncertainDrainText.includes('the leaf may still be running')
+    || !uncertainDrainText.includes("recover the claim on the owner's dashboard")
+    || !uncertainDrainText.includes('do not start another attempt')) {
+    throw new Error(`Drain stop feedback must explain safe launch recovery: ${uncertainDrainText}`);
+  }
+  const drainFeedbackLayout = await uncertainDrainStatus.evaluate(node => ({
+    height: node.clientHeight,
+    contentHeight: node.scrollHeight,
+    bottom: node.getBoundingClientRect().bottom,
+    nextTop: node.nextElementSibling?.getBoundingClientRect().top,
+  }));
+  if (drainFeedbackLayout.height < drainFeedbackLayout.contentHeight
+    || drainFeedbackLayout.bottom > drainFeedbackLayout.nextTop + 1) {
+    throw new Error(`Drain recovery guidance must fit above the panel without clipping: ${JSON.stringify(drainFeedbackLayout)}`);
+  }
+  await uncertainDrainStatus.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(350);
+  await page.screenshot({ path: path.join(evidence, 'drain-launch-uncertain-dark-1440.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await uncertainDrainStatus.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(350);
+  await page.screenshot({ path: path.join(evidence, 'drain-launch-uncertain-dark-375.png'), animations: 'disabled' });
 
   await page.click('.tab[data-tab="tasks"]');
   for (const width of [1251, 1250, 1073, 901, 900]) {
