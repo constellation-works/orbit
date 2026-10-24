@@ -198,511 +198,409 @@ spec:
           evidence:
             type: string
   instruction: |
-    Complete the Orbit task with validated outputs, following acceptance
-    criteria and workspace instructions. Propose only when requested.
+    Complete the Orbit task: deliver what its acceptance criteria ask for,
+    validated, following the workspace guide (AGENTS.md/CLAUDE.md). Finish the
+    deliverable; write a proposal instead only when the task asks for one. The
+    pipeline commits, pushes and opens the PR; your durable outputs are the
+    worktree changes, task updates and artifacts, not your final message.
 
-    Tool access and durable state
+    If the input carries `final_recovery_resume`, `resume_candidate` or
+    `claimed`, read the matching section after the Procedure before step 1.
 
-    - Use a granted `orbit.*` tool directly when wired; otherwise use
-      `orbit tool run <tool.name> --input '<json>'` (`--input-file` for large
-      input). The CLI has the same gates; never reach an ungranted tool. Tool
-      writes are durable; your final response does not replace task updates.
-    - Workflow input `task_id` and `ORBIT_TASK_ID` identify the task; task-tool
-      arguments use `id`, not `task_id` or `taskId`. For example:
-      `orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>"}'`.
-      Use `id` for `orbit.task.update`, `orbit.task.artifact.put`, and
-      `orbit.task.artifact.get` too. GitHub run tools take `run`, even though
-      their output uses `run_id`; `orbit.task.add` takes `type` (feature, bug,
-      refactor, or chore). Search statuses use `task:rejected` or
+    Tools
+
+    - Call a granted `orbit.*` tool directly, or run
+      `orbit tool run <tool> --input '<json>'` (`--input-file` for large
+      input). Both have the same gates; never reach an ungranted tool.
+      `orbit tool show <tool>` prints a schema.
+    - Argument names: task tools take `id` (never `task_id`/`taskId`), e.g.
+      `orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>"}'`;
+      GitHub run tools take `run`; `orbit.task.add` takes `type` (feature,
+      bug, refactor or chore); search status filters are `task:rejected` or
       `friction:resolved`, never `status:rejected` or a bare status.
-
     - To attach a file, write it under `.orbit/tmp/` and call
-      `orbit tool run orbit.task.artifact.put --input '{"id":"<task-id>","source_path":".orbit/tmp/<file>","path":"<artifact name>","model":"<agent-family>"}'`.
-      `source_path` is the local file; `path` is its stored artifact name.
-      Artifact paths beginning with `review-` in any ASCII case are reserved
-      for the review gate's system writer; the only agent-writable exception
-      is the schema-checked `review-report.json`. Name ordinary supporting
-      evidence with a nonreserved name (for example `examination-checks.json`).
-      `orbit tool show <tool.name>` prints the tool's schema.
-
-    Claimed mode
-
-    - When `input.claimed` is true, the pipeline delivers your output to the
-      owning machine. The injected task is authoritative; `orbit.task.update`
-      is unavailable. `orbit.task.show` can read only the claimed task through
-      the run's coordinator. Return writes as output fields:
-      - `execution_summary` (REQUIRED): the item 12 summary.
-      - `context_files_added`: selectors from item 4 (reported, not applied;
-        the owner widens the claim's footprint over every path the candidate
-        adds when it accepts the handoff).
-      - `comment`: any task comment or leftovers (item 11). A real blocker
-        (item 8) is `result.blocker` `{kind, evidence}`, not a status write
-        and not only this comment.
-      - `regression_from`: when the task asks you to record a
-        `regression_from` relation, the culprit task IDs as
-        `["<task-id>"]`, with the culprit commit named in
-        `execution_summary`. The owner checks each target and records the
-        relation when it accepts the handoff.
-    - In claimed mode, for a clean no-op or already-satisfied base without
-      `no-diff-expected`, write the structured
-      `no-diff.json` or `already-landed.json` report and every validation log
-      under the checkout's `.orbit/tmp/`. Return `no_diff_artifacts` as
-      `[{"path":"no-diff.json","source_path":".orbit/tmp/no-diff.json"}, ...]`,
-      including each report-referenced log. The deterministic commit step
-      attaches these bytes through the claim and runs the existing verifier.
-      `no_diff_artifacts` admits only the clean-tree report and its declared
-      validation logs; required task artifacts belong in `task_artifacts`.
-      This replaces the clean-tree evidence attachment in item 12 for claimed mode.
-    - In claimed mode, for both diff and no-diff candidates (including
-      `no-diff-expected`), write required task artifacts such as ledgers and
-      screenshots under the checkout's `.orbit/tmp/` and return
-      `task_artifacts` as `[{"path":"doc-duties-ledger.json","source_path":".orbit/tmp/doc-duties-ledger.json"}, ...]`.
-      The deterministic commit step validates every file and attaches it
-      through the claim. Missing, oversized, outside-scratch files, duplicate
-      artifact paths, or paths colliding with a clean-tree report or its
-      declared logs refuse the handoff; none are silently dropped. The engine's
-      `no-diff-handoff/<claim>.json` and `validation/<claim>/` names are also
-      reserved for its own checkpoint and validation logs. Paths in the
-      reserved `review-` namespace (any ASCII case, such as
-      `review-sandbox-handoff.json`) are refused too, because only the review
-      gate writes there.
-      The sandboxed implementer does not call owner artifact tools. Owner
-      mode continues to use `orbit.task.artifact.put` as item 12 requires.
-    - In claimed mode, for tasks without `no-diff-expected`, when the base
-      already resolves the task but the tests that show it run only outside
-      the agent sandbox (they skip or
-      defer here, and an affected-test gate selects none on an unchanged
-      base), also return `already_resolved` as
-      `{"selectors":["cargo test -p <crate> --test <target> [<filter>]"]}`.
-      The claim host replays each selector on the base outside the agent
-      sandbox before the NoDiff handoff. A passing replay lets the handoff
-      complete the task without a PR; a failing one fails the claim with its
-      output; an empty list, another command shape, or a selector that runs
-      no test is refused. Never set it with a diff or outside claimed mode.
-    - In claimed mode, `orbit.task.add` relations must include
-      `{"type":"spawned_from","target":"<claimed task ID>"}`. A review task
-      minted by `delivery-code-review` or `code-review` may also give each
-      finding a `regression_from` relation to the task in its workspace that
-      introduced it. `orbit.search` and `orbit.task.list` reach the owner's
-      authoritative records in the claimed workspace through the run's
-      coordinator; use them for duplicate checks. Federated search scopes
-      are refused. If the owner still
-      refuses a finding, return it in `unfiled_findings` as
-      `[{"title":..., "description":..., "relations":[...]}]`. The handoff
-      attaches these to the claimed task as `unfiled-findings.json` for the
-      owner to file.
-    - Other owner-routed tools may be unreachable; that is never a failure or
-      blocker. Record it in `comment`; report `failed` only for the work.
+      `orbit.task.artifact.put` with `id`, `source_path` (the local file) and
+      `path` (the artifact name). Names starting with `review-` in any case
+      are reserved for the review gate, except `review-report.json`; use
+      names like `examination-checks.json`.
 
     Terminal-task guard
 
-    - Before reading anything else, inspect the injected task. If
-      `task.terminal` is true, do no investigation, edits, or validation; return
-      success with `skipped_reason: "task_terminal"` and name `task.status` in
-      the summary.
-    - Re-read status with `orbit.task.show` before the first edit and before validation
-      (not in claimed mode, which relies on the injected status).
-      Apply the same stop rule if the fresh status refuses writes,
-      or if `orbit.task.update` rejects a write because the task became terminal.
-      Do not retry, work around it, or file friction for this designed outcome.
+    - Before anything else, check the injected task. If `task.terminal` is
+      true, do nothing else: return success with
+      `skipped_reason: "task_terminal"` and name `task.status` in the summary.
+    - Outside claimed mode, re-read status with `orbit.task.show` before the
+      first edit and before validation. Stop the same way if the status now
+      refuses writes, or if `orbit.task.update` rejects a write because the
+      task became terminal. Do not retry, work around it or file friction.
 
-    Context and checkout
+    Procedure
 
     1. The injected task is authoritative for title, description, acceptance
-       criteria, plan, and context files. If it is absent or malformed, recover
-       it with `orbit.task.show`. Read description, criteria, and plan first;
-       persist a concrete plan when it is blank. Read comments chronologically.
-       Later authorized refinements supersede earlier suggestions; report
-       unresolved contradictions. Recover truncated comments with granted
-       task tools when needed to understand the mandate.
-    2. Resolve every canonical `context_files` selector. Read `file:` targets
-       with the provider-native file-read tool. For `dir:`, verify containment
-       beneath the workspace root, list with `rg --files <directory>`, then
-       read key files; never pass directories to the file-read tool.
-    3. `input.workspace_path` and `input.repo_root` override task paths. Before
-       any write, obtain `pwd -P` and `git rev-parse --show-toplevel`; both
-       supplied roots must resolve to the canonical checkout. Otherwise write
-       nothing and fail with `worktree_mismatch`, naming requested and
-       resolved roots. Read the workspace's AGENTS.md and relevant guidance.
-       Record starting HEAD and full `git status --short` as the baseline
-       distinguishing run-owned output from pre-existing edits; preserve those
-       edits. Inspect materials, consumers, and evidence before changes.
+       criteria, plan and context files; if it is absent or malformed,
+       recover it with `orbit.task.show`. Read description, criteria and plan
+       first, and persist a concrete plan when the plan is blank. Read
+       comments oldest first: later authorized refinements supersede earlier
+       ones; report contradictions you cannot resolve. Recover truncated
+       comments when you need them to understand the mandate.
+    2. Resolve every `context_files` selector. Read `file:` targets with the
+       provider's file-read tool. For `dir:`, check it is inside the
+       workspace root, list it with `rg --files <dir>` and read the key
+       files; never pass a directory to the file-read tool.
+    3. `input.workspace_path` and `input.repo_root` override task paths.
+       Before any write, both must resolve to the checkout given by `pwd -P`
+       and `git rev-parse --show-toplevel`; otherwise write nothing and fail
+       with `worktree_mismatch`, naming the requested and resolved roots.
+       Read the workspace guide. Record the starting HEAD and full
+       `git status --short` as the baseline; preserve pre-existing edits.
+       Inspect the materials, consumers and evidence before changing anything.
+    4. Scope is the task's intent, not its selectors. Change any path the
+       work needs (a new test, a caller, a re-export) and explain why in the
+       summary; Orbit widens the task's selectors over every path you change.
+       To declare a selector yourself, read the durable `context_files` with
+       `orbit.task.show`, then send `orbit.task.update` the deduplicated union
+       of ALL existing selectors plus yours (`allow_missing_context: true` for
+       a file you will create): the list replaces the old one, so never send
+       additions alone. Revert accidental edits. Comment and stop when the
+       work turns out broad, ambiguous or out of scope. Never delete
+       unrelated material as cleanup.
+    5. Follow the workspace guide for repository practices and preserve
+       compatibility. A tool being available does not prove it is installed
+       or permit global installs, policy bypass or secret access.
+    6. Validate (see Validation). Check each acceptance criterion with
+       fitting evidence: sources for research, reproducibility for analysis,
+       behavior checks for software.
+    7. For a real blocker (missing dependency, contradictory requirements,
+       unresolvable conflict) return `result.blocker` as `{kind, evidence}`:
+       `kind` is a short token (an ASCII letter, then letters, digits, `_`,
+       `.`, `:` or `-`, at most 64 bytes); `evidence` is the reason. The run
+       stops and keeps the candidate. Never set `blocked` with
+       `orbit.task.update`; that write is refused. A criterion that
+       contradicts the workspace guide is not a blocker: the guide wins; skip
+       it and record the deviation and its source in the execution summary.
+    8. File `orbit.friction.add`, with evidence, only for a contradicted
+       assumption, a recurring failure, an incident root cause, or a
+       non-obvious gotcha that cost over 10 minutes.
+    9. Review the deliverable and diff for accuracy, unintended changes and
+       stale material. After your last repair, rerun the pre-handoff checks.
+    10. Clean up (see Scratch and cleanup), then reconcile, even if cleanup
+        was denied: inventory with
+        `git status --short` and `git diff --check` (staged, unstaged,
+        untracked, deletions, both sides of renames) and account for every
+        entry against the step 3 baseline. Delivery commits every tracked
+        change and every untracked path outside `.orbit/tmp/` (gitignored
+        output excepted), so every remaining entry must be deliverable. If
+        you updated `context_files`, re-read them and confirm the earlier
+        selectors remain. Repeat the inventory after cleanup.
+    11. Hand off (see Handoff).
+
+    Validation
+
+    - Unless the task is tagged `no-diff-expected`, run every check the
+      workspace guide requires and every required validation command before
+      handoff; never defer a required check to review. Required commands are
+      in a supplied delivery manifest's `required_validation_commands` or in
+      `workflow.required_validation_commands`.
+    - When `task.final_validation_commands` is present, the pipeline runs
+      each listed command itself, outside the agent sandbox, on the final
+      committed candidate. For a diff, do not run a listed command whole or
+      defer it: run focused checks (tests, formatter, linter for what you
+      changed) that show each criterion, plus every workspace-required check
+      the list does not name, and record each listed command as `not_run`
+      (pipeline final validation), never as passed. A clean no-op or
+      already-landed handoff skips pipeline validation, so there you run and
+      record every required check. Without the field, you own every check.
+    - Before handing off a diff, also run the pre-handoff checks the
+      workspace guide names for a diff (static guards, formatter, linters
+      for what you changed) and fix what they report. They do not replace
+      `task.final_validation_commands`.
+    - When the workspace requires an affected-test gate, run the full test
+      targets of the changed packages and their transitive workspace
+      dependents; formatting passes and focused filters do not replace it.
+      Pin its comparison base to the supplied delivery base with the
+      workspace's mechanism, and include committed, staged, unstaged and
+      untracked paths.
+    - A check the guide requires on another platform: record it as not run
+      and arrange the evidence the guide specifies. Exercise the affected
+      environment when needed, and state the limits of indirect evidence.
+    - Run builds and tests that take minutes in the provider's native shell
+      session (for Codex, exec_command/write_stdin) or another long-running
+      transport the lane provides, keeping sandboxing and build-budget
+      admission. `proc.spawn` caps `timeout_ms` at the activity's remaining
+      budget (default ceiling 45 min) and reports `timeout_ceiling_ms`; a
+      `proc.spawn` timeout on cargo or make is never a blocker: rerun through
+      the long-running transport and wait, including for build-budget
+      admission.
+    - A sandbox or runner denial (such as EPERM) proves neither a defect nor
+      correctness. Try safe in-scope alternatives without bypassing policy
+      and record the exact command, denial and uncertainty. Return success
+      only for a complete deliverable whose check the workspace policy lets
+      you defer (see Sanctioned sandbox deferral); otherwise report a
+      validation blocker.
+    - Run only gates the workspace policy names. When one fails outside the
+      delivery scope, reproduce it once on the unmodified base (same
+      command at the base commit, or with your diff reverted). If it fails
+      there too, it is pre-existing: record the command, case and base
+      result, keep the checks your change touches green, and hand off as
+      success. Orbit reruns network-inconclusive failures and holds the task
+      while the base is red, so never weaken, skip or work around a required
+      command to get past a red base, and never set `blocked` or return a
+      blocker for one. A failure the base does not share is yours to fix.
+
+    Sanctioned sandbox deferral
+
+    The only deferrable check is a required affected-test gate that exits 0
+    but prints only these notices for tests whose sandbox the agent sandbox
+    refuses: `DEFERRED: bubblewrap unavailable:` (Linux),
+    `SKIP: sandbox-exec cannot apply a profile:` (macOS) and, in claimed mode
+    on macOS only, `DEFERRED: ps denied:`. One run may print several kinds.
+    Do not fail the step for it:
+    - Run the gate with its comparison base pinned to `input.base_sha` and
+      `ORBIT_VALIDATION_SUMMARY` set to a new file under `.orbit/tmp/`.
+    - Return only that path:
+      `{"deferred_sandbox_validation":{"summary":".orbit/tmp/<file>.json"}}`.
+      Orbit derives and checks the record from the summary and replays the
+      gate outside the sandbox before delivery; any other key is refused, and
+      a summary without a command, exit status or executed-test count cannot
+      be deferred.
+    - In the execution summary, record the gate, summary path and notices,
+      and mark that coverage `not_run`, never passed.
+    Nothing else is deferrable: a nonzero exit, any other `SKIP:` or
+    `skipping` notice, a gate that ran or selected no tests, notices of a
+    kind this lane's sandbox does not refuse, `DEFERRED: ps denied:` outside
+    a macOS claimed leaf, a host-required criterion, a `baseline_red`
+    command, and every other required command (formatting, lint, goldens,
+    static analysis).
+
+    Post-deploy criteria
+
+    A criterion the task's latest task-pilot assessment lists in
+    `post_deploy` can only be evidenced by the deployed build on the host it
+    names. Do not fail or block on it. Gather what the candidate can show (its
+    own timings or request counts, a test server started from it) and return
+    each as
+    `{"owed_criteria":[{"criterion":N,"host":"...","command":"...","target":"...","candidate_evidence":"..."}]}`,
+    copying host and command from the pilot finding. Mark each `not_run`
+    (owed after deploy) in the execution summary. An owed entry for a
+    criterion the pilot did not type is refused; every other unmet
+    criterion still fails as usual.
+
+    Scratch and cleanup
+
+    - Write scratch, logs and evidence under `.orbit/tmp/`
+      (`$ORBIT_SCRATCH_DIR`: git-ignored, run-scoped, the only place
+      `orbit.task.artifact.put` accepts), never `/tmp`. It needs no
+      Trash-based cleanup.
+    - Run-owned output is only what `git status --short` adds to the step 3
+      baseline. Ignored build output, caches and sandbox-owned paths such as
+      `<worktree>/target` are not yours to remove and never block handoff.
+    - Before success, remove or revert run-owned output that is not
+      deliverable. Never use raw `rm -f`/`rm -rf` or broad cleanup for
+      specific leftovers; never retry denied cleanup or replace it
+      destructively. Preserve pre-existing contents, others' edits and
+      legitimate outputs.
+    - If denied or unsafe cleanup leaves run-owned output outside
+      `.orbit/tmp/`, record the exact paths and the blocker in an
+      `orbit.task.update` comment (the `comment` output in claimed mode) and
+      do not hand off as success.
+
+    Handoff
+
+    - Workflow admission set `in-progress` and the pipeline moves the task to
+      `review`; set neither. Leave changes uncommitted. Do not dispatch work,
+      and never delegate edits, validation, commits or dispatch to another
+      agent.
+    - REQUIRED: persist a meaningful `execution_summary` with
+      `orbit.task.update` (claimed mode: the `execution_summary` output).
+      Gates read artifacts and task state, never the summary, so the summary
+      is the audit trail. Map criteria to results; list validation commands
+      as passed, failed or not run, with reasons; record the reconciliation
+      (delivery paths, paths outside the task's selectors, cleanup outcome,
+      leftovers); disclose risks and deviations. Never claim a skipped check
+      passed or incomplete work succeeded.
+    - Return a short result `summary`; include `diff` only when cheap and
+      accurate.
+    - `no-diff-expected`: hand off the brief's outputs and execution summary
+      with a clean worktree. No no-diff report or validation logs are needed,
+      and the two cases below do not apply.
+    - Already landed: if this task's or a sibling's merged commit already
+      covers the clean checkout, verify that commit and the current
+      acceptance checks and do not manufacture a change, on a first attempt
+      or a retry. Attach `already-landed.json` and each validation log
+      before success, in the schema the Orbit task-execution reference
+      gives. Common misses: `criteria_evidence` is one non-empty string per
+      criterion, in order, never objects; `scope.comments` keep only `at`,
+      `by` and `message` (drop receipt ids such as `operation_id`); each
+      required command has one flat `validation[]` entry with outcome
+      `passed` and role `required`.
+    - Genuine no-op: attach `no-diff.json` and one JSON log per validation
+      command (with `run_id`, `tested_head`, `command`, `exit_code` and the
+      captured output), in the schema the task-execution reference gives.
+    - For a genuine no-op, every required check must pass directly or be the
+      gate of a sanctioned deferral; for the latter, include the gate's exit-0
+      log in the no-diff report and return the deferral record at the top
+      level (the claim
+      host replays it; the in-worker skip alone is not evidence, and it is
+      not a reason to block on `sandbox.seatbelt_unavailable`). Any other
+      old, missing, failed or unavailable check rules this path out: report
+      a validation blocker.
 
     Final-recovery resume
 
-    - When `input.final_recovery_resume` is present, after the terminal-task
-      guard address its `rationale`, original `refusal`, and `refused_output`
-      first. Repair the refused record or candidate before repeating validation;
-      do not return the same refused output unchanged. This applies in claimed
-      mode too. The context is supplied by the engine for the resumed phase
-      and survives a process restart.
+    When `input.final_recovery_resume` is present (claimed mode too), after
+    the terminal-task guard address its `rationale`, `refusal` and
+    `refused_output` first: repair the refused record or candidate before
+    validating again, and never return the same refused output unchanged.
 
     Resumed candidate
 
-    - When `input.resume_candidate` is set, the checkout already holds this
-      task's candidate from an earlier failed run, applied onto the current
-      base as uncommitted changes. Continue from that diff; do not discard
-      it and start over. Finish what `trigger` names: `implementation` (the
-      earlier run failed at `failed_step_id` before `commit`, so the diff is
-      a partial implementation — complete the task from it; a compiling
-      subset is not done), `conflict` (resolve the conflict markers in
-      `conflicting_paths` against the new base), `validation` (the `output`
-      of the failing `command`), `review` (the findings in the review
-      settlement comment or, when `interrupted_review` is set, in its
-      `findings`: the earlier run was stopped while its reviewer worked, and
-      when `repair_applied` is true the diff includes that reviewer's
-      unvalidated, unsettled repair — address the `open` findings, check the
-      `repaired` ones against the diff, and repair rather than
-      re-implement), `continuation` (an earlier claim committed it
-      but did not deliver it — check it against the task and finish what is
-      missing) or `landing` (a handed-off candidate whose landing stopped
-      because its base moved or a required check failed on it; it applied
-      cleanly onto the current base, so fix what `output` names, such as the
-      failed check and its signature, confirm it still builds and meets the
-      acceptance criteria there and adapt it to what the base changed). Then
-      rerun the checks and say in the summary that you repaired a resumed
-      candidate.
+    When `input.resume_candidate` is set, the worktree already holds this
+    task's candidate from an earlier failed run as uncommitted changes on
+    the current base. Continue from it; do not discard it. Finish what
+    `trigger` names:
+    - `implementation`: the run failed at `failed_step_id` before commit, so
+      the diff is partial; complete the task (a compiling subset is not
+      done).
+    - `conflict`: resolve the markers in `conflicting_paths` against the new
+      base.
+    - `validation`: fix the `output` of the failing `command`.
+    - `review`: address the findings in the review settlement comment or,
+      when `interrupted_review` is set, in its `findings`. If
+      `repair_applied` is true the diff includes that reviewer's unvalidated
+      repair: address the `open` findings, check the `repaired` ones against
+      the diff, and repair rather than re-implement.
+    - `continuation`: an earlier claim committed it but did not deliver it;
+      check it against the task and finish what is missing.
+    - `landing`: a handed-off candidate whose landing stopped because the
+      base moved or a required check failed; fix what `output` names (such
+      as the failed check and its signature), adapt it to what the base
+      changed, and confirm it builds and meets the criteria there.
+    Then rerun the checks, and say in the summary that you repaired a
+    resumed candidate.
 
-    Scope and implementation
+    Claimed mode
 
-    4. Treat `context_files` as a starting point, not a limit. Create or
-       modify any path the work requires, including paths outside the task's
-       selectors (a new test file, a caller, a re-export); explain why in the
-       summary. Orbit widens the task's selectors over every path you change
-       and records in task history which step introduced it, so declaring
-       selectors yourself is optional. To declare one, read durable
-       `context_files` with `orbit.task.show`, then use `orbit.task.update`
-       with the deduplicated union of ALL existing selectors and the added
-       canonical in-workspace `file:`, `dir:`, or `symbol:` selector (with
-       `allow_missing_context: true` for a file you will create). The list
-       REPLACES existing selectors; omission preserves them, `[]` clears them.
-       Never send additions alone. In claimed mode, report
-       `context_files_added` instead of calling unavailable task tools.
-       Revert accidental edits. Comment and stop for broad, ambiguous, or
-       out-of-scope behavior: scope is the task's intent, not its selectors.
-       Never delete unrelated materials as cleanup.
-    5. Keep shared instructions domain-neutral. Follow the workspace's
-       AGENTS.md, current evidence, and requirements for repository practices.
-    6. Deliver clear outputs, preserve compatibility, and explain constraints.
-       Tool availability does not prove installation or permit global installs,
-       policy bypass, or secret access.
-
-    Validation and handoff
-
-    7. Follow workspace validation policy. Check each acceptance criterion
-       with appropriate evidence: source support for research,
-       reproducibility for analysis, or behavior checks for software.
-       For tasks without `no-diff-expected`, run every check required by the
-       workspace's AGENTS.md and required validation commands before handoff;
-       do not defer a workspace-required
-       check to review. Read required validation commands from a supplied
-       delivery manifest's `required_validation_commands` or
-       `workflow.required_validation_commands`.
-       When `task.final_validation_commands` is present, the pipeline runs
-       each listed command itself, in order and outside the agent sandbox,
-       on the final committed candidate after base synchronization, and
-       attaches its log as delivery evidence. For a diff, do not run a
-       listed command whole or hand it off as `deferred_sandbox_validation`:
-       run focused checks (the tests, formatter or linter for what you
-       changed) that show each acceptance criterion, and every
-       workspace-required check the list does not name. Record each listed
-       command as `not_run` (pipeline final validation) in the execution
-       summary, never as passed. A clean no-op or already-landed handoff
-       skips that validation, so it runs and records every required check
-       (item 12). Without the field, you own every check.
-       For a candidate diff, when the workspace provides `make ci-guards`,
-       run it before handoff and fix every reported static guard violation, even
-       when `make ci-fast` is listed for pipeline final validation. In Rust
-       workspaces, also run `cargo fmt --all -- --check`, covering test targets
-       as well as production code. When applying rustfmt fixes, include changed
-       test files too; never restrict formatting to `src/` or library files.
-       For changed test `.rs` files, also run `rustfmt --check --edition <edition> <path> ...`
-       using the owning crate's edition. In workspaces providing
-       `ci-lint` and `scripts/build-budget.py`, mirror
-       these checks for each changed crate (`<crate>` is its package name):
-       - `scripts/build-budget.py -- cargo clippy -p <crate> --lib --bins -- -D warnings -D clippy::disallowed_methods`
-       - `scripts/build-budget.py -- cargo clippy -p <crate> --all-targets -- -D warnings -A clippy::disallowed_methods`
-       - `RUSTDOCFLAGS="-D warnings" scripts/build-budget.py -- cargo doc --no-deps -p <crate>`
-       The production pass retains the channel restriction; the all-targets
-       pass covers test targets, and rustdoc rejects broken/private links.
-       These focused checks do not replace final validation: leave whole
-       `task.final_validation_commands` entries to the pipeline, which
-       remains authoritative. Record commands and outcomes in the handoff.
-       If workspace guidance requires
-       a check on another platform, record it as not run and arrange the
-       evidence that guidance specifies rather than claiming it passed.
-       When the workspace requires an affected-test gate, run full test
-       targets of changed crates and their transitive workspace dependents;
-       a formatting/guardrail pass and focused test filters do not replace it.
-       Use the workspace's supported mechanism to pin the comparison base
-       when the delivery base is supplied, and include committed, staged,
-       unstaged and untracked candidate paths.
-       Exercise the affected environment when needed; state limits of indirect
-       evidence or checks run elsewhere.
-       Run build, test, cargo and make validation that can take minutes in the
-       provider's native shell session (for Codex, exec_command/write_stdin),
-       or another long-running transport the lane provides. proc.spawn clamps
-       timeout_ms to the activity's remaining wall-clock budget, at most the
-       configured ceiling (default 45 min; 60000 ms outside an activity), and
-       its result reports timeout_ceiling_ms. A proc.spawn timeout on cargo/make is
-       never a validation blocker: rerun through the long-running transport
-       and await completion, including time waiting for shared build-budget
-       admission. Preserve sandboxing and build-budget admission.
-       Sandbox/runner denials (e.g. EPERM) prove neither defects nor correctness.
-       Try safe in-scope alternatives without bypassing policy; record the
-       exact command, denial, and uncertainty. Return success only for a
-       complete deliverable when workspace policy permits deferring the
-       check; otherwise report the validation blocker.
-       One deferral is sanctioned: a required affected-test gate that exits
-       0 but prints only these notices, for tests whose sandbox the agent
-       sandbox refuses: `DEFERRED: bubblewrap unavailable:` notices on
-       Linux, `SKIP: sandbox-exec cannot apply a profile:` notices on macOS,
-       and, in claimed mode on macOS only, `DEFERRED: ps denied:` notices
-       for tests the agent sandbox refuses to exec `ps` for. One gate run
-       may print several of these kinds, as a broad macOS gate prints
-       Seatbelt and ps-denied notices together. Do not fail the step for
-       it. Run the gate with its comparison base pinned to
-       `input.base_sha` and `ORBIT_VALIDATION_SUMMARY` naming a new file
-       under the checkout's `.orbit/tmp/`, then return only that file's
-       checkout-relative path:
-       `{"deferred_sandbox_validation":{"summary":".orbit/tmp/<file>.json"}}`.
-       Do not write any other field: Orbit derives the record from the
-       summary the gate wrote (its command, exit status, executed tests,
-       base and notices), runs each deferring sandbox's probe in this lane
-       itself, and fails the step before commit unless the result is the
-       sanctioned case; it then replays the gate outside the agent sandbox
-       before delivery. A hand-written field is accepted only when it equals
-       Orbit's derivation, and any other key is refused. A gate whose
-       summary records no command, exit status or executed-test count cannot
-       be deferred. In the execution summary (never as a key in
-       `deferred_sandbox_validation`), record the gate, the summary path and
-       its notices, and mark that coverage `not_run`, never a completed
-       pass.
-       Nothing else is deferrable: a nonzero exit, any other `SKIP:` or
-       `skipping` notice, a gate that ran no tests or selected nothing,
-       notices of a kind whose probe this lane does not refuse,
-       `DEFERRED: ps denied:` notices outside a macOS claimed leaf, a host-required criterion, a
-       `baseline_red` command, and every other required command (formatting,
-       lint, goldens, static-analysis extraction) keep their ordinary
-       handling above.
-       A criterion the task's latest task-pilot assessment lists in
-       `post_deploy` can be evidenced only by the deployed build on the host
-       it names, so no candidate meets it before merge. Do not fail the run
-       or return a blocker for it. Gather what the candidate itself can show
-       (its own build's timings or request counts, a test server started
-       from the candidate) and return each such criterion as
-       `{"owed_criteria":[{"criterion":N,"host":"...","command":"...","target":"...","candidate_evidence":"..."}]}`,
-       copying the host and measurement command from that finding. The
-       delivery proceeds and settles in `review` until an operator records
-       the measurement. The step boundary refuses an owed criterion the
-       pilot did not type: every other unmet criterion still fails as
-       above. In the execution summary mark each owed criterion `not_run`
-       (owed after deploy), never as passed.
-       Run only gates named by workspace policy. When a gate fails outside the
-       delivery scope, reproduce it once on the unmodified baseline (the same
-       command at the base commit or with your diff reverted). A failure there
-       is pre-existing: record the command, case, and baseline result, keep
-       checks touched by your changes green, and hand off as success.
-       Orbit's own required validation makes the same comparison after you
-       hand off. It reruns a network-inconclusive failure (curl status 000,
-       DNS, TLS timeout), and it reruns a failing required command on the
-       base. When the base fails the same way, the task is held, not blocked,
-       until the base passes. So never weaken, skip or work around a required
-       command to get past a red base, and never set `blocked` or return a
-       blocker for one; a failure the base does not share is yours to fix.
-    8. For a real blocker (missing dependency, contradictory requirements, or
-       unresolvable conflict), return `result.blocker` as `{kind, evidence}`.
-       `kind` is a short token: an ASCII letter, then ASCII letters, digits,
-       `_`, `.`, `:`, or `-`, at most 64 bytes. `evidence` is the reason.
-       The step boundary records the kind, stops the run, and keeps the
-       candidate. Do not call `orbit.task.update` to set `blocked`; that write
-       is refused. A criterion contradicting AGENTS.md or equivalent is not a
-       blocker: the workspace rule wins; skip it and record the deviation and
-       source in the execution summary.
-    9. File `orbit.friction.add` with evidence only for a contradicted
-       assumption, recurring failure, incident root cause, or non-obvious
-       gotcha that took over 10 minutes.
-    10. Review the deliverable and diff for accuracy, unintended changes, and
-        stale material; run required checks unless tagged `no-diff-expected`,
-        leaving a diff's `task.final_validation_commands` to the pipeline.
-        On a diff, complete item 7's early static guards and scoped Rust
-        checks after your last repair before handing off.
-        Run-owned non-deliverable output is only what `git status --short` adds to the
-        item 3 baseline; ignored build output, caches, and sandbox-owned paths
-        like `<worktree>/target` are not yours to remove and never block
-        handoff. Write scratch, logs, and review evidence under `.orbit/tmp/`
-        (`$ORBIT_SCRATCH_DIR`; ignored by git, run-scoped, the only location
-        `orbit.task.artifact.put` accepts). Never under `/tmp`. Attach it
-        through granted task tools; scratch there needs no Trash-based
-        recoverable cleanup. Before success, remove or revert run-owned
-        output verified outside the deliverable. Deletion is exceptional for
-        stray untracked paths: never use raw `rm -f` or `rm -rf`, or broad
-        cleanup for specific leftovers. Never retry denied cleanup or replace
-        it destructively. Preserve pre-existing contents, others' edits, and
-        legitimate outputs.
-    11. Reconcile changes before returning, even if cleanup was denied.
-        Inventory with `git status --short` and `git diff --check`: staged,
-        unstaged, untracked, deletions, and both sides of renames. Account for
-        every entry against item 3's baseline. Delivery commits every tracked
-        change and every untracked path outside `.orbit/tmp/` (gitignored
-        output excepted), so each remaining entry must be deliverable. If you
-        updated `context_files`, re-read them and verify prior selectors
-        remain. Repeat inventory after cleanup.
-        If denied or unsafe cleanup leaves run-owned output outside
-        `.orbit/tmp/`, record exact paths and the blocker in an
-        `orbit.task.update` comment; do not hand off as success.
-    12. Workflow admission already set `in-progress`: do not redundantly set
-        that status or move the task to `review`; the pipeline owns that
-        transition. REQUIRED: persist a meaningful `execution_summary` with
-        `orbit.task.update` (in claimed mode, return it as the output's
-        `execution_summary` instead). Return a short result summary; include
-        `diff` only when cheap and accurate.
-
-        For `no-diff-expected`, hand off the brief's outputs and execution
-        summary with a clean worktree; no no-diff report or workspace
-        validation logs are required in either owner or claimed mode. The
-        following already-landed and genuine no-op evidence requirements
-        apply only to tasks without that tag.
-
-        If this task's or a sibling's merged commit covers the clean checkout,
-        verify that commit and current acceptance checks. On first attempt or
-        retry, do not manufacture a change: attach `already-landed.json` and
-        each validation log through `orbit.task.artifact.put` before success.
-        The already-landed report needs schema_version 1, task_id, run_id,
-        tested_head, covering_commit, covering_task_id (this task or covering
-        sibling), scope (title, description, acceptance_criteria, plan,
-        context_files, tags, relations, required_tools, type, comments; each
-        comment carries only at, by and message, so drop the receipt ids such
-        as operation_id that orbit.task.show adds), required_commands,
-        criteria_evidence, validation. Use flat validation[] objects with
-        sibling fields command, outcome, role, log_artifact. criteria_evidence
-        is an array of non-empty strings, one per acceptance criterion in
-        order (never objects). Each required
-        command's validation[] entry has outcome "passed" and role
-        "required"; the role vocabulary is required, expected_failure,
-        excluded, superseded, diagnostic.
-        For a genuine no-op, attach `no-diff.json` and validation logs via
-        `orbit.task.artifact.put`, using the schema in the Orbit task-execution
-        reference (schema_version 1, task_id, run_id, tested_head, reason,
-        validation[command, exit_code, log_artifact]). Attach each referenced
-        JSON log with run_id, tested_head, command, exit_code, and captured
-        output. Every required check must either pass directly or be the gate
-        covered by a sanctioned `deferred_sandbox_validation` record under
-        item 7. For that case, include the gate's exit-0 log in the no-diff
-        report and return the deferral record at the top level; do not treat
-        the nested-sandbox skip as an unavailable check or block on
-        `sandbox.seatbelt_unavailable`. `claim_validate` replays the deferred
-        gate on the claim host outside the worker sandbox, including for a
-        clean-base NoDiff handoff, and uses a passing replay as its evidence.
-        The in-worker skip alone is not evidence. Any other old, missing,
-        failed, or unavailable check disqualifies this path; report a
-        validation blocker.
-
-        Leave changes uncommitted; the pipeline owns commit, push, PR creation,
-        and merge. Follow item 10's scratch policy. Gates read durable artifacts and
-        task state, never the execution summary as an oracle. Do not dispatch work,
-        and never delegate edits, validation, commits or dispatch to another
-        agent. In the execution summary, map criteria to results,
-        list validation commands as passed/failed/not run with reasons, record
-        the item 11 reconciliation (delivery paths, paths outside the task's
-        selectors, cleanup outcome, leftovers), and disclose risks or
-        deviations.
-        Do not claim skipped checks passed or incomplete work successful.
+    When `input.claimed` is true, the pipeline delivers your output to the
+    owning machine. The injected task is authoritative; `orbit.task.update`
+    and owner artifact tools are unavailable, and `orbit.task.show` reads
+    only the claimed task. Return writes as output fields instead:
+    - `execution_summary` (REQUIRED): the Handoff summary.
+    - `context_files_added`: selectors you would have declared in step 4.
+    - `comment`: any task comment or leftovers. A real blocker is still
+      `result.blocker`, not only a comment.
+    - `regression_from`: when the task asks you to record a
+      `regression_from` relation, the culprit task IDs (`["<task-id>"]`),
+      with the culprit commit named in `execution_summary`.
+    - `task_artifacts`: required task artifacts (ledgers, screenshots) for
+      diff and no-diff candidates alike, including `no-diff-expected`, as
+      `[{"path":"doc-duties-ledger.json","source_path":".orbit/tmp/doc-duties-ledger.json"}]`,
+      with every file under `.orbit/tmp/`.
+    - `no_diff_artifacts`: for a clean no-op or already-satisfied base
+      without `no-diff-expected`, the `no-diff.json` or `already-landed.json`
+      report and every log it references, written under `.orbit/tmp/`, as
+      `[{"path":"no-diff.json","source_path":".orbit/tmp/no-diff.json"}]`.
+      This replaces attaching them yourself; it admits only the report and
+      its logs (other artifacts go in `task_artifacts`).
+    - `already_resolved`: only without a diff and without
+      `no-diff-expected`, when the base already resolves the task but the
+      tests that show it skip or defer inside the agent sandbox (and an
+      affected-test gate selects none on the unchanged base):
+      `{"selectors":["cargo test -p <crate> --test <target> [<filter>]"]}`.
+      The claim host replays each selector on the base; an empty list,
+      another command shape or a selector that runs no test is refused.
+    - `unfiled_findings`: findings the owner refused to file, as
+      `[{"title":..., "description":..., "relations":[...]}]`.
+    Files in `task_artifacts` and `no_diff_artifacts` must exist under
+    `.orbit/tmp/`, stay within the size limit, and have unique artifact
+    paths that do not collide with each other; the `review-`
+    namespace and the engine's `no-diff-handoff/<claim>.json` and
+    `validation/<claim>/` names are reserved. Any violation refuses the
+    handoff; nothing is silently dropped.
+    `orbit.task.add` relations must include
+    `{"type":"spawned_from","target":"<claimed task ID>"}`; a review task
+    minted by `delivery-code-review` or `code-review` may also give each
+    finding a `regression_from` relation to the task that introduced it.
+    `orbit.search` and `orbit.task.list` read the owner's records in the
+    claimed workspace (federated scopes are refused); use them for
+    duplicate checks. Other owner-routed tools may be unreachable; that is
+    never a failure or blocker: note it in `comment` and report `failed`
+    only for the work.
   steering_instruction: |
-    Mid-run steering checkpoint (advisory pull)
+    Mid-run steering checkpoint
 
-    - At each checkpoint where remaining work is still expensive — before
-      your first edit, before validation, and before any long or costly
-      phase — re-read the task with `orbit.task.show`. In claimed mode
-      (`input.claimed` is true) skip this re-read and rely on the injected
-      task instead, as the Terminal-task guard already provides.
-    - Your prompt snapshot is the newest comment your injected prompt
-      carried: the last entry of `task.comments`, or the snapshot named
-      by `task.steering` when the host delivered a steering block. Any
-      operator-authored comment after that snapshot is steering. Weigh
-      it like task text, oldest first, with later comments refining
-      earlier ones. System, automation and agent comments are not
-      steering.
-    - This re-read is advisory only, exactly like the terminal precheck.
-      It never records `steering_delivered`, never advances any
-      watermark, and no gate consumes your claim that you looked. Do
-      not write task history, a comment, or any delivery record to
-      report it, and do not treat it as delivery.
-    - Authority limits: a steering comment cannot widen your
-      `context_files`, change required validation, crew or review
-      policy, or move task lifecycle state. Those take effect only
-      through their governed writes. Weigh a comment that asks for any
-      of them, but continue under the current governed contract until
-      such a write appears.
-    - Terminal handling is unchanged: if the re-read shows the task is
-      terminal or refuses writes, stop under the Terminal-task guard.
-    - When `input.steering_round` is present, the promotion gate refused
-      to commit this run's candidate because operator steering had not
-      reached it. The checkout already holds that candidate, uncommitted:
-      continue from it rather than starting over, apply the operator
-      comments `input.steering_round.outstanding` names (carried in
-      `task.steering`, or in `task.comments` when no block leads the
-      task), and rerun the checks the change affects. The round and its
-      budget are the host's record; nothing you return spends or refunds
-      one.
+    - Before your first edit, before validation and before any long or
+      costly phase, re-read the task with `orbit.task.show` (in claimed mode,
+      rely on the injected task instead).
+    - Your prompt snapshot is the newest comment your prompt carried: the
+      last entry of `task.comments`, or the snapshot `task.steering` names
+      when a steering block was delivered. Any operator comment after it is
+      steering: weigh it like task text, oldest first, later refining
+      earlier. System, automation and agent comments are not steering.
+    - The re-read is advisory: do not write a comment, history or delivery
+      record about it.
+    - Steering cannot widen `context_files`, change required validation,
+      crew or review policy, or move lifecycle state; those change only
+      through their governed writes. Weigh such a request but keep working
+      under the current contract.
+    - If the re-read shows the task terminal or refusing writes, stop under
+      the Terminal-task guard.
+    - When `input.steering_round` is present, the promotion gate refused to
+      commit this run's candidate because operator steering had not reached
+      it. Continue from the uncommitted candidate in the worktree, apply the
+      comments `input.steering_round.outstanding` names (in `task.steering`,
+      or in `task.comments` when no steering block leads the task), and
+      rerun the checks the change affects.
   regression_risk_instruction: |
     Regression-risk marks
 
     `task.regression_risk.marks` names context files whose recent
-    deliveries often regressed: `regressed` counts the tasks that touched
-    the file in the last `window_days` and were later named by a
-    regression, and `nature` and `escape` say how those regressions most
-    often happened and why the gates missed them. `lesson` is the newest
-    regression's one-line summary. A mark points at where earlier work
-    broke; it does not describe the current code, so read the file as it is
-    now and do not re-fix old bugs.
+    deliveries often regressed: `regressed` counts tasks that touched the
+    file in the last `window_days` and were later named by a regression;
+    `nature` and `escape` say how those regressions happened and why gates
+    missed them; `lesson` is the newest one's summary. A mark shows where
+    earlier work broke, not the current code: read the file as it is now and
+    do not re-fix old bugs.
 
     For each marked file you change, act on every category its mark lists:
-    - escape `no_test`: add a focused regression check at the public
-      CLI/API boundary for the behavior you change there.
-    - escape `test_not_selected`: run the existing tests that cover the
-      file by name, not only an affected-test selection.
-    - escape `platform_only`: name each platform or host the change
-      behaves differently on, and exercise it or record it as owed.
+    - escape `no_test`: add a focused regression check at the public CLI/API
+      boundary for the behavior you change.
+    - escape `test_not_selected`: run the existing tests covering the file by
+      name, not only an affected-test selection.
+    - escape `platform_only`: name each platform or host the change behaves
+      differently on, and exercise it or record it as owed.
     - escape `review_missed`: before handoff, re-read your diff of the file
       against every acceptance criterion and its callers.
-    - escape `spec_ambiguous`: say in the execution summary which reading
-      of the requirement you implemented and why.
+    - escape `spec_ambiguous`: say in the execution summary which reading of
+      the requirement you implemented and why.
     - escape `nondeterministic`: keep timing, ordering and environment out
       of the change and its tests.
     - nature `broke_existing`: run the tests of the file's existing callers.
     - nature `defect_in_new`: cover the new paths you add, failure paths
       included.
     - nature `incomplete`: check each acceptance criterion against the diff.
-    - nature `merge_reintroduced`: after a rebase or base sync, re-verify
-      the touched area, and that nothing removed earlier came back.
-    - nature `contract_drift`: update the affected docs, schemas or
-      contract in the same diff.
-    - `unclassified`: no specific check; apply the ones above that fit.
+    - nature `merge_reintroduced`: after a rebase or base sync, re-verify the
+      touched area and that nothing removed earlier came back.
+    - nature `contract_drift`: update the affected docs, schemas or contract
+      in the same diff.
+    - `unclassified`: apply whichever checks above fit.
 
-    `orbit.codebase.show` with the path lists the tasks behind a mark when
-    you need them. In the execution summary, say what you did for each
-    marked file you changed.
+    `orbit.codebase.show` with the path lists the tasks behind a mark. In
+    the execution summary, say what you did for each marked file you changed.
   explore_instruction: |
     Read-only delegation
 
-    You may hand read-only questions to a cheaper agent instead of spending
-    your own turns on them: locating code, tracing callers, summarizing a
-    module, or finding the tests that cover a path.
-    - Through Orbit: call `orbit.agent.invoke` with `prompt` (one focused
-      question), `cwd` (your worktree root or a directory inside it),
-      `wait_seconds` (up to 600) and an `idempotency_key` unique to the
-      question. A crew from the workspace's explorer pool reads your
-      worktree in a read-only sandbox and answers with `answer.summary`,
-      `answer.findings` and `answer.paths_read`. Calls, concurrent
-      explorers, timeout and answer size are budgeted per run; when a call
-      is refused, continue the work yourself.
-    - Natively: your provider's own read-only subagents (for example
-      Claude's Agent tool on a small model) are allowed for the same kind
-      of question.
-    Delegate only reading. Never delegate edits, validation, commits or
-    dispatch: you make every change, run every check and own the result. An explorer's answer is a lead, not evidence; read
-    what you rely on in the files themselves before you change or cite it.
+    You may hand read-only questions (locate code, trace callers, summarize
+    a module, find the tests covering a path) to a cheaper agent:
+    - `orbit.agent.invoke` with one focused `prompt`, a `cwd` inside your
+      worktree, `wait_seconds` (≤600) and a unique `idempotency_key`. The
+      answer carries `answer.summary`, `answer.findings` and
+      `answer.paths_read`. Calls are budgeted; when one is refused, do the
+      work yourself.
+    - Your provider's own read-only subagents (for example Claude's Agent
+      tool on a small model).
+    Delegate only reading, never edits, validation, commits or dispatch. An
+    explorer's answer is a lead: read what you rely on yourself before you
+    change or cite it.
   tool_disallow_list:
     - orbit.auto_task.add
     - orbit.auto_task.mint
