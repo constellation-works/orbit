@@ -1,7 +1,7 @@
+//! `--no-reconcile` run reads leave stale runs and reservations untouched;
+//! explicit lookups keep store errors distinct, and live cancellation is driven end to end.
 #![allow(missing_docs)]
-// Tests use unwrap/expect to keep fixture setup readable.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
-
 //! `--no-reconcile` run reads leave stale runs and their task reservations
 //! untouched [ORB-12941].
 //!
@@ -19,20 +19,17 @@
 //! and the run must still end `cancelled`.
 //!
 //! A drain pass's surface reservation reaches readiness and `run show`.
-
 use crate::{fixture_crew, git_repo};
-
-use std::fs;
-use std::io::Write as _;
-use std::path::{Path, PathBuf};
-
 use assert_cmd::Command;
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use orbit_core::OrbitRuntime;
+use orbit_types::workflow::{DrainAdmissionPass, PipelineState};
 use rusqlite::{Connection, params};
 use serde_json::Value;
-
+use std::fs;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 mod admission_forecast;
 mod auth_exclusions;
 mod build_budget;
@@ -49,14 +46,10 @@ mod run_history;
 mod run_show_display;
 mod wait;
 mod waiting_blockers;
-
 const STALE_RUNNING: &str = "jrun-20260920-0100";
 const STALE_PENDING: &str = "jrun-20260920-0200";
 const FAILED: &str = "jrun-20260920-0300";
-
-/// A host resource sample well below every throttle mark.
 struct CalmHost;
-
 impl orbit_core::runtime::host_resource::HostResourceProbe for CalmHost {
     fn sample(
         &self,
@@ -78,11 +71,6 @@ impl orbit_core::runtime::host_resource::HostResourceProbe for CalmHost {
         }
     }
 }
-
-/// Re-executes `test` alone in a child with inherited authority cleared and a
-/// private `HOME`, so a body's in-process runtime and any process-wide worker
-/// substitute never reach the parallel parent. Returns `true` inside the child,
-/// where the body runs; the parent gets `false` once the child has passed.
 fn isolated_run_observation(test: &str) -> bool {
     const MARKER: &str = "ORBIT_TEST_SECURITY_SWEEP_CHILD";
     if std::env::var(MARKER).as_deref() == Ok(test) {
@@ -104,54 +92,30 @@ fn isolated_run_observation(test: &str) -> bool {
     test_env::assert_child_test_passed(test, output.status, output.stdout, output.stderr);
     false
 }
-
 fn successful_security_sweep_shows_filing_floor_source_and_excluded_alerts() {
     let fixture = Fixture::init();
-    let runtime =
-        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
-            .unwrap();
+    let runtime = fixture.runtime();
     for source in [Some("workspace"), None] {
         let id = format!("jrun-cli-security-{}", source.unwrap_or("historical"));
         let now = chrono::Utc::now().to_rfc3339();
-        fixture.db().execute(
-            "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,started_at,finished_at,created_at) VALUES (?1,?2,'dependabot_alert_sweep_pipeline',1,'success',?3,?3,?3,?3)",
-            params![id, fixture.workspace_id(), now],
-        ).unwrap();
-        let mut state = orbit_types::workflow::PipelineState::new(
-            id.clone(),
-            "dependabot_alert_sweep_pipeline".into(),
+        fixture.db().execute("INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,started_at,finished_at,created_at) VALUES (?1,?2,'dependabot_alert_sweep_pipeline',1,'success',?3,?3,?3,?3)", params![id, fixture.workspace_id(), now]).unwrap();
+        let mut state = fixture.write_state(
+            &runtime,
+            &id,
+            "dependabot_alert_sweep_pipeline",
             serde_json::json!({}),
         );
-        let mut output = serde_json::json!({
-            "filed_count": 1, "min_severity": "high",
-            "excluded_below_min_severity": [
-                {"family": "dependabot", "number": 71, "severity": "moderate"},
-                {"family": "code_scanning", "alert_number": 81, "security_severity": "moderate"}
-            ]
-        });
+        let mut output = serde_json::json!({"filed_count": 1, "min_severity": "high", "excluded_below_min_severity": [{"family": "dependabot", "number": 71, "severity": "moderate"}, {"family": "code_scanning", "alert_number": 81, "security_severity": "moderate"}]});
         if let Some(source) = source {
             output["min_severity_source"] = serde_json::json!(source);
         }
         state.record_pipeline_output("file", output);
         runtime.write_run_state(&id, &state).unwrap();
-        let output = fixture
-            .orbit()
-            .args(["run", "show", &id, "--no-reconcile"])
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let text = String::from_utf8_lossy(&output.stdout);
-        assert!(text.contains("filed=1"), "{text}");
-        assert!(
-            text.contains(&format!(
-                "min_severity=high ({})",
-                source.unwrap_or("unavailable")
-            )),
-            "{text}"
+        let text = fixture.show_text(&id);
+        contains(&text, "filed=1");
+        contains(
+            &text,
+            &format!("min_severity=high ({})", source.unwrap_or("unavailable")),
         );
         assert!(
             text.contains("2 (dependabot #71, code_scanning #81)"),
@@ -159,11 +123,8 @@ fn successful_security_sweep_shows_filing_floor_source_and_excluded_alerts() {
         );
     }
 }
-
 fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
     let fixture = Fixture::init();
-    // No gh is available: collection reports the capability gap, but filing
-    // still resolves its floor through the shipped job's real templates.
     for (config, input, floor, source) in [
         ("", None, "moderate", "built-in"),
         (
@@ -182,9 +143,6 @@ fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
         fs::write(fixture.work.join(".orbit/config.toml"), config).unwrap();
         let mut command = fixture.orbit();
         command.args(["run", "job", "dependabot_alert_sweep_pipeline", "--json"]);
-        // Keep a real CLI --wait route. The remaining precedence rows still
-        // submit and parse their inputs through this same CLI job route, then
-        // observe the real worker through the public wait boundary.
         if source == "built-in" {
             command.arg("--wait");
         }
@@ -224,8 +182,7 @@ fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
             assert_eq!(waited.results.len(), 1);
             assert_eq!(
                 waited.results[0].status,
-                orbit_core::PipelineWaitStatus::Success,
-                "{waited:?}"
+                orbit_core::PipelineWaitStatus::Success
             );
         }
         let shown = fixture.json(&[
@@ -243,22 +200,18 @@ fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
         );
     }
 }
-
 struct Fixture {
     _temp: tempfile::TempDir,
     home: PathBuf,
     work: PathBuf,
 }
-
 impl Fixture {
     fn init() -> Self {
         Self::init_with_stale_runs(true)
     }
-
     fn terminal() -> Self {
         Self::init_with_stale_runs(false)
     }
-
     fn init_with_stale_runs(include_stale_runs: bool) -> Self {
         let temp = tempfile::tempdir().expect("fixture tempdir");
         let home = temp.path().join("home");
@@ -276,11 +229,7 @@ impl Fixture {
             .args(["workspace", "init", "--name", "fixture"])
             .assert()
             .success();
-        // Deterministic jobs still freeze crew admission; pin fixture selection
-        // while every child sees a PATH with no provider launcher.
         fixture_crew::configure_sol(&fixture.home.join(".orbit"));
-        // Create the migrated store through the registered public factory;
-        // history output is not part of fixture setup's contract.
         drop(
             orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
                 orbit_core::runtime::OrbitRuntimeRoots {
@@ -294,7 +243,6 @@ impl Fixture {
         fixture.seed(include_stale_runs);
         fixture
     }
-
     fn orbit(&self) -> Command {
         let mut command = cargo_bin_cmd!("orbit");
         test_env::clear_inherited_authority(|name| {
@@ -307,11 +255,9 @@ impl Fixture {
             .env("PATH", self.home.join("empty-bin"));
         command
     }
-
     fn db(&self) -> Connection {
         Connection::open(self.home.join(".orbit").join("orbit.db")).expect("open fixture store")
     }
-
     fn workspace_id(&self) -> String {
         let config = fs::read_to_string(self.work.join(".orbit").join("config.yaml"))
             .expect("read workspace config");
@@ -321,10 +267,6 @@ impl Fixture {
             .expect("workspace id")
             .to_string()
     }
-
-    /// Every fixture keeps a finished failed run and its scan evidence.
-    /// Full fixtures also keep a stale running run (impossible owner pid) and
-    /// a never-claimed pending run, each holding a reservation.
     fn seed(&self, include_stale_runs: bool) {
         let workspace_id = self.workspace_id();
         let orbit_dir = canonical(&self.work).join(".orbit");
@@ -347,53 +289,13 @@ impl Fixture {
                     None,
                 ),
             ] {
-                db.execute(
-                    "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
-                     scheduled_at, started_at, created_at, pid)
-                 VALUES (?1, ?2, 'fixture_job', 1, ?3, ?4, ?5, ?4, ?6)",
-                    params![run_id, workspace_id, state, created_at, started_at, pid],
-                )
-                .expect("seed stale run");
-                db.execute(
-                    "INSERT INTO task_reservations (reservation_id, workspace_orbit_dir,
-                     workspace_id, task_ids_json, files_json, actor, created_at,
-                     expires_at, owner_run_id)
-                 VALUES (?1, ?2, ?3, '[]', ?4, 'fixture', ?5,
-                     '2099-01-01T00:00:00+00:00', ?6)",
-                    params![
-                        format!("reservation-{run_id}"),
-                        orbit_dir,
-                        workspace_id,
-                        format!(r#"["src/{state}.rs"]"#),
-                        created_at,
-                        run_id,
-                    ],
-                )
-                .expect("seed reservation");
+                db.execute("INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, scheduled_at, started_at, created_at, pid) VALUES (?1, ?2, 'fixture_job', 1, ?3, ?4, ?5, ?4, ?6)", params![run_id, workspace_id, state, created_at, started_at, pid]).expect("seed stale run");
+                db.execute("INSERT INTO task_reservations (reservation_id, workspace_orbit_dir, workspace_id, task_ids_json, files_json, actor, created_at, expires_at, owner_run_id) VALUES (?1, ?2, ?3, '[]', ?4, 'fixture', ?5, '2099-01-01T00:00:00+00:00', ?6)", params![format!("reservation-{run_id}"), orbit_dir, workspace_id, format!(r#"["src/{state}.rs"]"#), created_at, run_id]).expect("seed reservation");
             }
         }
-        db.execute(
-            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
-                 scheduled_at, started_at, finished_at, duration_ms, created_at)
-             VALUES (?1, ?2, 'fixture_job', 1, 'failed', '2026-09-20T03:00:00+00:00',
-                 '2026-09-20T03:00:01+00:00', '2026-09-20T03:05:00+00:00', 299000,
-                 '2026-09-20T03:00:00+00:00')",
-            params![FAILED, workspace_id],
-        )
-        .expect("seed failed run");
-        db.execute(
-            "INSERT INTO job_run_steps (workspace_id, run_id, step_index, target_type,
-                 target_id, state, started_at, finished_at, duration_ms, error_code,
-                 error_message)
-             VALUES (?1, ?2, 0, 'activity', 'implement', 'failed',
-                 '2026-09-20T03:00:01+00:00', '2026-09-20T03:05:00+00:00', 299000,
-                 'fixture_error', 'fixture step failed')",
-            params![workspace_id, FAILED],
-        )
-        .expect("seed failed step");
+        db.execute("INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, scheduled_at, started_at, finished_at, duration_ms, created_at) VALUES (?1, ?2, 'fixture_job', 1, 'failed', '2026-09-20T03:00:00+00:00', '2026-09-20T03:00:01+00:00', '2026-09-20T03:05:00+00:00', 299000, '2026-09-20T03:00:00+00:00')", params![FAILED, workspace_id]).expect("seed failed run");
+        db.execute("INSERT INTO job_run_steps (workspace_id, run_id, step_index, target_type, target_id, state, started_at, finished_at, duration_ms, error_code, error_message) VALUES (?1, ?2, 0, 'activity', 'implement', 'failed', '2026-09-20T03:00:01+00:00', '2026-09-20T03:05:00+00:00', 299000, 'fixture_error', 'fixture step failed')", params![workspace_id, FAILED]).expect("seed failed step");
     }
-
-    /// Every run, step, and reservation row, for before/after comparison.
     fn snapshot(&self) -> Vec<String> {
         let db = self.db();
         let mut rows = Vec::new();
@@ -416,7 +318,6 @@ impl Fixture {
         }
         rows
     }
-
     fn run_state(&self, run_id: &str) -> String {
         self.db()
             .query_row(
@@ -426,7 +327,6 @@ impl Fixture {
             )
             .expect("read run state")
     }
-
     fn insert_pending_run(&self, run_id: &str) {
         let workspace_id = self.workspace_id();
         let now = chrono::Utc::now().to_rfc3339();
@@ -439,7 +339,6 @@ impl Fixture {
             )
             .expect("insert pending leaf run");
     }
-
     fn json(&self, args: &[&str]) -> Value {
         let output = self.orbit().args(args).output().expect("spawn orbit");
         assert!(
@@ -462,8 +361,118 @@ impl Fixture {
         }
         serde_json::from_slice(&output.stdout).expect("json output")
     }
-
-    /// The structured error a failing `--json` invocation writes to stderr.
+    fn runtime(&self) -> OrbitRuntime {
+        OrbitRuntime::from_roots(&self.home.join(".orbit"), &self.work.join(".orbit")).unwrap()
+    }
+    fn text(&self, args: &[&str]) -> String {
+        let output = self.orbit().args(args).output().expect("spawn orbit");
+        assert!(
+            output.status.success(),
+            "{args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+    fn show_json(&self, id: &str) -> Value {
+        self.json(&["run", "show", id, "--no-reconcile", "--json"])
+    }
+    fn show_text(&self, id: &str) -> String {
+        self.text(&["run", "show", id, "--no-reconcile"])
+    }
+    fn readiness_text(&self) -> String {
+        self.text(&["run", "readiness"])
+    }
+    fn doctor_row(&self, check: &str) -> Value {
+        let out = self.orbit().args(["doctor", "--json"]).output().unwrap();
+        let rows: Value = serde_json::from_slice(&out.stdout).unwrap();
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["check"] == check)
+            .unwrap_or_else(|| panic!("no doctor row {check}: {rows}"))
+            .clone()
+    }
+    fn write_state(
+        &self,
+        runtime: &OrbitRuntime,
+        id: &str,
+        job: &str,
+        input: Value,
+    ) -> PipelineState {
+        let state = PipelineState::new(id.into(), job.into(), input);
+        runtime.write_run_state(id, &state).unwrap();
+        state
+    }
+    fn seed_running(&self, id: &str, job: &str, input: Value) -> (OrbitRuntime, PipelineState) {
+        let runtime = self.runtime();
+        let now = chrono::Utc::now().to_rfc3339();
+        self.db().execute("INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,?3,1,'running',?4,?5,?5,?5,?6)", params![id, self.workspace_id(), job, input.to_string(), now, std::process::id()]).unwrap();
+        let state = self.write_state(&runtime, id, job, input);
+        (runtime, state)
+    }
+    fn seed_pass(
+        &self,
+        id: &str,
+        job: &str,
+        pass: DrainAdmissionPass,
+    ) -> (OrbitRuntime, PipelineState) {
+        let (runtime, mut state) = self.seed_running(id, job, serde_json::json!({}));
+        state.pull_drain.drain_last_pass = Some(pass);
+        runtime.write_run_state(id, &state).unwrap();
+        (runtime, state)
+    }
+    fn set_run_state(&self, id: &str, state: &str) {
+        self.db()
+            .execute(
+                "UPDATE job_runs SET state=?1 WHERE run_id=?2",
+                params![state, id],
+            )
+            .unwrap();
+    }
+    fn conc(&self, id: &str, set: &str, rev: Option<&str>, reason: Option<&str>) -> Value {
+        let mut args = vec!["run", "concurrency", id, "--set", set];
+        if let Some(rev) = rev {
+            args.extend(["--if-revision", rev]);
+        }
+        if let Some(reason) = reason {
+            args.extend(["--reason", reason]);
+        }
+        args.push("--json");
+        self.json(&args)
+    }
+    fn conc_err(&self, id: &str, set: &str, rev: Option<&str>) -> Value {
+        let mut args = vec!["run", "concurrency", id, "--set", set];
+        if let Some(rev) = rev {
+            args.extend(["--if-revision", rev]);
+        }
+        args.push("--json");
+        self.failure(&args)
+    }
+    fn extend(&self, id: &str, dur: &str, conc: Option<&str>, reason: Option<&str>) -> Value {
+        let mut args = vec!["run", "extend", id, "--for", dur];
+        if let Some(conc) = conc {
+            args.extend(["--concurrency", conc]);
+        }
+        if let Some(reason) = reason {
+            args.extend(["--reason", reason]);
+        }
+        args.push("--json");
+        self.json(&args)
+    }
+    fn extend_err(&self, id: &str, dur: &str, conc: Option<&str>) -> Value {
+        let mut args = vec!["run", "extend", id, "--for", dur];
+        if let Some(conc) = conc {
+            args.extend(["--concurrency", conc]);
+        }
+        args.push("--json");
+        self.failure(&args)
+    }
+    fn config_set(&self, key: &str, value: &str) {
+        self.orbit()
+            .args(["config", "set", "--seed-from-global", key, value])
+            .assert()
+            .success();
+    }
     fn failure(&self, args: &[&str]) -> Value {
         let output = self.orbit().args(args).output().expect("spawn orbit");
         assert!(!output.status.success(), "{args:?} unexpectedly succeeded");
@@ -472,14 +481,82 @@ impl Fixture {
             .unwrap_or_else(|_| panic!("{args:?} stderr is not one JSON error: {stderr}"))
     }
 }
-
 fn canonical(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
-
-/// Every read form the run-failure scan permits, including the latest-run
-/// defaults, leaves the stale runs and their reservations exactly as stored
-/// while still returning the finished-run and step-failure evidence.
+fn pass_at(recorded_at: chrono::DateTime<chrono::Utc>) -> DrainAdmissionPass {
+    serde_json::from_value(serde_json::json!({"recorded_at": recorded_at, "queued": 0})).unwrap()
+}
+fn waiting(
+    task: &str,
+    reason: &str,
+    blocked_by: &[&str],
+    detail: Option<&str>,
+) -> orbit_types::workflow::DrainWaitingTask {
+    serde_json::from_value(serde_json::json!({"task_id": task, "reason": reason, "blocked_by": blocked_by, "detail": detail})).unwrap()
+}
+fn dispatch(
+    state: &mut PipelineState,
+    child: &str,
+    job: &str,
+    step: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    state.record_child_dispatch(orbit_types::workflow::ChildDispatch::submitted(
+        child.into(),
+        job.into(),
+        step.into(),
+        false,
+        false,
+        now,
+    ));
+}
+fn run_det(runtime: &OrbitRuntime, name: &str, input: Value) -> Value {
+    orbit_engine::RuntimeHost::run_deterministic(
+        runtime,
+        name,
+        &serde_json::json!({}),
+        &input,
+        orbit_tools::ToolContext::default(),
+    )
+    .unwrap()
+}
+fn task_params(
+    title: String,
+    description: String,
+    status: orbit_core::TaskStatus,
+) -> orbit_core::application::task::TaskAddParams {
+    orbit_core::application::task::TaskAddParams {
+        title,
+        description,
+        task_type: Some(orbit_core::TaskType::Feature),
+        complexity: orbit_core::TaskComplexity::Low,
+        status: Some(status),
+        ..Default::default()
+    }
+}
+fn cap(report: &Value) -> &Value {
+    &report["capacity"]
+}
+fn contains(text: &str, needle: &str) {
+    assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
+}
+macro_rules! contract {
+    ($name:ident, $($f:ident),+ $(,)?) => {
+        #[test]
+        fn $name() {
+            if !isolated_run_observation(concat!("run_observation::", stringify!($name))) { return; }
+            run_rows(&[$((stringify!($f), $f as fn())),+]);
+        }
+    };
+}
+fn run_rows(rows: &[(&str, fn())]) {
+    for (name, check) in rows {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+        orbit_common::test_env::record_scenario_pass(name);
+    }
+}
 fn readiness_bootstrap_preserves_stale_runs_and_held_reservations() {
     let fixture = Fixture::init();
     let before = fixture.snapshot();
@@ -492,7 +569,7 @@ fn readiness_bootstrap_preserves_stale_runs_and_held_reservations() {
         "1",
         "--json",
     ]);
-    assert_eq!(report["capacity"]["max_active_leaf_runs"], 3);
+    assert_eq!(cap(&report)["max_active_leaf_runs"], 3);
     assert!(report["tasks"].as_array().unwrap().len() <= 1);
     assert_eq!(
         fixture.snapshot(),
@@ -510,7 +587,6 @@ fn readiness_bootstrap_preserves_stale_runs_and_held_reservations() {
         "invalid readiness must also preserve state"
     );
 }
-
 #[test]
 fn readiness_snapshot_reports_replica_and_validation_warning() {
     if !isolated_run_observation(
@@ -520,11 +596,10 @@ fn readiness_snapshot_reports_replica_and_validation_warning() {
     }
     let fixture = Fixture::terminal();
     let idle = fixture.json(&["run", "readiness", "--json"]);
-    assert_eq!(idle["replica"], false, "{idle}");
+    assert_eq!(idle["replica"], false);
     assert!(
         idle.get("validation_env_warning")
-            .is_some_and(Value::is_null),
-        "{idle}"
+            .is_some_and(Value::is_null)
     );
     for (key, value) in [
         ("workflow.validation_env.shell_probe", "off"),
@@ -533,22 +608,14 @@ fn readiness_snapshot_reports_replica_and_validation_warning() {
             r#"["make ci-fast"]"#,
         ),
     ] {
-        fixture
-            .orbit()
-            .args(["config", "set", "--seed-from-global", key, value])
-            .assert()
-            .success();
+        fixture.config_set(key, value);
     }
     let warned = fixture.json(&["run", "readiness", "--json"]);
     let warning = warned["validation_env_warning"]
         .as_str()
         .expect("validation warning");
-    let text = fixture.orbit().args(["run", "readiness"]).output().unwrap();
-    assert!(text.status.success(), "{text:?}");
-    assert!(String::from_utf8(text.stdout).unwrap().contains(warning));
+    assert!(fixture.readiness_text().contains(warning));
 }
-
-/// Fresh CLI processes must reuse the advisory result without rerunning profiles.
 #[test]
 #[cfg(unix)]
 fn readiness_reuses_validation_warning_across_processes() {
@@ -559,48 +626,36 @@ fn readiness_reuses_validation_warning_across_processes() {
     }
     let fixture = Fixture::terminal();
     let marker = fixture.home.join("login-probes");
-    let profile = "printf 'probe\\n' >> \"$HOME/login-probes\"\nexport PATH=\"$HOME/login-tools:/usr/bin:/bin\"\n";
+    let probes = || fs::read_to_string(&marker).unwrap().lines().count();
+    let profile = "printf 'probe\n' >> \"$HOME/login-probes\"\nexport PATH=\"$HOME/login-tools:/usr/bin:/bin\"\n";
     for name in [".bash_profile", ".profile", ".zprofile"] {
         fs::write(fixture.home.join(name), profile).unwrap();
     }
     fs::create_dir_all(fixture.home.join(".config/fish")).unwrap();
-    fs::write(
-        fixture.home.join(".config/fish/config.fish"),
-        "printf 'probe\\n' >> \"$HOME/login-probes\"\nset -gx PATH \"$HOME/login-tools\" /usr/bin /bin\n",
-    ).unwrap();
+    fs::write(fixture.home.join(".config/fish/config.fish"), "printf 'probe\n' >> \"$HOME/login-probes\"\nset -gx PATH \"$HOME/login-tools\" /usr/bin /bin\n").unwrap();
     let config = fixture.work.join(".orbit/config.toml");
     let configure = |mode: &str| {
-        fs::write(&config, format!(
-            "[workflow]\nrequired_validation_commands = [\"make check\"]\n[workflow.validation_env]\npath = [\"/usr/bin\", \"/bin\"]\npath_mode = \"{mode}\"\n"
-        )).unwrap();
+        fs::write(&config, format!("[workflow]\nrequired_validation_commands = [\"make check\"]\n[workflow.validation_env]\npath = [\"/usr/bin\", \"/bin\"]\npath_mode = \"{mode}\"\n")).unwrap()
     };
     configure("replace");
     let first = fixture.json(&["run", "readiness", "--json"]);
-    let warning = first["validation_env_warning"]
-        .as_str()
-        .expect("missing PATH warning");
-    assert!(
-        warning.contains(fixture.home.join("login-tools").to_str().unwrap()),
-        "{warning}"
-    );
-    assert_eq!(fs::read_to_string(&marker).unwrap().lines().count(), 1);
-    let warm = fixture.json(&["run", "readiness", "--json"]);
+    let first_warning = first["validation_env_warning"].clone();
+    let warning = first_warning.as_str().expect("missing PATH warning");
+    contains(warning, fixture.home.join("login-tools").to_str().unwrap());
+    assert_eq!(probes(), 1);
     assert_eq!(
-        warm["validation_env_warning"],
-        first["validation_env_warning"]
+        fixture.json(&["run", "readiness", "--json"])["validation_env_warning"],
+        first_warning
     );
     assert_eq!(
-        fs::read_to_string(&marker).unwrap().lines().count(),
+        probes(),
         1,
         "a fresh readiness process must not rerun the login shell within the diagnostic TTL"
     );
-    // Policy edits invalidate the diagnostic even before its TTL expires.
     configure("prepend");
     let kept = fixture.json(&["run", "readiness", "--json"]);
-    assert!(kept["validation_env_warning"].is_null(), "{kept}");
-    assert_eq!(fs::read_to_string(&marker).unwrap().lines().count(), 2);
-
-    // An expired result must be recomputed, without a wall-clock sleep.
+    assert!(kept["validation_env_warning"].is_null());
+    assert_eq!(probes(), 2);
     let cache = fixture
         .work
         .join(".orbit/state/validation-env-warning.json");
@@ -613,94 +668,54 @@ fn readiness_reuses_validation_warning_across_processes() {
         .unwrap()
         .set_times(fs::FileTimes::new().set_modified(expired))
         .unwrap();
-    let refreshed = fixture.json(&["run", "readiness", "--json"]);
     assert_eq!(
-        refreshed["validation_env_warning"],
+        fixture.json(&["run", "readiness", "--json"])["validation_env_warning"],
         kept["validation_env_warning"]
     );
-    assert_eq!(fs::read_to_string(&marker).unwrap().lines().count(), 3);
-
-    // Cache damage cannot suppress the warning or fail readiness.
+    assert_eq!(probes(), 3);
     configure("replace");
     fs::write(&cache, "incomplete JSON").unwrap();
-    let repaired = fixture.json(&["run", "readiness", "--json"]);
     assert_eq!(
-        repaired["validation_env_warning"],
-        first["validation_env_warning"]
+        fixture.json(&["run", "readiness", "--json"])["validation_env_warning"],
+        first_warning
     );
-    assert_eq!(fs::read_to_string(&marker).unwrap().lines().count(), 4);
-
-    // A cache that cannot be replaced remains advisory: resolve and return
-    // the correct warning on each read instead of failing the snapshot.
+    assert_eq!(probes(), 4);
     fs::rename(&cache, fixture.home.join("saved-warning.json")).unwrap();
     fs::create_dir(&cache).unwrap();
     for expected in [5, 6] {
-        let uncached = fixture.json(&["run", "readiness", "--json"]);
         assert_eq!(
-            uncached["validation_env_warning"],
-            first["validation_env_warning"]
+            fixture.json(&["run", "readiness", "--json"])["validation_env_warning"],
+            first_warning
         );
-        assert_eq!(
-            fs::read_to_string(&marker).unwrap().lines().count(),
-            expected
-        );
+        assert_eq!(probes(), expected);
     }
 }
-
 fn readiness_reports_total_and_notifies_only_when_backlog_is_truncated() {
-    use orbit_core::application::task::TaskAddParams;
-    use orbit_core::{TaskComplexity, TaskStatus, TaskType};
-
+    use orbit_core::TaskStatus;
     let fixture = Fixture::init();
-    let runtime =
-        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
-            .unwrap();
+    let runtime = fixture.runtime();
     for index in 0..3 {
         runtime
-            .add_task(TaskAddParams {
-                title: format!("readiness candidate {index}"),
-                description: "Readiness total fixture".into(),
-                task_type: Some(TaskType::Feature),
-                complexity: TaskComplexity::Low,
-                status: Some(TaskStatus::Backlog),
-                ..Default::default()
-            })
+            .add_task(task_params(
+                format!("readiness candidate {index}"),
+                "Readiness total fixture".into(),
+                TaskStatus::Backlog,
+            ))
             .unwrap();
     }
-
-    let limited_text = fixture
-        .orbit()
-        .args(["run", "readiness", "--limit", "2"])
-        .output()
-        .unwrap();
-    assert!(
-        limited_text.status.success(),
-        "{}",
-        String::from_utf8_lossy(&limited_text.stderr)
-    );
-    let limited_text = String::from_utf8_lossy(&limited_text.stdout);
+    let limited_text = fixture.text(&["run", "readiness", "--limit", "2"]);
     assert_eq!(
         limited_text.lines().last(),
         Some("showing 2 of 3 backlog tasks; use --limit N or name task ids"),
         "the truncation notice must be the final text line: {limited_text}"
     );
-
     let limited_json = fixture.json(&["run", "readiness", "--limit", "2", "--json"]);
     assert_eq!(limited_json["total"], 3);
     assert_eq!(limited_json["tasks"].as_array().unwrap().len(), 2);
-
-    let complete_text = fixture
-        .orbit()
-        .args(["run", "readiness", "--limit", "3"])
-        .output()
-        .unwrap();
     assert!(
-        complete_text.status.success(),
-        "{}",
-        String::from_utf8_lossy(&complete_text.stderr)
-    );
-    assert!(
-        !String::from_utf8_lossy(&complete_text.stdout).contains("showing "),
+        !fixture
+            .text(&["run", "readiness", "--limit", "3"])
+            .contains("showing "),
         "a complete view must not print a truncation notice"
     );
     let complete_json = fixture.json(&["run", "readiness", "--limit", "3", "--json"]);
@@ -710,7 +725,6 @@ fn readiness_reports_total_and_notifies_only_when_backlog_is_truncated() {
         complete_json["tasks"].as_array().unwrap().len()
     );
 }
-
 fn job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage() {
     let fixture = Fixture::init();
     let jobs = fixture.home.join(".orbit/resources/jobs");
@@ -724,16 +738,16 @@ fn job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage() {
             params![input.to_string(), FAILED],
         )
         .unwrap();
-    let source = fixture.json(&["run", "show", FAILED, "--no-reconcile", "--json"]);
+    let source = fixture.show_json(FAILED);
     let replay = fixture.json(&["job", "replay", FAILED, "--json"]);
     assert_eq!(replay["success"], true);
     assert_eq!(replay["source_run_id"], FAILED);
     let id = replay["run_id"].as_str().unwrap();
     assert_ne!(id, FAILED);
-    let stored = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
+    let stored = fixture.show_json(id);
     assert_eq!(stored["run"]["state"], "success");
     assert_eq!(stored["run"]["retry_source_run_id"], FAILED);
-    let persisted_input: String = fixture
+    let persisted: String = fixture
         .db()
         .query_row(
             "SELECT input_json FROM job_runs WHERE run_id=?1",
@@ -741,25 +755,15 @@ fn job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(
-        serde_json::from_str::<Value>(&persisted_input).unwrap(),
-        input
-    );
-    assert_eq!(
-        fixture.json(&["run", "show", FAILED, "--no-reconcile", "--json"]),
-        source
-    );
+    assert_eq!(serde_json::from_str::<Value>(&persisted).unwrap(), input);
+    assert_eq!(fixture.show_json(FAILED), source);
     fixture
         .orbit()
         .args(["job", "replay", "jrun-missing-fixture", "--json"])
         .assert()
         .failure();
-    assert_eq!(
-        fixture.json(&["run", "show", FAILED, "--no-reconcile", "--json"]),
-        source
-    );
+    assert_eq!(fixture.show_json(FAILED), source);
 }
-
 fn no_reconcile_run_reads_leave_stale_runs_and_reservations_unchanged() {
     let fixture = Fixture::init();
     let before = fixture.snapshot();
@@ -767,7 +771,6 @@ fn no_reconcile_run_reads_leave_stale_runs_and_reservations_unchanged() {
         before.iter().any(|row| row.ends_with("|held|-")),
         "fixture must start with held reservations: {before:?}"
     );
-
     let history = fixture.json(&[
         "run",
         "history",
@@ -776,7 +779,7 @@ fn no_reconcile_run_reads_leave_stale_runs_and_reservations_unchanged() {
         "--no-reconcile",
         "--json",
     ]);
-    let states = history["runs"]
+    let states: Vec<_> = history["runs"]
         .as_array()
         .expect("runs")
         .iter()
@@ -786,7 +789,7 @@ fn no_reconcile_run_reads_leave_stale_runs_and_reservations_unchanged() {
                 run["state"].as_str().unwrap().to_string(),
             )
         })
-        .collect::<Vec<_>>();
+        .collect();
     for (run_id, state) in [
         (STALE_RUNNING, "running"),
         (STALE_PENDING, "pending"),
@@ -797,25 +800,25 @@ fn no_reconcile_run_reads_leave_stale_runs_and_reservations_unchanged() {
             "history must list {run_id} as {state}: {states:?}"
         );
     }
-
-    let shown = fixture.json(&["run", "show", FAILED, "--no-reconcile", "--json"]);
+    let shown = fixture.show_json(FAILED);
     assert_eq!(shown["run"]["state"], "failed");
     assert!(
         shown["steps"]
             .as_array()
             .expect("steps")
             .iter()
-            .any(|step| { step["state"] == "failed" && step["error_code"] == "fixture_error" }),
+            .any(|step| step["state"] == "failed" && step["error_code"] == "fixture_error"),
         "show must return the step failure: {shown}"
     );
     for run_id in [STALE_RUNNING, STALE_PENDING] {
-        let shown = fixture.json(&["run", "show", run_id, "--no-reconcile", "--json"]);
         assert!(
-            matches!(shown["run"]["state"].as_str(), Some("running" | "pending")),
-            "show must report {run_id} as stored: {shown}"
+            matches!(
+                fixture.show_json(run_id)["run"]["state"].as_str(),
+                Some("running" | "pending")
+            ),
+            "show must report {run_id} as stored"
         );
     }
-
     for args in [
         vec!["run", "logs", FAILED, "--no-reconcile", "--json"],
         vec![
@@ -839,9 +842,6 @@ fn no_reconcile_run_reads_leave_stale_runs_and_reservations_unchanged() {
     }
     assert_eq!(fixture.snapshot(), before);
 }
-
-/// Without the flag the same reads keep reconciling, including `run events`
-/// for an unrelated run, which reconciles every stale run at runtime open.
 fn default_run_reads_still_reconcile_stale_runs() {
     let fixture = Fixture::init();
     fixture
@@ -860,7 +860,6 @@ fn default_run_reads_still_reconcile_stale_runs() {
             .all(|row| row.ends_with("|stale_run_reconciled")),
         "reconciliation must release the stale runs' reservations: {after:?}"
     );
-
     let fixture = Fixture::init();
     let history = fixture.json(&["run", "history", "--json"]);
     assert!(
@@ -873,9 +872,6 @@ fn default_run_reads_still_reconcile_stale_runs() {
         "history must reconcile by default: {history}"
     );
 }
-
-/// An explicit run lookup reports why the stored run is unreadable instead
-/// of claiming it does not exist; only a run with no row is `not_found`.
 fn explicit_run_lookup_preserves_store_errors() {
     const MISSING: &str = "jrun-20260920-9999";
     let fixture = Fixture::init();
@@ -886,7 +882,6 @@ fn explicit_run_lookup_preserves_store_errors() {
             [FAILED],
         )
         .expect("corrupt stored run");
-
     let lookups = |run_id: &'static str| {
         [
             vec!["run", "show", run_id, "--no-reconcile", "--json"],
@@ -902,7 +897,7 @@ fn explicit_run_lookup_preserves_store_errors() {
         assert!(
             error["error"]
                 .as_str()
-                .is_some_and(|message| message.contains("corrupt_state")),
+                .is_some_and(|m| m.contains("corrupt_state")),
             "{args:?} must keep the store diagnostic: {error}"
         );
     }
@@ -910,17 +905,11 @@ fn explicit_run_lookup_preserves_store_errors() {
         let error = fixture.failure(&args);
         assert_eq!(error["code"], "job_run_not_found", "{args:?} -> {error}");
         assert!(
-            error["error"]
-                .as_str()
-                .is_some_and(|message| message.contains(MISSING)),
+            error["error"].as_str().is_some_and(|m| m.contains(MISSING)),
             "{args:?} must name the missing run: {error}"
         );
     }
 }
-
-/// The public `job run` alias executes locally, and its completed audit tree
-/// remains readable after the worker exits. Cancelling this terminal fixture
-/// cannot signal a process or replace its successful outcome.
 fn job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable() {
     let fixture = Fixture::init();
     let jobs = fixture.home.join(".orbit/resources/jobs");
@@ -930,8 +919,7 @@ fn job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable() {
     assert_eq!(completed["state"], "success");
     assert_eq!(completed["wait_timeout"], false);
     let run_id = completed["run_id"].as_str().unwrap();
-    let shown = fixture.json(&["run", "show", run_id, "--no-reconcile", "--json"]);
-    assert_eq!(shown["run"]["state"], "success");
+    assert_eq!(fixture.show_json(run_id)["run"]["state"], "success");
     let trace = fixture.json(&["run", "trace", run_id, "--json"]);
     assert_eq!(trace["run_id"], run_id);
     assert_eq!(trace["job_id"], "alias_fixture");
@@ -965,15 +953,11 @@ fn job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable() {
     assert_eq!(cancelled["provider_processes_stopped"], 0);
     assert_eq!(fixture.run_state(run_id), "success");
 }
-
-/// The CLI's default task-leaf cancel requeues with its reason and leaves the
-/// candidate in place; `--block` retains the previous blocked transition.
 fn cancel_task_leaf_requeues_by_default_and_block_is_explicit() {
     let fixture = Fixture::init();
     let candidate = fixture.work.join("src").join("candidate.rs");
     fs::create_dir_all(candidate.parent().unwrap()).unwrap();
     fs::write(&candidate, "candidate content\n").unwrap();
-
     for (run_id, block, expected_status) in [
         ("jrun-20261005-0434-1", false, "backlog"),
         ("jrun-20261005-0434-2", true, "blocked"),
@@ -1009,15 +993,12 @@ fn cancel_task_leaf_requeues_by_default_and_block_is_explicit() {
             ])
             .assert()
             .success();
-
         let mut args = vec!["run", "cancel", run_id, "--confirm", "--json"];
         if block {
             args.push("--block");
         }
         args.extend(["--reason", "preserve this candidate for later"]);
-        let result = fixture.json(&args);
-        assert_eq!(result["outcome"], "cancelled");
-
+        assert_eq!(fixture.json(&args)["outcome"], "cancelled");
         let task = fixture.json(&["task", "show", &task_id, "--json"]);
         assert_eq!(task["status"], expected_status);
         assert_eq!(task["plan"], "Resume the candidate after cancellation");
@@ -1026,14 +1007,11 @@ fn cancel_task_leaf_requeues_by_default_and_block_is_explicit() {
             fs::read_to_string(&candidate).unwrap(),
             "candidate content\n"
         );
-
-        let orbit_root = fixture.work.join(".orbit");
-        let runtime = OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &orbit_root)
-            .expect("open fixture runtime");
+        let runtime = fixture.runtime();
         let policy = runtime
             .read_run_state(run_id)
             .expect("run state")
-            .and_then(|state| state.task_cancellation_policy)
+            .and_then(|s| s.task_cancellation_policy)
             .expect("durable cancellation policy");
         assert_eq!(policy.block, block);
         let history = runtime.get_task_history(&task_id).expect("task history");
@@ -1043,7 +1021,7 @@ fn cancel_task_leaf_requeues_by_default_and_block_is_explicit() {
             Some(orbit_types::task::TaskStatus::InProgress)
         );
         assert_eq!(
-            entry.to_status.map(|status| status.to_string()).as_deref(),
+            entry.to_status.map(|s| s.to_string()).as_deref(),
             Some(expected_status)
         );
         assert_eq!(
@@ -1056,12 +1034,6 @@ fn cancel_task_leaf_requeues_by_default_and_block_is_explicit() {
         );
     }
 }
-
-/// Capture the pre-change stable timestamp independently of Orbit's probe.
-///
-/// `None` when the sandbox refuses to run `ps`: there is no pre-change token
-/// to capture, so the caller returns after this reports `test`'s deferral on
-/// stderr [ORB-15587].
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn ps_lstart_utc(test: &str, pid: u32) -> Option<String> {
     let output = match test_env::ps_lstart_utc(pid) {
@@ -1076,10 +1048,6 @@ fn ps_lstart_utc(test: &str, pid: u32) -> Option<String> {
     assert!(!raw.is_empty(), "ps must describe the live fixture process");
     Some(raw)
 }
-
-/// Re-execution clears PATH only in the child, without changing the parallel
-/// test runner's environment. The fixture token comes from the old ps probe.
-// Linux: the production /proc start-time probe must match persisted ps tokens with PATH empty.
 #[cfg(target_os = "linux")]
 #[test]
 fn linux_start_identity_without_ps_matches_pre_change_owner_tokens() {
@@ -1087,7 +1055,6 @@ fn linux_start_identity_without_ps_matches_pre_change_owner_tokens() {
         ProbeOutcome, STABLE_TOKEN_PREFIX, STABLE_TOKEN_PREFIX_V1, current_pid_namespace,
         legacy_lstart_matches, probe_process_start_identity, stable_tokens_match,
     };
-
     const PID: &str = "ORBIT_TEST_LSTART_PID";
     const RAW: &str = "ORBIT_TEST_LSTART_RAW";
     const TOKEN: &str = "ORBIT_TEST_LSTART_TOKEN";
@@ -1113,7 +1080,6 @@ fn linux_start_identity_without_ps_matches_pre_change_owner_tokens() {
         );
         return;
     }
-
     let pid = std::process::id();
     let Some(raw) = ps_lstart_utc(
         "run_observation::linux_start_identity_without_ps_matches_pre_change_owner_tokens",
@@ -1152,16 +1118,12 @@ fn linux_start_identity_without_ps_matches_pre_change_owner_tokens() {
         "the child must execute the identity assertions: {output:?}"
     );
 }
-
-/// Persist real ps-derived v2, v1 and legacy tokens in the store, then drive
-/// cancellation through the built binary with no ps on its PATH.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn cancelling_owners_with_pre_change_ps_tokens_still_signals_them() {
     use orbit_common::process::identity::{
         STABLE_TOKEN_PREFIX, STABLE_TOKEN_PREFIX_V1, current_pid_namespace, process_is_alive,
     };
-
     let fixture = Fixture::init();
     for format in ["v2", "v1", "legacy"] {
         let owner = test_env::spawn_unrelated_process();
@@ -1181,21 +1143,13 @@ fn cancelling_owners_with_pre_change_ps_tokens_still_signals_them() {
         };
         let run_id = format!("jrun-pre-change-{format}");
         let now = chrono::Utc::now().to_rfc3339();
-        fixture
-            .db()
-            .execute(
-                "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
-                scheduled_at, started_at, created_at, pid, pid_start_time)
-             VALUES (?1, ?2, 'fixture_job', 1, 'running', ?3, ?3, ?3, ?4, ?5)",
-                params![run_id, fixture.workspace_id(), now, owner.pid(), token],
-            )
-            .unwrap();
+        fixture.db().execute("INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, scheduled_at, started_at, created_at, pid, pid_start_time) VALUES (?1, ?2, 'fixture_job', 1, 'running', ?3, ?3, ?3, ?4, ?5)", params![run_id, fixture.workspace_id(), now, owner.pid(), token]).unwrap();
         let cancelled = fixture.json(&["run", "cancel", &run_id, "--confirm", "--json"]);
         assert_eq!(cancelled["outcome"], "cancelled", "{format}: {cancelled}");
         assert!(
             cancelled["signal_outcome"]
                 .as_str()
-                .is_some_and(|outcome| outcome.starts_with("terminated_")),
+                .is_some_and(|o| o.starts_with("terminated_")),
             "pre-change {format} owner token must still verify: {cancelled}"
         );
         assert!(
@@ -1204,18 +1158,10 @@ fn cancelling_owners_with_pre_change_ps_tokens_still_signals_them() {
         );
     }
 }
-
-/// Cancelling a live run ends its worker by signal while the launching CLI is
-/// still observing that worker. The observer must treat the signalled exit as
-/// the cancellation's own outcome rather than a worker failure racing it to
-/// the terminal state, and the cancelled outcome must survive a repeat
-/// cancel.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
     use std::process::{Child, Stdio};
     use std::time::{Duration, Instant};
-
-    /// Kills and reaps the launcher on every exit path, panics included.
     struct ReapOnDrop(Child);
     impl Drop for ReapOnDrop {
         fn drop(&mut self) {
@@ -1225,9 +1171,6 @@ fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
             let _ = self.0.wait();
         }
     }
-    /// The worker runs in its own session, outside the launcher's reach.
-    /// Kill its process group if the test fails before the cancellation is
-    /// shown to have stopped it.
     struct KillWorkerGroup(Option<libc::pid_t>);
     impl Drop for KillWorkerGroup {
         fn drop(&mut self) {
@@ -1236,14 +1179,10 @@ fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
             }
         }
     }
-
     let fixture = Fixture::init();
-    // Native Linux/macOS owner verification must work with no ps on PATH.
     let jobs = fixture.home.join(".orbit/resources/jobs");
     fs::create_dir_all(&jobs).unwrap();
     fs::write(jobs.join("cancel_fixture.yaml"), "schemaVersion: 2\nkind: Job\nmetadata:\n  name: cancel_fixture\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 60\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n").unwrap();
-
-    // `--wait` keeps the launching CLI alive as the worker's observer.
     let launcher_log = fixture.work.join("launcher.log");
     let log = fs::File::create(&launcher_log).unwrap();
     let mut launcher = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"));
@@ -1261,7 +1200,6 @@ fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
         .stderr(log);
     let mut launcher = ReapOnDrop(launcher.spawn().unwrap());
     let launcher_output = || fs::read_to_string(&launcher_log).unwrap_or_default();
-
     let deadline = Instant::now() + Duration::from_secs(30);
     let (run_id, worker_pid) = loop {
         let owned: Option<(String, Option<i64>)> = fixture
@@ -1297,19 +1235,17 @@ fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
     );
     let worker_pid = libc::pid_t::try_from(worker_pid).unwrap();
     let mut worker = KillWorkerGroup(Some(worker_pid));
-
     let cancelled = fixture.json(&["run", "cancel", &run_id, "--confirm", "--json"]);
-    assert_eq!(cancelled["outcome"], "cancelled", "{cancelled}");
+    assert_eq!(cancelled["outcome"], "cancelled");
     assert_eq!(cancelled["previous_state"], "running");
     assert_eq!(cancelled["final_state"], "cancelled");
-    assert_eq!(cancelled["signal_attempted"], true, "{cancelled}");
+    assert_eq!(cancelled["signal_attempted"], true);
     assert!(
         cancelled["signal_outcome"]
             .as_str()
-            .is_some_and(|outcome| outcome.starts_with("terminated_")),
+            .is_some_and(|o| o.starts_with("terminated_")),
         "cancellation must acknowledge terminating the worker: {cancelled}"
     );
-
     let deadline = Instant::now() + Duration::from_secs(30);
     while launcher.0.try_wait().unwrap().is_none() {
         assert!(
@@ -1319,34 +1255,29 @@ fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
-
     assert_eq!(
         unsafe { libc::kill(worker_pid, 0) },
         -1,
         "the cancelled run's worker is gone"
     );
     worker.0 = None;
-
-    let shown = fixture.json(&["run", "show", &run_id, "--no-reconcile", "--json"]);
-    assert_eq!(shown["run"]["state"], "cancelled", "{shown}");
+    assert_eq!(fixture.show_json(&run_id)["run"]["state"], "cancelled");
     let step_errors: Vec<String> = {
         let db = fixture.db();
-        let mut statement = db
+        let mut st = db
             .prepare("SELECT IFNULL(error_code, '-') FROM job_run_steps WHERE run_id = ?1")
             .unwrap();
-        statement
-            .query_map([&run_id], |row| row.get(0))
+        st.query_map([&run_id], |row| row.get(0))
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap()
     };
     for code in ["worker_terminated", "terminal_outcome_conflict"] {
         assert!(
-            !step_errors.iter().any(|error| error == code),
+            !step_errors.iter().any(|e| e == code),
             "a cancelled worker's exit is not recorded as {code}: {step_errors:?}"
         );
     }
-
     let audit_rows = fixture.json(&["audit", "list", "--limit", "200", "--json"]);
     let audits: Vec<String> = audit_rows
         .as_array()
@@ -1378,58 +1309,42 @@ fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
         serde_json::from_str(worker_exit["arguments_json"].as_str().unwrap()).unwrap();
     assert_eq!(exit["owner_pid"], worker_pid);
     assert_eq!(exit["signal"], libc::SIGTERM);
-    assert!(
-        exit["exit_status"]
-            .as_str()
-            .is_some_and(|status| !status.is_empty())
-    );
-
+    assert!(exit["exit_status"].as_str().is_some_and(|s| !s.is_empty()));
     let repeated = fixture.json(&["run", "cancel", &run_id, "--confirm", "--json"]);
     assert_eq!(repeated["outcome"], "already_terminal");
     assert_eq!(repeated["final_state"], "cancelled");
     assert_eq!(repeated["signal_attempted"], false);
     assert_eq!(fixture.run_state(&run_id), "cancelled");
 }
-
-/// A stopped coordinator's workers retain workspace slots, including a
-/// delivery whose wrapper has finished. A replacement records that inherited
-/// occupancy without attributing those workers' outcomes to itself.
 fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
-    use orbit_core::application::task::TaskAddParams;
-    use orbit_core::{TaskComplexity, TaskStatus, TaskType};
-    use orbit_types::workflow::{ChildDispatch, PipelineState};
+    use orbit_core::TaskStatus;
+    use orbit_types::workflow::PipelineState;
     use serde_json::json;
-
     let fixture = Fixture::init();
-    // The replacement's waves are classified against a pinned calm sample,
-    // never the live host: a loaded test host would throttle the wave and
-    // offer none of the work this test counts.
-    let runtime =
-        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
-            .unwrap()
-            .with_host_resource_probe(std::sync::Arc::new(CalmHost));
+    let runtime = fixture
+        .runtime()
+        .with_host_resource_probe(std::sync::Arc::new(CalmHost));
     let tasks: Vec<_> = (0..7)
         .map(|index| {
             let file = format!("task-{index}.rs");
             fs::write(fixture.work.join(&file), "fixture\n").unwrap();
-            runtime
-                .add_task(TaskAddParams {
-                    title: format!("independent task {index}"),
-                    description: "Fixture delivery".into(),
-                    acceptance_criteria: vec!["Delivery completes".into()],
-                    plan: "Fixture plan".into(),
-                    context_files: vec![format!("file:{file}")],
-                    task_type: Some(TaskType::Feature),
-                    complexity: TaskComplexity::Low,
-                    status: Some(if index < 2 {
+            {
+                let mut params = task_params(
+                    format!("independent task {index}"),
+                    "Fixture delivery".into(),
+                    if index < 2 {
                         TaskStatus::InProgress
                     } else {
                         TaskStatus::Backlog
-                    }),
-                    ..Default::default()
-                })
-                .unwrap()
-                .id
+                    },
+                );
+                params.acceptance_criteria = vec!["Delivery completes".into()];
+                params.plan = "Fixture plan".into();
+                params.context_files = vec![format!("file:{file}")];
+                runtime.add_task(params)
+            }
+            .unwrap()
+            .id
         })
         .collect();
     let sequence = std::cell::Cell::new(0);
@@ -1438,20 +1353,10 @@ fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
         sequence.set(index + 1);
         let id = format!("jrun-inherited-{index}");
         let now = chrono::Utc::now();
-        fixture.db().execute(
-            "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,?3,1,?4,?5,?6,?6,?6,?7)",
-            params![id, fixture.workspace_id(), job, status, input.to_string(), now.to_rfc3339(), std::process::id()],
-        ).unwrap();
+        fixture.db().execute("INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,?3,1,?4,?5,?6,?6,?6,?7)", params![id, fixture.workspace_id(), job, status, input.to_string(), now.to_rfc3339(), std::process::id()]).unwrap();
         let mut state = PipelineState::new(id.clone(), job.into(), input);
         for (child, child_job) in children {
-            state.record_child_dispatch(ChildDispatch::submitted(
-                (*child).into(),
-                (*child_job).into(),
-                "dispatch".into(),
-                false,
-                false,
-                now,
-            ));
+            dispatch(&mut state, child, child_job, "dispatch", now);
         }
         runtime.write_run_state(&id, &state).unwrap();
         id
@@ -1491,27 +1396,21 @@ fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
     );
     let stopped = fixture.json(&["run", "auto", "--stop", "--json"]);
     let coordinator = &stopped["coordinators"][0];
-    assert_eq!(coordinator["run_id"], old, "{stopped}");
-    assert_eq!(
-        coordinator["job_id"], "workspace_auto_pipeline",
-        "{stopped}"
-    );
+    assert_eq!(coordinator["run_id"], old);
+    assert_eq!(coordinator["job_id"], "workspace_auto_pipeline");
     assert_eq!(
         coordinator["forced_runs"],
         json!([]),
         "the CLI returns the stop projection MCP and the dashboard return: {stopped}"
     );
-    assert!(
-        coordinator["remaining_children"]
-            .as_array()
-            .is_some_and(|children| !children.is_empty()
-                && children
+    assert!(coordinator["remaining_children"].as_array().is_some_and(
+        |children| !children.is_empty()
+            && children.iter().all(|child| {
+                ["run_id", "job_name", "phase", "child_status"]
                     .iter()
-                    .all(|child| ["run_id", "job_name", "phase", "child_status"]
-                        .iter()
-                        .all(|key| child.get(key).is_some()))),
-        "{stopped}"
-    );
+                    .all(|key| child.get(key).is_some())
+            })
+    ));
     assert!(
         runtime
             .read_run_state(&old)
@@ -1521,14 +1420,7 @@ fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
             .drain_admissions_stop
             .is_some()
     );
-    // The stopped coordinator's loop ends, without cancelling either worker.
-    fixture
-        .db()
-        .execute(
-            "UPDATE job_runs SET state='success' WHERE run_id=?1",
-            [&old],
-        )
-        .unwrap();
+    fixture.set_run_state(&old, "success");
     let replacement = seed(
         "workspace_auto_pipeline",
         "running",
@@ -1536,55 +1428,34 @@ fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
         &[],
     );
     let classify = || {
-        orbit_engine::RuntimeHost::run_deterministic(
+        run_det(
             &runtime,
             "classify_workspace_auto_tasks",
-            &json!({}),
-            &json!({"run_id": replacement, "max_active_leaf_runs": 3, "mode": "pr"}),
-            orbit_tools::ToolContext::default(),
+            json!({"run_id": replacement, "max_active_leaf_runs": 3, "mode": "pr"}),
         )
-        .unwrap()
     };
     let verify = |occupied: u64, inherited: u64, offered: usize, limit: u64| {
         let wave = classify();
-        assert_eq!(wave["active_leaf_runs"], occupied, "{wave:#}");
-        assert_eq!(wave["inherited_leaf_runs"], inherited, "{wave:#}");
-        assert_eq!(
-            wave["free_slots"],
-            limit.saturating_sub(occupied),
-            "{wave:#}"
-        );
-        assert_eq!(
-            wave["loose_task_ids"].as_array().unwrap().len(),
-            offered,
-            "{wave:#}"
-        );
-        let shown = fixture.json(&["run", "show", &replacement, "--no-reconcile", "--json"]);
+        assert_eq!(wave["active_leaf_runs"], occupied);
+        assert_eq!(wave["inherited_leaf_runs"], inherited);
+        assert_eq!(wave["free_slots"], limit.saturating_sub(occupied));
+        assert_eq!(wave["loose_task_ids"].as_array().unwrap().len(), offered);
+        let shown = fixture.show_json(&replacement);
         let capacity = json!({"active_leaf_runs": occupied, "inherited_leaf_runs": inherited, "max_active_leaf_runs": limit});
         assert_eq!(
             shown["pipeline_state"]["drain_last_pass"]["capacity"],
             capacity
         );
         assert_eq!(shown["drain_summary"]["capacity"], capacity);
-        let output = fixture
-            .orbit()
-            .args(["run", "show", &replacement, "--no-reconcile"])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        let text = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            text.contains(&format!(
-                "occupied={occupied} inherited={inherited} limit={limit}"
-            )),
-            "{text}"
+        contains(
+            &fixture.show_text(&replacement),
+            &format!("occupied={occupied} inherited={inherited} limit={limit}"),
         );
         wave
     };
-    // A ceiling below inherited occupancy must offer no new work.
-    fixture.json(&["run", "concurrency", &replacement, "--set", "1", "--json"]);
+    fixture.conc(&replacement, "1", None, None);
     verify(2, 2, 0, 1);
-    fixture.json(&["run", "concurrency", &replacement, "--set", "3", "--json"]);
+    fixture.conc(&replacement, "3", None, None);
     let wave = verify(2, 2, 1, 3);
     let own_task = wave["loose_task_ids"][0].as_str().unwrap();
     let own_leaf = seed(
@@ -1600,91 +1471,39 @@ fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
         &[(&own_leaf, "task_local_pipeline")],
     );
     let mut state = runtime.read_run_state(&replacement).unwrap().unwrap();
-    state.record_child_dispatch(ChildDispatch::submitted(
-        own_wrapper.clone(),
-        "task_auto_pipeline".into(),
-        "dispatch".into(),
-        false,
-        false,
+    dispatch(
+        &mut state,
+        &own_wrapper,
+        "task_auto_pipeline",
+        "dispatch",
         chrono::Utc::now(),
-    ));
+    );
     runtime.write_run_state(&replacement, &state).unwrap();
     verify(3, 2, 0, 3);
-    // Even if our wrapper ends first, its live descendant is ours, not inherited.
-    fixture
-        .db()
-        .execute(
-            "UPDATE job_runs SET state='success' WHERE run_id=?1",
-            [&own_wrapper],
-        )
-        .unwrap();
+    fixture.set_run_state(&own_wrapper, "success");
     verify(3, 2, 0, 3);
     for id in [&old_wrapper, &old_leaf] {
-        fixture
-            .db()
-            .execute("UPDATE job_runs SET state='success' WHERE run_id=?1", [id])
-            .unwrap();
+        fixture.set_run_state(id, "success");
     }
     verify(2, 1, 1, 3);
-    fixture
-        .db()
-        .execute(
-            "UPDATE job_runs SET state='success' WHERE run_id=?1",
-            [&detached_leaf],
-        )
-        .unwrap();
+    fixture.set_run_state(&detached_leaf, "success");
     verify(1, 0, 2, 3);
-    let shown = fixture.json(&["run", "show", &replacement, "--no-reconcile", "--json"]);
+    let shown = fixture.show_json(&replacement);
     assert_eq!(shown["drain_summary"]["admitted"], 1);
     assert_eq!(shown["drain_summary"]["succeeded"], 1);
     assert_eq!(shown["drain_summary"]["failed"], 0);
 }
-
-/// Worker-limit adjustment only writes a drain control record. The fixture's
-/// live test PID prevents orphan reconciliation; this record is never passed
-/// to cancellation or any process-control command.
 fn run_concurrency_updates_persisted_revision_and_refuses_stale_writes() {
     let fixture = Fixture::init();
-    let runtime = orbit_core::OrbitRuntime::from_roots(
-        &fixture.home.join(".orbit"),
-        &fixture.work.join(".orbit"),
-    )
-    .unwrap();
     let id = "jrun-cli-workers";
     let input = serde_json::json!({"max_active_leaf_runs": 2});
-    let now = chrono::Utc::now().to_rfc3339();
-    fixture.db().execute(
-        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_auto_pipeline',1,'running',?3,?4,?4,?4,?5)",
-        params![id,fixture.workspace_id(),input.to_string(),now,std::process::id()],
-    ).unwrap();
-    runtime
-        .write_run_state(
-            id,
-            &orbit_types::workflow::PipelineState::new(
-                id.into(),
-                "workspace_auto_pipeline".into(),
-                input.clone(),
-            ),
-        )
-        .unwrap();
-    let changed = fixture.json(&[
-        "run",
-        "concurrency",
-        id,
-        "--set",
-        "3",
-        "--if-revision",
-        "0",
-        "--reason",
-        "CLI fixture",
-        "--json",
-    ]);
+    let (runtime, _) = fixture.seed_running(id, "workspace_auto_pipeline", input.clone());
+    let changed = fixture.conc(id, "3", Some("0"), Some("CLI fixture"));
     assert_eq!(changed["outcome"], "updated");
     assert_eq!(changed["previous_concurrency"], 2);
     assert_eq!(changed["concurrency"], 3);
     assert_eq!(changed["revision"], 1);
-    let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
-    assert_eq!(shown["run"]["state"], "running");
+    assert_eq!(fixture.show_json(id)["run"]["state"], "running");
     let before = runtime.read_run_state(id).unwrap().unwrap();
     let limit = before
         .pull_drain
@@ -1696,79 +1515,28 @@ fn run_concurrency_updates_persisted_revision_and_refuses_stale_writes() {
     assert_eq!(limit.revision, 1);
     assert_eq!(limit.actor, "cli");
     assert_eq!(limit.reason.as_deref(), Some("CLI fixture"));
-    let unchanged = fixture.json(&[
-        "run",
-        "concurrency",
-        id,
-        "--set",
-        "3",
-        "--if-revision",
-        "1",
-        "--json",
-    ]);
+    let unchanged = fixture.conc(id, "3", Some("1"), None);
     assert_eq!(unchanged["outcome"], "unchanged");
     assert_eq!(unchanged["revision"], 1);
-    let error = fixture.failure(&[
-        "run",
-        "concurrency",
-        id,
-        "--set",
-        "4",
-        "--if-revision",
-        "0",
-        "--json",
-    ]);
-    assert!(
-        error["error"].as_str().unwrap().contains("revision"),
-        "{error}"
-    );
+    let error = fixture.conc_err(id, "4", Some("0"));
+    assert!(error["error"].as_str().unwrap().contains("revision"));
     assert_eq!(runtime.read_run_state(id).unwrap().unwrap(), before);
     assert_eq!(runtime.show_job_run(id).unwrap().input, Some(input));
     assert_eq!(fixture.run_state(id), "running");
 }
-
-/// `orbit run extend` lengthens a live drain in place and retunes it, and a
-/// repeat drain start still queues behind it as a successor rather than
-/// extending it [ORB-15383]. Only drain control records are written; the
-/// fixture's live test PID keeps orphan reconciliation away from the run.
 fn run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues() {
     let fixture = Fixture::init();
     orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
-    let runtime = orbit_core::OrbitRuntime::from_roots(
-        &fixture.home.join(".orbit"),
-        &fixture.work.join(".orbit"),
-    )
-    .unwrap();
     let id = "jrun-cli-extend";
     let input = serde_json::json!({"for_seconds": 3600, "max_active_leaf_runs": 2});
     let now = chrono::Utc::now();
-    fixture.db().execute(
-        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_auto_pipeline',1,'running',?3,?4,?4,?4,?5)",
-        params![id,fixture.workspace_id(),input.to_string(),now.to_rfc3339(),std::process::id()],
-    ).unwrap();
+    let (runtime, mut state) = fixture.seed_running(id, "workspace_auto_pipeline", input);
     let stamped =
         (now + chrono::Duration::minutes(10)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mut state = orbit_types::workflow::PipelineState::new(
-        id.into(),
-        "workspace_auto_pipeline".into(),
-        input.clone(),
-    );
     state.record_pipeline_output("open_window", serde_json::json!({"deadline": stamped}));
     runtime.write_run_state(id, &state).unwrap();
-
-    let changed = fixture.json(&[
-        "run",
-        "extend",
-        id,
-        "--for",
-        "3h",
-        "--concurrency",
-        "4",
-        "--reason",
-        "CLI fixture",
-        "--json",
-    ]);
-    assert_eq!(changed["outcome"], "extended", "{changed}");
+    let changed = fixture.extend(id, "3h", Some("4"), Some("CLI fixture"));
+    assert_eq!(changed["outcome"], "extended");
     assert_eq!(changed["previous_deadline"], stamped.as_str());
     assert_eq!(changed["revision"], 1);
     assert_eq!(changed["concurrency"]["previous_concurrency"], 2);
@@ -1793,43 +1561,24 @@ fn run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues() {
             .max_active_leaf_runs,
         4
     );
-    let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
     assert_eq!(
-        shown["run"]["drain_window_extension"]["revision"], 1,
-        "{shown}"
+        fixture.show_json(id)["run"]["drain_window_extension"]["revision"],
+        1
     );
-
-    let unchanged = fixture.json(&["run", "extend", id, "--for", "5m", "--json"]);
+    let unchanged = fixture.extend(id, "5m", None, None);
     assert_eq!(unchanged["outcome"], "unchanged");
     assert_eq!(unchanged["deadline"], changed["deadline"]);
     assert!(unchanged["concurrency"].is_null());
-
-    let error = fixture.failure(&["run", "extend", id, "--for", "soon", "--json"]);
+    let error = fixture.extend_err(id, "soon", None);
+    assert!(error["error"].as_str().unwrap().contains("duration"));
+    let invalid = fixture.extend_err(id, "4h", Some("0"));
     assert!(
-        error["error"].as_str().unwrap().contains("duration"),
-        "{error}"
-    );
-
-    let invalid_concurrency = fixture.failure(&[
-        "run",
-        "extend",
-        id,
-        "--for",
-        "4h",
-        "--concurrency",
-        "0",
-        "--json",
-    ]);
-    assert!(
-        invalid_concurrency["error"]
+        invalid["error"]
             .as_str()
             .unwrap()
-            .contains("worker ceiling must be at least 1"),
-        "{invalid_concurrency}"
+            .contains("worker ceiling must be at least 1")
     );
     assert_eq!(runtime.read_run_state(id).unwrap().unwrap(), extended);
-
-    // A second start does not reach the live drain: it waits for its slot.
     let successor = runtime
         .submit_pipeline_run(
             "workspace_auto_pipeline",
@@ -1838,32 +1587,18 @@ fn run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues() {
             Some("fixture"),
         )
         .unwrap();
-    assert!(successor.queued, "{successor:?}");
+    assert!(successor.queued);
     assert_eq!(runtime.read_run_state(id).unwrap().unwrap(), extended);
     assert_eq!(fixture.run_state(id), "running");
 }
-
-/// A drain's worker limit is the only ceiling on the delivery jobs it
-/// dispatches. With nineteen delivery wrappers already running — past the ten
-/// the job once allowed — a twentieth is admitted to run at once instead of
-/// waiting `pending` behind a job-level limit while it holds a drain slot. The
-/// detached worker is substituted, so nothing beyond admission executes.
 fn a_drain_at_concurrency_twenty_runs_twenty_delivery_wrappers_at_once() {
     let fixture = Fixture::init();
     orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
-    let runtime = orbit_core::OrbitRuntime::from_roots(
-        &fixture.home.join(".orbit"),
-        &fixture.work.join(".orbit"),
-    )
-    .unwrap();
+    let runtime = fixture.runtime();
     let now = chrono::Utc::now().to_rfc3339();
     for index in 0..19 {
-        fixture.db().execute(
-            "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'task_auto_pipeline',1,'running',?3,?3,?3,?4)",
-            params![format!("jrun-cli-wrapper-{index}"),fixture.workspace_id(),now,std::process::id()],
-        ).unwrap();
+        fixture.db().execute("INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'task_auto_pipeline',1,'running',?3,?3,?3,?4)", params![format!("jrun-cli-wrapper-{index}"), fixture.workspace_id(), now, std::process::id()]).unwrap();
     }
-
     let twentieth = runtime
         .submit_pipeline_run(
             "task_auto_pipeline",
@@ -1872,41 +1607,15 @@ fn a_drain_at_concurrency_twenty_runs_twenty_delivery_wrappers_at_once() {
             Some("fixture"),
         )
         .unwrap();
-
-    assert!(!twentieth.queued, "{twentieth:?}");
+    assert!(!twentieth.queued);
     assert_eq!(twentieth.queue_position, None);
 }
-
-/// `orbit run concurrency` retunes a replica's pull drain the same way it
-/// does an auto drain, to any positive ceiling, and still refuses a run that
-/// is not a drain.
 fn run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling() {
     let fixture = Fixture::init();
-    let runtime = orbit_core::OrbitRuntime::from_roots(
-        &fixture.home.join(".orbit"),
-        &fixture.work.join(".orbit"),
-    )
-    .unwrap();
     let id = "jrun-cli-pull-workers";
     let input = serde_json::json!({"max_active_leaf_runs": 5});
-    let now = chrono::Utc::now().to_rfc3339();
-    fixture.db().execute(
-        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_pull_pipeline',1,'running',?3,?4,?4,?4,?5)",
-        params![id,fixture.workspace_id(),input.to_string(),now,std::process::id()],
-    ).unwrap();
-    runtime
-        .write_run_state(
-            id,
-            &orbit_types::workflow::PipelineState::new(
-                id.into(),
-                "workspace_pull_pipeline".into(),
-                input.clone(),
-            ),
-        )
-        .unwrap();
-
-    let changed = fixture.json(&["run", "concurrency", id, "--set", "24", "--json"]);
-
+    let (runtime, _) = fixture.seed_running(id, "workspace_pull_pipeline", input.clone());
+    let changed = fixture.conc(id, "24", None, None);
     assert_eq!(changed["outcome"], "updated");
     assert_eq!(changed["job_id"], "workspace_pull_pipeline");
     assert_eq!(changed["previous_concurrency"], 5);
@@ -1914,388 +1623,215 @@ fn run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling() {
     let state = runtime.read_run_state(id).unwrap().unwrap();
     assert_eq!(state.effective_max_active_leaf_runs(5), 24);
     assert_eq!(runtime.show_job_run(id).unwrap().input, Some(input));
-
-    let refused = fixture.failure(&["run", "concurrency", FAILED, "--set", "24", "--json"]);
-    assert!(
-        refused["error"].as_str().unwrap().contains("fixture_job"),
-        "{refused}"
-    );
+    let refused = fixture.conc_err(FAILED, "24", None);
+    assert!(refused["error"].as_str().unwrap().contains("fixture_job"));
 }
-
-/// [ORB-16337] Readiness uses a live pull drain's ceiling when no local drain
-/// is running, including after `orbit run concurrency --set`, and still prefers
-/// a local drain and the idle default of 5.
 fn readiness_uses_a_live_pull_drains_ceiling() {
     let fixture = Fixture::init();
-    let text = |fixture: &Fixture| -> String {
-        let output = fixture
-            .orbit()
-            .args(["run", "readiness"])
-            .output()
-            .expect("spawn readiness");
-        assert!(
-            output.status.success(),
-            "readiness text failed: {output:?}\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).expect("readiness text is utf-8")
-    };
-
     let idle = fixture.json(&["run", "readiness", "--json"]);
-    assert_eq!(idle["capacity"]["max_active_leaf_runs"], 5, "{idle}");
-    assert_eq!(idle["capacity"]["active_leaf_runs"], 0, "{idle}");
-    assert_eq!(idle["capacity"]["free_slots"], 5, "{idle}");
-    assert_eq!(idle["capacity"]["limit_source"], "default", "{idle}");
-    assert!(idle["capacity"]["drain_run_id"].is_null(), "{idle}");
-    assert!(idle["capacity"]["pull_drain_run_id"].is_null(), "{idle}");
-    let idle_text = text(&fixture);
-    assert!(
-        idle_text.contains("Active leaf runs: 0/5; free slots: 5."),
-        "{idle_text}"
-    );
+    for (key, expected) in [
+        ("max_active_leaf_runs", serde_json::json!(5)),
+        ("active_leaf_runs", serde_json::json!(0)),
+        ("free_slots", serde_json::json!(5)),
+        ("limit_source", serde_json::json!("default")),
+        ("drain_run_id", serde_json::Value::Null),
+        ("pull_drain_run_id", serde_json::Value::Null),
+    ] {
+        assert_eq!(cap(&idle)[&key], expected);
+    }
+    let idle_text = fixture.readiness_text();
+    contains(&idle_text, "Active leaf runs: 0/5; free slots: 5.");
     assert!(
         !idle_text.contains("Leaf ceiling:"),
         "idle readiness must not name a pull ceiling: {idle_text}"
     );
-
-    let runtime = orbit_core::OrbitRuntime::from_roots(
-        &fixture.home.join(".orbit"),
-        &fixture.work.join(".orbit"),
-    )
-    .unwrap();
-    let now = chrono::Utc::now().to_rfc3339();
     let pull_id = "jrun-cli-pull-ceiling";
-    let input = serde_json::json!({"max_active_leaf_runs": 3});
-    fixture.db().execute(
-        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_pull_pipeline',1,'running',?3,?4,?4,?4,?5)",
-        params![pull_id, fixture.workspace_id(), input.to_string(), now, std::process::id()],
-    ).unwrap();
-    runtime
-        .write_run_state(
-            pull_id,
-            &orbit_types::workflow::PipelineState::new(
-                pull_id.into(),
-                "workspace_pull_pipeline".into(),
-                input,
-            ),
-        )
-        .unwrap();
+    fixture.seed_running(
+        pull_id,
+        "workspace_pull_pipeline",
+        serde_json::json!({"max_active_leaf_runs": 3}),
+    );
+    let now = chrono::Utc::now().to_rfc3339();
     for index in 0..2 {
-        fixture.db().execute(
-            "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'task_pr_pipeline',1,'running',?3,?3,?3,?4)",
-            params![format!("jrun-cli-leaf-ceiling-{index}"), fixture.workspace_id(), now, std::process::id()],
-        ).unwrap();
+        fixture.db().execute("INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'task_pr_pipeline',1,'running',?3,?3,?3,?4)", params![format!("jrun-cli-leaf-ceiling-{index}"), fixture.workspace_id(), now, std::process::id()]).unwrap();
     }
-
     let submitted = fixture.json(&["run", "readiness", "--json"]);
-    assert_eq!(
-        submitted["capacity"]["max_active_leaf_runs"], 3,
-        "{submitted}"
+    for (key, expected) in [
+        ("max_active_leaf_runs", serde_json::json!(3)),
+        ("active_leaf_runs", serde_json::json!(2)),
+        ("free_slots", serde_json::json!(1)),
+        ("limit_source", serde_json::json!("pull_run_input")),
+        ("pull_drain_run_id", serde_json::json!(pull_id)),
+        ("drain_run_id", serde_json::Value::Null),
+    ] {
+        assert_eq!(cap(&submitted)[&key], expected);
+    }
+    let submitted_text = fixture.readiness_text();
+    contains(&submitted_text, "Active leaf runs: 2/3; free slots: 1.");
+    contains(
+        &submitted_text,
+        &format!("Leaf ceiling: {pull_id} (pull_run_input)."),
     );
-    assert_eq!(submitted["capacity"]["active_leaf_runs"], 2, "{submitted}");
-    assert_eq!(
-        submitted["capacity"]["free_slots"], 1,
-        "free slots are the pull ceiling minus occupied leaves: {submitted}"
-    );
-    assert_eq!(
-        submitted["capacity"]["limit_source"], "pull_run_input",
-        "{submitted}"
-    );
-    assert_eq!(
-        submitted["capacity"]["pull_drain_run_id"], pull_id,
-        "{submitted}"
-    );
-    assert!(
-        submitted["capacity"]["drain_run_id"].is_null(),
-        "{submitted}"
-    );
-    let submitted_text = text(&fixture);
-    assert!(
-        submitted_text.contains("Active leaf runs: 2/3; free slots: 1."),
-        "{submitted_text}"
-    );
-    assert!(
-        submitted_text.contains(&format!("Leaf ceiling: {pull_id} (pull_run_input).")),
-        "{submitted_text}"
-    );
-
-    let changed = fixture.json(&["run", "concurrency", pull_id, "--set", "4", "--json"]);
-    assert_eq!(changed["outcome"], "updated", "{changed}");
-    assert_eq!(changed["concurrency"], 4, "{changed}");
+    let changed = fixture.conc(pull_id, "4", None, None);
+    assert_eq!(changed["outcome"], "updated");
+    assert_eq!(changed["concurrency"], 4);
     let resized = fixture.json(&["run", "readiness", "--json"]);
-    assert_eq!(resized["capacity"]["max_active_leaf_runs"], 4, "{resized}");
-    assert_eq!(resized["capacity"]["active_leaf_runs"], 2, "{resized}");
-    assert_eq!(resized["capacity"]["free_slots"], 2, "{resized}");
-    assert_eq!(
-        resized["capacity"]["limit_source"], "pull_run_control",
-        "{resized}"
+    for (key, expected) in [
+        ("max_active_leaf_runs", serde_json::json!(4)),
+        ("active_leaf_runs", serde_json::json!(2)),
+        ("free_slots", serde_json::json!(2)),
+        ("limit_source", serde_json::json!("pull_run_control")),
+    ] {
+        assert_eq!(cap(&resized)[&key], expected);
+    }
+    let resized_text = fixture.readiness_text();
+    contains(&resized_text, "Active leaf runs: 2/4; free slots: 2.");
+    contains(
+        &resized_text,
+        &format!("Leaf ceiling: {pull_id} (pull_run_control)."),
     );
-    let resized_text = text(&fixture);
-    assert!(
-        resized_text.contains("Active leaf runs: 2/4; free slots: 2."),
-        "{resized_text}"
-    );
-    assert!(
-        resized_text.contains(&format!("Leaf ceiling: {pull_id} (pull_run_control).")),
-        "{resized_text}"
-    );
-
     let requested = fixture.json(&["run", "readiness", "--concurrency", "8", "--json"]);
-    assert_eq!(
-        requested["capacity"]["max_active_leaf_runs"], 8,
-        "{requested}"
-    );
-    assert_eq!(requested["capacity"]["free_slots"], 6, "{requested}");
-    assert_eq!(
-        requested["capacity"]["limit_source"], "requested",
-        "{requested}"
-    );
-
+    for (key, expected) in [
+        ("max_active_leaf_runs", serde_json::json!(8)),
+        ("free_slots", serde_json::json!(6)),
+        ("limit_source", serde_json::json!("requested")),
+    ] {
+        assert_eq!(cap(&requested)[&key], expected);
+    }
     let local_id = "jrun-cli-local-ceiling";
-    let local_input = serde_json::json!({"max_active_leaf_runs": 7});
-    fixture.db().execute(
-        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_auto_pipeline',1,'running',?3,?4,?4,?4,?5)",
-        params![local_id, fixture.workspace_id(), local_input.to_string(), now, std::process::id()],
-    ).unwrap();
-    runtime
-        .write_run_state(
-            local_id,
-            &orbit_types::workflow::PipelineState::new(
-                local_id.into(),
-                "workspace_auto_pipeline".into(),
-                local_input,
-            ),
-        )
-        .unwrap();
+    fixture.seed_running(
+        local_id,
+        "workspace_auto_pipeline",
+        serde_json::json!({"max_active_leaf_runs": 7}),
+    );
     let local = fixture.json(&["run", "readiness", "--json"]);
     assert_eq!(
-        local["capacity"]["max_active_leaf_runs"], 7,
+        cap(&local)["max_active_leaf_runs"],
+        7,
         "a live local drain keeps precedence over the pull drain: {local}"
     );
-    assert_eq!(local["capacity"]["active_leaf_runs"], 2, "{local}");
-    assert_eq!(local["capacity"]["free_slots"], 5, "{local}");
-    assert_eq!(local["capacity"]["limit_source"], "run_input", "{local}");
-    assert_eq!(local["capacity"]["drain_run_id"], local_id, "{local}");
-    assert_eq!(local["capacity"]["pull_drain_run_id"], pull_id, "{local}");
-    let local_text = text(&fixture);
-    assert!(
-        local_text.contains("Active leaf runs: 2/7; free slots: 5."),
-        "{local_text}"
-    );
+    for (key, expected) in [
+        ("active_leaf_runs", serde_json::json!(2)),
+        ("free_slots", serde_json::json!(5)),
+        ("limit_source", serde_json::json!("run_input")),
+        ("drain_run_id", serde_json::json!(local_id)),
+        ("pull_drain_run_id", serde_json::json!(pull_id)),
+    ] {
+        assert_eq!(cap(&local)[&key], expected);
+    }
+    let local_text = fixture.readiness_text();
+    contains(&local_text, "Active leaf runs: 2/7; free slots: 5.");
     assert!(
         !local_text.contains("Leaf ceiling:"),
         "local-drain text must not name the pull ceiling: {local_text}"
     );
-    assert!(
-        local_text.contains(&format!("Running drain: {local_id}.")),
-        "{local_text}"
-    );
-    assert!(
-        local_text.contains(&format!("Running pull drain: {pull_id}.")),
-        "{local_text}"
-    );
+    contains(&local_text, &format!("Running drain: {local_id}."));
+    contains(&local_text, &format!("Running pull drain: {pull_id}."));
 }
-
-/// [ORB-13901] A short-lived CLI cannot sample long enough to judge
-/// sustained pressure, so it reports the throttle a live drain recorded on
-/// its last pass: readiness and `run show` name the resource, value,
-/// threshold and since-when, and ship discovery stands down.
 fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
     let fixture = Fixture::init();
-    let runtime = orbit_core::OrbitRuntime::from_roots(
-        &fixture.home.join(".orbit"),
-        &fixture.work.join(".orbit"),
-    )
-    .unwrap();
     let id = "jrun-cli-throttled-pull";
     let now = chrono::Utc::now();
-    fixture.db().execute(
-        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_pull_pipeline',1,'running','{}',?3,?3,?3,?4)",
-        params![id,fixture.workspace_id(),now.to_rfc3339(),std::process::id()],
-    ).unwrap();
+    let (runtime, mut state) =
+        fixture.seed_running(id, "workspace_pull_pipeline", serde_json::json!({}));
     let since = chrono::DateTime::parse_from_rfc3339("2026-10-04T08:41:00Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
-    let mut state = orbit_types::workflow::PipelineState::new(
-        id.into(),
-        "workspace_pull_pipeline".into(),
-        serde_json::json!({}),
-    );
-    state.pull_drain.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
-        task_pilot_warning: None,
-        capacity: None,
-        recorded_at: now,
-        queued: 0,
-        deferred: Vec::new(),
-        deferred_total: 0,
-        excluded: Vec::new(),
-        excluded_total: 0,
-        waiting_recorded_at: None,
-        waiting_by_reason: Default::default(),
-        consecutive_idle_passes: 0,
-        last_pass_error_code: None,
-        last_pass_error: None,
-        consecutive_pass_failures: 0,
-        admission_refusal: None,
-        degraded: false,
-        admission_forecast: None,
-        resource_throttle: Some(orbit_types::workflow::ResourceThrottle {
-            resources: vec![
-                orbit_types::workflow::ResourcePressure {
-                    resource: "memory".into(),
-                    percent: 93.2,
-                    high_percent: 90,
-                    resume_percent: 80,
-                    since,
-                },
-                orbit_types::workflow::ResourcePressure {
-                    resource: "cpu".into(),
-                    percent: 89.0,
-                    high_percent: 90,
-                    resume_percent: 75,
-                    since,
-                },
-            ],
-        }),
+    let mut pass = pass_at(now);
+    pass.resource_throttle = Some(orbit_types::workflow::ResourceThrottle {
+        resources: vec![
+            orbit_types::workflow::ResourcePressure {
+                resource: "memory".into(),
+                percent: 93.2,
+                high_percent: 90,
+                resume_percent: 80,
+                since,
+            },
+            orbit_types::workflow::ResourcePressure {
+                resource: "cpu".into(),
+                percent: 89.0,
+                high_percent: 90,
+                resume_percent: 75,
+                since,
+            },
+        ],
     });
+    state.pull_drain.drain_last_pass = Some(pass);
     runtime.write_run_state(id, &state).unwrap();
     let held = "Admissions throttled: memory 93% (throttled at \u{2265} 90% since 2026-10-04 08:41Z; resumes below 80%); cpu 89% (throttled at \u{2265} 90% since 2026-10-04 08:41Z; resumes below 75%)";
-
     let readiness = fixture.json(&["run", "readiness", "--json"]);
-    assert_eq!(readiness["capacity"]["resource_cpu_source"], "load");
-    assert_eq!(readiness["capacity"]["free_slots"], 0, "{readiness:#}");
+    assert_eq!(cap(&readiness)["resource_cpu_source"], "load");
+    assert_eq!(cap(&readiness)["free_slots"], 0);
     assert_eq!(
-        readiness["capacity"]["resource_throttle"]["resources"][0]["percent"],
+        cap(&readiness)["resource_throttle"]["resources"][0]["percent"],
         93.2
     );
     assert_eq!(
-        readiness["capacity"]["resource_throttle"]["resources"][1]["percent"],
+        cap(&readiness)["resource_throttle"]["resources"][1]["percent"],
         89.0
     );
-    let text = fixture.orbit().args(["run", "readiness"]).output().unwrap();
-    let text = String::from_utf8_lossy(&text.stdout);
-    assert!(text.contains(held), "{text}");
+    let text = fixture.readiness_text();
+    contains(&text, held);
     assert!(
         !text.contains("89% \u{2265}"),
         "reading inside hysteresis band must not print a false comparison: {text}"
     );
-
-    let shown = fixture
-        .orbit()
-        .args(["run", "show", id, "--no-reconcile"])
-        .output()
-        .unwrap();
-    let shown = String::from_utf8_lossy(&shown.stdout);
-    assert!(shown.contains(&format!("Throttled: {held}")), "{shown}");
-
+    contains(&fixture.show_text(id), &format!("Throttled: {held}"));
     let refused = fixture.failure(&["run", "ship", "--json"]);
     assert!(
         refused["error"]
             .as_str()
-            .is_some_and(|error| error.contains("resource_throttled") && error.contains(held)),
-        "{refused}"
+            .is_some_and(|e| e.contains("resource_throttled") && e.contains(held))
     );
-    // The active source is observable even with the throttle disabled.
     for (key, value) in [
         ("workflow.resource_throttle.cpu_source", "utilization"),
         ("workflow.resource_throttle.enabled", "false"),
     ] {
-        fixture
-            .orbit()
-            .args(["config", "set", "--seed-from-global", key, value])
-            .assert()
-            .success();
+        fixture.config_set(key, value);
     }
     let configured = fixture.json(&["run", "readiness", "--json"]);
-    assert_eq!(configured["capacity"]["resource_cpu_source"], "utilization");
-    let text = fixture.orbit().args(["run", "readiness"]).output().unwrap();
-    assert!(
-        String::from_utf8_lossy(&text.stdout)
-            .contains("Resource throttle CPU source: utilization.")
+    assert_eq!(cap(&configured)["resource_cpu_source"], "utilization");
+    contains(
+        &fixture.readiness_text(),
+        "Resource throttle CPU source: utilization.",
     );
-    // Other host diagnostics may fail with the fixture's empty provider PATH;
-    // the informational policy row must still be present in doctor JSON.
-    let doctor = fixture.orbit().args(["doctor", "--json"]).output().unwrap();
-    let doctor: Value = serde_json::from_slice(&doctor.stdout).unwrap();
-    let row = doctor
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["check"] == "resource-throttle")
-        .unwrap();
-    assert_eq!(row["message"], "CPU source: utilization");
+    assert_eq!(
+        fixture.doctor_row("resource-throttle")["message"],
+        "CPU source: utilization"
+    );
 }
-
-/// A local admission pass counts deferred tasks inside `queued`; the CLI
-/// prints those tasks separately and subtracts them from the admissible count.
-/// The pass here was deferred on a busy lock, so it keeps the last completed
-/// pass's lists, dated from that pass rather than from an owner a local drain
-/// does not have, and the header says the pass was deferred.
 fn run_show_counts_local_deferred_tasks_once() {
-    use orbit_types::workflow::{DrainAdmissionPass, DrainWaitingTask};
-
     let fixture = Fixture::init();
-    let runtime =
-        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
-            .unwrap();
     let id = "jrun-cli-local-deferred";
     let now = chrono::Utc::now();
     let completed = now - chrono::Duration::minutes(1);
     let lock_error = "record pilot operator handoffs: timed out after 30000ms acquiring task commit boundary (held by pid 4242)";
-    fixture.db().execute(
-        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_auto_pipeline',1,'running','{}',?3,?3,?3,?4)",
-        params![id, fixture.workspace_id(), now.to_rfc3339(), std::process::id()],
-    ).unwrap();
-    let mut state = orbit_types::workflow::PipelineState::new(
-        id.into(),
-        "workspace_auto_pipeline".into(),
-        serde_json::json!({}),
-    );
-    state.pull_drain.drain_last_pass = Some(DrainAdmissionPass {
-        task_pilot_warning: None,
-        capacity: None,
-        recorded_at: now,
-        queued: 3,
-        deferred: (1..=3)
-            .map(|number| DrainWaitingTask {
-                task_id: format!("ORB-1520{number}"),
-                reason: Some("context_lock_conflict".into()),
-                blocked_by: vec!["ORB-15183".into()],
-                detail: None,
-                findings: Vec::new(),
-            })
-            .collect(),
-        deferred_total: 3,
-        excluded: Vec::new(),
-        excluded_total: 0,
-        waiting_recorded_at: Some(completed),
-        waiting_by_reason: Default::default(),
-        consecutive_idle_passes: 0,
-        resource_throttle: None,
-        last_pass_error_code: Some("lock_busy".into()),
-        last_pass_error: Some(lock_error.into()),
-        consecutive_pass_failures: 1,
-        admission_refusal: None,
-        degraded: false,
-        admission_forecast: None,
-    });
-    runtime.write_run_state(id, &state).unwrap();
-
-    let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
+    let mut pass = pass_at(now);
+    pass.queued = 3;
+    pass.deferred = (1..=3)
+        .map(|n| {
+            waiting(
+                &format!("ORB-1520{n}"),
+                "context_lock_conflict",
+                &["ORB-15183"],
+                None,
+            )
+        })
+        .collect();
+    pass.deferred_total = 3;
+    pass.waiting_recorded_at = Some(completed);
+    pass.last_pass_error_code = Some("lock_busy".into());
+    pass.last_pass_error = Some(lock_error.into());
+    pass.consecutive_pass_failures = 1;
+    fixture.seed_pass(id, "workspace_auto_pipeline", pass);
+    let shown = fixture.show_json(id);
     let pass = &shown["pipeline_state"]["drain_last_pass"];
-    assert_eq!(pass["queued"], 3, "{pass}");
-    assert_eq!(pass["deferred_total"], 3, "{pass}");
-
-    let output = fixture
-        .orbit()
-        .args(["run", "show", id, "--no-reconcile"])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let text = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        text.contains("Still waiting: 0 admissible, 3 deferred and 0 excluded backlog task(s) were never started at the last pass"),
-        "{text}"
+    assert_eq!(pass["queued"], 3);
+    assert_eq!(pass["deferred_total"], 3);
+    let text = fixture.show_text(id);
+    contains(
+        &text,
+        "Still waiting: 0 admissible, 3 deferred and 0 excluded backlog task(s) were never started at the last pass",
     );
     assert!(
         !text.contains("Still waiting: 3 admissible, 3 deferred"),
@@ -2309,140 +1845,60 @@ fn run_show_counts_local_deferred_tasks_once() {
         text.contains(&dated) && !text.contains("the owner answered"),
         "a local drain's kept lists are dated from its last completed pass: {text}"
     );
-    assert!(
-        text.contains(&format!(
-            "Admission pass deferred: consecutive_failures=1 last_pass_error={lock_error}"
-        )),
-        "{text}"
-    );
+    assert!(text.contains(&format!(
+        "Admission pass deferred: consecutive_failures=1 last_pass_error={lock_error}"
+    )));
 }
-
-/// [ORB-14475] A pull drain's recorded owner answer reaches `run show` as
-/// the same `Still waiting` lines a local drain prints: each kept-off task
-/// with its reason and the tasks it waits on, the age of the owner's answer,
-/// and, once several passes in a row claimed nothing, one line saying why.
 fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
-    use orbit_types::workflow::{DrainAdmissionPass, DrainWaitingTask};
     let fixture = Fixture::init();
-    let runtime = orbit_core::OrbitRuntime::from_roots(
-        &fixture.home.join(".orbit"),
-        &fixture.work.join(".orbit"),
-    )
-    .unwrap();
     let id = "jrun-cli-pull-waiting";
     let now = chrono::Utc::now();
     let answered = chrono::DateTime::parse_from_rfc3339("2026-10-07T06:44:53Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
-    fixture.db().execute(
-        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_pull_pipeline',1,'running','{}',?3,?3,?3,?4)",
-        params![id, fixture.workspace_id(), now.to_rfc3339(), std::process::id()],
-    ).unwrap();
-    let waiting =
-        |task: &str, reason: &str, blocked_by: &[&str], detail: Option<&str>| DrainWaitingTask {
-            task_id: task.into(),
-            reason: Some(reason.into()),
-            blocked_by: blocked_by.iter().map(ToString::to_string).collect(),
-            detail: detail.map(ToString::to_string),
-            findings: Vec::new(),
-        };
-    let mut state = orbit_types::workflow::PipelineState::new(
-        id.into(),
-        "workspace_pull_pipeline".into(),
-        serde_json::json!({}),
-    );
-    state.pull_drain.drain_last_pass = Some(DrainAdmissionPass {
-        task_pilot_warning: None,
-        capacity: None,
-        recorded_at: now,
-        queued: 9,
-        deferred: vec![
-            waiting("ORB-101", "context_lock_conflict", &["ORB-900"], None),
-            waiting(
-                "ORB-102",
-                "owner_hold",
-                &[],
-                Some("held for a red base: make ci-lint"),
-            ),
-        ],
-        deferred_total: 2,
-        excluded: vec![
-            waiting("ORB-103", "dependency_not_done", &["ORB-901"], None),
-            waiting(
-                "ORB-104",
-                "host_os_mismatch",
-                &[],
-                Some("waits for a linux host (os:linux); the executor runs macos"),
-            ),
-            waiting(
-                "ORB-105",
-                "crew_unavailable",
-                &[],
-                Some("crew antigravity cannot run on this host"),
-            ),
-            waiting(
-                "ORB-106",
-                "native_os_required",
-                &[],
-                Some(
-                    "Native OS requirement: criterion 2 needs native macos evidence, and the task's tags lack `os:macos`",
-                ),
-            ),
-            waiting(
-                "ORB-107",
-                "browser_kit_missing",
-                &[],
-                Some(
-                    "waits for a host with the browser kit (ui); run `orbit browser-kit install` on a host that runs workers to give it one; the executor reports no verified kit",
-                ),
-            ),
-        ],
-        excluded_total: 5,
-        waiting_recorded_at: Some(answered),
-        waiting_by_reason: [
-            ("context_lock_conflict", 4),
-            ("owner_hold", 11),
-            ("dependency_not_done", 1),
-            ("host_os_mismatch", 1),
-            ("crew_unavailable", 1),
-            ("native_os_required", 1),
-            ("browser_kit_missing", 1),
-        ]
-        .into_iter()
-        .map(|(reason, count)| (reason.to_string(), count))
-        .collect(),
-        consecutive_idle_passes: 4,
-        resource_throttle: None,
-        last_pass_error_code: None,
-        last_pass_error: None,
-        consecutive_pass_failures: 0,
-        admission_refusal: None,
-        degraded: false,
-        admission_forecast: None,
-    });
-    runtime.write_run_state(id, &state).unwrap();
-
-    let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
+    let mut pass = pass_at(now);
+    pass.queued = 9;
+    pass.deferred = vec![
+        waiting("ORB-101", "context_lock_conflict", &["ORB-900"], None),
+        waiting(
+            "ORB-102",
+            "owner_hold",
+            &[],
+            Some("held for a red base: make ci-lint"),
+        ),
+    ];
+    pass.deferred_total = 2;
+    pass.excluded = [
+        ("ORB-103", "dependency_not_done", &["ORB-901"][..], None),
+        ("ORB-104", "host_os_mismatch", &[][..], Some("waits for a linux host (os:linux); the executor runs macos")),
+        ("ORB-105", "crew_unavailable", &[][..], Some("crew antigravity cannot run on this host")),
+        ("ORB-106", "native_os_required", &[][..], Some("Native OS requirement: criterion 2 needs native macos evidence, and the task's tags lack `os:macos`")),
+        ("ORB-107", "browser_kit_missing", &[][..], Some("waits for a host with the browser kit (ui); run `orbit browser-kit install` on a host that runs workers to give it one; the executor reports no verified kit")),
+    ].into_iter().map(|(task, reason, blocked, detail)| waiting(task, reason, blocked, detail)).collect();
+    pass.excluded_total = 5;
+    pass.waiting_recorded_at = Some(answered);
+    pass.waiting_by_reason = [
+        ("context_lock_conflict", 4),
+        ("owner_hold", 11),
+        ("dependency_not_done", 1),
+        ("host_os_mismatch", 1),
+        ("crew_unavailable", 1),
+        ("native_os_required", 1),
+        ("browser_kit_missing", 1),
+    ]
+    .into_iter()
+    .map(|(r, c)| (r.to_string(), c))
+    .collect();
+    pass.consecutive_idle_passes = 4;
+    let (runtime, mut state) = fixture.seed_pass(id, "workspace_pull_pipeline", pass);
+    let shown = fixture.show_json(id);
     let pass = &shown["pipeline_state"]["drain_last_pass"];
-    assert_eq!(pass["queued"], 9, "{pass}");
-    assert_eq!(pass["excluded_total"], 5, "{pass}");
-    assert_eq!(pass["deferred"][0]["blocked_by"][0], "ORB-900", "{pass}");
-    assert_eq!(
-        pass["excluded"][0]["reason"], "dependency_not_done",
-        "{pass}"
-    );
-    assert_eq!(
-        pass["waiting_recorded_at"], "2026-10-07T06:44:53Z",
-        "{pass}"
-    );
-
-    let output = fixture
-        .orbit()
-        .args(["run", "show", id, "--no-reconcile"])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let text = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(pass["queued"], 9);
+    assert_eq!(pass["excluded_total"], 5);
+    assert_eq!(pass["deferred"][0]["blocked_by"][0], "ORB-900");
+    assert_eq!(pass["excluded"][0]["reason"], "dependency_not_done");
+    assert_eq!(pass["waiting_recorded_at"], "2026-10-07T06:44:53Z");
+    let text = fixture.show_text(id);
     for expected in [
         "Still waiting: 9 admissible, 2 deferred and 5 excluded backlog task(s) were never started at the last pass (the owner answered 2026-10-07 06:44:53Z)",
         "Task ORB-101: context_lock_conflict blocked-by=ORB-900",
@@ -2457,8 +1913,6 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
     ] {
         assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
     }
-
-    // Fewer than several idle passes: the per-task lines stand alone.
     state
         .pull_drain
         .drain_last_pass
@@ -2466,78 +1920,34 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
         .unwrap()
         .consecutive_idle_passes = 1;
     runtime.write_run_state(id, &state).unwrap();
-    let output = fixture
-        .orbit()
-        .args(["run", "show", id, "--no-reconcile"])
-        .output()
-        .unwrap();
-    let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.contains("Task ORB-101:"), "{text}");
-    assert!(!text.contains("idle:"), "{text}");
+    let text = fixture.show_text(id);
+    assert!(text.contains("Task ORB-101:"));
+    assert!(!text.contains("idle:"));
 }
-
-/// A pull drain bounds the deferred list it records; the `Still waiting`
-/// block counts every deferred task and says how many the list left out.
 fn run_show_reports_deferred_tasks_beyond_the_listed_ones() {
     let fixture = Fixture::init();
-    let runtime = orbit_core::OrbitRuntime::from_roots(
-        &fixture.home.join(".orbit"),
-        &fixture.work.join(".orbit"),
-    )
-    .unwrap();
     let id = "jrun-cli-pull-deferred-overflow";
     let now = chrono::Utc::now();
-    fixture.db().execute(
-        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_pull_pipeline',1,'running','{}',?3,?3,?3,?4)",
-        params![id, fixture.workspace_id(), now.to_rfc3339(), std::process::id()],
-    ).unwrap();
-    let mut state = orbit_types::workflow::PipelineState::new(
-        id.into(),
-        "workspace_pull_pipeline".into(),
-        serde_json::json!({}),
-    );
-    state.pull_drain.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
-        task_pilot_warning: None,
-        capacity: None,
-        recorded_at: now,
-        queued: 0,
-        deferred: (0..20)
-            .map(|index| orbit_types::workflow::DrainWaitingTask {
-                task_id: format!("ORB-{}", 200 + index),
-                reason: Some("owner_hold".into()),
-                blocked_by: Vec::new(),
-                detail: Some("held by the owner".into()),
-                findings: Vec::new(),
-            })
-            .collect(),
-        deferred_total: 25,
-        excluded: Vec::new(),
-        excluded_total: 0,
-        waiting_recorded_at: None,
-        waiting_by_reason: [("owner_hold".to_string(), 25)].into_iter().collect(),
-        consecutive_idle_passes: 1,
-        resource_throttle: None,
-        last_pass_error_code: None,
-        last_pass_error: None,
-        consecutive_pass_failures: 0,
-        admission_refusal: None,
-        degraded: false,
-        admission_forecast: None,
-    });
-    runtime.write_run_state(id, &state).unwrap();
-
-    let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
+    let mut pass = pass_at(now);
+    pass.deferred = (0..20)
+        .map(|i| {
+            waiting(
+                &format!("ORB-{}", 200 + i),
+                "owner_hold",
+                &[],
+                Some("held by the owner"),
+            )
+        })
+        .collect();
+    pass.deferred_total = 25;
+    pass.waiting_by_reason = [("owner_hold".to_string(), 25)].into_iter().collect();
+    pass.consecutive_idle_passes = 1;
+    fixture.seed_pass(id, "workspace_pull_pipeline", pass);
+    let shown = fixture.show_json(id);
     let pass = &shown["pipeline_state"]["drain_last_pass"];
-    assert_eq!(pass["deferred_total"], 25, "{pass}");
-    assert_eq!(pass["deferred"].as_array().unwrap().len(), 20, "{pass}");
-
-    let output = fixture
-        .orbit()
-        .args(["run", "show", id, "--no-reconcile"])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let text = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(pass["deferred_total"], 25);
+    assert_eq!(pass["deferred"].as_array().unwrap().len(), 20);
+    let text = fixture.show_text(id);
     for expected in [
         "Still waiting: 0 admissible, 25 deferred and 0 excluded backlog task(s) were never started at the last pass",
         "Task ORB-219: owner_hold",
@@ -2545,29 +1955,14 @@ fn run_show_reports_deferred_tasks_beyond_the_listed_ones() {
     ] {
         assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
     }
-    assert!(!text.contains("Task ORB-220"), "{text}");
+    assert!(!text.contains("Task ORB-220"));
 }
-
-/// [ORB-15639] An open pull breaker names its failure count, their classes
-/// and when it half-opens; once that time has passed it reads half-open.
 fn run_show_names_the_pull_breaker() {
     let fixture = Fixture::init();
-    let runtime = orbit_core::OrbitRuntime::from_roots(
-        &fixture.home.join(".orbit"),
-        &fixture.work.join(".orbit"),
-    )
-    .unwrap();
     let id = "jrun-cli-pull-breaker";
     let now = chrono::Utc::now();
-    fixture.db().execute(
-        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_pull_pipeline',1,'running','{}',?3,?3,?3,?4)",
-        params![id, fixture.workspace_id(), now.to_rfc3339(), std::process::id()],
-    ).unwrap();
-    let mut state = orbit_types::workflow::PipelineState::new(
-        id.into(),
-        "workspace_pull_pipeline".into(),
-        serde_json::json!({}),
-    );
+    let (runtime, mut state) =
+        fixture.seed_running(id, "workspace_pull_pipeline", serde_json::json!({}));
     let half_open_at = now + chrono::Duration::minutes(15);
     state.pull_drain.pull_breaker = Some(orbit_types::workflow::PullBreaker {
         failures: 3,
@@ -2576,21 +1971,11 @@ fn run_show_names_the_pull_breaker() {
         half_open_at,
     });
     runtime.write_run_state(id, &state).unwrap();
-
-    let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
+    let shown = fixture.show_json(id);
     let breaker = &shown["pipeline_state"]["pull_breaker"];
-    assert_eq!(breaker["failures"], 3, "{breaker}");
-    assert_eq!(breaker["failure_classes"][1], "task_input", "{breaker}");
-    let text = |fixture: &Fixture| {
-        let output = fixture
-            .orbit()
-            .args(["run", "show", id, "--no-reconcile"])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        String::from_utf8_lossy(&output.stdout).into_owned()
-    };
-    let open = text(&fixture);
+    assert_eq!(breaker["failures"], 3);
+    assert_eq!(breaker["failure_classes"][1], "task_input");
+    let open = fixture.show_text(id);
     let half_open = format!(
         "half-opens at {} to admit one probe claim",
         half_open_at.format("%Y-%m-%d %H:%M:%SZ")
@@ -2601,56 +1986,22 @@ fn run_show_names_the_pull_breaker() {
     ] {
         assert!(open.contains(expected), "missing {expected:?} in:\n{open}");
     }
-
     state.pull_drain.pull_breaker.as_mut().unwrap().half_open_at =
         now - chrono::Duration::minutes(1);
     runtime.write_run_state(id, &state).unwrap();
-    let probing = text(&fixture);
-    assert!(probing.contains("half-open since"), "{probing}");
+    let probing = fixture.show_text(id);
+    assert!(probing.contains("half-open since"));
 }
-
-/// A durable failed-pass record is visible through the actual CLI in text
-/// and JSON, independently of successful coordinator step outputs.
 fn run_show_exposes_degraded_pull_pass_health() {
     let fixture = Fixture::init();
-    let runtime = orbit_core::OrbitRuntime::from_roots(
-        &fixture.home.join(".orbit"),
-        &fixture.work.join(".orbit"),
-    )
-    .unwrap();
     let id = "jrun-cli-degraded-pull";
     let now = chrono::Utc::now();
-    fixture.db().execute(
-        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_pull_pipeline',1,'running','{}',?3,?3,?3,?4)",
-        params![id, fixture.workspace_id(), now.to_rfc3339(), std::process::id()],
-    ).unwrap();
-    let mut state = orbit_types::workflow::PipelineState::new(
-        id.into(),
-        "workspace_pull_pipeline".into(),
-        serde_json::json!({}),
-    );
-    state.pull_drain.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
-        task_pilot_warning: None,
-        capacity: None,
-        recorded_at: now,
-        queued: 0,
-        deferred: Vec::new(),
-        deferred_total: 0,
-        excluded: Vec::new(),
-        excluded_total: 0,
-        waiting_recorded_at: None,
-        waiting_by_reason: Default::default(),
-        consecutive_idle_passes: 0,
-        resource_throttle: None,
-        last_pass_error_code: None,
-        last_pass_error: Some("protocol_mismatch: caller revision 2; owner revision 1".into()),
-        consecutive_pass_failures: 3,
-        admission_refusal: None,
-        degraded: true,
-        admission_forecast: None,
-    });
-    runtime.write_run_state(id, &state).unwrap();
-    let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
+    let mut pass = pass_at(now);
+    pass.last_pass_error = Some("protocol_mismatch: caller revision 2; owner revision 1".into());
+    pass.consecutive_pass_failures = 3;
+    pass.degraded = true;
+    let (runtime, mut state) = fixture.seed_pass(id, "workspace_pull_pipeline", pass);
+    let shown = fixture.show_json(id);
     let pass = &shown["pipeline_state"]["drain_last_pass"];
     assert_eq!(pass["consecutive_pass_failures"], 3);
     assert_eq!(pass["degraded"], true);
@@ -2658,35 +2009,17 @@ fn run_show_exposes_degraded_pull_pass_health() {
         pass["last_pass_error"],
         "protocol_mismatch: caller revision 2; owner revision 1"
     );
-    let output = fixture
-        .orbit()
-        .args(["run", "show", id, "--no-reconcile"])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.contains("consecutive_failures=3"), "{text}");
-    assert!(
-        text.contains("last_pass_error=protocol_mismatch:"),
-        "{text}"
-    );
-    assert!(text.contains("Drain degraded:"), "{text}");
+    let text = fixture.show_text(id);
+    contains(&text, "consecutive_failures=3");
+    contains(&text, "last_pass_error=protocol_mismatch:");
+    contains(&text, "Drain degraded:");
     let pass = state.pull_drain.drain_last_pass.as_mut().unwrap();
     pass.last_pass_error_code = Some("protocol_skew".into());
     pass.last_pass_error =
         Some("protocol_skew: caller and owner request fingerprints differ".into());
     let skew_message = pass.last_pass_error.clone();
     runtime.write_run_state(id, &state).unwrap();
-    fixture
-        .db()
-        .execute(
-            "INSERT INTO job_run_steps (workspace_id, run_id, step_index, target_type,
-            target_id, state, started_at, finished_at, error_code, error_message)
-         VALUES (?1, ?2, 0, 'job', 'workspace_pull_pipeline', 'failed', ?3, ?3,
-            'protocol_skew', ?4)",
-            params![fixture.workspace_id(), id, now.to_rfc3339(), skew_message],
-        )
-        .unwrap();
+    fixture.db().execute("INSERT INTO job_run_steps (workspace_id, run_id, step_index, target_type, target_id, state, started_at, finished_at, error_code, error_message) VALUES (?1, ?2, 0, 'job', 'workspace_pull_pipeline', 'failed', ?3, ?3, 'protocol_skew', ?4)", params![fixture.workspace_id(), id, now.to_rfc3339(), skew_message]).unwrap();
     orbit_engine::RuntimeHost::finalize_job_run(
         &runtime,
         id,
@@ -2695,81 +2028,37 @@ fn run_show_exposes_degraded_pull_pass_health() {
         None,
     )
     .unwrap();
-    // The fixture intentionally has no provider CLIs, so other doctor rows
-    // fail and its process exits nonzero. Inspect the real JSON diagnostic.
-    let diagnosis = fixture.orbit().args(["doctor", "--json"]).output().unwrap();
-    let diagnosed: Value = serde_json::from_slice(&diagnosis.stdout).unwrap();
-    let row = diagnosed
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["check"] == "pull-protocol")
-        .unwrap();
-    assert_eq!(row["status"], "warning", "{diagnosed}");
-    assert!(
-        row["message"].as_str().unwrap().contains("protocol_skew"),
-        "{row}"
-    );
-    assert!(
-        row["remediation"].as_str().unwrap().contains("restart"),
-        "{row}"
-    );
+    let row = fixture.doctor_row("pull-protocol");
+    assert_eq!(row["status"], "warning");
+    assert!(row["message"].as_str().unwrap().contains("protocol_skew"));
+    assert!(row["remediation"].as_str().unwrap().contains("restart"));
 }
-
-/// [ORB-15622] `orbit doctor` compares this replica's validation gates with
-/// the owner's that its latest pull drain recorded at submission, and names
-/// each list that differs.
 fn doctor_warns_when_the_replicas_gates_differ_from_the_owners() {
     let fixture = Fixture::init();
     let now = chrono::Utc::now().to_rfc3339();
-    let input = serde_json::json!({"owner_validation_gates": {
-        "required_validation_commands": ["make owner-only-check"],
-        "baseline_commands": [],
-    }});
-    fixture.db().execute(
-        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES ('jrun-cli-gate-drift',?1,'workspace_pull_pipeline',1,'running',?2,?3,?3,?3,?4)",
-        params![fixture.workspace_id(), input.to_string(), now, std::process::id()],
-    ).unwrap();
-    // The fixture has no provider CLIs, so other doctor rows fail and its
-    // process exits nonzero. Inspect the real JSON diagnostic.
-    let diagnosis = fixture.orbit().args(["doctor", "--json"]).output().unwrap();
-    let diagnosed: Value = serde_json::from_slice(&diagnosis.stdout).unwrap();
-    let row = diagnosed
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["check"] == "pull-gates")
-        .unwrap();
-    assert_eq!(row["status"], "warning", "{diagnosed}");
+    let input = serde_json::json!({"owner_validation_gates": {"required_validation_commands": ["make owner-only-check"], "baseline_commands": []}});
+    fixture.db().execute("INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES ('jrun-cli-gate-drift',?1,'workspace_pull_pipeline',1,'running',?2,?3,?3,?3,?4)", params![fixture.workspace_id(), input.to_string(), now, std::process::id()]).unwrap();
+    let row = fixture.doctor_row("pull-gates");
+    assert_eq!(row["status"], "warning");
     assert!(
         row["message"]
             .as_str()
             .unwrap()
-            .contains("but [`make owner-only-check`] on the owner"),
-        "{row}"
+            .contains("but [`make owner-only-check`] on the owner")
     );
     assert!(
         row["remediation"]
             .as_str()
             .unwrap()
-            .contains("`.orbit/config.toml`"),
-        "{row}"
+            .contains("`.orbit/config.toml`")
     );
 }
-
 #[cfg(unix)]
 mod agent_invoke;
-
-/// A partial forced cancellation keeps its structured result on stdout and
-/// exits unsuccessfully in both JSON and terminal modes.
 fn force_cancel_reports_unstopped_local_children_and_exits_one() {
     for as_json in [true, false] {
         let fixture = Fixture::init();
-        let runtime = orbit_core::OrbitRuntime::from_roots(
-            &fixture.home.join(".orbit"),
-            &fixture.work.join(".orbit"),
-        )
-        .unwrap();
+        let runtime = fixture.runtime();
         let drain = "jrun-cli-force-local";
         let failed = "jrun-cli-unstopped-child";
         let stopped = "jrun-cli-stopped-child";
@@ -2779,27 +2068,16 @@ fn force_cancel_reports_unstopped_local_children_and_exits_one() {
             (failed, "task_auto_pipeline", "running"),
             (stopped, "task_auto_pipeline", "pending"),
         ] {
-            // A live, unverified PID prevents orphan reconciliation. Pending
-            // runs need no signal; the running child cannot be confirmed gone.
-            fixture.db().execute(
-                "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,?3,1,?4,?5,?5,?5,?6)",
-                params![id, fixture.workspace_id(), job, state, now.to_rfc3339(), std::process::id()],
-            ).unwrap();
+            fixture.db().execute("INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,?3,1,?4,?5,?5,?5,?6)", params![id, fixture.workspace_id(), job, state, now.to_rfc3339(), std::process::id()]).unwrap();
         }
-        let mut state = orbit_types::workflow::PipelineState::new(
-            drain.into(),
-            "workspace_auto_pipeline".into(),
+        let mut state = fixture.write_state(
+            &runtime,
+            drain,
+            "workspace_auto_pipeline",
             serde_json::json!({}),
         );
         for child in [failed, stopped] {
-            state.record_child_dispatch(orbit_types::workflow::ChildDispatch::submitted(
-                child.into(),
-                "task_auto_pipeline".into(),
-                "dispatch".into(),
-                false,
-                false,
-                now,
-            ));
+            dispatch(&mut state, child, "task_auto_pipeline", "dispatch", now);
         }
         runtime.write_run_state(drain, &state).unwrap();
         let mut command = fixture.orbit();
@@ -2808,7 +2086,7 @@ fn force_cancel_reports_unstopped_local_children_and_exits_one() {
             command.arg("--json");
         }
         let output = command.output().unwrap();
-        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert_eq!(output.status.code(), Some(1));
         if as_json {
             let body: Value = serde_json::from_slice(&output.stdout).unwrap();
             assert_eq!(body["outcome"], "cancelled");
@@ -2832,40 +2110,21 @@ fn force_cancel_reports_unstopped_local_children_and_exits_one() {
         assert_eq!(fixture.run_state(failed), "running");
     }
 }
-
-/// A surface reservation is visible where an operator looks for a waiting
-/// task [ORB-14310]: `run readiness` and the drain's `run show` both name the
-/// typed `surface_reserved` reason and the reserving task, from a real drain
-/// pass rather than a seeded record.
 fn a_surface_reservation_reaches_readiness_and_drain_run_show() {
-    use orbit_core::application::task::TaskAddParams;
-    use orbit_core::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
-
+    use orbit_core::{TaskComplexity, TaskPriority, TaskStatus};
     let fixture = Fixture::init();
-    let runtime = orbit_core::OrbitRuntime::from_roots(
-        &fixture.home.join(".orbit"),
-        &fixture.work.join(".orbit"),
-    )
-    .unwrap();
+    let runtime = fixture.runtime();
     for file in ["held.rs", "shared.rs"] {
         fs::write(fixture.work.join(file), "fixture\n").unwrap();
     }
     let add = |title: &str, status, priority, files: &[&str]| {
-        runtime
-            .add_task(TaskAddParams {
-                title: title.to_string(),
-                description: format!("Fixture task: {title}"),
-                acceptance_criteria: vec!["Fixture task is observable.".to_string()],
-                plan: "Fixture plan.".to_string(),
-                context_files: files.iter().map(|file| format!("file:{file}")).collect(),
-                priority,
-                complexity: TaskComplexity::Medium,
-                task_type: Some(TaskType::Feature),
-                status: Some(status),
-                ..Default::default()
-            })
-            .unwrap()
-            .id
+        let mut params = task_params(title.to_string(), format!("Fixture task: {title}"), status);
+        params.complexity = TaskComplexity::Medium;
+        params.priority = priority;
+        params.acceptance_criteria = vec!["Fixture task is observable.".to_string()];
+        params.plan = "Fixture plan.".to_string();
+        params.context_files = files.iter().map(|file| format!("file:{file}")).collect();
+        runtime.add_task(params).unwrap().id
     };
     add(
         "holder",
@@ -2885,33 +2144,14 @@ fn a_surface_reservation_reaches_readiness_and_drain_run_show() {
         TaskPriority::Low,
         &["shared.rs"],
     );
-
     let drain = "jrun-cli-surface-reservation";
-    let now = chrono::Utc::now();
-    fixture.db().execute(
-        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_auto_pipeline',1,'running','{}',?3,?3,?3,?4)",
-        params![drain, fixture.workspace_id(), now.to_rfc3339(), std::process::id()],
-    ).unwrap();
-    runtime
-        .write_run_state(
-            drain,
-            &orbit_types::workflow::PipelineState::new(
-                drain.into(),
-                "workspace_auto_pipeline".into(),
-                serde_json::json!({}),
-            ),
-        )
-        .unwrap();
-    let wave = orbit_engine::RuntimeHost::run_deterministic(
+    fixture.seed_running(drain, "workspace_auto_pipeline", serde_json::json!({}));
+    let wave = run_det(
         &runtime,
         "classify_workspace_auto_tasks",
-        &serde_json::json!({}),
-        &serde_json::json!({"run_id": drain, "max_active_leaf_runs": 2}),
-        orbit_tools::ToolContext::default(),
-    )
-    .unwrap();
-    assert_eq!(wave["loose_task_ids"], serde_json::json!([]), "{wave:#}");
-
+        serde_json::json!({"run_id": drain, "max_active_leaf_runs": 2}),
+    );
+    assert_eq!(wave["loose_task_ids"], serde_json::json!([]));
     let readiness = fixture.json(&["run", "readiness", "--json"]);
     let entry = readiness["tasks"]
         .as_array()
@@ -2919,57 +2159,31 @@ fn a_surface_reservation_reaches_readiness_and_drain_run_show() {
         .iter()
         .find(|task| task["task_id"] == withheld.as_str())
         .expect("withheld task in readiness");
-    assert_eq!(entry["reason"], "surface_reserved", "{readiness:#}");
+    assert_eq!(entry["reason"], "surface_reserved");
     assert_eq!(entry["blocking_task_ids"], serde_json::json!([critical]));
-    let text = fixture.orbit().args(["run", "readiness"]).output().unwrap();
-    let text = String::from_utf8_lossy(&text.stdout);
-    assert!(
-        text.contains(&format!(
-            "{withheld}: waiting (surface_reserved) blocked-by={critical}"
-        )),
-        "{text}"
+    contains(
+        &fixture.readiness_text(),
+        &format!("{withheld}: waiting (surface_reserved) blocked-by={critical}"),
     );
-
-    let shown = fixture
-        .orbit()
-        .args(["run", "show", drain, "--no-reconcile"])
-        .output()
-        .unwrap();
-    assert!(shown.status.success());
-    let shown = String::from_utf8_lossy(&shown.stdout);
-    assert!(
-        shown.contains(&format!(
-            "Task {withheld}: surface_reserved blocked-by={critical}"
-        )),
-        "{shown}"
+    contains(
+        &fixture.show_text(drain),
+        &format!("Task {withheld}: surface_reserved blocked-by={critical}"),
     );
 }
-
-/// A live agent whose supervisor reported a descendant stopped past its
-/// threshold, which is still stopped, reads as blocked rather than plainly
-/// alive; the same agent without that report reads plainly alive. The agent
-/// and its stopped child are real processes so both liveness probes answer.
 #[cfg(target_os = "linux")]
 fn run_show_marks_an_agent_blocked_on_a_stopped_descendant() {
+    use orbit_common::process::identity::{linux_process_stat, process_start_identity_token};
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
-
-    use orbit_common::process::identity::{linux_process_stat, process_start_identity_token};
-
     const BLOCKED: &str = "jrun-20261008-0100";
     const ALIVE: &str = "jrun-20261008-0200";
-
-    /// The agent's process group, killed and reaped on drop.
     struct AgentTree(std::process::Child);
-
     impl Drop for AgentTree {
         fn drop(&mut self) {
-            // SAFETY: signals only the fixture's own unreaped process group.
             unsafe { libc::killpg(self.0.id() as libc::pid_t, libc::SIGKILL) };
             let _ = self.0.wait();
         }
     }
-
     let fixture = Fixture::init();
     let pid_file = fixture.home.join("stopped-child.pid");
     let mut agent = std::process::Command::new("/bin/sh");
@@ -2994,80 +2208,26 @@ fn run_show_marks_an_agent_blocked_on_a_stopped_descendant() {
         match child {
             Some(pid) => break pid,
             None if std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                std::thread::sleep(std::time::Duration::from_millis(10))
             }
             None => panic!("the agent's child never stopped"),
         }
     };
-
     let workspace_id = fixture.workspace_id();
     let db = fixture.db();
     let now = chrono::Utc::now().to_rfc3339();
     let mut events = Vec::new();
     for run_id in [BLOCKED, ALIVE] {
-        db.execute(
-            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
-                 scheduled_at, started_at, created_at)
-             VALUES (?1, ?2, 'task_pr_pipeline', 1, 'running', ?3, ?3, ?3)",
-            params![run_id, workspace_id, now],
-        )
-        .expect("seed running leaf");
-        events.push((
-            run_id,
-            serde_json::json!({
-                "event_id": format!("{run_id}-process"),
-                "parent_event_id": format!("{run_id}-invocation"),
-                "body_kind": "cli_invocation_process",
-                "provider": "antigravity",
-                "pid": agent_pid,
-                "pid_start_time": process_start_identity_token(agent_pid),
-            }),
-        ));
+        db.execute("INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, scheduled_at, started_at, created_at) VALUES (?1, ?2, 'task_pr_pipeline', 1, 'running', ?3, ?3, ?3)", params![run_id, workspace_id, now]).expect("seed running leaf");
+        events.push((run_id, serde_json::json!({"event_id": format!("{run_id}-process"), "parent_event_id": format!("{run_id}-invocation"), "body_kind": "cli_invocation_process", "provider": "antigravity", "pid": agent_pid, "pid_start_time": process_start_identity_token(agent_pid)})));
     }
-    events.push((
-        BLOCKED,
-        serde_json::json!({
-            "event_id": format!("{BLOCKED}-stopped"),
-            "parent_event_id": format!("{BLOCKED}-invocation"),
-            "body_kind": "cli_invocation_stopped_descendant",
-            "provider": "antigravity",
-            "pid": child_pid,
-            "pid_start_time": process_start_identity_token(child_pid),
-            "command": "sh -c kill -STOP $$",
-            "stopped_ms": 612_000,
-            "ended": false,
-            "error": "Operation not permitted (os error 1)",
-        }),
-    ));
+    events.push((BLOCKED, serde_json::json!({"event_id": format!("{BLOCKED}-stopped"), "parent_event_id": format!("{BLOCKED}-invocation"), "body_kind": "cli_invocation_stopped_descendant", "provider": "antigravity", "pid": child_pid, "pid_start_time": process_start_identity_token(child_pid), "command": "sh -c kill -STOP $$", "stopped_ms": 612_000, "ended": false, "error": "Operation not permitted (os error 1)"})));
     for (run_id, mut event) in events {
         event["ts"] = Value::String(now.clone());
         event["run_id"] = Value::String(run_id.to_string());
         event["step_id"] = Value::String("implement_one".to_string());
-        db.execute(
-            "INSERT INTO v2_audit_events (workspace_id, event_id, source, schema_version,
-                 event_type, ts, run_id, agent_identity, parent_event_id, payload_json)
-             VALUES (?1, ?2, 'v2_envelope', 1, 'activity.progress', ?3, ?4, 'test', ?5, ?6)",
-            params![
-                workspace_id,
-                event["event_id"].as_str().unwrap(),
-                now,
-                run_id,
-                event["parent_event_id"].as_str().unwrap(),
-                event.to_string(),
-            ],
-        )
-        .expect("seed audit event");
+        db.execute("INSERT INTO v2_audit_events (workspace_id, event_id, source, schema_version, event_type, ts, run_id, agent_identity, parent_event_id, payload_json) VALUES (?1, ?2, 'v2_envelope', 1, 'activity.progress', ?3, ?4, 'test', ?5, ?6)", params![workspace_id, event["event_id"].as_str().unwrap(), now, run_id, event["parent_event_id"].as_str().unwrap(), event.to_string()]).expect("seed audit event");
     }
-
-    let text = |run_id: &str| {
-        let output = fixture
-            .orbit()
-            .args(["run", "show", run_id, "--no-reconcile"])
-            .output()
-            .expect("spawn orbit");
-        assert!(output.status.success(), "{output:?}");
-        String::from_utf8_lossy(&output.stdout).into_owned()
-    };
     let agent_line = |shown: &str| {
         shown
             .lines()
@@ -3075,21 +2235,17 @@ fn run_show_marks_an_agent_blocked_on_a_stopped_descendant() {
             .unwrap_or_else(|| panic!("no Agent: line in {shown}"))
             .to_string()
     };
-
-    let blocked = text(BLOCKED);
-    assert!(
-        agent_line(&blocked).contains(&format!(
-            "pid={agent_pid} step=implement_one liveness=alive blocked=stopped-descendant "
-        )),
-        "{blocked}"
-    );
-    assert!(
-        blocked.contains(&format!(
+    let blocked = fixture.show_text(BLOCKED);
+    assert!(agent_line(&blocked).contains(&format!(
+        "pid={agent_pid} step=implement_one liveness=alive blocked=stopped-descendant "
+    )));
+    contains(
+        &blocked,
+        &format!(
             "  stopped descendant: pid={child_pid} command=`sh -c kill -STOP $$` stopped for at least 612s; the supervisor could not end it (Operation not permitted (os error 1)); still stopped"
-        )),
-        "{blocked}"
+        ),
     );
-    let json = fixture.json(&["run", "show", BLOCKED, "--no-reconcile", "--json"]);
+    let json = fixture.show_json(BLOCKED);
     let process = &json["provider_processes"][0];
     assert_eq!(process["liveness"], "alive");
     assert_eq!(process["blocked_on_stopped_descendant"]["pid"], child_pid);
@@ -3098,232 +2254,103 @@ fn run_show_marks_an_agent_blocked_on_a_stopped_descendant() {
         true
     );
     assert_eq!(process["stopped_descendants"][0]["ended"], false);
-
-    let alive = text(ALIVE);
+    let alive = fixture.show_text(ALIVE);
     let line = agent_line(&alive);
+    assert!(line.contains("liveness=alive started_at=") && !line.contains("blocked="));
     assert!(
-        line.contains("liveness=alive started_at=") && !line.contains("blocked="),
-        "{alive}"
+        fixture.show_json(ALIVE)["provider_processes"][0]["blocked_on_stopped_descendant"]
+            .is_null()
     );
-    let json = fixture.json(&["run", "show", ALIVE, "--no-reconcile", "--json"]);
-    assert!(json["provider_processes"][0]["blocked_on_stopped_descendant"].is_null());
     drop(agent);
 }
-
-#[test]
-fn run_observation_contracts_0() {
-    if !isolated_run_observation("run_observation::run_observation_contracts_0") {
-        return;
-    }
-    for (name, check) in [
-        (
-            "successful_security_sweep_shows_filing_floor_source_and_excluded_alerts",
-            successful_security_sweep_shows_filing_floor_source_and_excluded_alerts as fn(),
-        ),
-        (
-            "shipped_security_job_uses_config_unless_run_input_overrides_it",
-            shipped_security_job_uses_config_unless_run_input_overrides_it as fn(),
-        ),
-        (
-            "readiness_bootstrap_preserves_stale_runs_and_held_reservations",
-            readiness_bootstrap_preserves_stale_runs_and_held_reservations as fn(),
-        ),
-        (
-            "readiness_reports_total_and_notifies_only_when_backlog_is_truncated",
-            readiness_reports_total_and_notifies_only_when_backlog_is_truncated as fn(),
-        ),
-    ] {
-        tracing::info!(case = name, "CLI contract row");
-        check();
-        orbit_common::test_env::record_scenario_pass(name);
-    }
-}
-
-#[test]
-fn run_observation_contracts_1() {
-    if !isolated_run_observation("run_observation::run_observation_contracts_1") {
-        return;
-    }
-    for (name, check) in [
-        (
-            "job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage",
-            job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage as fn(),
-        ),
-        (
-            "no_reconcile_run_reads_leave_stale_runs_and_reservations_unchanged",
-            no_reconcile_run_reads_leave_stale_runs_and_reservations_unchanged as fn(),
-        ),
-        (
-            "default_run_reads_still_reconcile_stale_runs",
-            default_run_reads_still_reconcile_stale_runs as fn(),
-        ),
-        (
-            "explicit_run_lookup_preserves_store_errors",
-            explicit_run_lookup_preserves_store_errors as fn(),
-        ),
-    ] {
-        tracing::info!(case = name, "CLI contract row");
-        check();
-        orbit_common::test_env::record_scenario_pass(name);
-    }
-}
-
+contract!(
+    run_observation_contracts_0,
+    successful_security_sweep_shows_filing_floor_source_and_excluded_alerts,
+    shipped_security_job_uses_config_unless_run_input_overrides_it,
+    readiness_bootstrap_preserves_stale_runs_and_held_reservations,
+    readiness_reports_total_and_notifies_only_when_backlog_is_truncated
+);
+contract!(
+    run_observation_contracts_1,
+    job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage,
+    no_reconcile_run_reads_leave_stale_runs_and_reservations_unchanged,
+    default_run_reads_still_reconcile_stale_runs,
+    explicit_run_lookup_preserves_store_errors
+);
 #[test]
 fn run_observation_contracts_2() {
     if !isolated_run_observation("run_observation::run_observation_contracts_2") {
         return;
     }
-    for (name, check) in [
+    run_rows(&[
         (
-            "job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable",
+            stringify!(job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable),
             job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable as fn(),
         ),
         (
-            "cancel_task_leaf_requeues_by_default_and_block_is_explicit",
+            stringify!(cancel_task_leaf_requeues_by_default_and_block_is_explicit),
             cancel_task_leaf_requeues_by_default_and_block_is_explicit as fn(),
         ),
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         (
-            "cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome",
+            stringify!(cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome),
             cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome as fn(),
         ),
         (
-            "replacement_drain_counts_and_reports_inherited_workers_until_they_finish",
+            stringify!(replacement_drain_counts_and_reports_inherited_workers_until_they_finish),
             replacement_drain_counts_and_reports_inherited_workers_until_they_finish as fn(),
         ),
-    ] {
-        tracing::info!(case = name, "CLI contract row");
-        check();
-        orbit_common::test_env::record_scenario_pass(name);
-    }
+    ]);
 }
-
-#[test]
-fn run_observation_contracts_3() {
-    if !isolated_run_observation("run_observation::run_observation_contracts_3") {
-        return;
-    }
-    for (name, check) in [
-        (
-            "run_concurrency_updates_persisted_revision_and_refuses_stale_writes",
-            run_concurrency_updates_persisted_revision_and_refuses_stale_writes as fn(),
-        ),
-        (
-            "run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues",
-            run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues as fn(),
-        ),
-        (
-            "a_drain_at_concurrency_twenty_runs_twenty_delivery_wrappers_at_once",
-            a_drain_at_concurrency_twenty_runs_twenty_delivery_wrappers_at_once as fn(),
-        ),
-        (
-            "run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling",
-            run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling as fn(),
-        ),
-        (
-            "readiness_uses_a_live_pull_drains_ceiling",
-            readiness_uses_a_live_pull_drains_ceiling as fn(),
-        ),
-    ] {
-        tracing::info!(case = name, "CLI contract row");
-        check();
-        orbit_common::test_env::record_scenario_pass(name);
-    }
-}
-
-#[test]
-fn run_observation_contracts_4() {
-    if !isolated_run_observation("run_observation::run_observation_contracts_4") {
-        return;
-    }
-    for (name, check) in [
-        (
-            "a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship",
-            a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship as fn(),
-        ),
-        (
-            "run_show_counts_local_deferred_tasks_once",
-            run_show_counts_local_deferred_tasks_once as fn(),
-        ),
-        (
-            "run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host",
-            run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host as fn(),
-        ),
-        (
-            "run_show_reports_deferred_tasks_beyond_the_listed_ones",
-            run_show_reports_deferred_tasks_beyond_the_listed_ones as fn(),
-        ),
-    ] {
-        tracing::info!(case = name, "CLI contract row");
-        check();
-        orbit_common::test_env::record_scenario_pass(name);
-    }
-}
-
-#[test]
-fn run_observation_contracts_5() {
-    if !isolated_run_observation("run_observation::run_observation_contracts_5") {
-        return;
-    }
-    for (name, check) in [
-        (
-            "run_show_names_the_pull_breaker",
-            run_show_names_the_pull_breaker as fn(),
-        ),
-        (
-            "run_show_exposes_degraded_pull_pass_health",
-            run_show_exposes_degraded_pull_pass_health as fn(),
-        ),
-        (
-            "doctor_warns_when_the_replicas_gates_differ_from_the_owners",
-            doctor_warns_when_the_replicas_gates_differ_from_the_owners as fn(),
-        ),
-        (
-            "force_cancel_reports_unstopped_local_children_and_exits_one",
-            force_cancel_reports_unstopped_local_children_and_exits_one as fn(),
-        ),
-    ] {
-        tracing::info!(case = name, "CLI contract row");
-        check();
-        orbit_common::test_env::record_scenario_pass(name);
-    }
-}
-
-/// A warnings hold names each finding's kind and first line where an operator
-/// looks: under `Approved:` in `orbit run show`, and as `findings` on
-/// `orbit run readiness --json`. The assessment's later lines stay in the
-/// audit.
+contract!(
+    run_observation_contracts_3,
+    run_concurrency_updates_persisted_revision_and_refuses_stale_writes,
+    run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues,
+    a_drain_at_concurrency_twenty_runs_twenty_delivery_wrappers_at_once,
+    run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling,
+    readiness_uses_a_live_pull_drains_ceiling
+);
+contract!(
+    run_observation_contracts_4,
+    a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship,
+    run_show_counts_local_deferred_tasks_once,
+    run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host,
+    run_show_reports_deferred_tasks_beyond_the_listed_ones
+);
+contract!(
+    run_observation_contracts_5,
+    run_show_names_the_pull_breaker,
+    run_show_exposes_degraded_pull_pass_health,
+    doctor_warns_when_the_replicas_gates_differ_from_the_owners,
+    force_cancel_reports_unstopped_local_children_and_exits_one
+);
 fn warnings_hold_findings_reach_run_show_and_readiness() {
-    use orbit_core::application::task::TaskAddParams;
-    use orbit_core::{TaskComplexity, TaskStatus};
-
+    use orbit_core::TaskStatus;
     let fixture = Fixture::init();
     fs::write(fixture.work.join("README.md"), "fixture\n").unwrap();
-    git_repo::run(&fixture.work, &["config", "user.name", "Orbit Test"]);
-    git_repo::run(
-        &fixture.work,
-        &["config", "user.email", "orbit-test@example.com"],
-    );
-    git_repo::run(&fixture.work, &["config", "commit.gpgsign", "false"]);
-    git_repo::run(&fixture.work, &["add", "README.md"]);
-    git_repo::run(&fixture.work, &["commit", "-m", "seed"]);
-
-    let runtime =
-        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
-            .unwrap();
-    let task = runtime
-        .add_task(TaskAddParams {
-            title: "Held proposal".into(),
-            description: "A proposed change with a pilot warning.".into(),
-            acceptance_criteria: vec!["The README change is observable.".into()],
-            plan: "Edit README.md.".into(),
-            status: Some(TaskStatus::Proposed),
-            complexity: TaskComplexity::Low,
-            context_files: vec!["file:README.md".into()],
-            ..Default::default()
-        })
-        .unwrap();
-
+    for args in [
+        &["config", "user.name", "Orbit Test"][..],
+        &["config", "user.email", "orbit-test@example.com"][..],
+        &["config", "commit.gpgsign", "false"][..],
+        &["add", "README.md"][..],
+        &["commit", "-m", "seed"][..],
+    ] {
+        git_repo::run(&fixture.work, args);
+    }
+    let runtime = fixture.runtime();
+    let task = {
+        let mut params = task_params(
+            "Held proposal".into(),
+            "A proposed change with a pilot warning.".into(),
+            TaskStatus::Proposed,
+        );
+        params.task_type = None;
+        params.acceptance_criteria = vec!["The README change is observable.".into()];
+        params.plan = "Edit README.md.".into();
+        params.context_files = vec!["file:README.md".into()];
+        runtime.add_task(params)
+    }
+    .unwrap();
     let drain = "jrun-cli-warning-hold";
     let pilot = "jrun-cli-warning-pilot";
     let now = chrono::Utc::now();
@@ -3340,173 +2367,65 @@ fn warnings_hold_findings_reach_run_show_and_readiness() {
             serde_json::json!({"task_ids": [task.id]}),
         ),
     ] {
-        db.execute(
-            "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,?3,1,'running',?4,?5,?5,?5,?6)",
-            params![
-                run_id,
-                fixture.workspace_id(),
-                job_id,
-                input.to_string(),
-                now.to_rfc3339(),
-                std::process::id()
-            ],
-        )
-        .unwrap();
-        runtime
-            .write_run_state(
-                run_id,
-                &orbit_types::workflow::PipelineState::new(
-                    run_id.into(),
-                    job_id.into(),
-                    serde_json::json!({}),
-                ),
-            )
-            .unwrap();
+        db.execute("INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,?3,1,'running',?4,?5,?5,?5,?6)", params![run_id, fixture.workspace_id(), job_id, input.to_string(), now.to_rfc3339(), std::process::id()]).unwrap();
+        fixture.write_state(&runtime, run_id, job_id, serde_json::json!({}));
     }
     let mut state = runtime.read_run_state(drain).unwrap().unwrap();
-    state.record_child_dispatch(orbit_types::workflow::ChildDispatch::submitted(
-        pilot.into(),
-        "task_pilot_pipeline".into(),
-        "invoke_detached".into(),
-        false,
-        false,
+    dispatch(
+        &mut state,
+        pilot,
+        "task_pilot_pipeline",
+        "invoke_detached",
         now,
-    ));
+    );
     runtime.write_run_state(drain, &state).unwrap();
-
-    let prepared = orbit_engine::RuntimeHost::run_deterministic(
+    let prepared = run_det(
         &runtime,
         "prepare_task_pilot",
-        &serde_json::json!({}),
-        &serde_json::json!({
-            "task_ids": [task.id],
-            "workspace_path": fixture.work,
-            "base_branch": "main",
-        }),
-        orbit_tools::ToolContext::default(),
-    )
-    .unwrap();
+        serde_json::json!({"task_ids": [task.id], "workspace_path": fixture.work, "base_branch": "main"}),
+    );
     let first = "The operator should review the proposed approach.";
     let rest = "This second line stays in the audit only.";
     let surface = "The proposed change overlaps an open surface.";
-    let applied = orbit_engine::RuntimeHost::run_deterministic(
+    let applied = run_det(
         &runtime,
         "apply_task_pilot_results",
-        &serde_json::json!({}),
-        &serde_json::json!({
-            "run_id": pilot,
-            "workspace_path": fixture.work,
-            "prepared": prepared,
-            "promotion_authorized": true,
-            "drain_promotion": {"run_id": drain},
-            "results": [{
-                "partition_index": 0,
-                "task_ids": [task.id],
-                "tasks": [{
-                    "task_id": task.id,
-                    "context_files_before": ["file:README.md"],
-                    "context_files_after": ["file:README.md"],
-                    "disposition": "selectors",
-                    "recommended_crew": "fixture",
-                    "recommended_complexity": "low",
-                    "confidence": "high",
-                    "assessment_rationale": "README.md holds the change.",
-                    "validation_approach": "Inspect README.md.",
-                    "evidence_gaps": [],
-                    "reassessment_triggers": [],
-                    "blocked_by": [],
-                    "adr_conflicts": [],
-                    "utility_warnings": [format!("{first}\n{rest}")],
-                    "surface_warnings": [surface],
-                    "duplicate_of": null,
-                    "already_landed": null,
-                }],
-            }],
-        }),
-        orbit_tools::ToolContext::default(),
-    )
-    .unwrap();
-    assert_eq!(applied["status"], "succeeded", "{applied}");
-    assert_eq!(
-        applied["drain_approval"][0]["classification"], "warnings",
-        "{applied}"
+        serde_json::json!({"run_id": pilot, "workspace_path": fixture.work, "prepared": prepared, "promotion_authorized": true, "drain_promotion": {"run_id": drain}, "results": [{"partition_index": 0, "task_ids": [task.id], "tasks": [{"task_id": task.id, "context_files_before": ["file:README.md"], "context_files_after": ["file:README.md"], "disposition": "selectors", "recommended_crew": "fixture", "recommended_complexity": "low", "confidence": "high", "assessment_rationale": "README.md holds the change.", "validation_approach": "Inspect README.md.", "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [], "adr_conflicts": [], "utility_warnings": [format!("{first}\n{rest}")], "surface_warnings": [surface], "duplicate_of": null, "already_landed": null}]}]}),
     );
+    assert_eq!(applied["status"], "succeeded");
+    assert_eq!(applied["drain_approval"][0]["classification"], "warnings");
     assert_eq!(
         runtime.get_task(&task.id).unwrap().status,
         TaskStatus::Proposed
     );
-
-    let selected = orbit_engine::RuntimeHost::run_deterministic(
+    let selected = run_det(
         &runtime,
         "select_proposed_approvals",
-        &serde_json::json!({}),
-        &serde_json::json!({"approve_proposed": true, "run_id": drain}),
-        orbit_tools::ToolContext::default(),
-    )
-    .unwrap();
-    assert_eq!(selected["held"][0]["reason"], "warnings", "{selected}");
-    assert_eq!(
-        selected["held"][0]["findings"],
-        serde_json::json!([
-            {"kind": "utility_warnings", "text": format!("{first}\n{rest}")},
-            {"kind": "surface_warnings", "text": surface},
-        ]),
-        "{selected}"
+        serde_json::json!({"approve_proposed": true, "run_id": drain}),
     );
-
-    let shown = fixture
-        .orbit()
-        .args(["run", "show", drain, "--no-reconcile"])
-        .output()
-        .unwrap();
-    assert!(shown.status.success(), "{shown:?}");
-    let shown = String::from_utf8_lossy(&shown.stdout);
-    assert!(shown.contains("Approved:"), "{shown}");
-    assert!(
-        shown.contains(&format!("    utility_warnings: {first}")),
-        "{shown}"
-    );
-    assert!(
-        shown.contains(&format!("    surface_warnings: {surface}")),
-        "{shown}"
-    );
+    assert_eq!(selected["held"][0]["reason"], "warnings");
+    let findings = serde_json::json!([{"kind": "utility_warnings", "text": format!("{first}\n{rest}")}, {"kind": "surface_warnings", "text": surface}]);
+    assert_eq!(selected["held"][0]["findings"], findings);
+    let shown = fixture.show_text(drain);
+    contains(&shown, "Approved:");
+    contains(&shown, &format!("    utility_warnings: {first}"));
+    contains(&shown, &format!("    surface_warnings: {surface}"));
     assert!(
         shown.contains(&format!("{first}\n{rest}")),
         "run show keeps the full multiline finding: {shown}"
     );
-
     let readiness = fixture.json(&["run", "readiness", "--json"]);
-    let task_id = task.id.as_str();
     let held = readiness["approvals"]["held"]
         .as_array()
-        .and_then(|held| held.iter().find(|entry| entry["task_id"] == task_id))
+        .and_then(|held| held.iter().find(|e| e["task_id"] == task.id.as_str()))
         .unwrap_or_else(|| panic!("held task missing: {readiness:#}"));
-    assert_eq!(held["reason"], "warnings", "{held}");
-    assert_eq!(
-        held["findings"],
-        serde_json::json!([
-            {"kind": "utility_warnings", "text": format!("{first}\n{rest}")},
-            {"kind": "surface_warnings", "text": surface},
-        ]),
-        "{held}"
-    );
+    assert_eq!(held["reason"], "warnings");
+    assert_eq!(held["findings"], findings);
 }
-
-#[test]
-fn run_observation_contracts_7() {
-    if !isolated_run_observation("run_observation::run_observation_contracts_7") {
-        return;
-    }
-    tracing::info!(
-        case = "warnings_hold_findings_reach_run_show_and_readiness",
-        "CLI contract row"
-    );
-    warnings_hold_findings_reach_run_show_and_readiness();
-    orbit_common::test_env::record_scenario_pass(
-        "warnings_hold_findings_reach_run_show_and_readiness",
-    );
-}
-
+contract!(
+    run_observation_contracts_7,
+    warnings_hold_findings_reach_run_show_and_readiness
+);
 #[test]
 fn run_observation_contracts_6() {
     if !isolated_run_observation("run_observation::run_observation_contracts_6") {
