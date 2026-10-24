@@ -1515,6 +1515,11 @@ function activeRefreshJobs() {
       add("Analytics › Codebase", fetchAndRenderCodebase());
       return jobs;
     }
+    if (activeAnalyticsSubtab === "agents") {
+      if (aggregate) placeholdAgentsAggregate();
+      else add(`Analytics › Agents › ${getAgentsRole()}`, fetchAndRenderAgents());
+      return jobs;
+    }
     if (aggregate) {
       placeholdScoreboardAggregate();
       placeholdMetricsAggregate();
@@ -1535,14 +1540,6 @@ function activeRefreshJobs() {
     }
     // ORB-15746: trends follow the shared window like Cost.
     add("Analytics › Metrics", fetchAndRenderMetrics());
-    return jobs;
-  }
-
-  if (activeTab === "agents") {
-    // The scorecards follow the shared window; one cached scan serves every
-    // role, window and row. The aggregate view has no workspace to rank.
-    if (aggregate) placeholdAgentsAggregate();
-    else add(`Agents › ${getAgentsRole()}`, fetchAndRenderAgents());
     return jobs;
   }
 

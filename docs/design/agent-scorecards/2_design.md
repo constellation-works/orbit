@@ -7,7 +7,7 @@ status: Draft
 feature: agent-scorecards
 doc_role: design
 type: design
-summary: Target design for the Agents dashboard destination; covers problem attribution, the shared score, per-role terms, the API, CLI and MCP contract, scan budget and delivery tracks.
+summary: Target design for the Agents dashboard view under Analytics; covers problem attribution, the shared score, per-role terms, the API, CLI and MCP contract, scan budget and delivery tracks.
 tags: [agent-scorecards, dashboard, analytics]
 paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-web/src/runtime_memo.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-core/src/application/codebase/pilot.rs", "crates/orbit-core/src/application/codebase/lock_waits.rs", "crates/orbit-core/src/application/codebase/facts/**", "crates/orbit-web/assets/dashboard/**"]
 related_features: [user-interface, review-gate, finding-verification]
@@ -16,17 +16,17 @@ related_artifacts: []
 
 # Agent Scorecards — Design
 
-This document is the target design for the Agents destination: one scorecard per agent role, ranked by crew and model. It is a **Draft** that becomes the description of current behaviour as the delivery tracks in §10 land. It fixes the attribution rules, the shared score, each role's terms, and the API payload first, so that every track builds against a stable contract.
+This document is the target design for the Agents view under Analytics: one scorecard per agent role, ranked by crew and model. It is a **Draft** that becomes the description of current behaviour as the delivery tracks in §10 land. It fixes the attribution rules, the shared score, each role's terms, and the API payload first, so that every track builds against a stable contract.
 
-The core, dashboard and role tracks have landed. Sections marked **Current** describe the code: the destination and layout (§1), the ranking unit (§2), attribution (§3), the shared score (§4), the Orchestrators, Implementers, Reviewers and Pilots roles (§5.1–5.4), the API (§6), the CLI and MCP (§7) and the scan and cache (§8). Everything else is the target. The view itself is described in [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-observe--agents).
+The core, dashboard and role tracks have landed. Sections marked **Current** describe the code: the destination and layout (§1), the ranking unit (§2), attribution (§3), the shared score (§4), the Orchestrators, Implementers, Reviewers and Pilots roles (§5.1–5.4), the API (§6), the CLI and MCP (§7) and the scan and cache (§8). Everything else is the target. The view itself is described in [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-analytics--agents).
 
 ## 1. Destination and Layout
 
 **Current**.
 
-**Agents** is a top-level Observe destination beside Health and Analytics. Its secondary tabs are its roles: **Orchestrators** (`#agents/orchestrators`, the default), **Implementers** (`#agents/implementers`), **Reviewers** (`#agents/reviewers`) and **Pilots** (`#agents/pilots`). Each tab shows its count of ranked rows. Navigation changes:
+**Agents** is an Analytics view, listed in the Analytics sub-nav beside Metrics, Reliability, Codebase, Resources and Cost; there is no standalone Agents rail destination. Its secondary tabs are its roles: **Orchestrators** (`#analytics/agents/orchestrators`, the default), **Implementers** (`#analytics/agents/implementers`), **Reviewers** (`#analytics/agents/reviewers`) and **Pilots** (`#analytics/agents/pilots`). Each tab shows its count of ranked rows. Reopening Analytics from the rail returns to the remembered Analytics view, including Agents with its remembered role. Navigation changes:
 
-- `#analytics/orchestrators` opens `#agents/orchestrators`, and Analytics loses its Orchestrators view.
+- `#analytics/orchestrators` and old `#agents/<role>` links open `#analytics/agents/<role>` in place, keeping the window, so Back is not trapped.
 - The Task pilot tile and its section leave Analytics › Codebase. The Codebase view keeps its path rankings, change coupling and lock contention.
 
 Every role tab has the same layout:

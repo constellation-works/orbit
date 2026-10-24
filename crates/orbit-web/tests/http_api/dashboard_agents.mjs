@@ -1,11 +1,11 @@
-// Observe › Agents through contract-shaped `/api/agents` payloads: the role
+// Analytics › Agents through contract-shaped `/api/agents` payloads: the role
 // tabs and their ranked-row counts, the attribution strip, ranking selection
 // driving the detail column (breakdown, biggest-penalty tasks linking to the
 // task, shown-not-scored stats), "How the score works" keeping its state
 // across polls, a newer scan re-reading the open detail, the empty and
 // not_computed states, the Reviewers provisional banner, `accepts often` tag
 // and verdict-outcome bars, the aggregate placeholder, and the router sending
-// `#analytics/orchestrators` to `#agents/orchestrators`.
+// `#analytics/orchestrators` and old `#agents/<role>` to `#analytics/agents/<role>`.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -117,20 +117,22 @@ const make = (tag, id, parent, className = '') => {
 const ROLES = ['orchestrators', 'implementers', 'reviewers', 'pilots'];
 const body = new Node('body');
 const tabs = make('div', 'tabs', body, 'tabs');
-for (const tab of ['tasks', 'analytics', 'agents']) make('button', null, tabs, 'tab').dataset.tab = tab;
+for (const tab of ['tasks', 'analytics']) make('button', null, tabs, 'tab').dataset.tab = tab;
+const analyticsSubtabs = make('nav', 'analytics-subtabs', body, 'subtabs rail-subtabs');
+for (const sub of ['metrics', 'reliability', 'codebase', 'resources', 'cost', 'agents']) make('button', null, analyticsSubtabs, 'subtab').dataset.subtab = sub;
 make('div', 'topbar-crumb', body);
-const panes = Object.fromEntries(['tasks', 'analytics', 'agents'].map(tab => {
+const panes = Object.fromEntries(['tasks', 'analytics'].map(tab => {
   const pane = make('section', null, body, 'tab-pane');
   pane.dataset.tab = tab;
   return [tab, pane];
 }));
-const roleTabs = make('nav', 'agents-roles', panes.agents, 'subtabs view-tabs');
+const roleTabs = make('nav', 'agents-roles', panes.analytics, 'subtabs view-tabs');
 for (const role of ROLES) {
   const button = make('button', null, roleTabs, 'subtab');
   button.dataset.view = role;
   make('span', `agents-count-${role}`, button, 'agents-role-count');
 }
-const layout = make('main', 'agents-main', panes.agents);
+const layout = make('main', 'agents-main', panes.analytics);
 for (const id of ['agents-title', 'agents-count', 'agents-meta', 'agents-body']) make('div', id, layout);
 const windows = make('div', 'agents-window-selector', layout);
 for (const value of ['1h', '24h', '7d', '30d', 'all']) make('button', null, windows, 'scoreboard-window-seg').dataset.window = value;
@@ -293,7 +295,7 @@ assert.match(strip.textContent, /20 problems in 30d/);
 const legend = strip.querySelectorAll('li');
 assert.deepEqual(legend.map(item => item.dataset.owner), [...ROLES, 'not_scored']);
 assert.ok(legend[0].classList.contains('is-current'), 'the current role is highlighted');
-assert.equal(legend[1].querySelector('a').href, '#agents/implementers?window=30d', 'a legend entry links to its role');
+assert.equal(legend[1].querySelector('a').href, '#analytics/agents/implementers?window=30d', 'a legend entry links to its role');
 assert.equal(legend[4].querySelector('a'), null, 'Not scored is no role to open');
 assert.match(strip.textContent, /2 rework caused by infrastructure · 1 no orchestrator attribution/);
 const segments = strip.querySelectorAll('span.agents-strip-seg');
@@ -344,7 +346,7 @@ assert.match(part('detail').textContent, /Active hours30\.3/, 'shown-not-scored 
 const panel = part('panel');
 assert.equal(panel.querySelector('h3').textContent, 'Rework by cause');
 assert.deepEqual(panel.querySelectorAll('li.agents-cause-row').map(item => item.querySelector('span.agents-cause-total').textContent), ['8 rework', '4 rework', 'no rework']);
-assert.equal(panel.querySelector('a.agents-cause-note').href, '#agents/implementers?window=30d', 'crew rework points at Implementers');
+assert.equal(panel.querySelector('a.agents-cause-note').href, '#analytics/agents/implementers?window=30d', 'crew rework points at Implementers');
 
 // Selecting another row moves the detail column to it.
 click(selectButton('sonnet'));
@@ -522,35 +524,45 @@ assert.equal(byId['agents-count'].textContent, '—');
 assert.equal(pending.length, 0);
 common.setWorkspace('ws-a');
 
-// Router: `#analytics/orchestrators` opens `#agents/orchestrators` in place,
-// keeping the window, and a role tab routes to its role.
+// Router: `#analytics/orchestrators` and old `#agents/<role>` open
+// `#analytics/agents/<role>` in place, keeping the window, and a role tab
+// routes to its role.
 await load('router.js').link(specifier => load(specifier.replace(/^\.\//, '')));
 await load('router.js').evaluate();
 const router = modules.get('router.js').namespace;
 let tab = 'tasks';
 let fetches = 0;
+let analyticsSubtab = 'metrics';
+let reliabilityView = 'pipeline';
 router.initRouter({
   getTab: () => tab, setTab: value => { tab = value; },
+  getAnalyticsSubtab: () => analyticsSubtab, setAnalyticsSubtab: value => { analyticsSubtab = value; },
+  getReliabilityView: () => reliabilityView, setReliabilityView: value => { reliabilityView = value; },
   getAgentsRole: agents.getAgentsRole, setAgentsRole: agents.setAgentsRole,
   fetchAgents: () => { fetches += 1; },
   refreshDashboard: () => {},
 });
 window.location.hash = '#analytics/orchestrators?window=7d';
 router.setActiveTab('analytics/orchestrators?window=7d');
-assert.equal(tab, 'agents', 'the legacy route opens Agents');
-assert.equal(replaced.at(-1).split('#')[1], 'agents/orchestrators?window=7d', 'the legacy hash is rewritten in place');
+assert.equal(tab, 'analytics', 'the legacy route opens Analytics');
+assert.equal(analyticsSubtab, 'agents', 'the legacy route opens Analytics > Agents');
+assert.equal(replaced.at(-1).split('#')[1], 'analytics/agents/orchestrators?window=7d', 'the legacy hash is rewritten in place');
 assert.equal(common.getWindow(), '7d', 'the redirect keeps the window');
-assert.ok(panes.agents.classList.contains('active'));
+assert.ok(panes.analytics.classList.contains('active'));
 assert.ok(roleTabs.children[0].classList.contains('active'));
 assert.equal(fetches, 1, 'opening a role reads it at once');
-router.setActiveTab('agents/reviewers');
+router.setActiveTab('agents/pilots');
+assert.equal(tab, 'analytics', 'the old Agents route opens Analytics');
+assert.equal(agents.getAgentsRole(), 'pilots', 'the old Agents route keeps its role');
+assert.equal(replaced.at(-1).split('#')[1], 'analytics/agents/pilots?window=7d', 'the old Agents hash is rewritten in place');
+router.setActiveTab('analytics/agents/reviewers');
 assert.equal(agents.getAgentsRole(), 'reviewers');
 assert.ok(roleTabs.children[2].classList.contains('active'));
 assert.equal(roleTabs.children[0].classList.contains('active'), false);
-assert.equal(window.location.hash, '#agents/reviewers?window=7d');
-router.setActiveTab('agents/nobody');
+assert.equal(window.location.hash, '#analytics/agents/reviewers?window=7d');
+router.setActiveTab('analytics/agents/nobody');
 assert.equal(agents.getAgentsRole(), 'reviewers', 'an unknown role keeps the role on screen');
-assert.equal(window.location.hash, '#agents/reviewers?window=7d', 'and names it in the hash');
+assert.equal(window.location.hash, '#analytics/agents/reviewers?window=7d', 'and names it in the hash');
 takeAll();
 console.log('dashboard agents ok');
 
