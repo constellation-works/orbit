@@ -777,10 +777,10 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
    every row at once. The compact layout above places its action on its own
    line and is left alone. */
 @container tasks-panel (min-width: 621px) {
-  /* Keep the crew and action edges consistent across task groups. The host
-     provenance uses this width too and truncates when its label is longer. */
+  /* Keep crew starts and action ends consistent across task groups. The
+     action cell's default right alignment puts each action at row padding;
+     host provenance uses this width too and truncates when its label is longer. */
   #tasks-body { --task-action-width: 108px; }
-  #tasks-body > .row .task-quick-cell { justify-content: flex-start; }
   #tasks-body[data-quick-actions="none"] .row {
     grid-template-columns: minmax(0, 1fr) var(--task-crew-width, 120px);
   }
