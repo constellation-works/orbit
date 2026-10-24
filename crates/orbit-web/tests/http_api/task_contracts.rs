@@ -102,6 +102,29 @@ fn get_task_artifact_serves_subdirectory_bytes_and_media_type() {
             );
             let bytes = response.bytes().expect("read response body");
             assert_eq!(&bytes[..], br#"{"ok":true}"#);
+
+            // [ORB-17784] The download reads the artifact without resolving the
+            // task first, so a missing task and a missing artifact share the
+            // artifact-not-found response.
+            let prefix = task.id.split_once('-').map_or("ORB", |(prefix, _)| prefix);
+            for (uri, missing) in [
+                (
+                    format!("/tasks/{}/artifacts/subdir/nope.json", task.id),
+                    format!("{}/subdir/nope.json", task.id),
+                ),
+                (
+                    format!("/tasks/{prefix}-99999/artifacts/subdir/file.json"),
+                    format!("{prefix}-99999/subdir/file.json"),
+                ),
+            ] {
+                let response = request(&server, &uri);
+                assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+                assert_eq!(
+                    body_json(response),
+                    json!({ "error": format!("artifact not found: {missing}") }),
+                    "{uri}"
+                );
+            }
         },
     );
 }

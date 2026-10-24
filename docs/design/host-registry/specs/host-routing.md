@@ -80,7 +80,10 @@ For an id-routed tool:
 ### Where routing applies
 
 - **CLI.** Every `orbit task` subcommand that wraps an id-routed tool, and
-  `orbit tool run <id-routed tool>`.
+  `orbit tool run <id-routed tool>`. A routed `orbit task artifact get --out <FILE>` writes
+  the holder's stored bytes, text or binary, through the same export as a local read, and
+  reports the stored `size`. Without `--out` it prints only text and refuses any other
+  payload with the `ssh <host> orbit task artifact get … --out <FILE>` to run.
 - **Federated MCP** (`--mode federated`). An id-only call routes by prefix. This amends the
   federated rule that `orbit.task.show` requires a host-qualified selector. A call that
   carries a selector keeps that rule.

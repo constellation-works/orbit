@@ -2251,6 +2251,25 @@ fn missing_artifact_names_the_listing_in_each_surface_syntax() {
         message.contains("orbit.task.show") && message.contains("field: \"artifacts\""),
         "the MCP refusal must keep the MCP listing spelling: {refused}"
     );
+
+    // [ORB-17784] MCP resolves the task before the artifact, so a missing task
+    // and a missing artifact stay distinct refusals.
+    let prefix = task_id.split_once('-').map_or("ORB", |(prefix, _)| prefix);
+    let unknown = format!("{prefix}-99999");
+    let missing_task = client.call_tool_err(
+        "orbit_task_artifact_get",
+        json!({ "id": unknown, "path": "nope.txt" }),
+    );
+    assert_eq!(
+        missing_task,
+        json!({ "code": "not_found", "message": format!("task not found: {unknown}") }),
+        "a missing task is not reported as a missing artifact"
+    );
+    assert_eq!(refused["code"], "not_found", "{refused}");
+    assert!(
+        message.starts_with(&format!("task artifact not found: {task_id}/nope.txt")),
+        "a missing artifact names the artifact: {refused}"
+    );
 }
 
 /// [ORB-12254] Regression guard for the class of bug this task fixed: a tool

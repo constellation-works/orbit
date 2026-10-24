@@ -19,6 +19,7 @@ use orbit_core::application::task::{
 };
 use orbit_core::{OrbitRuntime, TaskComplexity};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update};
+use orbit_types::task::TaskArtifact;
 use serde_json::{Value, json};
 
 use crate::git_repo;
@@ -1091,6 +1092,149 @@ fn ssh_hint_remote_argv(message: &str) -> Vec<String> {
     posix_shell_split(&local_words[2..].join(" "))
 }
 
+/// [ORB-17784] A routed `task artifact get --out` writes the bytes the holder
+/// stores, text or binary, and reports the same document as the holder's own
+/// export, stamped with the answering host. Without `--out` the routed view
+/// still prints only text and sends any other payload to the holding host.
+fn routed_artifact_export_writes_the_same_bytes_as_the_holders_export() {
+    let routed = Routed::new();
+    let remote = routed.remote_task.as_str();
+    let png: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0";
+    let cases: [(&str, &str, &[u8]); 3] = [
+        ("notes/readme.txt", "text/plain", "h\u{e9}llo\n".as_bytes()),
+        ("shots/pixel.png", "image/png", png),
+        (
+            "blobs/data.bin",
+            "application/octet-stream",
+            &[0x00, 0x9f, 0x92, 0x96, 0xff],
+        ),
+    ];
+    routed
+        .remote_runtime
+        .update_task_with_identity(
+            remote,
+            TaskUpdateParams {
+                upsert_artifacts: cases
+                    .iter()
+                    .map(|(path, media_type, content)| TaskArtifact {
+                        path: (*path).into(),
+                        media_type: (*media_type).into(),
+                        content: content.to_vec(),
+                        created_by: None,
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect("owning runtime fixture artifacts");
+    let exports = routed.fleet.temp.path().join("exports");
+    fs::create_dir_all(&exports).expect("export directory");
+    let without = |mut doc: Value, keys: &[&str]| {
+        for key in keys {
+            doc.as_object_mut().expect("artifact document").remove(*key);
+        }
+        doc
+    };
+
+    for (index, (path, _, content)) in cases.iter().enumerate() {
+        let held = exports.join(format!("held-{index}"));
+        let args = [
+            "task",
+            "artifact",
+            "get",
+            remote,
+            path,
+            "--out",
+            held.to_str().expect("export path"),
+            "--json",
+        ];
+        let output = routed
+            .fleet
+            .orbit_in(&routed.bravo.home, &routed.bravo.repo(), &args)
+            .output()
+            .expect("spawn the holder's own artifact export");
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let local = parse(&output.stdout, &args);
+
+        let out = exports.join(format!("routed-{index}"));
+        let out_path = out.to_str().expect("export path");
+        let args = [
+            "task", "artifact", "get", remote, path, "--out", out_path, "--json",
+        ];
+        let doc = routed.json(&args);
+        assert_eq!(
+            fs::read(&out).expect("routed export"),
+            *content,
+            "{path}: a routed --out writes the stored bytes"
+        );
+        assert_eq!(fs::read(&held).expect("holder export"), *content, "{path}");
+        assert_eq!(doc["size"], content.len(), "{path}: the stored size: {doc}");
+        assert_eq!(doc["written_to"], out_path, "{path}");
+        assert_eq!(doc["host"]["name"], "bravo", "{path}: {doc}");
+        assert_eq!(doc["host"]["machine_id"], routed.bravo.machine_id);
+        assert_eq!(
+            without(doc, &["host", "written_to"]),
+            without(local, &["written_to"]),
+            "{path}: the routed export reports the holder's document"
+        );
+
+        let human = routed.fleet.orbit_ok(
+            &routed.fleet.local_repo,
+            &["task", "artifact", "get", remote, path, "--out", out_path],
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&human.stdout).trim(),
+            format!(
+                "Wrote {} bytes of '{path}' from host 'bravo' to {out_path}",
+                content.len()
+            ),
+            "{path}"
+        );
+    }
+
+    let text = ["task", "artifact", "get", remote, "notes/readme.txt"];
+    let printed = routed.fleet.orbit_ok(&routed.fleet.local_repo, &text);
+    assert_eq!(printed.stdout, cases[0].2, "routed text prints as stored");
+    let doc = routed.json(&[&text[..], &["--json"]].concat());
+    assert_eq!(
+        doc["size"],
+        cases[0].2.len(),
+        "text size is the stored size"
+    );
+    assert_eq!(doc["presentation"], "text");
+    assert_eq!(doc["written_to"], Value::Null);
+
+    for (path, _, _) in &cases[1..] {
+        let (code, message) = routed.refused(&["task", "artifact", "get", remote, path, "--json"]);
+        assert_eq!(code, "invalid_input", "{path}: {message}");
+        assert!(
+            message.contains("is not text; read it on host 'bravo'")
+                && message.contains("--out <FILE>"),
+            "{path}: without --out a binary read names the holding host: {message}"
+        );
+        let local = routed
+            .fleet
+            .orbit_in(
+                &routed.bravo.home,
+                &routed.bravo.repo(),
+                &["task", "artifact", "get", remote, path],
+            )
+            .output()
+            .expect("spawn the holder's own artifact read");
+        let stderr = String::from_utf8_lossy(&local.stderr);
+        assert!(
+            !local.status.success() && stderr.contains("re-run with --out <FILE>"),
+            "{path}: the holder's own read names --out: {stderr}"
+        );
+    }
+}
+
 fn host_ssh_command_hint_quotes_metacharacters_and_roundtrips_posix_argv() {
     let routed = Routed::new();
     let marker = routed.fleet.temp.path().join("injected_marker");
@@ -1321,9 +1465,17 @@ fn host_routing_contracts_2() {
     if crate::isolated_test::run_in_child("host_routing::host_routing_contracts_2") {
         return;
     }
-    tracing::info!(
-        case = "host_ssh_command_hint_quotes_metacharacters_and_roundtrips_posix_argv",
-        "CLI contract row"
-    );
-    host_ssh_command_hint_quotes_metacharacters_and_roundtrips_posix_argv();
+    for (name, check) in [
+        (
+            "host_ssh_command_hint_quotes_metacharacters_and_roundtrips_posix_argv",
+            host_ssh_command_hint_quotes_metacharacters_and_roundtrips_posix_argv as fn(),
+        ),
+        (
+            "routed_artifact_export_writes_the_same_bytes_as_the_holders_export",
+            routed_artifact_export_writes_the_same_bytes_as_the_holders_export as fn(),
+        ),
+    ] {
+        tracing::info!(case = name, "CLI contract row");
+        check();
+    }
 }
