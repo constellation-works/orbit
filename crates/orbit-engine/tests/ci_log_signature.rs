@@ -87,3 +87,46 @@ fn nearest_diagnostic_keeps_compiler_test_and_annotation_precedence() {
         );
     }
 }
+
+#[test]
+fn tap_success_output_with_marker_words_is_not_selected_as_diagnostic() {
+    let subtest = "# Subtest: failed rename leaves the final path absent and removes the temp file";
+    let passing_result =
+        "ok 4 - failed rename leaves the final path absent and removes the temp file";
+    let skipped = "ok 5 # SKIP failed rename is unsupported";
+    let todo = "ok 6 # TODO error recovery is pending";
+
+    let log = format!(
+        "{subtest}\n{passing_result}\n# fail 0\ntest-installer-security: ok\n\
+         ##[error]Process completed with exit code 1."
+    );
+    assert_eq!(
+        error_signature(&log, "Run CI guardrails").text,
+        "test-installer-security: ok"
+    );
+    let excerpt = diagnostic_excerpt(&log, 80);
+    assert!(excerpt.contains("test-installer-security: ok"));
+    assert!(!excerpt.contains("# Subtest: failed rename"));
+    assert!(!excerpt.contains("ok 4 - failed rename"));
+
+    for status in [subtest, passing_result, skipped, todo] {
+        assert!(
+            matches!(classify_log_lines(status)[0].0, LineKind::Content),
+            "TAP status output is not diagnostic evidence: {status}"
+        );
+    }
+
+    let failure = "not ok 7 - failed rename leaves the final path absent";
+    assert!(
+        matches!(classify_log_lines(failure)[0].0, LineKind::Marker),
+        "a failing TAP result remains diagnostic evidence"
+    );
+    assert_eq!(
+        error_signature(
+            &format!("{failure}\n##[error]Process completed with exit code 1."),
+            "CI"
+        )
+        .text,
+        orbit_engine::ci_log_signature::normalize_signature(&failure.to_ascii_lowercase())
+    );
+}

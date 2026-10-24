@@ -510,6 +510,33 @@ fn is_libtest_non_diagnostic(lowered: &str) -> bool {
     matches!(trimmed, "failures:" | "errors:" | "successes:")
         || trimmed.starts_with("test result:")
         || is_successful_test_result(trimmed)
+        || is_tap_non_diagnostic(trimmed)
+}
+
+/// TAP captions and successful result lines are status output even when their
+/// test names contain words such as `failed` or `error`.
+fn is_tap_non_diagnostic(lowered: &str) -> bool {
+    if lowered.starts_with("# subtest:") {
+        return true;
+    }
+
+    let Some(rest) = lowered.strip_prefix("ok ") else {
+        return false;
+    };
+    let Some((number, result)) = rest.split_once(' ') else {
+        return false;
+    };
+    if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return false;
+    }
+
+    if result.starts_with("- ") {
+        return true;
+    }
+    let Some(directive) = result.strip_prefix("# ") else {
+        return false;
+    };
+    matches!(directive.split_whitespace().next(), Some("skip" | "todo"))
 }
 
 /// `test <name> ... ok` / `ignored`, with an optional timing suffix.
