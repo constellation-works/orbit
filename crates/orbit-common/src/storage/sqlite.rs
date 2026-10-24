@@ -162,7 +162,7 @@ pub fn open_private(path: &Path) -> Result<OpenedConnection, OrbitError> {
     let pragmas = apply_default_pragmas_for_path(&connection, &path)?;
     if pragmas.write_denied || filesystem_is_read_only(&path)? {
         drop(connection);
-        return open_observational(&path, ObservationRequirement::PublishedMainFile);
+        return open_observational(&path);
     }
     harden_sqlite_files(&path)?;
 
@@ -190,7 +190,7 @@ fn open_private_read_only(
     if !filesystem_read_only {
         harden_read_only_sqlite_files(&path)?;
     }
-    open_observational(&path, ObservationRequirement::PublishedMainFile)
+    open_observational(&path)
 }
 
 /// Resolve a SQLite file path through its existing parent and reject traversal
@@ -548,22 +548,6 @@ fn sqlite_error_detail(error: &rusqlite::Error) -> String {
     }
 }
 
-/// What a caller needs from an observational open.
-///
-/// A database whose current state cannot be read without writing leaves only a
-/// degraded read, and which of the two answers is right — refuse, or read the
-/// main file alone — belongs to the caller, not to whichever sidecars happen
-/// to be on disk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ObservationRequirement {
-    /// The connection must observe commits made after it is opened, or the
-    /// open must fail explaining what writable storage still owes it.
-    CurrentState,
-    /// The caller also accepts [`ObservationCurrency::MainFileOnly`], having
-    /// weighed that degraded read against not reading the database at all.
-    PublishedMainFile,
-}
-
 /// Whether a connection keeps up with commits another process makes after the
 /// connection was opened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -581,8 +565,7 @@ pub enum ObservationCurrency {
     /// writer that later checkpoints into the main file can leave this
     /// connection returning results that are not merely stale but internally
     /// inconsistent. It is only sound for a database published as a static
-    /// file set, and only a caller that passes
-    /// [`ObservationRequirement::PublishedMainFile`] ever receives it.
+    /// file set, which Orbit accepts when opening read-only storage.
     /// Observing current state again means opening a new connection.
     MainFileOnly,
 }
@@ -599,14 +582,11 @@ pub enum ObservationCurrency {
 /// turned an observation into `attempt to write a readonly database`, and how
 /// a checkpointed database kept reporting its pre-open row count.
 ///
-/// The database's own state decides which reads are possible, and
-/// `requirement` decides whether the degraded one is acceptable; see
+/// The database's own state decides which reads are possible. A published
+/// main file without a wal-index is accepted as a degraded read; see
 /// `observation_currency`.
-pub fn open_observational(
-    path: &Path,
-    requirement: ObservationRequirement,
-) -> Result<OpenedConnection, OrbitError> {
-    let currency = observation_currency(path, requirement)?;
+pub fn open_observational(path: &Path) -> Result<OpenedConnection, OrbitError> {
+    let currency = observation_currency(path)?;
     let connection = open_read_only_connection(path, currency)?;
 
     // Opening is lazy, so an unreadable database or an unusable wal-index would
@@ -653,16 +633,11 @@ pub fn open_observational(
 /// hiding committed pages the main file does not have; reporting the main file
 /// alone would be a silent, stale success, so those always fail closed.
 ///
-/// A WAL-mode database with no wal-index at all is the one case the caller
-/// decides. Nothing on disk proves it is quiescent — sidecar absence only says
-/// no writer holds it *right now* — so the degraded
-/// [`ObservationCurrency::MainFileOnly`] read is offered to
-/// [`ObservationRequirement::PublishedMainFile`] and refused to
-/// [`ObservationRequirement::CurrentState`].
-fn observation_currency(
-    path: &Path,
-    requirement: ObservationRequirement,
-) -> Result<ObservationCurrency, OrbitError> {
+/// A WAL-mode database with no wal-index at all is accepted as the degraded
+/// [`ObservationCurrency::MainFileOnly`] read. Nothing on disk proves it is
+/// quiescent — sidecar absence only says no writer holds it *right now* — so
+/// the caller receives the currency and a warning about the degraded read.
+fn observation_currency(path: &Path) -> Result<ObservationCurrency, OrbitError> {
     let [wal_path, shm_path] = sqlite_sidecar_paths(path);
     let wal = sidecar_metadata(&wal_path)?;
     let shm = sidecar_metadata(&shm_path)?;
@@ -681,14 +656,7 @@ fn observation_currency(
             path,
             "its '-wal' sidecar holds committed frames but its '-shm' wal-index is missing",
         )),
-        (Some(_) | None, None) => match requirement {
-            ObservationRequirement::PublishedMainFile => Ok(ObservationCurrency::MainFileOnly),
-            ObservationRequirement::CurrentState => Err(observational_unavailable(
-                path,
-                "it is in WAL mode with no published '-shm' wal-index, so a reader that may not \
-                 create one can only read the main file alone",
-            )),
-        },
+        (Some(_) | None, None) => Ok(ObservationCurrency::MainFileOnly),
     }
 }
 

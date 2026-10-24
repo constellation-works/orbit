@@ -80,16 +80,12 @@ fn error_code(err: &OrbitError) -> &str {
             | NotFoundKind::Skill
             | NotFoundKind::Job
             | NotFoundKind::JobRun
-            | NotFoundKind::Activity
-            | NotFoundKind::DesignFeature
-            | NotFoundKind::AgentSession
             | NotFoundKind::Workspace => const { RemoteToolCode::NotFound.as_str() },
         },
         OrbitError::PolicyDenied(_) => const { RemoteToolCode::PolicyDenied.as_str() },
         OrbitError::CapabilityDenied(_) => const { RemoteToolCode::CapabilityDenied.as_str() },
         OrbitError::UnknownSelector(_) => "unknown_selector",
         OrbitError::AmbiguousDestination(_) => "ambiguous_destination",
-        OrbitError::AmbiguousCaller(_) => "ambiguous_caller",
         OrbitError::UnreachableDestination(_) => "unreachable_destination",
         OrbitError::StaleRoute(_) => "stale_route",
         OrbitError::UnhealthyCheckout(_) => "unhealthy_checkout",
@@ -108,9 +104,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
         OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) | OrbitError::JobValidation(_) => "validation_failed",
-        OrbitError::TaskStatusTransition(_) | OrbitError::JobRunStateTransition(_) => {
-            "invalid_transition"
-        }
+        OrbitError::JobRunStateTransition(_) => "invalid_transition",
         // [ORB-10965] Not "invalid_transition": a duplicate start losing to the
         // incumbent owner is an expected race, and the caller yields rather
         // than treating its own request as malformed.
