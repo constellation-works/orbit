@@ -281,6 +281,59 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.equal(named.title, "Run run-ORB-2 ran on Mac follower, which is not a registered host");
 }
 
+// ORB-17964: pending Approve/Ship must not overlap the crew control in the
+// narrowed (73px) desktop action column. Drive the public renderer, click
+// each action and hold its POST, then measure crew/action geometry.
+{
+  const { renderTasks } = await import("./js/tasks.js");
+  const pendingTasks = [
+    { id: "ORB-PEND-APPROVE", title: "Pending approve fixture", status: "proposed", priority: "medium" },
+    { id: "ORB-PEND-SHIP", title: "Pending ship fixture", status: "backlog", priority: "medium" },
+  ];
+  const context = {
+    getTasks: () => pendingTasks,
+    getActiveStatuses: () => new Set(["proposed", "backlog"]),
+    statusOrder: ["proposed", "backlog"],
+    getTaskPagination: () => ({}),
+  };
+  const rowFor = (id) => document.querySelector(`#tasks-body [data-key="task-${id}"]`);
+  const geometry = (id) => {
+    const row = rowFor(id);
+    const crew = row.querySelector(".crew-cell").getBoundingClientRect();
+    const button = row.querySelector(".task-quick").getBoundingClientRect();
+    return { crew, button, gap: button.left - crew.right };
+  };
+  let releasePost;
+  holdPost = new Promise((resolve) => { releasePost = resolve; });
+  try {
+    renderTasks(pendingTasks, context);
+    for (const [id, idleLabel, pendingLabel] of [
+      ["ORB-PEND-APPROVE", "Approve", "Approving…"],
+      ["ORB-PEND-SHIP", "Ship", "Shipping…"],
+    ]) {
+      const idle = geometry(id);
+      assert.ok(idle.gap >= 0, `${id}: idle action must not overlap the crew control (gap ${idle.gap}px)`);
+      press(rowFor(id).querySelector(".task-quick"));
+      await settle();
+      const button = rowFor(id).querySelector(".task-quick");
+      assert.equal(button.textContent, idleLabel, `${id}: pending keeps the idle label`);
+      assert.equal(button.getAttribute("aria-label"), pendingLabel, `${id}: pending is named for assistive technology`);
+      assert.equal(button.getAttribute("aria-busy"), "true", `${id}: pending is marked busy`);
+      assert.ok(button.classList.contains("pending"), `${id}: pending carries the spinner class`);
+      assert.ok(button.disabled, `${id}: pending action is disabled`);
+      const pending = geometry(id);
+      assert.ok(pending.gap >= 0, `${id}: pending action must not overlap the crew control (gap ${pending.gap}px)`);
+      assert.ok(pending.button.left >= pending.crew.right, `${id}: pending button intersects the crew control`);
+      assert.ok(Math.abs(pending.button.width - idle.button.width) <= 1, `${id}: pending width ${pending.button.width}px must match idle width ${idle.button.width}px`);
+      assert.ok(Math.abs(pending.button.right - idle.button.right) <= 1, `${id}: pending action must keep the shared right edge`);
+    }
+  } finally {
+    releasePost();
+    holdPost = null;
+    await settle();
+  }
+}
+
 // Run detail uses the same visible location and retains the name and full id.
 {
   const runDetail = await import("./js/run-detail.js");
