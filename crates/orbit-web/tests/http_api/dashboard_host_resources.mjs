@@ -362,6 +362,14 @@ assert.deepEqual(providerItems().map(line), ['claude ×25.2 10% 7d', 'claude/cre
 assert.match(providerItems()[0].title, /claude ×25.2 \(seven_day 10%, resets 2026-10-24 18:00Z\)/);
 assert.match(providerItems()[2].title, /no live weekly usage/);
 assert.deepEqual(kv(providerSummary()), { k: 'claude', v: '×25.2' });
+// A model-scoped window names its scope once: the chip's scope prefix stands in
+// for the scope its window key carries, so `seven_day_opus` reads `opus 7d`.
+renderProviderUsage({ provider_limits: [
+  usage({ used_percent: 10, window: 'seven_day' }), usage({ scope: 'opus', used_percent: 40, window: 'seven_day_opus' }),
+  usage({ account: 'credits', scope: 'sonnet', used_percent: 20, window: 'seven_day_sonnet' }),
+], provider_pressures: pressures });
+assert.deepEqual(providerItems().map(line), ['claude ×25.2 10% 7d | 40% opus 7d', 'claude/credits ×0.5 20% sonnet 7d', 'gemini ×1'],
+  'a scoped window reads its scope once, and an account-wide window keeps its short label');
 renderProviderUsage({ provider_limits: [], provider_pressures: [{ provider: 'codex', pressure: 0, pressure_window: null }] });
 assert.deepEqual(providerItems().map(line), ['codex ×0'], 'zero pressure is displayed, not treated as missing');
 console.log('weekly pressure: raw values, account isolation, neutral and zero display passed');

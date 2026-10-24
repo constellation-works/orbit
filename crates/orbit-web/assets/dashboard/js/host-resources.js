@@ -113,9 +113,13 @@ const WINDOW_LABELS = { five_hour: '5h', seven_day: '7d', primary: '' };
 // Shorter windows read first within a provider's chip; others keep API order.
 const WINDOW_ORDER = { five_hour: 0, seven_day: 1 };
 
-function windowLabel(window) {
+/// A model-scoped key (`seven_day_opus` under scope `opus`) loses its scope
+/// suffix when `scope` is given, since the chip names the scope on its own.
+function windowLabel(window, scope = '') {
   if (window == null || window === '') return '';
-  return window in WINDOW_LABELS ? WINDOW_LABELS[window] : String(window).replace(/_/g, ' ');
+  const name = String(window);
+  const base = scope && name.endsWith(`_${scope}`) ? name.slice(0, -scope.length - 1) : name;
+  return base in WINDOW_LABELS ? WINDOW_LABELS[base] : base.replace(/_/g, ' ');
 }
 
 /// A reading observed on an earlier UTC date is stale. The payload's `stale`
@@ -176,7 +180,7 @@ export function describeProviderReading(reading, now = Date.now()) {
     + `${reading.partial === true ? ' (partial: some invocations report no cost)' : ''}`
     + ` · observed ${reading.observed_at || 'at an unknown time'} (${age.label}${age.stale ? ' · stale' : ''}) · ${state}`;
   const flag = age.stale ? 'old' : gatingOff ? 'off' : '';
-  return { key, provider, account, window: short, order: WINDOW_ORDER[reading.window] ?? 2, value, severity, stale: age.stale, gatingOff, flag, detail };
+  return { key, provider, account, window: short, baseWindow: windowLabel(reading.window, reading.scope), order: WINDOW_ORDER[reading.window] ?? 2, value, severity, stale: age.stale, gatingOff, flag, detail };
 }
 
 // Values are supplied by the host read model; no pressure arithmetic runs here.
@@ -276,7 +280,7 @@ export function renderProviderUsage(payload, host = document.getElementById('pro
       el('span', { class: 'k', text: group.provider }),
       ...(group.pressure ? [el('span', { class: 'v', text: pressureValue(group.pressure) })] : []),
       ...group.items.flatMap((item, index) => windowNodes({ ...item,
-        window: pressures && item.provider !== item.account ? `${item.provider.slice(item.account.length + 1)} ${item.window}` : item.window,
+        window: pressures && item.provider !== item.account ? `${item.provider.slice(item.account.length + 1)} ${item.baseWindow}` : item.window,
       }, index)),
     ]));
   if (groups.length > MAX_CHIPS) {
