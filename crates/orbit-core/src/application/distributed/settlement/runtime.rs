@@ -561,26 +561,22 @@ impl crate::OrbitRuntime {
 /// answer or a store failure says nothing about whether an earlier send of the
 /// same request committed, so the request stays pending and is retried.
 pub(crate) fn is_owner_refusal(error: &OrbitError) -> bool {
-    match error {
+    matches!(
+        error,
         OrbitError::RemoteTool {
-            code: RemoteToolCode::ProtocolSkew,
+            code: RemoteToolCode::ProtocolSkew
+                | RemoteToolCode::InvalidInput
+                | RemoteToolCode::CapabilityRefused
+                | RemoteToolCode::CapabilityDenied
+                | RemoteToolCode::PolicyDenied,
             ..
-        } => true,
-        OrbitError::RemoteTool {
-            code: RemoteToolCode::Other(code),
-            ..
-        } => matches!(
-            code.as_str(),
-            "invalid_input" | "capability_refused" | "capability_denied" | "policy_denied"
-        ),
-        OrbitError::InvalidInput(_)
-        | OrbitError::ClaimRefused { .. }
-        | OrbitError::ProtocolSkew(_)
-        | OrbitError::CapabilityRefused(_)
-        | OrbitError::CapabilityDenied(_)
-        | OrbitError::PolicyDenied(_) => true,
-        _ => false,
-    }
+        } | OrbitError::InvalidInput(_)
+            | OrbitError::ClaimRefused { .. }
+            | OrbitError::ProtocolSkew(_)
+            | OrbitError::CapabilityRefused(_)
+            | OrbitError::CapabilityDenied(_)
+            | OrbitError::PolicyDenied(_)
+    )
 }
 
 /// Whether an error says the owner could not be reached or did not answer

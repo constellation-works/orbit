@@ -85,8 +85,8 @@ fn error_code(err: &OrbitError) -> &str {
             | NotFoundKind::AgentSession
             | NotFoundKind::Workspace => const { RemoteToolCode::NotFound.as_str() },
         },
-        OrbitError::PolicyDenied(_) => "policy_denied",
-        OrbitError::CapabilityDenied(_) => "capability_denied",
+        OrbitError::PolicyDenied(_) => const { RemoteToolCode::PolicyDenied.as_str() },
+        OrbitError::CapabilityDenied(_) => const { RemoteToolCode::CapabilityDenied.as_str() },
         OrbitError::UnknownSelector(_) => "unknown_selector",
         OrbitError::AmbiguousDestination(_) => "ambiguous_destination",
         OrbitError::AmbiguousCaller(_) => "ambiguous_caller",
@@ -94,7 +94,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::StaleRoute(_) => "stale_route",
         OrbitError::UnhealthyCheckout(_) => "unhealthy_checkout",
         OrbitError::ToolNotOnThisHost(_) => "tool_not_on_this_host",
-        OrbitError::CapabilityRefused(_) => "capability_refused",
+        OrbitError::CapabilityRefused(_) => const { RemoteToolCode::CapabilityRefused.as_str() },
         OrbitError::ProtocolSkew(_) => const { RemoteToolCode::ProtocolSkew.as_str() },
         OrbitError::HostRegistry { code, .. } => code.as_str(),
         OrbitError::PluginDisabledInWorkspace { .. } => "plugin_disabled_in_workspace",
@@ -104,7 +104,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::PluginBuildFetchUnsupported(_) => "build_fetch_unsupported_on_macos",
         OrbitError::InvalidInput(_)
         | OrbitError::InvalidInputDiagnostic { .. }
-        | OrbitError::ClaimRefused { .. } => "invalid_input",
+        | OrbitError::ClaimRefused { .. } => const { RemoteToolCode::InvalidInput.as_str() },
         OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
         OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) | OrbitError::JobValidation(_) => "validation_failed",
