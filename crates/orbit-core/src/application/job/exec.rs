@@ -30,10 +30,10 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::SYSTEM_AUDIT_IDENTITY;
-use crate::application::job::ReviewAdmissionHook;
 use crate::application::job::claimed::CLAIMED_LEAF_JOBS;
 use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission};
 use crate::application::job::resume::ResumePlan;
+use crate::application::job::{JobDrainPort, ReviewAdmissionHook};
 
 /// The hold an unsuccessful run of `job_id` ends on instead of failing, if
 /// its failure `message` names one. A claimed leaf also holds on its
@@ -160,12 +160,10 @@ impl OrbitRuntime {
             .unwrap_or_default()
             .into_iter()
             .collect();
-        self.drain_entry_admission(
+        self.admit_explicit_drain_entry(
             crate::application::contracts::DrainEntryPoint::Replay,
             &task_ids,
-            false,
-        )?
-        .into_result()?;
+        )?;
         // Historical authority never travels into a new invocation. Trusted
         // host execution fails closed; review is captured from current policy.
         strip_trusted_host_admission(&mut input);

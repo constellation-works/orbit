@@ -23,7 +23,7 @@ use orbit_types::workflow::{
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::job::log_best_effort;
+use crate::application::job::{JobPullSettlementPort, log_best_effort};
 
 use super::owner::signal_run_owner_process;
 #[cfg(unix)]
@@ -152,11 +152,9 @@ impl OrbitRuntime {
             .flatten()
             .is_some_and(|run| run.job_id == crate::application::contracts::PULL_DRAIN_JOB);
         if is_pull_drain {
-            return self.settle_pending_pulls();
+            return self.settle_workspace_pulls();
         }
-        self.deliver_claimed_leaf_settlement(run_id)
-            .into_iter()
-            .collect()
+        self.deliver_leaf_settlement(run_id).into_iter().collect()
     }
 
     pub(super) fn cancel_job_run_cascading<F>(

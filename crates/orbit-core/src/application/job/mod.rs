@@ -5,6 +5,7 @@ pub(crate) mod catalog;
 pub(crate) mod claimed;
 pub(crate) mod crew_pools;
 pub(crate) mod delivery;
+mod drain_port;
 mod exec;
 mod explore_analytics;
 mod final_recovery;
@@ -54,6 +55,7 @@ pub use agent_invoke::{
 pub use catalog::CatalogReferenceLayer;
 pub(crate) use catalog::{DEFAULT_JOB_FILES, seed_default_jobs};
 pub use catalog::{JobCatalogEntry, JobCatalogFilter, job_catalog_to_json_with_last_run};
+pub(in crate::application) use drain_port::{JobDrainPort, JobPullSettlementPort};
 pub use exec::V2JobRunResult;
 pub use explore_analytics::{
     EXPLORE_COMPARISON_SCHEMA_VERSION, ExploreCohort, ExploreComparison, ExploreCrewComparison,

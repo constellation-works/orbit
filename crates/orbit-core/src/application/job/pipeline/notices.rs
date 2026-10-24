@@ -13,6 +13,7 @@ use orbit_types::workflow::ResourceThrottle;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::job::JobDrainPort;
 
 /// The submission the notices describe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,9 +114,7 @@ impl OrbitRuntime {
         };
         SubmissionNotices {
             kind,
-            resource_throttle: throttled
-                .then(|| self.admission_resource_throttle().throttle)
-                .flatten(),
+            resource_throttle: throttled.then(|| self.admission_throttle()).flatten(),
             validation_env_warning: self.validation_env_preflight_warning(),
             host_os_backlog_warning: (kind == SubmissionKind::Drain)
                 .then(|| self.host_os_backlog_warning())

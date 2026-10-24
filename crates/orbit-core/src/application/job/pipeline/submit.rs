@@ -1,7 +1,7 @@
 use super::*;
 
 use crate::application::contracts::RetryKey;
-use crate::application::job::ReviewAdmissionHook;
+use crate::application::job::{JobDrainPort, ReviewAdmissionHook};
 use crate::runtime::run_input::recorded_task_ids;
 
 /// [ORB-10544] Cap on the run history scanned by the in-flight ship guard.
@@ -209,12 +209,10 @@ impl OrbitRuntime {
         // already executing is settled or recovered, never shipped beside
         // itself. Saturation does not stand an operator's explicit invocation
         // down — the leaf definition's own `max_active_runs` bounds it.
-        self.drain_entry_admission(
+        self.admit_explicit_drain_entry(
             crate::application::contracts::DrainEntryPoint::ExplicitShip,
             task_ids,
-            false,
-        )?
-        .into_result()?;
+        )?;
         let workflow = crate::application::workflow::find_workflow(
             crate::application::workflow::SHIP_WORKFLOW_ALIAS,
         )
@@ -364,13 +362,11 @@ impl OrbitRuntime {
         self.require_workspace_claim("orbit.workflow.auto", claim_token)?;
         // [ORB-12500] An explicit owner drain is owner coordination work; a
         // replica executes through pull instead of running one locally.
-        self.drain_entry_admission(
+        self.admit_explicit_drain_entry(
             crate::application::contracts::DrainEntryPoint::OwnerDrain,
             &[],
-            false,
-        )?
-        .into_result()?;
-        self.preflight_git_protection()?;
+        )?;
+        self.drain_git_protection_preflight()?;
         let crews = self.drain_crews_runnable_here(self.canonical_allowed_crews(allowed_crews)?)?;
         let workflow = crate::application::workflow::find_workflow(
             crate::application::workflow::AUTO_WORKFLOW_ALIAS,

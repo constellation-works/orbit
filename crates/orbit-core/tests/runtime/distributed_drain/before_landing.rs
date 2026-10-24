@@ -6,7 +6,7 @@
 use super::claimed_review::{REVIEW_CREW, ReviewedLeaf, revision};
 use super::*;
 
-use orbit_core::application::distributed::ClaimedLeafStage;
+use orbit_core::application::contracts::ClaimedLeafStage;
 use orbit_types::workflow::handoff::HandoffReviewEvidence;
 use orbit_types::workflow::{ReviewAdmission, ReviewVerdict};
 
