@@ -587,16 +587,29 @@ spec:
        as does each deterministic `validation_tool_warnings` entry. Keep those
        fields as arrays of plain strings. For `utility_warnings` and
        `surface_warnings`, emit objects with `text` (finding plus citation) and
-       the required boolean `holds_promotion`. Set it true only when the task
-       as written would ship the wrong behavior, conflict with the current
-       contract, or cannot be validated by the implementation lane. Set it false
-       for advisory observations: adjacent out-of-scope work, optional cleanup,
-       or useful context that does not prevent this task from shipping correctly.
-       For example, an old section name in an adjacent comment outside this
-       task's criterion is advisory. Advisory entries persist in the assessment
-       and reach the operator and implementing worker, but never hold promotion
-       or appear as held findings. Legacy plain strings in these two fields
-       still hold; always emit explicit severity for new findings.
+       the required boolean `holds_promotion`. Reserve `holds_promotion: true`
+       strictly for hard blockers: findings that make it impossible to deliver
+       the task correctly as written (for example, acceptance criteria that
+       contradict each other or the current code/contract, criteria the
+       implementation lane cannot satisfy or validate on its own host, required
+       authority or tools the lane cannot obtain, or a target that does not
+       exist).
+       Never treat the following as hard blockers; emit them as advisory
+       (`holds_promotion: false`) or omit them:
+       - An empty or missing plan field. Do not treat Orbit's in-progress plan
+         rule as a promotion requirement: plans are filled by the implementer,
+         never a filing requirement, and approved tasks move through backlog.
+       - Details the implementer decides while working (approach, file split,
+         naming, test placement).
+       - Ambiguity the task's own instructions already route (for example,
+         stop-and-report or follow the code).
+       - Adjacent out-of-scope work or optional cleanup.
+       - Style or wording observations.
+       When in doubt or unsure, default to advisory (`holds_promotion: false`).
+       Advisory entries persist in the assessment and reach the operator and
+       implementing worker, but never hold promotion or appear as held findings.
+       Legacy plain strings in these two fields still hold; always emit
+       explicit severity for new findings.
        Combine each finding and its citation in its text — for
        example a non-empty adr_conflicts entry reads
        ["the module this task would change still exports the type it removes
