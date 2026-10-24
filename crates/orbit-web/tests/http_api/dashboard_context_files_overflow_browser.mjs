@@ -1,7 +1,9 @@
 // Run with the host Playwright kit and a checkout-local evidence directory.
 // ORB-17935: flat Context files rows must ellipsize inside a 560px pane, and
 // a grouped contended basename must ellipsize (not hard-clip) in a 375px
-// pane on a wide viewport. Exercises shipped CSS/JS with disposable API data.
+// pane on a wide viewport. ORB-17947: a flat basename wider than its link must
+// stay inside the link and ellipsize at 560, 720 and 375px panes.
+// Exercises shipped CSS/JS with disposable API data.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -13,9 +15,14 @@ const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).h
 const evidence = path.resolve(process.argv[3]);
 fs.mkdirSync(evidence, { recursive: true });
 const selector = 'file:crates/orbit-core/src/adapter/engine_host/actions/sandbox/provider_state.rs';
+const longBasename = 'a_very_long_filename_that_exceeds_the_width_of_the_context_files_row_and_should_show_an_ellipsis.rs';
+const longSelector = `file:crates/orbit-core/src/${longBasename}`;
+const symbolSelector = 'symbol:crates/orbit-core/src/adapter/engine_host/actions/sandbox/provider_state.rs#a_very_long_symbol_name_that_exceeds_the_width_of_the_context_files_row_and_should_show_an_ellipsis:function';
 const tasks = [
   { id: 'CTX-1', status: 'backlog', context_files: [selector, `file:unrelated/${'long-directory/'.repeat(10)}other.rs`] },
   { id: 'CTX-2', status: 'in-progress', context_files: [selector] },
+  { id: 'CTX-3', status: 'backlog', context_files: [longSelector] },
+  { id: 'CTX-4', status: 'backlog', context_files: [symbolSelector] },
 ].map(task => ({ ...task, title: `Context fixture ${task.id}`, priority: 'medium', complexity: 'low',
   description: 'Disposable browser scenario', plan: 'Inspect contexts', comments: [], history: [], artifacts: [], tags: [], status_transitions: [] }));
 const list = items => ({ items, total: items.length, limit: 100, truncated: false });
@@ -111,8 +118,69 @@ try {
   await page.locator('#detail-CTX-1').getByRole('button', { name: 'By crate', exact: true }).click();
   await page.locator('#detail-CTX-1 .file-list.cf-grouped').waitFor();
   await block().screenshot({ path: path.join(evidence, 'context-files-grouped-dark-560.png'), animations: 'disabled' });
+  await page.locator('[data-key="task-CTX-3"] .title').click();
+  await page.locator('#detail-CTX-3 [role="tab"][data-tab="context_files"]').click();
+  await page.locator('#detail-CTX-3 .file-list').waitFor();
+  await page.waitForFunction(() => document.querySelectorAll('#detail-CTX-3 .context-contended-backlog').length >= 1);
+  const longBlock = () => page.locator('#detail-CTX-3 .field-block').filter({ has: page.locator('.file-list') });
+  const longRow = async ({ view, cls, width }) => {
+    await setPaneWidth(width);
+    await page.locator('#detail-CTX-3').getByRole('button', { name: view, exact: true }).click();
+    await page.locator(`#detail-CTX-3 .file-list.${cls}`).waitFor();
+    return page.locator('#detail-CTX-3 .file-list').evaluate(node => {
+      const pane = node.closest('.task-detail-pane');
+      const link = node.querySelector('.context-selector');
+      const base = node.querySelector('.selector-base');
+      const linkBox = link.getBoundingClientRect();
+      const baseBox = base.getBoundingClientRect();
+      return { paneClient: pane.clientWidth, paneScroll: pane.scrollWidth, linkClient: link.clientWidth, linkScroll: link.scrollWidth, baseText: base.textContent, baseClient: base.clientWidth, baseScroll: base.scrollWidth, baseInsideLink: baseBox.left >= linkBox.left - 1 && baseBox.right <= linkBox.right + 1, textOverflow: getComputedStyle(base).textOverflow };
+    });
+  };
+  const longFlat = [];
+  for (const width of [560, 720, 375]) {
+    const row = await longRow({ view: 'Flat paths', cls: 'cf-flat', width });
+    assert(row.paneScroll <= row.paneClient + 1, `long basename pane does not overflow at ${width}px (scroll ${row.paneScroll} vs client ${row.paneClient})`);
+    assert.equal(row.baseText, longBasename);
+    assert(row.linkScroll <= row.linkClient + 1, `long basename stays inside its link at ${width}px (link scroll ${row.linkScroll} vs client ${row.linkClient})`);
+    assert(row.baseInsideLink, `long basename box stays inside its link at ${width}px`);
+    assert(row.baseScroll > row.baseClient + 1 && row.textOverflow === 'ellipsis', `long basename ellipsizes instead of hard-clipping at ${width}px (client ${row.baseClient} vs scroll ${row.baseScroll}, text-overflow ${row.textOverflow})`);
+    await longBlock().screenshot({ path: path.join(evidence, `context-files-long-flat-dark-${width}.png`), animations: 'disabled' });
+    longFlat.push({ width, ...row });
+  }
+  const longGrouped = await longRow({ view: 'By crate', cls: 'cf-grouped', width: 375 });
+  assert(longGrouped.paneScroll <= longGrouped.paneClient + 1, `long basename grouped pane does not overflow at 375px (scroll ${longGrouped.paneScroll} vs client ${longGrouped.paneClient})`);
+  assert.equal(longGrouped.baseText, longBasename);
+  assert(longGrouped.baseInsideLink, 'long grouped basename stays inside its link at 375px');
+  assert.equal(longGrouped.textOverflow, 'ellipsis', 'long grouped basename ellipsizes instead of hard-clipping');
+  await longBlock().screenshot({ path: path.join(evidence, 'context-files-long-grouped-dark-375.png'), animations: 'disabled' });
+  await page.locator('[data-key="task-CTX-4"] .title').click();
+  await page.locator('#detail-CTX-4 [role="tab"][data-tab="context_files"]').click();
+  await page.locator('#detail-CTX-4 .file-list').waitFor();
+  await page.waitForFunction(() => document.querySelectorAll('#detail-CTX-4 .context-contended-backlog').length >= 1);
+  await setPaneWidth(560);
+  await page.locator('#detail-CTX-4').getByRole('button', { name: 'Flat paths', exact: true }).click();
+  await page.locator('#detail-CTX-4 .file-list.cf-flat').waitFor();
+  const symbol = await page.locator('#detail-CTX-4 .file-list').evaluate(node => {
+    const pane = node.closest('.task-detail-pane');
+    const link = node.querySelector('.context-selector');
+    const kind = node.querySelector('.selector-kind');
+    const base = node.querySelector('.selector-base');
+    const linkBox = link.getBoundingClientRect();
+    const baseBox = base.getBoundingClientRect();
+    return { paneClient: pane.clientWidth, paneScroll: pane.scrollWidth, kindText: kind?.textContent, linkClient: link.clientWidth, linkScroll: link.scrollWidth, baseClient: base.clientWidth, baseScroll: base.scrollWidth, baseInsideLink: baseBox.left >= linkBox.left - 1 && baseBox.right <= linkBox.right + 1, textOverflow: getComputedStyle(base).textOverflow };
+  });
+  assert(symbol.paneScroll <= symbol.paneClient + 1, `symbol row pane does not overflow at 560px (scroll ${symbol.paneScroll} vs client ${symbol.paneClient})`);
+  assert.equal(symbol.kindText, 'symbol:');
+  assert(symbol.linkScroll <= symbol.linkClient + 1, `symbol row stays inside its link at 560px (link scroll ${symbol.linkScroll} vs client ${symbol.linkClient})`);
+  assert(symbol.baseInsideLink, 'symbol basename stays inside its link at 560px');
+  assert(symbol.baseScroll > symbol.baseClient + 1 && symbol.textOverflow === 'ellipsis', `symbol basename ellipsizes instead of hard-clipping at 560px (client ${symbol.baseClient} vs scroll ${symbol.baseScroll}, text-overflow ${symbol.textOverflow})`);
+  await page.locator('#detail-CTX-4 .field-block').filter({ has: page.locator('.file-list') }).screenshot({ path: path.join(evidence, 'context-files-symbol-flat-dark-560.png'), animations: 'disabled' });
   assert.deepEqual(errors, [], 'no browser runtime errors');
-  const results = [{ scenario: 'flat ellipsis at 560px pane, grouped basename at 375px pane', passed: true, flat, grouped }];
+  const results = [
+    { scenario: 'flat ellipsis at 560px pane, grouped basename at 375px pane', passed: true, flat, grouped },
+    { scenario: 'long flat basename ellipsizes inside its link at 560, 720 and 375px panes; grouped at 375px', passed: true, longFlat, longGrouped },
+    { scenario: 'long kind-prefixed flat symbol ellipsizes inside its link at 560px pane', passed: true, symbol },
+  ];
   fs.writeFileSync(path.join(evidence, 'results.json'), JSON.stringify({ passed: true, results }, null, 2));
   process.stdout.write(JSON.stringify({ passed: true, results }) + '\n');
 } finally {
