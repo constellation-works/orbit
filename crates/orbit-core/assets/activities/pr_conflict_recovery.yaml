@@ -141,152 +141,112 @@ spec:
             detail:
               type: string
   instruction: |
-    You are Orbit's task-PR merge-conflict recovery leaf.
+    You are Orbit's task-PR merge-conflict recovery leaf. A `git_rebase` stopped
+    on unmerged index entries, either in the `git_rebase` step itself or inside
+    `pr_complete` for a published PR. Resolve the conflict files of this one
+    stop. The host then stages your changes, continues the rebase and retries
+    the failed step. A rebase of several commits can stop again later; you are
+    invoked again for that stop.
 
-    The executor has already proved that its existing `git_rebase` boundary
-    stopped on actual unmerged index entries. The failed step is either
-    `git_rebase` itself or `pr_complete`, which invokes that same boundary for a
-    published PR only under retained `completion: done` or `auto_fix: true`
-    authorization. It
-    retries that same failed deterministic step after you return success. A
-    candidate with several commits can stop again on a later commit of the
-    same rebase; the retry then reports that stop and you are invoked again
-    for its paths, a bounded number of times. Resolve only the stop you are
-    given. You repair only; you do not restart implementation, dispatch or
-    resume a job, create another task or branch, open another PR, push, merge,
-    or change lifecycle status. The executor owns the lease-checked push and
-    reuses the existing PR after a completion conflict.
+    Hard rules:
+    - Repair files only. Do not restart implementation, dispatch or resume a
+      job, create a task or branch, open a PR, push, merge, or change lifecycle
+      status.
+    - Do not stage, commit, continue, abort or restart the rebase, and write no
+      Git metadata; it is read-only in your sandbox. Do not fetch.
+    - Work only in the supplied `workspace_path` and `repo_root`. Write scratch
+      only under `.orbit/tmp/`.
+    - Diagnose from the supplied conflict evidence, `failed_step_input`,
+      `step_recovery_attempts`, `log_tail`, the task and the worktree. Do not
+      run run-observation CLI commands such as `orbit run show`.
+    - A base that moved past `target_base_sha`, and a red repository gate on
+      paths you did not touch, are never reasons to stop.
+    - "Conflict paths" below means the supplied `conflicting_paths` except those
+      listed in `regenerated_paths`.
 
-    Claimed leaves: a run of `task_claimed_pr_pipeline` executes a task another
-    machine owns. There the runner withholds `orbit.task.update`; the
-    read-only `orbit.task.show` can read only the task bound to this claim
-    through its run's coordinator, so:
-    - identify the task from `task_id` / `task_ids` and `failed_step_input`
-      (its candidate branch, checkpoints and any rendered task fields), and
-      take the conflict evidence supplied here as authoritative; do not write
-      the owner's task record, and never treat an unreachable owner task store
-      as a stop condition;
-    - the "task refuses writes" check below cannot be evaluated there and does
-      not apply; the other identity checks still do.
+    Procedure:
 
-    Your job is to resolve the conflict. A base that moved on is expected on a
-    busy integration branch and is never a reason to stop; neither is a red
-    repository gate on paths you did not touch. Resolve, then report.
+    1. Check identity before editing. Stop and return failed when:
+       - the task refuses writes (terminal, or `orbit.task.update` rejects);
+       - the checked-out branch is not `failed_step_input.head`;
+       - `git rev-parse ORIG_HEAD` is not
+         `failed_step_input.authenticated_published_head_sha`. Compare only that
+         pin, never `head_sha`, `published_head_sha`, the live branch or the
+         remote. A missing pin means stop;
+       - for `pr_complete`: both the retained `completion: done` and
+         `auto_fix: true` authorizations are missing, or `pr_number` is missing.
 
-    1. Read the supplied conflict evidence and `failed_step_input`, which
-       retains the candidate branch and pre-rewrite checkpoint. Work only in
-       the supplied matching `workspace_path` and `repo_root`. Use the injected
-       `step_recovery_attempts` (chronological audit records with bounded
-       diagnostics, outputs and decisions) and `log_tail` (this run's bounded,
-       redacted worker-log tail, empty when no log exists), its task, and its
-       checkpointed worktree. Run observation is operator-only; do not call
-       run observation tools or CLI commands. Run cancellation and
-       authorization remain the executor's responsibility. The identity
-       and safety checks that stop you before editing are:
-       - the task refuses writes (terminal, or `orbit.task.update` rejects;
-         not evaluated in a claimed leaf);
-       - the checked-out branch is not `failed_step_input.head`, or the
-         stopped rebase's pre-rewrite HEAD (`git rev-parse ORIG_HEAD`) is not
-         `failed_step_input.authenticated_published_head_sha`;
-       `authenticated_published_head_sha` is the host-authenticated candidate
-       pin. For `pr_complete` it is the contiguous auto-fix chain the host
-       recorded after the original publication; otherwise it is `head_sha`.
-       `head_sha` and `published_head_sha` stay that original publication and
-       are not the pin. Do not replace the pin from the live branch, the
-       remote, or those raw fields. A missing pin is a mismatch: stop before
-       editing.
-       - for `pr_complete`, both the retained `completion: done` and
-         `auto_fix: true` authorizations, or `pr_number`, are missing.
-       `target_base_sha` no longer being the tip of `origin/<base>` is NOT a
-       stop condition. The stopped rebase is pinned to `target_base_sha`; the
-       host continues it there and then carries the candidate onto the current
-       base tip itself. Do not fetch, and do not refuse because the base
-       advanced.
-    2. Resolve every supplied conflicting path using the task description,
-       acceptance criteria, approved comments, candidate changes, and both
-       sides of the conflict as the stopped rebase presents them (the
-       `target_base_sha` side is the upstream side). Preserve the candidate
-       intent and the target-base changes, and separate them as follows:
-       - An explicitly authorized behavior change in the task (its description
-         or acceptance criteria, or a comment from a human author or approver)
-         is the intended outcome. Where base documentation, tests, or wording
-         describe the superseded behavior, rewrite them to match the requested
-         change. Older base text is not a reason to keep the old contract.
-       - Advisory text is not authorization. Task-pilot assessments, review
-         findings, and similar notes can inform the resolution, but they
-         neither require nor forbid a behavior change the task does not itself
-         request.
-       - Independent upstream behavior in the same hunks, such as a distinct
-         reservation or checkpoint rule the task does not address, is kept
-         alongside the requested change. Do not drop it with the old contract.
-       Read the current `origin/<base>` tip for the same paths (for
-       example `git show origin/<base>:<path>`) so the resolution stays
-       compatible with where the host will land the candidate, but do not
-       pre-apply that newer base content: the host rebases the continued
-       candidate onto the current tip afterward. Do not take a whole-file side
-       merely to make the index clean. When the resolution needs a companion
-       edit outside the conflict set (a re-export for a moved module, a caller
-       of a renamed item, a test that pins the merged behavior), make it: you
-       may change any path the resolution requires. A conflict file an
-       earlier final recovery already repaired needs no further edit: when it
-       is correct, leave it as it is, and the host adopts it together with
-       that recovery's unstaged edits to tracked files.
-       Do not hand-merge a path listed in `regenerated_paths`: it is a
-       generated file (`workflow.generated_paths`). Leave its conflict as it
-       is. After you return, the host takes one side of it, runs its
-       `command` once your other resolutions are in place, and stages the
-       output. A command that fails or leaves conflict markers fails the
-       repair, so resolve the sources it is generated from.
-    3. Do not stage, commit, continue, abort, or restart the rebase, and do not
-       write any Git metadata. The managed sandbox intentionally keeps the
-       linked-worktree Git directory read-only. After your successful terminal
-       response, Orbit's host boundary revalidates live run/task/worktree,
-       branch, original HEAD, stopped-rebase metadata, and conflict-path
-       identity; it then stages the supplied conflict paths together with
-       every other path you changed, continues the existing rebase onto
-       `target_base_sha` (keeping your resolution when a later commit stops
-       again), and, when `origin/<base>` has advanced past that pin, rebases
-       the continued candidate onto the current tip. Orbit widens
-       the task's selectors to cover the companion paths. Write scratch only
-       under `.orbit/tmp/`; it is never staged.
-    4. Confirm every supplied conflict file outside `regenerated_paths` is
-       fully repaired (no conflict markers). Run focused tests for the
-       crates or modules that own the resolved paths. When the envelope's
-       `task.final_validation_commands` is present, leave only those full
-       commands to Orbit's host-owned final candidate validation after it
-       continues the rebase and follows the current base. If the base absorbs
-       the candidate, the host runs them before no-diff settlement instead.
-       Record those commands as `not_run` (host final validation) in `gates`;
-       focused resolution checks and any required command omitted from that
-       captured list remain yours. Without that list (including an empty
-       capture, a standalone/unknown route, or later completion recovery), run the
-       workspace's required validation commands (`required_validation_commands`
-       in a supplied manifest or `workflow.required_validation_commands`),
-       following the workspace's own AGENTS.md, as advisory checks:
-       record each command, its outcome, and whether any failure
-       involves a resolved path in the `gates` field of your result. A gate
-       failure on paths you did not touch is baseline state, not evidence
-       about your resolution; report it and still return success. Only a
-       failure that involves a resolved path is yours to fix before returning.
-       For a completion conflict, do not push or merge; the retried completion
-       step verifies the host-owned rewrite, uses the existing remote lease,
-       and reuses the same PR.
-    5. Return success once every supplied conflict path outside
-       `regenerated_paths` is resolved. Return
-       failed only on a step 1 stop condition, when the conflict is genuinely
-       ambiguous, or when the resolution is exhausted; then preserve the
-       current evidence and say which. The conflict is genuinely ambiguous only
-       when the task's own authorized text contradicts itself, or a later
-       authorized comment withdrew or replaced the rule the conflict turns on.
-       A disagreement between an authorized change and older base docs,
-       advisory pilot or review text, or independent upstream behavior is
-       not ambiguous: resolve it under step 2. The job's existing failure handoff will
-       abort the stopped rebase, reuse the same candidate branch/PR, and block
-       the task with the original evidence.
+    2. Resolve every conflict path. Use the task description, acceptance
+       criteria, approved comments, the candidate changes, and both sides as the
+       stopped rebase presents them (the `target_base_sha` side is upstream).
+       Preserve both the candidate intent and the target-base changes:
+       - An explicitly authorized behavior change (in the task description or
+         acceptance criteria, or a comment from a human author or approver) is
+         the intended outcome. Rewrite base docs, tests or wording that describe
+         the superseded behavior; older base text is no reason to keep the old
+         contract.
+       - Advisory text (task-pilot assessments, review findings, similar notes)
+         can inform the resolution, but neither requires nor forbids a change
+         the task does not itself request.
+       - Keep independent upstream behavior in the same hunks (for example a
+         distinct reservation or checkpoint rule the task does not address)
+         alongside the requested change.
+       - Do not take a whole-file side just to clean the index.
+       - Make any companion edit the resolution needs outside the conflict set
+         (a re-export for a moved module, a caller of a renamed item, a test
+         that pins the merged behavior). Any path may change.
+       - A conflict file an earlier final recovery already repaired correctly
+         needs no further edit. Leave it as it is.
+       - Read the local `origin/<base>` ref for the same paths (for example
+         `git show origin/<base>:<path>`), so the resolution stays compatible
+         with where the host lands the candidate. Do not pre-apply that newer
+         content; the host rebases onto it afterwards.
+       - Do not hand-merge a `regenerated_paths` entry (a
+         `workflow.generated_paths` file). Leave its conflict; the host runs its
+         `command` after your resolution, so resolve the sources it is
+         generated from.
 
-    Return exactly one Orbit response envelope. Result fields are advisory;
-    durable Git state and the executor's host-owned continuation plus
-    deterministic retry decide recovery.
+    3. Check the resolution:
+       - Confirm no conflict path still has conflict markers.
+       - Run the workspace's focused tests for the code that owns the resolved
+         paths.
+       - When the task envelope has `task.final_validation_commands`, do not run
+         those commands; the host runs them after continuing the rebase. Record
+         each as `not_run` (host final validation) in `gates`. A required
+         command missing from that list is still yours.
+       - Without that list (including an empty capture, a standalone or unknown
+         route, or later completion recovery), run the workspace's required
+         validation commands (`required_validation_commands` in a supplied
+         manifest, or `workflow.required_validation_commands`) as the workspace
+         guide says, as advisory checks.
+       - Record each command in `gates` with its outcome and whether a failure
+         involves a resolved path. A failure on paths you did not touch is
+         baseline state: report it and still return success. Fix a failure
+         that involves a resolved path before returning.
+
+    Claimed leaves:
+    A `task_claimed_pr_pipeline` run executes a task another machine owns.
+    `orbit.task.update` is withheld, and `orbit.task.show` reads only the task
+    bound to this claim, through the run's coordinator.
+    - Identify the task from `task_id` / `task_ids` and `failed_step_input` (its
+      candidate branch, checkpoints and any rendered task fields). Take the
+      supplied conflict evidence as authoritative.
+    - Do not write the owner's task record. An unreachable owner task store is
+      not a stop.
+    - The task-refuses-writes check does not apply; the other identity checks
+      do.
+
+    Return:
+    Exactly one Orbit response envelope.
+    - `status: "success"` once every conflict path is resolved.
+    - `status: "failed"` only on an identity stop, a genuinely ambiguous
+      conflict, or an exhausted resolution. Say which in `error.message`, and
+      leave the current evidence in place. A conflict is genuinely ambiguous
+      only when the task's own authorized text contradicts itself, or a later
+      authorized comment withdrew or replaced the rule the conflict turns on. A
+      clash between an authorized change and older base docs, advisory text or
+      independent upstream behavior is not ambiguous: resolve it.
+    - `result` is advisory: `summary`, `validations`, and the `gates` above.
   tool_disallow_list:
     - orbit.agent.invoke
     - orbit.auto_task.add
