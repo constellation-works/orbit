@@ -150,35 +150,44 @@ pub(super) fn run_action(
     scope: ScopeArg,
 ) -> Result<Vec<McpProvider>, OrbitError> {
     let providers = resolve_providers(selection, repo_root, home_dir.as_deref());
+    // Local launches carry a non-default catalog. Federated launches ignore
+    // it inside `ServerLaunch::with_orbit_root`.
+    let embedded = super::workspace::embedded_launch_root(orbit_root);
     for provider in &providers {
         let target = ConfigTarget::resolve(scope, provider, repo_root, home_dir.as_deref())?;
         match action {
-            McpAction::Init(launch) => match provider {
-                McpProvider::Claude => apply_claude_init(&target, launch)?,
-                McpProvider::Codex => apply_toml_init(&target, launch, true)?,
-                McpProvider::Gemini => apply_gemini_init(&target, launch)?,
-                McpProvider::Antigravity => apply_simple_json_init(&target, "mcpServers", launch)?,
-                McpProvider::Grok => {
-                    if target.legacy_mcp_path.is_some() {
-                        // Claude's handler provides the ~/.claude.json lock.
-                        // Reconcile even when Claude was selected: Grok's old
-                        // operator entry may still need migrating. Equal writes
-                        // are no-ops at the file boundary.
-                        let inherited = legacy_grok_entry(&target, server_id_for_action(action))?;
-                        apply_claude_init_with_legacy(
-                            &shared_grok_target(&target),
-                            launch,
-                            inherited.as_ref(),
-                        )?;
-                        cleanup_legacy_grok_path(&target, server_id_for_action(action))?;
-                    } else {
-                        apply_toml_init(&target, launch, false)?;
+            McpAction::Init(launch) => {
+                let launch = launch.with_orbit_root(embedded.as_deref());
+                match provider {
+                    McpProvider::Claude => apply_claude_init(&target, launch)?,
+                    McpProvider::Codex => apply_toml_init(&target, launch, true)?,
+                    McpProvider::Gemini => apply_gemini_init(&target, launch)?,
+                    McpProvider::Antigravity => {
+                        apply_simple_json_init(&target, "mcpServers", launch)?
                     }
+                    McpProvider::Grok => {
+                        if target.legacy_mcp_path.is_some() {
+                            // Claude's handler provides the ~/.claude.json lock.
+                            // Reconcile even when Claude was selected: Grok's old
+                            // operator entry may still need migrating. Equal writes
+                            // are no-ops at the file boundary.
+                            let inherited =
+                                legacy_grok_entry(&target, server_id_for_action(action))?;
+                            apply_claude_init_with_legacy(
+                                &shared_grok_target(&target),
+                                launch,
+                                inherited.as_ref(),
+                            )?;
+                            cleanup_legacy_grok_path(&target, server_id_for_action(action))?;
+                        } else {
+                            apply_toml_init(&target, launch, false)?;
+                        }
+                    }
+                    McpProvider::Cursor => apply_simple_json_init(&target, "mcpServers", launch)?,
+                    McpProvider::Vscode => apply_simple_json_init(&target, "servers", launch)?,
+                    McpProvider::Windsurf => apply_simple_json_init(&target, "mcpServers", launch)?,
                 }
-                McpProvider::Cursor => apply_simple_json_init(&target, "mcpServers", launch)?,
-                McpProvider::Vscode => apply_simple_json_init(&target, "servers", launch)?,
-                McpProvider::Windsurf => apply_simple_json_init(&target, "mcpServers", launch)?,
-            },
+            }
             McpAction::Remove | McpAction::RemoveFederated => {
                 let server_id = if matches!(action, McpAction::RemoveFederated) {
                     ORBIT_FEDERATED_MCP_SERVER_ID
@@ -211,7 +220,6 @@ pub(super) fn run_action(
             }
         }
     }
-    let _ = orbit_root;
     Ok(providers)
 }
 
