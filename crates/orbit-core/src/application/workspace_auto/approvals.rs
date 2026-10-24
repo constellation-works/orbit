@@ -191,10 +191,37 @@ fn approval_snapshot(
             && let Some(classification) = held_classification(runtime, entry)
         {
             let findings = if classification == "warnings" {
-                task_pilot_warnings(task.status, &runtime.get_task_comments(&task.id)?)
+                task_pilot_warnings(
+                    task.status,
+                    &runtime.get_task_comments(&task.id)?,
+                    &task.dependencies(),
+                    &|id: &str| {
+                        matches!(
+                            runtime.get_task(id),
+                            Ok(found) if found.status == TaskStatus::Done
+                        )
+                    },
+                )
             } else {
                 Vec::new()
             };
+            // A typed warnings hold whose findings no longer hold (a
+            // prerequisite became a dependency edge, or finished) releases
+            // the task to be piloted and promoted by this pass without an
+            // operator edit. Legacy note-derived holds have no receipt to
+            // re-evaluate, so they stay held.
+            let typed_warnings = matches!(
+                &entry.decision,
+                Some(orbit_types::task::TaskDecision::DrainApprovalHeld { classification })
+                    if classification == "warnings"
+            );
+            if typed_warnings && findings.is_empty() {
+                snapshot.candidates.push(ApprovalCandidate {
+                    id: task.id,
+                    crew: normalized_task_crew(task.crew.as_deref()),
+                });
+                continue;
+            }
             snapshot.held.push(held(classification, None, findings));
             continue;
         }

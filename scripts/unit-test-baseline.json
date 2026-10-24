@@ -281,6 +281,7 @@
         "application/task/pilot/tests/drain_promotion.rs::a_drain_hold_is_the_typed_decision_and_rationale_text_cannot_forge_one",
         "application/task/pilot/tests/drain_promotion.rs::material_edit_after_the_pilot_write_is_held_for_revalidation",
         "application/task/pilot/tests/drain_promotion.rs::opt_out_landing_before_the_approval_lock_keeps_the_task_proposed",
+        "application/task/pilot/tests/drain_promotion.rs::prerequisite_covered_by_a_dependency_promotes_and_clears_pilot_warnings",
         "application/task/pilot/tests/persist.rs::overlapping_pilot_graphs_lock_in_order_and_refuse_the_closing_edge",
         "application/task/pilot/tests/prepare.rs::automatic_admission_between_selection_and_hydration_settles_superseded",
         "application/task/pilot/tests/prepare.rs::explicit_admission_between_selection_and_hydration_settles_superseded",

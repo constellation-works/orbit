@@ -525,3 +525,101 @@ fn a_drain_hold_is_the_typed_decision_and_rationale_text_cannot_forge_one() {
         "a marker in an agent-written note has no effect: {entry:?}"
     );
 }
+
+#[test]
+fn prerequisite_covered_by_a_dependency_promotes_and_clears_pilot_warnings() {
+    // An unfinished local prerequisite becomes a dependency edge in the
+    // same atomic write, so it must not also hold promotion as a warning.
+    let workspace = workspace(None);
+    let runtime = &workspace.runtime;
+    let blocker = qualifying_task(runtime);
+    let task = qualifying_task(runtime);
+    let (drain, pilot) = drain_with_pilot(runtime, &task.id);
+    let applied = pilot_with_findings(
+        &workspace,
+        &task,
+        &drain,
+        &pilot,
+        None,
+        json!({"blocked_by": [format!("Wait for {} to land", blocker.id)]}),
+    );
+    let decision = &applied["drain_approval"][0];
+    assert_eq!(decision["decision"], "promote", "{decision}");
+    assert_eq!(decision["approved"], true, "{decision}");
+    let current = runtime.get_task(&task.id).expect("task");
+    assert_eq!(current.status, TaskStatus::Backlog);
+    assert_eq!(current.dependencies(), [blocker.id.as_str()]);
+    let comments = runtime.get_task_comments(&task.id).expect("comments");
+    let warnings = super::super::promotion::task_pilot_warnings(
+        TaskStatus::Proposed,
+        &comments,
+        &current.dependencies(),
+        &|id: &str| {
+            matches!(
+                runtime.get_task(id),
+                Ok(found) if found.status == TaskStatus::Done
+            )
+        },
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+
+    // A prerequisite already done needs no edge and holds nothing either.
+    let workspace2 = super::persist::workspace(None);
+    let runtime = &workspace2.runtime;
+    let done = runtime
+        .add_task(TaskAddParams {
+            title: "finished prerequisite".to_string(),
+            description: "Already landed.".to_string(),
+            acceptance_criteria: vec!["Done.".to_string()],
+            plan: "Nothing.".to_string(),
+            status: Some(TaskStatus::Done),
+            context_files: vec!["file:README.md".to_string()],
+            complexity: TaskComplexity::Low,
+            ..Default::default()
+        })
+        .expect("done task");
+    let task = qualifying_task(runtime);
+    let (drain, pilot) = drain_with_pilot(runtime, &task.id);
+    let applied = pilot_with_findings(
+        &workspace2,
+        &task,
+        &drain,
+        &pilot,
+        None,
+        json!({"blocked_by": [format!("Wait for {} to land", done.id)]}),
+    );
+    assert_eq!(
+        applied["drain_approval"][0]["decision"], "promote",
+        "{applied}"
+    );
+    assert_eq!(
+        runtime.get_task(&task.id).expect("task").status,
+        TaskStatus::Backlog
+    );
+
+    // Prose naming no task, and a missing task, still hold: no edge enforces them.
+    for warning in [
+        "Await operator credentials".to_string(),
+        "Wait for ORB-999999999 to land".to_string(),
+    ] {
+        let workspace3 = super::persist::workspace(None);
+        let runtime = &workspace3.runtime;
+        let task = qualifying_task(runtime);
+        let (drain, pilot) = drain_with_pilot(runtime, &task.id);
+        let applied = pilot_with_findings(
+            &workspace3,
+            &task,
+            &drain,
+            &pilot,
+            None,
+            json!({"blocked_by": [warning]}),
+        );
+        let decision = &applied["drain_approval"][0];
+        assert_eq!(decision["decision"], "withhold", "{decision}");
+        assert_eq!(decision["classification"], "warnings", "{decision}");
+        assert_eq!(
+            runtime.get_task(&task.id).expect("task").status,
+            TaskStatus::Proposed
+        );
+    }
+}

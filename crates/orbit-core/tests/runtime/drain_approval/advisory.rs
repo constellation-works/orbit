@@ -60,12 +60,6 @@ fn advisory_findings_are_approved_and_reach_the_worker() {
 fn both_promotion_authorities_keep_real_warning_holds() {
     for sweep in [false, true] {
         let workspace = Workspace::new();
-        let blocker = workspace.task(
-            "unfinished prerequisite",
-            &[],
-            &["file:README.md"],
-            TaskComplexity::Low,
-        );
         let cases = [
             (
                 "surface_warnings",
@@ -81,7 +75,10 @@ fn both_promotion_authorities_keep_real_warning_holds() {
                 "adr_conflicts",
                 json!("The current contract conflicts with this task."),
             ),
-            ("blocked_by", json!(blocker.id)),
+            // A prerequisite no dependency edge enforces still holds; one
+            // naming a recorded dependency is covered by the new rule and
+            // has its own regression check in the pilot unit tests.
+            ("blocked_by", json!("Wait for ORB-999999999 to land")),
         ];
         for (index, (field, finding)) in cases.into_iter().enumerate() {
             let tags = if sweep {

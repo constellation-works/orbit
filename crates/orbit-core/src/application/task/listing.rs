@@ -128,8 +128,17 @@ fn query_task_store(
         let mut ids = BTreeSet::new();
         for task in candidates.items {
             let comments = runtime.get_task_comments(&task.id)?;
-            if !super::task_pilot_warnings(task.status, &comments).is_empty() {
-                ids.insert(task.id);
+            let task_id = task.id.clone();
+            let status = task.status;
+            let dependencies = metadata_task(task).dependencies();
+            let is_done = |id: &str| {
+                matches!(
+                    runtime.get_task(id),
+                    Ok(found) if found.status == TaskStatus::Done
+                )
+            };
+            if !super::task_pilot_warnings(status, &comments, &dependencies, &is_done).is_empty() {
+                ids.insert(task_id);
             }
         }
         Some(ids)
