@@ -1,6 +1,7 @@
 use clap::Args;
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::audit::run::RunAuditEvent;
+use orbit_core::runtime::audit::run_events::RunEventsSelection;
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -54,11 +55,13 @@ fn run_events_payload(
     let run = resolve_run(runtime, run_id, read)?;
     let audit_steps = runtime.collect_run_audit_steps(&run.run_id)?;
     let step_filter = resolve_step_filter(&run, &audit_steps, step_id)?;
-    let events = filter_run_audit_events(
-        runtime.collect_run_audit_events(&run.run_id)?,
-        step_filter.as_deref(),
-        event_type,
-    );
+    let events = runtime.run_events_trail(
+        &run,
+        RunEventsSelection {
+            step_id: step_filter.as_deref(),
+            event_type,
+        },
+    )?;
 
     let doc = json!({
         "run_id": run.run_id,
@@ -85,20 +88,6 @@ fn run_events_payload(
         ]);
     }
     Ok(Payload::detail_table(doc, table).into())
-}
-
-fn filter_run_audit_events(
-    events: Vec<RunAuditEvent>,
-    step_filter: Option<&str>,
-    event_type: Option<&str>,
-) -> Vec<RunAuditEvent> {
-    events
-        .into_iter()
-        .filter(|event| {
-            step_filter.is_none_or(|filter| event.step_id.as_deref() == Some(filter))
-                && event_type.is_none_or(|filter| event.event_type.as_deref() == Some(filter))
-        })
-        .collect()
 }
 
 pub(crate) fn summarize_audit_event(event: &RunAuditEvent) -> String {

@@ -80,6 +80,82 @@ fn run_event_tail_pages_include_the_end_and_preserve_legacy_reads() {
     );
 }
 
+/// Forward pages return each stored envelope as written: invalid JSON is
+/// skipped, a payload without an `event_id` is kept and no inherited
+/// `step_id` is added. A kind page the scan budget cannot fill is refused
+/// with 413; one it fills is served.
+#[test]
+fn run_event_pages_keep_stored_envelopes_and_refuse_an_unfillable_kind_scan() {
+    isolated(
+        "runs::run_event_pages_keep_stored_envelopes_and_refuse_an_unfillable_kind_scan",
+        || {
+            let fixture = Fixture::new();
+            let run = fixture.seed_run("jrun-event-budget", "fixture", JobRunState::Failed);
+            let workspace = fixture.runtime.workspace_id().unwrap();
+            let start = "2026-10-10T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+            let mut db = rusqlite::Connection::open(fixture.global.join("orbit.db")).unwrap();
+            let tx = db.transaction().unwrap();
+            {
+                let mut insert = tx
+                    .prepare(
+                        "INSERT INTO v2_audit_events (workspace_id, event_id, source, \
+                         schema_version, event_type, ts, run_id, agent_identity, payload_json) \
+                         VALUES (?1, ?2, 'v2_envelope', 1, 'fixture', ?3, ?4, 'test', ?5)",
+                    )
+                    .unwrap();
+                // One row past the budget, then a match only a larger budget reaches.
+                let rows = orbit_core::runtime::audit::run_events::RUN_EVENTS_MAX_SCAN_ROWS + 2;
+                for index in 0..rows {
+                    let payload = match index {
+                        0 => json!({"event_id": "e0", "body_kind": "step_started", "step_id": "implement"}).to_string(),
+                        1 => "not json".to_string(),
+                        2 => json!({"event_id": "e2", "parent_event_id": "e0", "body_kind": "cli_invocation_finished"}).to_string(),
+                        3 => json!({"body_kind": "activity_progress"}).to_string(),
+                        _ if index == rows - 1 => json!({"event_id": "late", "body_kind": "late_marker"}).to_string(),
+                        _ => json!({"event_id": format!("f{index}"), "body_kind": "activity_progress"}).to_string(),
+                    };
+                    let ts = (start + chrono::Duration::seconds(index as i64)).to_rfc3339();
+                    insert
+                        .execute(rusqlite::params![
+                            workspace,
+                            format!("row-{index}"),
+                            ts,
+                            run.run_id,
+                            payload
+                        ])
+                        .unwrap();
+                }
+            }
+            tx.commit().unwrap();
+            let server = fixture.server(false);
+            let path = format!("/api/runs/{}/events", run.run_id);
+
+            // An unfiltered page is a window of four stored rows, one of them invalid.
+            let page = json_ok(server.get(&format!("{path}?limit=4")));
+            assert_eq!(
+                page,
+                json!([
+                    {"event_id": "e0", "body_kind": "step_started", "step_id": "implement"},
+                    {"event_id": "e2", "parent_event_id": "e0", "body_kind": "cli_invocation_finished"},
+                    {"body_kind": "activity_progress"},
+                ]),
+                "stored envelopes only: invalid JSON skipped, nothing added"
+            );
+            let filled = json_ok(server.get(&format!("{path}?kind=step_started&limit=1")));
+            assert_eq!(
+                filled[0]["event_id"], "e0",
+                "a page the budget fills is served"
+            );
+            let refused = server.get(&format!("{path}?kind=late_marker"));
+            assert_eq!(refused.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
+            assert_eq!(
+                refused.json::<Value>().unwrap(),
+                json!({"error": "run-events audit rows exceed bounded scan budget; narrow the kind filter or reduce offset"})
+            );
+        },
+    );
+}
+
 fn operations(trace: &[Value], name: &str) -> usize {
     trace
         .iter()
