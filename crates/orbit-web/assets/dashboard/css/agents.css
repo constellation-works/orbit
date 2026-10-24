@@ -282,19 +282,6 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
   #agents-roles { overflow-x: auto; scrollbar-width: none; }
 }
 
-/* Square coordinates keep the frontier attached at every viewport width. */
-.agents-role-panel-implementers { min-width: 0; }
-.agents-cost-plot { position: relative; width: 100%; max-width: 420px; aspect-ratio: 1; margin: 12px auto 0; border-left: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--bg-elev); }
-.agents-cost-point { position: absolute; width: 10px; height: 10px; border-radius: 50%; background: var(--fg-mute); transform: translate(-50%, -50%); }
-.agents-cost-point.is-frontier { background: var(--status-in-progress); outline: 2px solid var(--bg); }
-.agents-cost-frontier { position: absolute; border-top: 1px dashed var(--status-in-progress); transform-origin: 0 0; }
-.agents-cost-axis { text-align: center; font-size: 11px; color: var(--fg-mute); margin: 6px 0; }
-.agents-cost-legend { padding-left: 18px; color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
-.agents-role-panel-implementers h4 { margin: 16px 0 4px; }
-.agents-tier-table { border-collapse: collapse; width: 100%; font-size: 12px; white-space: nowrap; }
-.agents-tier-table th, .agents-tier-table td { padding: 8px; border-bottom: 1px solid var(--border); text-align: right; }
-.agents-tier-table th:first-child, .agents-tier-table td:first-child { text-align: left; }
-
 /* Pilots: one assessed-by-observed tier matrix per row. */
 .agents-tier-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 12px; margin-top: 10px; }
 .agents-tier-card { border: 1px solid var(--hair); border-radius: 3px; padding: 8px 10px; min-width: 0; }

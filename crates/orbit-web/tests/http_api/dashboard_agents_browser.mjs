@@ -2,8 +2,8 @@
 // Observe › Agents through the shipped app, router, renderer and CSS, fed
 // contract-shaped `/api/agents` payloads: `#analytics/orchestrators` opening
 // `#agents/orchestrators`, the role tabs and their counts, row selection
-// driving the detail column, the disclosure surviving a refresh, the
-// Implementers cost frontier and tier table, the Reviewers provisional
+// driving the detail column, the disclosure surviving a refresh, no
+// Implementers role panel, the Reviewers provisional
 // banner, `accepts often` tag and verdict-outcome bars, the Pilots
 // tier-calibration matrices, the empty state, and the 375px layout (ranking
 // scrolling in its own box, detail stacked below, 44px touch targets).
@@ -331,16 +331,17 @@ try {
   await body.locator('.agents-role-panel-reviewers').scrollIntoViewIfNeeded();
   await shot('agents-reviewers-outcomes-dark-1440');
 
-  // Implementers uses the shared ranking/detail and its own cost/tier panel.
+  // Implementers uses the shared ranking/detail and shows no role panel.
   await page.locator('#agents-roles [data-view="implementers"]').click();
-  await body.locator('.agents-cost-point').first().waitFor();
+  await body.locator('.agents-row').first().waitFor();
   await body.locator('.agents-penalty .agents-task').first().waitFor();
   assert.equal(await body.locator('.agents-row').count(), 6);
-  assert.equal(await body.locator('.agents-cost-point').count(), 5);
-  assert.equal(await body.locator('.agents-cost-point.is-frontier').count(), 3);
-  assert.equal(await body.locator('.agents-cost-frontier').count(), 2);
-  assert.equal(await body.locator('.agents-tier-table tbody tr').count(), 12);
-  assert.match(await body.locator('.agents-tier-table').textContent(), /20%20\.59%/);
+  assert.equal(await body.locator('.agents-role-panel').count(), 0, 'no role panel and no empty container');
+  assert.equal(await body.locator('.agents-cost-plot, .agents-cost-point, .agents-cost-frontier, .agents-cost-axis, .agents-cost-legend, .agents-tier-table').count(), 0);
+  const implementersText = await body.textContent();
+  assert.ok(!implementersText.includes('Score against cost') && !implementersText.includes('First reviews by tier'), 'no chart, frontier or tier copy');
+  assert.equal(await body.evaluate(node => node.lastElementChild.classList.contains('agents-how')), true, 'nothing reserves space past the disclosure');
+  assert.match(await body.locator('.agents-stats').textContent(), /Cost per weighted landed task/, 'cost stays in Shown, not scored');
   await shot('agents-implementers-dark-1440');
   const desktopRanking = await rankingVisibility();
   assert.deepEqual(desktopRanking.headersInside.filter(([, visible]) => !visible), [], `rank, crew · model and score are visible without scrolling at 1440px: ${JSON.stringify(desktopRanking)}`);
@@ -348,19 +349,12 @@ try {
   assert.equal(desktopRanking.scrolls, true, 'the evidence columns still scroll at 1440px');
   assert.equal(desktopRanking.cue, true, 'a scrolling ranking shows edge fades');
   await body.locator('.agents-ranking').screenshot({ path: path.join(evidence, 'agents-implementers-table-dark-1440.png'), animations: 'disabled' });
-  await body.locator('.agents-role-panel h3').evaluate(node => node.scrollIntoView({ block: 'start' }));
-  await page.evaluate(() => window.scrollBy(0, -80));
-  await shot('agents-implementers-panel-dark-1440');
   await body.locator('.agents-row', { hasText: 'costly' }).locator('button').click();
   await page.waitForFunction(() => document.querySelector('#agents-detail h3')?.textContent === 'costly');
   await page.setViewportSize({ width: 375, height: 812 });
   await page.waitForTimeout(100);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-  const tierFits = await body.locator('.agents-tier-table').evaluate(table => {
-    const box = table.parentElement;
-    return getComputedStyle(box).overflowX === 'auto' && box.scrollWidth > box.clientWidth;
-  });
-  assert.ok(tierFits, 'the tier table scrolls inside its box at 375px');
+  assert.equal(await body.locator('.agents-role-panel').count(), 0, 'no role panel at 375px either');
   const phoneRanking = await rankingVisibility();
   assert.deepEqual(phoneRanking.headersInside.filter(([, visible]) => !visible), [], `rank, crew · model and score are visible at 375px: ${JSON.stringify(phoneRanking)}`);
   assert.equal(phoneRanking.scoreInsideEveryRow, true, 'every row shows its score at 375px');
@@ -369,13 +363,8 @@ try {
   await body.locator('.agents-ranking').screenshot({ path: path.join(evidence, 'agents-implementers-table-dark-375.png'), animations: 'disabled' });
   await page.evaluate(() => window.scrollTo(0, 0));
   await shot('agents-implementers-dark-375');
-  await body.locator('.agents-role-panel h3').evaluate(node => node.scrollIntoView({ block: 'start' }));
-  await page.evaluate(() => window.scrollBy(0, -80));
-  await shot('agents-implementers-panel-dark-375');
-  await body.locator('.agents-tier-table').scrollIntoViewIfNeeded();
-  await shot('agents-implementers-tiers-dark-375');
   await page.setViewportSize({ width: 1440, height: 1100 });
-  pass('implementers ranking, detail, frontier and tier comparison at desktop and phone widths');
+  pass('implementers ranking and detail without a role panel at desktop and phone widths');
 
   // Pilots: the shared ranking and detail, then one tier matrix per row with
   // its diagonal and its too-easy and too-hard counts, at both widths.

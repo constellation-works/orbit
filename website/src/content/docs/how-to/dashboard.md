@@ -464,22 +464,15 @@ there was no test. A review reject is counted once; regressions the reviewer
 missed count against Reviewers. Each task counts once per crew and model
 that started an implementation run in the window.
 
-**Score against cost** plots the score against recorded USD per weighted
-landed task. Higher and farther left is better. The dashed frontier joins
-supported rows no other supported row matches or beats on both measures
-while improving at least one. Ties stay on the frontier. Grey points have too
-little work to rank and cannot set it. Unpriced rows stay in the ranking and
-are omitted from the plot. Cost uses recorded delivery-run invocations,
-including delivery reviews and repairs, and prefers provider cost to derived
-pricing. Missing or unpriced telemetry and rows with no landed work show a
-dash; a dash does not mean free work.
-
-The **First reviews by tier** table compares each row's first reviews needing
-changes (rejects or reviewer repairs) with the fleet rate for the same tier,
-including that row. A dash means no first reviews. The detail column also
-shows median completed run time and tasks by tier. Cost, time and tier
-comparisons never change the score. On a phone, the ranking and tier table
-scroll within their own boxes and the detail stacks below the ranking.
+The tab has no role panel: the ranking, the detail column and **How the
+score works** are the whole view. Cost per weighted landed task, median
+completed run time and tasks by tier appear under **Shown, not scored** in
+the detail column. Cost uses recorded delivery-run invocations, including
+delivery reviews and repairs, and prefers provider cost to derived pricing.
+Missing or unpriced telemetry and rows with no landed work show a dash; a
+dash does not mean free work. Cost and time never change the score. On a
+phone, the ranking scrolls within its own box and the detail stacks below
+the ranking.
 
 The **Reviewers** tab ranks the reviewers of the review gate, and the review
 jobs that file findings as tasks, by how their verdicts turned out. A reviewer
