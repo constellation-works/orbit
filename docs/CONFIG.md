@@ -422,7 +422,7 @@ Only the global file, and only when it is absent (or under `--force`):
   | codex only | `["luna"]` | `["sol"]` | `["sol"]` | `["astra"]` |
   | claude only | `["haiku"]` | `["sonnet"]` | `["opus"]` | `["opus"]` |
 
-  On any row, and alone when neither codex nor claude is detected, a detected `grok` is appended to `medium`, and a Google CLI's crew to `low` (`antigravity` when `agy` is detected, otherwise `gemini`). Other families leave the pools `[]`, which route to `default_crew`. Init fails rather than write a pool entry it does not seed enabled.
+  On any row, and alone when neither codex nor claude is detected, a detected `grok` is appended to `medium`, and a Google CLI's crew to `low` (`antigravity` when `agy` is detected, otherwise `gemini`). When `agy` is detected, `argon` also joins `hard`. Other families leave the pools `[]`, which route to `default_crew`. Init fails rather than write a pool entry it does not seed enabled.
 
 Interactive init asks for the default crew by name, offering only enabled crews. It no longer writes or asks for `workflow.system_crew`: system work draws from the pools. With no supported CLI, every crew is written disabled and `default_crew` stays unset, so it resolves to the disabled `opus` and agent dispatch refuses until you run `orbit config set crews.<name>.enabled true`; deterministic jobs such as store retention still run. Init never writes `[crews.system]`, `[crews.custom]` or `[crews.qa]`.
 
@@ -860,7 +860,7 @@ provider = "gemini"
 |---|---|---|---|
 | `claude` | `claude` | `opus` (`opus`), `sonnet` (`sonnet`), `haiku` (`haiku`), `fable` (`fable`) | `opus` |
 | `codex` | `codex` | `astra` (`gpt-6-astra`), `sol` (`gpt-6.1-sol`), `luna` (`gpt-6-luna`) | `astra` |
-| `antigravity` | `agy` | `antigravity` (`gemini-3.8-flash-high`) | `antigravity` |
+| `antigravity` | `agy` | `antigravity` (`gemini-3.8-flash-high`), `argon` (`gemini-4-argon-high`) | `antigravity` |
 | `gemini` | `gemini` | `gemini` (`gemini-3.8-flash`) | `gemini` |
 | `grok` | `grok` | `grok` (`grok-4.7`) | `grok` |
 | `copilot` | `copilot` | `copilot` (`claude-sonnet-5`) | `copilot` |

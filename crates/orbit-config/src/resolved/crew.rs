@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::model_defaults::{
-    ANTIGRAVITY_DEFAULT_MODEL, CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK, CLAUDE_FABLE_MODEL,
-    CLAUDE_HAIKU_MODEL, CODEX_ASTRA_MODEL, CODEX_LUNA_MODEL, CODEX_SOL_MODEL,
+    ANTIGRAVITY_ARGON_MODEL, ANTIGRAVITY_DEFAULT_MODEL, CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK,
+    CLAUDE_FABLE_MODEL, CLAUDE_HAIKU_MODEL, CODEX_ASTRA_MODEL, CODEX_LUNA_MODEL, CODEX_SOL_MODEL,
     COPILOT_DEFAULT_MODEL, CURSOR_DEFAULT_MODEL, GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL,
     MUSE_DEFAULT_MODEL, OPENCODE_DEFAULT_MODEL, PI_DEFAULT_MODEL,
 };
@@ -164,6 +164,7 @@ pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
         ("astra", CODEX_ASTRA_MODEL, "codex"),
         ("gemini", GEMINI_CREW_MODEL, "gemini"),
         ("antigravity", ANTIGRAVITY_DEFAULT_MODEL, "antigravity"),
+        ("argon", ANTIGRAVITY_ARGON_MODEL, "antigravity"),
         ("grok", GROK_DEFAULT_MODEL, "grok"),
         ("copilot", COPILOT_DEFAULT_MODEL, "copilot"),
         ("cursor", CURSOR_DEFAULT_MODEL, "cursor"),
