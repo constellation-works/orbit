@@ -777,3 +777,54 @@ fn ci_disagreeing_workspace_checkouts_stay_unobserved() {
         "{output:#}"
     );
 }
+
+/// A later run step returns to the workspace without announcing its directory.
+/// Its revision must survive the preceding nested helper checkout and prevent
+/// the sweep from attributing the failure to the first workspace head.
+#[test]
+fn ci_workspace_checkout_after_helper_stays_unobserved() {
+    if !isolated_with_fake_gh("sweep::ci_workspace_checkout_after_helper_stays_unobserved") {
+        return;
+    }
+    let mut workspace = Workspace::new();
+    let head = workspace.head.clone();
+    let later_head = "cccccccccccccccccccccccccccccccccccccccc";
+    let mut log = two_checkout_log(&head, true);
+    let test_start = gh_line(FAILED_STEP, "##[group]Run cargo test");
+    let checkout = [
+        "##[group]Run git checkout",
+        "##[endgroup]",
+        &format!("[command]/usr/bin/git checkout --progress --force {later_head}"),
+        "HEAD is now at ccccccc another revision",
+    ]
+    .into_iter()
+    .map(|line| gh_line("Change revision", line))
+    .collect::<String>();
+    log = log.replace(&test_start, &format!("{checkout}{test_start}"));
+    workspace.push_red_run(8_302, 9_302, &log);
+
+    let (evidence, filed) = workspace.sweep();
+    let failure = failure_by_run(&evidence, 8_302);
+    assert_eq!(
+        failure["checkout_identity"]["state"],
+        json!("ambiguous"),
+        "{failure:#}"
+    );
+    assert_eq!(
+        failure["actual_checkout_shas"],
+        json!([head, later_head]),
+        "{failure:#}"
+    );
+    let message = filed.expect_err("the later workspace revision must prevent admission");
+    let (_, payload) = message
+        .split_once("ci_failure_sweep retryable: ")
+        .unwrap_or_else(|| panic!("expected a retryable sweep error, got {message}"));
+    let output: Value = serde_json::from_str(payload).expect(&message);
+    assert!(
+        output["errors"].as_array().unwrap().iter().any(|error| {
+            error["operation"] == "job_evidence_identity" && error["retryable"] == true
+        }),
+        "{output:#}"
+    );
+    assert!(open_sweep_tasks(&workspace.runtime).is_empty());
+}

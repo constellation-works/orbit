@@ -23,6 +23,12 @@ pub(super) struct CheckoutEvidenceCollector {
     /// Directory of the checkout step in effect, from `Working directory is
     /// '<path>'` or an absolute `git init`.
     checkout_directory: Option<String>,
+    /// Column logs identify a step by both job and step; plain job-API logs
+    /// identify it by a top-level `Run` group instead.
+    column_step: Option<(String, String)>,
+    plain_group_depth: usize,
+    step_scope_known: bool,
+    unscoped_directory_seen: bool,
     /// Every distinct directory in which a SHA token was seen, including
     /// `None` when the line named no directory. A later sighting has to be
     /// kept: the helper checkout's merge subject quotes the workspace SHA.
@@ -49,6 +55,10 @@ impl CheckoutEvidenceCollector {
             seen_commits: HashSet::new(),
             named_commits: HashSet::new(),
             checkout_directory: None,
+            column_step: None,
+            plain_group_depth: 0,
+            step_scope_known: false,
+            unscoped_directory_seen: false,
             commit_directories: HashMap::new(),
             pending_checkout_command: None,
             lines: Vec::new(),
@@ -101,7 +111,16 @@ impl CheckoutEvidenceCollector {
         let sightings = &self.commit_directories;
         let observed = std::mem::take(&mut self.commits);
         let named = std::mem::take(&mut self.named_commits);
-        let (commits, named) = omit_side_path_checkouts(observed, named, sightings);
+        // Without step boundaries, directory announcements alone establish
+        // only the known root-plus-helper pair. A third identity may be a
+        // later workspace checkout that inherited the helper's directory.
+        let (commits, named) = if self.unscoped_directory_seen
+            && canonical_checkout_commits(&observed, &named).len() != 2
+        {
+            (observed, named)
+        } else {
+            omit_side_path_checkouts(observed, named, sightings)
+        };
         CheckoutEvidence {
             commits: canonical_checkout_commits(&commits, &named),
             lines: self.lines,
@@ -127,8 +146,11 @@ impl CheckoutEvidenceCollector {
             self.pending_checkout_command = None;
             return;
         }
-        let (step, payload) = split_log_line(line);
+        let (column_step, payload) = split_log_context(line);
+        self.observe_step(column_step, payload);
+        let step = column_step.map_or("", |(_, step)| step);
         if let Some(directory) = checkout_directory_announcement(payload) {
+            self.unscoped_directory_seen |= !self.step_scope_known;
             self.checkout_directory = Some(directory);
         }
         let lowered = payload.to_ascii_lowercase();
@@ -172,6 +194,36 @@ impl CheckoutEvidenceCollector {
             self.commits.push(token);
         }
         self.pending_checkout_command = command;
+    }
+
+    fn observe_step(&mut self, column_step: Option<(&str, &str)>, payload: &str) {
+        let previous = self
+            .column_step
+            .as_ref()
+            .map(|(job, step)| (job.as_str(), step.as_str()));
+        if previous != column_step {
+            self.checkout_directory = None;
+            self.pending_checkout_command = None;
+            self.plain_group_depth = 0;
+            self.step_scope_known = false;
+            self.column_step = column_step.map(|(job, step)| (job.to_string(), step.to_string()));
+        }
+        if column_step.is_some() {
+            self.step_scope_known = true;
+            return;
+        }
+        let payload = payload.trim();
+        if let Some(title) = payload.strip_prefix("##[group]") {
+            let title = title.trim();
+            if self.plain_group_depth == 0 && (title == "Run" || title.starts_with("Run ")) {
+                self.checkout_directory = None;
+                self.pending_checkout_command = None;
+                self.step_scope_known = true;
+            }
+            self.plain_group_depth = self.plain_group_depth.saturating_add(1);
+        } else if payload.starts_with("##[endgroup]") {
+            self.plain_group_depth = self.plain_group_depth.saturating_sub(1);
+        }
     }
 
     fn record_evidence_line(&mut self, payload: &str) {
@@ -228,18 +280,28 @@ pub(super) fn runner_log_payload(line: &[u8]) -> &[u8] {
 /// harvesting that SHA would report the checkout action's own commit as the
 /// commit under test — the exact conflation this scan exists to prevent.
 pub(super) fn split_log_line(line: &str) -> (&str, &str) {
+    let (columns, payload) = split_log_context(line);
+    (columns.map_or("", |(_, step)| step), payload)
+}
+
+/// Retain the job as part of step identity. A timestamp at the start marks a
+/// raw job-API line, whose payload tabs must never become column boundaries.
+fn split_log_context(line: &str) -> (Option<(&str, &str)>, &str) {
     let line = line.trim_start_matches('\u{feff}');
+    if let Some(payload) = strip_log_timestamp(line) {
+        return (None, payload);
+    }
     let mut columns = line.splitn(3, '\t');
-    let (step, rest) = match (columns.next(), columns.next(), columns.next()) {
-        (Some(_job), Some(step), Some(rest)) => (step, rest),
-        _ => ("", line),
+    let (columns, rest) = match (columns.next(), columns.next(), columns.next()) {
+        (Some(job), Some(step), Some(rest)) => (Some((job, step)), rest),
+        _ => (None, line),
     };
-    // Drop the leading ISO-8601 runner timestamp when there is one.
-    let payload = match rest.split_once(' ') {
-        Some((first, tail)) if first.contains('T') && first.ends_with('Z') => tail,
-        _ => rest,
-    };
-    (step, payload)
+    (columns, strip_log_timestamp(rest).unwrap_or(rest))
+}
+
+fn strip_log_timestamp(line: &str) -> Option<&str> {
+    let (first, tail) = line.split_once(' ')?;
+    (!first.contains('\t') && first.contains('T') && first.ends_with('Z')).then_some(tail)
 }
 
 /// Whether a line dropped for exceeding [`MAX_CHECKOUT_EVIDENCE_LINE_BYTES`]
