@@ -8,12 +8,12 @@ type: design
 summary: "Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative)"
 tags: [crew-performance, crews, crew-pools, agent-scorecards, admission]
 last_updated: 2026-10-24
-last_validated: 2026-10-23
+last_validated: 2026-10-24
 ---
 
 # Scope: performance-weighted crew selection
 
-Status: phases 1–3 implemented (type list, classification, the by-type cell report, the persisted hourly snapshot with its readiness line, and performance-weighted draws with their provenance); phase 4 proposed.
+Status: phases 1–4 implemented (type list, classification, the by-type cell report, the persisted hourly snapshot with its readiness line, performance-weighted draws with their provenance, and shadow modes with the share comparison report).
 Bearing: complexity and purpose pools (`workflow.<complexity>_complexity_crews`,
 `workflow.purpose_crews.*`) decide which crews may run a task, and their weights express the
 operator's preference among them. [Usage pressure](../usage-pressure/1_scope.md) scales those
@@ -181,7 +181,7 @@ creation and every admission pass.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `workflow.crew_performance` | `off` | `off`, `absolute` or `comparative`. Independent of `workflow.crew_selection`. |
+| `workflow.crew_performance` | `off` | `off`, `absolute`, `comparative`, `shadow_absolute` or `shadow_comparative`. Independent of `workflow.crew_selection`. Shadow computes the same factor as the live mode, records it with `applied: false`, and draws on the weights `off` would use. Only `off` skips the snapshot refresh. |
 | `workflow.crew_performance_strength` | `3` | `k`; at least `0`, and `0` disables the factor. |
 | `workflow.crew_performance_cap` | `4` | Factor clamp `[1/cap, cap]`; at least `1`. |
 | `workflow.crew_performance_window_days` | `30` | Evidence window, at most the scan's 90 days. |
@@ -194,11 +194,15 @@ combination.
 ### Surfaces
 
 - `crew_selection` in run input and `orbit run show` gains, per eligible member, a
-  `performance` object: mode, type, cell score, crew mean, `n`, factor and snapshot time.
-  History's `crew_redrawn` carries the same.
+  `performance` object: mode, `applied`, type, cell score, crew mean, `n`, factor and snapshot
+  time. `applied` is true for `absolute` and `comparative`, false for either shadow mode.
+  History's `crew_redrawn` carries the factor only when it was applied.
 - Readiness and doctor show the snapshot's age and type list, and say when it is ignored.
 - `orbit agents scorecard --role implementers --by-type` (and its `--json`) prints the cell
-  matrix. The dashboard gets no new section: the scorecard tab stays as it is.
+  matrix. With `--shadow` as well, the same command prints each crew's static, drawn and
+  would-be share per pool and type over `--window`, and lists draws with no performance
+  record separately as static. The dashboard gets no new section: the scorecard tab stays as
+  it is, and a call without the switches keeps the ranking.
 
 ## Non-goals
 
@@ -244,9 +248,10 @@ combination.
 3. **Weighted draws.** The `crew_performance*` keys, the factor beside pressure in the shared
    draw helper (`pressure_weighted_candidates` becomes the general weighting seam), run
    provenance and history. Default `off`.
-4. **Shadow trial in `ws_orbit`.** Record the factor the draw would have used on every draw
-   without applying it, for two weeks, and compare the would-be shares with the static ones
-   before switching on.
+4. **Shadow trial.** `shadow_absolute` and `shadow_comparative` record the factor the draw
+   would have used, with `applied: false`, and do not apply it. `orbit agents scorecard
+   --role implementers --by-type --shadow` compares static, drawn and would-be shares.
+   Running the trial and choosing a default stay with the operator.
 
 ## Open questions
 

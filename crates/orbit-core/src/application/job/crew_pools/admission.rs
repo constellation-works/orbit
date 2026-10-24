@@ -442,8 +442,12 @@ impl OrbitRuntime {
             describe(original),
             describe(replacement),
         );
-        // The re-draw carries the performance factor too when it applied.
-        if let Some((mode, _)) = weighting.performance_lens() {
+        // The re-draw names the performance factor only when it changed the
+        // tickets. A shadow factor is recorded on the run and left out of
+        // this note, because the draw did not use it.
+        if weighting.performance_applied()
+            && let Some((mode, _)) = weighting.performance_lens()
+        {
             let performance = |crew: &str| {
                 weighting
                     .performance_description(crew)

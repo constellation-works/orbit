@@ -847,3 +847,106 @@ fn agents_scorecard_by_type_returns_cells_and_the_type_list() {
         .assert()
         .failure();
 }
+
+/// `--by-type --shadow` returns the share report, including an empty window,
+/// and is refused without `--by-type` or for another role. A call without
+/// the switch keeps the ranking.
+#[test]
+fn agents_scorecard_shadow_reports_shares_and_refuses_a_partial_request() {
+    if crate::isolated_test::run_in_child(
+        "agents_cli::agents_scorecard_shadow_reports_shares_and_refuses_a_partial_request",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let card = fixture.json(&[
+        "agents",
+        "scorecard",
+        "--role",
+        "implementers",
+        "--by-type",
+        "--shadow",
+        "--window",
+        "7d",
+        "--json",
+    ]);
+    assert_eq!(card["shadow"], true, "{card}");
+    assert_eq!(card["by_type"], true, "{card}");
+    assert_eq!(card["window"], "7d", "{card}");
+    assert_eq!(card["requested_window"], "7d", "{card}");
+    assert!(card["pools"].as_array().unwrap().is_empty(), "{card}");
+    assert_eq!(card["static_draws"]["draws"], 0, "{card}");
+    assert!(
+        card["static_draws"]["pools"].as_array().unwrap().is_empty(),
+        "{card}"
+    );
+    assert!(card.get("cells").is_none(), "{card}");
+    assert!(card.get("rows").is_none(), "{card}");
+
+    let plain = fixture.json(&["agents", "scorecard", "--role", "implementers", "--json"]);
+    assert!(plain.get("shadow").is_none(), "{plain}");
+    assert!(plain["rows"].is_array(), "{plain}");
+
+    let by_type = fixture.json(&[
+        "agents",
+        "scorecard",
+        "--role",
+        "implementers",
+        "--by-type",
+        "--json",
+    ]);
+    assert!(by_type.get("shadow").is_none(), "{by_type}");
+    assert!(by_type["cells"].is_array(), "{by_type}");
+
+    let shown = fixture
+        .command(&[
+            "agents",
+            "scorecard",
+            "--role",
+            "implementers",
+            "--by-type",
+            "--shadow",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&shown.stdout),
+        String::from_utf8_lossy(&shown.stderr),
+    );
+    assert!(
+        text.contains("Would-be"),
+        "the report says how to read would-be shares: {text}"
+    );
+    assert!(
+        text.to_lowercase().contains("static"),
+        "the report names the static bucket: {text}"
+    );
+    assert!(text.contains("no recorded draw in the window"), "{text}");
+
+    fixture
+        .command(&[
+            "agents",
+            "scorecard",
+            "--role",
+            "implementers",
+            "--shadow",
+            "--json",
+        ])
+        .assert()
+        .failure();
+    fixture
+        .command(&[
+            "agents",
+            "scorecard",
+            "--role",
+            "orchestrators",
+            "--by-type",
+            "--shadow",
+            "--json",
+        ])
+        .assert()
+        .failure();
+}

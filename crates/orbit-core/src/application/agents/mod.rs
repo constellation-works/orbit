@@ -23,6 +23,7 @@ mod facts;
 mod records;
 mod roles;
 mod score;
+mod shadow;
 
 use std::time::Duration;
 
@@ -179,6 +180,13 @@ impl OrbitRuntime {
             self.crew_performance_types(),
             Duration::ZERO,
         ))
+    }
+
+    /// The implementer shadow share report for `query`: each crew's static,
+    /// drawn and would-be share per pool and type, from recorded draws in
+    /// the window. This does not scan tasks.
+    pub fn agent_shadow_scorecard(&self, query: &AgentQuery) -> Result<Value, OrbitError> {
+        shadow::report(self, query)
     }
 
     /// Rebuild this workspace's crew-performance snapshot from a fresh scan

@@ -441,6 +441,38 @@ fn crew_performance_keys_default_to_off_and_give_the_scope_factor() {
         .expect("strength 0 loads")
         .crew_performance;
     assert!(!off.applies(), "strength 0 disables the factor");
+    assert!(!off.records(), "strength 0 records nothing");
+    for mode in ["shadow_absolute", "shadow_comparative"] {
+        let shadow = load(&format!("crew_performance = \"{mode}\""))
+            .unwrap_or_else(|error| panic!("{mode} loads: {error}"))
+            .crew_performance;
+        assert_eq!(shadow.mode.as_str(), mode);
+        assert!(shadow.mode.is_on(), "{mode} still refreshes the snapshot");
+        assert!(shadow.records(), "{mode} records the factor");
+        assert!(!shadow.applies(), "{mode} does not weigh the draw");
+        set("workflow.crew_performance", &format!("\"{mode}\""))
+            .unwrap_or_else(|error| panic!("config set admits {mode}: {error}"));
+    }
+    let shadow_absolute = load("crew_performance = \"shadow_absolute\"")
+        .expect("shadow_absolute loads")
+        .crew_performance;
+    assert_eq!(
+        shadow_absolute.advantage(115.0, 114.0),
+        15.0,
+        "shadow_absolute reads score − 100"
+    );
+    let shadow_comparative = load("crew_performance = \"shadow_comparative\"")
+        .expect("shadow_comparative loads")
+        .crew_performance;
+    assert_eq!(
+        shadow_comparative.advantage(108.0, 98.0),
+        10.0,
+        "shadow_comparative reads score − crew mean"
+    );
+    let shadow_off = load("crew_performance = \"shadow_absolute\"\ncrew_performance_strength = 0")
+        .expect("shadow strength 0 loads")
+        .crew_performance;
+    assert!(!shadow_off.records() && !shadow_off.applies());
     for (key, value) in [
         ("workflow.crew_performance_strength", "0.5"),
         ("workflow.crew_performance_cap", "1"),
@@ -458,6 +490,11 @@ fn invalid_crew_performance_settings_are_refused_by_load_and_config_set() {
         ("workflow.crew_performance_cap", "nan", "at least 1"),
         ("workflow.crew_performance_strength", "-1", "at least 0"),
         ("workflow.crew_performance_strength", "inf", "at least 0"),
+        (
+            "workflow.crew_performance",
+            r#""boost""#,
+            "shadow_absolute, shadow_comparative",
+        ),
     ] {
         let field = key.trim_start_matches("workflow.");
         for error in [

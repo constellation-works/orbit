@@ -726,7 +726,7 @@ define_config_settings! {
     },
     workflow_crew_performance: String => String {
         key: "workflow.crew_performance", value_type: "string",
-        description: "How task crew draws weigh crew performance: off, absolute or comparative.",
+        description: "How task crew draws weigh crew performance: off, absolute, comparative, shadow_absolute or shadow_comparative. Shadow records the factor and does not apply it.",
         section: ConfigSection::Delivery, order: 114,
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| crate::crew_performance::admit_crew_performance(raw),

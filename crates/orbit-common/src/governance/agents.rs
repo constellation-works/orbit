@@ -90,6 +90,15 @@ const BY_TYPE: &[ParamSpec] = &[both(
     "Show implementers split by task type within each tier",
 )];
 
+/// The shadow share report, implementers with `--by-type` only.
+const SHADOW: &[ParamSpec] = &[both(
+    "shadow",
+    ParamType::Switch,
+    "For implementers with by_type, report each crew's static, drawn and would-be share from recorded draws instead of the cell matrix. Draws without a performance record are counted separately as static.",
+    CliArgKind::flag("shadow"),
+    "Compare recorded draw shares with the shares the recorded factor would have given",
+)];
+
 const MODEL: &[ParamSpec] = &[mcp_only(
     "model",
     ParamType::String,
@@ -100,18 +109,18 @@ const SCORECARD: OperationSpec<AgentsVerb> = OperationSpec {
     verb: AgentsVerb::Scorecard,
     cli_path: &["scorecard"],
     tool_name: "orbit.agents.scorecard",
-    tool_description: "Rank one agent role's crews and models over the window: weighted outcome rates per 100 units of work, then pulled down toward the fleet average when above it. Implementers start at 100 and score actual counts against fleet expectations for the same tier mix; other roles sum weighted actual rates. Rows below the minimum support are listed last without a rank; a role whose terms are not computed yet answers status not_computed with its terms and no rows. With by_type, implementers instead return one cell per (crew, model, tier, type) with n, raw, crew_mean and score, plus the type list used. Scans the workspace once per call (cache_ttl_seconds 0). The payload the dashboard's Agents view reads.",
+    tool_description: "Rank one agent role's crews and models over the window: weighted outcome rates per 100 units of work, then pulled down toward the fleet average when above it. Implementers start at 100 and score actual counts against fleet expectations for the same tier mix; other roles sum weighted actual rates. Rows below the minimum support are listed last without a rank; a role whose terms are not computed yet answers status not_computed with its terms and no rows. With by_type, implementers instead return one cell per (crew, model, tier, type) with n, raw, crew_mean and score, plus the type list used. With shadow as well, implementers instead return each crew's draw count and its static, drawn and would-be share per pool and type over the window; draws with no performance record are counted separately as static. Calls without those switches keep this ranking. Scans the workspace once per call (cache_ttl_seconds 0), except the shadow report, which reads recorded draws only. The payload the dashboard's Agents view reads.",
     cli_about: "Show one role's scorecard rows by crew and model",
     cli_help: CliHelp {
         long_about: None,
         after_help: Some(
-            "The table shows each row's units, score and term counts; --json carries every rate per 100\nunits and the term definitions. Follow a row to its tasks with\n`orbit agents show --role <role> --crew <crew>`.",
+            "The table shows each row's units, score and term counts; --json carries every rate per 100\nunits and the term definitions. Follow a row to its tasks with\n`orbit agents show --role <role> --crew <crew>`.\n\n`--by-type --shadow` (implementers only) replaces the cell matrix with each crew's static,\ndrawn and would-be share from recorded draws in the window.",
         ),
         flag_order: &[],
         constraints: &[],
     },
     effect: Effect::Read,
-    params: &[ROLE, SELECTION, BY_TYPE, MODEL],
+    params: &[ROLE, SELECTION, BY_TYPE, SHADOW, MODEL],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

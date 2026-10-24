@@ -17,7 +17,10 @@
 //! `workflow.crew_performance` multiplies the creation, re-rate and
 //! admission draws by each crew's performance factor from the persisted
 //! snapshot through the same seam; it never re-draws an assigned crew by
-//! itself, and activity draws take no performance factor.
+//! itself, and activity draws take no performance factor. `shadow_absolute`
+//! and `shadow_comparative` compute and record that factor with
+//! `applied: false` and leave the tickets on the weights the draw would
+//! use with the mode off; pressure still applies.
 
 mod activity;
 mod admission;
