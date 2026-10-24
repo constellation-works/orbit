@@ -100,17 +100,6 @@ pub trait AutomationStoreBackend: Send + Sync {
     }
 
     fn automation_state(&self, consumer: &str) -> Result<Option<AutomationState>, OrbitError>;
-    /// Every persisted consumer state whose key starts with `prefix`, bounded
-    /// to `limit`. Read-only: operation-mode promotion consumes accepted
-    /// assessments from here rather than re-deriving readiness [ORB-11332].
-    fn automation_states(
-        &self,
-        _prefix: &str,
-        _limit: usize,
-    ) -> Result<Vec<AutomationState>, OrbitError> {
-        Ok(vec![])
-    }
-
     /// A bounded page of states whose consumer keys start with the literal
     /// `prefix`, ordered by consumer key, strictly after `after` when given.
     /// `limit` must be nonzero; implementations may cap the page size further.

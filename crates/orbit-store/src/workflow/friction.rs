@@ -1,5 +1,4 @@
-//! One-time per-workspace import of the legacy Markdown friction tree, plus
-//! the export route that keeps the corpus inspectable after cutover
+//! One-time per-workspace import of the legacy Markdown friction tree
 //! (ORB-10680).
 //!
 //! The import is transactional and idempotent. Everything it does — the
@@ -11,8 +10,7 @@
 //! rather than importing a partial corpus.
 //!
 //! Legacy files are never modified or deleted: after the marker commits they
-//! are read-only rollback evidence, and [`export_workspace_frictions`] can
-//! re-materialize the live corpus beside them for inspection.
+//! are read-only rollback evidence.
 
 use std::collections::BTreeSet;
 use std::io;
@@ -23,18 +21,13 @@ use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::{Connection, TransactionBehavior};
 
 use crate::Store;
-use crate::driver::file::friction_store::{friction_record_paths, read_record_at, write_record_at};
+use crate::driver::file::friction_store::{friction_record_paths, read_record_at};
 
-use crate::contracts::{FrictionListFilter, StoredFrictionRecord};
 use crate::repository::friction::queries::upsert_record;
 
 /// Shape of the import this binary knows how to produce and re-verify. A
 /// marker recorded by a newer binary is refused rather than reinterpreted.
 pub(super) const FRICTION_IMPORT_SCHEMA_VERSION: u32 = 1;
-
-/// Rows exported per page, so export memory tracks the page rather than the
-/// corpus it is walking.
-const EXPORT_PAGE: usize = 200;
 
 /// Outcome of importing one legacy source tree into one workspace.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -328,51 +321,4 @@ fn source_key(source_root: &Path) -> String {
         .unwrap_or_else(|_| source_root.to_path_buf())
         .to_string_lossy()
         .into_owned()
-}
-
-/// Re-materialize a workspace's live SQLite corpus as the Markdown layout the
-/// file store used, for inspection or rollback. Reads one bounded page at a
-/// time, so export memory does not grow with the corpus.
-pub fn export_workspace_frictions(
-    store: &Store,
-    workspace_id: &str,
-    destination_root: &Path,
-) -> Result<u64, OrbitError> {
-    let mut exported = 0u64;
-    let mut offset = 0usize;
-    loop {
-        let page = crate::repository::friction::read_page(
-            store,
-            workspace_id,
-            &FrictionListFilter {
-                limit: Some(EXPORT_PAGE),
-                offset,
-                ..FrictionListFilter::default()
-            },
-        )?;
-        if page.is_empty() {
-            break;
-        }
-        for stored in &page {
-            write_export_record(destination_root, stored)?;
-            exported += 1;
-        }
-        offset += page.len();
-    }
-    Ok(exported)
-}
-
-fn write_export_record(
-    destination_root: &Path,
-    stored: &StoredFrictionRecord,
-) -> Result<(), OrbitError> {
-    let (month, seq) = split_friction_id(&stored.record.id).ok_or_else(|| {
-        OrbitError::Store(format!(
-            "cannot export friction record with malformed id '{}'",
-            stored.record.id
-        ))
-    })?;
-    let path = destination_root.join(month).join(format!("F{seq:03}.md"));
-    write_record_at(&path, &stored.record)?;
-    Ok(())
 }

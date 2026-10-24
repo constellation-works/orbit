@@ -570,7 +570,7 @@ The result is clamped to `FRICTION_TITLE_MAX_CHARS` (120) at a word boundary. An
 
 **Consequences.**
 - Bounded scan memory and indexed workspace-local reads for the CLI, MCP, HTTP, dashboard, Bridge-facing, and scoreboard friction paths; the scoreboard consumes a per-model SQL aggregate instead of the full record slice.
-- Legacy trees stay untouched, read-only rollback evidence for one release, and `export_workspace_frictions` re-materializes the live corpus in the same Markdown layout for inspection.
+- Legacy trees stay untouched, read-only rollback evidence for one release.
 - No retention, deletion, cold archival, body compression, or disk-reclamation policy is introduced; removing legacy trees needs an explicit later finalize path that also drops `legacy_path`.
 - Cost: a consumer that read `path` as an always-present file location now sees `null` for post-cutover records and must treat it as an optional legacy pointer.
 - Rejected alternative: keeping the file store and adding a SQLite index sidecar. That would have preserved two sources of truth for the same records and left the full parse cost on every cold read and index rebuild.
