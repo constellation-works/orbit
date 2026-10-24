@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::time::{Duration, Instant};
 
-use orbit_common::{LOCK_BUSY_ERROR_CODE, OrbitError};
+use orbit_common::{LOCK_BUSY_ERROR_CODE, OrbitError, RemoteToolCode};
 use orbit_types::tool::mcp_advertised_tool_name;
 use serde_json::{Value, json};
 
@@ -600,7 +600,7 @@ impl DestinationSession {
             return unreachable(&self.destination, reason);
         }
         OrbitError::RemoteTool {
-            code: LOCK_BUSY_ERROR_CODE.to_string(),
+            code: RemoteToolCode::LockBusy,
             message: format!("{}: {reason}", self.destination.machine_id),
             payload: json!({ "code": LOCK_BUSY_ERROR_CODE, "message": reason }),
         }

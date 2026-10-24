@@ -35,7 +35,7 @@ use std::path::Path;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, RemoteToolCode};
 use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, media_type_for_artifact_path};
 use orbit_types::tool::{
     CLAIMED_OWNER_TOOLS, ToolSessionContext, WorkerInvocation, is_claimed_owner_tool,
@@ -195,7 +195,7 @@ pub fn owner_route_unavailable(name: &str, cause: &str) -> OrbitError {
          the claim for a retry"
     );
     OrbitError::RemoteTool {
-        code: OWNER_ROUTE_UNAVAILABLE_ERROR_CODE.to_string(),
+        code: OWNER_ROUTE_UNAVAILABLE_ERROR_CODE.into(),
         payload: json!({
             "code": OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
             "message": message,
@@ -210,16 +210,18 @@ pub fn owner_route_unavailable(name: &str, cause: &str) -> OrbitError {
 /// a busy listener, a request over its limit — keep their own code.
 fn coordinator_unavailable(name: &str, error: OrbitError) -> OrbitError {
     match error {
-        OrbitError::RemoteTool { code, message, .. } if code == "plugin_broker_unavailable" => {
-            owner_route_unavailable(
-                name,
-                &format!(
-                    "the call could not reach this run's coordinator ({message}); the step \
+        OrbitError::RemoteTool {
+            code: RemoteToolCode::PluginBrokerUnavailable,
+            message,
+            ..
+        } => owner_route_unavailable(
+            name,
+            &format!(
+                "the call could not reach this run's coordinator ({message}); the step \
                      runner that carries a claimed worker's owner calls has stopped or is \
                      restarting"
-                ),
-            )
-        }
+            ),
+        ),
         other => other,
     }
 }

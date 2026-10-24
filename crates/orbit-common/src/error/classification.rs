@@ -2,7 +2,7 @@ use std::path::Path;
 
 use super::{
     ArtifactOrigin, ClaimRefusalKind, FrictionNotLocal, HostRegistryCode, NotFoundKind, OrbitError,
-    PrivateVcsFailure, SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    PrivateVcsFailure, RemoteToolCode, SqliteContention, StorageLayer, WorkspaceClaimHeld,
 };
 
 impl OrbitError {
@@ -276,20 +276,23 @@ impl OrbitError {
     /// Whether this failed only because a lock stayed held past its
     /// acquisition deadline: an advisory file lock or a SQLite database here,
     /// or either on a remote owner, which reports it as
-    /// [`LOCK_BUSY_ERROR_CODE`]. Nothing was decided under the lock, so the
-    /// same call can succeed once its holder lets go.
+    /// [`RemoteToolCode::LockBusy`]. Nothing was decided under the lock, so
+    /// the same call can succeed once its holder lets go.
     ///
     /// Answered from the variant alone, like
     /// [`Self::is_readonly_or_access_failure`]: a SQLite busy or locked
     /// result is classified where the `rusqlite::Error` is translated.
     pub fn is_lock_busy(&self) -> bool {
-        match self {
-            Self::FileLockTimeout(_) | Self::SqliteContention(_) | Self::StorageLockBusy { .. } => {
-                true
-            }
-            Self::RemoteTool { code, .. } => code == LOCK_BUSY_ERROR_CODE,
-            _ => false,
-        }
+        matches!(
+            self,
+            Self::FileLockTimeout(_)
+                | Self::SqliteContention(_)
+                | Self::StorageLockBusy { .. }
+                | Self::RemoteTool {
+                    code: RemoteToolCode::LockBusy,
+                    ..
+                }
+        )
     }
 
     /// Whether a supervised operation exceeded its deadline: a process
@@ -305,7 +308,7 @@ impl OrbitError {
 /// The stable tool error code for a call that lost only to a lock-wait
 /// deadline ([`OrbitError::is_lock_busy`]). Retryable: unlike
 /// `internal_error`, it says the call can succeed unchanged later.
-pub const LOCK_BUSY_ERROR_CODE: &str = "lock_busy";
+pub const LOCK_BUSY_ERROR_CODE: &str = RemoteToolCode::LockBusy.as_str();
 
 /// Whether an error's text says it lost only to a lock-wait deadline, for an
 /// error that reached this process as text rather than as a typed

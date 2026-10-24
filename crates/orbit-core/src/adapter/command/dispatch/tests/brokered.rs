@@ -447,6 +447,6 @@ fn a_backend_answering_with_a_listener_code_is_audited_once_by_the_broker() {
     let OrbitError::RemoteTool { code, payload, .. } = &error else {
         panic!("a structured broker error: {error:?}");
     };
-    assert_eq!(code, "plugin_broker_call_failed", "{payload}");
+    assert_eq!(code.as_str(), "plugin_broker_call_failed", "{payload}");
     assert_eq!(payload["retryable"], false, "{payload}");
 }

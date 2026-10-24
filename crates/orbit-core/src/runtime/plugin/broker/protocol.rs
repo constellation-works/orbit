@@ -199,7 +199,10 @@ pub(crate) fn call_error_response(error: &OrbitError) -> Vec<u8> {
             message,
             payload,
         } => {
-            let code = payload.get("code").and_then(Value::as_str).unwrap_or(code);
+            let code = payload
+                .get("code")
+                .and_then(Value::as_str)
+                .unwrap_or(code.as_str());
             let message = payload
                 .get("message")
                 .and_then(Value::as_str)

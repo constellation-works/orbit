@@ -8,21 +8,21 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, RemoteToolCode};
 use serde_json::{Value, json};
 
 use super::protocol::{
     FrameError, MAX_REQUEST_BYTES, SCHEMA_VERSION, is_listener_code, read_frame, write_frame,
 };
 
-const UNAVAILABLE: &str = "plugin_broker_unavailable";
+const UNAVAILABLE: &str = RemoteToolCode::PluginBrokerUnavailable.as_str();
 const RESPONSE_BYTES: u32 = 4 * 1024 * 1024;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(310);
 
 fn unavailable(message: impl Into<String>) -> OrbitError {
     let message = message.into();
     OrbitError::RemoteTool {
-        code: UNAVAILABLE.to_string(),
+        code: RemoteToolCode::PluginBrokerUnavailable,
         payload: json!({"code": UNAVAILABLE, "message": message, "retryable": false}),
         message,
     }
@@ -182,7 +182,7 @@ pub(crate) fn forward_call_with_status(
                 "plugin tool"
             };
             let error = OrbitError::RemoteTool {
-                code: code.to_string(),
+                code: code.into(),
                 message: format!("{kind} '{tool}' failed: {message}"),
                 payload,
             };

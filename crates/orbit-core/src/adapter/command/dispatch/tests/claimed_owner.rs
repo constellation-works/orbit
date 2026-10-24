@@ -57,7 +57,7 @@ fn refused(route: Option<ClaimedOwnerRoute>) -> OrbitError {
 
 fn route_unavailable(error: &OrbitError) -> bool {
     matches!(error, OrbitError::RemoteTool { code, payload, .. }
-        if code == OWNER_ROUTE_UNAVAILABLE_ERROR_CODE
+        if code.as_str() == OWNER_ROUTE_UNAVAILABLE_ERROR_CODE
             && payload["code"] == OWNER_ROUTE_UNAVAILABLE_ERROR_CODE)
 }
 

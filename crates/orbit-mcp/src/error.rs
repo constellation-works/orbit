@@ -1,4 +1,4 @@
-use orbit_common::{LOCK_BUSY_ERROR_CODE, NotFoundKind, OrbitError};
+use orbit_common::{LOCK_BUSY_ERROR_CODE, NotFoundKind, OrbitError, RemoteToolCode};
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
 
@@ -83,7 +83,7 @@ fn error_code(err: &OrbitError) -> &str {
             | NotFoundKind::Activity
             | NotFoundKind::DesignFeature
             | NotFoundKind::AgentSession
-            | NotFoundKind::Workspace => "not_found",
+            | NotFoundKind::Workspace => const { RemoteToolCode::NotFound.as_str() },
         },
         OrbitError::PolicyDenied(_) => "policy_denied",
         OrbitError::CapabilityDenied(_) => "capability_denied",
@@ -95,7 +95,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::UnhealthyCheckout(_) => "unhealthy_checkout",
         OrbitError::ToolNotOnThisHost(_) => "tool_not_on_this_host",
         OrbitError::CapabilityRefused(_) => "capability_refused",
-        OrbitError::ProtocolSkew(_) => "protocol_skew",
+        OrbitError::ProtocolSkew(_) => const { RemoteToolCode::ProtocolSkew.as_str() },
         OrbitError::HostRegistry { code, .. } => code.as_str(),
         OrbitError::PluginDisabledInWorkspace { .. } => "plugin_disabled_in_workspace",
         OrbitError::PluginDisabledOnHost { .. } => "plugin_disabled_on_host",

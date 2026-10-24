@@ -54,13 +54,10 @@ pub(super) fn unreachable(destination: &Destination, reason: String) -> OrbitErr
 
 /// Preserve a destination's structured tool error as-is.
 pub(super) fn remote_tool_error(destination: &Destination, payload: &Value) -> OrbitError {
-    let code = payload["code"]
-        .as_str()
-        .unwrap_or("execution_failed")
-        .to_string();
+    let code = payload["code"].as_str().unwrap_or("execution_failed");
     let message = payload["message"].as_str().unwrap_or_default();
     OrbitError::RemoteTool {
-        code,
+        code: code.into(),
         message: format!("{}: {message}", destination.machine_id),
         payload: payload.clone(),
     }

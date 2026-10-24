@@ -129,7 +129,7 @@ impl DestinationProbe for ScriptedProbe {
             let message = "session ended before answering 'initialize'; ssh stderr: error: store \
                            error: database is locked";
             return Err(OrbitError::RemoteTool {
-                code: orbit_common::LOCK_BUSY_ERROR_CODE.to_string(),
+                code: orbit_common::RemoteToolCode::LockBusy,
                 message: format!("{}: {message}", destination.machine_id),
                 payload: serde_json::json!({
                     "code": orbit_common::LOCK_BUSY_ERROR_CODE,

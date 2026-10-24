@@ -282,6 +282,84 @@ impl std::fmt::Display for HostRegistryCode {
     }
 }
 
+/// The stable machine code of an [`OrbitError::RemoteTool`]: what a remote
+/// owner, plugin backend or broker answered with.
+///
+/// Named variants are exactly the codes Orbit decides on; any other code is
+/// kept verbatim in [`Self::Other`]. Parse a received code once with
+/// [`From`], which never yields `Other` for a named spelling, then match the
+/// variant. It serializes, displays and debug-prints as the received string,
+/// so every wire spelling round-trips byte-for-byte.
+///
+/// [`OrbitError::RemoteTool`]: super::OrbitError::RemoteTool
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum RemoteToolCode {
+    /// The call lost only to a lock-wait deadline; it can succeed unchanged
+    /// later.
+    LockBusy,
+    /// The requested record does not exist on the remote.
+    NotFound,
+    /// The remote's protocol contract differs from this build's.
+    ProtocolSkew,
+    /// The call could not reach the plugin broker.
+    PluginBrokerUnavailable,
+    /// Any other code, exactly as received.
+    Other(String),
+}
+
+impl RemoteToolCode {
+    const NAMED: [Self; 4] = [
+        Self::LockBusy,
+        Self::NotFound,
+        Self::ProtocolSkew,
+        Self::PluginBrokerUnavailable,
+    ];
+
+    /// The wire spelling of this code.
+    pub const fn as_str(&self) -> &str {
+        match self {
+            Self::LockBusy => "lock_busy",
+            Self::NotFound => "not_found",
+            Self::ProtocolSkew => "protocol_skew",
+            Self::PluginBrokerUnavailable => "plugin_broker_unavailable",
+            Self::Other(code) => code.as_str(),
+        }
+    }
+}
+
+impl From<String> for RemoteToolCode {
+    fn from(code: String) -> Self {
+        Self::NAMED
+            .into_iter()
+            .find(|named| named.as_str() == code)
+            .unwrap_or(Self::Other(code))
+    }
+}
+
+impl From<&str> for RemoteToolCode {
+    fn from(code: &str) -> Self {
+        Self::from(code.to_string())
+    }
+}
+
+impl std::fmt::Display for RemoteToolCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::fmt::Debug for RemoteToolCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self.as_str(), f)
+    }
+}
+
+impl Serialize for RemoteToolCode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
 /// Facts certified when conflict recovery leaves a candidate on its covering base.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CandidateAbsorbed {
