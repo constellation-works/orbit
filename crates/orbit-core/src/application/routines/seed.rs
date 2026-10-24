@@ -24,8 +24,9 @@
 //! in the state trigger's owner. Seeded routines are disabled when written;
 //! they exist so a fresh workspace gets reviewable, opt-in schedules without
 //! silently enabling unattended work. The one exception is
-//! `crew_performance_refresh`, seeded enabled because its action no-ops
-//! without scanning while `workflow.crew_performance` is `off`.
+//! `crew_performance_refresh`, seeded enabled because, while
+//! `workflow.crew_performance` is `off`, its action skips the scan and
+//! writes no snapshot (it still records a job run each hour).
 //!
 //! Provenance is byte-exact first and shape-aware second. The manifest records
 //! the digest Orbit last wrote; a file that still matches is Orbit's. A file

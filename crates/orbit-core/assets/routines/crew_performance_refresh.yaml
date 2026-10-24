@@ -1,7 +1,7 @@
 # Hourly crew-performance snapshot refresh. Seeded enabled, unlike the
-# other defaults: the refresh no-ops without scanning while
-# `workflow.crew_performance` is `off` (the default), so an enabled routine
-# costs nothing until the feature is switched on, and then the snapshot a
+# other defaults: while `workflow.crew_performance` is `off` (the default)
+# the refresh skips the scan and writes no snapshot (it still records a
+# job run each hour), and once the feature is switched on the snapshot a
 # draw reads is never more than an hour old.
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__

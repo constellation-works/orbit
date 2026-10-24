@@ -184,8 +184,8 @@ impl OrbitRuntime {
     /// Rebuild this workspace's crew-performance snapshot from a fresh scan
     /// over `workflow.crew_performance_window_days`, replacing the stored
     /// one atomically. With `workflow.crew_performance` off this does not
-    /// scan and writes nothing, so the hourly routine costs nothing in workspaces
-    /// that do not use the feature.
+    /// scan and writes no snapshot in workspaces that do not use the
+    /// feature (the hourly routine still records a job run).
     pub fn refresh_crew_performance_snapshot(&self) -> Result<Value, OrbitError> {
         if !self.crew_performance().is_on() {
             return Ok(json!({ "skipped": "crew_performance_off" }));
@@ -246,8 +246,8 @@ impl OrbitRuntime {
 
     /// The readiness view of the snapshot: its metadata when one is stored,
     /// plus the unusable reason when a draw would ignore it. Advisory, so a
-    /// store that cannot be read reports the error beside `missing` rather
-    /// than failing readiness.
+    /// store that cannot be read reports `unreadable` beside the error
+    /// rather than failing readiness, so it is not confused with `missing`.
     pub fn crew_performance_readiness(&self) -> Value {
         let mode = self.crew_performance().as_str();
         let stored = (|runtime: &Self| -> Result<_, OrbitError> {
@@ -283,7 +283,7 @@ impl OrbitRuntime {
             Err(error) => json!({
                 "mode": mode,
                 "snapshot": Value::Null,
-                "unusable_reason": "missing",
+                "unusable_reason": "unreadable",
                 "error": error.to_string(),
             }),
         }
