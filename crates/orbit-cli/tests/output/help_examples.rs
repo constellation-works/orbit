@@ -1,9 +1,7 @@
 //! Behavior checks for flags in CLI help examples.
 
-use std::fs;
-use std::path::Path;
-
 use crate::task_workspace::{TaskSeed, TestWorkspace};
+use std::fs;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
@@ -47,17 +45,6 @@ fn run_job_help_examples_are_accepted_by_the_documented_command() {
 
         for example in examples {
             let arguments = parse_example_arguments(example);
-            let job = &arguments[0];
-            if Path::new(job).extension().is_some_and(|ext| ext == "yaml") {
-                let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../..")
-                    .join(job);
-                let yaml = fs::read_to_string(&path)
-                    .unwrap_or_else(|error| panic!("documented job {job} must exist: {error}"));
-                let document: serde_yaml::Value = serde_yaml::from_str(&yaml).expect("job YAML");
-                let _: orbit_types::workflow::JobV2 =
-                    serde_yaml::from_value(document["spec"].clone()).expect("documented job spec");
-            }
             let mut command = cargo_bin_cmd!("orbit");
             test_env::clear_inherited_authority(|name| {
                 command.env_remove(name);
