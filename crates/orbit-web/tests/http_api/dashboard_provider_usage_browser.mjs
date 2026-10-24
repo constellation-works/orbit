@@ -276,6 +276,53 @@ try {
     await page.keyboard.press('Escape');
   }
 
+  // ---- Resizing across 1900px with the all-providers dialog open: the open
+  // state follows the chip that is now on screen, and an unchanged poll keeps it there.
+  const allChips = () => page.evaluate(() => [...document.querySelectorAll('#provider-usage-chips [data-usage-key="*"]')]
+    .map(node => ({ summary: node.classList.contains('provider-usage-summary'), visible: node.getClientRects().length > 0, expanded: node.getAttribute('aria-expanded') })));
+  const assertOpenOnVisible = async step => {
+    const state = await allChips();
+    assert.equal(state.length, 2, `the summary and +N more chips both exist ${step}`);
+    for (const node of state) assert.equal(node.expanded, node.visible ? 'true' : 'false', `aria-expanded is on the visible chip only ${step}`);
+  };
+  const unchangedPoll = async () => {
+    // The host poll runs every five seconds; the payload is the same override.
+    await page.waitForResponse(response => response.url().endsWith('/api/host/resources'), { timeout: 15000 });
+    await settle(250);
+  };
+
+  // Open from +N more at 1920px, then narrow past the breakpoint.
+  await load(1920, () => document.querySelectorAll('#provider-usage-chips .provider-usage-item').length === 4);
+  await chip('*').click();
+  assert.equal(await open(), true);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await settle(300);
+  await shoot('provider-resize-narrow-dark-1440.png', 1440, 560);
+  assert.equal(await open(), true, 'the dialog stays open across the breakpoint');
+  await assertOpenOnVisible('after narrowing');
+  const narrowed = await dialog.boundingBox();
+  const summaryBox = await chip('*').boundingBox();
+  assert.ok(narrowed.y >= summaryBox.y + summaryBox.height - 1, 'the dialog sits under the summary chip after narrowing');
+  await unchangedPoll();
+  assert.equal(await open(), true);
+  await assertOpenOnVisible('after an unchanged poll');
+  await page.keyboard.press('Escape');
+
+  // Open from the summary chip below 1900px, then widen past the breakpoint.
+  await load(1440, () => document.querySelectorAll('#provider-usage-chips .provider-usage-summary').length === 1);
+  await chip('*').click();
+  assert.equal(await open(), true);
+  await page.setViewportSize({ width: 1920, height: 900 });
+  await settle(300);
+  await shoot('provider-resize-wide-dark-1920.png', 1920, 560);
+  assert.equal(await open(), true, 'the dialog stays open across the breakpoint');
+  await assertOpenOnVisible('after widening');
+  await unchangedPoll();
+  assert.equal(await open(), true);
+  await assertOpenOnVisible('after an unchanged poll');
+  await page.keyboard.press('Escape');
+  assert.equal(await open(), false);
+
   // Touch: a tap toggles.
   const touch = await browser.newContext({ viewport: { width: 375, height: 800 }, hasTouch: true, isMobile: true });
   const phone = await touch.newPage();
