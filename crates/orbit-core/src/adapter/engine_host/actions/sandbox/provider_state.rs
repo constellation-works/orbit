@@ -1,10 +1,11 @@
 use std::path::{Path, PathBuf};
 
+use orbit_common::fs::physical::canonicalize_existing_prefix_checked;
 use orbit_engine::DispatchError;
 use orbit_types::policy::ResolvedFsProfile;
 
 use super::resolve::append_unique_modify_root;
-use super::runtime_paths::resolved_existing_ancestor;
+use super::runtime_paths::linux_path_inspection_error;
 
 pub(super) fn append_linux_provider_state_roots(
     provider: &str,
@@ -128,7 +129,9 @@ pub(super) fn validated_linux_provider_state_root(
     // Resolve the deepest part of the path that already exists, so a provider
     // directory that is itself a symlink to an existing directory validates
     // against its real destination.
-    let Some(validated) = resolved_existing_ancestor(path)? else {
+    let Some(validated) = canonicalize_existing_prefix_checked(path)
+        .map_err(|error| linux_path_inspection_error(path, error))?
+    else {
         return Err(DispatchError::CliInvocationPermanent(format!(
             "Linux provider state root `{}` has no existing ancestor",
             path.display()

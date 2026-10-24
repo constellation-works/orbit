@@ -59,7 +59,7 @@ The implicit `unrestricted` profile appears only when an activity omitted `fsPro
 4. Walk rules in order and record the most recent match against the normalized workspace-relative path. Later matches override earlier ones.
 5. Use the last match's negation flag. If no rule matched but a positive rule exists, deny with `<no matching rule>`; if only negated rules exist, deny with `[]`.
 
-Path normalization (`normalize_path`) trims, flips slashes, strips `./` prefixes, and rejects absolute paths, `~`-anchored paths, and parent-directory traversal anywhere in the component list ([T20260509-27]). Callers canonicalize first (via `orbit_policy::resolve_symlinks` / `PolicyEngine::check_resolved`) and then express the path workspace-relative.
+Path normalization (`normalize_path`) trims, flips slashes, strips `./` prefixes, and rejects absolute paths, `~`-anchored paths, and parent-directory traversal anywhere in the component list ([T20260509-27]). Callers canonicalize first (via `orbit_common::fs::physical::resolve_symlinks` / `PolicyEngine::check_resolved`) and then express the path workspace-relative. `orbit_policy::resolve_symlinks` remains as a compatibility re-export.
 
 The glob translator supports `*`, `**`, `?`, and `<prefix>/**`. It is intentionally narrower than POSIX glob syntax.
 

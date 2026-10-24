@@ -13,6 +13,10 @@ use thiserror::Error;
 
 use crate::OrbitError;
 
+/// Compatibility path; the definition lives with its siblings in
+/// [`crate::fs::physical`].
+pub use super::physical::canonicalize_existing_prefix;
+
 /// Error returned when a selector or legacy path-like scope cannot be parsed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Error)]
 #[error("invalid selector `{input}`: {reason}")]
@@ -528,35 +532,6 @@ fn normalize_workspace_anchor(
             ),
         })?;
     Ok((relative, contained))
-}
-
-/// Canonicalize the longest existing ancestor, then append the missing tail.
-///
-/// Returns the original path if no ancestor can be canonicalized.
-pub fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
-    if let Ok(canonical) = path.canonicalize() {
-        return canonical;
-    }
-
-    let mut missing = Vec::new();
-    let mut ancestor = path;
-    while let Some(parent) = ancestor.parent() {
-        if parent == ancestor {
-            break;
-        }
-        if let Some(name) = ancestor.file_name() {
-            missing.push(name.to_os_string());
-        }
-        if let Ok(canonical) = parent.canonicalize() {
-            let mut resolved = canonical;
-            for name in missing.iter().rev() {
-                resolved.push(name);
-            }
-            return resolved;
-        }
-        ancestor = parent;
-    }
-    path.to_path_buf()
 }
 
 fn normalize_path_text(raw: &str) -> Result<String, String> {
