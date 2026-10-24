@@ -81,6 +81,96 @@ try {
     await page.waitForFunction(w => Math.abs(document.querySelector('.task-detail-pane').getBoundingClientRect().width - w) <= 1, width);
   };
   const block = () => page.locator('#detail-CTX-1 .field-block').filter({ has: page.locator('.file-list') });
+
+  const checkRowCopy = async (rowLocator, description, { expectPill = false, expectCompact = true } = {}) => {
+    await rowLocator.hover();
+    const data = await rowLocator.evaluate(node => {
+      const copy = node.querySelector('.cf-copy');
+      const link = node.querySelector('.context-selector');
+      const base = node.querySelector('.selector-base');
+      const pill = node.querySelector('.cf-pill');
+      const copyBox = copy.getBoundingClientRect();
+      const linkBox = link.getBoundingClientRect();
+      const baseBox = base.getBoundingClientRect();
+      const pillBox = pill ? pill.getBoundingClientRect() : null;
+      const copyOpacity = getComputedStyle(copy).opacity;
+      const rowBox = node.getBoundingClientRect();
+      return {
+        copyBox,
+        linkBox,
+        baseBox,
+        pillBox,
+        copyOpacity,
+        rowHeight: rowBox.height,
+      };
+    });
+    assert.equal(data.copyOpacity, '1', `${description}: copy button visible on hover`);
+    assert(data.copyBox.left >= data.linkBox.right - 0.5,
+      `${description}: copy button (left ${data.copyBox.left}) does not overlap link (right ${data.linkBox.right})`);
+    assert(data.copyBox.left >= data.baseBox.right - 0.5,
+      `${description}: copy button (left ${data.copyBox.left}) does not overlap basename (right ${data.baseBox.right})`);
+    if (expectPill) {
+      assert(data.pillBox, `${description}: contention pill exists`);
+      assert(data.copyBox.left >= data.pillBox.right - 0.5,
+        `${description}: copy button (left ${data.copyBox.left}) does not overlap contention pill (right ${data.pillBox.right})`);
+    }
+    if (expectCompact) {
+      assert(data.rowHeight <= 28, `${description}: compact row height (${data.rowHeight}px <= 28px)`);
+    }
+    return data;
+  };
+
+  const checkRowCopyFocused = async (rowLocator, description, { expectPill = false } = {}) => {
+    const copyBtn = rowLocator.locator('.cf-copy');
+    await copyBtn.focus();
+    const data = await rowLocator.evaluate(node => {
+      const copy = node.querySelector('.cf-copy');
+      const link = node.querySelector('.context-selector');
+      const base = node.querySelector('.selector-base');
+      const pill = node.querySelector('.cf-pill');
+      const copyBox = copy.getBoundingClientRect();
+      const linkBox = link.getBoundingClientRect();
+      const baseBox = base.getBoundingClientRect();
+      const pillBox = pill ? pill.getBoundingClientRect() : null;
+      const copyOpacity = getComputedStyle(copy).opacity;
+      return {
+        copyBox,
+        linkBox,
+        baseBox,
+        pillBox,
+        copyOpacity,
+        isFocused: document.activeElement === copy,
+      };
+    });
+    assert(data.isFocused, `${description}: copy button is focused`);
+    assert.equal(data.copyOpacity, '1', `${description}: copy button visible on focus`);
+    assert(data.copyBox.left >= data.linkBox.right - 0.5,
+      `${description}: focused copy button (left ${data.copyBox.left}) does not overlap link (right ${data.linkBox.right})`);
+    assert(data.copyBox.left >= data.baseBox.right - 0.5,
+      `${description}: focused copy button (left ${data.copyBox.left}) does not overlap basename (right ${data.baseBox.right})`);
+    if (expectPill) {
+      assert(data.pillBox, `${description}: contention pill exists`);
+      assert(data.copyBox.left >= data.pillBox.right - 0.5,
+        `${description}: focused copy button (left ${data.copyBox.left}) does not overlap contention pill (right ${data.pillBox.right})`);
+    }
+    return data;
+  };
+
+  const checkKeyboardTab = async (rowLocator, description, expectedSelector) => {
+    await rowLocator.locator('.context-selector').focus();
+    await page.keyboard.press('Tab');
+    const activeInfo = await page.evaluate(() => {
+      const el = document.activeElement;
+      return {
+        isCopy: el && el.classList.contains('cf-copy'),
+        ariaLabel: el ? el.getAttribute('aria-label') : null,
+        opacity: el ? getComputedStyle(el).opacity : null,
+      };
+    });
+    assert(activeInfo.isCopy, `${description}: Tab reached copy button`);
+    assert.equal(activeInfo.opacity, '1', `${description}: copy button visible when focused via Tab`);
+    assert.equal(activeInfo.ariaLabel, `Copy ${expectedSelector}`, `${description}: copy button has selector aria-label`);
+  };
   await setPaneWidth(560);
   await page.locator('#detail-CTX-1').getByRole('button', { name: 'Flat paths', exact: true }).click();
   await page.locator('#detail-CTX-1 .file-list.cf-flat').waitFor();
@@ -97,6 +187,10 @@ try {
   assert(flat.clippedEllipsis, 'flat overflowing directory or basename ellipsizes at 560px');
   assert(flat.baseClient >= flat.baseScroll - 1, `flat basename stays whole at 560px (client ${flat.baseClient} vs scroll ${flat.baseScroll})`);
   assert(flat.dimScroll > flat.dimClient + 1 && flat.dimHeight <= 20, `flat directory ellipsizes on one line at 560px (client ${flat.dimClient} vs scroll ${flat.dimScroll}, height ${flat.dimHeight})`);
+  await checkRowCopy(page.locator('#detail-CTX-1 .cf-row').first(), 'flat contended 560px', { expectPill: true });
+  await checkRowCopyFocused(page.locator('#detail-CTX-1 .cf-row').first(), 'flat contended 560px focused', { expectPill: true });
+  await checkKeyboardTab(page.locator('#detail-CTX-1 .cf-row').first(), 'flat contended 560px', selector);
+  await page.locator('#detail-CTX-1 .cf-row').first().hover();
   await block().screenshot({ path: path.join(evidence, 'context-files-flat-dark-560.png'), animations: 'disabled' });
   await page.locator('#detail-CTX-1').getByRole('button', { name: 'By folder', exact: true }).click();
   await page.locator('#detail-CTX-1 .file-list.cf-grouped').waitFor();
@@ -110,13 +204,22 @@ try {
   assert.equal(grouped.baseText, 'provider_state.rs');
   assert.equal(grouped.textOverflow, 'ellipsis', 'grouped basename ellipsizes instead of hard-clipping');
   assert(grouped.baseClient >= 80, `grouped basename stays identifiable at 375px (client ${grouped.baseClient})`);
+  await checkRowCopy(page.locator('#detail-CTX-1 .cf-row').first(), 'grouped contended 375px', { expectPill: true, expectCompact: false });
+  await page.locator('#detail-CTX-1 .cf-row').first().hover();
   await block().screenshot({ path: path.join(evidence, 'context-files-grouped-dark-375.png'), animations: 'disabled' });
   await page.locator('#detail-CTX-1').getByRole('button', { name: 'Flat paths', exact: true }).click();
   await page.locator('#detail-CTX-1 .file-list.cf-flat').waitFor();
+  await setPaneWidth(375);
+  await checkRowCopy(page.locator('#detail-CTX-1 .cf-row').first(), 'flat contended 375px', { expectPill: true, expectCompact: false });
+  await page.locator('#detail-CTX-1 .cf-row').first().hover();
   await block().screenshot({ path: path.join(evidence, 'context-files-flat-dark-375.png'), animations: 'disabled' });
   await setPaneWidth(560);
   await page.locator('#detail-CTX-1').getByRole('button', { name: 'By folder', exact: true }).click();
   await page.locator('#detail-CTX-1 .file-list.cf-grouped').waitFor();
+  await checkRowCopy(page.locator('#detail-CTX-1 .cf-row').first(), 'grouped contended 560px', { expectPill: true });
+  await checkRowCopyFocused(page.locator('#detail-CTX-1 .cf-row').first(), 'grouped contended 560px focused', { expectPill: true });
+  await checkKeyboardTab(page.locator('#detail-CTX-1 .cf-row').first(), 'grouped contended 560px', selector);
+  await page.locator('#detail-CTX-1 .cf-row').first().hover();
   await block().screenshot({ path: path.join(evidence, 'context-files-grouped-dark-560.png'), animations: 'disabled' });
   await page.locator('[data-key="task-CTX-3"] .title').click();
   await page.locator('#detail-CTX-3 [role="tab"][data-tab="context_files"]').click();
@@ -144,6 +247,12 @@ try {
     assert(row.linkScroll <= row.linkClient + 1, `long basename stays inside its link at ${width}px (link scroll ${row.linkScroll} vs client ${row.linkClient})`);
     assert(row.baseInsideLink, `long basename box stays inside its link at ${width}px`);
     assert(row.baseScroll > row.baseClient + 1 && row.textOverflow === 'ellipsis', `long basename ellipsizes instead of hard-clipping at ${width}px (client ${row.baseClient} vs scroll ${row.baseScroll}, text-overflow ${row.textOverflow})`);
+    await checkRowCopy(page.locator('#detail-CTX-3 .cf-row').first(), `long flat basename at ${width}px`, { expectPill: false, expectCompact: width > 480 });
+    await checkRowCopyFocused(page.locator('#detail-CTX-3 .cf-row').first(), `long flat basename at ${width}px focused`, { expectPill: false });
+    if (width === 560) {
+      await checkKeyboardTab(page.locator('#detail-CTX-3 .cf-row').first(), `long flat basename at ${width}px`, longSelector);
+    }
+    await page.locator('#detail-CTX-3 .cf-row').first().hover();
     await longBlock().screenshot({ path: path.join(evidence, `context-files-long-flat-dark-${width}.png`), animations: 'disabled' });
     longFlat.push({ width, ...row });
   }
@@ -152,7 +261,13 @@ try {
   assert.equal(longGrouped.baseText, longBasename);
   assert(longGrouped.baseInsideLink, 'long grouped basename stays inside its link at 375px');
   assert.equal(longGrouped.textOverflow, 'ellipsis', 'long grouped basename ellipsizes instead of hard-clipping');
+  await checkRowCopy(page.locator('#detail-CTX-3 .cf-row').first(), 'long grouped basename at 375px', { expectPill: false, expectCompact: false });
+  await checkRowCopyFocused(page.locator('#detail-CTX-3 .cf-row').first(), 'long grouped basename at 375px focused', { expectPill: false });
+  await page.locator('#detail-CTX-3 .cf-row').first().hover();
   await longBlock().screenshot({ path: path.join(evidence, 'context-files-long-grouped-dark-375.png'), animations: 'disabled' });
+  const longGrouped560 = await longRow({ view: 'By folder', cls: 'cf-grouped', width: 560 });
+  await checkRowCopy(page.locator('#detail-CTX-3 .cf-row').first(), 'long grouped basename at 560px', { expectPill: false, expectCompact: true });
+  await checkRowCopyFocused(page.locator('#detail-CTX-3 .cf-row').first(), 'long grouped basename at 560px focused', { expectPill: false });
   await page.locator('[data-key="task-CTX-4"] .title').click();
   await page.locator('#detail-CTX-4 [role="tab"][data-tab="context_files"]').click();
   await page.locator('#detail-CTX-4 .file-list').waitFor();
