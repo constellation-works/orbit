@@ -299,7 +299,7 @@ if {
   fail=1
 fi
 
-# Print every `super::` chain in production code under application module
+# Print every `super::` path or use-tree in production code under application module
 # `$2` that climbs out of it to `application` and names one of the
 # `|`-separated modules `$3`; exit nonzero when one is found.
 super_chains_into() {
@@ -311,7 +311,34 @@ import sys
 app = pathlib.Path(sys.argv[1])
 module = sys.argv[2]
 upper = set(sys.argv[3].split("|"))
-chain = re.compile(r"\b((?:super::)+)([a-z_][a-z0-9_]*)")
+token = re.compile(r"::|[a-zA-Z_][a-zA-Z_0-9]*|\S")
+
+
+def use_tree(tokens, index, prefix=()):
+    """Expand relative paths, carrying the prefix through nested use groups."""
+    paths = []
+    while index + 1 < len(tokens) and tokens[index + 1][0] == "::":
+        prefix += (tokens[index][0],)
+        index += 2
+    if index < len(tokens) and tokens[index][0] == "{":
+        index += 1
+        while index < len(tokens) and tokens[index][0] != "}":
+            member_paths, index = use_tree(tokens, index, prefix)
+            paths.extend(member_paths)
+            if index < len(tokens) and tokens[index][0] == ",":
+                index += 1
+            else:
+                break
+        if index < len(tokens) and tokens[index][0] == "}":
+            index += 1
+    elif index < len(tokens):
+        paths.append(prefix + (tokens[index][0],))
+        index += 1
+        if index < len(tokens) and tokens[index][0] == "as":
+            index += 2
+    return paths, index
+
+
 failed = False
 for path in sorted((app / module).rglob("*.rs")):
     rel = path.relative_to(app)
@@ -320,12 +347,25 @@ for path in sorted((app / module).rglob("*.rs")):
     parts = ["application", *rel.with_suffix("").parts]
     if parts[-1] == "mod":
         parts.pop()
-    for number, line in enumerate(path.read_text().splitlines(), 1):
-        for match in chain.finditer(line):
-            ups = match.group(1).count("super::")
-            if parts[: len(parts) - ups] == ["application"] and match.group(2) in upper:
-                print(f"{path}:{number}:{line}")
+    source = path.read_text()
+    tokens = [(match.group(), match.start()) for match in token.finditer(source)]
+    index = 0
+    while index + 1 < len(tokens):
+        if tokens[index][0] != "super" or tokens[index + 1][0] != "::":
+            index += 1
+            continue
+        start = tokens[index][1]
+        paths, index = use_tree(tokens, index)
+        for segments in paths:
+            ups = 0
+            while ups < len(segments) and segments[ups] == "super":
+                ups += 1
+            if (parts[: len(parts) - ups] == ["application"]
+                    and ups < len(segments) and segments[ups] in upper):
+                number = source.count("\n", 0, start) + 1
+                print(f"{path}:{number}:{source.splitlines()[number - 1]}")
                 failed = True
+                break
 sys.exit(1 if failed else 0)
 PY
 }
