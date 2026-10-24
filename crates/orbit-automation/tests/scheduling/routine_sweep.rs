@@ -11,7 +11,7 @@ use orbit_automation::routines::sweep::{
 use orbit_common::OrbitError;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_store::{RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, Store};
-use orbit_types::workflow::JobRunState;
+use orbit_types::workflow::{JobRunState, automation::AutomationDiagnostic};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -101,6 +101,23 @@ impl RoutineDispatch for FakeDispatch {
             .get(run_id)
             .copied()
             .unwrap_or(RunOwnerLiveness::Stopped)
+    }
+
+    fn evaluate_delivery(
+        &self,
+        _routine: &LoadedRoutine,
+        _dry_run: bool,
+        _now: DateTime<Utc>,
+    ) -> Result<AutomationDiagnostic, OrbitError> {
+        Ok(AutomationDiagnostic {
+            reason: "debouncing".into(),
+            state: None,
+            receipts: Vec::new(),
+            waivers: Vec::new(),
+            ownership: None,
+            batch: Vec::new(),
+            refusals: Vec::new(),
+        })
     }
 }
 
@@ -861,4 +878,109 @@ fn skip_records_a_bounded_batch_before_the_next_natural_fire() {
         reports[0].slot.as_deref(),
         Some(ts(2026, 1, 1, 2, 0, 0).to_rfc3339().as_str())
     );
+}
+
+/// A state-triggered routine shaped like the seeded triage definitions.
+fn state_routine(name: &str, kind: &str) -> LoadedRoutine {
+    let yaml = format!(
+        r#"schemaVersion: 1
+name: {name}
+enabled: true
+trigger:
+  state:
+    kind: {kind}
+    owner_machine: hm_test
+    branch: agent-main
+    debounce_minutes: 2
+    max_wait_minutes: 10
+    max_items: 50
+    batch_size: 5
+    retries: 1
+    deadline_minutes: 90
+target: job:escalation_triage_pipeline
+policy:
+  timeout_minutes: 90
+  overlap: forbid
+  retries: {{ max: 1, backoff_minutes: 5 }}
+"#
+    );
+    LoadedRoutine {
+        definition: parse_routine_yaml(&yaml).expect("valid state routine yaml"),
+        origin: RoutineOrigin::Workspace,
+        source_workspace: "polaris".to_string(),
+        source_orbit_dir: PathBuf::from(SOURCE_DIR),
+        path: PathBuf::from(format!("{SOURCE_DIR}/routines/{name}.yaml")),
+    }
+}
+
+/// The seeded pilot-warning and blocked-task triage routines share
+/// `job:escalation_triage_pipeline` but watch different trigger kinds. Each
+/// owns its own consumer and member set, so enabling both runs both rather
+/// than skipping both as duplicate owners. [ORB-17918]
+#[test]
+fn state_routines_of_different_kinds_on_one_target_both_run() {
+    let store = Store::open_in_memory().expect("in-memory store");
+    let coll = collection(vec![
+        state_routine("pilot-warning-triage", "pilot_warnings_held"),
+        state_routine("blocked-task-triage", "block_escalated"),
+    ]);
+
+    let reports = run_sweep_core(
+        &store,
+        &coll,
+        &FakeDispatch::default(),
+        SweepOptions::default(),
+        ts(2026, 1, 1, 0, 0, 0),
+    )
+    .unwrap();
+
+    for report in &reports {
+        assert_eq!(report.action, "state", "{} should evaluate", report.routine);
+        assert_eq!(report.reason.as_deref(), Some("debouncing"));
+    }
+}
+
+/// The migration guard keeps the cases it was written for: a temporal routine
+/// and a state routine on one target, or two state routines of one kind, still
+/// skip each other as duplicate owners. [ORB-11331]
+#[test]
+fn temporal_and_same_kind_state_routines_on_one_target_still_skip_as_duplicates() {
+    let store = Store::open_in_memory().expect("in-memory store");
+    let temporal_and_state = collection(vec![
+        routine_spec(
+            "temporal-triage",
+            "0 * * * *",
+            "skip",
+            "allow",
+            "escalation_triage_pipeline",
+            (0, 1),
+            30,
+        ),
+        state_routine("pilot-warning-triage", "pilot_warnings_held"),
+    ]);
+    let same_kind = collection(vec![
+        state_routine("pilot-warning-triage", "pilot_warnings_held"),
+        state_routine("pilot-warning-copy", "pilot_warnings_held"),
+    ]);
+
+    for coll in [temporal_and_state, same_kind] {
+        let reports = run_sweep_core(
+            &store,
+            &coll,
+            &FakeDispatch::default(),
+            SweepOptions::default(),
+            ts(2026, 1, 1, 0, 0, 0),
+        )
+        .unwrap();
+
+        for report in &reports {
+            assert_eq!(report.action, "skipped", "{}", report.routine);
+            assert_eq!(
+                report.reason.as_deref(),
+                Some("duplicate_routine_ownership"),
+                "{}",
+                report.routine
+            );
+        }
+    }
 }

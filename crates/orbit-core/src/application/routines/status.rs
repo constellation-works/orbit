@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use chrono::{DateTime, Local, Utc};
+use orbit_automation::routines::sweep::duplicate_ownership_skipped;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_common::protocol::yaml::parse_routine_yaml;
@@ -425,7 +426,13 @@ pub fn routine_statuses_with_providers(
 
     let mut statuses = Vec::with_capacity(collection.routines.len());
     let source_cache = crate::application::automation::SourceCache::default();
-    for routine in collection.routines {
+    // The sweep skips a duplicate owner before evaluating it, so its status says so.
+    let duplicate_owners: Vec<bool> = collection
+        .routines
+        .iter()
+        .map(|routine| duplicate_ownership_skipped(&collection.routines, routine))
+        .collect();
+    for (routine, duplicate_owner) in collection.routines.into_iter().zip(duplicate_owners) {
         let next_due = next_scheduled_occurrence(&routine.definition.trigger.cron, &now);
         let cron_fires =
             store.routine_recent_fires(&routine.definition.name, FIRE_HISTORY_LIMIT)?;
@@ -433,8 +440,37 @@ pub fn routine_statuses_with_providers(
         let paused_at = pauses
             .get(&routine.definition.name)
             .map(|pause| pause.paused_at.clone());
-        let automation=(routine.definition.trigger.deliveries_landed.is_some() || routine.definition.trigger.state.is_some()).then(|| {
-            discovered.entries.iter().find(|(_,runtime)|runtime.shared_root()==routine.source_orbit_dir).map_or_else(||serde_json::json!({"reason":"source_unavailable"}),|(_,runtime)|match crate::application::automation::inspect_routine_with_cache(runtime,&routine.definition,now_utc,&source_cache) {Ok(value)=>serde_json::json!(value),Err(error)=>serde_json::json!({"reason":"state_unavailable","error":error.to_string()})})
+        let automation = (routine.definition.trigger.deliveries_landed.is_some()
+            || routine.definition.trigger.state.is_some())
+        .then(|| {
+            discovered
+                .entries
+                .iter()
+                .find(|(_, runtime)| runtime.shared_root() == routine.source_orbit_dir)
+                .map_or_else(
+                    || serde_json::json!({"reason": "source_unavailable"}),
+                    |(_, runtime)| {
+                        match crate::application::automation::inspect_routine_with_cache(
+                            runtime,
+                            &routine.definition,
+                            now_utc,
+                            &source_cache,
+                        ) {
+                            Ok(mut value) => {
+                                if duplicate_owner {
+                                    // The sweep records this skip without admitting any batch.
+                                    value.reason = "duplicate_routine_ownership".into();
+                                    value.batch.clear();
+                                }
+                                serde_json::json!(value)
+                            }
+                            Err(error) => serde_json::json!({
+                                "reason": "state_unavailable",
+                                "error": error.to_string(),
+                            }),
+                        }
+                    },
+                )
         });
         let automation_fires = automation_fires(&discovered, &routine)?;
         let last_fire = newest_fire(

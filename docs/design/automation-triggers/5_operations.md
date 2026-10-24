@@ -785,9 +785,15 @@ cron file whose template-owned fields were hand-edited is preserved and
 reported. For any other routine, migration is an explicit edit of that
 definition: disable its old temporal owner, settle any existing run, and
 replace only that definition's trigger. Preserve the user's policy. Do not run
-both old and new definitions; a sweep preview reports
-`duplicate_routine_ownership` for enabled definitions sharing the same source
-and target when one uses state scheduling.
+both old and new definitions. A sweep preview reports
+`duplicate_routine_ownership` for an enabled definition whose enabled peer on
+the same source and target conflicts with it: a temporal (cron) routine and a
+state routine, or two state routines of the same trigger kind. Two state
+routines with different kinds on one target do not conflict, because each owns
+a distinct consumer and member set, so the seeded `pilot_warning_triage` and
+`blocked_task_triage` routines run side by side. `orbit routine show` and
+`list` report the same skip for a skipped state routine instead of the
+evaluator's dry-run reason, so it never reads as `debouncing`.
 
 ```yaml
 schemaVersion: 1
