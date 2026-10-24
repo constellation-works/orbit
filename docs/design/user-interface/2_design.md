@@ -17,7 +17,7 @@ This document describes the current Orbit UI implementation: the local dashboard
 
 ## 1. Dense Layout
 
-The dashboard favors wide, dense tables and panels over narrative screens. Tight spacing, small radii, and expandable sunken detail rows preserve hierarchy without hiding root lists. Analytics › Cost (`#analytics/cost`) shows managed-execution cost and token usage for the shared window: provider-reported USD, derived estimates, the comparable same-invocation population, normalized tokens, and model attribution. It is not an agent-family ranking. The family leaderboard, narrative strip, agent cards, and insights panel were removed [ORB-15921].
+The dashboard favors wide, dense tables and panels over narrative screens. Tight spacing, small radii, and expandable sunken detail rows preserve hierarchy without hiding root lists. Analytics › Cost (`#analytics/cost`) shows managed-execution cost and token usage for the shared window: provider-reported USD, derived estimates, the comparable same-invocation population, normalized tokens, and model attribution. A header band (title, window buttons, the managed-execution scope and the window range) sits above two tabs, Spend & tokens and Read-only exploration; the selected tab rides in the hash (`#analytics/cost?window=30d&tab=exploration`, no `tab` is Spend & tokens) and switching tabs rewrites the hash in place without a refetch. Dollar amounts show cents with thousands separators, and a non-zero amount under one cent reads `<$0.01`. It is not an agent-family ranking. The family leaderboard, narrative strip, agent cards, and insights panel were removed [ORB-15921].
 
 Window selectors are `role="tablist"` buttons with `aria-selected`, keyboard movement, and a visible focus ring [ORB-10873].
 
