@@ -10,7 +10,9 @@
 use std::collections::BTreeSet;
 
 use orbit_engine::DispatchError;
+use orbit_store::contracts::{TaskLockConflict, TaskLockHolder};
 use orbit_types::telemetry::AuditEventStatus;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -20,6 +22,103 @@ use crate::runtime::audit::system::{
 };
 use crate::runtime::task::locks::{workspace_orbit_dir, workspace_task_reservation_id};
 
+/// Parsed once where the rendered step input enters the dispatcher.
+#[derive(Deserialize)]
+pub(crate) struct GateStarvationInput {
+    #[serde(default, deserialize_with = "string_list")]
+    pub(crate) task_ids: Vec<String>,
+    #[serde(default)]
+    pub(crate) expired: bool,
+    #[serde(default)]
+    pub(crate) reservation: GateReservationInput,
+    #[serde(flatten)]
+    pub(crate) window: GateWindow,
+    pub(crate) max_wait_seconds: Option<f64>,
+    pub(crate) run_id: Option<String>,
+}
+
+/// Absence is the legacy flat input; null means the loop never polled.
+#[derive(Default)]
+pub(crate) enum GateReservationInput {
+    #[default]
+    Missing,
+    Unpolled,
+    Observed(Box<GateReservation>),
+}
+
+impl<'de> Deserialize<'de> for GateReservationInput {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Option::<GateReservation>::deserialize(deserializer)?
+            .map(|reservation| Self::Observed(Box::new(reservation)))
+            .unwrap_or(Self::Unpolled))
+    }
+}
+
+/// Preserve unconsumed grant metadata in the persisted reservation, including
+/// deferred footprints and publication details, even after releasing a late grant.
+#[derive(Deserialize, Serialize)]
+pub(crate) struct GateReservation {
+    #[serde(flatten)]
+    pub(crate) window: GateWindow,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reservation_id: Option<String>,
+    #[serde(flatten)]
+    metadata: serde_json::Map<String, Value>,
+}
+
+impl GateReservation {
+    pub(crate) fn unpolled(conflicts: Vec<TaskLockConflict>, waiting_on_deps: Vec<String>) -> Self {
+        Self {
+            window: GateWindow {
+                reserved: Some(TemplateReserved::Bool(false)),
+                conflicts: Some(conflicts),
+                waiting_on_deps: Some(waiting_on_deps),
+            },
+            reservation_id: None,
+            metadata: serde_json::Map::from_iter([(
+                "footprint_deferred".to_string(),
+                json!(false),
+            )]),
+        }
+    }
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+pub(crate) struct GateWindow {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reserved: Option<TemplateReserved>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) conflicts: Option<Vec<TaskLockConflict>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) waiting_on_deps: Option<Vec<String>>,
+}
+
+/// Templates can render the success flag as either a boolean or text. Keep
+/// its wire representation while interpreting it only at this boundary.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub(crate) enum TemplateReserved {
+    Bool(bool),
+    Text(String),
+    Other(Value),
+}
+
+impl Default for TemplateReserved {
+    fn default() -> Self {
+        Self::Other(Value::Null)
+    }
+}
+
+impl TemplateReserved {
+    pub(crate) fn granted(&self) -> bool {
+        match self {
+            Self::Bool(value) => *value,
+            Self::Text(value) => value.trim().parse().unwrap_or(false),
+            Self::Other(_) => false,
+        }
+    }
+}
+
 /// The gate's post-wait step. Runs on every gate run so later steps may read
 /// its output: a reserved window is `{deferred: false}`; an expired one is
 /// audited as `gate.starvation` and returned as the deferral `invoke_and_wait`
@@ -27,28 +126,36 @@ use crate::runtime::task::locks::{workspace_orbit_dir, workspace_task_reservatio
 pub(crate) fn gate_starvation_defer(
     runtime: &OrbitRuntime,
     action: &str,
-    input: &Value,
+    input: &GateStarvationInput,
 ) -> Result<Value, DispatchError> {
-    if reserved(input) {
+    if input
+        .window
+        .reserved
+        .as_ref()
+        .is_some_and(TemplateReserved::granted)
+    {
         return Ok(json!({ "deferred": false }));
     }
-    let task_ids = string_list(input.get("task_ids"));
-    let conflicts = input
-        .get("conflicts")
-        .cloned()
-        .unwrap_or(Value::Array(Vec::new()));
-    let max_wait_seconds = input.get("max_wait_seconds").and_then(Value::as_f64);
-    let conflicting_files = conflict_entries(&conflicts)
-        .filter_map(|entry| entry.get("file").and_then(Value::as_str))
-        .map(ToOwned::to_owned)
+    let task_ids = &input.task_ids;
+    let conflicts = input.window.conflicts.as_deref().unwrap_or_default();
+    let max_wait_seconds = input.max_wait_seconds;
+    let conflicting_files = conflicts
+        .iter()
+        .map(|conflict| conflict.file.clone())
         .collect::<BTreeSet<_>>();
-    // The gate can starve on either axis. Reporting only `conflicting_files`
-    // left a dependency-starved bundle with an empty list and no blocker
-    // named at all, so carry the last-observed unmet dependency IDs too.
-    let waiting_on_deps = string_list(input.get("waiting_on_deps"));
-    let mut blocking_task_ids = blocking_lock_holders(runtime, action, &conflicts)?;
+    let waiting_on_deps = input
+        .window
+        .waiting_on_deps
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|dependency| dependency.trim())
+        .filter(|dependency| !dependency.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    let mut blocking_task_ids = blocking_lock_holders(runtime, action, conflicts)?;
     blocking_task_ids.extend(waiting_on_deps.iter().cloned());
-    for task_id in &task_ids {
+    for task_id in task_ids {
         blocking_task_ids.remove(task_id);
     }
     let claim_holders = ClaimHolders::read(runtime);
@@ -86,36 +193,27 @@ pub(crate) fn gate_starvation_defer(
         "max_wait_seconds": max_wait_seconds,
         "detail": detail,
     });
-    record_starvation(runtime, action, input, &task_ids, &deferral)?;
+    record_starvation(
+        runtime,
+        action,
+        input.run_id.as_deref(),
+        task_ids,
+        &deferral,
+    )?;
     Ok(deferral)
 }
 
-/// Whether the wait loop's last reservation succeeded. The template renders
-/// the flag as a bool or, inside a larger string, as its text.
-fn reserved(input: &Value) -> bool {
-    match input.get("reserved") {
-        Some(Value::Bool(reserved)) => *reserved,
-        Some(Value::String(reserved)) => reserved.trim() == "true",
-        _ => false,
-    }
-}
-
-fn string_list(value: Option<&Value>) -> Vec<String> {
-    value
-        .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|entry| entry.as_str().map(str::trim))
-                .filter(|entry| !entry.is_empty())
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn conflict_entries(conflicts: &Value) -> impl Iterator<Item = &Value> {
-    conflicts.as_array().into_iter().flatten()
+fn string_list<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    Ok(value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
 }
 
 /// The tasks behind the last conflicts: a task lock names its task, and a
@@ -124,22 +222,18 @@ fn conflict_entries(conflicts: &Value) -> impl Iterator<Item = &Value> {
 fn blocking_lock_holders(
     runtime: &OrbitRuntime,
     action: &str,
-    conflicts: &Value,
+    conflicts: &[TaskLockConflict],
 ) -> Result<BTreeSet<String>, DispatchError> {
     let mut blocking = BTreeSet::new();
     let mut reservations = BTreeSet::new();
-    for conflict in conflict_entries(conflicts) {
-        let Some(holder) = conflict.get("held_by_id").and_then(Value::as_str) else {
-            continue;
-        };
-        match conflict.get("held_by").and_then(Value::as_str) {
-            Some("task") => {
-                blocking.insert(holder.to_string());
+    for conflict in conflicts {
+        match conflict.held_by {
+            TaskLockHolder::Task => {
+                blocking.insert(conflict.held_by_id.clone());
             }
-            Some("reservation") => {
-                reservations.insert(holder.to_string());
+            TaskLockHolder::Reservation => {
+                reservations.insert(conflict.held_by_id.clone());
             }
-            _ => {}
         }
     }
     if reservations.is_empty() {
@@ -175,13 +269,11 @@ fn blocking_lock_holders(
 fn record_starvation(
     runtime: &OrbitRuntime,
     action: &str,
-    input: &Value,
+    run_id: Option<&str>,
     task_ids: &[String],
     deferral: &Value,
 ) -> Result<(), DispatchError> {
-    let parent_run_id = input
-        .get("run_id")
-        .and_then(Value::as_str)
+    let parent_run_id = run_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);

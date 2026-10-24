@@ -13,5 +13,8 @@ mod results;
 pub(crate) use bundles::validate_bundles;
 pub(crate) use delivery::resolve_delivery_job;
 pub(crate) use gate_admission::{gate_admission_stop, wait_success_status};
-pub(crate) use gate_starvation::gate_starvation_defer;
+pub(crate) use gate_starvation::{
+    GateReservation, GateReservationInput, GateStarvationInput, TemplateReserved,
+    gate_starvation_defer,
+};
 pub(crate) use results::{pipeline_success_guard, record_pipeline_results_audit};

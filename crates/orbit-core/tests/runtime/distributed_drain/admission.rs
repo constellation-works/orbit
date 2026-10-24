@@ -2220,6 +2220,23 @@ fn a_wait_on_a_claimed_footprint_names_the_claim_and_a_starved_gate_defers() {
     let deferred = owner.run_deterministic("gate_starvation_defer", &json!({}), &json!({"task_ids": [free], "max_wait_seconds": 1, "expired": true, "reservation": reservation}), ToolContext::default()).unwrap();
     assert_eq!(deferred["deferred"], true);
     assert_eq!(deferred["reservation"]["reserved"], false);
+    let mut released = reservation.clone();
+    released["reserved"] = json!(false);
+    assert_eq!(
+        deferred["reservation"], released,
+        "late release preserves all grant metadata"
+    );
+    for reserved in [json!(true), json!(" true ")] {
+        let legacy = owner
+            .run_deterministic(
+                "gate_starvation_defer",
+                &json!({}),
+                &json!({"task_ids": [free], "reserved": reserved}),
+                ToolContext::default(),
+            )
+            .unwrap();
+        assert_eq!(legacy, json!({"deferred": false, "reservation": {}}));
+    }
     let locks = owner.run_tool("orbit.task.locks", json!({})).unwrap();
     assert!(
         locks["by_reservation"]

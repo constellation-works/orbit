@@ -32,15 +32,17 @@ use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
+use orbit_store::contracts::TaskLockConflict;
 use orbit_tools::ReservationOwnerContext;
 use orbit_types::workflow::JobRunState;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::job::JobRunListParams;
 use crate::runtime::task::locks::{
-    EmptyTaskSurfacePolicy, TaskLockIndex, parse_task_ids, reserve_deferred_footprint,
-    reserve_with_index, runs_holding_file_reservations,
+    EmptyTaskSurfacePolicy, ReservationOutcome, TaskLockIndex, parse_task_ids,
+    reserve_deferred_footprint, reserve_with_index, runs_holding_file_reservations,
 };
 
 /// The run input key the gate sets when it deferred the leaf's footprint.
@@ -61,6 +63,13 @@ const FOOTPRINT_TTL_SECONDS: u32 = 14400;
 /// The decision-only activity that edits nothing, so never waits on locks.
 const FINAL_RECOVERY_ACTIVITY: &str = "final_recovery";
 
+/// Publication metadata carried only by a deferred gate grant.
+#[derive(Serialize)]
+pub(crate) struct PublishedDelivery {
+    source_run_id: String,
+    pull_request: Option<String>,
+}
+
 impl OrbitRuntime {
     /// The reservation a gate takes for a resumed published delivery the
     /// ordinary reservation in `denied` refused, or `None` when `input` is
@@ -73,14 +82,15 @@ impl OrbitRuntime {
     pub(crate) fn deferred_footprint_reservation(
         &self,
         input: &Value,
-        denied: &Value,
+        denied: &ReservationOutcome,
         agent: Option<String>,
         model: Option<String>,
         owner: Option<ReservationOwnerContext>,
-    ) -> Result<Option<Value>, OrbitError> {
-        if denied["reserved"] == true
-            || input.get("delivery_job").and_then(Value::as_str) != Some("task_pr_pipeline")
-        {
+    ) -> Result<Option<(ReservationOutcome, PublishedDelivery)>, OrbitError> {
+        let ReservationOutcome::Denied { conflicts } = denied else {
+            return Ok(None);
+        };
+        if input.get("delivery_job").and_then(Value::as_str) != Some("task_pr_pipeline") {
             return Ok(None);
         }
         let task_ids = parse_task_ids(input)?;
@@ -90,19 +100,15 @@ impl OrbitRuntime {
         let Some(resume) = self.published_resume(&self.get_task(task_id)?)? else {
             return Ok(None);
         };
-        let mut output = reserve_deferred_footprint(
-            self,
-            input,
-            agent,
-            model,
-            owner,
-            denied["conflicts"].clone(),
-        )?;
-        output["published_delivery"] = json!({
-            "source_run_id": resume.source_run_id,
-            "pull_request": resume.pull_request,
-        });
-        Ok(Some(output))
+        let output =
+            reserve_deferred_footprint(self, input, agent, model, owner, conflicts.clone())?;
+        Ok(Some((
+            output,
+            PublishedDelivery {
+                source_run_id: resume.source_run_id,
+                pull_request: resume.pull_request,
+            },
+        )))
     }
 
     /// Before `activity_name` of `run_id` may edit, take the footprint its
@@ -167,9 +173,10 @@ impl OrbitRuntime {
                 &index,
                 EmptyTaskSurfacePolicy::Admit,
             )?;
-            if output["reserved"] == true {
-                return Ok(());
-            }
+            let conflicts = match output {
+                ReservationOutcome::Granted { .. } => return Ok(()),
+                ReservationOutcome::Denied { conflicts } => conflicts,
+            };
             let elapsed = started.elapsed();
             if elapsed >= wait {
                 return Err(OrbitError::Execution(format!(
@@ -177,7 +184,7 @@ impl OrbitRuntime {
                      delivery only once its context locks are free, and after {}s they are \
                      still held: {}",
                     elapsed.as_secs(),
-                    holders(&output["conflicts"])
+                    holders(&conflicts)
                 )));
             }
             if self
@@ -221,18 +228,10 @@ impl OrbitRuntime {
 }
 
 /// `file held by holder` for each conflict a refused reservation names.
-fn holders(conflicts: &Value) -> String {
+fn holders(conflicts: &[TaskLockConflict]) -> String {
     let named = conflicts
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|conflict| {
-            Some(format!(
-                "{} held by {}",
-                conflict["file"].as_str()?,
-                conflict["held_by_id"].as_str()?
-            ))
-        })
+        .iter()
+        .map(|conflict| format!("{} held by {}", conflict.file, conflict.held_by_id))
         .collect::<Vec<_>>();
     if named.is_empty() {
         "no holder was named".to_string()

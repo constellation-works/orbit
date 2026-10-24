@@ -26,7 +26,7 @@ use crate::application::task::pilot as task_pilot;
 use crate::application::task::{blocked_recovery, finding_verification_steps};
 use crate::application::workspace_auto;
 use crate::runtime::task::locks::{
-    EmptyTaskSurfacePolicy, TaskLockIndex, emit_expired_reservation_events,
+    EmptyTaskSurfacePolicy, ReservationOutcome, TaskLockIndex, emit_expired_reservation_events,
     merge_task_lock_conflicts, parse_task_ids, requested_task_files_indexed, reserve_with_index,
     task_lock_conflicts_indexed, workspace_orbit_dir, workspace_task_reservation_id,
 };
@@ -425,12 +425,10 @@ pub(crate) fn run_deterministic(
                     None,
                     action,
                 )?;
-                return Ok(serde_json::json!({
-                    "reserved": false,
-                    "waiting_on_deps": admission.waiting_on,
-                    "conflicts": [],
-                    "footprint_deferred": false,
-                }));
+                return Ok(ReservationOutcome::Denied {
+                    conflicts: Vec::new(),
+                }
+                .into_step_output(admission.waiting_on));
             }
 
             let task_ids = parse_task_ids(input)
@@ -450,7 +448,7 @@ pub(crate) fn run_deterministic(
             // A resumed published delivery adopts before it edits, so its
             // gate does not wait on the holders that refused it; the leaf
             // takes its footprint before its first edit.
-            if let Some(deferred) = runtime
+            let published_delivery = if let Some((deferred, publication)) = runtime
                 .deferred_footprint_reservation(
                     input,
                     &output,
@@ -461,25 +459,16 @@ pub(crate) fn run_deterministic(
                 .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?
             {
                 output = deferred;
-            }
-            // Always publish `waiting_on_deps` (empty here), `conflicts`
-            // (empty once reserved) and `footprint_deferred` so the gate
-            // pipeline's always-run starvation step and child dispatch can
-            // reference them unconditionally, whichever branch produced the
-            // output [ORB-15514].
-            if let Some(object) = output.as_object_mut() {
-                object
-                    .entry("waiting_on_deps")
-                    .or_insert_with(|| Value::Array(Vec::new()));
-                object
-                    .entry("conflicts")
-                    .or_insert_with(|| Value::Array(Vec::new()));
-                object
-                    .entry("footprint_deferred")
-                    .or_insert(Value::Bool(false));
-            }
+                Some(publication)
+            } else {
+                None
+            };
             let waiting_on_locks = waiting_locks_from_reserve_output(&output);
             update_run_waiting_reasons(runtime, input, None, non_empty(waiting_on_locks), action)?;
+            let mut output = output.into_step_output(Vec::new());
+            if let Some(publication) = published_delivery {
+                output["published_delivery"] = serde_json::json!(publication);
+            }
             Ok(output)
         }
         CoreDeterministicAction::ReleaseLocks => {
@@ -528,11 +517,16 @@ pub(crate) fn run_deterministic(
         // blocking tasks and the claims holding them, and returns a deferral
         // that ends the gate without a child, leaving the task in backlog.
         CoreDeterministicAction::GateStarvationDefer => {
-            let mut normalized = input.clone();
-            if let Some(reservation) = input.get("reservation") {
-                let reservation = if reservation.is_null() {
-                    // A zero/expired budget may run no body at all. Observe
-                    // blockers without ever acquiring a late reservation.
+            use pipeline_actions::{GateReservationInput, GateStarvationInput, TemplateReserved};
+
+            let mut gate: GateStarvationInput =
+                serde_json::from_value(input.clone()).map_err(|err| {
+                    DispatchError::action_failed(action, format!("parse gate input: {err}"))
+                })?;
+            match &gate.reservation {
+                GateReservationInput::Unpolled => {
+                    // A zero/expired budget observes blockers without ever
+                    // acquiring a late reservation.
                     let admission = dependency_admission_for_input(runtime, input)
                         .map_err(|err| DispatchError::action_failed(action, err.to_string()))?;
                     if !admission.unsatisfiable.is_empty() {
@@ -548,34 +542,36 @@ pub(crate) fn run_deterministic(
                         input,
                         tool_context.clone(),
                     )?;
-                    serde_json::json!({
-                        "reserved": false,
-                        "conflicts": conflicts["conflicts"],
-                        "waiting_on_deps": admission.waiting_on,
-                        "footprint_deferred": false,
-                    })
-                } else {
-                    reservation.clone()
-                };
-                for key in ["reserved", "conflicts", "waiting_on_deps"] {
-                    normalized[key] = reservation[key].clone();
+                    #[derive(serde::Deserialize)]
+                    struct ConflictCheckOutput {
+                        conflicts: Vec<orbit_store::contracts::TaskLockConflict>,
+                    }
+                    let conflicts: ConflictCheckOutput = serde_json::from_value(conflicts)
+                        .map_err(|err| DispatchError::action_failed(action, err.to_string()))?;
+                    gate.reservation = GateReservationInput::Observed(Box::new(
+                        pipeline_actions::GateReservation::unpolled(
+                            conflicts.conflicts,
+                            admission.waiting_on,
+                        ),
+                    ));
                 }
-                normalized["reservation"] = reservation;
+                GateReservationInput::Missing | GateReservationInput::Observed(_) => {}
             }
-            if input.get("expired").and_then(Value::as_bool) == Some(true)
-                && normalized["reserved"] == true
-            {
-                // A reservation already in flight can finish after its budget.
-                // Release that late grant before reporting a deferral; it must
-                // never authorize dispatch after expiry.
-                let reservation_id = normalized["reservation"]["reservation_id"]
-                    .as_str()
-                    .ok_or_else(|| {
-                        DispatchError::action_failed(
-                            action,
-                            "late reservation missing reservation_id".to_string(),
-                        )
-                    })?;
+            if let GateReservationInput::Observed(reservation) = &gate.reservation {
+                gate.window = reservation.window.clone();
+            }
+            // Only a boolean grant authorizes late-grant cleanup. Legacy
+            // text flags retain the template boundary's existing interpretation.
+            if gate.expired && matches!(gate.window.reserved, Some(TemplateReserved::Bool(true))) {
+                let reservation_id = match &gate.reservation {
+                    GateReservationInput::Observed(reservation) => {
+                        reservation.reservation_id.as_deref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    DispatchError::action_failed(action, "late reservation missing reservation_id")
+                })?;
                 run_deterministic(
                     runtime,
                     "release_locks",
@@ -583,15 +579,16 @@ pub(crate) fn run_deterministic(
                     &serde_json::json!({"reservation_id": reservation_id}),
                     tool_context,
                 )?;
-                normalized["reserved"] = Value::Bool(false);
-                normalized["reservation"]["reserved"] = Value::Bool(false);
+                gate.window.reserved = Some(TemplateReserved::Bool(false));
+                if let GateReservationInput::Observed(reservation) = &mut gate.reservation {
+                    reservation.window.reserved = Some(TemplateReserved::Bool(false));
+                }
             }
-            let mut output = pipeline_actions::gate_starvation_defer(runtime, action, &normalized)?;
-            // Always present, including for legacy callers using flat inputs.
-            output["reservation"] = normalized
-                .get("reservation")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({}));
+            let mut output = pipeline_actions::gate_starvation_defer(runtime, action, &gate)?;
+            output["reservation"] = match gate.reservation {
+                GateReservationInput::Observed(reservation) => serde_json::json!(reservation),
+                _ => serde_json::json!({}),
+            };
             Ok(output)
         }
         // The gate's first step: the job this bundle is delivered by — the
@@ -784,14 +781,14 @@ fn dependency_admission_for_input(
     })
 }
 
-fn waiting_locks_from_reserve_output(output: &Value) -> Vec<String> {
-    output
-        .get("conflicts")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|conflict| conflict.get("file").and_then(Value::as_str))
-        .map(str::trim)
+fn waiting_locks_from_reserve_output(output: &ReservationOutcome) -> Vec<String> {
+    let conflicts = match output {
+        ReservationOutcome::Granted { .. } => return Vec::new(),
+        ReservationOutcome::Denied { conflicts } => conflicts,
+    };
+    conflicts
+        .iter()
+        .map(|conflict| conflict.file.trim())
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .collect::<BTreeSet<_>>()

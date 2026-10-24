@@ -9,8 +9,8 @@ use orbit_common::protocol::tool_input::{
     optional_string_list_alias, optional_u32_alias, required_string,
 };
 use orbit_store::contracts::{
-    TaskReservationCheckParams, TaskReservationReleaseParams, TaskReservationReleaseReason,
-    TaskReservationReserveParams,
+    TaskLockConflict, TaskReservationCheckParams, TaskReservationReleaseParams,
+    TaskReservationReleaseReason, TaskReservationReserveParams,
 };
 use orbit_tools::ReservationOwnerContext;
 use orbit_types::telemetry::AuditEventStatus;
@@ -22,6 +22,67 @@ use super::index::{
     requested_task_files_indexed, task_lock_conflicts_indexed,
 };
 use crate::OrbitRuntime;
+
+/// The in-process reservation answer. JSON is produced only for a tool or
+/// persisted step output; ordinary grants omit the deferred-footprint keys.
+pub(crate) enum ReservationOutcome {
+    Granted {
+        reservation_id: String,
+        expires_at: Option<String>,
+        reserved_files: Vec<String>,
+        footprint_deferred: bool,
+        deferred_conflicts: Vec<TaskLockConflict>,
+    },
+    Denied {
+        conflicts: Vec<TaskLockConflict>,
+    },
+}
+
+impl ReservationOutcome {
+    pub(crate) fn into_tool_output(self) -> Value {
+        match self {
+            Self::Granted {
+                reservation_id,
+                expires_at,
+                reserved_files,
+                footprint_deferred,
+                deferred_conflicts,
+            } => {
+                let mut output = json!({
+                    "reserved": true,
+                    "reservation_id": reservation_id,
+                    "expires_at": expires_at,
+                    "reserved_files": reserved_files,
+                });
+                if footprint_deferred {
+                    output["footprint_deferred"] = json!(true);
+                    output["deferred_conflicts"] = json!(deferred_conflicts);
+                }
+                output
+            }
+            Self::Denied { conflicts } => json!({"reserved": false, "conflicts": conflicts}),
+        }
+    }
+
+    /// The gate always publishes defaults for its template-visible fields.
+    pub(crate) fn into_step_output(self, waiting_on_deps: Vec<String>) -> Value {
+        let footprint_deferred = matches!(
+            self,
+            Self::Granted {
+                footprint_deferred: true,
+                ..
+            }
+        );
+        let granted = matches!(self, Self::Granted { .. });
+        let mut output = self.into_tool_output();
+        output["waiting_on_deps"] = json!(waiting_on_deps);
+        output["footprint_deferred"] = json!(footprint_deferred);
+        if granted {
+            output["conflicts"] = json!([]);
+        }
+        output
+    }
+}
 
 const MAX_TASK_RESERVATION_TTL_SECONDS: u32 = 14400;
 
@@ -147,6 +208,7 @@ pub(crate) fn reserve(
         &index,
         EmptyTaskSurfacePolicy::Refuse,
     )
+    .map(ReservationOutcome::into_tool_output)
 }
 
 /// Whether a task-scope reservation that resolves to zero files is a mistake
@@ -184,7 +246,7 @@ pub(crate) fn reserve_with_index(
     reservation_owner: Option<ReservationOwnerContext>,
     index: &TaskLockIndex,
     empty_task_surface_policy: EmptyTaskSurfacePolicy,
-) -> Result<Value, OrbitError> {
+) -> Result<ReservationOutcome, OrbitError> {
     let reservation_scope = parse_task_lock_reservation_scope(&input)?;
     let ttl_seconds =
         optional_u32_alias(&input, &["ttl_seconds", "ttlSeconds", "ttl-seconds"])?.unwrap_or(1800);
@@ -336,12 +398,13 @@ pub(crate) fn reserve_with_index(
                     .map(|owner| owner.owner_run_id.clone()),
             }),
         )?;
-        Ok(json!({
-            "reserved": true,
-            "reservation_id": reservation_result.reservation_id,
-            "expires_at": reservation_result.expires_at,
-            "reserved_files": reservation_result.reserved_files,
-        }))
+        Ok(ReservationOutcome::Granted {
+            reservation_id,
+            expires_at: reservation_result.expires_at,
+            reserved_files: reservation_result.reserved_files,
+            footprint_deferred: false,
+            deferred_conflicts: Vec::new(),
+        })
     } else {
         let conflicts = merge_task_lock_conflicts(conflicts, reservation_result.conflicts);
         record_task_lock_audit_event(
@@ -361,10 +424,7 @@ pub(crate) fn reserve_with_index(
                     .map(|owner| owner.owner_run_id.clone()),
             }),
         )?;
-        Ok(json!({
-            "reserved": false,
-            "conflicts": conflicts,
-        }))
+        Ok(ReservationOutcome::Denied { conflicts })
     }
 }
 
@@ -383,8 +443,8 @@ pub(crate) fn reserve_deferred_footprint(
     agent: Option<String>,
     model: Option<String>,
     reservation_owner: Option<ReservationOwnerContext>,
-    deferred_conflicts: Value,
-) -> Result<Value, OrbitError> {
+    deferred_conflicts: Vec<TaskLockConflict>,
+) -> Result<ReservationOutcome, OrbitError> {
     let task_ids = parse_task_ids(input)?;
     let ttl_seconds =
         optional_u32_alias(input, &["ttl_seconds", "ttlSeconds", "ttl-seconds"])?.unwrap_or(1800);
@@ -433,14 +493,13 @@ pub(crate) fn reserve_deferred_footprint(
             "deferred_conflicts": deferred_conflicts.clone(),
         }),
     )?;
-    Ok(json!({
-        "reserved": true,
-        "reservation_id": reservation_id,
-        "expires_at": result.expires_at,
-        "reserved_files": [],
-        "footprint_deferred": true,
-        "deferred_conflicts": deferred_conflicts,
-    }))
+    Ok(ReservationOutcome::Granted {
+        reservation_id,
+        expires_at: result.expires_at,
+        reserved_files: Vec::new(),
+        footprint_deferred: true,
+        deferred_conflicts,
+    })
 }
 
 /// The runs that own an active reservation holding files.
