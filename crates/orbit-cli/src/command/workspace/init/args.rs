@@ -45,9 +45,6 @@ pub struct WorkspaceInitArgs {
     /// file). Without it, init asks at a terminal and otherwise only says how.
     #[arg(long)]
     pub install_browser_kit: bool,
-    /// No-op (kept for backwards compatibility — defaults are always refreshed on init)
-    #[arg(long, hide = true)]
-    pub refresh_defaults: bool,
     /// Reconcile an already registered workspace after validating its logical
     /// and checkout binding. A missing or malformed identity is restored only
     /// for that exact binding; malformed bytes are archived first. Also
