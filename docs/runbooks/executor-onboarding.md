@@ -158,10 +158,6 @@ cargo test -p orbit-core --test provider <provider>_fake_agent::
 cargo test -p orbit-engine --test engine v2_local_shell::
 ./scripts/generate-doc-indexes.sh --check
 ./scripts/sync-plugin-skills.sh --check
-make ci-fast
-make ci-test-affected
-make ci-lint
-make goldens
 ```
 
 The fake-agent fixtures are modules in the `provider` integration-test target,
@@ -174,10 +170,13 @@ cargo test -p orbit-core --test provider pi_fake_agent:: -- --list
 Require a nonempty list; an unknown filter can exit zero with no tests. Add a
 new provider's fixture as a module registered in `tests/provider/main.rs`
 before calling the lane supported. These Cargo filters are not provider CLI
-flags. `make ci-fast`, `make ci-test-affected`, `make ci-lint`, and `make goldens`
-are the repository handoff gates. `make ci-fast` runs no Rust tests; the
-affected-test gate runs full test targets for changed crates and workspace
-dependents. See [validation and CI](../DEVELOPMENT.md#validation-and-ci).
+flags. For a managed change, follow the current
+[validation and CI guidance](../DEVELOPMENT.md#validation-and-ci): run
+`make ci-guards` as the early static check, then the focused formatting, lint,
+and behavior checks the change needs. The pipeline runs configured
+final-validation commands on the final candidate. `make ci-fast`,
+`make ci-test-affected`, `make ci-lint`, and `make goldens` are not blanket
+pre-handoff gates; run `make goldens` when the change touches a golden surface.
 Do not substitute a live authenticated smoke for fixture coverage.
 
 ## Package and hand off managed assets
