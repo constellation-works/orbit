@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use super::{HeldPilotWarnings, PilotWarningCandidacy};
 use crate::OrbitRuntime;
+use crate::application::task::TaskAutomationPort;
 use crate::application::task::TriageCandidacy;
 use crate::application::task::pilot::input::{
     bounded_usize, requested_workspace_root, string_array,
@@ -99,7 +100,7 @@ pub(crate) fn prepare(
     let failed = |error: OrbitError| DispatchError::action_failed(action, error.to_string());
     let subject = Subject::parse(action, input)?;
     let workspace_root = requested_workspace_root(runtime, action, input)?;
-    let claim = crate::application::automation::members::claim(runtime, input).map_err(failed)?;
+    let claim = runtime.state_claim(input).map_err(failed)?;
     if let Some(claim) = &claim
         && claim.kind != subject.trigger_kind()
     {
@@ -152,8 +153,7 @@ pub(crate) fn prepare(
     }
 
     // A retried prepare is not held by its own earlier checkpoint.
-    let mut held = crate::application::automation::preparation::active_escalation_triages(runtime)
-        .map_err(failed)?;
+    let mut held = runtime.escalation_triage_holders().map_err(failed)?;
     if let Some(run_id) = run_id {
         held.retain(|_, holders| {
             holders.remove(run_id);

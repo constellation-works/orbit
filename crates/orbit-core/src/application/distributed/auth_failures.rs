@@ -22,8 +22,8 @@ use serde_json::Value;
 
 use super::auth_recovery::relogin_hint;
 use crate::OrbitRuntime;
+use crate::application::contracts::ESCALATION_TRIAGE_JOB;
 use crate::application::job::crew_pools::complexity_crews_key;
-use crate::application::task::ESCALATION_TRIAGE_JOB;
 
 /// How far back the drain card looks for an authentication failure or the
 /// success that clears it. Older runs are not shown.

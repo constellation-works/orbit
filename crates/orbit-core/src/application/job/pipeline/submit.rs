@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::application::job::ReviewAdmissionHook;
 use crate::runtime::run_input::recorded_task_ids;
 
 /// [ORB-10544] Cap on the run history scanned by the in-flight ship guard.
@@ -218,7 +219,7 @@ impl OrbitRuntime {
         // itself. Saturation does not stand an operator's explicit invocation
         // down — the leaf definition's own `max_active_runs` bounds it.
         self.drain_entry_admission(
-            crate::application::distributed::DrainEntryPoint::ExplicitShip,
+            crate::application::contracts::DrainEntryPoint::ExplicitShip,
             task_ids,
             false,
         )?
@@ -240,8 +241,7 @@ impl OrbitRuntime {
         if strict_containment {
             input["__worker_containment_strict"] = json!(true);
         }
-        crate::application::review::admit_review_request(
-            self,
+        self.admit_review_request(
             &mut input,
             review,
             mode == crate::application::workflow::ShipMode::Local,
@@ -303,7 +303,7 @@ impl OrbitRuntime {
             {
                 return Err(OrbitError::InvalidInput(format!(
                     "explicit ship task '{task_id}' is routed to local-only delivery: {}",
-                    crate::application::review::local_route_run_option_refusal(layer)
+                    self.local_route_review_refusal(layer)
                 )));
             }
         }
@@ -374,7 +374,7 @@ impl OrbitRuntime {
         // [ORB-12500] An explicit owner drain is owner coordination work; a
         // replica executes through pull instead of running one locally.
         self.drain_entry_admission(
-            crate::application::distributed::DrainEntryPoint::OwnerDrain,
+            crate::application::contracts::DrainEntryPoint::OwnerDrain,
             &[],
             false,
         )?
@@ -400,8 +400,7 @@ impl OrbitRuntime {
         if strict_containment {
             input["__worker_containment_strict"] = json!(true);
         }
-        crate::application::review::admit_review_request(
-            self,
+        self.admit_review_request(
             &mut input,
             review,
             self.automatic_delivery_ship_mode() == crate::application::workflow::ShipMode::Local,

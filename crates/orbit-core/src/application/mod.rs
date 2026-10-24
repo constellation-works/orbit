@@ -21,6 +21,7 @@ pub mod audit_event;
 pub mod auto_tasks;
 pub mod codebase;
 pub mod config;
+pub mod contracts;
 pub mod distributed;
 pub(crate) mod executor;
 pub(crate) mod executor_host_os;

@@ -63,8 +63,8 @@ pub use contract::{
     ensure_distributed_mutation_available, owner_binary_version,
 };
 pub(crate) use contract::{owner_protocol_error, probe_pull_contract};
-pub use entry::{DrainEntryAdmission, DrainEntryPoint, DrainEntryRefusal, RESOURCE_THROTTLED};
-pub use follower::{PULL_DRAIN_JOB, WorkspacePullRequest};
+pub use entry::{DrainEntryAdmission, DrainEntryRefusal, RESOURCE_THROTTLED};
+pub use follower::WorkspacePullRequest;
 pub(crate) use host_provider_hold::HostProviderHold;
 pub use leaf_settlements::LeafSettlement;
 pub(crate) use owner_repair::OwnerRepairDrain;
@@ -75,7 +75,7 @@ pub(crate) use pull_waiting::OwnerAnswer;
 pub use serve::TaskPullResponse;
 pub use settlement::{
     ClaimedLeafStage, DrainClaimedLeaf, OwnerBusyBackoff, PendingPullSettlements, PullCrewWindow,
-    PullLeafClaim, PullSettlementEntry, PullSettlementOutcome, RefusedPullSettlement,
+    PullLeafClaim, RefusedPullSettlement,
 };
 pub(crate) use settlement::{
     OWNER_BUSY_EPISODE_LIMIT, is_owner_refusal, is_owner_transport_failure,

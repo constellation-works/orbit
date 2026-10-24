@@ -146,9 +146,8 @@ pub use orbit_store::skill_store as skill_catalog;
 pub use orbit_store::{InvocationInsertParams, InvocationQuery, InvocationRecord};
 
 // Command-layer types the CLI names in its clap surfaces.
-pub use application::distributed::{
-    DrainEntryPoint, DrainEntryRefusal, PullSettlementEntry, WorkspacePullRequest,
-};
+pub use application::contracts::{DrainEntryPoint, PullSettlementEntry};
+pub use application::distributed::{DrainEntryRefusal, WorkspacePullRequest};
 pub use application::job::{
     AgentInvokeRequest, CatalogReferenceLayer, DrainAdmissionsStopRequest,
     DrainWindowExtensionRequest, DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry,

@@ -396,7 +396,7 @@ pub(crate) fn run_show_payload(
         if let Some(error) = &pass.last_pass_error {
             // A local drain records a pass only when it deferred it on a busy
             // task-store lock; the next pass retries.
-            let label = if run.job_id == orbit_core::application::distributed::PULL_DRAIN_JOB {
+            let label = if run.job_id == orbit_core::application::contracts::PULL_DRAIN_JOB {
                 "Pull pass warning:"
             } else {
                 "Admission pass deferred:"

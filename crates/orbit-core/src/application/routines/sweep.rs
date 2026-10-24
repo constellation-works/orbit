@@ -6,7 +6,7 @@
 //! failures (registry unreadable, store unopenable) — an unconfigured host
 //! is a clean no-op, because launchd/systemd will invoke this forever.
 
-use crate::application::distributed::PullSettlementOutcome;
+use crate::application::contracts::PullSettlementOutcome;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};

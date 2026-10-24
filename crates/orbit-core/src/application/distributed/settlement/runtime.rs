@@ -43,7 +43,7 @@ impl crate::OrbitRuntime {
         let Some(run) = jobs.get_job_run(drain_run_id)? else {
             return Ok(Vec::new());
         };
-        if run.job_id != super::super::PULL_DRAIN_JOB {
+        if run.job_id != crate::application::contracts::PULL_DRAIN_JOB {
             return Ok(Vec::new());
         }
         let inherits = (!run.state.is_terminal())
@@ -84,7 +84,7 @@ impl crate::OrbitRuntime {
     ) -> Result<Option<orbit_store::contracts::DrainLeafOccupancy>, OrbitError> {
         let jobs = self.stores().jobs();
         match jobs.get_job_run(drain_run_id)? {
-            Some(run) if run.job_id == super::super::PULL_DRAIN_JOB => {
+            Some(run) if run.job_id == crate::application::contracts::PULL_DRAIN_JOB => {
                 jobs.drain_leaf_occupancy().map(Some)
             }
             _ => Ok(None),
@@ -162,7 +162,7 @@ impl crate::OrbitRuntime {
     ) -> Result<Option<PullCrewWindow>, OrbitError> {
         let jobs = self.stores().jobs();
         match jobs.get_job_run(drain_run_id)? {
-            Some(run) if run.job_id == super::super::PULL_DRAIN_JOB => {}
+            Some(run) if run.job_id == crate::application::contracts::PULL_DRAIN_JOB => {}
             _ => return Ok(None),
         }
         let preflight = self

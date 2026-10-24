@@ -8,7 +8,7 @@
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use orbit_core::application::automation::evaluate_routine;
-use orbit_core::application::distributed::PULL_DRAIN_JOB;
+use orbit_core::application::contracts::PULL_DRAIN_JOB;
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::{JobRun, JobRunState, JobRunStep, JobTargetType};
 use orbit_engine::RuntimeHost;

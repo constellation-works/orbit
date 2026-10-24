@@ -1,7 +1,8 @@
 //! Pull admission: cancel-state reads, owner negotiation, the failure breaker, the crew window, `os:` tag routing, host throttling and local/claim exclusion.
 
 use orbit_core::WorkspacePullRequest;
-use orbit_core::application::distributed::{DrainEntryPoint, PullCrewWindow, RESOURCE_THROTTLED};
+use orbit_core::application::contracts::DrainEntryPoint;
+use orbit_core::application::distributed::{PullCrewWindow, RESOURCE_THROTTLED};
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 use orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA;

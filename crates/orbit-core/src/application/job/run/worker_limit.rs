@@ -25,7 +25,7 @@ use orbit_types::workflow::{DrainWorkerLimit, JobRun, JobRunState, PipelineState
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::distributed::PULL_DRAIN_JOB;
+use crate::application::contracts::PULL_DRAIN_JOB;
 use crate::application::workflow::{AUTO_WORKFLOW_ALIAS, find_workflow};
 
 const WORKER_LIMIT_REQUEST_AUDIT: &str = "pipeline.run.workers.requested";

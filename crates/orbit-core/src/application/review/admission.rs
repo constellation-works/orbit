@@ -26,6 +26,8 @@ use serde_json::Value;
 use super::crew::pre_landing_review_crew_unset;
 use super::{LOCAL_ROUTE_JOB, REVIEW_ADMITTED_JOBS};
 use crate::OrbitRuntime;
+use crate::application::contracts::review_layer_json;
+use crate::application::job::ReviewAdmissionHook;
 
 /// Whether caller-shaped run input names the reserved review key.
 fn declares_review_admission(input: &Value) -> bool {
@@ -37,7 +39,7 @@ fn declares_review_admission(input: &Value) -> bool {
 /// Install the review admission a delivery submission carries, or refuse a
 /// submission that tries to supply one. `parent_run_id` is set for the
 /// parent-authorized child path; `resuming` keeps persisted input as is.
-pub(crate) fn install_review_admission(
+fn install_review_admission(
     runtime: &OrbitRuntime,
     job_name: &str,
     input: &mut Value,
@@ -61,7 +63,7 @@ pub(crate) fn install_review_admission(
         }
         return Ok(());
     }
-    if request.is_some() && job_name == crate::application::distributed::PULL_DRAIN_JOB {
+    if request.is_some() && job_name == crate::application::contracts::PULL_DRAIN_JOB {
         return Err(OrbitError::InvalidInput(
             pull_review_request_refusal().to_string(),
         ));
@@ -205,7 +207,7 @@ pub fn pull_review_request_refusal() -> &'static str {
 /// run exists when it could not be admitted [ORB-16572]: on the local-only
 /// route (`local_route`), against the other workspace layer, or without a
 /// reviewer crew. Submission resolves the recorded request again.
-pub(crate) fn admit_review_request(
+fn admit_review_request(
     runtime: &OrbitRuntime,
     input: &mut Value,
     review: Option<ReviewLayer>,
@@ -360,17 +362,6 @@ pub(crate) fn run_review_admission(
         .map(Option::flatten)
 }
 
-/// The review layer an admission captured and what decided it, as run
-/// surfaces show it [ORB-16572]: `source` is `run-option` when the run's
-/// `--review` added it, else the policy layer (`workspace`, `global`,
-/// `built-in`) or `claim` for a claimed leaf.
-pub(crate) fn review_layer_json(admission: &ReviewAdmission) -> Value {
-    serde_json::json!({
-        "timing": admission.timing.as_str(),
-        "source": admission.timing_source,
-    })
-}
-
 impl OrbitRuntime {
     /// A run's captured review layer as `{"timing", "source"}`, or null
     /// when it captured no review admission.
@@ -403,7 +394,7 @@ pub(crate) fn input_run_review_admission(
 /// installing today's admission into its input would not rerun an already
 /// successful review gate. The clock therefore resumes only when the captured
 /// admission still matches today's contract.
-pub(crate) fn upgrade_resume_admission_mismatch(
+fn upgrade_resume_admission_mismatch(
     runtime: &OrbitRuntime,
     run: &orbit_types::workflow::JobRun,
 ) -> Option<String> {
@@ -424,7 +415,7 @@ pub(crate) fn upgrade_resume_admission_mismatch(
 /// Unlike ordinary checkpoint resume, completion observation only needs the
 /// obligations that apply to this unchanged candidate. Provenance-only drift
 /// and the retired after-landing state cannot add a pre-landing gate.
-pub(crate) fn completion_admission_mismatch(
+fn completion_admission_mismatch(
     runtime: &OrbitRuntime,
     run: &orbit_types::workflow::JobRun,
 ) -> Option<String> {
@@ -513,4 +504,47 @@ fn reserved_review_key_error(job_name: &str) -> OrbitError {
          effective review.timing is captured from configuration at submission and cannot be \
          requested through ordinary job input"
     ))
+}
+
+impl ReviewAdmissionHook for OrbitRuntime {
+    fn install_review_admission(
+        &self,
+        job_name: &str,
+        input: &mut Value,
+        parent_run_id: Option<&str>,
+        resuming: bool,
+    ) -> Result<(), OrbitError> {
+        install_review_admission(self, job_name, input, parent_run_id, resuming)
+    }
+
+    fn admit_review_request(
+        &self,
+        input: &mut Value,
+        review: Option<ReviewLayer>,
+        local_route: bool,
+    ) -> Result<(), OrbitError> {
+        admit_review_request(self, input, review, local_route)
+    }
+
+    fn local_route_review_refusal(&self, layer: ReviewLayer) -> String {
+        local_route_run_option_refusal(layer)
+    }
+
+    fn captured_review_admission(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<ReviewAdmission>, OrbitError> {
+        run_review_admission(self, run_id)
+    }
+
+    fn upgrade_resume_review_mismatch(
+        &self,
+        run: &orbit_types::workflow::JobRun,
+    ) -> Option<String> {
+        upgrade_resume_admission_mismatch(self, run)
+    }
+
+    fn completion_review_mismatch(&self, run: &orbit_types::workflow::JobRun) -> Option<String> {
+        completion_admission_mismatch(self, run)
+    }
 }

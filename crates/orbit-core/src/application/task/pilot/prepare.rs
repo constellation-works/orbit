@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::OrbitRuntime;
 use crate::application::job::delivery::{PrForgeCheck, tags_route_through_pr_pipeline};
+use crate::application::task::TaskAutomationPort;
 use crate::application::task::TaskListFilter;
 
 use super::input::{bounded_usize, requested_workspace_root, string_array};
@@ -40,7 +41,8 @@ pub(crate) fn prepare(
     input: &Value,
 ) -> Result<Value, DispatchError> {
     let workspace_root = requested_workspace_root(runtime, action, input)?;
-    let claim = crate::application::automation::members::claim(runtime, input)
+    let claim = runtime
+        .state_claim(input)
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     let source = resolve_source_snapshot(runtime, action, input, &workspace_root)?;
     if let Some(claim) = &claim
@@ -75,9 +77,9 @@ pub(crate) fn prepare(
     }
     let explicit_mode = !explicit_task_ids.is_empty();
     let run_id = pilot_run_id(input);
-    let mut active_preparations =
-        crate::application::automation::preparation::active_task_pilot_preparations(runtime)
-            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+    let mut active_preparations = runtime
+        .pilot_preparation_holders()
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     // A retried prepare is not held by its own run.
     if let Some(run_id) = run_id {
         active_preparations.retain(|_, holders| {
@@ -85,21 +87,22 @@ pub(crate) fn prepare(
             !holders.is_empty()
         });
     }
-    let policy = crate::application::automation::preparation::claim_policy(runtime, claim.as_ref())
+    let policy = runtime
+        .claim_preparation_policy(claim.as_ref())
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     // A claimed task the branch already changed under is not piloted against
     // the frozen source: it settles superseded, and its member is claimed
     // afresh at the head [ORB-14476]. Apply carries these outcomes.
     let superseded = match &claim {
-        Some(claim) => crate::application::automation::members::stale_tasks(
-            runtime,
-            claim,
-            &policy,
-            &Value::Null,
-            &claim.task_ids(),
-            &BTreeMap::new(),
-        )
-        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?,
+        Some(claim) => runtime
+            .stale_claimed_tasks(
+                claim,
+                &policy,
+                &Value::Null,
+                &claim.task_ids(),
+                &BTreeMap::new(),
+            )
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?,
         None => BTreeMap::new(),
     };
 
@@ -342,13 +345,9 @@ pub(crate) fn prepare(
         snapshot[CONTEXT_CREATION_IDENTITY] = json!(creation.identity());
 
         if let Some(source) = &source {
-            let fingerprints = crate::application::automation::preparation::fingerprints(
-                runtime,
-                &task,
-                &source.source_revision,
-                &policy,
-            )
-            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+            let fingerprints = runtime
+                .task_pilot_fingerprints(&task, &source.source_revision, &policy)
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
             // Each task is checked against the batch member that claimed it.
             // A member edited since the claim is set aside alone, as apply
             // supersedes per member [ORB-14476]: it is claimed afresh while
@@ -554,15 +553,15 @@ fn fresh_no_target_assessment(
     if task.status != assessed_status {
         return Ok(false);
     }
-    let current = crate::application::automation::preparation::pilot_fingerprint(
-        runtime,
-        &task,
-        source.map(|source| source.source_revision.as_str()),
-        policy,
-    )
-    .map_err(|error| {
-        DispatchError::action_failed(action, format!("fingerprint task {task_id}: {error}"))
-    })?;
+    let current = runtime
+        .task_pilot_fingerprint(
+            &task,
+            source.map(|source| source.source_revision.as_str()),
+            policy,
+        )
+        .map_err(|error| {
+            DispatchError::action_failed(action, format!("fingerprint task {task_id}: {error}"))
+        })?;
     Ok(current == assessed_fingerprint)
 }
 

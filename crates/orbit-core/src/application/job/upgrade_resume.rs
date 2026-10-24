@@ -33,7 +33,7 @@ use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
+use crate::application::job::{ReviewAdmissionHook, RunOwnerLiveness, run_owner_liveness};
 use crate::runtime::upgrade_handover::UPGRADE_QUIESCE_ERROR_CODE;
 
 /// Audit tool name of every auto-resume decision about an interrupted run.
@@ -243,9 +243,7 @@ impl OrbitRuntime {
             ));
         }
 
-        if let Some(detail) =
-            crate::application::review::upgrade_resume_admission_mismatch(self, run)
-        {
+        if let Some(detail) = self.upgrade_resume_review_mismatch(run) {
             return Ok(Skip::new("review_admission_changed", detail));
         }
 

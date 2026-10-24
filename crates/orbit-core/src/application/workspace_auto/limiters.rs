@@ -8,7 +8,7 @@ use orbit_store::contracts::JobRunQuery;
 
 use super::drains::DRAIN_JOB_NAME;
 use crate::OrbitRuntime;
-use crate::application::distributed::PULL_DRAIN_JOB;
+use crate::application::contracts::PULL_DRAIN_JOB;
 use crate::runtime::host_resource::accuracy::{AccuracySelection, DrainLimiters, ForecastAccuracy};
 
 impl OrbitRuntime {

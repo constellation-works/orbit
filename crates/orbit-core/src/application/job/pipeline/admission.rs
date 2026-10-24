@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::application::job::{crew_pools, delivery};
+use crate::application::job::{ReviewAdmissionHook, crew_pools, delivery};
 use orbit_common::fs::io::open_read_only_no_follow;
 
 impl OrbitRuntime {
@@ -141,8 +141,7 @@ impl OrbitRuntime {
         // child inherits its parent's snapshot, an ordinary delivery
         // submission captures the effective policy once, and ordinary input
         // naming the key is refused.
-        crate::application::review::install_review_admission(
-            self,
+        self.install_review_admission(
             job_name,
             &mut input,
             admission.map(|admission| admission.parent_run_id.as_str()),

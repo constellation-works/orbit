@@ -83,7 +83,7 @@ pub(super) fn host_dependents(
         };
         for state in [JobRunState::Running, JobRunState::Pending] {
             let runs = runtime.list_job_runs(orbit_core::application::job::JobRunListParams {
-                job_id: Some(orbit_core::application::distributed::PULL_DRAIN_JOB.to_string()),
+                job_id: Some(orbit_core::application::contracts::PULL_DRAIN_JOB.to_string()),
                 state: Some(state),
                 ..Default::default()
             });

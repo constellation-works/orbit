@@ -6,7 +6,7 @@ use orbit_store::contracts::JobRunQuery;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::distributed::PULL_DRAIN_JOB;
+use crate::application::contracts::PULL_DRAIN_JOB;
 
 /// The admission wrapper a checkout ships to wait for host build slots. A
 /// checkout without it never waits, so a slot limit governs none of its builds.

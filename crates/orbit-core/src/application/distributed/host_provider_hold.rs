@@ -34,9 +34,9 @@ use orbit_types::workflow::{
     provider_account_label,
 };
 
-use super::PULL_DRAIN_JOB;
 use super::auth_failures::{SCAN_LIMIT, canonical_provider, clearing_at, host_of, run_at};
 use crate::OrbitRuntime;
+use crate::application::contracts::PULL_DRAIN_JOB;
 use crate::runtime::task::provider_hold::base_backoff;
 
 /// One hour of run recency: finish time, else start time, else creation time.
