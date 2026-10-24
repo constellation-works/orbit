@@ -82,8 +82,12 @@ still applies.
   three times its schedule interval.
 - **No overlap.** A fire is skipped while the previous one is still running,
   for up to `timeout_minutes`.
-- **Seeded disabled.** `orbit workspace init` writes task pilot, ship sweep,
-  worktree GC, and CI and dependency-alert sweeps, all with `enabled: false`.
+- **Seeded mostly disabled.** `orbit workspace init` writes task pilot, ship
+  sweep, worktree and store GC, CI and dependency-alert sweeps, and the
+  finding-verification, pilot-warning and blocked-task triage routines, all
+  with `enabled: false`. The one exception is the hourly crew-performance
+  refresh, seeded enabled; while crew performance is off, its action skips
+  the scan and writes no snapshot.
 
 Routine files and scheduler state are per machine; git does not share them.
 
