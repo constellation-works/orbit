@@ -467,6 +467,8 @@ pub(crate) struct OrbitRuntimeSettings {
     /// `[workflow.explore]`: whether implement and review-repair runs may
     /// delegate read-only exploration, and its per-run budgets.
     explore: orbit_config::ExploreSettings,
+    /// `workflow.crew_performance_types`: the scorecard's task-type lens.
+    crew_performance_types: Vec<orbit_config::CrewPerformanceType>,
 }
 
 impl OrbitRuntimeSettings {
@@ -508,6 +510,7 @@ impl OrbitRuntimeSettings {
         light_delivery_paths: Vec<String>,
         regression_risk: orbit_config::RegressionRiskSettings,
         explore: orbit_config::ExploreSettings,
+        crew_performance_types: Vec<orbit_config::CrewPerformanceType>,
     ) -> Self {
         Self {
             persistence,
@@ -546,7 +549,12 @@ impl OrbitRuntimeSettings {
             light_delivery_paths,
             regression_risk,
             explore,
+            crew_performance_types,
         }
+    }
+
+    pub(crate) fn crew_performance_types(&self) -> &[orbit_config::CrewPerformanceType] {
+        &self.crew_performance_types
     }
 
     pub(crate) fn explore(&self) -> orbit_config::ExploreSettings {

@@ -780,3 +780,70 @@ fn orchestrator_show_aliases_select_a_row_among_legacy_and_recorded_models() {
         );
     }
 }
+
+/// `--by-type` returns the cell matrix and the configured type list, is
+/// refused for other roles, and leaves the plain ranking's shape alone.
+#[test]
+fn agents_scorecard_by_type_returns_cells_and_the_type_list() {
+    if crate::isolated_test::run_in_child(
+        "agents_cli::agents_scorecard_by_type_returns_cells_and_the_type_list",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let config_path = workspace_root.join("config.toml");
+    let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
+    std::fs::write(
+        &config_path,
+        format!(
+            "{existing}\n[[workflow.crew_performance_types]]\nname = \"review\"\ntags = [\"no-diff-expected\"]\n"
+        ),
+    )
+    .unwrap();
+
+    let card = fixture.json(&[
+        "agents",
+        "scorecard",
+        "--role",
+        "implementers",
+        "--by-type",
+        "--json",
+    ]);
+    assert_eq!(card["by_type"], true, "{card}");
+    assert_eq!(card["types"][0]["name"], "review", "{card}");
+    assert!(card["cells"].is_array(), "{card}");
+    for cell in card["cells"].as_array().unwrap() {
+        for field in [
+            "crew",
+            "model",
+            "tier",
+            "type",
+            "n",
+            "raw",
+            "crew_mean",
+            "score",
+        ] {
+            assert!(cell.get(field).is_some(), "cell misses {field}: {cell}");
+        }
+    }
+
+    // The plain ranking keeps its rows shape and carries no cells.
+    let plain = fixture.json(&["agents", "scorecard", "--role", "implementers", "--json"]);
+    assert!(plain["rows"].is_array(), "{plain}");
+    assert!(plain.get("cells").is_none(), "{plain}");
+
+    // Other roles refuse the switch.
+    fixture
+        .command(&[
+            "agents",
+            "scorecard",
+            "--role",
+            "orchestrators",
+            "--by-type",
+            "--json",
+        ])
+        .assert()
+        .failure();
+}

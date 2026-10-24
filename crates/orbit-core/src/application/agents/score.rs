@@ -55,6 +55,11 @@ pub(super) struct Tally<'a> {
 }
 
 impl<'a> Tally<'a> {
+    /// The term's total count on the row or cell.
+    pub(super) fn count(&self) -> f64 {
+        self.count
+    }
+
     /// Actual counts by task, for tier reference rates without rescanning.
     pub(super) fn task_counts(&self) -> impl Iterator<Item = (&TaskFacts, f64)> {
         self.tasks.values().map(|tally| (tally.task, tally.count))

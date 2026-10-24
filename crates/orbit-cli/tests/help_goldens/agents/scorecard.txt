@@ -25,6 +25,9 @@ Options:
           
           [default: 10]
 
+      --by-type
+          Show implementers split by task type within each tier
+
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)
 

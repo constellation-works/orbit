@@ -81,6 +81,15 @@ const SELECTION: &[ParamSpec] = &[
     ),
 ];
 
+/// The by-type cell matrix switch, implementers only.
+const BY_TYPE: &[ParamSpec] = &[both(
+    "by_type",
+    ParamType::Switch,
+    "Split implementers into (crew, model, tier, type) cells using workflow.crew_performance_types, with two-level shrinkage; implementers only.",
+    CliArgKind::flag("by-type"),
+    "Show implementers split by task type within each tier",
+)];
+
 const MODEL: &[ParamSpec] = &[mcp_only(
     "model",
     ParamType::String,
@@ -91,7 +100,7 @@ const SCORECARD: OperationSpec<AgentsVerb> = OperationSpec {
     verb: AgentsVerb::Scorecard,
     cli_path: &["scorecard"],
     tool_name: "orbit.agents.scorecard",
-    tool_description: "Rank one agent role's crews and models over the window: weighted outcome rates per 100 units of work, then pulled down toward the fleet average when above it. Implementers start at 100 and score actual counts against fleet expectations for the same tier mix; other roles sum weighted actual rates. Rows below the minimum support are listed last without a rank; a role whose terms are not computed yet answers status not_computed with its terms and no rows. Scans the workspace once per call (cache_ttl_seconds 0). The payload the dashboard's Agents view reads.",
+    tool_description: "Rank one agent role's crews and models over the window: weighted outcome rates per 100 units of work, then pulled down toward the fleet average when above it. Implementers start at 100 and score actual counts against fleet expectations for the same tier mix; other roles sum weighted actual rates. Rows below the minimum support are listed last without a rank; a role whose terms are not computed yet answers status not_computed with its terms and no rows. With by_type, implementers instead return one cell per (crew, model, tier, type) with n, raw, crew_mean and score, plus the type list used. Scans the workspace once per call (cache_ttl_seconds 0). The payload the dashboard's Agents view reads.",
     cli_about: "Show one role's scorecard rows by crew and model",
     cli_help: CliHelp {
         long_about: None,
@@ -102,7 +111,7 @@ const SCORECARD: OperationSpec<AgentsVerb> = OperationSpec {
         constraints: &[],
     },
     effect: Effect::Read,
-    params: &[ROLE, SELECTION, MODEL],
+    params: &[ROLE, SELECTION, BY_TYPE, MODEL],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

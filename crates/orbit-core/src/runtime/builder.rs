@@ -372,6 +372,7 @@ pub(crate) fn build_context_from_roots(
                 .clone(),
             runtime_config.snapshot.regression_risk(),
             runtime_config.snapshot.explore(),
+            runtime_config.snapshot.crew_performance_types().to_vec(),
         ),
     ))
 }

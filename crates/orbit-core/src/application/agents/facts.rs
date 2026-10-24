@@ -287,6 +287,10 @@ pub(super) struct TaskFacts {
     /// The orchestrator's model recorded when the task was created.
     pub(super) orchestrator_model: Option<String>,
     pub(super) origin: Option<TaskOrigin>,
+    /// The task's tags, for task-type classification.
+    pub(super) tags: Vec<String>,
+    /// The task's context-file selectors, for task-type classification.
+    pub(super) context_files: Vec<String>,
     pub(super) complexity: Option<TaskComplexity>,
     pub(super) created_at: DateTime<Utc>,
     /// Done, or archived after it was done.
@@ -854,6 +858,8 @@ fn task_facts(
             .filter(|model| !model.is_empty())
             .map(str::to_string),
         origin: task.origin,
+        tags: task.tags.clone(),
+        context_files: task.context_files.clone(),
         complexity: task.complexity,
         created_at: task.created_at,
         landed,

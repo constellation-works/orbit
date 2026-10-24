@@ -168,6 +168,17 @@ impl OrbitRuntime {
         ))
     }
 
+    /// Scan, then report the implementer by-type cell matrix, with a cache
+    /// period of zero as on [`Self::agent_role_scorecard`].
+    pub fn agent_by_type_scorecard(&self, query: &AgentQuery) -> Result<Value, OrbitError> {
+        Ok(agent_by_type_scorecard(
+            &self.agent_scan()?,
+            query,
+            self.crew_performance_types(),
+            Duration::ZERO,
+        ))
+    }
+
     /// Scan, then report one row of a role with the tasks behind each term,
     /// with a cache period of zero as on [`Self::agent_role_scorecard`].
     pub fn agent_role_detail(
@@ -229,6 +240,33 @@ pub fn agent_scorecard(
     payload["fleet_average"] = json!(fleet_average.map(score::number));
     payload["provisional"] = json!(score::provisional(role, &scored));
     payload["rows"] = scored.iter().map(|row| row.row(spec.terms)).collect();
+    payload
+}
+
+/// The implementer cell matrix for `query`: one cell per `(crew, model,
+/// tier, type)` with its `n`, `raw`, `crew_mean` and shrunk `score`, plus
+/// the type list the tasks were classified with.
+pub fn agent_by_type_scorecard(
+    facts: &AgentFacts,
+    query: &AgentQuery,
+    types: &[orbit_config::CrewPerformanceType],
+    cache_ttl: Duration,
+) -> Value {
+    let since = query.since();
+    let role = AgentRole::Implementers;
+    let mut payload = role_header(facts, role, query, since, cache_ttl);
+    payload["by_type"] = json!(true);
+    payload["types"] = json!(
+        types
+            .iter()
+            .map(|entry| json!({
+                "name": entry.name,
+                "tags": entry.tags,
+                "paths": entry.paths,
+            }))
+            .collect::<Vec<_>>()
+    );
+    payload["cells"] = json!(roles::implementer_by_type_cells(facts, since, types));
     payload
 }
 
