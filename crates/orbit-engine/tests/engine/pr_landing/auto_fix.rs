@@ -3,43 +3,175 @@
 use super::*;
 use std::io::Write as _;
 
+type JobResult = Result<orbit_engine::JobOutcome, DispatchError>;
+
+fn cases(names: &str) -> std::str::SplitWhitespace<'_> {
+    names.split_whitespace()
+}
+
+fn auto_fix_input(fx: &Fixture) -> Value {
+    let mut input = fx.complete_ungated_input();
+    input["auto_fix"] = json!(true);
+    input["completion"] = json!("review");
+    input
+}
+
+fn is_check_repair(error: &str) -> bool {
+    orbit_types::workflow::is_pr_auto_fix_check_repair(error)
+}
+
+fn repair_attempts(host: &DeliveryHost) -> Vec<PrAutoFixAttempt> {
+    pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER)
+}
+
+fn repair_pushes(host: &DeliveryHost) -> Vec<PrAutoFixPush> {
+    orbit_types::workflow::pr_auto_fix_pushes(&host.history(TASK_ID), PR_NUMBER)
+}
+
+fn scripted_ran(host: &DeliveryHost, name: &str) -> bool {
+    host.scripted_inputs.lock().unwrap().contains_key(name)
+}
+
+fn seed_attempt(
+    host: &DeliveryHost,
+    head: &str,
+    blocker: PrAutoFixBlocker,
+    attempt: u32,
+    run_id: &str,
+) {
+    seed_auto_fix_history(
+        host,
+        PR_AUTO_FIX_ADMITTED_EVENT,
+        &PrAutoFixAttempt {
+            pr_number: PR_NUMBER.into(),
+            head_sha: head.into(),
+            blocker,
+            attempt,
+            budget: PR_AUTO_FIX_BUDGET,
+            run_id: run_id.into(),
+            crew: "fixture".into(),
+            crew_source: "fixture".into(),
+        },
+    );
+}
+
+fn seed_spent(host: &DeliveryHost, from: u32, blocker: PrAutoFixBlocker, run_id: &str) {
+    for attempt in from..=PR_AUTO_FIX_BUDGET {
+        seed_attempt(host, &format!("spent-{attempt}"), blocker, attempt, run_id);
+    }
+}
+
+fn reserve_base_update(host: &DeliveryHost, head: &str, base_sha: &str) {
+    seed_auto_fix_history(
+        host,
+        orbit_types::workflow::PR_BASE_UPDATE_RESERVED_EVENT,
+        &orbit_types::workflow::PrBaseUpdateReservation {
+            execution: RUN_ID.into(),
+            repository: "forge/remote".into(),
+            pr_number: PR_NUMBER.into(),
+            head_sha: head.into(),
+            head_branch: BRANCH.into(),
+            base_branch: BASE.into(),
+            base_sha: base_sha.into(),
+            deadline_ms: 1_100_000,
+            evidence: json!({"cause": "inherited"}),
+        },
+    );
+}
+
+fn deterministic_activity(name: &str, action: &str) -> ActivityV2 {
+    ActivityV2 {
+        description: name.into(),
+        input_schema_json: Value::Null,
+        output_schema_json: Value::Null,
+        fs_profile: None,
+        spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+            action: action.into(),
+            config: Value::Null,
+        }),
+    }
+}
+
+fn run_job(
+    host: &DeliveryHost,
+    mut job: orbit_types::workflow::JobV2,
+    activities: &[(&str, &str)],
+    run_id: &str,
+    input: Value,
+    resume: Option<&PipelineState>,
+) -> JobResult {
+    let mut catalog = V2ActivityCatalog::new();
+    for &(name, action) in activities {
+        catalog.insert(name.to_string(), deterministic_activity(name, action));
+    }
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
+    let audit = tempfile::tempdir().unwrap();
+    let (writer, _, _) = build_writer_and_sinks(audit.path(), run_id);
+    execute_job_with_resume(&job, input, run_id, writer, host, resume)
+}
+
+const REPAIR_ACTS: &[(&str, &str)] = &[
+    ("checkpoint", "test_checkpoint"),
+    ("pr_complete", "pr_complete"),
+    ("step_failure_recovery", "test_ci_repair"),
+    ("pr_conflict_recovery", "unexpected_conflict"),
+];
+
+fn repair_job(input: Value) -> orbit_types::workflow::JobV2 {
+    job_asset(json!([
+        {"id":"commit","target":"activity:checkpoint","recovery_activity":"step_failure_recovery"},
+        {"id":"complete_pr","target":"activity:pr_complete","recovery_activity":"pr_conflict_recovery","default_input":input}
+    ]))
+}
+
+fn run_repair_job(host: &DeliveryHost, input: Value) -> JobResult {
+    run_job(
+        host,
+        repair_job(input),
+        REPAIR_ACTS,
+        RUN_ID,
+        json!({}),
+        None,
+    )
+}
+
+fn opened_review(row: &std::path::Path) -> (Fixture, DeliveryHost) {
+    let fx = Fixture::new(row);
+    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+    open_for_completion(&fx, &host);
+    (fx, host)
+}
+
+fn docs_only_pr(row: &std::path::Path) -> (Fixture, DeliveryHost) {
+    let mut fx = Fixture::new(row);
+    fs::create_dir_all(fx.repo.join(".git/info")).unwrap();
+    fs::write(fx.repo.join(".git/info/exclude"), ".orbit/\n").unwrap();
+    fx.commit_on_base("src/contract", "broken\n");
+    git(&fx.repo, &["reset", "--hard", BASE]);
+    fx.base_sha = fx.head();
+    delete_remote_branch(&fx, BRANCH);
+    fx.candidate = fx.commit("README.md", "documentation only\n");
+    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+    host.set_context_files(TASK_ID, &["file:README.md"]);
+    action(
+        &host,
+        "pr_open",
+        &fx.open_input(&fx.candidate, &fx.base_sha),
+    )
+    .unwrap();
+    (fx, host)
+}
+
 // A successful publication checkpoint deliberately keeps H0 when completion
 // fails after repairing it. Resume executes completion as R2, retaining R0's
 // task/worktree ownership but inheriting only its durable ancestor authority.
 fn resume_auto_fix(fx: &Fixture, host: &DeliveryHost, reviewed: bool) -> Result<Value, String> {
-    let mut input = fx.complete_ungated_input();
-    input["auto_fix"] = json!(true);
-    input["completion"] = json!("review");
+    let mut input = auto_fix_input(fx);
     input["published_head_sha"] = json!("{{ steps.push.output.local_sha }}");
     if reviewed {
         input["reviewed_head_sha"] = json!(fx.candidate);
     }
-    let mut job = job_asset(json!([
-        {"id": "commit", "target": "activity:fixture_checkpoint"},
-        {"id": "push", "target": "activity:fixture_checkpoint"},
-        {"id": "complete_pr", "target": "activity:pr_complete", "default_input": input}
-    ]));
-    let mut catalog = V2ActivityCatalog::new();
-    for (name, action) in [
-        ("fixture_checkpoint", "test_stub_checkpoint"),
-        ("pr_complete", "pr_complete"),
-    ] {
-        catalog.insert(
-            name,
-            ActivityV2 {
-                description: name.into(),
-                input_schema_json: Value::Null,
-                output_schema_json: Value::Null,
-                fs_profile: None,
-                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
-                    action: action.into(),
-                    config: Value::Null,
-                }),
-            },
-        );
-    }
     host.script("test_stub_checkpoint", json!({"unexpected": true}));
-    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
     let mut resume = PipelineState::new(RUN_ID.into(), "fixture-job".into(), json!({}));
     resume.step_states = BTreeMap::from([
         (0, orbit_types::workflow::JobRunState::Success),
@@ -50,17 +182,24 @@ fn resume_auto_fix(fx: &Fixture, host: &DeliveryHost, reviewed: bool) -> Result<
         (0, json!({"commit_sha": fx.candidate})),
         (1, json!({"local_sha": fx.candidate})),
     ]);
-    let audit = tempfile::tempdir().unwrap();
-    let (writer, _, _) = build_writer_and_sinks(audit.path(), "jrun-resumed");
-    let outcome =
-        execute_job_with_resume(&job, json!({}), "jrun-resumed", writer, host, Some(&resume))
-            .map_err(|error| error.to_string())?;
+    let outcome = run_job(
+        host,
+        job_asset(json!([
+            {"id": "commit", "target": "activity:fixture_checkpoint"},
+            {"id": "push", "target": "activity:fixture_checkpoint"},
+            {"id": "complete_pr", "target": "activity:pr_complete", "default_input": input}
+        ])),
+        &[
+            ("fixture_checkpoint", "test_stub_checkpoint"),
+            ("pr_complete", "pr_complete"),
+        ],
+        "jrun-resumed",
+        json!({}),
+        Some(&resume),
+    )
+    .map_err(|error| error.to_string())?;
     assert!(
-        !host
-            .scripted_inputs
-            .lock()
-            .unwrap()
-            .contains_key("test_stub_checkpoint"),
+        !scripted_ran(host, "test_stub_checkpoint"),
         "successful prefix is restored, never replayed"
     );
     if !outcome.success {
@@ -114,19 +253,12 @@ fn auto_fix_resume_fixture(fx: &Fixture, source: &str) -> DeliveryHost {
             .unwrap(),
         );
     }
-    seed_auto_fix_history(
+    seed_attempt(
         &host,
-        PR_AUTO_FIX_ADMITTED_EVENT,
-        &PrAutoFixAttempt {
-            pr_number: PR_NUMBER.into(),
-            head_sha: fx.candidate.clone(),
-            blocker: PrAutoFixBlocker::FailedChecks,
-            attempt: 1,
-            budget: PR_AUTO_FIX_BUDGET,
-            run_id: RUN_ID.into(),
-            crew: "fixture".into(),
-            crew_source: "fixture".into(),
-        },
+        &fx.candidate,
+        PrAutoFixBlocker::FailedChecks,
+        1,
+        RUN_ID,
     );
     host
 }
@@ -136,19 +268,9 @@ fn auto_fix_resume_adopts_only_source_lineage_publication_chains() {
     isolated(
         "auto_fix::auto_fix_resume_adopts_only_source_lineage_publication_chains",
         |sandbox| {
-            for case in [
-                "published",
-                "unrelated",
-                "wrong_pr",
-                "wrong_branch",
-                "noncontiguous",
-                "changed_head",
-                "reviewed",
-                "budget",
-                "cross_job",
-                "missing_parent",
-                "cycle",
-            ] {
+            for case in cases(
+                "published unrelated wrong_pr wrong_branch noncontiguous changed_head reviewed budget cross_job missing_parent cycle",
+            ) {
                 in_fresh_row(sandbox, |row| {
                     let fx = Fixture::new(row);
                     let host = auto_fix_resume_fixture(&fx, RUN_ID);
@@ -240,22 +362,7 @@ fn auto_fix_resume_adopts_only_source_lineage_publication_chains() {
                     // the local-repair admission consumer.
                     git(&fx.repo, &["reset", "--hard", &fx.candidate]);
                     if case == "budget" {
-                        for attempt in 2..=PR_AUTO_FIX_BUDGET {
-                            seed_auto_fix_history(
-                                &host,
-                                PR_AUTO_FIX_ADMITTED_EVENT,
-                                &PrAutoFixAttempt {
-                                    pr_number: PR_NUMBER.into(),
-                                    head_sha: format!("spent-{attempt}"),
-                                    blocker: PrAutoFixBlocker::Conflict,
-                                    attempt,
-                                    budget: PR_AUTO_FIX_BUDGET,
-                                    run_id: RUN_ID.into(),
-                                    crew: "fixture".into(),
-                                    crew_source: "fixture".into(),
-                                },
-                            );
-                        }
+                        seed_spent(&host, 2, PrAutoFixBlocker::Conflict, RUN_ID);
                         fx.script_checks(&["dirty"]);
                     } else {
                         fx.script_checks(&["pending", "success"]);
@@ -281,7 +388,7 @@ fn auto_fix_resume_adopts_only_source_lineage_publication_chains() {
                     );
                     assert_eq!(host.status(TASK_ID), TaskStatus::Review);
                     assert_eq!(
-                        pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).len(),
+                        repair_attempts(&host).len(),
                         if case == "budget" {
                             3
                         } else if case == "published" {
@@ -301,15 +408,9 @@ fn auto_fix_resume_publishes_source_admitted_local_repair_safely() {
     isolated(
         "auto_fix::auto_fix_resume_publishes_source_admitted_local_repair_safely",
         |sandbox| {
-            for case in [
-                "unpublished",
-                "reviewed",
-                "remote_moved",
-                "validation_failed",
-                "unrelated",
-                "detached",
-                "wrong_branch",
-            ] {
+            for case in cases(
+                "unpublished reviewed remote_moved validation_failed unrelated detached wrong_branch",
+            ) {
                 in_fresh_row(sandbox, |row| {
                     let fx = Fixture::new(row);
                     let host = auto_fix_resume_fixture(&fx, RUN_ID);
@@ -347,10 +448,7 @@ fn auto_fix_resume_publishes_source_admitted_local_repair_safely() {
                             let output = result.expect("source-admitted committed repair must validate, publish and watch on resume");
                             assert_eq!(output["merge"]["head_sha"], repair);
                             assert_eq!(fx.remote_tip(BRANCH), repair);
-                            let pushes = orbit_types::workflow::pr_auto_fix_pushes(
-                                &host.history(TASK_ID),
-                                PR_NUMBER,
-                            );
+                            let pushes = repair_pushes(&host);
                             assert_eq!(pushes.len(), 1);
                             assert_eq!(pushes[0].run_id, "jrun-resumed");
                             assert_eq!(pushes[0].from_head_sha, fx.candidate);
@@ -389,10 +487,7 @@ fn auto_fix_resume_publishes_source_admitted_local_repair_safely() {
                         "repair authority never merges: {case}"
                     );
                     assert_eq!(host.status(TASK_ID), TaskStatus::Review);
-                    assert_eq!(
-                        pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).len(),
-                        1
-                    );
+                    assert_eq!(repair_attempts(&host).len(), 1);
                     if case != "unpublished" {
                         assert!(
                             orbit_types::workflow::pr_auto_fix_pushes(
@@ -573,10 +668,7 @@ pub(super) fn perform_ci_repair(
         .unwrap()
         .insert("test_ci_repair".into(), input.clone());
     let error = input["error_message"].as_str().unwrap();
-    assert!(
-        orbit_types::workflow::is_pr_auto_fix_check_repair(error),
-        "{mode}: {error}"
-    );
+    assert!(is_check_repair(error), "{mode}: {error}");
     let report = error
         .split("before writing retry, write ")
         .nth(1)
@@ -627,44 +719,18 @@ fn docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head() {
     isolated(
         "auto_fix::docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head",
         |sandbox| {
-            for mode in [
-                "unrelated",
-                "repair",
-                "landed",
-                "reviewed",
-                "landed_reviewed",
-                "budget",
-                "review_required",
-                "missing",
-                "stale",
-                "workflow",
-                "remote_moved",
-                "validation_failed",
-            ] {
+            for mode in cases(
+                "unrelated repair landed reviewed landed_reviewed budget review_required missing stale workflow remote_moved validation_failed",
+            ) {
                 in_fresh_row(sandbox, |row| {
-                    let mut fx = Fixture::new(row);
-                    fs::create_dir_all(fx.repo.join(".git/info")).unwrap();
-                    fs::write(fx.repo.join(".git/info/exclude"), ".orbit/\n").unwrap();
-                    fx.commit_on_base("src/contract", "broken\n");
-                    git(&fx.repo, &["reset", "--hard", BASE]);
-                    fx.base_sha = fx.head();
-                    delete_remote_branch(&fx, BRANCH);
-                    fx.candidate = fx.commit("README.md", "documentation only\n");
+                    let (fx, host) = docs_only_pr(row);
                     assert_eq!(
                         git(
                             &fx.repo,
                             &["diff", "--name-only", &fx.base_sha, &fx.candidate]
                         ),
-                        "README.md"
+                        "README.md",
                     );
-                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
-                    host.set_context_files(TASK_ID, &["file:README.md"]);
-                    action(
-                        &host,
-                        "pr_open",
-                        &fx.open_input(&fx.candidate, &fx.base_sha),
-                    )
-                    .unwrap();
                     host.script("test_ci_repair", json!({"mode":mode}));
                     host.script(
                         "test_checkpoint",
@@ -679,9 +745,7 @@ fn docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head() {
                     if matches!(mode, "landed" | "landed_reviewed") {
                         fx.commit_on_base("src/contract", "fixed\n");
                     }
-                    let mut input = fx.complete_ungated_input();
-                    input["auto_fix"] = json!(true);
-                    input["completion"] = json!("review");
+                    let mut input = auto_fix_input(&fx);
                     if matches!(mode, "reviewed" | "landed_reviewed") {
                         input["reviewed_head_sha"] = json!(fx.candidate);
                         input["re_review_on_conflict"] = json!(true);
@@ -694,53 +758,9 @@ fn docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head() {
                         fx.script_checks(&["review_required"]);
                     }
                     if mode == "budget" {
-                        for attempt in 1..=PR_AUTO_FIX_BUDGET {
-                            seed_auto_fix_history(
-                                &host,
-                                PR_AUTO_FIX_ADMITTED_EVENT,
-                                &PrAutoFixAttempt {
-                                    pr_number: PR_NUMBER.into(),
-                                    head_sha: format!("spent-{attempt}"),
-                                    blocker: PrAutoFixBlocker::FailedChecks,
-                                    attempt,
-                                    budget: PR_AUTO_FIX_BUDGET,
-                                    run_id: RUN_ID.into(),
-                                    crew: "fixture".into(),
-                                    crew_source: "fixture".into(),
-                                },
-                            );
-                        }
+                        seed_spent(&host, 1, PrAutoFixBlocker::FailedChecks, RUN_ID);
                     }
-                    let mut job = job_asset(json!([
-                        {"id":"commit","target":"activity:checkpoint","recovery_activity":"step_failure_recovery"},
-                        {"id":"complete_pr","target":"activity:pr_complete","recovery_activity":"pr_conflict_recovery","default_input":input}
-                    ]));
-                    let mut catalog = V2ActivityCatalog::new();
-                    for (name, action) in [
-                        ("checkpoint", "test_checkpoint"),
-                        ("pr_complete", "pr_complete"),
-                        ("step_failure_recovery", "test_ci_repair"),
-                        ("pr_conflict_recovery", "unexpected_conflict"),
-                    ] {
-                        catalog.insert(
-                            name,
-                            ActivityV2 {
-                                description: name.into(),
-                                input_schema_json: Value::Null,
-                                output_schema_json: Value::Null,
-                                fs_profile: None,
-                                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
-                                    action: action.into(),
-                                    config: Value::Null,
-                                }),
-                            },
-                        );
-                    }
-                    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
-                    let audit = tempfile::tempdir().unwrap();
-                    let (writer, _, _) = build_writer_and_sinks(audit.path(), RUN_ID);
-                    let outcome =
-                        execute_job_with_resume(&job, json!({}), RUN_ID, writer, &host, None);
+                    let outcome = run_repair_job(&host, input);
                     if matches!(mode, "repair" | "landed") {
                         let result = outcome.expect(mode);
                         assert!(result.success, "{result:?}");
@@ -829,7 +849,7 @@ fn docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head() {
                         }
                     }
                     assert_eq!(
-                        pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).len(),
+                        repair_attempts(&host).len(),
                         if mode == "budget" {
                             3
                         } else if matches!(mode, "review_required" | "landed" | "landed_reviewed") {
@@ -856,18 +876,9 @@ fn published_ci_repair_conflict_refresh_keeps_authenticated_head_and_guards() {
     isolated(
         "auto_fix::published_ci_repair_conflict_refresh_keeps_authenticated_head_and_guards",
         |sandbox| {
-            for case in [
-                "refresh",
-                "reviewed",
-                "review_required",
-                "real_conflict",
-                "ordinary_stale",
-                "budget",
-                "validation_failed",
-                "remote_moved",
-                "remote_deleted",
-                "wrong_base",
-            ] {
+            for case in cases(
+                "refresh reviewed review_required real_conflict ordinary_stale budget validation_failed remote_moved remote_deleted wrong_base",
+            ) {
                 in_fresh_row(sandbox, |row| {
                     tracing::info!(case, "published CI repair conflict");
                     let fx = Fixture::new(row);
@@ -877,16 +888,11 @@ fn published_ci_repair_conflict_refresh_keeps_authenticated_head_and_guards() {
                     git(&fx.repo, &["commit", "-m", "admitted CI repair"]);
                     let repaired = fx.head();
                     host.require_commands(&["test -f repair.txt"]);
-                    let mut input = fx.complete_ungated_input();
-                    input["auto_fix"] = json!(true);
-                    input["completion"] = json!("review");
+                    let mut input = auto_fix_input(&fx);
                     let published = action(&host, "pr_complete", &input).unwrap();
                     assert_eq!(published["merge"]["head_sha"], repaired);
                     assert_eq!(fx.remote_tip(BRANCH), repaired);
-                    let pushes = orbit_types::workflow::pr_auto_fix_pushes(
-                        &host.history(TASK_ID),
-                        PR_NUMBER,
-                    );
+                    let pushes = repair_pushes(&host);
                     assert_eq!(pushes.len(), 1);
                     assert_eq!(pushes[0].from_head_sha, fx.candidate);
                     assert_eq!(pushes[0].to_head_sha, repaired);
@@ -907,22 +913,7 @@ fn published_ci_repair_conflict_refresh_keeps_authenticated_head_and_guards() {
                     } else if case == "ordinary_stale" {
                         input["auto_fix"] = json!(false);
                     } else if case == "budget" {
-                        for attempt in 2..=PR_AUTO_FIX_BUDGET {
-                            seed_auto_fix_history(
-                                &host,
-                                PR_AUTO_FIX_ADMITTED_EVENT,
-                                &PrAutoFixAttempt {
-                                    pr_number: PR_NUMBER.into(),
-                                    head_sha: format!("spent-{attempt}"),
-                                    blocker: PrAutoFixBlocker::Conflict,
-                                    attempt,
-                                    budget: PR_AUTO_FIX_BUDGET,
-                                    run_id: "sibling-run".into(),
-                                    crew: "fixture".into(),
-                                    crew_source: "fixture".into(),
-                                },
-                            );
-                        }
+                        seed_spent(&host, 2, PrAutoFixBlocker::Conflict, "sibling-run");
                     } else if case == "validation_failed" {
                         host.require_commands(&["exit 23"]);
                     } else if case == "remote_moved" {
@@ -950,10 +941,7 @@ fn published_ci_repair_conflict_refresh_keeps_authenticated_head_and_guards() {
                                 )["tested_head"],
                                 refreshed
                             );
-                            let pushes = orbit_types::workflow::pr_auto_fix_pushes(
-                                &host.history(TASK_ID),
-                                PR_NUMBER,
-                            );
+                            let pushes = repair_pushes(&host);
                             assert_eq!(pushes.len(), 2);
                             assert_eq!(pushes[1].from_head_sha, repaired);
                             assert_eq!(pushes[1].to_head_sha, refreshed);
@@ -1015,15 +1003,9 @@ fn published_ci_repair_conflict_refresh_keeps_authenticated_head_and_guards() {
                             assert_eq!(recovered_fx.remote_tip(BASE), base);
                             assert_eq!(host.status(TASK_ID), TaskStatus::Review);
                             assert_eq!(input["published_head_sha"], pushes[0].from_head_sha);
-                            assert_eq!(
-                                pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).len(),
-                                2
-                            );
+                            assert_eq!(repair_attempts(&host).len(), 2);
                             assert!(host.history(TASK_ID).starts_with(&failed_history));
-                            let pushes = orbit_types::workflow::pr_auto_fix_pushes(
-                                &host.history(TASK_ID),
-                                PR_NUMBER,
-                            );
+                            let pushes = repair_pushes(&host);
                             assert_eq!(pushes.last().unwrap().from_head_sha, repaired);
                             assert_eq!(pushes.last().unwrap().to_head_sha, recovered);
                             return;
@@ -1064,7 +1046,7 @@ fn published_ci_repair_conflict_refresh_keeps_authenticated_head_and_guards() {
                         }
                     }
                     assert_eq!(
-                        pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).len(),
+                        repair_attempts(&host).len(),
                         match case {
                             "budget" => 3,
                             "ordinary_stale" | "wrong_base" | "review_required" => 1,
@@ -1102,20 +1084,9 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
             let signature =
                 "step.sh: line <n>: scripts/ci-download-verified.sh: no such file or directory";
             let display = "##[group]Run preflight\n  emit \"::error title=insufficient runner disk::need more space\"\n  error[E0123]: printed compiler text\n  lost communication with the server\n##[endgroup]\n";
-            for case in [
-                "raw",
-                "raw_timestamp_tabs",
-                "raw_timestamp_tabbed_error",
-                "raw_timestamp_tabbed_compiler",
-                "columns",
-                "successful_step",
-                "unclosed",
-                "orphan",
-                "truncated",
-                "incomplete",
-                "selected",
-                "wrong_step",
-            ] {
+            for case in cases(
+                "raw raw_timestamp_tabs raw_timestamp_tabbed_error raw_timestamp_tabbed_compiler columns successful_step unclosed orphan truncated incomplete selected wrong_step",
+            ) {
                 in_fresh_row(sandbox, |row| {
                     let fx = Fixture::new(row);
                     let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
@@ -1202,9 +1173,7 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
                     }
                     host.script("ci.job_log", response);
                     fx.script_checks(&["failure"]);
-                    let mut input = fx.complete_ungated_input();
-                    input["auto_fix"] = json!(true);
-                    input["completion"] = json!("review");
+                    let input = auto_fix_input(&fx);
                     let error = action(&host, "pr_complete", &input)
                         .unwrap_err()
                         .to_string();
@@ -1212,11 +1181,7 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
                         case,
                         "unclosed" | "orphan" | "truncated" | "incomplete" | "wrong_step"
                     );
-                    assert_eq!(
-                        orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
-                        actionable,
-                        "{case}: {error}"
-                    );
+                    assert_eq!(is_check_repair(&error), actionable, "{case}: {error}");
                     if actionable {
                         assert!(
                             error.contains(&format!("with signature `{expected}`")),
@@ -1232,7 +1197,7 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
                                 || error.contains("could not be read"),
                             "{case}: {error}"
                         );
-                        assert!(pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).is_empty());
+                        assert!(repair_attempts(&host).is_empty());
                     }
                     assert!(error.len() < 12000, "repair evidence remains bounded");
                     assert!(fx.merge_requests().is_empty());
@@ -1250,32 +1215,12 @@ fn auto_fix_preserves_complete_oversized_failure_regions() {
     isolated(
         "auto_fix::auto_fix_preserves_complete_oversized_failure_regions",
         |sandbox| {
-            for case in [
-                "columns",
-                "unattributed",
-                "raw",
-                "runner_regions",
-                "source_incomplete",
-                "source_missing",
-                "command_incomplete",
-                "selection_incomplete",
-                "selection_missing",
-                "source_unknown",
-                "provenance_missing",
-                "step_missing",
-                "multiple_steps",
-                "job_conflict",
-                "step_conflict",
-                "mixed_labels",
-                "omitted_conflict",
-                "ambiguous_raw",
-                "tail_only",
-            ] {
+            for case in cases(
+                "columns unattributed raw runner_regions source_incomplete source_missing command_incomplete selection_incomplete selection_missing source_unknown provenance_missing step_missing multiple_steps job_conflict step_conflict mixed_labels omitted_conflict ambiguous_raw tail_only",
+            ) {
                 writeln!(std::io::stderr(), "oversized-failure-region-case: {case}").unwrap();
                 in_fresh_row(sandbox, |row| {
-                    let fx = Fixture::new(row);
-                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
-                    open_for_completion(&fx, &host);
+                    let (fx, host) = opened_review(row);
                     let label = if case == "unattributed" {
                         "UNKNOWN STEP"
                     } else {
@@ -1397,21 +1342,15 @@ fn auto_fix_preserves_complete_oversized_failure_regions() {
                         host.script("ci.commit_jobs", json!({"jobs":[job]}));
                     }
                     fx.script_checks(&["failure"]);
-                    let mut input = fx.complete_ungated_input();
-                    input["auto_fix"] = json!(true);
-                    input["completion"] = json!("review");
+                    let input = auto_fix_input(&fx);
                     let error = action(&host, "pr_complete", &input)
                         .unwrap_err()
                         .to_string();
                     let actionable =
                         matches!(case, "columns" | "unattributed" | "raw" | "runner_regions");
+                    assert_eq!(is_check_repair(&error), actionable, "{case}: {error}");
                     assert_eq!(
-                        orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
-                        actionable,
-                        "{case}: {error}"
-                    );
-                    assert_eq!(
-                        pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).len(),
+                        repair_attempts(&host).len(),
                         usize::from(actionable),
                         "{case}: invalid evidence spends no repair authority"
                     );
@@ -1455,14 +1394,10 @@ fn auto_fix_watches_required_running_beside_optional_failure() {
     isolated(
         "auto_fix::auto_fix_watches_required_running_beside_optional_failure",
         |sandbox| {
-            let fx = Fixture::new(sandbox);
-            let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
-            open_for_completion(&fx, &host);
+            let (fx, host) = opened_review(sandbox);
             host.script("ci.prerequisite_evidence", json!({"evidence":null}));
             fx.script_checks(&["mixed_pending", "mixed_pending", "mixed_success"]);
-            let mut input = fx.complete_ungated_input();
-            input["auto_fix"] = json!(true);
-            input["completion"] = json!("review");
+            let mut input = auto_fix_input(&fx);
             input["max_wait_seconds"] = json!(15);
             let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_u64));
             let reads = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -1495,7 +1430,7 @@ fn auto_fix_watches_required_running_beside_optional_failure() {
             assert_eq!(completed["merge"]["head_sha"], fx.candidate);
             assert_eq!(completed["merge"]["waited_seconds"], 10);
             assert_eq!(fx.status_reads(), 3, "watch until required success");
-            assert!(pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).is_empty());
+            assert!(repair_attempts(&host).is_empty());
             assert!(
                 fx.merge_requests().is_empty(),
                 "watch authority never merges"
@@ -1514,32 +1449,14 @@ fn auto_fix_mixed_failure_wait_preserves_recovery_and_refusals() {
     isolated(
         "auto_fix::auto_fix_mixed_failure_wait_preserves_recovery_and_refusals",
         |sandbox| {
-            for case in [
-                "required_failure",
-                "optional_pending",
-                "administrative",
-                "review",
-                "foreign_head",
-                "foreign_commit",
-                "missing_head",
-                "unknown_required",
-                "unclassified",
-                "truncated",
-                "malformed",
-                "auth",
-                "timeout",
-                "changed_head",
-                "changed_base",
-            ] {
+            for case in cases(
+                "required_failure optional_pending administrative review foreign_head foreign_commit missing_head unknown_required unclassified truncated malformed auth timeout changed_head changed_base",
+            ) {
                 in_fresh_row(sandbox, |row| {
-                    let fx = Fixture::new(row);
-                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
-                    open_for_completion(&fx, &host);
+                    let (fx, host) = opened_review(row);
                     host.script("ci.prerequisite_evidence", json!({"evidence":null}));
                     fx.script_checks(&["mixed_pending", "mixed_success"]);
-                    let mut input = fx.complete_ungated_input();
-                    input["auto_fix"] = json!(true);
-                    input["completion"] = json!("review");
+                    let mut input = auto_fix_input(&fx);
                     let mut policy = json!({"headRefOid":fx.candidate,"commits":{"nodes":[{"commit":{
                         "oid":fx.candidate,"statusCheckRollup":{"contexts":{
                             "pageInfo":{"hasNextPage":false},"nodes":[
@@ -1632,14 +1549,14 @@ fn auto_fix_mixed_failure_wait_preserves_recovery_and_refusals() {
                         .to_string();
                     if case == "required_failure" {
                         assert!(
-                            orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
+                            is_check_repair(&error),
                             "eligible required failure: {error}"
                         );
                     } else {
                         assert!(error.contains(expected), "{case}: {error}");
                     }
                     assert_eq!(
-                        pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).len(),
+                        repair_attempts(&host).len(),
                         usize::from(case == "required_failure"),
                         "{case}: only required failure admits recovery"
                     );
@@ -1676,33 +1593,11 @@ fn auto_fix_repairs_required_aggregate_from_authenticated_source_annotations() {
     isolated(
         "auto_fix::auto_fix_repairs_required_aggregate_from_authenticated_source_annotations",
         |sandbox| {
-            for aggregate in [
-                "valid",
-                "mixed",
-                "foreign_app",
-                "missing_identity",
-                "stale",
-                "workflow_path",
-                "escape",
-                "no_failure",
-            ] {
+            for aggregate in cases(
+                "valid mixed foreign_app missing_identity stale workflow_path escape no_failure",
+            ) {
                 in_fresh_row(sandbox, |row| {
-                    let mut fx = Fixture::new(row);
-                    fs::create_dir_all(fx.repo.join(".git/info")).unwrap();
-                    fs::write(fx.repo.join(".git/info/exclude"), ".orbit/\n").unwrap();
-                    fx.commit_on_base("src/contract", "broken\n");
-                    git(&fx.repo, &["reset", "--hard", BASE]);
-                    fx.base_sha = fx.head();
-                    delete_remote_branch(&fx, BRANCH);
-                    fx.candidate = fx.commit("README.md", "documentation only\n");
-                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
-                    host.set_context_files(TASK_ID, &["file:README.md"]);
-                    action(
-                        &host,
-                        "pr_open",
-                        &fx.open_input(&fx.candidate, &fx.base_sha),
-                    )
-                    .unwrap();
+                    let (fx, host) = docs_only_pr(row);
                     host.script(
                         "test_ci_repair",
                         json!({"mode":"repair","aggregate":aggregate}),
@@ -1717,46 +1612,15 @@ fn auto_fix_repairs_required_aggregate_from_authenticated_source_annotations() {
                     } else {
                         "source_aggregate"
                     }]);
-                    let mut input = fx.complete_ungated_input();
-                    input["auto_fix"] = json!(true);
-                    input["completion"] = json!("review");
-                    let mut job = job_asset(json!([
-                        {"id":"commit","target":"activity:checkpoint","recovery_activity":"step_failure_recovery"},
-                        {"id":"complete_pr","target":"activity:pr_complete","recovery_activity":"pr_conflict_recovery","default_input":input}
-                    ]));
-                    let mut catalog = V2ActivityCatalog::new();
-                    for (name, action) in [
-                        ("checkpoint", "test_checkpoint"),
-                        ("pr_complete", "pr_complete"),
-                        ("step_failure_recovery", "test_ci_repair"),
-                        ("pr_conflict_recovery", "unexpected_conflict"),
-                    ] {
-                        catalog.insert(
-                            name,
-                            ActivityV2 {
-                                description: name.into(),
-                                input_schema_json: Value::Null,
-                                output_schema_json: Value::Null,
-                                fs_profile: None,
-                                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
-                                    action: action.into(),
-                                    config: Value::Null,
-                                }),
-                            },
-                        );
-                    }
-                    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
-                    let audit = tempfile::tempdir().unwrap();
-                    let (writer, _, _) = build_writer_and_sinks(audit.path(), RUN_ID);
-                    let outcome =
-                        execute_job_with_resume(&job, json!({}), RUN_ID, writer, &host, None);
+                    let input = auto_fix_input(&fx);
+                    let outcome = run_repair_job(&host, input);
                     let repair = host
                         .scripted_inputs
                         .lock()
                         .unwrap()
                         .get("test_ci_repair")
                         .cloned();
-                    let attempts = pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER);
+                    let attempts = repair_attempts(&host);
                     if matches!(aggregate, "valid" | "mixed") {
                         let result = outcome.expect(aggregate);
                         assert!(result.success, "{aggregate}: {result:?}");
@@ -1839,32 +1703,7 @@ fn auto_fix_repairs_required_aggregate_from_authenticated_source_annotations() {
 /// `gh run view --log-failed` serves `ci.job_log`. Absent unless this test
 /// plants it, so other rows keep the substitute's ordinary refusal.
 fn plant_commit_ci(fx: &Fixture, sha: &str, run_id: u64, conclusion: &str, log: &str) {
-    let dir = fx.forge.join("commit-ci").join(sha);
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("run_id"), run_id.to_string()).unwrap();
-    fs::write(
-        dir.join("runs.json"),
-        serde_json::to_vec(&json!({"total_count":1,"workflow_runs":[{
-            "id":run_id,"name":"CI","workflow_id":1,"event":"push",
-            "head_sha":sha,"head_branch":BASE
-        }]}))
-        .unwrap(),
-    )
-    .unwrap();
-    let steps = if conclusion == "failure" {
-        r#"[{"name":"compile","conclusion":"failure"}]"#
-    } else {
-        r#"[{"name":"compile","conclusion":"success"}]"#
-    };
-    fs::write(
-        dir.join("jobs.json"),
-        format!(
-            r#"{{"total_count":1,"jobs":[{{"id":{},"name":"test","status":"completed","conclusion":"{conclusion}","steps":{steps}}}]}}"#,
-            run_id + 1
-        ),
-    )
-    .unwrap();
-    fs::write(dir.join("log"), log).unwrap();
+    plant_paired_commit_ci(fx, sha, run_id, &[("test", conclusion)], log);
 }
 
 /// One push run whose jobs are `(name, conclusion)`. One log serves every job
@@ -1920,9 +1759,7 @@ fn plant_paired_commit_ci(fx: &Fixture, sha: &str, run_id: u64, jobs: &[(&str, &
 /// known-red on the tip, also candidate-owned, or green on the tip with no
 /// fork-point job.
 fn paired_required_base_case(row: &std::path::Path, case: &str) {
-    let fx = Fixture::new(row);
-    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
-    open_for_completion(&fx, &host);
+    let (fx, host) = opened_review(row);
     let shared = "error[E0433]: cannot find module `broken_base`\n";
     let own = "error[E0433]: cannot find module `different_failure`\n";
     let known_red = case.starts_with("known_red_");
@@ -1952,21 +1789,7 @@ fn paired_required_base_case(row: &std::path::Path, case: &str) {
     };
     plant_paired_commit_ci(&fx, &tip, 31, tip_jobs, if known_red { shared } else { "" });
     if case.ends_with("_reserved") {
-        seed_auto_fix_history(
-            &host,
-            orbit_types::workflow::PR_BASE_UPDATE_RESERVED_EVENT,
-            &orbit_types::workflow::PrBaseUpdateReservation {
-                execution: RUN_ID.into(),
-                repository: "forge/remote".into(),
-                pr_number: PR_NUMBER.into(),
-                head_sha: fx.candidate.clone(),
-                head_branch: BRANCH.into(),
-                base_branch: BASE.into(),
-                base_sha: tip.clone(),
-                deadline_ms: 1_100_000,
-                evidence: json!({"cause": "inherited"}),
-            },
-        );
+        reserve_base_update(&host, &fx.candidate, &tip);
     }
     let rollup = if matches!(
         case,
@@ -1977,9 +1800,7 @@ fn paired_required_base_case(row: &std::path::Path, case: &str) {
         "paired_failure"
     };
     fx.script_checks(&[rollup]);
-    let mut input = fx.complete_ungated_input();
-    input["auto_fix"] = json!(true);
-    input["completion"] = json!("review");
+    let mut input = auto_fix_input(&fx);
     input["max_wait_seconds"] = json!(15);
     input["poll_interval_seconds"] = json!(5);
     let result = super::complete_with_logical_clock(&host, &input);
@@ -2008,10 +1829,7 @@ fn paired_required_base_case(row: &std::path::Path, case: &str) {
         let error = result
             .expect_err("candidate-owned checks take one repair")
             .to_string();
-        assert!(
-            orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
-            "{case}: {error}"
-        );
+        assert!(is_check_repair(&error), "{case}: {error}");
         assert_eq!(attempts.len(), 1, "{case}: one ordinary repair");
         assert_eq!(base_red, 0, "{case}: no known-red record");
         assert!(
@@ -2045,29 +1863,20 @@ fn auto_fix_checks_current_base_before_spending_a_repair() {
     isolated(
         "auto_fix::auto_fix_checks_current_base_before_spending_a_repair",
         |sandbox| {
-            for case in [
-                "fixed_base",
-                "red_tip",
-                "candidate",
-                "already_current",
-                "red_tip_older_green",
-                "red_tip_foreign_green",
-                "non_push_green",
-                "incomplete_green",
-                "fixed_base_older_red",
-                "fixed_base_exhausted_repairs",
-                "fixed_base_reserved",
-                "candidate_green_tip",
-                "candidate_green_tip_reserved",
-                "known_red_beside_candidate",
-                "known_red_before_candidate",
-                "candidate_owned_pair",
-                "candidate_owned_pair_reserved",
-                "candidate_beside_green_tip",
-            ] {
+            for case in cases(
+                "fixed_base red_tip candidate already_current red_tip_older_green red_tip_foreign_green non_push_green incomplete_green fixed_base_older_red fixed_base_exhausted_repairs fixed_base_reserved candidate_green_tip candidate_green_tip_reserved known_red_beside_candidate known_red_before_candidate candidate_owned_pair candidate_owned_pair_reserved candidate_beside_green_tip auto_fix_does_not_repair_while_the_moved_base_ci_is_open",
+            ) {
                 in_fresh_row(sandbox, |row| {
                     eprintln!("scenario: {case}");
                     let row_started = std::time::Instant::now();
+                    if case == "auto_fix_does_not_repair_while_the_moved_base_ci_is_open" {
+                        open_moved_base_ci(row);
+                        eprintln!(
+                            "scenario: {case} row elapsed {:.3} s",
+                            row_started.elapsed().as_secs_f64()
+                        );
+                        return;
+                    }
                     if matches!(
                         case,
                         "known_red_beside_candidate"
@@ -2083,9 +1892,7 @@ fn auto_fix_checks_current_base_before_spending_a_repair() {
                         );
                         return;
                     }
-                    let fx = Fixture::new(row);
-                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
-                    open_for_completion(&fx, &host);
+                    let (fx, host) = opened_review(row);
                     let shared = "error[E0433]: cannot find module `broken_base`\n";
                     let own = "error[E0433]: cannot find module `different_failure`\n";
                     let candidate_only = case.starts_with("candidate_green_tip");
@@ -2149,39 +1956,10 @@ fn auto_fix_checks_current_base_before_spending_a_repair() {
                     }
                     fs::write(runs_path, serde_json::to_vec(&runs).unwrap()).unwrap();
                     if case == "fixed_base_exhausted_repairs" {
-                        for attempt in 1..=PR_AUTO_FIX_BUDGET {
-                            seed_auto_fix_history(
-                                &host,
-                                PR_AUTO_FIX_ADMITTED_EVENT,
-                                &PrAutoFixAttempt {
-                                    pr_number: PR_NUMBER.into(),
-                                    head_sha: format!("spent-{attempt}"),
-                                    blocker: PrAutoFixBlocker::FailedChecks,
-                                    attempt,
-                                    budget: PR_AUTO_FIX_BUDGET,
-                                    run_id: RUN_ID.into(),
-                                    crew: "fixture".into(),
-                                    crew_source: "fixture".into(),
-                                },
-                            );
-                        }
+                        seed_spent(&host, 1, PrAutoFixBlocker::FailedChecks, RUN_ID);
                     }
                     if case.ends_with("_reserved") {
-                        seed_auto_fix_history(
-                            &host,
-                            orbit_types::workflow::PR_BASE_UPDATE_RESERVED_EVENT,
-                            &orbit_types::workflow::PrBaseUpdateReservation {
-                                execution: RUN_ID.into(),
-                                repository: "forge/remote".into(),
-                                pr_number: PR_NUMBER.into(),
-                                head_sha: fx.candidate.clone(),
-                                head_branch: BRANCH.into(),
-                                base_branch: BASE.into(),
-                                base_sha: tip.clone(),
-                                deadline_ms: 1_100_000,
-                                evidence: json!({"cause":"inherited"}),
-                            },
-                        );
+                        reserve_base_update(&host, &fx.candidate, &tip);
                     }
                     fx.script_checks(
                         if case.starts_with("fixed_base") && case != "fixed_base_reserved" {
@@ -2190,13 +1968,11 @@ fn auto_fix_checks_current_base_before_spending_a_repair() {
                             &["failure"]
                         },
                     );
-                    let mut input = fx.complete_ungated_input();
-                    input["auto_fix"] = json!(true);
-                    input["completion"] = json!("review");
+                    let mut input = auto_fix_input(&fx);
                     input["max_wait_seconds"] = json!(15);
                     input["poll_interval_seconds"] = json!(5);
                     let result = super::complete_with_logical_clock(&host, &input);
-                    let attempts = pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER);
+                    let attempts = repair_attempts(&host);
                     match case {
                         "fixed_base" | "fixed_base_older_red" | "fixed_base_exhausted_repairs" => {
                             let output = result.expect("refresh stale branch without repair");
@@ -2244,10 +2020,7 @@ fn auto_fix_checks_current_base_before_spending_a_repair() {
                         }
                         _ => {
                             let error = result.expect_err("candidate needs repair").to_string();
-                            assert!(
-                                orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
-                                "{case}: {error}"
-                            );
+                            assert!(is_check_repair(&error), "{case}: {error}");
                             assert_eq!(attempts.len(), 1, "{case}: ordinary repair admission");
                             assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
                             assert!(
@@ -2306,16 +2079,9 @@ fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
     isolated(
         "auto_fix::auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure",
         |sandbox| {
-            for case in [
-                "red_base",
-                "red_base_beside_optional",
-                "candidate",
-                "unfetched_head",
-            ] {
+            for case in cases("red_base red_base_beside_optional candidate unfetched_head") {
                 in_fresh_row(sandbox, |row| {
-                    let fx = Fixture::new(row);
-                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
-                    open_for_completion(&fx, &host);
+                    let (fx, host) = opened_review(row);
                     let shared = "error[E0433]: cannot find module `broken_base`\n\
                         ##[error]Process completed with exit code 101.\n";
                     let candidate_only = "error[E0433]: cannot find module `candidate_only`\n\
@@ -2402,7 +2168,7 @@ fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
                     let error = action(&host, "pr_complete", &input)
                         .expect_err(case)
                         .to_string();
-                    let attempts = pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER);
+                    let attempts = repair_attempts(&host);
                     let polls = fx.status_reads() - reads_before;
                     if case != "candidate" {
                         assert!(
@@ -2413,7 +2179,7 @@ fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
                             "{case}: {error}"
                         );
                         assert!(
-                            !orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
+                            !is_check_repair(&error),
                             "{case}: no repair handoff: {error}"
                         );
                         assert!(attempts.is_empty(), "{case}: no attempt is spent");
@@ -2422,10 +2188,7 @@ fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
                             "{case}: waits for the base before the deadline ({polls} polls)"
                         );
                     } else {
-                        assert!(
-                            orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
-                            "{case}: {error}"
-                        );
+                        assert!(is_check_repair(&error), "{case}: {error}");
                         let evidence = "candidate_only";
                         assert!(
                             error.contains(&format!(
@@ -2451,64 +2214,54 @@ fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
 /// A base that moved to a commit whose same job has not concluded is still
 /// the inherited failure. That poll admits no repair: the attempt waits until
 /// the tip job finishes, when a success can refresh and a failure can be
-/// judged on its own.
-#[test]
-fn auto_fix_does_not_repair_while_the_moved_base_ci_is_open() {
-    isolated(
-        "auto_fix::auto_fix_does_not_repair_while_the_moved_base_ci_is_open",
-        |sandbox| {
-            in_fresh_row(sandbox, |row| {
-                let fx = Fixture::new(row);
-                let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
-                open_for_completion(&fx, &host);
-                let shared = "error[E0433]: cannot find module `broken_base`\n\
+/// judged on its own. Labelled row of
+/// `auto_fix_checks_current_base_before_spending_a_repair`.
+fn open_moved_base_ci(row: &std::path::Path) {
+    let case = "auto_fix_does_not_repair_while_the_moved_base_ci_is_open";
+    let (fx, host) = opened_review(row);
+    let shared = "error[E0433]: cannot find module `broken_base`\n\
                     ##[error]Process completed with exit code 101.\n";
-                plant_commit_ci(&fx, &fx.candidate, 11, "failure", shared);
-                plant_commit_ci(&fx, &fx.base_sha, 21, "failure", shared);
-                fx.advance_base();
-                let tip = fx.local_tip(BASE);
-                assert_ne!(tip, fx.base_sha, "the base commit moved");
-                assert_eq!(fx.remote_tip(BASE), tip);
-                plant_open_commit_ci(&fx, &tip, 31);
-                fx.script_checks(&["failure"]);
-                let mut input = fx.complete_ungated_input();
-                input["auto_fix"] = json!(true);
-                input["completion"] = json!("review");
-                input["max_wait_seconds"] = json!(15);
-                input["poll_interval_seconds"] = json!(5);
-                let reads_before = fx.status_reads();
-                // The prerequisite clock and the poll wait advance together, so
-                // the hold reaches its deadline without a wall-clock sleep.
-                let error = super::complete_with_logical_clock(&host, &input)
-                    .expect_err("an open moved base does not merge or repair")
-                    .to_string();
-                let attempts = pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER);
-                assert!(
-                    error.contains("auto_fix_stopped")
-                        && error.contains("base_red")
-                        && error.contains(&tip)
-                        && error.contains("has not concluded"),
-                    "{error}"
-                );
-                assert!(
-                    !orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
-                    "no repair handoff: {error}"
-                );
-                assert!(
-                    attempts.is_empty(),
-                    "no repair attempt is spent: {attempts:?}"
-                );
-                assert!(
-                    fx.status_reads() - reads_before >= 2,
-                    "the open tip is held across polls, not repaired on the first"
-                );
-                assert!(fx.merge_requests().is_empty(), "no merge");
-                assert_eq!(fx.head(), fx.candidate);
-                assert_eq!(fx.remote_tip(BASE), tip);
-                assert_eq!(host.status(TASK_ID), TaskStatus::Review);
-            });
-        },
+    plant_commit_ci(&fx, &fx.candidate, 11, "failure", shared);
+    plant_commit_ci(&fx, &fx.base_sha, 21, "failure", shared);
+    fx.advance_base();
+    let tip = fx.local_tip(BASE);
+    assert_ne!(tip, fx.base_sha, "the base commit moved");
+    assert_eq!(fx.remote_tip(BASE), tip);
+    plant_open_commit_ci(&fx, &tip, 31);
+    fx.script_checks(&["failure"]);
+    let mut input = auto_fix_input(&fx);
+    input["max_wait_seconds"] = json!(15);
+    input["poll_interval_seconds"] = json!(5);
+    let reads_before = fx.status_reads();
+    // The prerequisite clock and the poll wait advance together, so
+    // the hold reaches its deadline without a wall-clock sleep.
+    let error = super::complete_with_logical_clock(&host, &input)
+        .expect_err(case)
+        .to_string();
+    let attempts = repair_attempts(&host);
+    assert!(
+        error.contains("auto_fix_stopped")
+            && error.contains("base_red")
+            && error.contains(&tip)
+            && error.contains("has not concluded"),
+        "{case}: {error}"
     );
+    assert!(
+        !is_check_repair(&error),
+        "{case}: no repair handoff: {error}"
+    );
+    assert!(
+        attempts.is_empty(),
+        "{case}: no repair attempt is spent: {attempts:?}"
+    );
+    assert!(
+        fx.status_reads() - reads_before >= 2,
+        "{case}: the open tip is held across polls, not repaired on the first"
+    );
+    assert!(fx.merge_requests().is_empty(), "{case}: no merge");
+    assert_eq!(fx.head(), fx.candidate, "{case}");
+    assert_eq!(fx.remote_tip(BASE), tip, "{case}");
+    assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{case}");
 }
 
 /// A second required failure must reach both repair admission and the job's
@@ -2520,9 +2273,7 @@ fn auto_fix_settles_staggered_required_failures_before_repair_and_final_recovery
         |sandbox| {
             for case in ["settled", "timeout", "policy_ahead"] {
                 in_fresh_row(sandbox, |row| {
-                    let fx = Fixture::new(row);
-                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
-                    open_for_completion(&fx, &host);
+                    let (fx, host) = opened_review(row);
                     plant_paired_commit_ci(
                         &fx,
                         &fx.candidate,
@@ -2553,14 +2304,12 @@ fn auto_fix_settles_staggered_required_failures_before_repair_and_final_recovery
                             }}
                         })).unwrap()).unwrap();
                     }
-                    let mut input = fx.complete_ungated_input();
-                    input["auto_fix"] = json!(true);
-                    input["completion"] = json!("review");
+                    let mut input = auto_fix_input(&fx);
                     input["max_wait_seconds"] = json!(15);
                     let error = super::complete_with_logical_clock(&host, &input)
                         .expect_err("failed checks cannot complete")
                         .to_string();
-                    let attempts = pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER);
+                    let attempts = repair_attempts(&host);
                     assert_eq!(
                         fx.status_reads(),
                         if case == "policy_ahead" { 1 } else { 3 },
@@ -2598,35 +2347,16 @@ fn auto_fix_settles_staggered_required_failures_before_repair_and_final_recovery
                         {"id":"complete_pr","target":"activity:pr_complete","default_input":input}
                     ]));
                     job.final_recovery_activity = Some("decide".into());
-                    let mut catalog = V2ActivityCatalog::new();
-                    for (name, action) in [
-                        ("checkpoint", "test_checkpoint"),
-                        ("pr_complete", "pr_complete"),
-                        ("decide", "test_final_decision"),
-                    ] {
-                        catalog.insert(
-                            name,
-                            ActivityV2 {
-                                description: name.into(),
-                                input_schema_json: Value::Null,
-                                output_schema_json: Value::Null,
-                                fs_profile: None,
-                                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
-                                    action: action.into(),
-                                    config: Value::Null,
-                                }),
-                            },
-                        );
-                    }
-                    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
-                    let audit = tempfile::tempdir().unwrap();
-                    let (writer, _, _) = build_writer_and_sinks(audit.path(), RUN_ID);
-                    let outcome = execute_job_with_resume(
-                        &job,
-                        json!({"task_ids":[TASK_ID]}),
-                        RUN_ID,
-                        writer,
+                    let outcome = run_job(
                         &host,
+                        job,
+                        &[
+                            ("checkpoint", "test_checkpoint"),
+                            ("pr_complete", "pr_complete"),
+                            ("decide", "test_final_decision"),
+                        ],
+                        RUN_ID,
+                        json!({"task_ids": [TASK_ID]}),
                         None,
                     );
                     assert!(!outcome.is_ok_and(|outcome| outcome.success));
