@@ -6,6 +6,8 @@ mod git_test_support;
 
 #[path = "http_api/agents.rs"]
 mod agents;
+#[path = "http_api/agents_implementers.rs"]
+mod agents_implementers;
 #[path = "http_api/agents_orchestrators.rs"]
 mod agents_orchestrators;
 #[path = "http_api/agents_pilots.rs"]

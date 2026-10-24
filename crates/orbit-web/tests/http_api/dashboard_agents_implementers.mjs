@@ -24,10 +24,15 @@ for (const selector of ['.agents-cost-plot', '.agents-cost-point', '.agents-cost
   assert.equal(body.querySelectorAll(selector).length, 0, `the removed panel leaves no ${selector}`);
 }
 assert.ok(!body.textContent.includes('Score against cost') && !body.textContent.includes('First reviews by tier'), 'the removed panel leaves no chart, frontier or tier copy');
-assert.match(part('detail').textContent, /Cost per weighted landed task/, 'cost stays in Shown, not scored');
+assert.match(part('detail').textContent, /Cost per landed task/, 'cost stays in Shown, not scored');
 for (const request of takeAll()) request.resolve(response(implementerDetail('sol', 'model-b')));
 await settle();
 assert.match(part('detail').textContent, /model-b/);
+const shown = part('detail').querySelectorAll('.agents-term-context');
+assert.equal(shown.length, implementerCard().terms.length, 'every scored term shows its reference count');
+assert.equal(shown[0].textContent, '22 actual · 19.1 expected');
+const rejects = part('detail').querySelectorAll('.agents-breakdown li').find(node => node.dataset.term === 'review_rejects');
+assert.equal(rejects.querySelector('.agents-term-value').textContent, '−2.7', 'the bar uses excess rejects, rather than total rejects');
 assert.ok(!part('detail').textContent.includes('[object Object]'), 'structured tier data never leaks into the detail column');
 click(selectButton('costly'));
 const requests = takeAll();

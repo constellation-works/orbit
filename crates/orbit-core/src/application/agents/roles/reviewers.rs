@@ -341,6 +341,7 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
                 runs_without_model: row.without_model,
                 provisional: Some(row.provisional),
                 tallies: row.tallies,
+                expected: None,
                 stats,
             }
         })

@@ -609,6 +609,7 @@ fn row_input<'a>(
         runs_without_model,
         provisional: None,
         tallies,
+        expected: None,
         stats: vec![
             stat(
                 "recall_percent",

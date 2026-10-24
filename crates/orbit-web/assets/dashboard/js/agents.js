@@ -303,7 +303,8 @@ function roleHref(forRole) {
 
 function contribution(term, row) {
   const rate = row.per_100 ? row.per_100[term.key] : null;
-  return typeof rate === "number" ? term.weight * rate : null;
+  const expected = row.expected && typeof row.expected[term.key] === "number" ? row.expected[term.key] * 100 / Math.max(1, row.units) : 0;
+  return typeof rate === "number" ? term.weight * (rate - expected) : null;
 }
 
 function render() {
@@ -525,14 +526,25 @@ function detailNode(row) {
   const contributions = termList.map((term) => ({ term, value: contribution(term, row) }));
   const largest = Math.max(1e-9, ...contributions.map((entry) => Math.abs(entry.value || 0)));
   const breakdown = el("ul", { class: "agents-breakdown" });
+  if (typeof row.score_base === "number") {
+    breakdown.append(el("li", {}, [
+      el("span", { class: "agents-term-label", text: "Fleet reference" }),
+      el("span"), el("span"),
+      el("span", { class: "agents-term-value", text: signed(row.score_base) }),
+    ]));
+  }
   for (const { term, value } of contributions) {
     const width = (Math.abs(value || 0) * 50) / largest;
     const fill = el("span", {
       class: (value || 0) < 0 ? "agents-bar-fill negative" : "agents-bar-fill",
       style: (value || 0) < 0 ? { left: `${50 - width}%`, width: `${width}%` } : { left: "50%", width: `${width}%` },
     });
+    const label = el("span", { class: "agents-term-label", text: term.label });
+    if (row.expected && typeof row.expected[term.key] === "number") {
+      label.append(el("small", { class: "agents-term-context", text: `${number(row.counts[term.key])} actual · ${number(row.expected[term.key])} expected` }));
+    }
     const item = el("li", {}, [
-      el("span", { class: "agents-term-label", text: term.label }),
+      label,
       el("span", { class: "agents-term-weight", text: `× ${weight(term.weight)}`, title: "weight" }),
       el("span", { class: "agents-bar agents-bar-centered", "aria-hidden": "true" }, [fill, el("span", { class: "agents-bar-zero", style: { left: "50%" } })]),
       el("span", { class: "agents-term-value", text: signed(value), title: `${number(row.counts && row.counts[term.key])} counted, ${number(row.per_100 && row.per_100[term.key])} per 100 ${scorecard.unit}` }),
@@ -654,7 +666,9 @@ function howNode() {
   const details = el("details", { class: "agents-how" }, [
     el("summary", { text: "How the score works" }),
     list,
-    el("p", { text: `Each term's count becomes a rate per 100 ${unit}. The raw score is the sum of weight × rate over the terms; positive weights are credit and negative weights are problems.` }),
+    el("p", { text: role === "implementers"
+      ? `The raw score starts at 100, then adds weight × (actual − expected) per 100 ${unit} for every term. Expected counts use the fleet's rates on the row's tier mix. Tiers with fewer than 30 fleet tasks pool with the largest tier. Landings count one each at every complexity.`
+      : `Each term's count becomes a rate per 100 ${unit}. The raw score is the sum of weight × rate over the terms; positive weights are credit and negative weights are problems.` }),
     el("p", { class: "agents-formula", text: `score = min(raw, (${unit} × raw + ${SMOOTHING} × fleet average) ÷ (${unit} + ${SMOOTHING}))` }),
     el("p", { text: `A row above the fleet average, the mean raw score weighted by ${unit}, is pulled down toward it, the more the less work backs it; a row below keeps its raw score. So a small row never rises on the fleet's evidence, and at an equal raw score the row with more ${unit} ranks higher. Rows with fewer than ${scorecard.min_support} ${unit} are greyed, unranked and listed last. Every problem counts against one role only, and cost and time are shown, never scored.` }),
     ...(panel && Array.isArray(panel.how) ? panel.how.map((text) => el("p", { text })) : []),

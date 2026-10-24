@@ -7,7 +7,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::{
-    ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, TASK_FIELDS_UPDATED_EVENT, TaskComplexity,
+    ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, TASK_FIELDS_UPDATED_EVENT,
     TaskHistoryEntry, TaskStatus, task_fields_updated_documents,
 };
 use orbit_types::workflow::{TASK_BLOCKED_BY_AGENT_EVENT, task_blocked_by_agent_kind};
@@ -44,24 +44,6 @@ const SPEC_BLOCKER_WORDS: &[&str] = &[
 ];
 /// The longest detail an occurrence keeps from a history note.
 const DETAIL_CHARS: usize = 200;
-
-/// Complexity weights for weighted landed tasks; unassessed and unset weigh 1.
-pub(in crate::application) const COMPLEXITY_WEIGHTS: &[(&str, i64)] = &[
-    ("low", 1),
-    ("medium", 2),
-    ("hard", 4),
-    ("xhard", 8),
-    ("unassessed", 1),
-];
-
-/// A landed task's weight by complexity.
-pub(in crate::application) fn complexity_weight(complexity: Option<TaskComplexity>) -> i64 {
-    let name = complexity.map_or("unassessed", TaskComplexity::as_str);
-    COMPLEXITY_WEIGHTS
-        .iter()
-        .find(|(key, _)| *key == name)
-        .map_or(1, |(_, weight)| *weight)
-}
 
 /// What a rework occurrence is attributed to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

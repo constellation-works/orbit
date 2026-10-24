@@ -112,11 +112,13 @@ A problem falls in the window of its owner's unit of work: the task's creation f
 
 **Current.**
 
-One module computes every role's score. A role supplies its unit of work, its terms and their weights. Nothing else is role-specific.
+One module computes every role's score. A role supplies its unit of work, its terms and their weights, and optionally the expected counts for its task mix.
 
 ### 4.1 Rates and the raw score
 
-Each term's count is converted to a rate per 100 units of the role's work (§5). The **raw score** is `Σ weight × rate` over the role's terms. Positive weights are credit; negative weights are problems. Weights live in one table per role, shown in the view and returned in the payload.
+Each term's count is converted to a rate per 100 units of the role's work (§5). For roles without expectations, the **raw score** is `Σ weight × rate` over the role's terms. Positive weights are credit; negative weights are problems. Weights live in one table per role, shown in the view and returned in the payload.
+
+Implementers instead start at 100 and sum weighted actual-minus-expected rates for their tier mix (§5.2).
 
 ### 4.2 Smoothing toward the fleet average
 
@@ -186,18 +188,47 @@ Unit: **implemented tasks**, meaning tasks with at least one implementation run 
 
 | Term | Weight | Definition |
 |---|---|---|
-| Weighted landed | +1 | Landed tasks whose final implementation run is the row's, weighted by complexity: low 1, medium 2, hard 4, xhard 8, unassessed or unset 1. |
+| Landed | +1 | Landed tasks whose final implementation run is the row's, one point each at every complexity. |
 | First-pass accepts | +1 | Reviewed tasks whose first review verdict on the row's candidate was `accept`. |
 | Review rejects | −1 | `reject` verdicts on the row's candidates. |
 | Reviewer repairs | −0.5 | `accept_with_fixes` verdicts on the row's candidates. |
 | Crew-caused rework | −1 | Repeat runs, `[BLOCKED]` or unmerged PRs, and operator requeues with cause `crew`, charged to the run that ended the attempt. Review verdicts are not counted again here. |
 | Escaped regressions | −2 | Regressions with escape `no_test` against tasks whose final implementation run is the row's. |
 
-Shown, not scored:
-- cost per weighted landed task;
-- median run duration;
-- tasks by tier;
-- first reviews needing changes compared with the average for the same tier. Rejects and repairs grow with complexity, so this is the fair comparison across pools that get different tiers. It stays unscored until a month of data shows its variance.
+Every scored term uses a fleet expectation for the row's **same task mix**:
+
+```
+expected(row, term) = Σ tier [row_tasks(tier) × fleet_count(term, tier) / fleet_tasks(tier)]
+raw = 100 + Σ term [weight(term) × (actual(row, term) − expected(row, term)) × 100 / row_tasks]
+```
+
+Positive credit above expectation raises the score; problems above expectation
+lower it. A crew matching every reference rate has raw 100 whatever its tier
+mix, including when tiers have different landing or first-pass acceptance
+rates. The fleet includes the row itself and below-support and `model unknown`
+rows. Its unit is a **row-task observation**: a task implemented by two crew/model
+rows contributes once to each row and once to each corresponding fleet
+observation. The denominator includes unreviewed and unlanded implemented tasks,
+not just tasks with the outcome. Repeated rejects can exceed one per task.
+
+**Sparse tiers:** a tier with fewer than 30 fleet observations joins the largest
+tier's pool; ties for largest use the lexically first tier name. All sparse
+tiers join that same pool, including unassessed. Supported tiers otherwise keep
+their own rates. If all tiers are sparse, the pool is the entire fleet. Both
+counts and denominators are pooled before division, so a rare tier cannot set
+an extreme reference from one task, and no empty denominator is used. Within
+that pool the comparison is approximate by design: exact tier-mix invariance
+applies to the reference pools, not to distinct rates inside a sparse pool.
+Pooling conserves expected counts across the fleet, so its units-weighted raw
+average is 100. An empty fleet has no rows or fleet average.
+
+This replaces complexity-weighted landed credit and unadjusted problem rates.
+Complexity pools choose a crew's tier mix, so the old ranking largely measured
+pool membership; rejects and repairs also grow with difficulty. After a month
+of data, the tier comparison previously shown only as context now supplies the
+scored expectation for **every** term. This extends the unit-landed principle
+introduced for orchestrators by [ORB-17118] without changing other roles.
+See [the decision](./4_decisions.md#compare-implementers-with-the-fleet-on-their-task-mix).
 
 The public runtime scorecard and detail APIs return `status: ok`. Tasks count
 once per crew and model, even if that row ran them more than once in the
@@ -205,30 +236,33 @@ window. First-pass credit uses the first settled review of that row's
 candidates; a later accept does not erase an earlier reject. Review verdicts
 enter their own terms once and are not added to crew rework. The shared
 attribution assigns `review_missed` to reviewers and `no_test` to the final
-implementer.
+implementer. Shrinkage remains `min(raw, …)` with K = 30; minimum support and
+model attribution are unchanged.
 
-The not-scored `stats` expose `cost_per_weighted_landed` in USD,
-`median_run_seconds` for completed implementation spans, `tasks_by_tier`,
-and structured `tier_comparison` rows. Cost sums the workspace's recorded
-invocations for the row's delivery runs (including delivery review and repair
-activities), counting each run once, using provider-reported cost when present
-and derived pricing otherwise, from the same telemetry as `/cost`. It divides
-by this row's weighted landed credit. Missing run telemetry, an unpriced
-invocation, a truncated cost scan, or no landed credit returns null, never
-zero. These are recorded costs as of the scan, not a final bill. Pulled work
-without local cost records remains unpriced.
+The historical payload keys `weighted_landed` and `cost_per_weighted_landed`
+remain for compatibility; both now use **unit landings**, with labels **Landed**
+and **Cost per landed task (USD)**. Each implementer row adds `expected`, a map
+of term keys to expected counts, and `score_base: 100`. Actual `counts` and
+`per_100` remain actuals; detail term `contribution` is weight times the
+actual-minus-expected rate, so `score_base + Σ contribution` equals raw before
+rounding. Other roles have neither additive field and retain their formulas.
+The former `tier_comparison` stat is removed: scored expectations supersede it.
 
-Each tier row reports implemented tasks, first reviews, those needing changes
-(`reject` or `accept_with_fixes`), their percentage, and the fleet percentage
-on the same tier, including this row. A task contributes its first review per
-crew and model; unreviewed tasks have a null rate.
+Shown, not scored: cost per landed task, median completed run duration, and
+tasks by tier. Cost sums the workspace's recorded invocations for the row's
+delivery runs (including delivery review and repair activities), counting each
+run once, using provider-reported cost when present and derived pricing
+otherwise, from the same telemetry as `/cost`. It divides by this row's landed
+task count. Missing run telemetry, an unpriced invocation, a truncated cost
+scan, or no landed credit returns null, never zero. These are recorded costs as
+of the scan, not a final bill. Pulled work without local cost records remains
+unpriced.
 
 Implementers have no role panel. The score-against-cost plot and per-tier
-review table were removed as a product decision; the ranking, detail column
-and disclosure are the whole tab. Cost per weighted landed task, median run
-duration and tasks by tier stay under **Shown, not scored**, and the
-`tier_comparison` rows remain in the API even though the dashboard no longer
-renders them.
+review table remain removed; the ranking, detail column and disclosure are the
+whole tab. The existing **Score breakdown** shows the 100-point fleet reference
+and each term's actual and expected counts beside its contribution. It adds no
+new section or per-tier table.
 
 ### 5.3 Reviewers
 
@@ -342,7 +376,7 @@ The dashboard reads only these routes. The `/api/orchestrators/*` routes were re
 
 **Current.**
 
-`orbit agents scorecard --role <role> [--window <w>] [--min-support <n>] [--json]` and `orbit agents show --role <role> --crew <crew> [--model <model>] [--window <w>] [--min-support <n>] [--json]` print the same payloads as `/api/agents/<role>/scorecard` and `/api/agents/<role>/detail`. The table view lists each row's rank (`below` under the minimum support), crew, model, units, score and term counts. Stdout carries only those rows, so plain and piped output is tab-separated records (with `--header`, the column header first); the selection line, the units footer and the empty-state line go to stderr, and a role with no row prints nothing on stdout. `show` lists each term's weight, count, rate and contribution, then the tasks behind every nonzero count. The read-only MCP tools `orbit.agents.scorecard` and `orbit.agents.show` take the same arguments as `role`, `window`, `min_support` and, for `show`, `crew` and `row_model`. The row's model travels as `row_model` because `model` is every tool's caller attribution. A role outside the four is refused, naming the choices. A crew with several rows in the window is refused without a model, naming the selector for each surface (`--model`, `row_model`, or the dashboard's `model` query parameter) and the candidate models.
+`orbit agents scorecard --role <role> [--window <w>] [--min-support <n>] [--json]` and `orbit agents show --role <role> --crew <crew> [--model <model>] [--window <w>] [--min-support <n>] [--json]` print the same payloads as `/api/agents/<role>/scorecard` and `/api/agents/<role>/detail`. The table view lists each row's rank (`below` under the minimum support), crew, model, units, score and term counts. Stdout carries only those rows, so plain and piped output is tab-separated records (with `--header`, the column header first); the selection line, the units footer and the empty-state line go to stderr, and a role with no row prints nothing on stdout. `show` lists each term's weight, count, rate and contribution, then the tasks behind every nonzero count. Implementers also show the 100-point base and an expected-count column; their scorecard footer explains the same-tier reference. The read-only MCP tools `orbit.agents.scorecard` and `orbit.agents.show` take the same arguments as `role`, `window`, `min_support` and, for `show`, `crew` and `row_model`. The row's model travels as `row_model` because `model` is every tool's caller attribution. A role outside the four is refused, naming the choices. A crew with several rows in the window is refused without a model, naming the selector for each surface (`--model`, `row_model`, or the dashboard's `model` query parameter) and the candidate models.
 
 Each of those scans once per call and reports `cache_ttl_seconds: 0`. The definitions live in `orbit-common`'s `governance::agents` registry; the tools call `OrbitRuntime::agent_role_scorecard` and `agent_role_detail`, which scan and slice like the API without keeping the scan.
 
@@ -427,7 +461,8 @@ Each track updates the docs its change makes stale in the same PR. That includes
 - ORB-16952 — track B: the core scan, one-owner attribution, shared score, role registry with Orchestrators computed, and the `/api/agents` routes and cache.
 - ORB-16953 — track C: the Agents destination, its role tabs, the shared renderer and the orchestrators panel; retired Analytics › Orchestrators and `/api/orchestrators/*`.
 - ORB-16954 — track D: the Implementers role (current) and cost/tier panel (removed by ORB-17736).
-- ORB-17736 — removed the Implementers score-against-cost and first-reviews role panel; the tab keeps its ranking, detail and disclosure, and the API is unchanged.
+- ORB-17779 — implementer unit landed credit and same-tier fleet expectations replace complexity weighting and the unscored tier comparison.
+- ORB-17736 — removed the Implementers score-against-cost and first-reviews role panel; the tab keeps its ranking, detail and disclosure.
 - ORB-16955 — track E: the Reviewers role (current), its scan additions (false rejects judged from cited paths, incomplete reviews, findings rejected by finding verification), the provisional count, the banner, the `accepts often` tag and the outcomes panel.
 - ORB-16956 — track F: the Pilots role, its lock-wait holders and calibration panel; removed the Task pilot ranking from Analytics › Codebase (current).
 - ORB-16957 — track G: CLI and MCP (current).

@@ -1,5 +1,6 @@
 //! Implementers: the crew and model of the implementation runs that did the
-//! work. Costs and tier comparisons are context only, never score terms.
+//! work. Every term is compared with the fleet on the same tier mix;
+//! recorded cost and duration remain unscored context.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -22,9 +23,9 @@ pub(super) const ROLE: RoleSpec = RoleSpec {
 const TERMS: &[Term] = &[
     Term {
         key: "weighted_landed",
-        label: "Weighted landed",
+        label: "Landed",
         weight: 1.0,
-        definition: "Landed tasks whose final implementation run is the row's, weighted by complexity: low 1, medium 2, hard 4, xhard 8, unassessed or unset 1.",
+        definition: "Landed tasks whose final implementation run is the row's, one point each, whatever their complexity.",
         group: "credit",
     },
     Term {
@@ -80,7 +81,6 @@ fn tier(task: &TaskFacts) -> &'static str {
 /// One task per row, however many attempts that row started in the window.
 fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
     let mut work: BTreeMap<Key, Vec<&TaskFacts>> = BTreeMap::new();
-    let mut fleet: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
     for task in &facts.tasks {
         let keys: BTreeSet<_> = task
             .attempts
@@ -89,11 +89,6 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
             .map(key)
             .collect();
         for row in keys {
-            if let Some(review) = first_review(task, &row, since) {
-                let counts = fleet.entry(tier(task)).or_default();
-                counts.0 += 1;
-                counts.1 += usize::from(needs_changes(review.verdict));
-            }
             work.entry(row).or_default().push(task);
         }
     }
@@ -105,9 +100,70 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
     for credit in &facts.credits {
         credits.entry(&credit.task_id).or_default().push(credit);
     }
-    work.into_iter()
-        .map(|(row, tasks)| row_input(facts, since, row, &tasks, &fleet, &charges, &credits))
-        .collect()
+    let mut rows: Vec<_> = work
+        .iter()
+        .map(|(row, tasks)| row_input(facts, since, row.clone(), tasks, &charges, &credits))
+        .collect();
+    let mut fleet: BTreeMap<&str, Fleet> = BTreeMap::new();
+    for tasks in work.values() {
+        for task in tasks {
+            fleet.entry(tier(task)).or_default().units += 1;
+        }
+    }
+    for row in &rows {
+        for (term, tally) in &row.tallies {
+            for (task, count) in tally.task_counts() {
+                *fleet
+                    .entry(tier(task))
+                    .or_default()
+                    .counts
+                    .entry(term)
+                    .or_default() += count;
+            }
+        }
+    }
+    // Sparse tiers join the largest tier (lexical first on a tie). This
+    // bounds their reference by a supported pool and conserves fleet totals.
+    let largest = fleet
+        .iter()
+        .max_by(|(left, a), (right, b)| a.units.cmp(&b.units).then_with(|| right.cmp(left)))
+        .map(|(tier, _)| *tier);
+    if let Some(largest) = largest {
+        let pool_key = |tier: &'static str| {
+            if fleet[tier].units < MIN_TIER_TASKS {
+                largest
+            } else {
+                tier
+            }
+        };
+        let mut pools: BTreeMap<&str, Fleet> = BTreeMap::new();
+        for (&tier, stats) in &fleet {
+            let pool = pools.entry(pool_key(tier)).or_default();
+            pool.units += stats.units;
+            for (&term, &count) in &stats.counts {
+                *pool.counts.entry(term).or_default() += count;
+            }
+        }
+        for (row, tasks) in rows.iter_mut().zip(work.values()) {
+            row.expected = Some(
+                TERMS
+                    .iter()
+                    .map(|term| {
+                        let expected = tasks
+                            .iter()
+                            .map(|task| {
+                                let pool = &pools[pool_key(tier(task))];
+                                pool.counts.get(term.key).copied().unwrap_or(0.0)
+                                    / pool.units as f64
+                            })
+                            .sum();
+                        (term.key, expected)
+                    })
+                    .collect(),
+            );
+        }
+    }
+    rows
 }
 
 /// A later accept cannot erase an earlier reject of this row's candidate.
@@ -120,11 +176,13 @@ fn first_review<'a>(task: &'a TaskFacts, row: &Key, since: DateTime<Utc>) -> Opt
     })
 }
 
-fn needs_changes(verdict: ReviewVerdict) -> bool {
-    matches!(
-        verdict,
-        ReviewVerdict::Reject | ReviewVerdict::AcceptWithFixes
-    )
+/// Minimum fleet row-task observations before a tier has its own rate.
+const MIN_TIER_TASKS: usize = 30;
+
+#[derive(Default)]
+struct Fleet {
+    units: usize,
+    counts: BTreeMap<&'static str, f64>,
 }
 
 fn row_input<'a>(
@@ -132,20 +190,18 @@ fn row_input<'a>(
     since: DateTime<Utc>,
     row: Key,
     tasks: &[&'a TaskFacts],
-    fleet: &BTreeMap<&str, (usize, usize)>,
     charges: &BTreeMap<&str, Vec<&Charge>>,
     credits: &BTreeMap<&str, Vec<&Credit>>,
 ) -> RowInput<'a> {
     let mut tallies: BTreeMap<&'static str, Tally<'a>> = BTreeMap::new();
-    let mut tiers: BTreeMap<&str, (usize, usize, usize)> = BTreeMap::new();
+    let mut tiers: BTreeMap<&str, usize> = BTreeMap::new();
     let mut durations = Vec::new();
     let mut run_ids = BTreeSet::new();
     let mut missing_runs = false;
     let mut runs_without_model = 0;
-    let mut weighted = 0.0;
+    let mut landed = 0.0;
     for &task in tasks {
-        let counts = tiers.entry(tier(task)).or_default();
-        counts.0 += 1;
+        *tiers.entry(tier(task)).or_default() += 1;
         for attempt in task
             .attempts
             .iter()
@@ -162,37 +218,35 @@ fn row_input<'a>(
                 None => missing_runs = true,
             }
         }
-        if let Some(review) = first_review(task, &row, since) {
-            counts.1 += 1;
-            counts.2 += usize::from(needs_changes(review.verdict));
-            if review.verdict == ReviewVerdict::Accept {
-                tallies.entry("first_pass_accepts").or_default().add(
-                    task,
-                    1.0,
-                    Some(Occurrence {
-                        at: review.at,
-                        detail: "first review accepted the candidate".into(),
-                        run_id: task
-                            .attempt_at(review.at)
-                            .and_then(|index| task.attempts[index].runner.run_id.clone()),
-                    }),
-                );
-            }
+        if let Some(review) = first_review(task, &row, since)
+            && review.verdict == ReviewVerdict::Accept
+        {
+            tallies.entry("first_pass_accepts").or_default().add(
+                task,
+                1.0,
+                Some(Occurrence {
+                    at: review.at,
+                    detail: "first review accepted the candidate".into(),
+                    run_id: task
+                        .attempt_at(review.at)
+                        .and_then(|index| task.attempts[index].runner.run_id.clone()),
+                }),
+            );
         }
-        for credit in credits
+        if credits
             .get(task.id.as_str())
             .into_iter()
             .flatten()
-            .filter(|credit| {
+            .any(|credit| {
                 credit.anchor >= since
                     && row_key(credit.crew.as_deref(), credit.model.as_deref()) == row
             })
         {
-            weighted += credit.weight as f64;
+            landed += 1.0;
             tallies
                 .entry("weighted_landed")
                 .or_default()
-                .add(task, credit.weight as f64, None);
+                .add(task, 1.0, None);
         }
         for charge in charges
             .get(task.id.as_str())
@@ -241,17 +295,6 @@ fn row_input<'a>(
         let middle = durations.len() / 2;
         Some((durations[middle] + durations[(durations.len() - 1) / 2]) / 2.0)
     };
-    let tier_rows: Vec<Value> = tiers
-        .iter()
-        .map(|(tier, (tasks, reviewed, changes))| {
-            let (fleet_reviewed, fleet_changes) = fleet.get(tier).copied().unwrap_or_default();
-            json!({
-                "tier": tier, "tasks": tasks, "first_reviews": reviewed, "needing_changes": changes,
-                "needing_changes_percent": percent(*changes, *reviewed),
-                "fleet_needing_changes_percent": percent(fleet_changes, fleet_reviewed),
-            })
-        })
-        .collect();
     RowInput {
         crew: row.0,
         model: row.1,
@@ -259,12 +302,13 @@ fn row_input<'a>(
         runs_without_model,
         provisional: None,
         tallies,
+        expected: None,
         stats: vec![
             stat(
                 "cost_per_weighted_landed",
-                "Cost per weighted landed task (USD)",
-                cost.filter(|_| weighted > 0.0)
-                    .map(|cost| json!(cost / weighted))
+                "Cost per landed task (USD)",
+                cost.filter(|_| landed > 0.0)
+                    .map(|cost| json!(cost / landed))
                     .unwrap_or(Value::Null),
             ),
             stat(
@@ -278,21 +322,12 @@ fn row_input<'a>(
                 json!(
                     tiers
                         .iter()
-                        .map(|(tier, counts)| format!("{tier}: {}", counts.0))
+                        .map(|(tier, counts)| format!("{tier}: {counts}"))
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
             ),
-            stat("tier_comparison", "First reviews by tier", json!(tier_rows)),
         ],
-    }
-}
-
-fn percent(changes: usize, reviewed: usize) -> Value {
-    if reviewed == 0 {
-        Value::Null
-    } else {
-        number(changes as f64 * 100.0 / reviewed as f64)
     }
 }
 
