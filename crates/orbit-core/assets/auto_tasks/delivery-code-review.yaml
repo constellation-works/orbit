@@ -58,9 +58,11 @@ template:
     task's assigned executor run with
     `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/automation-coverage.json","path":"automation-coverage.json","model":"<agent-family>"}'`.
     `orbit tool show <tool.name>` prints the tool's schema.
-    Fill one `delivery_examinations` entry per frozen delivery: `examined_paths`
-    lists the changed paths you read and `skipped_paths` the ones you did not,
-    each with a `reason`; together they must be exactly what
+    Fill one `delivery_examinations` entry per frozen delivery. `examined_paths`
+    is an array of path strings: the changed paths you read. `skipped_paths` is
+    an array of `{"path": "<path>", "reason": "<why>"}` objects: the changed
+    paths you did not read. Only `skipped_paths` holds objects. Together they
+    must be exactly what
     `git diff --name-only --no-renames <before.commit> <after.commit>` lists for
     that delivery. Set `verdict` to `"clean"` or `{"findings": ["<finding task ID>"]}`
     and write a `rationale` of at least 40 characters, specific to that delivery,
@@ -68,13 +70,20 @@ template:
     match the frozen diff.
     Preserve the supplied schema_version and frozen identity. Batch/action IDs,
     consumer, epoch and input_digest are strings. The examined_commits,
-    examined_deliveries and findings arrays contain strings: copy commit SHAs
-    and delivery keys, not the frozen commit/delivery objects.
+    examined_deliveries, examined_paths and findings arrays contain strings:
+    copy commit SHAs, delivery keys and path strings, not the frozen
+    commit/delivery objects or `{path, reason}` objects.
     Each checks entry is an object with string subject, method and observation.
     For example, these fields have valid shapes (replace every example with
     your actual evidence; use findings: [] when there are no findings):
     ```json
     {"checks":[{"subject":"src/lib.rs","method":"git diff <before> <after> -- src/lib.rs","observation":"The error branch drops the caller's retry token."}],"findings":["<finding task ID>: retry token lost; introduced by <culprit task ID> at <commit SHA>"]}
+    ```
+    A delivery_examinations entry has this shape. Replace every placeholder
+    with the frozen delivery key and the changed paths from the frozen input;
+    settlement refuses a placeholder copied as a value:
+    ```json
+    {"delivery_examinations":[{"delivery":"<frozen delivery key>","examined_paths":["<changed path you read>"],"skipped_paths":[{"path":"<changed path you did not read>","reason":"<why it was not read>"}],"verdict":"clean","rationale":"<at least 40 characters, specific to this delivery>"}]}
     ```
     Verdict findings are task-ID strings, for example
     `{"findings":["<finding task ID>"]}`, not task objects.
