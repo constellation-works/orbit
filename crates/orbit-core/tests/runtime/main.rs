@@ -49,6 +49,7 @@ mod child_wait_audit;
 mod claude_worker_credential;
 mod config_settings;
 mod crew_accounts;
+mod default_catalog;
 mod dispatch_admission;
 mod distributed_drain;
 mod drain_approval;

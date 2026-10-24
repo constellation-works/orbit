@@ -106,7 +106,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These eleven YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These ten YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.

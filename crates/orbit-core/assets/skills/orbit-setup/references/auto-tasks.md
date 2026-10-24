@@ -336,9 +336,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The eleven seeded definitions
+## The ten seeded definitions
 
-`orbit workspace init` seeds all eleven, disabled, except any you deleted (see
+`orbit workspace init` seeds all ten, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
