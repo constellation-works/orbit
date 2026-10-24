@@ -174,12 +174,11 @@ td .rel-rate { font-size: 12px; }
   background: var(--bg-elev); color: var(--fg); font: 13px var(--font-sans);
 }
 .incident-search:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px rgba(122, 167, 255, 0.2); }
-.incident-toggle, .incident-action {
+.incident-action {
   min-height: 40px; padding: 0 14px; border: 1px solid var(--border); border-radius: 8px;
   background: var(--bg-elev); color: var(--fg); font: 500 13px var(--font-sans); white-space: nowrap; cursor: pointer;
 }
-.incident-toggle:hover, .incident-action:hover { border-color: #3a424d; }
-.incident-toggle[aria-pressed="true"] { background: #2a1513; border-color: #7a3a33; color: #ffb3aa; }
+.incident-action:hover { border-color: #3a424d; }
 
 /* One grid for the axis header, every cause header and every row, so a bar
    and its labels line up. */
@@ -326,7 +325,7 @@ td .rel-rate { font-size: 12px; }
 .incident-evidence td.stderr { min-width: 14rem; white-space: normal; overflow-wrap: anywhere; }
 .incident-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
 .incident-seg:focus-visible, .incident-tile:focus-visible, .incident-insight:focus-visible,
-.incident-toggle:focus-visible, .incident-action:focus-visible, .incident-related-item:focus-visible,
+.incident-action:focus-visible, .incident-related-item:focus-visible,
 .incident-link-button:focus-visible, .incident-copy:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }

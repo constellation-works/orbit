@@ -61,7 +61,6 @@ const GROUP_MODES = [["cause", "By cause"], ["signature", "By signature"]];
 let incidentClass = "unexpected";
 let windowOverride = null;
 let searchQuery = "";
-let lastHourOnly = false;
 let groupMode = "cause";
 let noMessageOnly = false;
 let selectedKey = null;
@@ -614,15 +613,16 @@ function selectClass(key) {
 function insightsNode(groups, now) {
   const live = groups.filter(group => isLive(group, now)).length;
   const silent = groups.filter(group => !group.message.recorded).length;
+  const lastHourSelected = getIncidentWindow() === "1h";
   const chips = [];
-  if (live > 0 || lastHourOnly) {
+  if (live > 0) {
     const chip = el("button", {
-      class: `incident-insight live${lastHourOnly ? " on" : ""}`,
+      class: `incident-insight live${lastHourSelected ? " on" : ""}`,
       type: "button",
-      "aria-pressed": lastHourOnly ? "true" : "false",
+      "aria-pressed": lastHourSelected ? "true" : "false",
     }, [el("span", { class: "incident-dot", "aria-hidden": "true" }), `${plural(live, "signature")} failed in the last hour`]);
     chip.dataset.insight = "last-hour";
-    chip.addEventListener("click", () => { lastHourOnly = !lastHourOnly; rerender(); });
+    chip.addEventListener("click", () => selectWindow("1h"));
     chips.push(chip);
   }
   if (silent > 0 || noMessageOnly) {
@@ -644,7 +644,7 @@ function insightsNode(groups, now) {
   }
   const node = el("div", { class: "incident-insights", role: "group", "aria-label": "Insights" }, chips);
   node.dataset.key = "incident-insights";
-  node.dataset.hash = JSON.stringify([live, silent, lastHourOnly, noMessageOnly]);
+  node.dataset.hash = JSON.stringify([live, silent, lastHourSelected, noMessageOnly]);
   return node;
 }
 
@@ -661,8 +661,7 @@ function matchesSearch(group, query) {
 
 function visibleGroups(groups, now) {
   const query = searchQuery.trim().toLowerCase();
-  return groups.filter(group => (!lastHourOnly || isLive(group, now))
-    && (!noMessageOnly || !group.message.recorded)
+  return groups.filter(group => (!noMessageOnly || !group.message.recorded)
     && matchesSearch(group, query));
 }
 
@@ -791,8 +790,6 @@ function ensureLayout(body) {
   search.addEventListener("input", () => { searchQuery = search.value; rerender(); });
   const searchLabel = el("label", { class: "visually-hidden", text: "Filter incidents" });
   searchLabel.htmlFor = "incident-search";
-  const lastHour = el("button", { class: "incident-toggle", type: "button", text: "Last hour only" });
-  lastHour.addEventListener("click", () => { lastHourOnly = !lastHourOnly; rerender(); });
   const modes = el("div", { class: "incident-windows incident-modes", role: "group", "aria-label": "Group rows" });
   const modeButtons = GROUP_MODES.map(([mode, text]) => {
     const button = el("button", { class: "incident-seg", type: "button", text });
@@ -809,7 +806,6 @@ function ensureLayout(body) {
     heading,
     el("div", { class: "incident-search-wrap" }, [searchLabel, search]),
     modes,
-    lastHour,
   ]);
   const axisHead = el("div", { class: "incident-axis-head", "aria-hidden": "true" });
   const rows = el("div", { class: "incident-rows", role: "group", "aria-label": "Incident signatures" });
@@ -819,7 +815,7 @@ function ensureLayout(body) {
   const root = el("div", { class: "incident-layout" }, [master, detail]);
   root.dataset.key = "incident-layout";
   root.dataset.hash = "incident-layout";
-  layout = { root, heading, search, lastHour, modeButtons, axisHead, rows, footer, master, detail };
+  layout = { root, heading, search, modeButtons, axisHead, rows, footer, master, detail };
   return layout;
 }
 
@@ -829,7 +825,6 @@ function emptyNode(text, { clear = false, status = false } = {}) {
     const button = el("button", { class: "incident-link-button", type: "button", text: "Clear filters" });
     button.addEventListener("click", () => {
       searchQuery = "";
-      lastHourOnly = false;
       noMessageOnly = false;
       if (layout) layout.search.value = "";
       rerender();
@@ -1228,8 +1223,6 @@ export function renderIncidents(payload, ctx = {}, { interactive = false } = {})
     button.className = `incident-seg${on ? " on" : ""}`;
     button.setAttribute("aria-pressed", on ? "true" : "false");
   }
-  view.lastHour.className = `incident-toggle${lastHourOnly ? " on" : ""}`;
-  view.lastHour.setAttribute("aria-pressed", lastHourOnly ? "true" : "false");
   const axisHead = el("div", { class: "incident-axis-row" }, [
     el("span", { class: "incident-main", text: byCause ? "Cause · signature" : "Signature" }),
     axisNode(axis, 2, "incident-track incident-axis"),

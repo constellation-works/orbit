@@ -7,8 +7,8 @@
 // tiles (counts, filtering, pressed state), lifespan bars for a recurring and
 // a single-burst signature, the detail panel (full message and its copy, the
 // truncation note and its audit drill-down, related signatures, runs), the
-// last-hour and no-message filters, the local 6h window, the sticky panel and
-// a 375px phone with no horizontal page scroll. It also checks grouping by
+// last-hour window insight and no-message filters, the local 6h window, the
+// sticky panel and a 375px phone with no horizontal page scroll. It also checks grouping by
 // cause [ORB-15434]: cause headers over signatures that share one, a
 // single-signature cause as one row, the By signature toggle, and the
 // detail panel's same-cause list and grouping basis, and that a message the
@@ -333,6 +333,7 @@ try {
   //    and the request asks the server for that class only.
   await page.goto(`${origin}/?workspace=ws_orbit#diagnostics/incidents?window=24h`);
   await page.locator('#diag-body .incident-row').first().waitFor({ state: 'visible' });
+  assert(await page.locator('#diag-body .incident-toolbar').getByRole('button', { name: 'Last hour only' }).count() === 0, 'the toolbar has no duplicate last-hour filter');
   assert(lastRequest().class === 'unexpected' && lastRequest().since === '24h', `the request names the class and window: ${JSON.stringify(lastRequest())}`);
   const tileState = await tiles();
   evidenceLog.tiles = tileState;
@@ -409,16 +410,22 @@ try {
   assert(/^4 events, all 3h( \d+m)? ago\.$/.test(panel.sentence), `a burst reads as one moment: ${panel.sentence}`);
   await page.screenshot({ path: path.join(evidence, 'incidents-detail-1440.png'), fullPage: true });
 
-  // 4. Last-hour filter: only signatures seen in the last hour stay.
+  // 4. The last-hour insight selects the 1h window and refetches the list.
+  const beforeLastHourRequest = incidentRequests.length;
   const lastHourChip = page.locator('#diag-body .incident-insight[data-insight="last-hour"]');
   assert(await lastHourChip.textContent() === '2 signatures failed in the last hour', 'the chip counts live signatures');
   await lastHourChip.click();
+  await until('the 1h answer', async () => incidentRequests.length > beforeLastHourRequest
+    && lastRequest().class === 'unexpected' && lastRequest().since === '1h' && (await rows()).length === 2);
   let filtered = await rows();
-  assert(filtered.length === 2 && filtered.every((row) => row.live), `the last-hour filter keeps live rows: ${JSON.stringify(filtered.map((row) => row.headline))}`);
+  assert(filtered.length === 2 && filtered.every((row) => row.live), `the 1h window keeps the recent rows: ${JSON.stringify(filtered.map((row) => row.headline))}`);
+  assert(await page.locator('#diag-body .incident-seg[data-window="1h"]').getAttribute('aria-pressed') === 'true', 'the chip selects the 1h window segment');
   assert(await lastHourChip.getAttribute('aria-pressed') === 'true', 'the chip shows it is on');
-  assert(await page.locator('#diag-body .incident-toggle').getAttribute('aria-pressed') === 'true', 'the list toggle agrees');
-  await page.locator('#diag-body .incident-toggle').click();
-  assert((await rows()).length === 8, 'the list toggle turns the filter off');
+  await page.locator('#diag-body .incident-toolbar').screenshot({ path: path.join(evidence, 'incidents-toolbar-1440.png') });
+  const beforeRestoreRequest = incidentRequests.length;
+  await page.locator('#diag-body .incident-seg[data-window="24h"]').click();
+  await until('the restored 24h answer', async () => incidentRequests.length > beforeRestoreRequest
+    && lastRequest().since === '24h' && (await rows()).length === 8);
 
   // No-message chip: only the silent signature, selected.
   await page.locator('#diag-body .incident-insight[data-insight="no-message"]').click();
@@ -711,7 +718,7 @@ try {
       'browser-incidents-detail-full-message-and-copy',
       'browser-incidents-truncation-note-opens-audit-events',
       'browser-incidents-related-signatures',
-      'browser-incidents-last-hour-filter',
+      'browser-incidents-last-hour-chip-selects-1h-window',
       'browser-incidents-no-message-filter',
       'browser-incidents-local-6h-window',
       'browser-incidents-sticky-detail-panel',
