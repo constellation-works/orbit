@@ -219,10 +219,26 @@ pub(crate) fn run_cli_backend_for_step(
                 .collect(),
         });
     }
+    // Direct dispatches build the recovery input themselves and never pass
+    // through bind_recovery_context. Stamp the same host pin onto the
+    // envelope the provider reads. Admission below still recomputes the chain
+    // from the original input and does not see this copy.
+    let mut pinned_recovery_input = None;
+    if activity_name == "pr_conflict_recovery" && inspection_input.is_none() {
+        let mut owned = input.clone();
+        crate::executor::automation::vcs::apply_authenticated_published_head(
+            host, run_id, &mut owned,
+        );
+        pinned_recovery_input = Some(owned);
+    }
+    let envelope_input = pinned_recovery_input
+        .as_ref()
+        .or(inspection_input.as_ref())
+        .unwrap_or(input);
     let envelope_json = cli_agent_envelope_json(
         &envelope_spec,
         run_id,
-        inspection_input.as_ref().unwrap_or(input),
+        envelope_input,
         inspection_task_ctx.as_ref().or(task_ctx.as_ref()),
         &activity_tools.requested_tools,
         &activity_tools.effective_tools,
