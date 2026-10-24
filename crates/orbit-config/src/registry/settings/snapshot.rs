@@ -133,10 +133,7 @@ impl ConfigSnapshot {
             env_default,
             require_default_crew,
         )?;
-        crate::provider_limit_budget::validate_budget_crews(
-            &self.workflow_provider_limit_budgets,
-            crews,
-        )?;
+        crate::provider_limit::validate_budget_crews(&self.workflow_provider_limit_budgets, crews)?;
         crate::provider_limit::validate_override_crews(
             &self.workflow_provider_limit_overrides,
             crews,

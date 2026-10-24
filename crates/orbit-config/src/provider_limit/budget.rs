@@ -14,8 +14,8 @@ use std::collections::BTreeMap;
 use orbit_common::OrbitError;
 use orbit_types::identity::Crew;
 
+use super::target::{ProviderLimitTarget, validate_crew_target};
 use crate::ConfigSnapshot;
-use crate::provider_limit::{ProviderLimitTarget, validate_crew_target};
 
 pub(crate) const BUDGETS_KEY: &str = "workflow.provider_limit_budgets";
 
