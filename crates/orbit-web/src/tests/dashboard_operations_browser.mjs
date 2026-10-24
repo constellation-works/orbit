@@ -11,6 +11,7 @@ fs.mkdirSync(evidence, { recursive: true });
 const test = fileURLToPath(new URL('./dashboard_operations.mjs', import.meta.url));
 const cronZoneTest = fileURLToPath(new URL('./dashboard_operations_cron_zone.mjs', import.meta.url));
 const routineTriggersTest = fileURLToPath(new URL('./dashboard_operations_routine_triggers.mjs', import.meta.url));
+const relativeTimeTest = fileURLToPath(new URL('./dashboard_operations_relative_time.mjs', import.meta.url));
 const feedbackHarness = `
 globalThis.review = {
   mint: async (failsReadback = false) => {
@@ -82,6 +83,7 @@ const server = http.createServer((req, res) => {
   const served = name === '/test.mjs' ? { data: fs.readFileSync(test), type: 'text/javascript' }
     : name === '/cron-zone.mjs' ? { data: fs.readFileSync(cronZoneTest), type: 'text/javascript' }
     : name === '/routine-triggers.mjs' ? { data: fs.readFileSync(routineTriggersTest), type: 'text/javascript' }
+    : name === '/relative-time.mjs' ? { data: fs.readFileSync(relativeTimeTest), type: 'text/javascript' }
     : name === '/feedback-timer.mjs' ? { data: fs.readFileSync(test) + '\n' + feedbackHarness, type: 'text/javascript' }
     : name === '/dock-feedback.mjs' ? { data: fs.readFileSync(test) + '\n' + dockHarness, type: 'text/javascript' }
     : dashboardFile(name);
@@ -1432,6 +1434,16 @@ try {
   await triggerPage.addScriptTag({ type: 'module', url: '/routine-triggers.mjs' });
   await triggerPage.waitForFunction(() => globalThis.routineTriggerTestsPassed, undefined, { timeout: 15000 });
   await triggerPage.screenshot({ path: path.join(evidence, 'routine-triggers-browser.png') });
+  // Relative times carry a minute remainder that rounds to 60 into the hour (ORB-17853).
+  const relativePage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'UTC' });
+  relativePage.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
+  await relativePage.clock.setFixedTime(new Date('2026-10-24T08:27:00Z'));
+  await relativePage.goto(`http://127.0.0.1:${server.address().port}/#operations/auto-tasks`);
+  await relativePage.addScriptTag({ type: 'module', url: '/relative-time.mjs' });
+  await relativePage.waitForFunction(() => globalThis.relativeTimeTestsPassed, undefined, { timeout: 15000 });
+  await relativePage.screenshot({ path: path.join(evidence, 'auto-tasks-next-mint-dark-1440.png'), animations: 'disabled' });
+  await relativePage.setViewportSize({ width: 375, height: 812 });
+  await relativePage.screenshot({ path: path.join(evidence, 'auto-tasks-next-mint-dark-375.png'), animations: 'disabled' });
 
   // Operation mutation success expiry retains readback failure diagnostics.
   const feedbackPage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'America/Los_Angeles' });
