@@ -263,6 +263,118 @@ const MUSE_USAGE: &[u8] = include_bytes!("provider_invocation/fixtures/muse_usag
 /// Captured from Grok 1.0.67's CLI billing API on dk-server-2, 2026-10-24.
 const GROK_BILLING: &[u8] = include_bytes!("provider_invocation/fixtures/grok_billing.json");
 
+/// agy 1.4.6 on dk-server-2, 2026-10-24: native `/usage` control payload.
+const ANTIGRAVITY_USAGE: &[u8] =
+    include_bytes!("provider_invocation/fixtures/antigravity_usage.json");
+
+#[test]
+fn antigravity_quota_command_reports_scoped_windows_without_reading_answer_text() {
+    use orbit_types::telemetry::ProviderLimitSource;
+    let now = Utc.with_ymd_and_hms(2026, 10, 24, 5, 37, 0).unwrap();
+    let readings = provider_usage_windows("antigravity", ANTIGRAVITY_USAGE, None, now);
+    assert_eq!(
+        readings.len(),
+        9,
+        "five buckets split by their covered model families"
+    );
+    for reading in &readings {
+        assert_eq!(reading.provider, "antigravity");
+        assert_eq!(reading.source, ProviderLimitSource::Event);
+        assert_eq!(reading.observed_at, now);
+        assert!(reading.gating && !reading.exhausted);
+        assert!(reading.account.is_none() && reading.run_id.is_none() && reading.crew.is_none());
+        let id = reading.window.as_deref().unwrap();
+        assert_eq!(
+            reading.window_minutes,
+            Some(if id.ends_with("5h") { 300 } else { 10080 })
+        );
+        if id == "gemini-5h" {
+            assert_eq!(reading.used_percent, Some(9.81));
+            assert_eq!(
+                reading.resets_at,
+                Some("2026-10-24T08:49:02Z".parse().unwrap())
+            );
+            assert!(["flash", "pro"].contains(&reading.model.as_deref().unwrap()));
+        } else {
+            assert_eq!(reading.used_percent, Some(0.0));
+            assert!(reading.resets_at.is_some());
+        }
+    }
+    let argon = readings
+        .iter()
+        .filter(|reading| reading.model.as_deref() == Some("argon"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        argon.len(),
+        1,
+        "Argon's separate quota cannot inherit Flash/Pro limits"
+    );
+    assert_eq!(argon[0].window.as_deref(), Some("gemini-argon-wtu-weekly"));
+
+    // Without a separate bucket, Gemini's reported quota covers the family.
+    let mut shared: serde_json::Value = serde_json::from_slice(ANTIGRAVITY_USAGE).unwrap();
+    shared["command"]["data"]["groups"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    let readings = provider_usage_windows("antigravity", shared.to_string().as_bytes(), None, now);
+    assert_eq!(readings.len(), 6);
+    assert_eq!(readings[0].model.as_deref(), Some("gemini"));
+}
+
+#[test]
+fn antigravity_quota_command_ignores_unknown_and_invalid_control_data() {
+    use serde_json::{Value, json};
+    let now = Utc::now();
+    let original: Value = serde_json::from_slice(ANTIGRAVITY_USAGE).unwrap();
+    for body in [
+        json!({}),
+        json!({"status":"SUCCESS", "response":original.to_string()}),
+        json!({"event":"step_update", "step_update":original}),
+        json!({"schemaVersion":1, "status":"SUCCESS", "command":original["command"]}),
+        json!({"status":"ERROR", "command":original["command"]}),
+        json!({"status":"SUCCESS", "command":{"name":"other", "data":original["command"]["data"]}}),
+    ] {
+        assert!(
+            provider_usage_windows("antigravity", body.to_string().as_bytes(), None, now)
+                .is_empty()
+        );
+    }
+    let bucket = original["command"]["data"]["groups"][0]["buckets"][0].clone();
+    for (field, value) in [
+        ("id", json!("future-weekly")),
+        ("window", json!("monthly")),
+        ("remaining_fraction", json!("0.5")),
+        ("remaining_fraction", json!(-0.1)),
+        ("remaining_fraction", json!(1.1)),
+        ("remaining_fraction", Value::Null),
+        ("reset_time", json!("invalid")),
+        ("reset_time", Value::Null),
+        ("disabled", json!(true)),
+        ("disabled", json!("false")),
+    ] {
+        let mut bucket = bucket.clone();
+        bucket[field] = value;
+        let body = json!({"status":"SUCCESS", "command":{"name":"usage", "data":{"groups":[{"buckets":[bucket]}]}}});
+        assert!(
+            provider_usage_windows("antigravity", body.to_string().as_bytes(), None, now)
+                .is_empty(),
+            "invalid {field}"
+        );
+    }
+    assert!(provider_usage_windows("antigravity", b"not json", None, now).is_empty());
+    let body = json!({"status":"SUCCESS", "command":{"name":"usage", "data":{"groups":[{"buckets":[{"id":"3p-5h", "window":"5h", "remaining_fraction":0, "reset_time":"2026-10-24T09:00:00Z"}]}]}}});
+    let readings = provider_usage_windows("antigravity", body.to_string().as_bytes(), None, now);
+    assert_eq!(readings.len(), 2);
+    assert!(
+        readings
+            .iter()
+            .all(|reading| reading.exhausted && reading.used_percent == Some(100.0))
+    );
+    assert_eq!(readings[0].model.as_deref(), Some("claude"));
+    assert_eq!(readings[1].model.as_deref(), Some("gpt"));
+}
+
 #[test]
 fn grok_billing_records_the_reported_weekly_window_without_invocation_tokens() {
     use orbit_types::telemetry::ProviderLimitSource;

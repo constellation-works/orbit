@@ -21,8 +21,14 @@ const SUCCESS_ENVELOPE: &str =
 
 fn fake_agy(dir: &Path, body: &str, argv_path: &Path, stdin_path: &Path) -> PathBuf {
     let program = dir.join("agy");
+    // After each run Orbit reads agy's quota with `--print /usage` through the same
+    // launcher. That query is not a model turn: answer it without recording argv or
+    // stdin, so the run's own invocation is what the assertions read.
     let script = format!(
         r#"#!/bin/sh
+case " $* " in
+  *" /usage "*) exit 1 ;;
+esac
 : > '{argv}'
 for arg in "$@"; do printf '%s\n' "$arg" >> '{argv}'; done
 cat > '{stdin}'

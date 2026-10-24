@@ -1,5 +1,6 @@
 //! Orchestration for `backend: cli` agent subprocess dispatch.
 
+mod antigravity_usage;
 mod completion;
 mod dispatch;
 mod entry;

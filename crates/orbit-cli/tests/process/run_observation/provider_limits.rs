@@ -20,6 +20,7 @@ fn configure_crews(fixture: &Fixture) {
         ("sonnet", "claude", "sonnet-model"),
         ("credits", "claude", "opus-model"),
         ("ledger", "grok", "grok-model"),
+        ("agy-flash", "antigravity", "gemini-3.8-flash-high"),
         ("error", "claude", "opus-model"),
         ("lapsed", "claude", "opus-model"),
         ("no-reset", "claude", "opus-model"),
@@ -70,9 +71,9 @@ fn doctor_row<'a>(rows: &'a Value, check: &str) -> &'a Value {
 }
 
 #[test]
-fn grok_billing_events_are_visible_in_readiness_and_weekly_pressure() {
+fn native_provider_usage_events_are_visible_in_readiness_and_weekly_pressure() {
     if !isolated_run_observation(
-        "run_observation::provider_limits::grok_billing_events_are_visible_in_readiness_and_weekly_pressure",
+        "run_observation::provider_limits::native_provider_usage_events_are_visible_in_readiness_and_weekly_pressure",
     ) {
         return;
     }
@@ -86,41 +87,56 @@ fn grok_billing_events_are_visible_in_readiness_and_weekly_pressure() {
         },
     )
     .unwrap();
-    // The captured billing response is a 2% weekly account window. Keep the
-    // reset live independently of the calendar date this fixture runs on.
-    let mut observation = reading("grok", 2.0, Duration::days(7));
-    observation.window = Some("weekly".into());
-    observation.window_minutes = Some(10080);
-    runtime.record_provider_limit(&observation).unwrap();
-    let readiness = fixture.json(&["run", "readiness", "--json"]);
-    let grok = readiness["provider_limits"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|limit| limit["provider"] == "grok")
-        .unwrap();
-    assert_eq!(grok["source"], "event");
-    assert_eq!(grok["window"], "weekly");
-    assert_eq!(grok["used_percent"], 2.0);
-    assert_eq!(
-        grok["resets_at"],
-        observation
-            .resets_at
+    for (provider, window, scope) in [
+        ("grok", "weekly", None),
+        ("antigravity", "gemini-weekly", Some("flash")),
+    ] {
+        let mut observation = reading(provider, 2.0, Duration::days(7));
+        observation.window = Some(window.into());
+        observation.window_minutes = Some(10080);
+        observation.model = scope.map(str::to_string);
+        runtime.record_provider_limit(&observation).unwrap();
+        let readiness = fixture.json(&["run", "readiness", "--json"]);
+        let limit = readiness["provider_limits"]
+            .as_array()
             .unwrap()
-            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
-    );
-    let pressure = readiness["provider_pressures"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|account| account["provider"] == "grok")
-        .unwrap();
-    assert_eq!(
-        pressure["reports_usage"], true,
-        "Grok billing must be recognized by readiness"
-    );
-    assert_eq!(pressure["pressure_window"]["window"], "weekly");
-    assert_eq!(pressure["pressure_window"]["used_percent"], 2.0);
+            .iter()
+            .find(|limit| limit["provider"] == provider)
+            .unwrap();
+        assert_eq!(limit["source"], "event");
+        assert_eq!(limit["window"], window);
+        assert_eq!(limit["scope"].as_str(), scope);
+        assert_eq!(limit["used_percent"], 2.0);
+        assert_eq!(
+            limit["resets_at"],
+            observation
+                .resets_at
+                .unwrap()
+                .to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+        );
+        let pressure = readiness["provider_pressures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|account| account["provider"] == provider)
+            .unwrap();
+        assert_eq!(
+            pressure["reports_usage"], true,
+            "{provider} usage must be recognized by readiness"
+        );
+        let scoped = if scope.is_some() {
+            readiness["crew_pressures"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|crew| crew["crew"] == "agy-flash")
+                .unwrap()
+        } else {
+            pressure
+        };
+        assert_eq!(scoped["pressure_window"]["window"], window);
+        assert_eq!(scoped["pressure_window"]["used_percent"], 2.0);
+    }
 }
 
 #[test]

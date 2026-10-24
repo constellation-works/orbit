@@ -2,7 +2,7 @@
 //!
 //! A usage limit belongs to the provider login on one host, so each host keeps
 //! its own record. Every limit failure writes an observation, and so does
-//! every Codex, Claude, Muse or Grok run that reported its usage windows [ORB-14696]; the
+//! every Codex, Claude, Muse, Grok or Antigravity run that reported its usage windows [ORB-14696]; the
 //! latest per provider account, model scope and window stands. A crew that
 //! sets `env` is its own account, so its readings are kept apart from its
 //! provider's default login's. A provider that reports
@@ -18,7 +18,7 @@ pub const PROVIDER_LIMIT_DETAIL_MAX_BYTES: usize = 512;
 
 /// The providers whose output or account API reports usage windows after a run
 /// [ORB-14696]. Every other provider is read only from a limit failure.
-pub const USAGE_REPORTING_PROVIDERS: [&str; 4] = ["claude", "codex", "muse", "grok"];
+pub const USAGE_REPORTING_PROVIDERS: [&str; 5] = ["claude", "codex", "muse", "grok", "antigravity"];
 
 /// Where an observation came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,7 +61,7 @@ impl ProviderLimitSource {
 /// One reading of a provider account's usage limit on this host.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderLimitObservation {
-    /// The provider whose account the limit belongs to (`codex`, `claude`, `muse`, `grok`).
+    /// The provider whose account the limit belongs to (for example `antigravity`).
     pub provider: String,
     /// The crew account the reading was taken under: a crew that sets `env`
     /// runs on its own credential, so its readings limit only it. `None` for
