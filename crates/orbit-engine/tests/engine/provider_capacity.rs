@@ -86,13 +86,27 @@ impl FakeProvider {
         exit_code: i32,
         before: &str,
     ) -> Self {
+        Self::with_usage_command(binary, stdout, stderr, exit_code, before, "exit 1")
+    }
+
+    /// Keep native quota reads separate from model turns and their side effects.
+    pub(super) fn with_usage_command(
+        binary: &str,
+        stdout: &str,
+        stderr: &str,
+        exit_code: i32,
+        before: &str,
+        usage_command: &str,
+    ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(binary);
         let invocations = dir.path().join("invocations");
         fs::write(
             &path,
             format!(
-                "#!/bin/sh\ncat > /dev/null\necho invoked >> '{}'\n{before}\n\
+                "#!/bin/sh\ncat > /dev/null\n\
+                 if [ \"$1\" = '--print' ] && [ \"$2\" = '/usage' ]; then\n{usage_command}\nexit 1\nfi\n\
+                 echo invoked >> '{}'\n{before}\n\
                  cat <<'STDOUT'\n{stdout}\nSTDOUT\ncat >&2 <<'STDERR'\n{stderr}\nSTDERR\n\
                  exit {exit_code}\n",
                 invocations.display()

@@ -49,6 +49,7 @@ use super::prepare::{
 };
 use crate::context::RuntimeHost;
 
+use super::antigravity_usage::AntigravityUsageRequest;
 use super::environment::{
     activity_deadline_env, add_browser_kit_env, codex_home, provider_child_environment,
     require_claude_worker_credential, require_crew_env,
@@ -731,6 +732,11 @@ pub(crate) fn run_cli_backend_for_step(
     };
 
     let usage_context = UsageWindowContext {
+        antigravity: (provider == "antigravity").then(|| AntigravityUsageRequest {
+            program: resolved_program.clone(),
+            environment: child_env.clone(),
+            cwd: subprocess_cwd.clone(),
+        }),
         codex_home: (provider == "codex")
             .then(|| codex_home(&child_env))
             .flatten(),

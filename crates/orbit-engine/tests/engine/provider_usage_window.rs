@@ -69,7 +69,17 @@ fn dispatch(
     stdout: &str,
     agent_env: &[(&str, &Path)],
 ) -> (DispatchOutcome, Vec<ProviderLimitObservation>) {
-    let fake = FakeProvider::new(binary, stdout, "", 0, "");
+    dispatch_with_prelude(binary, provider, stdout, agent_env, "")
+}
+
+fn dispatch_with_prelude(
+    binary: &str,
+    provider: Provider,
+    stdout: &str,
+    agent_env: &[(&str, &Path)],
+    prelude: &str,
+) -> (DispatchOutcome, Vec<ProviderLimitObservation>) {
+    let fake = FakeProvider::with_usage_command(binary, stdout, "", 0, "", prelude);
     let audit = tempfile::tempdir().unwrap();
     let mut host = CapacityHost::new(&fake.path, audit.path());
     host.agent_env = agent_env
@@ -94,6 +104,78 @@ fn dispatch(
     .unwrap();
     let limits = host.store.provider_limits().unwrap();
     (outcome, limits)
+}
+
+fn antigravity_records_native_quota_and_unavailable_readings_are_advisory() {
+    let home = tempfile::tempdir().unwrap();
+    let response = home.path().join("usage.json");
+    let fixture = include_str!(
+        "../../../orbit-agent/tests/provider_invocation/fixtures/antigravity_usage.json"
+    );
+    fs::write(&response, fixture).unwrap();
+    // Same launcher and child's HOME, with a fixed native command and no prompt.
+    let prelude = r#"
+if [ "$1" = '--print' ]; then
+  [ "$#" = 6 ] && [ "$2" = '/usage' ] && [ "$3" = '--output-format' ] && [ "$4" = 'json' ] && [ "$5" = '--print-timeout' ] && [ "$6" = '3s' ] || exit 9
+  cat "$HOME/usage.json"
+  exit $?
+fi
+"#;
+    let success = json!({"event":"result", "result": {
+        "status":"SUCCESS", "response":super::provider_capacity::SUCCESS_ENVELOPE,
+        "usage":{"input_tokens":12, "output_tokens":4}
+    }})
+    .to_string();
+    let env = [("HOME", home.path())];
+    let run =
+        |stdout: &str| dispatch_with_prelude("agy", Provider::Antigravity, stdout, &env, prelude);
+    let (outcome, limits) = run(&success);
+    assert!(outcome.success, "{:?}", outcome.message);
+    assert_eq!(limits.len(), 9);
+    for reading in &limits {
+        assert_eq!(reading.provider, "antigravity");
+        assert_eq!(reading.source, ProviderLimitSource::Event);
+        assert_eq!(reading.run_id.as_deref(), Some("usage-run"));
+        assert_eq!(reading.crew.as_deref(), Some("fixture-crew"));
+        assert!(
+            reading.used_percent.is_some()
+                && reading.window_minutes.is_some()
+                && reading.resets_at.is_some()
+        );
+    }
+    let flash = limits
+        .iter()
+        .find(|reading| {
+            reading.model.as_deref() == Some("flash")
+                && reading.window.as_deref() == Some("gemini-5h")
+        })
+        .unwrap();
+    assert_eq!(flash.used_percent, Some(9.81));
+    assert_eq!(flash.window_minutes, Some(300));
+    assert_eq!(
+        flash.resets_at,
+        Some("2026-10-24T08:49:02Z".parse().unwrap())
+    );
+    let (failed, failed_limits) = run("no completion envelope");
+    assert!(!failed.success);
+    assert_eq!(failed_limits.len(), 9, "failed runs also record usage");
+    for body in ["not json".to_string(), "{}".to_string(), "x".repeat(65537)] {
+        fs::write(&response, body).unwrap();
+        let (outcome, limits) = run(&success);
+        assert!(
+            outcome.success,
+            "advisory quota read: {:?}",
+            outcome.message
+        );
+        assert!(limits.is_empty());
+    }
+    fs::rename(&response, home.path().join("saved-usage.json")).unwrap();
+    let (outcome, limits) = run(&success);
+    assert!(
+        outcome.success,
+        "an unavailable quota command cannot fail a run"
+    );
+    assert!(limits.is_empty());
 }
 
 /// A `CODEX_HOME` holding `rollout` as the session rollout of `thread_id`,
@@ -438,6 +520,10 @@ cat '{}'
 fn usage_window_contracts_1() {
     crate::git_fixture::isolated(module_path!(), "usage_window_contracts_1", || {
         crate::git_fixture::run_scenarios(&[
+            (
+                "antigravity_records_native_quota_and_unavailable_readings_are_advisory",
+                antigravity_records_native_quota_and_unavailable_readings_are_advisory,
+            ),
             (
                 "grok_records_billing_and_unavailable_or_unrecognized_readings_are_advisory",
                 grok_records_billing_and_unavailable_or_unrecognized_readings_are_advisory,

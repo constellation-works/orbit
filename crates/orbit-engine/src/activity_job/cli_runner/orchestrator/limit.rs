@@ -15,12 +15,14 @@ use serde_json::Value;
 
 use crate::context::RuntimeHost;
 
+use super::antigravity_usage::AntigravityUsageRequest;
 use super::completion::{provider_failure, stdout_frames};
 use super::grok_usage::GrokUsageRequest;
 
 /// State resolved from the provider child's environment before dispatch.
 #[derive(Default)]
 pub(super) struct UsageWindowContext {
+    pub(super) antigravity: Option<AntigravityUsageRequest>,
     pub(super) codex_home: Option<PathBuf>,
     pub(super) grok: Option<GrokUsageRequest>,
 }
@@ -144,8 +146,9 @@ pub(super) fn record_limit(
 /// [ORB-14696] Record each usage window the provider reported about its own
 /// account during the run, success or failure. `stdout` is the whole capture,
 /// since a long run's first frames sit before a truncation marker, and
-/// `context` names the Codex rollout root or Grok CLI account to read.
-/// Grok reads its billing API rather than its invocation telemetry. [ORB-17288] Each
+/// `context` names the Codex rollout root, Grok CLI account or agy launcher to read.
+/// Grok reads its billing API and Antigravity its quota command rather than
+/// invocation telemetry. [ORB-17288] Each
 /// reading is attributed to `account`, the crew account the run used, or to
 /// the provider's default login when that is `None`.
 pub(super) fn record_usage_windows(
@@ -157,11 +160,16 @@ pub(super) fn record_usage_windows(
     crew: Option<&str>,
     account: Option<&str>,
 ) {
-    let billing = (provider == "grok")
-        .then(|| context.grok.as_ref()?.read())
-        .flatten();
-    let source = if provider == "grok" {
-        billing.as_deref().unwrap_or_default()
+    let usage = match provider {
+        "grok" => context.grok.as_ref().and_then(GrokUsageRequest::read),
+        "antigravity" => context
+            .antigravity
+            .as_ref()
+            .and_then(AntigravityUsageRequest::read),
+        _ => None,
+    };
+    let source = if matches!(provider, "grok" | "antigravity") {
+        usage.as_deref().unwrap_or_default()
     } else {
         stdout
     };
