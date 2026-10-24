@@ -23,11 +23,11 @@
 use orbit_common::process::ancestry::SessionTree;
 use orbit_common::process::ancestry::{ProcessStartKey, ProcessTreeProcess, TreeCpuAccount};
 
-use super::scope::ScopeUsage;
+use super::super::scope::ScopeUsage;
 
 /// Turns process-tree snapshots into the monotonic usage the minute aggregator
 /// already records for a cgroup scope.
-pub(super) struct TreeSampler {
+pub(crate) struct TreeSampler {
     cpu: TreeCpuAccount,
     read: Box<dyn FnMut() -> Option<Vec<ProcessTreeProcess>> + Send>,
     locate: Box<dyn FnMut(u32) -> Option<(ProcessStartKey, u32)> + Send>,
@@ -35,7 +35,7 @@ pub(super) struct TreeSampler {
 
 impl TreeSampler {
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub(super) fn new(
+    pub(crate) fn new(
         read: impl FnMut() -> Option<Vec<ProcessTreeProcess>> + Send + 'static,
         locate: impl FnMut(u32) -> Option<(ProcessStartKey, u32)> + Send + 'static,
     ) -> Self {
@@ -48,7 +48,7 @@ impl TreeSampler {
 
     /// The next scope-shaped reading, or `None` when this sample's tree
     /// cannot be read. A miss does not move the baseline.
-    pub(super) fn usage(&mut self) -> Option<ScopeUsage> {
+    pub(crate) fn usage(&mut self) -> Option<ScopeUsage> {
         let current = (self.read)()?;
         self.cpu.observe(&current, &mut self.locate);
         let memory_bytes = current.iter().fold(0u64, |total, process| {
@@ -65,7 +65,7 @@ impl TreeSampler {
 /// The snapshots a worker rooted at `root` samples: its tree plus the orphans
 /// still in a session it leads.
 #[cfg(target_os = "macos")]
-pub(super) fn session_tree_reader(
+pub(crate) fn session_tree_reader(
     root: u32,
 ) -> impl FnMut() -> Option<Vec<ProcessTreeProcess>> + Send + 'static {
     let mut tree = SessionTree::new(root);

@@ -1,147 +1,4 @@
-use std::borrow::Cow;
-use std::cell::{OnceCell, RefCell};
-use std::collections::{BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
-
-use orbit_common::fs::git::{GIT_LOCAL_TIMEOUT, GIT_OUTPUT_LIMIT};
-use orbit_common::process::run_bounded_capped;
-use orbit_common::{NotFoundKind, OrbitError};
-use orbit_engine::activity_job::{
-    CatalogDirectory, CatalogDirectoryList, CatalogError, V2JobCatalog, catalog_error_to_orbit,
-};
-use orbit_types::workflow::{JobKind, JobRun, JobScheduleState, JobV2, JobV2Step, JobV2StepBody};
-use serde_json::{Value, json};
-
-use crate::OrbitRuntime;
-use crate::application::managed_assets::{
-    ManagedAssetLayout, ManagedAssetReconciliation, reconcile_managed_assets,
-};
-
-/// Shippable default workflow assets. The list lives beside the shipped
-/// activities in `runtime::assets` so the runtime kernel can answer "is this a
-/// job Orbit ships" — a plugin routine may target one — without reaching up
-/// into the application layer.
-pub(crate) use crate::runtime::assets::DEFAULT_JOB_FILES;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JobCatalogFilter {
-    WorkflowsOnly,
-    All,
-    Kind(JobKind),
-}
-
-#[derive(Debug, Clone)]
-pub struct JobCatalogEntry {
-    pub job_id: String,
-    pub path: PathBuf,
-    pub spec: JobV2,
-}
-
-impl JobCatalogEntry {
-    /// Whether operator UI surfaces may submit this job without task input.
-    /// Delivery coordinators and leaves belong to Ship or a bounded drain.
-    pub fn supports_no_input_submission(&self) -> bool {
-        let name = &self.job_id;
-        self.kind() != JobKind::Subroutine
-            && self.state() != JobScheduleState::Disabled
-            && !self.spec.holds_task_delivery()
-            && !(name.starts_with("workspace_")
-                || name.starts_with("epic_")
-                || (name.starts_with("task_") && name != "task_pilot_pipeline"))
-    }
-
-    pub fn kind(&self) -> JobKind {
-        self.spec.kind
-    }
-
-    pub fn state(&self) -> JobScheduleState {
-        self.spec.state
-    }
-
-    pub fn max_active_runs(&self) -> u32 {
-        self.spec.max_active_runs
-    }
-
-    pub fn default_input(&self) -> Option<&Value> {
-        self.spec.default_input.as_ref()
-    }
-}
-
-pub fn job_catalog_to_json_with_last_run(
-    job: &JobCatalogEntry,
-    last_run: Option<&JobRun>,
-) -> Value {
-    let mut value = json!({
-        "job_id": job.job_id.clone(),
-        "kind": job.kind().to_string(),
-        "state": job.state().to_string(),
-        "default_input": job.spec.default_input,
-        "max_active_runs": job.spec.max_active_runs,
-        "steps": job.spec.steps.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
-        "path": job.path.display().to_string(),
-    });
-    value["last_run_state"] = last_run
-        .map(|r| serde_json::Value::String(r.state.to_string()))
-        .unwrap_or(serde_json::Value::Null);
-    value["last_run_at"] = last_run
-        .and_then(|r| r.finished_at.or(r.started_at).or(Some(r.scheduled_at)))
-        .map(|ts| serde_json::Value::String(ts.to_rfc3339()))
-        .unwrap_or(serde_json::Value::Null);
-    value
-}
-
-fn job_v2_step_to_json(step: &JobV2Step) -> Value {
-    let mut value = json!({
-        "id": step.id.clone(),
-        "when": step.when,
-        "retry": step.retry,
-    });
-    match &step.body {
-        JobV2StepBody::TargetRef(target) => {
-            value["body"] = json!({
-                "kind": "target_ref",
-                "target": target.target.clone(),
-                "default_input": target.default_input,
-                "timeout_seconds": target.timeout_seconds,
-                "session": target.session,
-            });
-        }
-        JobV2StepBody::Target(target) => {
-            value["body"] = json!({
-                "kind": "target",
-                "default_input": target.default_input,
-                "timeout_seconds": target.timeout_seconds,
-                "session": target.session,
-                "spec": target.spec,
-            });
-        }
-        JobV2StepBody::Parallel { parallel } => {
-            value["body"] = json!({
-                "kind": "parallel",
-                "join": parallel.join,
-                "branches": parallel.branches.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
-            });
-        }
-        JobV2StepBody::FanOut { fan_out, fan_in } => {
-            value["body"] = json!({
-                "kind": "fan_out",
-                "items": fan_out.items,
-                "max_workers": fan_out.max_workers,
-                "worker": job_v2_step_to_json(&fan_out.worker),
-                "fan_in": fan_in,
-            });
-        }
-        JobV2StepBody::Loop { loop_ } => {
-            value["body"] = json!({
-                "kind": "loop",
-                "max_iterations": loop_.max_iterations,
-                "break_when": loop_.break_when,
-                "steps": loop_.steps.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
-            });
-        }
-    }
-    value
-}
+use super::*;
 
 /// The job catalog one multi-run read parses once; see
 /// [`OrbitRuntime::v2_job_by_name_cached`].
@@ -153,7 +10,7 @@ pub(crate) struct V2JobNameCache {
 
 /// The membership layering, which is named execution's layering for a custom
 /// job name and that layering plus the workspace directory for a default one.
-struct LoadedV2JobCatalog {
+pub(super) struct LoadedV2JobCatalog {
     catalog: V2JobCatalog,
     diagnostics: Vec<V2JobCatalogDiagnostic>,
     dirs: Vec<CatalogDirectory<V2JobCatalogDirKind>>,
@@ -163,7 +20,7 @@ struct LoadedV2JobCatalog {
 impl LoadedV2JobCatalog {
     /// `Some` with what named execution resolves for `job_id`, or `None` when
     /// this layering cannot answer for it.
-    fn resolve(&self, job_id: &str) -> Option<Option<JobV2>> {
+    pub(super) fn resolve(&self, job_id: &str) -> Option<Option<JobV2>> {
         let selected = self.catalog.get(job_id);
         let selected_path = selected.map(|(path, _)| path);
         // A shipped default never resolves from the workspace directory.
@@ -202,14 +59,14 @@ pub(crate) struct V2JobExecutionMembership {
 }
 
 #[derive(Debug)]
-struct V2JobCatalogDiagnostic {
+pub(super) struct V2JobCatalogDiagnostic {
     directory_index: usize,
     path: PathBuf,
     error: OrbitError,
 }
 
 impl V2JobCatalogDiagnostic {
-    fn applies_to_job(
+    pub(super) fn applies_to_job(
         &self,
         job_id: &str,
         selected_path: Option<&Path>,
@@ -253,7 +110,7 @@ impl OrbitRuntime {
         Ok(())
     }
 
-    fn ci_sweep_integration_branch(
+    pub(super) fn ci_sweep_integration_branch(
         &self,
         spec: &JobV2,
         input: &Value,
@@ -378,7 +235,7 @@ impl OrbitRuntime {
         Err(OrbitError::not_found(NotFoundKind::Job, job_id.to_string()))
     }
 
-    pub(super) fn load_v2_job_assets(&self) -> Result<V2JobCatalog, OrbitError> {
+    pub(crate) fn load_v2_job_assets(&self) -> Result<V2JobCatalog, OrbitError> {
         self.load_v2_job_catalog(self.v2_job_asset_dirs())
     }
 
@@ -424,7 +281,7 @@ impl OrbitRuntime {
         V2JobExecutionMembership { names, errors }
     }
 
-    fn load_v2_job_catalog(
+    pub(super) fn load_v2_job_catalog(
         &self,
         dirs: Vec<CatalogDirectory<V2JobCatalogDirKind>>,
     ) -> Result<V2JobCatalog, OrbitError> {
@@ -432,7 +289,7 @@ impl OrbitRuntime {
             .map(|(catalog, _)| catalog)
     }
 
-    fn load_v2_job_catalog_with_diagnostics(
+    pub(super) fn load_v2_job_catalog_with_diagnostics(
         &self,
         dirs: Vec<CatalogDirectory<V2JobCatalogDirKind>>,
     ) -> Result<(V2JobCatalog, Vec<V2JobCatalogDiagnostic>), OrbitError> {
@@ -482,7 +339,7 @@ impl OrbitRuntime {
         Ok((catalog, diagnostics))
     }
 
-    fn load_v2_job_catalog_best_effort(
+    pub(super) fn load_v2_job_catalog_best_effort(
         &self,
         dirs: Vec<CatalogDirectory<V2JobCatalogDirKind>>,
     ) -> (V2JobCatalog, Vec<OrbitError>) {
@@ -510,7 +367,7 @@ impl OrbitRuntime {
     /// a shipped default is never displaced). A plugin whose job files no
     /// longer parse yields a diagnostic, never a failed catalog: every other
     /// job must remain dispatchable.
-    fn load_plugin_job_files(
+    pub(super) fn load_plugin_job_files(
         &self,
         catalog: &mut V2JobCatalog,
         report: &mut dyn FnMut(OrbitError),
@@ -529,11 +386,11 @@ impl OrbitRuntime {
         }
     }
 
-    fn v2_job_asset_dirs(&self) -> Vec<CatalogDirectory<V2JobCatalogDirKind>> {
+    pub(super) fn v2_job_asset_dirs(&self) -> Vec<CatalogDirectory<V2JobCatalogDirKind>> {
         self.v2_job_asset_dirs_with_env(v2_job_env_dirs().as_deref())
     }
 
-    fn v2_job_asset_dirs_with_env(
+    pub(super) fn v2_job_asset_dirs_with_env(
         &self,
         env_dirs: Option<&str>,
     ) -> Vec<CatalogDirectory<V2JobCatalogDirKind>> {
@@ -551,7 +408,7 @@ impl OrbitRuntime {
         dirs.into_vec()
     }
 
-    fn v2_job_membership_dirs(&self) -> Vec<CatalogDirectory<V2JobCatalogDirKind>> {
+    pub(super) fn v2_job_membership_dirs(&self) -> Vec<CatalogDirectory<V2JobCatalogDirKind>> {
         let mut dirs = CatalogDirectoryList::default();
         // Same layering as named execution, with the workspace dir always
         // present so one parse covers both default and custom job names.
@@ -629,14 +486,14 @@ impl OrbitRuntime {
         resolved
     }
 
-    fn v2_job_asset_dirs_for_execution(
+    pub(super) fn v2_job_asset_dirs_for_execution(
         &self,
         job_id: &str,
     ) -> Vec<CatalogDirectory<V2JobCatalogDirKind>> {
         self.v2_job_asset_dirs_for_execution_with_env(job_id, v2_job_env_dirs().as_deref())
     }
 
-    fn v2_job_asset_dirs_for_execution_with_env(
+    pub(super) fn v2_job_asset_dirs_for_execution_with_env(
         &self,
         job_id: &str,
         env_dirs: Option<&str>,
@@ -660,7 +517,10 @@ impl OrbitRuntime {
     }
 }
 
-fn validate_ci_integration_branch(repo_root: &Path, branch: &str) -> Result<String, OrbitError> {
+pub(super) fn validate_ci_integration_branch(
+    repo_root: &Path,
+    branch: &str,
+) -> Result<String, OrbitError> {
     // Match pilot admission's origin-prefix normalization once, so collection
     // and every child receive the identical literal branch, never @{-1} or
     // another Git revision expression.
@@ -685,7 +545,7 @@ fn validate_ci_integration_branch(repo_root: &Path, branch: &str) -> Result<Stri
     Ok(branch.to_string())
 }
 
-fn ci_branch_field(input: &Value, key: &str) -> Result<Option<String>, OrbitError> {
+pub(super) fn ci_branch_field(input: &Value, key: &str) -> Result<Option<String>, OrbitError> {
     match input.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(branch)) => {
@@ -698,13 +558,13 @@ fn ci_branch_field(input: &Value, key: &str) -> Result<Option<String>, OrbitErro
     }
 }
 
-fn v2_job_env_dirs() -> Option<String> {
+pub(super) fn v2_job_env_dirs() -> Option<String> {
     std::env::var("ORBIT_JOB_DIR")
         .ok()
         .or_else(|| std::env::var("ORBIT_V2_JOB_DIR").ok())
 }
 
-fn push_v2_job_env_dirs(
+pub(super) fn push_v2_job_env_dirs(
     dirs: &mut CatalogDirectoryList<V2JobCatalogDirKind>,
     env_dirs: Option<&str>,
 ) {
@@ -716,19 +576,19 @@ fn push_v2_job_env_dirs(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum V2JobCatalogDirKind {
+pub(super) enum V2JobCatalogDirKind {
     Explicit,
     Workspace,
     Global,
 }
 
-pub(super) fn is_default_job_name(job_id: &str) -> bool {
+pub(crate) fn is_default_job_name(job_id: &str) -> bool {
     DEFAULT_JOB_FILES
         .iter()
         .any(|(default_job_id, _)| *default_job_id == job_id)
 }
 
-fn matches_job_filter(kind: JobKind, filter: JobCatalogFilter) -> bool {
+pub(super) fn matches_job_filter(kind: JobKind, filter: JobCatalogFilter) -> bool {
     match filter {
         JobCatalogFilter::WorkflowsOnly => kind == JobKind::Workflow,
         JobCatalogFilter::All => true,
@@ -745,7 +605,7 @@ fn matches_job_filter(kind: JobKind, filter: JobCatalogFilter) -> bool {
 /// When `overwrite` is false, existing files are preserved — users who've
 /// edited a previously-seeded workflow won't lose their changes on re-init.
 /// Parse the job asset compiled into this binary.
-pub(super) fn shipped_job_spec(job_id: &str) -> Result<JobV2, OrbitError> {
+pub(crate) fn shipped_job_spec(job_id: &str) -> Result<JobV2, OrbitError> {
     let (_, yaml) = DEFAULT_JOB_FILES
         .iter()
         .find(|(name, _)| *name == job_id)

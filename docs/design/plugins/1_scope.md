@@ -918,7 +918,7 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
 - **Catalog layer.** Activities and jobs are not copied into the workspace. The plugin layer
   loads after the workspace and the shipped defaults, so a workspace file shadows a plugin's
   and a shipped default is never displaced (L-0060). `orbit run show` prints the resolving
-  layer and what it shadowed (`orbit-core/src/application/job/catalog_layers.rs`).
+  layer and what it shadowed (`orbit-core/src/application/job/catalog/layers.rs`).
 - Routines target `job:<name>` only, and only a job the same plugin ships or a shipped default;
   cross-plugin targets are a load error.
 - Plugin jobs may reference shipped activities and their own; a reference to another plugin's
