@@ -60,6 +60,11 @@ timestamps and job/step columns are excluded from that context and remain
 readable when a credential value on the following selected line is masked. Values
 whose introducer falls outside the selection are masked with asterisks before excerpt
 retention, preserving raw selected byte/line counts and source coordinates.
+A capped head/tail cut that separates an in-selection introducer from its value
+omits that value when the introducer is inside the tail cut's display lookbehind
+(the same 16 KiB bound, with the same newline reset). A token the redactor
+already recognizes on its own stays for in-place redaction. Raw selected byte
+and line counts stay the source counts.
 EOF, collector batch boundaries, overlong context, capped displays and ordinary
 line/step selections are covered without live GitHub access or authentication.
 

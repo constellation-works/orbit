@@ -4688,5 +4688,22 @@
       ]
     },
     "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_primary_capped_in_selection_bearer_cut",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 1,
+      "line_end": 10
+    },
+    "job_logs": {},
+    "max_bytes": 86,
+    "registered": true,
+    "run_log": [
+      "filler0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller3 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller4 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nBearer\nSYNTHETICVALUE1234567890\ntailend1234567890\n"
+    ]
   }
 ]
