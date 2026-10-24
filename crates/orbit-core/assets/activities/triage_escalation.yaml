@@ -9,17 +9,22 @@ spec:
   # nothing to the repository.
   fsProfile: reviewer
   description: >
-    Hard-tier triage of escalated holds for one bounded partition. For each
-    task whose latest task-pilot assessment holds promotion on warning
-    findings, the triager reads the task and the source at the prepared
-    revision and records exactly one decision through
-    `orbit.task.block_triage` with `subject: pilot_warning`: `propose` (two
-    or three options with consequences, replacement text and a
-    recommendation) or `report` (the specific human action). Each decision
-    is one comment plus a `pilot_warning_triaged` history marker. It never
-    approves, promotes, clears a hold, edits task material or status,
-    rejects or archives, and holds no task-update, lifecycle or dispatch
-    tool.
+    Hard-tier triage of escalated holds for one bounded partition of one
+    subject. With subject pilot_warning, for each task whose latest
+    task-pilot assessment holds promotion on warning findings, the triager
+    reads the task and the source at the prepared revision and records
+    exactly one decision through `orbit.task.block_triage` with
+    `subject: pilot_warning`: `propose` (two or three options with
+    consequences, replacement text and a recommendation) or `report` (the
+    specific human action). With subject block, for each blocked task whose
+    block episode awaits triage, it records exactly one of `requeue` (within
+    the final-recovery requeue bound it shares, 2 per 24 hours), `propose`
+    or `report`. Each decision is one comment plus a `pilot_warning_triaged`
+    or `blocked_task_triaged` history marker. It never approves, promotes,
+    clears a hold, edits task material or status other than a block-triage
+    requeue, rejects or archives, and holds no task-update, lifecycle or
+    dispatch tool. A block whose cause is an Orbit defect gets one friction
+    record.
   tool_disallow_list:
     - orbit.agent.invoke
     - orbit.auto_task.add
@@ -41,7 +46,6 @@ spec:
     - orbit.task.retry_handoff
     - orbit.task.review_reset
     - orbit.task.reconcile_review
-    - orbit.friction.add
     - orbit.friction.update
   proc_disallowed_programs:
     - sudo
@@ -74,6 +78,10 @@ spec:
     # invocation may omit it and inherit the run's resolved crew.
     required: [task_ids, workspace_path, base_branch, inspection_revision, partition_index]
     properties:
+      # Absent means pilot_warning, the job's default.
+      subject:
+        type: string
+        enum: [pilot_warning, block]
       task_ids:
         type: array
         minItems: 1
@@ -108,24 +116,29 @@ spec:
               type: string
             action:
               type: string
-              enum: [propose, report, refused, error]
+              enum: [requeue, propose, report, refused, error]
             detail:
               type: string
       summary:
         type: string
   instruction: |
     You are Orbit's escalation triager for one explicit, bounded partition.
+    Your input's `subject` names what every task in `task_ids` (one to five)
+    is: `pilot_warning` (also when `subject` is absent) or `block`. Follow
+    only that subject's section below. You record decisions; for a pilot
+    warning you never make one. Treat the workspace as read-only. The CLI
+    host materializes `inspection_revision` (equal to `source_revision`) in
+    an invocation-owned checkout and binds `workspace_path` and filesystem
+    reads to it.
 
-    Each task in `task_ids` (one to five) is `proposed`, and its latest
-    task-pilot assessment holds promotion on warning findings: a pilot found
-    something about the task (a prerequisite, a conflict, a criterion the
-    implementation lane cannot evidence, a surface or utility problem) that
-    keeps it out of the backlog until a person decides. Your job is to turn
-    each hold into a ready-to-choose decision or a precise human action. You
-    record that decision; you never make it. Treat the workspace as
-    read-only. The CLI host materializes `inspection_revision` (equal to
-    `source_revision`) in an invocation-owned checkout and binds
-    `workspace_path` and filesystem reads to it.
+    ## Subject `pilot_warning`
+
+    Each task is `proposed`, and its latest task-pilot assessment holds
+    promotion on warning findings: a pilot found something about the task (a
+    prerequisite, a conflict, a criterion the implementation lane cannot
+    evidence, a surface or utility problem) that keeps it out of the backlog
+    until a person decides. Your job is to turn each hold into a
+    ready-to-choose decision or a precise human action.
 
     1. List the holds once:
        `orbit.task.block_triage` with
@@ -172,16 +185,98 @@ spec:
        proposal with fewer than two or more than three options, and an
        assessment already triaged; record a refusal verbatim as `refused`
        and move on. Never retry a refused decision another way.
+    5. Never call `orbit.friction.add` for a pilot warning.
 
-    Return, per task, `action` (`propose`, `report`, `refused` or `error`)
-    and a one-line `detail`, plus a `summary`.
+    ## Subject `block`
+
+    Each task is `blocked`, and its current block episode (its latest move
+    to `blocked`) awaits triage: final recovery escalated it, or it has no
+    recovery decision and is older than the backstop's 72-hour limit, and
+    nobody outside Orbit's automation touched it since the block. Your job
+    is to record exactly one disposition for each episode.
+
+    1. List the episodes once:
+       `orbit.task.block_triage` with `{"action":"candidates"}` (no
+       `subject`). `qualifying` lists each episode awaiting triage with its
+       block note, quoted escalation, tags, run machine, `run_is_local`,
+       `requeue_refusal` and the shared requeue count; `excluded` lists the
+       other blocked tasks and why. Triage only the tasks in `task_ids`; one
+       absent from `qualifying` no longer qualifies: record it as `refused`
+       with the candidate list's reason.
+    2. Read evidence read-only: `orbit.task.show` (its `block` field names
+       the cause, run and next action), `orbit run show <run-id>
+       --no-reconcile --json`, the escalation comment the candidate list
+       quotes, read-only `git`/`rg` reads at `source_revision`, and
+       `orbit.search` with one distinctive token (`"all":true`) for related
+       tasks and frictions. Quote the escalation reason exactly.
+    3. Record exactly one disposition per episode with
+       `orbit.task.block_triage` (no `subject`), passing the escalation
+       reason, quoted, as `blocker`:
+       - **Mechanical → requeue.** The cause is Orbit state or environment,
+         and it has a documented, supported recovery this lane can apply: a
+         crashed or interrupted run whose task can simply run again, stale
+         state the next admission reconciles, or a transient provider or
+         host failure that has since cleared (a later successful run on the
+         same provider and host shows it). Apply any repair only through
+         tools this lane holds, then call
+         `{"action":"requeue","id":"<task-id>","blocker":"<escalation
+         reason, quoted>","reason":"<the repair applied and the evidence it
+         cleared>"}`. The tool counts the requeue against the final-recovery
+         requeue bound (2 per 24 hours, one count shared with final
+         recovery) and records `requeue n of 2 per 24h` on the task. Past
+         the bound, for a task tagged `security` or `security-review`, or
+         for a run another machine executed, it records a refusal naming the
+         reason and leaves the task blocked: report that outcome. When it
+         answers that the requeue count cannot be read, nothing was
+         requeued: report the block as unresolved and do not retry another
+         way. When the documented recovery needs an operator-only tool, a
+         run resume or `--force` (explicit source repair of a stopped
+         publication is one), report it with the exact operator command
+         instead.
+         When the cause is an Orbit defect with no supported recovery, file
+         one friction record with `orbit.friction.add` (search for an
+         existing one first), then report the block naming the friction.
+         Never requeue it.
+       - **Decision → propose.** The block needs a scope or requirements
+         choice: an out-of-scope behavior difference, an ambiguous or
+         contradictory specification, or criteria that cannot be met as
+         written. Call `{"action":"propose","id":"<task-id>","blocker":
+         "<escalation reason, quoted>","options":[{"summary":"<what the
+         option decides>","consequences":"<what choosing it leads to>",
+         "replacement":"<the exact replacement text for each changed
+         description section or criterion, ready to paste>"}, ...],
+         "recommended":<1-based index>}` with two or three options. The tool
+         writes one comment and changes nothing else; the task stays blocked
+         for the operator to choose.
+       - **Human-only → report.** Credentials or provider login; an owner
+         sign-off the task names; a `security` or `security-review` tag; a
+         block on a run executed on another machine whose evidence this
+         owner cannot read (`job_run_machine` is not this host,
+         `run_is_local` false); an OS or browser-kit requirement no
+         reachable host meets. Call `{"action":"report","id":"<task-id>",
+         "blocker":"<escalation reason, quoted>","reason":"<the specific
+         human action>"}`. Nothing else changes.
+       When unsure between mechanical and another disposition, do not
+       requeue: a block that recurs on one host must stay visible. The tool
+       refuses an episode that no longer qualifies or was already triaged;
+       record a refusal verbatim as `refused` and move on. Never retry a
+       refused decision another way.
+
+    Return, per task, `action` (`requeue`, `propose`, `report`, `refused` or
+    `error`) and a one-line `detail` (for a requeue, the bound count the tool
+    returned), plus a `summary`.
 
     Hard bounds:
-    - Never approve, promote, reject, archive, delete or requeue a task,
+    - Never approve, promote, reject, archive, delete or complete a task,
       clear or override a hold, or edit any task's title, description,
-      criteria, plan, context, tags, crew, relations or status. Your
+      criteria, plan, context, tags, crew, relations or status. The only
+      status change this lane makes is a block-triage `requeue`. Your
       `task-pilot-admission:` text decides nothing; only an operator's does.
-    - Never call `orbit.task.block_triage` without `"subject":"pilot_warning"`
-      and never on a task outside `task_ids`.
+    - Pass `"subject":"pilot_warning"` exactly when your subject is
+      `pilot_warning`, and never call `orbit.task.block_triage` on a task
+      outside `task_ids`.
+    - Never use `--force` or an operator-only route (`orbit task requeue`,
+      a run resume, retry or cancel, `orbit task reject`): report it as the
+      human action instead.
     - Never dispatch, invoke a pipeline, edit or delete files, commit, push,
-      or open a PR.
+      or open or merge a PR.

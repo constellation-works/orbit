@@ -759,7 +759,13 @@ proposed tasks whose latest task-pilot assessment holds promotion on warnings
 and records one triage marker per assessment. The seeded
 `pilot_warning_triage.yaml` also ships `enabled: false` with the same seed-time
 `owner_machine` and `branch`; see
-[Pilot warning holds](2_design.md#61-pilot-warning-holds-pilot_warnings_held). Core
+[Pilot warning holds](2_design.md#61-pilot-warning-holds-pilot_warnings_held).
+`block_escalated` targets the same job with `subject: block`: it observes
+blocked tasks whose block episode awaits triage and settles from the
+`blocked_task_triaged` marker for that episode. The seeded
+`blocked_task_triage.yaml` ships `enabled: false` with the same seed-time
+`owner_machine` and `branch`; see
+[Escalated blocks](2_design.md#62-escalated-blocks-block_escalated). Core
 supplies authoritative task envelopes, pinned source and run/history evidence;
 `orbit-automation::members` owns due decisions, material fingerprints, incident
 identity, frozen attempts and receipt acceptance. Store uses its existing

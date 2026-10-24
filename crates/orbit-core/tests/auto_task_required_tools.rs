@@ -23,10 +23,6 @@ const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
         include_str!("../assets/auto_tasks/backlog-hygiene.yaml"),
     ),
     (
-        "blocked-task-triage",
-        include_str!("../assets/auto_tasks/blocked-task-triage.yaml"),
-    ),
-    (
         "code-review",
         include_str!("../assets/auto_tasks/code-review.yaml"),
     ),
@@ -599,41 +595,40 @@ fn shipped_templates_filing_findings_declare_context_files_in_task_add() {
     );
 }
 
-/// The blocked-task triage holds no operator authority: none of its tools is
-/// governed, so it cannot requeue past the bound, reject, resume a run or
-/// merge, and it ships inert behind its blocked-candidate precondition.
+/// The escalation triage lane that replaced the blocked-task-triage
+/// auto-task requeues only through `orbit.task.block_triage`, whose shared
+/// bound and refusals it cannot bypass: its activity withholds every agent
+/// tool that would edit, requeue or resume a task another way, and lets
+/// it file the friction an Orbit-defect block needs.
 #[test]
-fn blocked_task_triage_declares_no_operator_only_tool() {
-    let source = BUNDLED_AUTO_TASKS
+fn escalation_triage_holds_no_operator_only_tool() {
+    let activity: serde_yaml::Value =
+        serde_yaml::from_str(include_str!("../assets/activities/triage_escalation.yaml")).unwrap();
+    let disallowed: Vec<&str> = activity["spec"]["tool_disallow_list"]
+        .as_sequence()
+        .unwrap()
         .iter()
-        .find_map(|(name, source)| (*name == "blocked-task-triage").then_some(*source))
-        .unwrap_or_else(|| panic!("blocked-task-triage is a bundled auto-task"));
-    let definition = parse_template("blocked-task-triage", source);
-    assert!(!definition.enabled, "bundled defaults ship inert");
-    assert!(definition.skip_unless_blocked_candidates);
-    assert!(
-        definition
-            .template
-            .tags
-            .iter()
-            .any(|tag| tag == "no-diff-expected")
-    );
-    assert!(has_required_tool(&definition, "orbit.task.block_triage"));
-    let tools = &definition.template.required_tools;
-    for tool in tools {
-        assert!(
-            orbit_common::governance::authorization::governed_tool(tool).is_none(),
-            "{tool} is operator-governed; the triage reports operator-only routes instead"
-        );
-    }
+        .map(|tool| tool.as_str().unwrap())
+        .collect();
     for forbidden in [
         "orbit.task.update",
         "orbit.task.requeue",
-        "orbit.task.reject",
+        "orbit.workflow.run.resume",
     ] {
         assert!(
-            !tools.iter().any(|tool| tool == forbidden),
-            "the triage writes other tasks only through orbit.task.block_triage, not {forbidden}"
+            disallowed.contains(&forbidden),
+            "the triager writes other tasks only through orbit.task.block_triage, not {forbidden}"
         );
     }
+    assert!(
+        !disallowed.contains(&"orbit.task.block_triage")
+            && !disallowed.contains(&"orbit.friction.add"),
+        "the triager records block dispositions and Orbit-defect frictions: {disallowed:?}"
+    );
+    let routine: serde_yaml::Value =
+        serde_yaml::from_str(include_str!("../assets/routines/blocked_task_triage.yaml")).unwrap();
+    assert_eq!(
+        routine["enabled"], false,
+        "[ORB-10549] the replacing routine ships inert"
+    );
 }

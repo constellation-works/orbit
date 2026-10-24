@@ -18,6 +18,8 @@
 //! - `change_probe` — the `skip_if_unchanged` precondition's evidence. The
 //!   `skip_unless_blocked_candidates` precondition reads the blocked-task
 //!   triage's candidate rule (`application::task::triage_candidacy`).
+//! - `retired` — shipped defaults a routine replaced, kept as provenance so
+//!   `orbit workspace sync` retires their seeded copies.
 //! - [`crud`] — the shared add/list/show/update/toggle/mint domain surface.
 //! - [`listing`] — whether each listed definition fires here, and when: the
 //!   one decision every list surface renders.
@@ -33,6 +35,7 @@ pub mod crud;
 pub mod delete;
 pub mod listing;
 mod read;
+pub(crate) mod retired;
 pub use orbit_automation::auto_tasks::loader;
 pub use orbit_automation::auto_tasks::schedule;
 pub mod scheduler;
@@ -57,14 +60,12 @@ pub use state::{AutoTaskCursor, AutoTaskCursorState, cursor_state_path, load_cur
 /// Default definitions embedded in the Orbit binary and materialized into a
 /// workspace on initialization. Defaults are deliberately inert: users must
 /// explicitly mint one or enable it through the existing auto-task surface.
+/// A default a later release dropped moves to
+/// [`retired::RETIRED_AUTO_TASK_FILES`].
 pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
     (
         "backlog-hygiene",
         include_str!("../../../assets/auto_tasks/backlog-hygiene.yaml"),
-    ),
-    (
-        "blocked-task-triage",
-        include_str!("../../../assets/auto_tasks/blocked-task-triage.yaml"),
     ),
     (
         "delivery-code-review",

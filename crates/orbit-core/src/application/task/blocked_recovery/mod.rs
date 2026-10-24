@@ -54,6 +54,7 @@ pub use episode::{
 pub(crate) use input::BlockedRecoveryPreparation;
 pub use input::{BlockedRecoveryInput, BlockedRecoveryTick, BlockedRecoveryView};
 pub use next_step::BlockedNextStep;
+pub(crate) use triage::block_triaged_at;
 pub use triage::{
     BLOCKED_TASK_TRIAGED_EVENT, BlockTriageDecision, BlockTriageRequest, BlockedTriageView,
     TriageBasis, TriageCandidacy, TriageEpisode, TriageOption, triage_candidacy,

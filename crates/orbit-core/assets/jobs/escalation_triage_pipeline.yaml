@@ -2,21 +2,30 @@
 # actions, one hard-tier read per hold. Propose-only: it never edits task
 # material, approves, promotes, clears a hold, rejects or archives.
 #
-# Today the job triages pilot warning holds: a `proposed` task whose latest
-# applied task-pilot assessment holds promotion on warning findings (the
-# findings `orbit task list --pilot-warnings` shows). Design:
-# docs/design/automation-triggers/2_design.md (`pilot_warnings_held`).
+# One run reads one `subject`:
+# - `pilot_warning` (the default): a `proposed` task whose latest applied
+#   task-pilot assessment holds promotion on warning findings (the findings
+#   `orbit task list --pilot-warnings` shows). Propose-only.
+# - `block`: a `blocked` task whose block episode final recovery escalated,
+#   or that stayed undecided past the backstop's 72-hour limit, with no human
+#   touch since the block. The triager may requeue it within the
+#   final-recovery requeue bound it shares, propose options, or report.
+# Design: docs/design/automation-triggers/2_design.md (`pilot_warnings_held`,
+# `block_escalated`).
 #
 # Selection
 # - Explicit: `orbit run job escalation_triage_pipeline --input
-#   'task_ids=["<id>"]'` triages those tasks. A named task whose latest
-#   assessment no longer qualifies (it holds nothing on warnings, an operator
-#   decided it, it was already triaged, or another live run is triaging it)
-#   settles superseded with its reason.
-# - Automatic (no task_ids): every qualifying held assessment, oldest task
-#   first, up to max_tasks.
+#   'task_ids=["<id>"]'` (add `--input 'subject="block"'` for blocked tasks)
+#   triages those tasks. A named task that no longer qualifies (its
+#   assessment holds nothing on warnings, an operator decided or touched it,
+#   it was already triaged, or another live run is triaging it) settles
+#   superseded with its reason.
+# - Automatic (no task_ids): every qualifying task of the subject, oldest
+#   task first, up to max_tasks.
 # - State-triggered: the seeded `pilot_warning_triage` routine
-#   (`kind: pilot_warnings_held`) submits one crew-homogeneous batch per run.
+#   (`kind: pilot_warnings_held`) and `blocked_task_triage` routine
+#   (`kind: block_escalated`) each submit one crew-homogeneous batch of their
+#   subject per run.
 #
 # Prepare pins one landing-branch revision without touching the primary
 # checkout and fails before any agent call outside a Git work tree.
@@ -25,15 +34,17 @@
 # - Every triager is drawn from `workflow.hard_complexity_crews`, keeping
 #   only crews that can inspect source natively (a tier without one passes
 #   to xhard), or is the inspection-capable `workflow.default_crew` when no
-#   pool has one. The crew that wrote the held assessment (the pilot run's
-#   frozen draw) is passed over while the pool offers another. Prepare
+#   pool has one. For a pilot warning, the crew that wrote the held
+#   assessment (the pilot run's frozen draw) is passed over while the pool
+#   offers another. Prepare
 #   records every draw; the triager step names the crew of its partition, so
 #   tasks are partitioned by crew, at most five per partition.
 #
 # There is no apply step. Each triager records its decision through
-# `orbit.task.block_triage` (`subject: pilot_warning`), which writes one
-# comment and one `pilot_warning_triaged` history marker; the routine settles
-# each member from that marker, never from the agent's final message.
+# `orbit.task.block_triage` with the run's subject, which writes one comment
+# and one `pilot_warning_triaged` or `blocked_task_triaged` history marker;
+# the routine settles each member from that marker, never from the agent's
+# final message.
 
 schemaVersion: 2
 kind: Job
@@ -44,6 +55,7 @@ spec:
   kind: workflow
   max_active_runs: 3
   default_input:
+    subject: pilot_warning
     task_ids: []
     workspace_path: .
     max_tasks: 50
@@ -57,6 +69,7 @@ spec:
       default_input:
         state_automation: "{{ input.state_automation }}"
         source_revision: "{{ input.source_revision }}"
+        subject: "{{ input.subject }}"
         task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ input.workspace_path }}"
         base_branch: "{{ input.base_branch }}"
@@ -72,6 +85,7 @@ spec:
           id: triager
           target: activity:triage_escalation
           default_input:
+            subject: "{{ steps.prepare.output.subject }}"
             task_ids: "{{ item.task_ids }}"
             partition_index: "{{ item.partition_index }}"
             workspace_path: "{{ steps.prepare.output.workspace_path }}"

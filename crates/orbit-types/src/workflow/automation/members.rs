@@ -24,6 +24,10 @@ pub enum StateTriggerKind {
     /// A `proposed` task whose latest applied task-pilot assessment holds
     /// promotion on warning findings, not yet triaged for that assessment.
     PilotWarningsHeld,
+    /// A `blocked` task whose current block episode awaits triage: final
+    /// recovery escalated it, or it has no decision past the backstop's age
+    /// limit, and nobody outside Orbit's automation touched it since.
+    BlockEscalated,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -360,7 +364,9 @@ impl StateTrigger {
             StateTriggerKind::PreparationEligible => "task_pilot_pipeline",
             StateTriggerKind::ExecutionFailed => "task_triage_pipeline",
             StateTriggerKind::FindingUnverified => "finding_verification_pipeline",
-            StateTriggerKind::PilotWarningsHeld => "escalation_triage_pipeline",
+            StateTriggerKind::PilotWarningsHeld | StateTriggerKind::BlockEscalated => {
+                "escalation_triage_pipeline"
+            }
         }
     }
 }

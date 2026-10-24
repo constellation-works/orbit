@@ -1,15 +1,19 @@
-//! Select the held pilot assessments an escalation triage run reads, draw
-//! each one's hard-tier crew and partition them by crew.
+//! Select the escalated holds an escalation triage run reads (held pilot
+//! assessments, or block episodes awaiting triage), draw each one's
+//! hard-tier crew and partition them by crew.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::{SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{Task, TaskComplexity, TaskStatus};
+use orbit_types::workflow::automation::members::StateTriggerKind;
 use serde_json::{Value, json};
 
 use super::{HeldPilotWarnings, PilotWarningCandidacy};
 use crate::OrbitRuntime;
+use crate::application::task::TriageCandidacy;
 use crate::application::task::pilot::input::{
     bounded_usize, requested_workspace_root, string_array,
 };
@@ -25,6 +29,66 @@ const HARD_MAX_TASKS: usize = 500;
 /// every triager is drawn from this tier.
 const TRIAGE_TIER: TaskComplexity = TaskComplexity::Hard;
 
+/// What one escalation triage run reads: the job's `subject` input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Subject {
+    /// A `proposed` task's held pilot assessment (`pilot_warnings_held`).
+    PilotWarning,
+    /// A `blocked` task's block episode awaiting triage (`block_escalated`).
+    Block,
+}
+
+impl Subject {
+    fn parse(action: &str, input: &Value) -> Result<Self, DispatchError> {
+        match input.get("subject") {
+            None | Some(Value::Null) => Ok(Self::PilotWarning),
+            Some(Value::String(subject)) => match subject.as_str() {
+                "" | "pilot_warning" => Ok(Self::PilotWarning),
+                "block" => Ok(Self::Block),
+                other => Err(DispatchError::action_failed(
+                    action,
+                    format!("subject `{other}` is not one of pilot_warning or block"),
+                )),
+            },
+            Some(_) => Err(DispatchError::action_failed(
+                action,
+                "subject must be a string: pilot_warning or block",
+            )),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::PilotWarning => "pilot_warning",
+            Self::Block => "block",
+        }
+    }
+
+    /// The trigger kind whose members are this subject.
+    fn trigger_kind(self) -> StateTriggerKind {
+        match self {
+            Self::PilotWarning => StateTriggerKind::PilotWarningsHeld,
+            Self::Block => StateTriggerKind::BlockEscalated,
+        }
+    }
+
+    /// The status a candidate of this subject holds.
+    fn status(self) -> TaskStatus {
+        match self {
+            Self::PilotWarning => TaskStatus::Proposed,
+            Self::Block => TaskStatus::Blocked,
+        }
+    }
+}
+
+/// One selected task's prepared row and the crew that wrote what holds it,
+/// when one is known.
+struct Selected {
+    task: Task,
+    row: Value,
+    author: Option<String>,
+}
+
 pub(crate) fn prepare(
     runtime: &OrbitRuntime,
     action: &str,
@@ -32,8 +96,20 @@ pub(crate) fn prepare(
     run_id: Option<&str>,
 ) -> Result<Value, DispatchError> {
     let failed = |error: OrbitError| DispatchError::action_failed(action, error.to_string());
+    let subject = Subject::parse(action, input)?;
     let workspace_root = requested_workspace_root(runtime, action, input)?;
     let claim = crate::application::automation::members::claim(runtime, input).map_err(failed)?;
+    if let Some(claim) = &claim
+        && claim.kind != subject.trigger_kind()
+    {
+        return Err(DispatchError::action_failed(
+            action,
+            format!(
+                "the state claim's members are not the `{}` subject",
+                subject.as_str()
+            ),
+        ));
+    }
     // Triagers cite the source to dispute a finding, so the run pins one
     // revision as finding verification does.
     let source =
@@ -115,7 +191,7 @@ pub(crate) fn prepare(
         let mut envelopes = runtime
             .task_candidates(
                 &TaskListFilter {
-                    statuses: Some(vec![TaskStatus::Proposed]),
+                    statuses: Some(vec![subject.status()]),
                     ..Default::default()
                 },
                 usize::MAX,
@@ -137,26 +213,29 @@ pub(crate) fn prepare(
 
     // An explicitly named task that no longer qualifies settles superseded
     // with its reason, so a claimed member is released rather than failed.
+    let now = Utc::now();
     let mut superseded = Vec::new();
     let mut excluded = BTreeMap::<&'static str, usize>::new();
     let mut selected = Vec::new();
     for task in candidates {
-        let candidacy = runtime.pilot_warning_candidacy_of(&task).map_err(failed)?;
-        let reason = match (&candidacy, held.get(&task.id)) {
-            (_, Some(_)) => Err("already_triaging"),
-            (PilotWarningCandidacy::Qualifies(warnings), None) => Ok(warnings.clone()),
-            (other, None) => Err(other.as_str()),
+        let reason = if held.contains_key(&task.id) {
+            Err("already_triaging")
+        } else {
+            qualify(runtime, subject, &task, now).map_err(failed)?
         };
         match reason {
-            Ok(warnings) if selected.len() < max_tasks => selected.push((task, warnings)),
-            Ok(_) => *excluded.entry("deferred_by_max_tasks").or_default() += 1,
+            Ok(_) if selected.len() >= max_tasks => {
+                *excluded.entry("deferred_by_max_tasks").or_default() += 1;
+            }
+            Ok((row, author)) => selected.push(Selected { task, row, author }),
             Err(reason) if explicit => superseded.push(json!({
                 "task_id": task.id, "outcome": "superseded", "reason": reason,
                 "status": task.status,
                 "detail": skipped_detail(reason, held.get(&task.id)),
             })),
-            // An unheld proposed task is not a candidate at all.
-            Err("not_held") => {}
+            // A task in the subject's status that holds nothing is not a
+            // candidate at all.
+            Err("not_held" | "not_blocked") => {}
             Err(reason) => *excluded.entry(reason).or_default() += 1,
         }
     }
@@ -165,24 +244,20 @@ pub(crate) fn prepare(
     // part of the prepared checkpoint the run records.
     let mut tasks = Vec::with_capacity(selected.len());
     let mut by_crew = BTreeMap::<String, Vec<String>>::new();
-    for (task, warnings) in &selected {
-        let author = assessment_author(runtime, warnings).map_err(failed)?;
-        let triager = triager(runtime, task, author.as_deref()).map_err(failed)?;
+    for Selected {
+        task,
+        mut row,
+        author,
+    } in selected
+    {
+        let triager = triager(runtime, &task, author.as_deref()).map_err(failed)?;
         by_crew
             .entry(triager.crew.clone())
             .or_default()
             .push(task.id.clone());
-        tasks.push(json!({
-            "task_id": task.id,
-            "title": task.title,
-            "status": task.status,
-            "operation_id": warnings.operation_id,
-            "pilot_run_id": warnings.pilot_run_id,
-            "findings": warnings.findings,
-            "assessment_crew": author,
-            "crew": triager.crew,
-            "tier": triager.tier,
-        }));
+        row["crew"] = json!(triager.crew);
+        row["tier"] = json!(triager.tier);
+        tasks.push(row);
     }
     let partitions = by_crew
         .iter()
@@ -203,7 +278,7 @@ pub(crate) fn prepare(
     Ok(json!({
         "state_automation": claim,
         "mode": if explicit { "explicit" } else { "automatic" },
-        "subject": "pilot_warning",
+        "subject": subject.as_str(),
         "workspace_path": workspace_root,
         "owner_machine": runtime.automation_execution_location(),
         "source": source.to_json(),
@@ -216,6 +291,53 @@ pub(crate) fn prepare(
         "excluded_by_reason": excluded,
         "superseded_during_preparation": superseded,
     }))
+}
+
+/// `task`'s prepared row and the crew to pass over when it qualifies for
+/// `subject` at `now`, else the stable reason it does not.
+fn qualify(
+    runtime: &OrbitRuntime,
+    subject: Subject,
+    task: &Task,
+    now: chrono::DateTime<Utc>,
+) -> Result<Result<(Value, Option<String>), &'static str>, OrbitError> {
+    Ok(match subject {
+        Subject::PilotWarning => match runtime.pilot_warning_candidacy_of(task)? {
+            PilotWarningCandidacy::Qualifies(warnings) => {
+                let author = assessment_author(runtime, &warnings)?;
+                Ok((
+                    json!({
+                        "task_id": task.id,
+                        "title": task.title,
+                        "status": task.status,
+                        "operation_id": warnings.operation_id,
+                        "pilot_run_id": warnings.pilot_run_id,
+                        "findings": warnings.findings,
+                        "assessment_crew": author,
+                    }),
+                    author,
+                ))
+            }
+            other => Err(other.as_str()),
+        },
+        // The shared triage rule, exactly as the tool and the trigger apply
+        // it. No crew wrote a block, so the draw passes over none.
+        Subject::Block => match runtime.block_triage_candidacy_of(task, now)? {
+            TriageCandidacy::Qualifies(episode) => Ok((
+                json!({
+                    "task_id": task.id,
+                    "title": task.title,
+                    "status": task.status,
+                    "episode": episode.key(),
+                    "blocked_at": episode.blocked_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+                    "basis": episode.basis,
+                    "run_id": episode.run_id,
+                }),
+                None,
+            )),
+            other => Err(other.as_str()),
+        },
+    })
 }
 
 /// The crew that wrote the held assessment: the pilot run's frozen draw.
@@ -273,7 +395,15 @@ fn skipped_detail(reason: &str, holders: Option<&BTreeSet<String>>) -> String {
         "operator_decided" => {
             "an operator recorded a task-pilot admission decision on the latest assessment".into()
         }
-        "triaged" => "the latest assessment was already triaged".into(),
+        "triaged" => "the latest assessment or block episode was already triaged".into(),
+        "human_intervened" => "someone outside Orbit's automation acted after the block".into(),
+        "unexplained_change" => "the task changed after the block with no recorded actor".into(),
+        "not_escalated" => "the block's final-recovery decision is not an escalation".into(),
+        "awaiting_backstop" => {
+            "no decision yet; the blocked-task backstop may still recover it".into()
+        }
+        "no_episode" => "no history entry records the block".into(),
+        "not_blocked" => "the task is not blocked".into(),
         _ => reason.into(),
     }
 }

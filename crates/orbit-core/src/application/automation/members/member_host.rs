@@ -10,7 +10,7 @@ use orbit_automation::{
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::TaskListFilter;
 use orbit_types::{
-    task::{TaskStatus, TaskType},
+    task::{Task, TaskHistoryEntry, TaskStatus, TaskType},
     workflow::{
         ActivityV2Spec, JobRun, JobRunState, JobRunTrigger, JobV2, JobV2StepBody, PipelineState,
         TargetStep,
@@ -21,8 +21,11 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{Host, SUPERSEDED_BY_SOURCE, stale_tasks};
+use crate::application::task::blocked_recovery::block_triaged_at;
 use crate::application::task::escalation_triage_steps::{PilotWarningCandidacy, triaged_at};
-use crate::application::task::{VERIFIABLE_STATUSES, finding_fingerprint, needs_verification};
+use crate::application::task::{
+    TriageCandidacy, VERIFIABLE_STATUSES, finding_fingerprint, needs_verification,
+};
 
 impl MemberHost for Host<'_> {
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
@@ -85,7 +88,7 @@ impl MemberHost for Host<'_> {
             StateTriggerKind::FindingUnverified => {
                 preparation::active_finding_verifications(self.runtime)?
             }
-            StateTriggerKind::PilotWarningsHeld => {
+            StateTriggerKind::PilotWarningsHeld | StateTriggerKind::BlockEscalated => {
                 preparation::active_escalation_triages(self.runtime)?
             }
             StateTriggerKind::ExecutionFailed => BTreeMap::new(),
@@ -172,6 +175,35 @@ impl MemberHost for Host<'_> {
                         task_ids: vec![task.id.clone()],
                         evidence: json!({"task_id":task.id, "operation_id":held.operation_id}),
                         fingerprint: held.operation_id,
+                        source: source.clone(),
+                        first_seen: now,
+                        changed_at: now,
+                        crew: bundle_crew(task.crew.as_deref()),
+                    });
+                }
+                StateTriggerKind::BlockEscalated => {
+                    // Only an episode the shared triage rule qualifies is a
+                    // member, keyed by the task and fingerprinted by the
+                    // episode, so each episode is read once and a fresh
+                    // block is a new member.
+                    let TriageCandidacy::Qualifies(episode) =
+                        self.runtime.block_triage_candidacy_of(&task, now)?
+                    else {
+                        continue;
+                    };
+                    if let Some(run_ids) = active_preparations.get(&task.id) {
+                        withheld.insert(task.id, already_triaging(run_ids));
+                        continue;
+                    }
+                    candidates.push(StateMember {
+                        key: task.id.clone(),
+                        task_ids: vec![task.id.clone()],
+                        evidence: json!({
+                            "task_id": task.id,
+                            "episode": episode.key(),
+                            "basis": episode.basis,
+                        }),
+                        fingerprint: episode.key(),
                         source: source.clone(),
                         first_seen: now,
                         changed_at: now,
@@ -349,34 +381,29 @@ impl MemberHost for Host<'_> {
             return Ok(MemberAdmission::Admit);
         }
 
-        if self.trigger.kind == StateTriggerKind::PilotWarningsHeld {
+        if self.is_escalation_triage() {
             let active = preparation::active_escalation_triages(self.runtime)?;
             for id in &member.task_ids {
-                let candidacy = match self
+                let escalation = match self
                     .runtime
                     .get_task(id)
-                    .and_then(|task| self.runtime.pilot_warning_candidacy_of(&task))
+                    .and_then(|task| self.escalation_of(&task, Utc::now()))
                 {
-                    Ok(candidacy) => candidacy,
+                    Ok(escalation) => escalation,
                     Err(OrbitError::NotFound {
                         kind: NotFoundKind::Task,
                         ..
                     }) => return Ok(MemberAdmission::Retire("task_deleted".into())),
                     Err(error) => return Err(error.into()),
                 };
-                match candidacy {
-                    PilotWarningCandidacy::Qualifies(held)
-                        if held.operation_id == member.fingerprint => {}
-                    // A re-pilot wrote another assessment; it is its own member.
-                    PilotWarningCandidacy::Qualifies(_) => {
+                match escalation {
+                    Escalation::Qualifies(fingerprint) if fingerprint == member.fingerprint => {}
+                    // A re-pilot wrote another assessment, or the task was
+                    // blocked again; that is its own member.
+                    Escalation::Qualifies(_) => {
                         return Ok(MemberAdmission::Retire("material_changed".into()));
                     }
-                    other => {
-                        return Ok(MemberAdmission::Retire(format!(
-                            "pilot_warning_{}",
-                            other.as_str()
-                        )));
-                    }
+                    Escalation::Gone(reason) => return Ok(MemberAdmission::Retire(reason)),
                 }
                 if let Some(run_ids) = active.get(id) {
                     return Ok(MemberAdmission::Withhold(already_triaging(run_ids)));
@@ -418,7 +445,8 @@ impl MemberHost for Host<'_> {
             }
             StateTriggerKind::PreparationEligible
             | StateTriggerKind::FindingUnverified
-            | StateTriggerKind::PilotWarningsHeld => None,
+            | StateTriggerKind::PilotWarningsHeld
+            | StateTriggerKind::BlockEscalated => None,
         };
 
         Ok(keys
@@ -467,7 +495,9 @@ impl MemberHost for Host<'_> {
             StateTriggerKind::PreparationEligible => "preparation",
             StateTriggerKind::ExecutionFailed => "execution_failure",
             StateTriggerKind::FindingUnverified => "finding_verification",
-            StateTriggerKind::PilotWarningsHeld => "escalation_triage",
+            StateTriggerKind::PilotWarningsHeld | StateTriggerKind::BlockEscalated => {
+                "escalation_triage"
+            }
         };
 
         // Every batch member travels as an explicit task id. Finding
@@ -476,18 +506,23 @@ impl MemberHost for Host<'_> {
         // those ids by live `task.crew` and then by `max_partition_size`
         // [ORB-12746, ORB-16839].
         let task_ids = attempt.task_ids();
+        let mut input = json!({
+            "state_automation": attempt,
+            "task_ids": task_ids,
+            "source_revision": attempt.member.source.commit,
+            "base_branch": self.trigger.branch,
+            "max_tasks": task_ids.len(),
+            "promotion_authorized": false,
+            "automation_origin": origin,
+        });
+        // One escalation job reads both subjects; the trigger names which.
+        if let Some(subject) = self.escalation_subject() {
+            input["subject"] = json!(subject);
+        }
         self.runtime
             .submit_automation_pipeline_run(
                 self.trigger.job_name(),
-                json!({
-                    "state_automation": attempt,
-                    "task_ids": task_ids,
-                    "source_revision": attempt.member.source.commit,
-                    "base_branch": self.trigger.branch,
-                    "max_tasks": task_ids.len(),
-                    "promotion_authorized": false,
-                    "automation_origin": origin,
-                }),
+                input,
                 &attempt.action_key,
                 JobRunTrigger::state_routine(self.routine, &attempt.consumer),
             )
@@ -598,8 +633,8 @@ impl MemberHost for Host<'_> {
 
         // The triager records each decision itself; its durable marker, not
         // the agent's final message, settles the member.
-        if self.trigger.kind == StateTriggerKind::PilotWarningsHeld {
-            return self.pilot_warning_outcome(attempt, id, stopped);
+        if self.is_escalation_triage() {
+            return self.escalation_outcome(attempt, id, stopped);
         }
 
         // Only the exact canonical deterministic apply steps can provide this
@@ -783,16 +818,65 @@ impl Host<'_> {
             StateTriggerKind::ExecutionFailed => vec![TaskStatus::Blocked],
             StateTriggerKind::FindingUnverified => VERIFIABLE_STATUSES.to_vec(),
             StateTriggerKind::PilotWarningsHeld => vec![TaskStatus::Proposed],
+            StateTriggerKind::BlockEscalated => vec![TaskStatus::Blocked],
+        }
+    }
+
+    /// Whether this consumer feeds `escalation_triage_pipeline`.
+    fn is_escalation_triage(&self) -> bool {
+        self.escalation_subject().is_some()
+    }
+
+    /// The escalation triage subject this consumer's members are, as the
+    /// pipeline's `subject` input names it.
+    fn escalation_subject(&self) -> Option<&'static str> {
+        match self.trigger.kind {
+            StateTriggerKind::PilotWarningsHeld => Some("pilot_warning"),
+            StateTriggerKind::BlockEscalated => Some("block"),
+            StateTriggerKind::PreparationEligible
+            | StateTriggerKind::ExecutionFailed
+            | StateTriggerKind::FindingUnverified => None,
+        }
+    }
+
+    /// Whether `task` is still an escalation triage member at `now`, with
+    /// the fingerprint it would carry: the held assessment's receipt, or the
+    /// block episode.
+    fn escalation_of(&self, task: &Task, now: DateTime<Utc>) -> Result<Escalation, OrbitError> {
+        Ok(match self.trigger.kind {
+            StateTriggerKind::BlockEscalated => {
+                match self.runtime.block_triage_candidacy_of(task, now)? {
+                    TriageCandidacy::Qualifies(episode) => Escalation::Qualifies(episode.key()),
+                    other => Escalation::Gone(format!("block_{}", other.as_str())),
+                }
+            }
+            _ => match self.runtime.pilot_warning_candidacy_of(task)? {
+                PilotWarningCandidacy::Qualifies(held) => Escalation::Qualifies(held.operation_id),
+                other => Escalation::Gone(format!("pilot_warning_{}", other.as_str())),
+            },
+        })
+    }
+
+    /// When the triager's marker for the member `fingerprint` was recorded.
+    fn escalation_triaged_at(
+        &self,
+        history: &[TaskHistoryEntry],
+        fingerprint: &str,
+    ) -> Option<DateTime<Utc>> {
+        match self.trigger.kind {
+            StateTriggerKind::BlockEscalated => block_triaged_at(history, fingerprint),
+            _ => triaged_at(history, fingerprint),
         }
     }
 
     /// Settle an escalation triage attempt from the markers its triagers
-    /// recorded. A member whose assessment carries its
-    /// `pilot_warning_triaged` marker is applied; once the run stopped, one
-    /// that no longer qualifies (an operator decided, the task was approved,
-    /// edited and re-piloted, or deleted) is released, and one still held
-    /// without a marker failed.
-    fn pilot_warning_outcome(
+    /// recorded. A member whose assessment or block episode carries its
+    /// `pilot_warning_triaged` or `blocked_task_triaged` marker is applied;
+    /// once the run stopped, one that no longer qualifies (an operator
+    /// decided or touched it, the task moved on, was re-piloted or blocked
+    /// again, or was deleted) is released, and one still qualifying without
+    /// a marker failed.
+    fn escalation_outcome(
         &self,
         attempt: &MemberAttempt,
         action_id: &str,
@@ -818,7 +902,7 @@ impl Host<'_> {
                 Err(error) => return Err(error.into()),
             };
             let history = self.runtime.get_task_history(task_id)?;
-            if let Some(at) = triaged_at(&history, &member.fingerprint) {
+            if let Some(at) = self.escalation_triaged_at(&history, &member.fingerprint) {
                 applied.push(MemberEvidence {
                     action_id: action_id.into(),
                     attempt_id: attempt.id.clone(),
@@ -828,6 +912,8 @@ impl Host<'_> {
                     ready: true,
                     result: json!({
                         "task_id": task_id,
+                        "subject": self.escalation_subject(),
+                        // The assessment's receipt or the block episode.
                         "operation_id": member.fingerprint,
                         "triaged_at": at,
                     }),
@@ -837,17 +923,15 @@ impl Host<'_> {
             if !stopped {
                 return Ok(MemberOutcome::Pending);
             }
-            match self.runtime.pilot_warning_candidacy_of(&task)? {
-                PilotWarningCandidacy::Qualifies(held)
-                    if held.operation_id == member.fingerprint =>
-                {
+            match self.escalation_of(&task, Utc::now())? {
+                Escalation::Qualifies(fingerprint) if fingerprint == member.fingerprint => {
                     failed.insert(member.key.clone(), "no_triage_marker".into());
                 }
-                other => {
-                    superseded.insert(
-                        member.key.clone(),
-                        format!("pilot_warning_{}", other.as_str()),
-                    );
+                Escalation::Qualifies(_) => {
+                    superseded.insert(member.key.clone(), "material_changed".into());
+                }
+                Escalation::Gone(reason) => {
+                    superseded.insert(member.key.clone(), reason);
                 }
             }
         }
@@ -867,6 +951,14 @@ fn already_verifying(run_ids: &BTreeSet<String>) -> String {
         "already_verifying: {}",
         run_ids.iter().cloned().collect::<Vec<_>>().join(", ")
     )
+}
+
+/// Whether a task is still an escalation triage member, and as what.
+enum Escalation {
+    /// It qualifies, with the fingerprint its member carries.
+    Qualifies(String),
+    /// It no longer qualifies, for this retirement reason.
+    Gone(String),
 }
 
 /// A temporary hold diagnostic names every durable run the operator can inspect.
@@ -948,7 +1040,7 @@ impl PilotSteps {
                 "repair_count",
             ),
             // Settled from triage markers, never from an apply checkpoint.
-            StateTriggerKind::PilotWarningsHeld => {
+            StateTriggerKind::PilotWarningsHeld | StateTriggerKind::BlockEscalated => {
                 return Ok(Self {
                     prepare: None,
                     apply: None,

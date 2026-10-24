@@ -1,25 +1,48 @@
-//! The blocked-task triage through its public boundaries: the scheduler's
-//! `skip_unless_blocked_candidates` precondition mints only for an episode
-//! awaiting triage, and `orbit.task.block_triage` records exactly one
+//! The blocked-task triage through its public boundaries: an operator
+//! auto-task's `skip_unless_blocked_candidates` precondition mints only for
+//! an episode awaiting triage, and `orbit.task.block_triage` — the tool the
+//! `block_escalated` escalation triager records with — records exactly one
 //! disposition per episode — a requeue counted against the requeue bound
 //! final recovery shares, a decision proposal that changes nothing else, or a
-//! human-only report — and refuses anything else.
+//! human-only report — and refuses anything else. The seeded
+//! `blocked_task_triage` routine's `block_escalated` trigger admits each
+//! qualifying episode once, under the same rule.
 
 use std::path::PathBuf;
 
 use chrono::{Duration, Utc};
 use orbit_core::application::auto_tasks::state::{cursor_state_path, load_cursor_state};
 use orbit_core::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
+use orbit_core::application::automation::evaluate_routine;
 use orbit_core::application::task::{FinalRecoveryCompletion, FinalRecoveryRequest};
-use orbit_core::{ActorIdentity, AutoTaskDefinition, OrbitRuntime};
+use orbit_core::{ActorIdentity, OrbitRuntime};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{ExecutionLocation, TaskStatus};
-use orbit_types::workflow::{AutoTaskSchedule, JobRunState};
+use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-const DEFINITION: &str = "blocked-task-triage";
-const BUNDLED: &str = include_str!("../../assets/auto_tasks/blocked-task-triage.yaml");
+const DEFINITION: &str = "block-reader";
+/// An operator's own blocked-task reader: the precondition is a definition
+/// field any auto-task may set, now that the routine replaced the shipped
+/// default.
+const OPERATOR_DEFINITION: &str = "\
+schemaVersion: 1
+name: block-reader
+enabled: true
+schedule:
+  every_minutes: 1
+dedupe: skip_if_open
+skip_unless_blocked_candidates: true
+template:
+  title: Read escalated blocks
+  description: Triage each block episode once.
+  acceptance_criteria:
+  - Every qualifying episode has one disposition.
+  complexity: medium
+  tags:
+  - block-reader
+";
 
 struct Fixture {
     _root: TempDir,
@@ -187,17 +210,12 @@ impl Fixture {
             .collect()
     }
 
-    /// The bundled definition, enabled and due every minute.
+    /// The operator's definition, enabled and due every minute.
     fn install_definition(&self) {
-        let mut definition: AutoTaskDefinition = serde_yaml::from_str(BUNDLED).unwrap();
-        assert!(!definition.enabled, "the bundled definition ships inert");
-        assert!(definition.skip_unless_blocked_candidates);
-        definition.enabled = true;
-        definition.schedule = AutoTaskSchedule::Interval { every_minutes: 1 };
         std::fs::write(
             self.repo
                 .join(format!(".orbit/auto_tasks/{DEFINITION}.yaml")),
-            serde_yaml::to_string(&definition).unwrap(),
+            OPERATOR_DEFINITION,
         )
         .unwrap();
     }
@@ -533,4 +551,97 @@ fn each_episode_is_triaged_once_and_a_human_touch_excludes_it() {
         .unwrap();
     let view = late.iter().find(|view| view.task.id == manual).unwrap();
     assert_eq!(view.candidacy.as_str(), "human_intervened");
+}
+
+/// The seeded routine, enabled, with its seed-time placeholders rendered.
+fn seeded_routine() -> orbit_types::workflow::RoutineDefinition {
+    let yaml = include_str!("../../assets/routines/blocked_task_triage.yaml")
+        .replace("__ORBIT_ROUTINE_NAME__", "blocked-task-triage-fixture")
+        .replace("__ORBIT_OWNER_MACHINE__", "fixture-machine")
+        .replace("__ORBIT_BASE_BRANCH__", "main")
+        .replace("enabled: false", "enabled: true");
+    orbit_common::protocol::yaml::parse_routine_yaml(&yaml).unwrap()
+}
+
+#[test]
+fn the_block_escalated_trigger_admits_each_escalated_episode_once() {
+    let fx = fixture();
+    // The trigger observes the workspace's branch.
+    let git = |args: &[&str]| {
+        let status = crate::git_test_support::command()
+            .args([
+                "-c",
+                "user.name=Orbit Test",
+                "-c",
+                "user.email=orbit-test@example.com",
+            ])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(args)
+            .current_dir(&fx.repo)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::write(fx.repo.join(".gitignore"), ".orbit/\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "seed"]);
+    let runtime = OrbitRuntime::from_roots(&fx.global, &fx.repo.join(".orbit"))
+        .unwrap()
+        .with_automation_machine_identity(Some("fixture-machine".into()));
+    let routine = seeded_routine();
+    let pending = |now| {
+        evaluate_routine(&runtime, &routine, false, now)
+            .unwrap()
+            .state
+            .unwrap()
+            .members
+            .unwrap()
+            .pending
+    };
+
+    let escalated = fx.task(&[]);
+    fx.escalate(&escalated);
+    let undecided = fx.task(&[]);
+    fx.update(json!({"id": undecided, "status": "in_progress"}));
+    fx.update(json!({"id": undecided, "status": "blocked", "note": "worker exited"}));
+    let touched = fx.task(&[]);
+    fx.escalate(&touched);
+    fx.human()
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": touched, "comment": "I am looking at this"}),
+        )
+        .unwrap();
+    let triaged = fx.task(&[]);
+    fx.escalate(&triaged);
+    fx.triage(json!({"action": "report", "id": triaged, "blocker": "login", "reason": "sign in"}))
+        .unwrap();
+
+    let now = Utc::now();
+    let observed = evaluate_routine(&runtime, &routine, false, now).unwrap();
+    assert_eq!(observed.reason, "debouncing", "{observed:?}");
+    let members = pending(now);
+    assert_eq!(
+        members.keys().collect::<Vec<_>>(),
+        vec![&escalated],
+        "only the untouched, untriaged escalated episode is observed"
+    );
+    let episode = members[&escalated].fingerprint.clone();
+    let due = evaluate_routine(&runtime, &routine, true, now + Duration::minutes(3)).unwrap();
+    assert_eq!(due.reason, "would_fire", "{due:?}");
+    assert_eq!(due.batch.len(), 1, "{due:?}");
+    assert_eq!(due.batch[0].task_ids, std::slice::from_ref(&escalated));
+
+    // Triaging the episode takes it out of observation; a fresh block on the
+    // same task is a new episode.
+    fx.triage(
+        json!({"action": "report", "id": escalated, "blocker": "login", "reason": "sign in"}),
+    )
+    .unwrap();
+    assert!(pending(now + Duration::minutes(4)).is_empty());
+    fx.update(json!({"id": escalated, "status": "backlog"}));
+    fx.escalate(&escalated);
+    let fresh = pending(Utc::now() + Duration::minutes(5));
+    assert_ne!(fresh[&escalated].fingerprint, episode, "a new episode");
 }
