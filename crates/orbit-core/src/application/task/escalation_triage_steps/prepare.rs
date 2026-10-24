@@ -17,7 +17,8 @@ use crate::application::task::TriageCandidacy;
 use crate::application::task::pilot::input::{
     bounded_usize, requested_workspace_root, string_array,
 };
-use crate::application::task::pilot::source::resolve_source_snapshot;
+use crate::application::task::pilot::requested_base_branch;
+use crate::application::task::pilot::source::{SourceSnapshot, resolve_source_snapshot};
 use crate::application::task::{TaskListFilter, VerifierAssignment};
 
 const DEFAULT_MAX_PARTITION_SIZE: usize = 5;
@@ -110,17 +111,13 @@ pub(crate) fn prepare(
             ),
         ));
     }
-    // Triagers cite the source to dispute a finding, so the run pins one
-    // revision as finding verification does.
-    let source =
-        resolve_source_snapshot(runtime, action, input, &workspace_root)?.ok_or_else(|| {
-            DispatchError::action_failed(
-                action,
-                "escalation triage pins a Git revision; the workspace is not a Git work tree",
-            )
-        })?;
+    // Triagers cite the source to dispute a finding, so a Git run pins one
+    // revision as finding verification does. A non-Git workspace pins none,
+    // as a task pilot does, and its triagers report no observed revision.
+    let source = resolve_source_snapshot(runtime, action, input, &workspace_root)?;
     if let Some(claim) = &claim
-        && (source.source_revision != claim.member.source.commit
+        && (source.as_ref().map(|source| &source.source_revision)
+            != Some(&claim.member.source.commit)
             || input.get("task_ids") != Some(&json!(claim.task_ids())))
     {
         return Err(DispatchError::action_failed(
@@ -281,7 +278,16 @@ pub(crate) fn prepare(
         "subject": subject.as_str(),
         "workspace_path": workspace_root,
         "owner_machine": runtime.automation_execution_location(),
-        "source": source.to_json(),
+        // Results of this run must carry the observed-revision proof.
+        crate::application::task::pilot::source::INSPECTION_PROOF_KEY: true,
+        "source": source.as_ref().map(SourceSnapshot::to_json).unwrap_or_else(|| {
+            json!({
+                "base_branch": requested_base_branch(runtime, input),
+                "source_ref": Value::Null,
+                "source_revision": Value::Null,
+                "fast_forwarded": false,
+            })
+        }),
         "task_count": task_ids.len(),
         "task_ids": task_ids,
         "tasks": tasks,
@@ -355,11 +361,11 @@ fn assessment_author(
         .and_then(crate::application::distributed::pilot_run_crew))
 }
 
-/// `task`'s triager: a hard-tier draw passing over the assessment's author
-/// while the pool offers another, else the default crew, exactly as a
-/// finding verifier is drawn. Any configured crew may triage; the
-/// observed-revision proof on its `orbit.task.block_triage` decisions, not
-/// the draw, establishes that it read the pinned source.
+/// `task`'s triager: a hard-tier draw that can inspect source natively,
+/// passing over the assessment's author while the pool offers another, else
+/// the inspection-capable default crew, exactly as a finding verifier is
+/// drawn. With neither, preparation fails with `inspection_crew_unavailable`
+/// before any triager launches.
 fn triager(
     runtime: &OrbitRuntime,
     task: &Task,
@@ -369,7 +375,7 @@ fn triager(
     if let Some(assignment) = runtime.draw_finding_verifier(task, TRIAGE_TIER, &avoid)? {
         return Ok(assignment);
     }
-    let crew = runtime.resolve_crew_for_task(None, None)?;
+    let crew = runtime.inspection_capable_default_crew(TRIAGE_TIER)?;
     Ok(VerifierAssignment {
         crew: crew.name,
         tier: TRIAGE_TIER,

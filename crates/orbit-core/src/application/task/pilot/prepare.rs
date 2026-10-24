@@ -460,6 +460,8 @@ pub(crate) fn prepare(
         // Callable tools of the activity that will implement the task, plus
         // both artifact-attachment paths. Null when that activity cannot be read.
         "implementation_lane": lane.prompt_input(),
+        // Results of this run must carry the observed-revision proof.
+        crate::application::task::pilot::source::INSPECTION_PROOF_KEY: true,
         "source": source.as_ref().map(SourceSnapshot::to_json).unwrap_or_else(|| {
             json!({
                 "base_branch": requested_base_branch(runtime, input),

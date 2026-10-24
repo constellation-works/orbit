@@ -3,7 +3,7 @@ summary: "Activity / Job — Design"
 type: design
 title: "Activity / Job — Design"
 owner: codex
-last_updated: 2026-10-19
+last_updated: 2026-10-24
 last_validated: 2026-10-19
 status: Draft
 feature: activity-job
@@ -246,7 +246,7 @@ Activities execute only through jobs (`orbit job run` and the workflow aliases u
 
 Some module comments still describe older phase ordering; the authoritative behavior is the orbit-core call path in `crates/orbit-core/src/application/job/exec.rs`.
 
-Seeded direct shipment workflows (`task_local_pipeline` and `task_pr_pipeline`) opt into recovery activities on specific steps. Most use `step_failure_recovery`; after [ORB-11281], the PR pipeline's `sync_base` checkpoint instead uses `pr_conflict_recovery`, and [ORB-11488] extends that same typed leaf to `complete_pr`. The completion path acts only when GitHub reports `DIRTY` under retained `completion: done` authority. It verifies that the task branch still equals the published SHA, fetches and pins the PR base, and invokes the existing `git_rebase` boundary. Only actual unmerged index entries produce `RecoverableVcsConflict`; the executor retries `complete_pr` once after recovery, recognizes the recovered pinned rewrite through the original published SHA, lease-pushes the same branch, and continues polling the same PR. A base advance after a certified recovery is chased as described below rather than refused. A changed remote task branch, exhausted recovery episode, missing completion authority, fetch/push/auth failure, protection or review/check refusal, or any other VCS diagnostic remains untyped and cannot invoke the agent. The typed recovery envelope carries the original and target base SHAs plus conflicting paths, bypasses ordinary retry, and permits one recovery-crew invocation followed by one executor-owned retry of the same deterministic step per conflict stop. After [ORB-14332] a multi-commit candidate whose rebase stops again on a later commit is not refused: the host continuation keeps the resolved progress, certifies nothing, and leaves the rebase stopped at the new pick; the retried step reports that stop as a new typed conflict pinned to the rebase's own `onto`, and the executor dispatches `pr_conflict_recovery` again, at most four rounds per failure and only while each retry reports a different stop (the stopped pick, a new base, or new paths), after which the step fails like any failed post-recovery attempt. Activity routing accepts a rendered `crew` after [ORB-10622], a `crew_config_key` that asks the host to resolve configuration, or the run's resolved crew when neither is present. [ORB-11242] adds one gate on top of that selection: a run whose input carries `allowed_crews` refuses to dispatch any activity whose *resolved* crew is outside it. Recovery activities and the task pilot name their crew source with `crew_config_key`: step-failure and PR conflict recovery draw from `workflow.purpose_crews.failure_recovery`, falling back to `workflow.medium_complexity_crews` while that pool is unset; the pilot draws from `workflow.purpose_crews.task_pilot`, falling back to `workflow.low_complexity_crews`; and final recovery draws from `workflow.purpose_crews.final_recovery` (its persisted `crew_config_key` keeps the spelling `workflow.final_recovery_crews`). Each draw keeps the pool's weights, skips disabled and provider-limited crews, and is frozen per key in run state; an empty complexity pool falls back to `workflow.default_crew` and the frozen record says so. A draw for an activity whose input carries the inspection fields (`inspection_revision` and `partition_index`, the task pilot) is an ordinary pool draw: any configured crew may inspect, whatever its provider, because trust in the inspection comes from the observed-revision proof its apply step checks (below), not from the provider name. The retired `workflow.system_crew` key and an undefined `crew: system` resolve through the medium pool with a warning [ORB-15663]. The same allowlist gate applies to the resolved crew. Higher-level orchestration workflows do not enable recovery because replaying child dispatch or planning orchestration is not a safe leaf action.
+Seeded direct shipment workflows (`task_local_pipeline` and `task_pr_pipeline`) opt into recovery activities on specific steps. Most use `step_failure_recovery`; after [ORB-11281], the PR pipeline's `sync_base` checkpoint instead uses `pr_conflict_recovery`, and [ORB-11488] extends that same typed leaf to `complete_pr`. The completion path acts only when GitHub reports `DIRTY` under retained `completion: done` authority. It verifies that the task branch still equals the published SHA, fetches and pins the PR base, and invokes the existing `git_rebase` boundary. Only actual unmerged index entries produce `RecoverableVcsConflict`; the executor retries `complete_pr` once after recovery, recognizes the recovered pinned rewrite through the original published SHA, lease-pushes the same branch, and continues polling the same PR. A base advance after a certified recovery is chased as described below rather than refused. A changed remote task branch, exhausted recovery episode, missing completion authority, fetch/push/auth failure, protection or review/check refusal, or any other VCS diagnostic remains untyped and cannot invoke the agent. The typed recovery envelope carries the original and target base SHAs plus conflicting paths, bypasses ordinary retry, and permits one recovery-crew invocation followed by one executor-owned retry of the same deterministic step per conflict stop. After [ORB-14332] a multi-commit candidate whose rebase stops again on a later commit is not refused: the host continuation keeps the resolved progress, certifies nothing, and leaves the rebase stopped at the new pick; the retried step reports that stop as a new typed conflict pinned to the rebase's own `onto`, and the executor dispatches `pr_conflict_recovery` again, at most four rounds per failure and only while each retry reports a different stop (the stopped pick, a new base, or new paths), after which the step fails like any failed post-recovery attempt. Activity routing accepts a rendered `crew` after [ORB-10622], a `crew_config_key` that asks the host to resolve configuration, or the run's resolved crew when neither is present. [ORB-11242] adds one gate on top of that selection: a run whose input carries `allowed_crews` refuses to dispatch any activity whose *resolved* crew is outside it. Recovery activities and the task pilot name their crew source with `crew_config_key`: step-failure and PR conflict recovery draw from `workflow.purpose_crews.failure_recovery`, falling back to `workflow.medium_complexity_crews` while that pool is unset; the pilot draws from `workflow.purpose_crews.task_pilot`, falling back to `workflow.low_complexity_crews`; and final recovery draws from `workflow.purpose_crews.final_recovery` (its persisted `crew_config_key` keeps the spelling `workflow.final_recovery_crews`). Each draw keeps the pool's weights, skips disabled and provider-limited crews, and is frozen per key in run state; an empty complexity pool falls back to `workflow.default_crew` and the frozen record says so. A draw for an activity whose input carries the inspection fields (`inspection_revision` and `partition_index`, the task pilot) keeps only crews whose provider has a CLI runtime and whose executor declares `inspection_args`, passes to the next tier and then the default crew when a tier has none, fails with `inspection_crew_unavailable` before dispatch when the default cannot inspect, and names the filter in the frozen record's source [ORB-15792]; no provider is named in code. The retired `workflow.system_crew` key and an undefined `crew: system` resolve through the medium pool with a warning [ORB-15663]. The same allowlist gate applies to the resolved crew. Higher-level orchestration workflows do not enable recovery because replaying child dispatch or planning orchestration is not a safe leaf action.
 
 [ORB-11982] narrows what that completion step is allowed to call delivered. The same `head`, `base`, and `published_head_sha` checkpoints that authorize conflict repair also pin the pull request the run may complete on, and the pin follows the one rewrite a bounded repair produces. Completion refuses a pull request whose head branch or base branch no longer matches those pins, before any merge is requested; refuses a merged state whose head is not the pinned candidate or that names no merge commit; and refuses a provider answer that reports a merge timestamp while still calling the pull request open or closed, which is the F2026-09-102 shape where a task reached `done` with its PR open. The evidence that did permit the transition — pull request, branches, merged head, and landing commit — is written to the activity output and named in the durable authorization note, so task history distinguishes an evidence-backed automatic completion from any other writer of the same transition. A protection or required-check refusal additionally reports whether the published candidate is behind the current base, which separates a red merge ref that no longer describes the proposal from a genuine failure at the current candidate and base.
 
@@ -302,27 +302,44 @@ macOS kernel coverage checks both absent and prepared roots, including file
 creation, modification, and moving the root aside to replace it.
 
 Task-pilot source inspections use each CLI's own native file-read and command
-tools independently of the Orbit MCP tool list; every provider with a CLI
-runtime gets one generic instruction naming that surface. Dispatch still
-explicitly enables Codex's shell and unified exec features (a user config can
-turn its shell off), and Claude uses Read and Bash, with an explicit native
-tool set when its executor does not select one. A provider with no CLI
-runtime, a Claude executor that omits or disallows Read/Bash, or a profile
-other than `reviewer` fails before allocating the inspection checkout or
-starting a provider session with the non-retryable
+tools independently of the Orbit MCP tool list; every inspecting run gets one
+generic instruction naming that surface. Core names no provider here: an
+executor declares `inspection_args`, the arguments that turn those tools on
+(the shipped Codex executor enables its shell and unified exec features, and
+the shipped Claude executor declares none beyond its `--tools default`), and
+dispatch appends them. An installed executor that omits the field takes the
+shipped default's declaration of the same name. Inspection draws keep only
+crews whose provider has a CLI runtime and whose executor declares the field
+[ORB-15792], passing to the next tier and then the default crew, and the
+frozen draw names the filter and the crews it skipped; with no such crew the
+activity fails with `inspection_crew_unavailable` before dispatch. An explicit
+or run crew that still reaches dispatch with no declaration, a provider with
+no CLI runtime, or a profile other than `reviewer` fails before allocating the
+inspection checkout or starting a provider session with the non-retryable
 `InspectionToolsUnavailable` configuration error. This also applies to
 non-Git pilots (`inspection_revision: null`). Read-only is the `reviewer`
-profile's boundary, not the provider's. What proves an inspection happened
-is the result's observed-revision proof: the pilot reports `observed_revision`
-(`git rev-parse HEAD`) and `observed_tree` (`git rev-parse 'HEAD^{tree}'`)
-from its checkout, and apply refuses the partition — feeding the repair
-loop, as any validation error — when either is missing or the tree is not
-the pinned revision's tree, recomputed host-side. The envelope carries the
-revision, which a blind result could echo, but never its tree. A null
-`source_revision` (non-Git workspace) skips the check. Finding verification
-applies the same proof per partition, and escalation triage passes it on
-each `orbit.task.block_triage` decision, which the tool checks before
-recording anything. The pilot contract's
+profile's boundary, not the provider's. The inspection checkout's scratch
+directory, where a provider that reads its prompt from a file finds it, is
+listed in the checkout's `.git/info/exclude`, so the post-run cleanliness
+check never counts the host's own files, whenever they are removed. What
+proves an inspection happened is the result's observed-revision proof: the
+pilot reports `observed_revision` (`git rev-parse HEAD`) and `observed_tree`
+(`git rev-parse 'HEAD^{tree}'`) from its checkout, and apply refuses the
+partition — feeding the repair loop, as any validation error — when either
+is missing or the tree is not the pinned revision's tree, recomputed
+host-side with the shared commit-id and tree helpers. Hex case is
+normalised, since Git accepts either. The envelope carries the revision,
+which a blind result could echo, but never its tree. A null
+`source_revision` (non-Git workspace) skips the check. Each prepare step
+stamps its checkpoint `inspection_proof_required: true`; a run prepared
+before the proof existed, still in flight across an upgrade, carries no
+stamp, and its results are checked only when they report a proof. Finding
+verification applies the same proof per partition. Escalation triage passes
+it on each `orbit.task.block_triage` decision: while a live triage run holds
+the task, the tool requires that run's proof (or, for a non-Git run,
+`source_revision` null and no observed values) and refuses before recording,
+proposing or requeueing anything. It validates the action, subject and task
+before reading the proof, so a malformed call spends no `git` process. The pilot contract's
 `partition_index` and `inspection_revision` fields select this preparation;
 other source-inspection activities retain their own provider/tool contracts. Native commands
 remain inside the same reviewer filesystem sandbox; the pilot uses them only

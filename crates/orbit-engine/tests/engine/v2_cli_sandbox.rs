@@ -224,6 +224,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
         Ok(ResolvedCliExecutor {
             command: self.command.display().to_string(),
             args: Vec::new(),
+            inspection_args: None,
         })
     }
 
@@ -422,6 +423,7 @@ impl orbit_engine::test_support::NullRuntimeHost for MissingWrapperHost {
         Ok(ResolvedCliExecutor {
             command: self.command.display().to_string(),
             args: Vec::new(),
+            inspection_args: None,
         })
     }
 

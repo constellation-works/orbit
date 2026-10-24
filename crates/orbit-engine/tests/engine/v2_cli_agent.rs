@@ -1212,6 +1212,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ScriptHost {
         Ok(ResolvedCliExecutor {
             command: self.command.clone(),
             args: self.args.clone(),
+            inspection_args: None,
         })
     }
 

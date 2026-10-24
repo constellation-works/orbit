@@ -1066,6 +1066,7 @@ fn follower_cli(runtime: &OrbitRuntime, provider: &str, command: &str) {
             executor_type: ExecutorType::DirectAgent,
             command: Some(command.to_string()),
             args: vec![],
+            inspection_args: None,
             stdout_format: None,
             model_pair_override: None,
             model_flag: None,

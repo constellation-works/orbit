@@ -25,6 +25,11 @@ use super::cli_runner::{run_cli_backend_for_step, task_id_from_input};
 pub struct ResolvedCliExecutor {
     pub command: String,
     pub args: Vec<String>,
+    /// The executor's declared arguments for a pinned-source inspection run
+    /// (`ExecutorDef::inspection_args`): appended to that run's argv, empty
+    /// when `args` already leave the native tools on. `None` declares no
+    /// inspection surface, and such a run is refused before launch.
+    pub inspection_args: Option<Vec<String>>,
 }
 
 /// The registered `local_shell` executor definition behind a deterministic
@@ -241,10 +246,9 @@ pub enum DispatchError {
     CliInvocationPermanent(String),
 
     /// An inspection cannot start: the filesystem profile is not
-    /// `reviewer`, the provider has no CLI runtime, or its executor
-    /// configuration disables the native tools inspection needs (Claude's
-    /// `--tools`/`--disallowedTools`). Configuration errors never spend a
-    /// provider session.
+    /// `reviewer`, the provider has no CLI runtime, or its executor declares
+    /// no `inspection_args`. Configuration errors never spend a provider
+    /// session.
     #[error("inspection_tools_unavailable: provider `{provider}`: {reason}")]
     InspectionToolsUnavailable { provider: String, reason: String },
 

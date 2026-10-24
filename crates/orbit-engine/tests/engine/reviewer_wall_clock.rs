@@ -57,6 +57,7 @@ impl orbit_engine::test_support::NullRuntimeHost for BoundingHost {
         Ok(ResolvedCliExecutor {
             command: self.command.to_string_lossy().into_owned(),
             args: Vec::new(),
+            inspection_args: None,
         })
     }
 

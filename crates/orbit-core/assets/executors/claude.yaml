@@ -13,6 +13,9 @@ spec:
     - json
     - --tools
     - default
+  # `--tools default` above already enables the native Read and Bash tools a
+  # pinned-source inspection run uses; inspection adds no arguments.
+  inspection_args: []
   stdout_format: envelope
   sandbox: macos-sandbox-exec
   model_flag: "--model"

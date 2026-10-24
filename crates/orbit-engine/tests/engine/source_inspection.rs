@@ -27,23 +27,43 @@ fn pilots_of_any_provider_inspect_the_pinned_checkout_with_native_tools() {
     let revision = git(&repo, &["rev-parse", "HEAD"]);
     fs::write(repo.join("candidate.rs"), "later candidate\n").unwrap();
 
-    for (provider, name, args) in [
-        (Provider::Codex, "codex", vec!["exec", "--json"]),
-        (Provider::Claude, "claude", vec!["-p"]),
-        (Provider::Claude, "claude", vec!["-p", "--tools", "default"]),
-        (Provider::Claude, "claude", vec!["-p", "--tools=Read,Bash"]),
-        // Providers beyond Codex and Claude inspect with their own CLI's
-        // native tools and the one generic instruction; nothing refuses
-        // them for their provider.
-        (Provider::Gemini, "gemini", vec![]),
-        (Provider::Grok, "grok", vec![]),
-        (Provider::Muse, "muse", vec![]),
+    let codex_inspection = [
+        "--config",
+        "features.shell_tool=true",
+        "--config",
+        "features.unified_exec=true",
+    ];
+    for (provider, name, args, inspection_args) in [
+        (
+            Provider::Codex,
+            "codex",
+            vec!["exec", "--json"],
+            codex_inspection.to_vec(),
+        ),
+        (
+            Provider::Claude,
+            "claude",
+            vec!["-p", "--tools", "default"],
+            vec![],
+        ),
+        // Any provider whose executor declares `inspection_args` inspects
+        // with its own CLI's native tools: the declared arguments reach its
+        // argv, with the one generic instruction.
+        (
+            Provider::Gemini,
+            "gemini",
+            vec![],
+            vec!["--native-inspection"],
+        ),
+        (Provider::Grok, "grok", vec![], vec!["--native-inspection"]),
+        (Provider::Muse, "muse", vec![], vec!["--native-inspection"]),
     ] {
         let cli = temp.path().join(name);
         executable(&cli, NATIVE_PROVIDER);
         let host = InspectionHost {
             command: cli,
             args: args.into_iter().map(str::to_string).collect(),
+            inspection_args: Some(inspection_args.into_iter().map(str::to_string).collect()),
         };
         let mut asset = pilot(provider);
         let ActivityV2Spec::AgentLoop(spec) = &mut asset else {
@@ -96,47 +116,22 @@ fn unavailable_inspection_surface_is_a_typed_non_retryable_dispatch_error() {
         (
             Provider::OpenaiCompat,
             "openai_compat",
-            vec![],
+            None,
             Some("reviewer"),
         ),
-        (
-            Provider::Claude,
-            "claude",
-            vec!["--tools", ""],
-            Some("reviewer"),
-        ),
-        (
-            Provider::Claude,
-            "claude",
-            vec!["--tools=Read"],
-            Some("reviewer"),
-        ),
-        (
-            Provider::Claude,
-            "claude",
-            vec!["--tools", "default", "--tools", ""],
-            Some("reviewer"),
-        ),
-        (
-            Provider::Claude,
-            "claude",
-            vec!["--disallowedTools", "Bash"],
-            Some("reviewer"),
-        ),
-        (
-            Provider::Claude,
-            "claude",
-            vec!["--disallowed-tools=Read"],
-            Some("reviewer"),
-        ),
-        (Provider::Codex, "codex", vec![], Some("implementer")),
+        // An executor that declares no `inspection_args` never launches,
+        // whatever its provider.
+        (Provider::Gemini, "gemini", None, Some("reviewer")),
+        (Provider::Claude, "claude", None, Some("reviewer")),
+        (Provider::Codex, "codex", Some(vec![]), Some("implementer")),
     ];
-    for (provider, name, args, profile) in cases {
+    for (provider, name, inspection_args, profile) in cases {
         let cli = temp.path().join(name);
         executable(&cli, &format!("#!/bin/sh\ntouch '{}'\n", calls.display()));
         let host = InspectionHost {
             command: cli,
-            args: args.iter().map(|arg| (*arg).into()).collect(),
+            args: Vec::new(),
+            inspection_args,
         };
         let audit = writer(temp.path());
         let error = dispatch_v2_activity(V2DispatchInput {
@@ -234,6 +229,7 @@ fn git(root: &Path, args: &[&str]) -> String {
 struct InspectionHost {
     command: PathBuf,
     args: Vec<String>,
+    inspection_args: Option<Vec<String>>,
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for InspectionHost {
@@ -241,6 +237,7 @@ impl orbit_engine::test_support::NullRuntimeHost for InspectionHost {
         Ok(ResolvedCliExecutor {
             command: self.command.display().to_string(),
             args: self.args.clone(),
+            inspection_args: self.inspection_args.clone(),
         })
     }
     fn run_deterministic(
@@ -274,11 +271,9 @@ if provider == 'codex':
     assert config['features.shell_tool'] == 'true'
     assert config['features.unified_exec'] == 'true'
 elif provider == 'claude':
-    selected = []
-    for i, arg in enumerate(args):
-        if arg == '--tools': selected = args[i+1].split(',')
-        elif arg.startswith('--tools='): selected = arg.split('=', 1)[1].split(',')
-    assert 'default' in selected or {'Read', 'Bash'} <= set(selected)
+    assert args[args.index('--tools') + 1] == 'default'
+else:
+    assert '--native-inspection' in args
 prompt = pathlib.Path(args[args.index('--prompt-file') + 1]).read_text() if '--prompt-file' in args else sys.stdin.read()
 envelope = json.loads(prompt.split('Execution envelope:\n', 1)[1])
 assert 'proc.spawn' not in envelope['tools']

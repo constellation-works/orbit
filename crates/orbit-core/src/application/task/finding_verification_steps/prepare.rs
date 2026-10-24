@@ -205,6 +205,8 @@ pub(crate) fn prepare(
         "mode": if explicit { "explicit" } else { "automatic" },
         "workspace_path": workspace_root,
         "owner_machine": runtime.automation_execution_location(),
+        // Results of this run must carry the observed-revision proof.
+        crate::application::task::pilot::source::INSPECTION_PROOF_KEY: true,
         "source": source.to_json(),
         "round": "initial",
         "task_count": task_ids.len(),

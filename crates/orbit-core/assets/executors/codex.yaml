@@ -8,6 +8,14 @@ spec:
   args:
     - exec
     - --json
+  # Appended to pinned-source inspection runs (task pilot, finding
+  # verification, escalation triage): turn the native shell on even when a
+  # user config disables it. The reviewer sandbox stays authoritative.
+  inspection_args:
+    - --config
+    - features.shell_tool=true
+    - --config
+    - features.unified_exec=true
   stdout_format: envelope
   sandbox: macos-sandbox-exec
   model_flag: "--model"

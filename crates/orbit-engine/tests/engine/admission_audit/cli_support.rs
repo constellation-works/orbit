@@ -49,6 +49,9 @@ impl orbit_engine::test_support::NullRuntimeHost for TestHost {
         Ok(ResolvedCliExecutor {
             command: self.command.clone(),
             args: Vec::new(),
+            // As the shipped executors declare: inspection runs reach the
+            // checks after the inspection-tools gate.
+            inspection_args: Some(Vec::new()),
         })
     }
 

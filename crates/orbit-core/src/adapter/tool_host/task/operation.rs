@@ -174,6 +174,7 @@ fn block_triage(
     caller: ToolCaller<'_>,
     input: &OperationInput,
 ) -> Result<(Value, Option<String>), OrbitError> {
+    use crate::application::task::escalation_triage_steps::TriageInspectionProof;
     use crate::application::task::{
         BlockTriageDecision, BlockTriageRequest, PilotWarningDecision, PilotWarningTriageRequest,
     };
@@ -196,7 +197,6 @@ fn block_triage(
         };
         return Ok((candidates, None));
     }
-    inspection_proof(runtime, input)?;
     let id = input.required_string("id")?;
     let reason = || {
         input.optional_string("reason").and_then(|reason| {
@@ -209,6 +209,18 @@ fn block_triage(
         runtime
             .actor()
             .resolve_write_label(caller.agent.as_deref(), caller.model.as_deref())
+    };
+    // The decision is validated in full before the inspection proof, so a
+    // malformed call reports its own error and spends no `git` process.
+    let proof = || -> Result<(), OrbitError> {
+        runtime.check_triage_inspection_proof(
+            &id,
+            &TriageInspectionProof {
+                source_revision: input.optional_string("source_revision")?,
+                observed_revision: input.optional_string("observed_revision")?,
+                observed_tree: input.optional_string("observed_tree")?,
+            },
+        )
     };
     if pilot_warning {
         if input.optional_string("blocker")?.is_some() {
@@ -240,10 +252,12 @@ fn block_triage(
                 )));
             }
         };
+        let requested_by = requested_by()?;
+        proof()?;
         let response = runtime.record_pilot_warning_triage(&PilotWarningTriageRequest {
             task_id: id.clone(),
             decision,
-            requested_by: requested_by()?,
+            requested_by,
         })?;
         return Ok((response, Some(id)));
     }
@@ -265,60 +279,15 @@ fn block_triage(
             )));
         }
     };
-    let response = runtime.record_block_triage(&BlockTriageRequest {
+    let request = BlockTriageRequest {
         task_id: id.clone(),
         blocker: input.optional_string("blocker")?.unwrap_or_default(),
         decision,
         requested_by: requested_by()?,
-    })?;
-    Ok((response, Some(id)))
-}
-
-/// The observed-revision proof a pinned-source inspection lane (escalation
-/// triage) passes with each decision: when `source_revision` is supplied,
-/// `observed_revision` must equal it and `observed_tree` must be that
-/// revision's tree, recomputed here. The envelope carries the revision but
-/// never its tree, so a triager whose native tools never ran cannot forge
-/// the pair. Callers with no pinned revision (an operator, the
-/// blocked-task triage auto-task) omit all three and are unchecked.
-fn inspection_proof(runtime: &OrbitRuntime, input: &OperationInput) -> Result<(), OrbitError> {
-    let source_revision = input.optional_string("source_revision")?;
-    let observed_revision = input.optional_string("observed_revision")?;
-    let observed_tree = input.optional_string("observed_tree")?;
-    if source_revision.is_none() && observed_revision.is_none() && observed_tree.is_none() {
-        return Ok(());
-    }
-    let refuse =
-        |message: String| OrbitError::InvalidInput(format!("{message}; nothing was recorded"));
-    let Some(source_revision) = source_revision.filter(|revision| {
-        matches!(revision.len(), 40 | 64) && revision.chars().all(|ch| ch.is_ascii_hexdigit())
-    }) else {
-        return Err(refuse(
-            "block triage inspection proof needs `source_revision` as a full commit id, with              `observed_revision` and `observed_tree` from the inspection checkout"
-                .into(),
-        ));
     };
-    let spec = format!("{source_revision}^{{tree}}");
-    let output = orbit_common::fs::git::run_git(
-        &runtime.paths().repo_root,
-        &["rev-parse", "--verify", &spec],
-    )
-    .map_err(|error| refuse(format!("read the pinned source tree: {error}")))?;
-    let source_tree = output.stdout.trim();
-    if !output.success || source_tree.is_empty() {
-        return Err(refuse(format!(
-            "block triage inspection proof: source_revision {source_revision} has no readable              tree in this workspace"
-        )));
-    }
-    match crate::application::task::pilot::source::inspection_proof_error(
-        observed_revision.as_deref(),
-        observed_tree.as_deref(),
-        &source_revision,
-        source_tree,
-    ) {
-        Some(error) => Err(refuse(error)),
-        None => Ok(()),
-    }
+    proof()?;
+    let response = runtime.record_block_triage(&request)?;
+    Ok((response, Some(id)))
 }
 
 /// A triage `propose` call's `options` and 1-based `recommended` index.

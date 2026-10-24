@@ -4,6 +4,7 @@ use orbit_common::OrbitError;
 use orbit_config::UsagePressurePolicy;
 use orbit_types::identity::Crew;
 use orbit_types::task::TaskComplexity;
+use orbit_types::workflow::activity_job::Provider;
 use orbit_types::workflow::{ActivityCrewDraw, ActivityCrewPoolMember};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -98,6 +99,47 @@ impl crate::OrbitRuntime {
                 })
                 .collect(),
         })
+    }
+}
+
+/// The reason an inspection-requiring activity names when no crew it may
+/// draw can inspect [ORB-15792].
+pub(crate) const INSPECTION_CREW_UNAVAILABLE: &str = "inspection_crew_unavailable";
+
+impl crate::OrbitRuntime {
+    /// Whether `crew` can run a pinned-source inspection activity: its
+    /// provider has a CLI runtime and its executor declares
+    /// `inspection_args`, the arguments that turn on its native file-read
+    /// and shell tools. Nothing here names a provider; the declaration lives
+    /// in executor configuration. A crew that cannot is passed over before
+    /// dispatch rather than launched to fail its observed-revision proof.
+    pub(crate) fn can_inspect(&self, crew: &Crew) -> Result<bool, OrbitError> {
+        let provider = crew.assignment.provider.as_str();
+        if !Provider::parse(provider).is_ok_and(Provider::has_cli_runtime) {
+            return Ok(false);
+        }
+        let installed = self.get_executor_def(provider)?;
+        Ok(
+            crate::application::executor::declared_inspection_args(installed.as_ref(), provider)
+                .is_some(),
+        )
+    }
+
+    /// `candidates` split into the crews that can inspect and the rest.
+    pub(super) fn partition_inspecting(
+        &self,
+        candidates: Vec<CrewCandidate>,
+    ) -> Result<(Vec<CrewCandidate>, Vec<CrewCandidate>), OrbitError> {
+        let mut capable = Vec::new();
+        let mut unable = Vec::new();
+        for candidate in candidates {
+            if self.can_inspect(&candidate.crew)? {
+                capable.push(candidate);
+            } else {
+                unable.push(candidate);
+            }
+        }
+        Ok((capable, unable))
     }
 }
 

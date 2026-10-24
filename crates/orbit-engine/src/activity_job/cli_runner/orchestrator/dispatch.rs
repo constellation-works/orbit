@@ -28,7 +28,7 @@ use super::super::argv::{
     codex_mcp_server_launch_args, neutralize_inner_sandbox, try_audit_argv_for_dispatch,
 };
 use super::super::envelope::{cli_agent_envelope_json, task_id_from_input, task_ids_from_input};
-use super::super::inspection_tools::prepare_inspection_tools;
+use super::super::inspection_tools::{admit_inspection, prepare_inspection_tools};
 use super::super::launcher::{orbit_tool_env, resolve_provider_launcher};
 use super::super::plugin_broker::RunPluginBroker;
 use super::super::prompt_file::PromptFile;
@@ -114,10 +114,10 @@ pub(crate) fn run_cli_backend_for_step(
     // Reject an inspection configuration that cannot start (a non-reviewer
     // profile, a provider with no CLI runtime) before executor lookup can
     // classify it as a transient missing-CLI error.
-    prepare_inspection_tools(&provider, input, fs_profile, &[])?;
+    admit_inspection(&provider, input, fs_profile)?;
     let mut cli_executor = host.resolve_cli_executor(&provider)?;
     let inspection_tools =
-        prepare_inspection_tools(&provider, input, fs_profile, &cli_executor.args)?;
+        prepare_inspection_tools(&provider, input, cli_executor.inspection_args.as_deref())?;
     let timeout_seconds =
         invocation_timeout_seconds(spec, activity_name, trusted_host.as_ref(), input);
     let wall_clock_timeout = Duration::from_secs(timeout_seconds);
@@ -830,12 +830,6 @@ pub(crate) fn run_cli_backend_for_step(
             });
         }
     };
-
-    // The provider has exited, so its prompt file has served its purpose:
-    // delete it before the post-run checks, or an inspection run whose
-    // scratch directory sits inside its read-only checkout would see the
-    // host's own prompt file as a provider change to that checkout.
-    drop(prompt_file);
 
     // A post-run check fails the step, but the run trail must still hold the
     // provider's output. Refresh before those writes: a sandboxed provider may

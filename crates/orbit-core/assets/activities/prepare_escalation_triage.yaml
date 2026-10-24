@@ -21,12 +21,13 @@ spec:
     first, up to max_tasks, and counts the rest in `excluded_by_reason`. A
     state claim must be of the subject's trigger kind. It pins one
     landing-branch revision without changing the primary HEAD, index or
-    working files, and fails before any agent call outside a Git work tree.
-    Each task's triager is drawn from the hard complexity pool's
-    inspection-capable crews (or the next tier up, or the inspection-capable
-    default crew), passing over the crew that wrote a held assessment when
-    the pool offers another. Tasks are partitioned by crew, at most
-    max_partition_size per partition. Nothing is written.
+    working files; outside a Git work tree it pins none and reports a null
+    `source_revision`. Each task's triager is drawn from the hard complexity
+    pool's crews whose executor declares `inspection_args` (or the next tier
+    up, or the default crew when its executor declares them), passing over
+    the crew that wrote a held assessment when the pool offers another.
+    Tasks are partitioned by crew, at most max_partition_size per
+    partition. Nothing is written.
   input_schema_json:
     type: object
     properties:

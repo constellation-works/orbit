@@ -30,8 +30,10 @@
 //! `blocked_task_triaged` marker settles the member.
 
 mod prepare;
+mod proof;
 
 pub(crate) use prepare::prepare;
+pub(crate) use proof::TriageInspectionProof;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;

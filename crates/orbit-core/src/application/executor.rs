@@ -205,3 +205,44 @@ pub(super) fn parse_default_executor_for_platform(
 
     Ok(def)
 }
+
+/// The `inspection_args` the executor named `name` declares for a
+/// pinned-source inspection run, or `None` when it declares none.
+///
+/// `installed` is the registered definition, if any. One that omits the
+/// field (every definition installed before it existed, and the unregistered
+/// fallback that runs the provider's own command) takes the declaration of
+/// the shipped default with the same name, so an upgrade keeps the shipped
+/// executors inspecting until an operator writes the field. The declaration
+/// lives in the executor assets, never in code.
+pub(crate) fn declared_inspection_args(
+    installed: Option<&ExecutorDef>,
+    name: &str,
+) -> Option<Vec<String>> {
+    if let Some(args) = installed.and_then(|def| def.inspection_args.as_ref()) {
+        return Some(args.clone());
+    }
+    shipped_inspection_args().get(name).cloned().flatten()
+}
+
+/// Each shipped executor's `inspection_args`, by name, parsed once.
+fn shipped_inspection_args()
+-> &'static std::collections::BTreeMap<&'static str, Option<Vec<String>>> {
+    static SHIPPED: std::sync::OnceLock<
+        std::collections::BTreeMap<&'static str, Option<Vec<String>>>,
+    > = std::sync::OnceLock::new();
+    SHIPPED.get_or_init(|| {
+        DEFAULT_EXECUTOR_FILES
+            .iter()
+            .map(|(name, yaml)| {
+                let args = serde_yaml::from_str::<ExecutorResource>(yaml)
+                    .map_err(|error| {
+                        tracing::warn!(executor = name, %error, "unreadable shipped executor");
+                    })
+                    .ok()
+                    .and_then(|resource| resource.spec.inspection_args);
+                (*name, args)
+            })
+            .collect()
+    })
+}

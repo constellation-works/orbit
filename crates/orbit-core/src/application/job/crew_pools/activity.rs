@@ -3,6 +3,7 @@ use orbit_common::OrbitError;
 use orbit_config::canonical_crew_pool;
 use orbit_types::identity::Crew;
 use orbit_types::task::TaskComplexity;
+use orbit_types::workflow::activity_job::requires_native_inspection;
 use orbit_types::workflow::{
     ActivityCrewDraw, CrewPurpose, FINAL_RECOVERY_CREWS_CONFIG_KEY, FINAL_RECOVERY_CREWS_KEY,
     RunStateUpdate,
@@ -58,9 +59,12 @@ impl OrbitRuntime {
     /// (`provider_unavailable` or `provider_capacity`) are skipped the same
     /// way, after that limit narrowing. An empty or wholly disabled pool falls
     /// back to `workflow.default_crew`, as an unassigned task does, and the
-    /// frozen record's source says so. Any configured crew may be drawn,
-    /// whatever its provider: an inspection activity's trust comes from the
-    /// observed-revision proof its apply step checks.
+    /// frozen record's source says so.
+    ///
+    /// [ORB-15792] An activity that inspects pinned source natively (the task
+    /// pilot) draws only crews that [`Self::can_inspect`], through
+    /// [`Self::inspection_activity_candidates`], and its source names the
+    /// filter. Any other activity draws from the whole pool.
     pub(crate) fn complexity_pool_activity_crew(
         &self,
         input: &Value,
@@ -68,6 +72,7 @@ impl OrbitRuntime {
         random: &mut impl FnMut() -> Result<u64, OrbitError>,
     ) -> Result<Crew, OrbitError> {
         let key = complexity_crews_key(complexity);
+        let inspection = requires_native_inspection(input);
         let now = Utc::now();
         // The hold scans read run history. They run before the run-state
         // write transaction, and not at all once this run has frozen its draw.
@@ -77,7 +82,8 @@ impl OrbitRuntime {
             self.standing_host_provider_holds(now)
         };
         self.frozen_activity_crew(input, &key, &mut |allowlist| {
-            let (candidates, source) = self.activity_draw_candidates(complexity, allowlist, now)?;
+            let (candidates, source) =
+                self.activity_draw_candidates(complexity, inspection, allowlist, now)?;
             let (candidates, source) = skip_held_candidates(candidates, source, &holds, now);
             Ok(self
                 .draw_crew_pool(candidates, &source, random)?
@@ -93,7 +99,8 @@ impl OrbitRuntime {
     /// the way a complexity-pool draw is: disabled and zero-weight crews, then
     /// the members this run's `allowed_crews` excludes, then crews at a
     /// provider limit or under a host provider hold while any member is left.
-    /// A purpose with no such pool draws exactly as its activities
+    /// An activity that inspects natively keeps only inspection-capable
+    /// members. A purpose with no such pool draws exactly as its activities
     /// did before purposes existed, from the complexity pool
     /// [`activity_fallback_tier`] names, and the frozen record's source names
     /// that pool. A run that froze its draw under that complexity key before
@@ -118,6 +125,7 @@ impl OrbitRuntime {
         {
             return self.complexity_pool_activity_crew(input, tier, random);
         }
+        let inspection = requires_native_inspection(input);
         let now = Utc::now();
         let holds = if frozen {
             Vec::new()
@@ -126,7 +134,7 @@ impl OrbitRuntime {
         };
         self.frozen_activity_crew(input, key, &mut |allowlist| {
             let (candidates, source) =
-                self.purpose_draw_candidates(purpose, tier, allowlist, now)?;
+                self.purpose_draw_candidates(purpose, tier, inspection, allowlist, now)?;
             let (candidates, source) = skip_held_candidates(candidates, source, &holds, now);
             Ok(self
                 .draw_crew_pool(candidates, &source, random)?
@@ -142,19 +150,21 @@ impl OrbitRuntime {
         &self,
         purpose: CrewPurpose,
         tier: TaskComplexity,
+        inspection: bool,
         allowlist: Option<&CrewAllowlist>,
         now: DateTime<Utc>,
     ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
-        let Some((candidates, source)) = self.purpose_pool_candidates(purpose)? else {
-            return self.activity_draw_candidates(tier, allowlist, now);
+        let Some((candidates, source)) = self.purpose_pool_candidates(purpose, inspection)? else {
+            return self.activity_draw_candidates(tier, inspection, allowlist, now);
         };
         let candidates = permitted_candidates(candidates, &source, allowlist)?;
         Ok(self.provider_unlimited_candidates(candidates, source, now))
     }
 
     /// What a complexity-pool activity draw chooses from before host provider
-    /// holds apply: the pool's members, falling back as
-    /// [`Self::complexity_pool_activity_crew`] describes, without disabled,
+    /// holds apply: the pool's members (only inspection-capable ones when the
+    /// activity inspects natively, falling back as
+    /// [`Self::complexity_pool_activity_crew`] describes), without disabled,
     /// zero-weight or allowlist-excluded crews, then without crews at one of
     /// this host's provider limits while any member is left. The draw and the
     /// task-pilot routine's withhold both read it, so one narrowing rule
@@ -162,26 +172,69 @@ impl OrbitRuntime {
     fn activity_draw_candidates(
         &self,
         complexity: TaskComplexity,
+        inspection: bool,
         allowlist: Option<&CrewAllowlist>,
         now: DateTime<Utc>,
     ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
         let key = complexity_crews_key(complexity);
-        let (candidates, source) =
-            if let Some(candidates) = self.configured_complexity_pool(complexity)? {
-                (candidates, key)
-            } else {
-                tracing::warn!(
-                    pool = %key,
-                    "the pool is empty or wholly disabled; this run's activity crew falls back \
-                     to workflow.default_crew",
-                );
-                (
-                    vec![sole_candidate(self.resolve_crew_for_task(None, None)?)],
-                    format!("workflow.default_crew ({key} is empty)"),
-                )
-            };
+        let (candidates, source) = if inspection {
+            self.inspection_activity_candidates(complexity)?
+        } else if let Some(candidates) = self.configured_complexity_pool(complexity)? {
+            (candidates, key)
+        } else {
+            tracing::warn!(
+                pool = %key,
+                "the pool is empty or wholly disabled; this run's activity crew falls back \
+                 to workflow.default_crew",
+            );
+            (
+                vec![sole_candidate(self.resolve_crew_for_task(None, None)?)],
+                format!("workflow.default_crew ({key} is empty)"),
+            )
+        };
         let candidates = permitted_candidates(candidates, &source, allowlist)?;
         Ok(self.provider_unlimited_candidates(candidates, source, now))
+    }
+
+    /// The candidates and source of an inspection-requiring activity draw
+    /// from `complexity`'s pool, before the run's allowlist and provider
+    /// limits apply: the inspection-capable members of the first tier from
+    /// `complexity` upward that has one, else an inspection-capable
+    /// `workflow.default_crew`.
+    fn inspection_activity_candidates(
+        &self,
+        complexity: TaskComplexity,
+    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+        let key = complexity_crews_key(complexity);
+        let Some(pool) = self.inspection_capable_pool(complexity)? else {
+            tracing::warn!(
+                pool = %key,
+                "no crew in the pool or a higher tier can inspect natively; this run's activity \
+                 crew falls back to workflow.default_crew",
+            );
+            return Ok((
+                vec![sole_candidate(
+                    self.inspection_capable_default_crew(complexity)?,
+                )],
+                format!(
+                    "workflow.default_crew (native inspection: no crew in {key} or a higher tier \
+                     can inspect)"
+                ),
+            ));
+        };
+        let mut source = complexity_crews_key(pool.tier);
+        if pool.tier != complexity {
+            source.push_str(&format!(" (no crew in {key} can inspect)"));
+        }
+        if pool.skipped.is_empty() {
+            source.push_str("; native inspection");
+        } else {
+            source.push_str(&format!(
+                "; native inspection, skipped: {}",
+                pool.skipped.join(", ")
+            ));
+        }
+        Ok((pool.candidates, source))
     }
 
     /// Run `draw` once per run and `key`, freezing its record in the executing
@@ -271,7 +324,7 @@ impl OrbitRuntime {
 
     /// Why the task-pilot routine must not start a run at `now`: every crew
     /// its pilots' draw could choose ([`Self::purpose_draw_candidates`] for
-    /// the task-pilot purpose) is under a host hold.
+    /// the task-pilot purpose, with native inspection) is under a host hold.
     ///
     /// The routine submits no `allowed_crews`, so its runs draw with no
     /// allowlist. An unreadable pool is not a hold: the draw reports that
@@ -285,6 +338,7 @@ impl OrbitRuntime {
         let (candidates, source) = match self.purpose_draw_candidates(
             CrewPurpose::TaskPilot,
             TaskComplexity::Low,
+            true,
             None,
             now,
         ) {

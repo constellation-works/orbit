@@ -153,11 +153,13 @@ fn assessments<'a>(
     // assessment is trusted (structural refusals above keep their own
     // errors): a crew whose native tools never ran cannot report the
     // pinned revision's tree, which the envelope never carries. A non-Git
-    // workspace (no pinned source) skips it. The failure settles the
-    // partition invalid, so the repair loop re-runs the pilot with this
-    // error like any other validation error.
+    // workspace (no pinned source) skips it, and a run prepared before the
+    // proof existed is checked only when its result reports one. The
+    // failure settles the partition invalid, so the repair loop re-runs the
+    // pilot with this error like any other validation error.
     if let (Some(source), Some(source_tree)) = (context.source, context.source_tree)
         && let Some(error) = super::super::source::inspection_proof_error(
+            super::super::source::inspection_proof_required(context.prepared),
             result.observed_revision.get().map(String::as_str),
             result.observed_tree.get().map(String::as_str),
             &source.source_revision,
