@@ -327,10 +327,11 @@ try {
   pass('legacy route opens Agents');
 
   // Role tabs and their counts; the strip; the default selection.
-  await page.waitForFunction(() => document.getElementById('agents-count-reviewers').textContent === '2');
-  await page.waitForFunction(() => document.getElementById('agents-count-pilots').textContent === '2');
+  await page.waitForFunction(() => document.getElementById('agents-count-reviewers').textContent === '2 ranked');
+  await page.waitForFunction(() => document.getElementById('agents-count-pilots').textContent === '2 ranked');
   const counts = await page.locator('#agents-roles .agents-role-count').allTextContents();
-  assert.deepEqual(counts, ['3', '5', '2', '2'], 'three ranked orchestrators, five implementers, two reviewers and two pilots');
+  assert.deepEqual(counts, ['3 ranked', '5 ranked', '2 ranked', '2 ranked'], 'each role tab labels its ranked-row count');
+  assert.equal(await page.locator('#agents-count').textContent(), '4 rows · 3 ranked', 'the panel labels all rows and the ranked subset');
   assert.match(await body.locator('.agents-strip').textContent(), /131 problems in 30d/);
   assert.equal(await body.locator('.agents-strip-seg.is-current.agents-owner-orchestrators').count(), 1);
   assert.equal(await body.locator('.agents-row-select[aria-pressed="true"] .agents-crew').textContent(), 'claude-orchestrator');
@@ -407,6 +408,8 @@ try {
   await page.locator('#agents-roles [data-view="implementers"]').click();
   await body.locator('.agents-row').first().waitFor();
   await body.locator('.agents-penalty .agents-task').first().waitFor();
+  assert.equal(await page.locator('#agents-count-implementers').textContent(), '5 ranked', 'the tab labels the ranked subset without hover');
+  assert.equal(await page.locator('#agents-count').textContent(), '6 rows · 5 ranked', 'the panel labels all rows and the ranked subset');
   assert.equal(await body.locator('.agents-row').count(), 6);
   assert.equal(await body.locator('.agents-role-panel').count(), 0, 'no role panel and no empty container');
   assert.equal(await body.locator('.agents-cost-plot, .agents-cost-point, .agents-cost-frontier, .agents-cost-axis, .agents-cost-legend, .agents-tier-table').count(), 0);
@@ -440,7 +443,18 @@ try {
   assert.equal(phoneRanking.pageOverflow, false);
   assert.equal(phoneRanking.cue, true, 'a scrolling ranking shows edge fades at 375px');
   await body.locator('.agents-ranking').screenshot({ path: path.join(evidence, 'agents-implementers-table-dark-375.png'), animations: 'disabled' });
-  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.locator('#agents-roles').evaluate(node => node.scrollIntoView({ block: 'start' }));
+  const phoneOverview = await page.evaluate(() => {
+    const insideViewport = node => {
+      const rect = node.getBoundingClientRect();
+      return rect.top >= 0 && rect.bottom <= window.innerHeight;
+    };
+    return {
+      roleTabsVisible: insideViewport(document.querySelector('#agents-roles')),
+      panelHeaderVisible: insideViewport(document.querySelector('#agents-panel > header')),
+    };
+  });
+  assert.deepEqual(phoneOverview, { roleTabsVisible: true, panelHeaderVisible: true }, 'the 375px overview shows the role counts and panel count together');
   await shot('agents-implementers-dark-375');
   await body.locator('#agents-detail').scrollIntoViewIfNeeded();
   await shot('agents-implementers-detail-dark-375');
@@ -459,6 +473,8 @@ try {
   await page.locator('#agents-roles [data-view="pilots"]').click();
   await body.locator('.agents-tier-card').first().waitFor();
   await body.locator('.agents-penalty .agents-task').first().waitFor();
+  assert.equal(await page.locator('#agents-count-pilots').textContent(), '2 ranked');
+  assert.equal(await page.locator('#agents-count').textContent(), '3 rows · 2 ranked');
   assert.equal(new URL(page.url()).hash, '#analytics/agents/pilots?window=30d');
   assert.equal(await body.locator('.agents-row').count(), 3);
   assert.equal(await body.locator('#agents-detail h3').textContent(), 'luna');
