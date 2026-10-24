@@ -53,6 +53,14 @@ retains at most 16 KiB of original line-prefix context, carrying pending
 introducers across newlines. If that bound is exceeded, affected display bytes
 are conservatively omitted until the next context reset.
 
+Registered line-window fixtures exercise the same introducers on both primary
+and fallback job logs, with full-log controls and step-plus-line selections.
+Discarded lines still contribute bounded original token context. Values whose
+introducer falls outside the selection are masked with asterisks before excerpt
+retention, preserving raw selected byte/line counts and source coordinates.
+EOF, collector batch boundaries, overlong context, capped displays and ordinary
+line/step selections are covered without live GitHub access or authentication.
+
 ## Carrier cost and boundary coverage
 
 Rows write `golden row start: <suite>/<fixture>` to stderr before source
