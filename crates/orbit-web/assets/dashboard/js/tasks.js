@@ -6,7 +6,7 @@ import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessEntry, drainReadinessFor, drainReadinessView, drainWaitSignature } from './drain-waits.js';
 import { elapsedLabel, onTaskRuntimeChange, runStartedAt, taskContextContenders, taskLockFiles } from './task-runtime.js';
-import { buildAttentionCallout, buildDeliveryPanel, buildDeliveryProgress, buildExecutionProvenance, formatExecutionLocation, claimAttention, claimedReviewApproval, deliverySteps, handoffApprovalRequest, invalidateDistributedConsole, lastKnownClaims } from './distributed.js';
+import { buildAttentionCallout, buildDeliveryPanel, buildDeliveryProgress, buildExecutionProvenance, formatExecutionLocation, claimAttention, claimedReviewApproval, deliverySteps, handoffApprovalRequest, invalidateDistributedConsole, lastKnownClaims, registeredMachineHost } from './distributed.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -4884,14 +4884,34 @@ function canRunQuickAction(task) {
   return canMutateTask(task) && (task.status !== "review" || !isAggregateView());
 }
 
+// A run recorded on another machine. A registered host opens the run there; an
+// unregistered one has no dashboard to open, so its "View run" is dimmed text
+// that names the machine in its title.
+function buildRemoteRunAction(task, location) {
+  const runId = task.job_run_id;
+  const host = registeredMachineHost(location);
+  if (host) {
+    const link = el("a", { class: "task-quick-link remote-run-link", text: "View run", title: `Open run ${runId} on ${host.name}` });
+    link.href = runHref(runId, { host: host.name, workspace: task.workspace_id || getWorkspace() });
+    link.addEventListener("click", (event) => event.stopPropagation());
+    return link;
+  }
+  const machine = location.machine_name || location.machine_id;
+  return el("span", {
+    class: "task-quick-link unlinked",
+    text: "View run",
+    title: `Run ${runId} ran on ${machine}, which is not a registered host`,
+  });
+}
+
 function buildQuickAction(task, context) {
   const cell = el("span", { class: "task-quick-cell" });
   stopRowInteraction(cell);
   const state = quickActionState.get(task.id);
   if (task.status === "in-progress" && task.job_run_id) {
     // A missing flag stays a link: that is the historical unrecorded-host row.
-    // An explicit false means the run was recorded on another machine, so name
-    // that host instead of opening this host's job store.
+    // An explicit false means the run was recorded on another machine, so open
+    // it on that host rather than this host's job store.
     if (task.job_run_navigable !== false) {
       const link = el("a", { class: "task-quick-link", text: "View run", title: `Open run ${task.job_run_id}` });
       link.href = runHref(task.job_run_id);
@@ -4901,7 +4921,7 @@ function buildQuickAction(task, context) {
     }
     const location = summaryExecutionLocation(task.job_run_machine);
     if (location.known) {
-      cell.appendChild(buildExecutionProvenance(location, { runId: task.job_run_id, workspace: task.workspace_id }));
+      cell.appendChild(buildRemoteRunAction(task, location));
       return cell;
     }
   }

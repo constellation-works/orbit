@@ -370,15 +370,20 @@ export function formatExecutionLocation(location) {
   return `on ${label}`;
 }
 
+/// The registered host row an execution machine names, or null when the host
+/// file does not register that machine.
+export function registeredMachineHost(location) {
+  if (!location || location.known !== true || !location.machine_id) return null;
+  return getRegisteredHosts().find((row) => row.machine_id === location.machine_id) || null;
+}
+
 /// The execution-provenance cell shared by the run meta grid and the task
 /// detail's run line. Given the run (`{runId, workspace}`) and an execution
 /// machine the serving host's host file registers, "on <machine>" links to
 /// that run on that host [ORB-14680]; an unregistered machine stays text.
 export function buildExecutionProvenance(location, run = null) {
   const known = !!(location && location.known === true && location.machine_id);
-  const host = known && run && run.runId
-    ? getRegisteredHosts().find((row) => row.machine_id === location.machine_id)
-    : null;
+  const host = known && run && run.runId ? registeredMachineHost(location) : null;
   if (host) {
     const link = el("a", {
       class: "exec-origin remote-run-link",

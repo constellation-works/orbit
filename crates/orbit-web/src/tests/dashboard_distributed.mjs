@@ -269,12 +269,16 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.equal(rows.length, 3, "the in-progress fixture rows are rendered");
   const heights = rows.map((row) => row.getBoundingClientRect().height);
   assert.ok(heights.every((height) => height === heights[0]), `remote rows must match neighbour heights at 1440px: ${heights.join(", ")}`);
-  const fallback = rows[0].querySelector(".task-quick-cell .exec-origin");
-  assert.equal(fallback.textContent, "on hm_ba05…");
-  assert.equal(fallback.title, `Execution machine id: ${machineId}`);
-  const named = rows[1].querySelector(".task-quick-cell .exec-origin");
-  assert.equal(named.textContent, "on Mac follower");
-  assert.equal(named.title, `Execution machine: Mac follower (${machineId})`);
+  // The action reads View run. An unregistered machine has nothing to open, so
+  // it is text, and its title names the machine.
+  const fallback = rows[0].querySelector(".task-quick-cell .task-quick-link");
+  assert.equal(fallback.tagName, "SPAN", "an unregistered run is not a link");
+  assert.equal(fallback.textContent, "View run");
+  assert.equal(fallback.title, `Run run-ORB-1 ran on ${machineId}, which is not a registered host`);
+  const named = rows[1].querySelector(".task-quick-cell .task-quick-link");
+  assert.equal(named.tagName, "SPAN", "an unregistered named run is not a link");
+  assert.equal(named.textContent, "View run");
+  assert.equal(named.title, "Run run-ORB-2 ran on Mac follower, which is not a registered host");
 }
 
 // Run detail uses the same visible location and retains the name and full id.

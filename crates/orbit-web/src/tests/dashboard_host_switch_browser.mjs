@@ -437,7 +437,7 @@ try {
     await linkedTab.close();
   }
   assert(await taskRow('alpha-LOCAL').locator('.task-quick-cell a').count() === 0, 'an unregistered machine is not a link');
-  assert((await taskRow('alpha-LOCAL').locator('.task-quick-cell .exec-origin').textContent()) === 'on laptop', 'an unregistered machine keeps its text');
+  assert((await taskRow('alpha-LOCAL').locator('.task-quick-cell .task-quick-link.unlinked').textContent()) === 'View run', 'an unregistered machine keeps a dimmed View run label');
   await page.locator('#tasks-body [data-key="task-alpha-ART"] .title').click();
   const deliveryTab = page.locator('#task-detail-body').getByRole('tab', { name: 'Delivery' });
   await deliveryTab.click();
