@@ -38,12 +38,26 @@ impl ProviderRegistry {
             .ok_or(OrbitError::UnsupportedAgentProvider(key))
     }
 
+    pub(crate) fn factory_for_provider(
+        &self,
+        provider: &str,
+    ) -> Result<&Arc<dyn AgentRuntimeFactory>, OrbitError> {
+        let key = Self::normalize_cli_key(provider);
+        self.factories
+            .get(key.as_str())
+            .ok_or_else(|| OrbitError::UnsupportedAgentProvider(provider.to_string()))
+    }
+
     fn normalize_cli_key(agent_cli: &str) -> String {
-        Path::new(agent_cli)
+        let key = Path::new(agent_cli)
             .file_name()
             .and_then(|value| value.to_str())
             .map(|value| value.to_ascii_lowercase())
-            .unwrap_or_else(|| agent_cli.to_ascii_lowercase())
+            .unwrap_or_else(|| agent_cli.to_ascii_lowercase());
+        match key.as_str() {
+            "antigravity" => "agy".to_string(),
+            _ => key,
+        }
     }
 }
 
