@@ -47,7 +47,7 @@ use super::owner::{
 };
 use super::types::{JobRunCancelOutcome, JobRunCancelResult, UnstoppedChild, UnstoppedLeaf};
 use crate::OrbitRuntime;
-use crate::application::distributed::PULL_DRAIN_JOB;
+use crate::application::contracts::PULL_DRAIN_JOB;
 
 /// The local auto drain, whose leaves its cancel detaches.
 const LOCAL_DRAIN_JOB: &str = "workspace_auto_pipeline";

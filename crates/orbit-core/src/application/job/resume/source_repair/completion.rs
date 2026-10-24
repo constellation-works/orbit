@@ -1,5 +1,6 @@
 //! Reuse only the successful prefix of this worker's unchanged publication.
 use super::*;
+use crate::application::job::ReviewAdmissionHook;
 use orbit_engine::CompletionObservationAdmission;
 use orbit_types::task::ArtifactWriter;
 use orbit_types::workflow::{
@@ -286,7 +287,7 @@ impl OrbitRuntime {
                 ));
             }
         }
-        let admission = crate::application::review::run_review_admission(self, run_id)?;
+        let admission = self.captured_review_admission(run_id)?;
         let timing = admission.as_ref().map(|a| a.timing);
         let policy_change = if timing.is_none() {
             (self.operation_policy().review_before_pr.value
@@ -295,9 +296,9 @@ impl OrbitRuntime {
                     "review policy has no captured admission for the newly required gate".into()
                 })
         } else if observation {
-            crate::application::review::completion_admission_mismatch(self, &source)
+            self.completion_review_mismatch(&source)
         } else {
-            crate::application::review::upgrade_resume_admission_mismatch(self, &source)
+            self.upgrade_resume_review_mismatch(&source)
         };
         if !observation && policy_change.is_some() {
             return Err(refuse(if timing.is_none() {

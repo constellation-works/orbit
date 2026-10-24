@@ -111,9 +111,5 @@ mod owner;
 mod pass;
 mod record;
 
-/// The job that runs this action. Recorded in each request's run context, so
-/// the owner's claim names the drain that holds it.
-pub(crate) const PULL_DRAIN_JOB_NAME: &str = "workspace_pull_pipeline";
-
 pub(crate) use crews::crew_window;
 pub(crate) use pass::pull_refill;

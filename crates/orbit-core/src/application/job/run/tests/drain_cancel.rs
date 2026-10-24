@@ -41,7 +41,7 @@ fn graceful_cancel_initialization_preserves_worker_checkpoint_and_merges_control
     for worker_wins in [false, true] {
         let (_root, runtime) = test_runtime();
         let run =
-            running_run_without_state(&runtime, crate::application::distributed::PULL_DRAIN_JOB);
+            running_run_without_state(&runtime, crate::application::contracts::PULL_DRAIN_JOB);
         let checkpoint = worker_wins.then(|| worker_checkpoint(&runtime, &run));
         let reached = std::rc::Rc::new(std::cell::Cell::new(false));
         let worker = runtime.clone();
@@ -106,10 +106,8 @@ fn graceful_cancel_initialization_refuses_concurrent_terminalization() {
     for terminal in [JobRunState::Success, JobRunState::Failed] {
         for worker_wins in [false, true] {
             let (_root, runtime) = test_runtime();
-            let run = running_run_without_state(
-                &runtime,
-                crate::application::distributed::PULL_DRAIN_JOB,
-            );
+            let run =
+                running_run_without_state(&runtime, crate::application::contracts::PULL_DRAIN_JOB);
             let checkpoint = worker_wins.then(|| worker_checkpoint(&runtime, &run));
             let worker = runtime.clone();
             let run_id = run.run_id.clone();

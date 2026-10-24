@@ -9,6 +9,7 @@ use orbit_types::task::{Task, TaskType};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskAutomationPort;
 use crate::application::task::{
     TaskListFilter, VERIFIABLE_STATUSES, finding_fingerprint, is_review_finding, needs_verification,
 };
@@ -31,7 +32,7 @@ pub(crate) fn prepare(
 ) -> Result<Value, DispatchError> {
     let failed = |error: OrbitError| DispatchError::action_failed(action, error.to_string());
     let workspace_root = requested_workspace_root(runtime, action, input)?;
-    let claim = crate::application::automation::members::claim(runtime, input).map_err(failed)?;
+    let claim = runtime.state_claim(input).map_err(failed)?;
     // Verdicts cite `path:line` at one revision, so there is nothing to
     // verify against outside a Git work tree.
     let source =
@@ -77,9 +78,7 @@ pub(crate) fn prepare(
     }
 
     // A retried prepare is not held by its own earlier checkpoint.
-    let mut held =
-        crate::application::automation::preparation::active_finding_verifications(runtime)
-            .map_err(failed)?;
+    let mut held = runtime.finding_verification_holders().map_err(failed)?;
     if let Some(run_id) = run_id {
         held.retain(|_, holders| {
             holders.remove(run_id);

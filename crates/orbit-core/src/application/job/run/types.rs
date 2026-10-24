@@ -84,7 +84,7 @@ pub struct JobRunCancelResult {
     /// claims are released back to the owner's backlog once no drain carries
     /// them); for a claimed leaf, its own settlement. Empty for every other
     /// run.
-    pub pull_settlements: Vec<crate::application::distributed::PullSettlementEntry>,
+    pub pull_settlements: Vec<crate::application::contracts::PullSettlementEntry>,
     /// The claimed leaves a `cancelling` pull drain is waiting for.
     pub waiting_leaves: Vec<crate::application::distributed::DrainClaimedLeaf>,
     /// Runs a forced cancel stopped besides this one: a pull drain's live

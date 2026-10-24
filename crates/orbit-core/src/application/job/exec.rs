@@ -30,6 +30,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::SYSTEM_AUDIT_IDENTITY;
+use crate::application::job::ReviewAdmissionHook;
 use crate::application::job::claimed::CLAIMED_LEAF_JOBS;
 use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission};
 use crate::application::job::resume::ResumePlan;
@@ -118,13 +119,7 @@ impl OrbitRuntime {
         claim_token: Option<&str>,
     ) -> Result<V2JobRunResult, OrbitError> {
         let (source, mut input) = self.admit_job_run_replay(source_run_id, claim_token)?;
-        crate::application::review::install_review_admission(
-            self,
-            &source.job_id,
-            &mut input,
-            None,
-            false,
-        )?;
+        self.install_review_admission(&source.job_id, &mut input, None, false)?;
         self.install_auto_crew_admission(
             &source.job_id,
             &mut input,
@@ -166,7 +161,7 @@ impl OrbitRuntime {
             .into_iter()
             .collect();
         self.drain_entry_admission(
-            crate::application::distributed::DrainEntryPoint::Replay,
+            crate::application::contracts::DrainEntryPoint::Replay,
             &task_ids,
             false,
         )?

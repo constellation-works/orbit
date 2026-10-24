@@ -209,7 +209,7 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         .and_then(|input| orbit_types::workflow::ReviewAdmission::from_run_input(input).ok())
         .flatten()
     {
-        value["review_layer"] = crate::application::review::review_layer_json(&admission);
+        value["review_layer"] = crate::application::contracts::review_layer_json(&admission);
     }
     value["task_ids"] = json!((!task_ids.is_empty()).then_some(task_ids));
     value["drain_window_extension"] = drain_window_extension;

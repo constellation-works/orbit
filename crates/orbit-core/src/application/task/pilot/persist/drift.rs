@@ -4,6 +4,7 @@ use orbit_types::task::Task;
 use orbit_types::workflow::automation::members::PreparationPolicy;
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskAutomationPort;
 
 use super::super::apply::admission::{PreparedTaskSnapshot, ValidatedTask};
 use super::history::{MATERIAL_CHANGED_DETAIL, material_change_detail, status_only_fingerprint};
@@ -18,10 +19,9 @@ pub(super) fn task_snapshot_drift(
         .material
         .as_ref()
         .is_some_and(|(expected, revision)| {
-            crate::application::automation::preparation::fingerprint(
-                runtime, current, revision, policy,
-            )
-            .map_or(true, |fingerprint| &fingerprint != expected)
+            runtime
+                .task_material_fingerprint(current, revision, policy)
+                .map_or(true, |fingerprint| &fingerprint != expected)
         })
     {
         Some(("material_changed", MATERIAL_CHANGED_DETAIL))

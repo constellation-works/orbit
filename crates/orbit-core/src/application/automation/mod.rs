@@ -22,6 +22,7 @@ pub(crate) mod source;
 mod source_cache;
 pub(crate) mod stall;
 mod task;
+mod task_port;
 
 pub(crate) use after_landing::review_crew_overrides_definition;
 pub use after_landing::{

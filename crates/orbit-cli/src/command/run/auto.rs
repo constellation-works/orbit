@@ -254,7 +254,7 @@ fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut
                     child.run_id, child.job_name, child.phase, status
                 ));
             }
-            lines.push(if change.job_id == orbit_core::application::distributed::PULL_DRAIN_JOB {
+            lines.push(if change.job_id == orbit_core::application::contracts::PULL_DRAIN_JOB {
                 format!(
                     "Claimed leaves finish and settle on their own. `orbit run cancel {} --confirm` \
                      waits for them and then ends the drain; add `--force` to stop them and return \

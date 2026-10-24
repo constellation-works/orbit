@@ -35,6 +35,7 @@ use orbit_types::task::{Task, TaskStatus, is_valid_orb_task_id, task_base_json};
 use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskAutomationPort;
 
 use super::lifecycle::{task_status_transition_allowed, task_status_transition_required_field};
 use super::pull_request_links::PullRequestLinks;
@@ -338,7 +339,8 @@ pub fn job_run_is_locally_navigable(local_machine_id: Option<&str>, task: &Task)
 /// task unmarked rather than failing the task read.
 pub fn tasks_in_pilot_preparation(runtime: &OrbitRuntime) -> BTreeSet<String> {
     runtime
-        .tasks_in_pilot_preparation()
+        .pilot_preparation_holders()
+        .map(|holders| holders.into_keys().collect())
         .unwrap_or_else(|error| {
             tracing::warn!(%error, "task readiness: active pilot preparations unreadable");
             BTreeSet::new()

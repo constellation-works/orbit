@@ -15,8 +15,9 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use crate::OrbitRuntime;
+use crate::application::job::ReviewAdmissionHook;
 use crate::application::job::seed_default_jobs;
-use crate::application::review::{install_review_admission, review_gate_admit};
+use crate::application::review::review_gate_admit;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 use crate::application::test_support::runtime_with_workspace_config;
 
@@ -98,7 +99,9 @@ fn admitted_run(runtime: &OrbitRuntime, job: &str, task_ids: &[String]) -> JobRu
         "base_sync": "local",
         "allowed_crews": [],
     });
-    install_review_admission(runtime, job, &mut input, None, false).expect("capture admission");
+    runtime
+        .install_review_admission(job, &mut input, None, false)
+        .expect("capture admission");
     let run = RuntimeHost::insert_job_run(runtime, job, 1, Utc::now(), Some(input), None)
         .expect("insert run");
     bind_tasks(runtime, task_ids, &run.run_id);

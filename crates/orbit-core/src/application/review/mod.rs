@@ -39,10 +39,8 @@ mod tests;
 
 pub use admission::pull_review_request_refusal;
 pub(crate) use admission::{
-    admit_review_request, completion_admission_mismatch, input_run_review_admission,
-    install_review_admission, local_route_before_landing_conflict, local_route_before_pr_conflict,
-    local_route_run_option_refusal, review_layer_json, run_review_admission,
-    upgrade_resume_admission_mismatch,
+    input_run_review_admission, local_route_before_landing_conflict,
+    local_route_before_pr_conflict, local_route_run_option_refusal, run_review_admission,
 };
 pub(crate) use coverage::exclusions;
 pub(crate) use fulfilment::fulfil_review_evidence;

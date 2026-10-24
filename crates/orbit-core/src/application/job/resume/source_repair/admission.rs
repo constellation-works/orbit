@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use super::super::plan::{RESUME_LINEAGE_SCAN_LIMIT, ResumePlan};
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::PipelineSubmission;
-use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
+use crate::application::job::{ReviewAdmissionHook, RunOwnerLiveness, run_owner_liveness};
 use crate::runtime::run_input::carried_task_ids;
 
 #[derive(Deserialize)]
@@ -119,13 +119,7 @@ impl OrbitRuntime {
         )
         .map_err(|e| refuse(e.to_string()))?;
         let mut fresh = json!({"task_ids":[]});
-        crate::application::review::install_review_admission(
-            self,
-            "task_pr_pipeline",
-            &mut fresh,
-            None,
-            false,
-        )?;
+        self.install_review_admission("task_pr_pipeline", &mut fresh, None, false)?;
         // Capture time is not policy; every inspection resolves it afresh.
         fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY]
             .as_object_mut()
@@ -275,13 +269,7 @@ impl OrbitRuntime {
                 let (source, _, binding) =
                     self.observe_source_repair(&source_id, &request.task_id, false)?;
                 let mut fresh = json!({"task_ids":[request.task_id]});
-                crate::application::review::install_review_admission(
-                    self,
-                    "task_pr_pipeline",
-                    &mut fresh,
-                    None,
-                    false,
-                )?;
+                self.install_review_admission("task_pr_pipeline", &mut fresh, None, false)?;
                 Ok(
                     json!({"binding":binding, "review":fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY],
                     "policy_digest":if source.state == JobRunState::Success {
@@ -477,13 +465,7 @@ impl OrbitRuntime {
                     ));
                 }
                 let mut fresh = json!({"task_ids":[task.id]});
-                crate::application::review::install_review_admission(
-                    self,
-                    "task_pr_pipeline",
-                    &mut fresh,
-                    None,
-                    false,
-                )?;
+                self.install_review_admission("task_pr_pipeline", &mut fresh, None, false)?;
                 let review: ReviewAdmission = serde_json::from_value(
                     fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY].clone(),
                 )
@@ -511,13 +493,7 @@ impl OrbitRuntime {
         // A reservation whose insertion was interrupted retains its charge and
         // captured policy. It cannot silently grant old policy after a config edit.
         let mut fresh = json!({"task_ids":[task.id]});
-        crate::application::review::install_review_admission(
-            self,
-            "task_pr_pipeline",
-            &mut fresh,
-            None,
-            false,
-        )?;
+        self.install_review_admission("task_pr_pipeline", &mut fresh, None, false)?;
         let mut current: ReviewAdmission =
             serde_json::from_value(fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY].clone())
                 .map_err(|e| refuse(e.to_string()))?;

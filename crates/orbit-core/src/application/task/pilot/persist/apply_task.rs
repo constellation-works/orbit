@@ -12,6 +12,7 @@ use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskAutomationPort;
 
 use super::super::apply::admission::{
     Admission, AppliedTaskMaterial, PreparedTaskSnapshot, ValidatedTask,
@@ -115,19 +116,19 @@ pub(in super::super) fn apply_task(
             entered = true;
             #[cfg(test)]
             lock_hook::fire(lock_hook::Point::Locked);
-            let claim = crate::application::automation::members::claim(runtime, prepared)?;
+            let claim = runtime.state_claim(prepared)?;
             // Re-checked under the task locks: the branch may have moved
             // under this task's material since apply's own check [ORB-14476].
             if let Some(claim) = &claim
-                && let Some(detail) = crate::application::automation::members::stale_tasks(
-                    runtime,
-                    claim,
-                    policy,
-                    prepared,
-                    std::slice::from_ref(&task.task_id),
-                    &BTreeMap::from([(task.task_id.clone(), task.after.clone())]),
-                )?
-                .remove(&task.task_id)
+                && let Some(detail) = runtime
+                    .stale_claimed_tasks(
+                        claim,
+                        policy,
+                        prepared,
+                        std::slice::from_ref(&task.task_id),
+                        &BTreeMap::from([(task.task_id.clone(), task.after.clone())]),
+                    )?
+                    .remove(&task.task_id)
             {
                 outcome = Some(ApplyTaskOutcome::Superseded(source_superseded(
                     &task.task_id,
@@ -281,16 +282,16 @@ pub(in super::super) fn apply_task(
                 assessed.tags = tags_after.clone();
                 assessed.complexity = Some(task.complexity);
                 assessed.status = target_status;
-                let fingerprint = crate::application::automation::preparation::pilot_fingerprint(
-                    runtime,
-                    &assessed,
-                    snapshot
-                        .material
-                        .as_ref()
-                        .map(|(_, revision)| revision.as_str()),
-                    policy,
-                )
-                .map_err(orbit_automation::automation_error_to_orbit)?;
+                let fingerprint = runtime
+                    .task_pilot_fingerprint(
+                        &assessed,
+                        snapshot
+                            .material
+                            .as_ref()
+                            .map(|(_, revision)| revision.as_str()),
+                        policy,
+                    )
+                    .map_err(orbit_automation::automation_error_to_orbit)?;
                 history_summary.push_str(&format!(
                     " [no-target-assessed:{}:{fingerprint}]",
                     target_status.cli_name()
@@ -334,10 +335,9 @@ pub(in super::super) fn apply_task(
                 .material
                 .as_ref()
                 .map(|(_, revision)| {
-                    crate::application::automation::preparation::fingerprints(
-                        runtime, &assessed, revision, policy,
-                    )
-                    .map_err(orbit_automation::automation_error_to_orbit)
+                    runtime
+                        .task_pilot_fingerprints(&assessed, revision, policy)
+                        .map_err(orbit_automation::automation_error_to_orbit)
                 })
                 .transpose()?;
             let written = AppliedTaskMaterial {

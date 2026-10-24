@@ -50,9 +50,6 @@ use super::{TaskListFilter, TriageOption};
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
 
-/// The job the `pilot_warnings_held` and `block_escalated` triggers submit.
-pub const ESCALATION_TRIAGE_JOB: &str = "escalation_triage_pipeline";
-
 /// History event that marks one pilot assessment's warning hold triaged.
 pub const PILOT_WARNING_TRIAGED_EVENT: &str = "pilot_warning_triaged";
 

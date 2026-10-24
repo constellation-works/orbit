@@ -2,6 +2,7 @@
 
 use super::source::{BudgetClock, LISTING_LIMIT, OUTPUT_LIMIT, SOURCE_DEADLINE, Source};
 use crate::OrbitRuntime;
+use crate::application::contracts::PilotFingerprints;
 use orbit_automation::members::preparation::{self, MaterialEvidence};
 use orbit_automation::routines::loader::declared_routine_names;
 use orbit_automation::{AutomationError, DeferredReason};
@@ -255,16 +256,6 @@ pub(crate) fn fingerprint_with_instructions(
 ) -> Result<String, AutomationError> {
     let evidence = evidence(runtime, task, Some(revision), instructions, policy)?;
     preparation::fingerprint(task, &evidence, policy)
-}
-
-/// Both task-pilot hashes and the per-field digests behind a `material_changed`
-/// refusal, from one instruction and dependency read. The hashes differ only
-/// in the normalized status fields even when a dependency is updated
-/// concurrently with preparation.
-pub(crate) struct PilotFingerprints {
-    pub(crate) material: String,
-    pub(crate) status_neutral: String,
-    pub(crate) components: BTreeMap<String, String>,
 }
 
 pub(crate) fn fingerprints(
@@ -574,13 +565,19 @@ pub(crate) fn active_task_pilot_preparations(
 pub(crate) fn active_finding_verifications(
     runtime: &OrbitRuntime,
 ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
-    active_preparations(runtime, crate::application::task::FINDING_VERIFICATION_JOB)
+    active_preparations(
+        runtime,
+        crate::application::contracts::FINDING_VERIFICATION_JOB,
+    )
 }
 
 pub(crate) fn active_escalation_triages(
     runtime: &OrbitRuntime,
 ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
-    active_preparations(runtime, crate::application::task::ESCALATION_TRIAGE_JOB)
+    active_preparations(
+        runtime,
+        crate::application::contracts::ESCALATION_TRIAGE_JOB,
+    )
 }
 
 /// The prepared checkpoint of each live escalation triage run that holds
@@ -592,7 +589,7 @@ pub(crate) fn escalation_triage_checkpoints_holding(
     let mut holding = BTreeMap::new();
     for_each_active_preparation(
         runtime,
-        crate::application::task::ESCALATION_TRIAGE_JOB,
+        crate::application::contracts::ESCALATION_TRIAGE_JOB,
         |run_id, output, task_ids| {
             if task_ids.iter().any(|id| id == task_id) {
                 holding.insert(run_id.to_string(), output.clone());
@@ -710,15 +707,6 @@ impl FootprintPilots {
             .filter(|(eligibility, _)| preparation::eligible(task, eligibility))
             .map(|(_, wait)| task.updated_at + *wait)
             .max()
-    }
-}
-
-impl OrbitRuntime {
-    /// IDs of the tasks an active task-pilot run is preparing; admission holds
-    /// them until the run settles, and read surfaces show them as preparing
-    /// rather than by their readiness gaps.
-    pub fn tasks_in_pilot_preparation(&self) -> Result<BTreeSet<String>, OrbitError> {
-        Ok(active_task_pilot_preparations(self)?.into_keys().collect())
     }
 }
 

@@ -2,6 +2,7 @@
 
 mod add;
 mod artifact_export;
+mod automation_port;
 mod baseline_hold;
 mod baseline_repair;
 pub(crate) use baseline_repair::BASELINE_RED_REPAIR_TAG;
@@ -53,6 +54,7 @@ mod write_response;
 /// claim's footprint all resolve declarations through it.
 pub use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
 pub use artifact_export::TaskArtifactRead;
+pub(in crate::application) use automation_port::TaskAutomationPort;
 pub(crate) use baseline_hold::refresh_baseline_holds_step;
 pub use baseline_hold::{BASELINE_HOLD_REFRESH_JOB, BaselineHoldRefresh};
 pub(crate) use blocked_recovery::{
@@ -70,17 +72,16 @@ pub use context_repair::{
     CONTEXT_REPAIR_SWEEP_STATUSES, ContextFileRestoration, ContextRepairCandidate,
 };
 pub use escalation_triage_steps::{
-    ESCALATION_TRIAGE_JOB, PILOT_WARNING_TRIAGED_EVENT, PilotWarningDecision,
-    PilotWarningTriageRequest,
+    PILOT_WARNING_TRIAGED_EVENT, PilotWarningDecision, PilotWarningTriageRequest,
 };
 pub use final_recovery::{
     FINAL_RECOVERY_REQUEUED_EVENT, FinalRecoveryCompletion, FinalRecoveryOutcome,
     FinalRecoveryRequest, FinalRecoveryRequeueBound, FinalRecoveryTaskRevision,
 };
 pub use finding_verification::{
-    FINDING_VERIFICATION_JOB, FINDING_VERIFICATION_SCHEMA_VERSION, FindingEvidence,
-    FindingRejection, FindingSeverity, FindingVerdict, FindingVerification, REVIEW_FINDING_TAGS,
-    RejectionReason, VerdictConfidence, VerifierReport, VerifierVerdict, is_review_finding,
+    FINDING_VERIFICATION_SCHEMA_VERSION, FindingEvidence, FindingRejection, FindingSeverity,
+    FindingVerdict, FindingVerification, REVIEW_FINDING_TAGS, RejectionReason, VerdictConfidence,
+    VerifierReport, VerifierVerdict, is_review_finding,
 };
 pub(crate) use finding_verification::{
     UNVERIFIED_REVIEW_FINDING, VERIFIABLE_STATUSES, VerdictWrite, VerifierAssignment,

@@ -517,8 +517,8 @@ impl Inventory {
         for job in [
             "task_pilot_pipeline",
             "task_triage_pipeline",
-            crate::application::task::FINDING_VERIFICATION_JOB,
-            crate::application::task::ESCALATION_TRIAGE_JOB,
+            crate::application::contracts::FINDING_VERIFICATION_JOB,
+            crate::application::contracts::ESCALATION_TRIAGE_JOB,
         ] {
             for run in runtime
                 .stores()

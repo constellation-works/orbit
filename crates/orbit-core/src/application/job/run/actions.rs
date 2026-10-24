@@ -145,12 +145,12 @@ impl OrbitRuntime {
     fn pull_settlements_after_cancel(
         &self,
         run_id: &str,
-    ) -> Vec<crate::application::distributed::PullSettlementEntry> {
+    ) -> Vec<crate::application::contracts::PullSettlementEntry> {
         let is_pull_drain = self
             .get_job_run_backend(run_id)
             .ok()
             .flatten()
-            .is_some_and(|run| run.job_id == crate::application::distributed::PULL_DRAIN_JOB);
+            .is_some_and(|run| run.job_id == crate::application::contracts::PULL_DRAIN_JOB);
         if is_pull_drain {
             return self.settle_pending_pulls();
         }

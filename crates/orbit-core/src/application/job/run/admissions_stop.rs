@@ -116,7 +116,7 @@ pub struct DrainAdmissionsStopResult {
     /// every owner this replica pulls from: recorded settlements delivered,
     /// and the unlaunched admissions of drains that are no longer running
     /// ended. Empty on a workspace that never pulled.
-    pub pull_settlements: Vec<crate::application::distributed::PullSettlementEntry>,
+    pub pull_settlements: Vec<crate::application::contracts::PullSettlementEntry>,
     /// The owner machine when this checkout is a replica, so a report can say
     /// "no pull drain" rather than "no auto coordinator" there.
     pub replica_owner_machine_id: Option<String>,
@@ -173,9 +173,9 @@ impl OrbitRuntime {
         // then runs a settle-only pass of its own, so settlements a cancelled
         // drain left behind reach the owner without starting another drain.
         coordinators.extend(
-            self.stores().jobs().list_pending_or_running_job_runs(
-                crate::application::distributed::PULL_DRAIN_JOB,
-            )?,
+            self.stores()
+                .jobs()
+                .list_pending_or_running_job_runs(crate::application::contracts::PULL_DRAIN_JOB)?,
         );
 
         self.record_stop_request(&request_id, request, drain_job_id, coordinators.len())?;

@@ -25,7 +25,7 @@ impl OrbitRuntime {
     pub fn active_pull_auth_exclusions(&self) -> Result<Vec<PullAuthExclusion>, OrbitError> {
         let mut exclusions = Vec::new();
         for run in self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-            job_id: Some(super::PULL_DRAIN_JOB.into()),
+            job_id: Some(crate::application::contracts::PULL_DRAIN_JOB.into()),
             active_only: true,
             include_steps: false,
             ..Default::default()

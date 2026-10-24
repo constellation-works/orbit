@@ -41,7 +41,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 
-use orbit_core::application::distributed::DrainEntryPoint;
+use orbit_core::application::contracts::DrainEntryPoint;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::host_resource::{DiskSample, HostResourceProbe, HostResourceSample};
 use orbit_core::{

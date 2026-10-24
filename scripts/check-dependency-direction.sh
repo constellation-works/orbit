@@ -270,6 +270,55 @@ if rg -n 'crate::adapter' \
   fail=1
 fi
 
+# Within the application layer [ORB-17924]: constants and DTOs that several
+# modules share live in `application::contracts`, which imports none of the
+# application modules; `task` reaches the state scheduler only through its
+# `TaskAutomationPort`, and `job` reaches review admission only through its
+# `ReviewAdmissionHook`. Grouped `use crate::application::{…}` trees count too.
+app_src="$repo_root/crates/orbit-core/src/application"
+app_modules='task|automation|job|review|distributed|admission|workspace_auto|pull_drain|sweep_filing'
+if rg -n "crate::application::(${app_modules})\\b|\\bsuper::super\\b" \
+  "$app_src/contracts" -g '*.rs' ||
+  rg -n -U "crate::application::\\{[^}]*\\b(${app_modules})\\b" \
+    "$app_src/contracts" -g '*.rs'; then
+  echo "orbit-core application contracts must not import the application modules"
+  fail=1
+fi
+
+# Two task-pilot callers the cut did not list keep their direct edge, by the
+# owner's stop-and-report ruling on ORB-17924; each is allowed only as that
+# exact line.
+task_automation_allowed='^[^:]*/task/pilot/no_diff\.rs:[0-9]+:use crate::application::automation::source::Source;$|^[^:]*/task/pilot/prepare\.rs:[0-9]+:    let held = crate::application::automation::pilot_reservation::reserve\($'
+if {
+  rg -n 'crate::application::automation\b|(super::)+automation\b' \
+    "$app_src/task" -g '*.rs' -g '!**/tests/**' || true
+  rg -n -U 'crate::application::\{[^}]*\bautomation\b' \
+    "$app_src/task" -g '*.rs' -g '!**/tests/**' || true
+} | grep -Ev "$task_automation_allowed"; then
+  echo "orbit-core task must reach automation through task::TaskAutomationPort"
+  fail=1
+fi
+
+review_admission_items='admission|install_review_admission|admit_review_request|run_review_admission|input_run_review_admission|upgrade_resume_admission_mismatch|completion_admission_mismatch|local_route_run_option_refusal|review_layer_json'
+if rg -n "review::(${review_admission_items})\\b" \
+  "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
+  rg -n -U "review::\\{[^}]*\\b(${review_admission_items})\\b" \
+    "$app_src/job" -g '*.rs' -g '!**/tests/**'; then
+  echo "orbit-core job must reach review admission through job::ReviewAdmissionHook"
+  fail=1
+fi
+
+shared_contracts='PULL_DRAIN_JOB|ESCALATION_TRIAGE_JOB|FINDING_VERIFICATION_JOB|DrainEntryPoint|PullSettlementEntry|PullSettlementOutcome|SUPERSEDED_BY_SOURCE|PilotFingerprints|review_layer_json'
+if rg -n "\\b(const|enum|struct|fn) (${shared_contracts})\\b" \
+  "$repo_root/crates/orbit-core/src" -g '*.rs' -g "!**/application/contracts/**" ||
+  rg -n "\\b(${app_modules})(::[a-z_]+)*::(${shared_contracts})\\b" \
+    "$repo_root/crates" -g '*.rs' ||
+  rg -n -U "\\b(${app_modules})(::[a-z_]+)*::\\{[^}]*\\b(${shared_contracts})\\b" \
+    "$repo_root/crates" -g '*.rs'; then
+  echo "shared application contracts are defined and imported only at application::contracts"
+  fail=1
+fi
+
 if rg -n 'ResolvedConfig::load|ConfigRoots::' \
   "$repo_root/crates/orbit-runtime/src" \
   -g '*.rs' -g '!**/tests/**'; then

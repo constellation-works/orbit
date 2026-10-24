@@ -25,11 +25,10 @@ use serde_json::json;
 
 use super::TaskRecordUpdateParams;
 use crate::OrbitRuntime;
+use crate::application::contracts::FINDING_VERIFICATION_JOB;
 use crate::application::job::crew_pools::{InspectionPool, seeded_crew_ticket};
 use crate::application::task::TaskRecords;
 
-/// The job that verifies review-filed findings.
-pub const FINDING_VERIFICATION_JOB: &str = "finding_verification_pipeline";
 /// The actor every verdict write is attributed to.
 pub(crate) const FINDING_VERIFICATION_ACTOR: &str = "finding-verification";
 /// The trusted history event carrying a verdict record.

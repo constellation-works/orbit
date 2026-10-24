@@ -16,6 +16,7 @@ use orbit_common::OrbitError;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskAutomationPort;
 use crate::application::task::pilot::source::{
     inspection_proof_error, inspection_proof_required, is_commit_id, tree_of,
 };
@@ -66,10 +67,7 @@ impl OrbitRuntime {
                     })
             })
             .transpose()?;
-        let holding =
-            crate::application::automation::preparation::escalation_triage_checkpoints_holding(
-                self, task_id,
-            )?;
+        let holding = self.escalation_triage_checkpoints(task_id)?;
         let pins = holding
             .iter()
             .filter(|(_, prepared)| inspection_proof_required(prepared))

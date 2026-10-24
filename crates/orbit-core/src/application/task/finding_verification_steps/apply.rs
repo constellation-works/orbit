@@ -11,6 +11,7 @@ use orbit_types::workflow::automation::members::MemberEvidence;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskAutomationPort;
 use crate::application::task::{
     FindingVerification, VerdictWrite, VerifierReport, VerifierVerdict, next_tier,
 };
@@ -62,8 +63,7 @@ pub(crate) fn apply(
     })?;
     source.ensure_commit(action, &workspace_root)?;
     let source_tree = source.tree_id(action, &workspace_root)?;
-    let claim =
-        crate::application::automation::members::claim(runtime, prepared).map_err(failed)?;
+    let claim = runtime.state_claim(prepared).map_err(failed)?;
     let escalation_round = prepared.get("round").and_then(Value::as_str) == Some("escalation");
     let proof_required = inspection_proof_required(prepared);
     let partitions = prepared

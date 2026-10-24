@@ -1,5 +1,3 @@
-use super::PULL_DRAIN_JOB_NAME;
-
 use std::cell::{Cell, RefCell};
 
 use orbit_common::OrbitError;
@@ -22,6 +20,7 @@ use super::record::{
     refused_settlements,
 };
 use crate::OrbitRuntime;
+use crate::application::contracts::PULL_DRAIN_JOB;
 use crate::application::distributed::{
     OwnerAnswer, PullCrewWindow, PullWorkFit, owner_binary_version,
 };
@@ -270,7 +269,9 @@ pub(crate) fn pull_refill(
                         review_gate: true,
                         run_context: AdmissionRunContext {
                             run_id: run_id.clone(),
-                            job_name: PULL_DRAIN_JOB_NAME.to_string(),
+                            // The job that runs this action, so the owner's
+                            // claim names the drain that holds it.
+                            job_name: PULL_DRAIN_JOB.to_string(),
                             machine_name: runtime
                                 .automation_execution_location()
                                 .and_then(|location| location.machine_name.clone()),

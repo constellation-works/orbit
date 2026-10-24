@@ -48,7 +48,3 @@ struct PilotHoldCache {
     now: DateTime<Utc>,
     withhold: Option<String>,
 }
-
-/// The task outcome reason apply and prepare record for a task the branch
-/// made stale under its claim; the member settles superseded, not failed.
-pub(crate) const SUPERSEDED_BY_SOURCE: &str = "superseded_by_source";

@@ -1,4 +1,4 @@
-use orbit_core::application::distributed::PullSettlementOutcome;
+use orbit_core::application::contracts::PullSettlementOutcome;
 use std::fmt::Write as _;
 
 use clap::Args;
