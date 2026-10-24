@@ -9,6 +9,7 @@ pub(crate) mod contention;
 mod context_repair;
 mod context_widening;
 mod desktop;
+pub(crate) mod escalation_triage_steps;
 mod external_merge;
 mod proposed;
 pub use proposed::ProposedTaskInput;
@@ -65,6 +66,10 @@ pub use blocked_recovery::{
 pub use contention::{LockContentionHotspot, LockContentionReport};
 pub use context_repair::{
     CONTEXT_REPAIR_SWEEP_STATUSES, ContextFileRestoration, ContextRepairCandidate,
+};
+pub use escalation_triage_steps::{
+    ESCALATION_TRIAGE_JOB, PILOT_WARNING_TRIAGED_EVENT, PilotWarningDecision,
+    PilotWarningTriageRequest,
 };
 pub use final_recovery::{
     FINAL_RECOVERY_REQUEUED_EVENT, FinalRecoveryCompletion, FinalRecoveryOutcome,

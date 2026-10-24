@@ -98,7 +98,8 @@ declared explicitly.
 **Routine** — a definition (`.orbit/routines/*.yaml`) pointing at a
 `job:<name>` target, with a retry and overlap policy. The trigger is cron, or
 a state predicate (`preparation_eligible` for task-pilot,
-`finding_unverified` for finding-verification). Definitions are per-user
+`finding_unverified` for finding-verification, `pilot_warnings_held` for
+pilot-warning triage). Definitions are per-user
 checkout state. An owner checkout evaluates its routines. A replica checkout
 schedules only cron routines whose job is `worktree_gc_pipeline` or
 `store_gc_pipeline`.

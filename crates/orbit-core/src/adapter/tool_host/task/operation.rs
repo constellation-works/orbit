@@ -166,20 +166,35 @@ fn reviewed(value: Result<Value, OrbitError>) -> Result<(Value, Option<String>),
     Ok((value, id))
 }
 
-/// `orbit.task.block_triage`: the candidate list, or one triage decision.
+/// `orbit.task.block_triage`: the candidate list, or one triage decision,
+/// for a block episode or, with `subject` `pilot_warning`, a pilot warning
+/// hold.
 fn block_triage(
     runtime: &OrbitRuntime,
     caller: ToolCaller<'_>,
     input: &OperationInput,
 ) -> Result<(Value, Option<String>), OrbitError> {
-    use crate::application::task::{BlockTriageDecision, BlockTriageRequest, TriageOption};
+    use crate::application::task::{
+        BlockTriageDecision, BlockTriageRequest, PilotWarningDecision, PilotWarningTriageRequest,
+    };
 
     let action = input.required_string("action")?;
+    let pilot_warning = match input.optional_string("subject")?.as_deref() {
+        None | Some("block") => false,
+        Some("pilot_warning") => true,
+        Some(other) => {
+            return Err(OrbitError::InvalidInput(format!(
+                "block triage subject `{other}` is not one of block or pilot_warning"
+            )));
+        }
+    };
     if action == "candidates" {
-        return Ok((
-            runtime.blocked_triage_candidates_json(chrono::Utc::now())?,
-            None,
-        ));
+        let candidates = if pilot_warning {
+            runtime.pilot_warning_candidates_json()?
+        } else {
+            runtime.blocked_triage_candidates_json(chrono::Utc::now())?
+        };
+        return Ok((candidates, None));
     }
     let id = input.required_string("id")?;
     let reason = || {
@@ -189,55 +204,58 @@ fn block_triage(
             })
         })
     };
+    let requested_by = || {
+        runtime
+            .actor()
+            .resolve_write_label(caller.agent.as_deref(), caller.model.as_deref())
+    };
+    if pilot_warning {
+        if input.optional_string("blocker")?.is_some() {
+            return Err(OrbitError::InvalidInput(
+                "pilot warning triage quotes the holding findings itself; omit `blocker`".into(),
+            ));
+        }
+        let decision = match action.as_str() {
+            "report" => PilotWarningDecision::Report {
+                human_action: reason()?,
+            },
+            "propose" => {
+                let (options, recommended) = proposal(input)?;
+                PilotWarningDecision::Propose {
+                    options,
+                    recommended,
+                }
+            }
+            "requeue" => {
+                return Err(OrbitError::InvalidInput(
+                    "pilot warning triage cannot requeue: it only proposes or reports, and \
+                     never moves a task"
+                        .into(),
+                ));
+            }
+            other => {
+                return Err(OrbitError::InvalidInput(format!(
+                    "pilot warning triage action `{other}` is not one of candidates, propose or report"
+                )));
+            }
+        };
+        let response = runtime.record_pilot_warning_triage(&PilotWarningTriageRequest {
+            task_id: id.clone(),
+            decision,
+            requested_by: requested_by()?,
+        })?;
+        return Ok((response, Some(id)));
+    }
     let decision = match action.as_str() {
         "requeue" => BlockTriageDecision::Requeue { repair: reason()? },
         "report" => BlockTriageDecision::Report {
             human_action: reason()?,
         },
         "propose" => {
-            let options = input
-                .as_value()
-                .get("options")
-                .and_then(Value::as_array)
-                .ok_or_else(|| {
-                    OrbitError::InvalidInput(
-                        "block triage `propose` needs `options`: two or three {summary, consequences, replacement} objects"
-                            .into(),
-                    )
-                })?
-                .iter()
-                .map(|option| {
-                    let text = |key: &str| {
-                        option
-                            .get(key)
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                            .ok_or_else(|| {
-                                OrbitError::InvalidInput(format!(
-                                    "every proposal option needs a string `{key}`"
-                                ))
-                            })
-                    };
-                    Ok(TriageOption {
-                        summary: text("summary")?,
-                        consequences: text("consequences")?,
-                        replacement: text("replacement")?,
-                    })
-                })
-                .collect::<Result<Vec<_>, OrbitError>>()?;
-            let recommended = input
-                .as_value()
-                .get("recommended")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| {
-                    OrbitError::InvalidInput(
-                        "block triage `propose` needs `recommended`: the 1-based option index"
-                            .into(),
-                    )
-                })?;
+            let (options, recommended) = proposal(input)?;
             BlockTriageDecision::Propose {
                 options,
-                recommended: usize::try_from(recommended).unwrap_or(usize::MAX),
+                recommended,
             }
         }
         other => {
@@ -246,16 +264,59 @@ fn block_triage(
             )));
         }
     };
-    let requested_by = runtime
-        .actor()
-        .resolve_write_label(caller.agent.as_deref(), caller.model.as_deref())?;
     let response = runtime.record_block_triage(&BlockTriageRequest {
         task_id: id.clone(),
         blocker: input.optional_string("blocker")?.unwrap_or_default(),
         decision,
-        requested_by,
+        requested_by: requested_by()?,
     })?;
     Ok((response, Some(id)))
+}
+
+/// A triage `propose` call's `options` and 1-based `recommended` index.
+fn proposal(
+    input: &OperationInput,
+) -> Result<(Vec<crate::application::task::TriageOption>, usize), OrbitError> {
+    let options = input
+        .as_value()
+        .get("options")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(
+                "block triage `propose` needs `options`: two or three {summary, consequences, replacement} objects"
+                    .into(),
+            )
+        })?
+        .iter()
+        .map(|option| {
+            let text = |key: &str| {
+                option
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        OrbitError::InvalidInput(format!(
+                            "every proposal option needs a string `{key}`"
+                        ))
+                    })
+            };
+            Ok(crate::application::task::TriageOption {
+                summary: text("summary")?,
+                consequences: text("consequences")?,
+                replacement: text("replacement")?,
+            })
+        })
+        .collect::<Result<Vec<_>, OrbitError>>()?;
+    let recommended = input
+        .as_value()
+        .get("recommended")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(
+                "block triage `propose` needs `recommended`: the 1-based option index".into(),
+            )
+        })?;
+    Ok((options, usize::try_from(recommended).unwrap_or(usize::MAX)))
 }
 
 /// `orbit.task.reject`.

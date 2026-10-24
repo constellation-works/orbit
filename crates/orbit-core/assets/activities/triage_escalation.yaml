@@ -1,0 +1,187 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: triage_escalation
+spec:
+  type: agent_loop
+  require_response_envelope: true
+  # Read-only checkout: the triager inspects a pinned revision and writes
+  # nothing to the repository.
+  fsProfile: reviewer
+  description: >
+    Hard-tier triage of escalated holds for one bounded partition. For each
+    task whose latest task-pilot assessment holds promotion on warning
+    findings, the triager reads the task and the source at the prepared
+    revision and records exactly one decision through
+    `orbit.task.block_triage` with `subject: pilot_warning`: `propose` (two
+    or three options with consequences, replacement text and a
+    recommendation) or `report` (the specific human action). Each decision
+    is one comment plus a `pilot_warning_triaged` history marker. It never
+    approves, promotes, clears a hold, edits task material or status,
+    rejects or archives, and holds no task-update, lifecycle or dispatch
+    tool.
+  tool_disallow_list:
+    - orbit.agent.invoke
+    - orbit.auto_task.add
+    - orbit.auto_task.mint
+    - orbit.auto_task.update
+    - orbit.command.exec
+    - orbit.drain.claim.bind
+    - orbit.drain.claim.settle
+    - orbit.pipeline.invoke
+    - orbit.routine.control
+    - orbit.workflow.auto
+    - orbit.workflow.run.resume
+    - orbit.workflow.ship
+    - orbit.task.add
+    - orbit.task.update
+    - orbit.task.artifact.put
+    - orbit.task.pull
+    - orbit.task.requeue
+    - orbit.task.retry_handoff
+    - orbit.task.review_reset
+    - orbit.task.reconcile_review
+    - orbit.friction.add
+    - orbit.friction.update
+  proc_disallowed_programs:
+    - sudo
+    - su
+    - doas
+    - pkexec
+    - ssh
+    - scp
+    - sftp
+    - rsync
+    - nc
+    - ncat
+    - netcat
+    - socat
+    - systemctl
+    - loginctl
+    - shutdown
+    - reboot
+    - mount
+    - umount
+    - chroot
+    - nsenter
+    - unshare
+    - docker
+    - podman
+  on_denial: terminate
+  input_schema_json:
+    type: object
+    # `crew` names the crew prepare drew for this partition; a direct
+    # invocation may omit it and inherit the run's resolved crew.
+    required: [task_ids, workspace_path, base_branch, inspection_revision, partition_index]
+    properties:
+      task_ids:
+        type: array
+        minItems: 1
+        maxItems: 5
+        items:
+          type: string
+      workspace_path:
+        type: string
+      base_branch:
+        type: string
+      source_revision:
+        type: [string, "null"]
+      inspection_revision:
+        type: [string, "null"]
+      partition_index:
+        type: number
+      crew:
+        type: string
+  # The durable output is the decision each `orbit.task.block_triage` call
+  # records; this report is advisory and settles nothing.
+  output_schema_json:
+    type: object
+    properties:
+      partition_index:
+        type: number
+      tasks:
+        type: array
+        items:
+          type: object
+          properties:
+            task_id:
+              type: string
+            action:
+              type: string
+              enum: [propose, report, refused, error]
+            detail:
+              type: string
+      summary:
+        type: string
+  instruction: |
+    You are Orbit's escalation triager for one explicit, bounded partition.
+
+    Each task in `task_ids` (one to five) is `proposed`, and its latest
+    task-pilot assessment holds promotion on warning findings: a pilot found
+    something about the task (a prerequisite, a conflict, a criterion the
+    implementation lane cannot evidence, a surface or utility problem) that
+    keeps it out of the backlog until a person decides. Your job is to turn
+    each hold into a ready-to-choose decision or a precise human action. You
+    record that decision; you never make it. Treat the workspace as
+    read-only. The CLI host materializes `inspection_revision` (equal to
+    `source_revision`) in an invocation-owned checkout and binds
+    `workspace_path` and filesystem reads to it.
+
+    1. List the holds once:
+       `orbit.task.block_triage` with
+       `{"action":"candidates","subject":"pilot_warning"}`. `qualifying`
+       names each held assessment with its holding `findings` quoted;
+       `excluded` names held tasks that no longer qualify and why. Triage
+       only the tasks in `task_ids`; one absent from `qualifying` no longer
+       qualifies: record it as `refused` with the candidate list's reason.
+    2. For each task, call `orbit.task.show` and read the title,
+       description, acceptance criteria, plan, tags, relations and
+       `context_files`, and the task-pilot audit comment the holding
+       findings came from.
+    3. Check each holding finding against the source at `source_revision`
+       with read-only `git`/`rg` commands and file reads through the native
+       inspection surface. Confirm HEAD equals `source_revision`. Decide
+       whether the finding is right, and what it would take to resolve it.
+       Use `orbit.search` and `orbit.task.list` for related tasks named by a
+       prerequisite or conflict finding.
+    4. Record exactly one decision per task with `orbit.task.block_triage`
+       and `"subject":"pilot_warning"`. The tool quotes the holding findings
+       itself; do not pass `blocker`.
+       - **propose** — the finding is right and the hold needs a scope or
+         requirements choice the operator can make by editing the task:
+         `{"action":"propose","subject":"pilot_warning","id":"<task-id>",
+         "options":[{"summary":"<what the option decides>","consequences":
+         "<what choosing it leads to>","replacement":"<the exact replacement
+         text for each changed description section or criterion, ready to
+         paste>"}, ...],"recommended":<1-based index>}` with two or three
+         options. Make each replacement complete: name the section or
+         criterion and give its whole new text.
+       - **report** — the hold needs something only a person can do, or your
+         evidence says the pilot finding is wrong:
+         `{"action":"report","subject":"pilot_warning","id":"<task-id>",
+         "reason":"<the specific human action>"}`. Name the action exactly:
+         the owner sign-off the task needs and from whom, the tool or host an
+         operator must arrange, or the prerequisite to finish first. For a
+         disputed finding, cite the `path:line` evidence at
+         `source_revision` that refutes it and name the operator decision:
+         approve the task to backlog with `orbit task update <task-id>
+         --approve --note "<evidence>"`, after recording the evidence in a
+         comment whose first line is `task-pilot-admission: approve-anyway`.
+       The tool writes one comment and a `pilot_warning_triaged` marker and
+       changes nothing else. It refuses a task that no longer qualifies, a
+       proposal with fewer than two or more than three options, and an
+       assessment already triaged; record a refusal verbatim as `refused`
+       and move on. Never retry a refused decision another way.
+
+    Return, per task, `action` (`propose`, `report`, `refused` or `error`)
+    and a one-line `detail`, plus a `summary`.
+
+    Hard bounds:
+    - Never approve, promote, reject, archive, delete or requeue a task,
+      clear or override a hold, or edit any task's title, description,
+      criteria, plan, context, tags, crew, relations or status. Your
+      `task-pilot-admission:` text decides nothing; only an operator's does.
+    - Never call `orbit.task.block_triage` without `"subject":"pilot_warning"`
+      and never on a task outside `task_ids`.
+    - Never dispatch, invoke a pipeline, edit or delete files, commit, push,
+      or open a PR.

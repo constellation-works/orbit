@@ -39,6 +39,7 @@ use super::super::TaskUpdateParams;
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
 use crate::application::search::task_selectors_contain_path;
+use crate::application::task::PILOT_WARNING_TRIAGED_EVENT;
 
 /// The hold reason, and the admission classification, for a proposed task
 /// whose latest pilot assessment is `verified_no_diff`.
@@ -225,7 +226,12 @@ impl OrbitRuntime {
         let Some(operation_id) = history
             .iter()
             .rev()
-            .find(|entry| entry.event != CONTEXT_CREATION_AUTHORIZED_EVENT)
+            .find(|entry| {
+                // Neither a context grant nor the triage of a warning hold
+                // changes what the latest pilot write decided.
+                entry.event != CONTEXT_CREATION_AUTHORIZED_EVENT
+                    && entry.event != PILOT_WARNING_TRIAGED_EVENT
+            })
             .filter(|entry| entry.event == "task_pilot_applied")
             .and_then(TaskHistoryEntry::receipt)
             .map(str::to_string)

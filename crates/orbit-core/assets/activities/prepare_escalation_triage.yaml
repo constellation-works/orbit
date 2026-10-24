@@ -1,0 +1,90 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: prepare_escalation_triage
+spec:
+  type: deterministic
+  description: >
+    Select the held task-pilot assessments an escalation triage run reads and
+    assign each its triager. A task qualifies while it is proposed, its
+    latest applied task-pilot assessment holds promotion on warning findings,
+    no operator recorded a task-pilot admission decision on that assessment,
+    and no pilot_warning_triaged marker names it. With task_ids it triages
+    those tasks; a named task that does not qualify, or that another live
+    triage run holds, settles superseded with its reason. Without task_ids it
+    selects every qualifying task, oldest first, up to max_tasks, and counts
+    the rest in `excluded_by_reason`. It pins one landing-branch revision
+    without changing the primary HEAD, index or working files, and fails
+    before any agent call outside a Git work tree. Each task's triager is
+    drawn from the hard complexity pool's inspection-capable crews (or the
+    next tier up, or the inspection-capable default crew), passing over the
+    crew that wrote the held assessment when the pool offers another. Tasks
+    are partitioned by crew, at most max_partition_size per partition.
+    Nothing is written.
+  input_schema_json:
+    type: object
+    properties:
+      state_automation: {}
+      source_revision:
+        type: string
+      task_ids:
+        type: array
+        items:
+          type: string
+      workspace_path:
+        type: string
+      base_branch:
+        type: string
+      max_tasks:
+        type: number
+        minimum: 1
+        maximum: 500
+      max_partition_size:
+        type: number
+        minimum: 1
+        maximum: 5
+  output_schema_json:
+    type: object
+    required:
+      [mode, subject, workspace_path, source, task_count, task_ids, tasks,
+       partition_size, partition_count, partitions, excluded_by_reason,
+       superseded_during_preparation]
+    properties:
+      mode:
+        type: string
+        enum: [automatic, explicit]
+      subject:
+        type: string
+        enum: [pilot_warning]
+      workspace_path:
+        type: string
+      source:
+        type: object
+      task_count:
+        type: number
+      task_ids:
+        type: array
+        items:
+          type: string
+      tasks:
+        type: array
+        items:
+          type: object
+          required: [task_id, operation_id, findings, crew, tier]
+      partition_size:
+        type: number
+      partition_count:
+        type: number
+      partitions:
+        type: array
+        items:
+          type: object
+          required: [partition_index, task_ids, crew]
+      excluded_by_reason:
+        type: object
+      superseded_during_preparation:
+        type: array
+        items:
+          type: object
+  action: prepare_escalation_triage
+  config: {}

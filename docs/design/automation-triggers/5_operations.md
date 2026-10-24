@@ -741,10 +741,10 @@ excluded landings with their certificate and assurance label.
 ## State preparation [ORB-11331]
 
 > Failed-run triage is retired ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)): the `execution_failed`
-> trigger kind still parses but has no shipped target and fires nothing. `preparation_eligible` and
-> `finding_unverified` schedule work.
+> trigger kind still parses but has no shipped target and fires nothing. `preparation_eligible`,
+> `finding_unverified` and `pilot_warnings_held` schedule work.
 
-The same routine sweep now accepts `trigger.state` with one of three kinds.
+The same routine sweep now accepts `trigger.state` with one of four kinds.
 `finding_unverified` [ORB-15662] targets `job:finding_verification_pipeline`.
 It observes review-filed bug findings (type `bug` tagged `code-review`,
 `delivery-code-review`, `security-review` or `qa-sweep`) in `proposed`,
@@ -753,7 +753,13 @@ finding as filed: title, description, criteria, tags, type and selectors. It
 takes no `eligibility` or `freshness` block. The seeded
 `finding_verification.yaml` ships `enabled: false`, with the same
 seed-time `owner_machine` and `branch` as `task_pilot.yaml`. See
-[finding-verification](../finding-verification/2_design.md#7-state-trigger). Core
+[finding-verification](../finding-verification/2_design.md#7-state-trigger).
+`pilot_warnings_held` targets `job:escalation_triage_pipeline`: it observes
+proposed tasks whose latest task-pilot assessment holds promotion on warnings
+and records one triage marker per assessment. The seeded
+`pilot_warning_triage.yaml` also ships `enabled: false` with the same seed-time
+`owner_machine` and `branch`; see
+[Pilot warning holds](2_design.md#61-pilot-warning-holds-pilot_warnings_held). Core
 supplies authoritative task envelopes, pinned source and run/history evidence;
 `orbit-automation::members` owns due decisions, material fingerprints, incident
 identity, frozen attempts and receipt acceptance. Store uses its existing

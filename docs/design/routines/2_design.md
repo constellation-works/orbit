@@ -251,7 +251,9 @@ policy:
 require `overlap: forbid` and the job fixed by their kind:
 `preparation_eligible` targets `job:task_pilot_pipeline`;
 `finding_unverified` targets `job:finding_verification_pipeline` and uses the
-[finding-verification eligibility contract](../finding-verification/2_design.md#7-state-trigger).
+[finding-verification eligibility contract](../finding-verification/2_design.md#7-state-trigger);
+`pilot_warnings_held` targets `job:escalation_triage_pipeline` and uses the
+[pilot warning hold contract](../automation-triggers/2_design.md#61-pilot-warning-holds-pilot_warnings_held).
 `execution_failed` still parses for compatibility, but its retired target is
 skipped and dispatches nothing. These are domain eligibility checks, not arbitrary
 status-change subscriptions.

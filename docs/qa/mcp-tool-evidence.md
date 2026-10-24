@@ -34,7 +34,7 @@ This matrix covers the exact 38 modern advertised names in `crates/orbit-cli/tes
 | orbit_task_add | S-records, S-guarded | — | S-guarded | S-replica, S-selector | Guarded proposed create and ordinary authoring |
 | orbit_task_artifact_get | S-artifact | I-artifact-denial | S-artifact-write | S-artifact | Text/raster fixtures; no external download |
 | orbit_task_artifact_put | S-artifact-write | S-artifact-write, I-artifact-authority | S-artifact-write | S-artifact-write, I-artifact-authority | Exact UTF-8 bytes after server restart; path and workspace refusals |
-| orbit_task_block_triage | I-triage | I-triage | I-triage | — | Requeue/propose/report decisions with input refusals over disposable stores; live scheduler and stdio untested |
+| orbit_task_block_triage | I-triage | I-triage | I-triage | — | Requeue/propose/report decisions with input refusals over disposable stores; live scheduler and stdio untested; the `pilot_warning` subject has no automated case |
 | orbit_task_eligible | S-eligible | S-eligible | — | — | Lock-overlap split and conflict explanation proved through `orbit tool run` in the CLI suite; stdio proves the schema, read-only hint, a call and refusals |
 | orbit_task_list | S-records | S-selector | S-guarded | S-selector | Field projections, bounded pages |
 | orbit_task_reconcile_review | I-reconcile | I-reconcile | I-reconcile | I-reconcile | Composed owner/follower runtimes with a stub `gh` and a stub reviewer provider; real GitHub, stdio transport and a real reviewer model untested |

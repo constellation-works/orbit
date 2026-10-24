@@ -23,6 +23,7 @@ use serde_json::Value;
 use super::auth_recovery::relogin_hint;
 use crate::OrbitRuntime;
 use crate::application::job::crew_pools::complexity_crews_key;
+use crate::application::task::ESCALATION_TRIAGE_JOB;
 
 /// How far back the drain card looks for an authentication failure or the
 /// success that clears it. Older runs are not shown.
@@ -327,37 +328,39 @@ impl RunCrewLookup {
         let Some(state) = self.0.get(&run.run_id) else {
             return Vec::new();
         };
-        // A pilot run admitted before the task-pilot purpose froze its draw
-        // under the low complexity pool's key.
-        let keys = match run.job_id.as_str() {
-            "task_pilot_pipeline" => vec![
-                CrewPurpose::TaskPilot.config_key().to_string(),
-                complexity_crews_key(TaskComplexity::Low),
-            ],
-            "blocked_task_recovery_pipeline" => vec![FINAL_RECOVERY_CREWS_KEY.to_string()],
-            _ => Vec::new(),
-        };
-        if !keys.is_empty() {
-            return keys
-                .iter()
-                .find_map(|key| state.activity_crew_draws.get(key))
-                .map(|draw| vec![draw.crew.clone()])
-                .unwrap_or_default();
+        match run.job_id.as_str() {
+            "task_pilot_pipeline" => {
+                return pilot_run_crew(state).into_iter().collect();
+            }
+            "blocked_task_recovery_pipeline" => {
+                return state
+                    .activity_crew_draws
+                    .get(FINAL_RECOVERY_CREWS_KEY)
+                    .map(|draw| vec![draw.crew.clone()])
+                    .unwrap_or_default();
+            }
+            _ => {}
         }
 
-        // Verifiers draw per partition, not from one run-wide pool. A prepared
-        // assignment alone is not proof that its agent ran. Successful runs
-        // count partitions with results; failed runs count provider errors
-        // actually carried by their terminal diagnostic, in either round.
+        // Verifiers and escalation triagers draw per partition, not from one
+        // run-wide pool. A prepared assignment alone is not proof that its
+        // agent ran. Successful runs count partitions with results; failed
+        // runs count provider errors actually carried by their terminal
+        // diagnostic, in every round.
+        let rounds: &[(&str, &str, &str)] = if run.job_id == ESCALATION_TRIAGE_JOB {
+            &[("/prepare/partitions", "/triage_results", "/triage_errors")]
+        } else {
+            &[
+                ("/prepare/partitions", "/verdict_results", "/verdict_errors"),
+                (
+                    "/apply/escalation_prepared/partitions",
+                    "/escalation_results",
+                    "/escalation_errors",
+                ),
+            ]
+        };
         let mut crews = BTreeSet::new();
-        for (partitions, results, errors) in [
-            ("/prepare/partitions", "/verdict_results", "/verdict_errors"),
-            (
-                "/apply/escalation_prepared/partitions",
-                "/escalation_results",
-                "/escalation_errors",
-            ),
-        ] {
+        for &(partitions, results, errors) in rounds {
             let Some(partitions) = state.pipeline.pointer(partitions).and_then(Value::as_array)
             else {
                 continue;
@@ -395,6 +398,23 @@ impl RunCrewLookup {
 fn uses_recorded_crews(job: &str) -> bool {
     matches!(
         job,
-        "task_pilot_pipeline" | "blocked_task_recovery_pipeline" | "finding_verification_pipeline"
+        "task_pilot_pipeline"
+            | "blocked_task_recovery_pipeline"
+            | "finding_verification_pipeline"
+            | ESCALATION_TRIAGE_JOB
     )
+}
+
+/// The crew a task-pilot run's pilots ran as: the draw it froze under the
+/// task-pilot purpose, or, for a run admitted before that purpose existed,
+/// under the low complexity pool's key. Pilot apply can redraw `task.crew`,
+/// so this, not the task, names who wrote an assessment.
+pub(crate) fn pilot_run_crew(state: &PipelineState) -> Option<String> {
+    [
+        CrewPurpose::TaskPilot.config_key().to_string(),
+        complexity_crews_key(TaskComplexity::Low),
+    ]
+    .iter()
+    .find_map(|key| state.activity_crew_draws.get(key))
+    .map(|draw| draw.crew.clone())
 }

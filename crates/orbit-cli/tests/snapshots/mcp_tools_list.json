@@ -1431,7 +1431,7 @@
   },
   {
     "name": "orbit_task_block_triage",
-    "description": "Triage escalated blocks. `candidates` lists every blocked task with whether its current block episode awaits triage: its final-recovery decision escalated, or it has none and the backstop will never decide it; an episode already triaged or touched by a human after the block is excluded. Each other action records one decision on a qualifying episode, as one task comment plus a history marker, and refuses any other episode. `requeue` returns the task to the backlog as a final-recovery requeue, counted against the shared final-recovery requeue bound (2 per 24 hours): past the bound, for a task tagged security or security-review, or for a run another machine executed, it is recorded as refused and the task stays blocked; when the count cannot be read nothing is written. `propose` records the quoted blocker, two or three options with consequences and ready-to-apply replacement text, and a recommendation, and changes nothing else. `report` records the human action and changes nothing else. Never completes, rejects or archives a task.",
+    "description": "Triage escalated blocks. `candidates` lists every blocked task with whether its current block episode awaits triage: its final-recovery decision escalated, or it has none and the backstop will never decide it; an episode already triaged or touched by a human after the block is excluded. Each other action records one decision on a qualifying episode, as one task comment plus a history marker, and refuses any other episode. `requeue` returns the task to the backlog as a final-recovery requeue, counted against the shared final-recovery requeue bound (2 per 24 hours): past the bound, for a task tagged security or security-review, or for a run another machine executed, it is recorded as refused and the task stays blocked; when the count cannot be read nothing is written. `propose` records the quoted blocker, two or three options with consequences and ready-to-apply replacement text, and a recommendation, and changes nothing else. `report` records the human action and changes nothing else. Never completes, rejects or archives a task. With `subject` `pilot_warning`, the same actions read `proposed` tasks whose latest task-pilot assessment holds promotion on warning findings instead: `candidates` lists each held assessment not yet triaged and without an operator decision, quoting its holding findings; `propose` and `report` record one comment quoting those findings plus a `pilot_warning_triaged` history marker that excludes the assessment afterwards, and refuse a task that no longer qualifies; `requeue` is refused. A pilot warning triage never approves, promotes, clears a hold or edits any other task field.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1443,13 +1443,17 @@
           "type": "string",
           "description": "candidates, requeue, propose, or report"
         },
+        "subject": {
+          "type": "string",
+          "description": "what is triaged: block (default), a blocked task's block episode; pilot_warning, a proposed task's pilot warning hold"
+        },
         "id": {
           "type": "string",
-          "description": "requeue, propose, report: the blocked task"
+          "description": "requeue, propose, report: the blocked or pilot-held task"
         },
         "blocker": {
           "type": "string",
-          "description": "requeue, propose, report: the escalation reason, quoted in the comment"
+          "description": "block requeue, propose, report: the escalation reason, quoted in the comment; pilot_warning quotes the holding findings itself and refuses it"
         },
         "reason": {
           "type": "string",
