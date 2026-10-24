@@ -1,4 +1,19 @@
-use super::*;
+use orbit_common::OrbitError;
+use orbit_common::security::redaction::redact_all;
+use orbit_types::task::{
+    LIGHT_DELIVERY_TAGS, Task, TaskStatus, is_system_identity_tag, is_valid_orb_task_id,
+    normalize_task_dependencies, normalize_task_tags, validate_os_tags,
+    validate_task_dependencies_with,
+};
+
+use super::super::params::TaskUpdateParams;
+use super::super::paths::{
+    canonicalize_context_files_for_read, context_workspace_root, normalize_context_files_for_write,
+};
+use super::artifacts::validate_pr_status;
+use super::entry::{TaskFieldWriter, ValidatedTaskFieldEdits};
+use crate::OrbitRuntime;
+use crate::application::job::crew_pools::{CreationCrewAssignment, random_crew_ticket};
 
 impl OrbitRuntime {
     /// Re-check, under the task lock, the creation intent an operator
@@ -39,7 +54,7 @@ impl OrbitRuntime {
     ///
     /// `writer` is this caller's trusted class. Light-delivery tag additions
     /// consult it, not the process environment alone [ORB-16872].
-    pub(crate) fn validate_and_normalize_task_field_edits(
+    pub(in crate::application::task) fn validate_and_normalize_task_field_edits(
         &self,
         id: &str,
         task: &Task,

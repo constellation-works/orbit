@@ -17,7 +17,7 @@ use orbit_store::contracts::{ResourceUsageStoreBackend, RunResourceMinute};
 use tempfile::TempDir;
 
 use crate::application::job::pipeline::worker::delivery_class::DeliveryResourceClass;
-use crate::application::job::pipeline::worker::usage::RunResourceSampler;
+use crate::application::job::pipeline::worker::usage::sampler::RunResourceSampler;
 
 fn start() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 10, 12, 8, 0, 0).unwrap()

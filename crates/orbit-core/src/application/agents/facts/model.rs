@@ -1,7 +1,17 @@
-use super::*;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use chrono::{DateTime, Utc};
+use orbit_types::task::{RegressionClassification, TaskComplexity, TaskOrigin, TaskStatus};
+use orbit_types::workflow::ReviewVerdict;
+
+use super::super::attribution::{Charge, Credit};
+use super::super::records::Cause;
+use super::super::roles::pilot_warnings::Warnings;
+use super::super::roles::pilots::Graded;
+use crate::application::task::{FindingSeverity, FindingVerdict};
 
 /// How far back the scan reads. Every window, `all` included, fits inside it.
-pub(crate) const SCAN_DAYS: i64 = 90;
+pub(in crate::application::agents) const SCAN_DAYS: i64 = 90;
 /// The jobs whose runs implement a task: the PR and local delivery leaves,
 /// owned or claimed.
 pub(super) const IMPLEMENTATION_JOBS: &[&str] = &[
@@ -112,36 +122,36 @@ impl Problem {
 /// Who did a piece of work: the crew and model a job run recorded, and the
 /// run. Each is `None` when nothing records it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct Runner {
-    pub(crate) crew: Option<String>,
-    pub(crate) model: Option<String>,
-    pub(crate) run_id: Option<String>,
+pub(in crate::application::agents) struct Runner {
+    pub(in crate::application::agents) crew: Option<String>,
+    pub(in crate::application::agents) model: Option<String>,
+    pub(in crate::application::agents) run_id: Option<String>,
 }
 
 /// One implementation attempt: a run span from task history, and the job
 /// run that worked it when one is found.
 #[derive(Debug, Clone)]
-pub(crate) struct Attempt {
-    pub(crate) start: DateTime<Utc>,
-    pub(crate) end: Option<DateTime<Utc>>,
-    pub(crate) runner: Runner,
+pub(in crate::application::agents) struct Attempt {
+    pub(in crate::application::agents) start: DateTime<Utc>,
+    pub(in crate::application::agents) end: Option<DateTime<Utc>>,
+    pub(in crate::application::agents) runner: Runner,
 }
 
 /// A problem as the task's records show it, before it has an owner.
 #[derive(Debug, Clone)]
-pub(crate) struct Record {
-    pub(crate) problem: Problem,
-    pub(crate) at: DateTime<Utc>,
-    pub(crate) detail: String,
+pub(in crate::application::agents) struct Record {
+    pub(in crate::application::agents) problem: Problem,
+    pub(in crate::application::agents) at: DateTime<Utc>,
+    pub(in crate::application::agents) detail: String,
     /// What the rework is attributed to; `None` for anything else.
     pub(in crate::application::agents) cause: Option<Cause>,
     /// The attempt the rework ended, when the record names one.
-    pub(crate) ended: Option<usize>,
+    pub(in crate::application::agents) ended: Option<usize>,
 }
 
 /// What a review finding's settlement records about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FindingState {
+pub(in crate::application::agents) enum FindingState {
     /// Left open: it blocks a `reject`.
     Open,
     /// Repaired by the reviewer.
@@ -152,18 +162,18 @@ pub(crate) enum FindingState {
 
 /// One finding of a settled review.
 #[derive(Debug, Clone)]
-pub(crate) struct Finding {
-    pub(crate) severity: String,
-    pub(crate) state: FindingState,
+pub(in crate::application::agents) struct Finding {
+    pub(in crate::application::agents) severity: String,
+    pub(in crate::application::agents) state: FindingState,
     /// The paths a fixed finding changed, or an open or disposed one cites.
-    pub(crate) paths: BTreeSet<String>,
+    pub(in crate::application::agents) paths: BTreeSet<String>,
     /// The finding's settlement line: its id, severity, state and summary.
-    pub(crate) line: String,
+    pub(in crate::application::agents) line: String,
 }
 
 /// How the run after a `reject` turned out for the findings it left open.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RejectOutcome {
+pub(in crate::application::agents) enum RejectOutcome {
     /// No review settled after it yet.
     Pending,
     /// The records cannot tell: no open finding cites a path, a settlement
@@ -180,38 +190,38 @@ pub(crate) enum RejectOutcome {
 
 /// One settled review gate attempt, from its settlement comment.
 #[derive(Debug, Clone)]
-pub(crate) struct Review {
-    pub(crate) attempt_id: String,
-    pub(crate) at: DateTime<Utc>,
-    pub(crate) verdict: ReviewVerdict,
+pub(in crate::application::agents) struct Review {
+    pub(in crate::application::agents) attempt_id: String,
+    pub(in crate::application::agents) at: DateTime<Utc>,
+    pub(in crate::application::agents) verdict: ReviewVerdict,
     /// The reviewer's crew and model as the settlement names them.
-    pub(crate) reviewer: Runner,
-    pub(crate) findings: Vec<Finding>,
+    pub(in crate::application::agents) reviewer: Runner,
+    pub(in crate::application::agents) findings: Vec<Finding>,
     /// The implementation commit the reviewer examined.
-    pub(crate) reviewed: Option<String>,
+    pub(in crate::application::agents) reviewed: Option<String>,
     /// The candidate the verdict binds to, after any reviewer commit.
-    pub(crate) final_candidate: Option<String>,
+    pub(in crate::application::agents) final_candidate: Option<String>,
     /// The reviewer's runtime in seconds.
-    pub(crate) seconds: Option<u64>,
+    pub(in crate::application::agents) seconds: Option<u64>,
     /// Reviewer fixes that a gate escalation says failed owner revalidation.
-    pub(crate) fix_failed: bool,
+    pub(in crate::application::agents) fix_failed: bool,
     /// An `incomplete` verdict whose block the run failure classification
     /// names as infrastructure.
-    pub(crate) infrastructure: bool,
+    pub(in crate::application::agents) infrastructure: bool,
     /// For a `reject`, how the next run treated its open findings.
-    pub(crate) outcome: RejectOutcome,
+    pub(in crate::application::agents) outcome: RejectOutcome,
 }
 
 impl Review {
     /// The findings closed by an authorized decision.
-    pub(crate) fn disposed(&self) -> impl Iterator<Item = &Finding> {
+    pub(in crate::application::agents) fn disposed(&self) -> impl Iterator<Item = &Finding> {
         self.findings
             .iter()
             .filter(|finding| finding.state == FindingState::Disposed)
     }
 
     /// The findings left open.
-    pub(crate) fn open(&self) -> impl Iterator<Item = &Finding> {
+    pub(in crate::application::agents) fn open(&self) -> impl Iterator<Item = &Finding> {
         self.findings
             .iter()
             .filter(|finding| finding.state == FindingState::Open)
@@ -219,7 +229,7 @@ impl Review {
 
     /// A `reject` the next run proved wrong: it changed none of the cited
     /// paths and the next review accepted.
-    pub(crate) fn false_reject(&self) -> bool {
+    pub(in crate::application::agents) fn false_reject(&self) -> bool {
         self.verdict == ReviewVerdict::Reject
             && matches!(&self.outcome, RejectOutcome::Judged { changed, accepted } if changed.is_empty() && *accepted)
     }
@@ -228,53 +238,54 @@ impl Review {
 /// A finding a review job filed as a `bug` task, and what finding
 /// verification decided about it.
 #[derive(Debug, Clone)]
-pub(crate) struct FiledFinding {
+pub(in crate::application::agents) struct FiledFinding {
     /// The review task it was spawned from.
-    pub(crate) filer: Option<String>,
+    pub(in crate::application::agents) filer: Option<String>,
     /// The latest verdict, with when it was recorded and the severity the
     /// verifier rated.
-    pub(crate) verdict: Option<(FindingVerdict, DateTime<Utc>, Option<FindingSeverity>)>,
+    pub(in crate::application::agents) verdict:
+        Option<(FindingVerdict, DateTime<Utc>, Option<FindingSeverity>)>,
 }
 
 /// A typed `regression_from` link: `regressing` regressed `culprit`.
 #[derive(Debug, Clone)]
-pub(crate) struct RegressionLink {
-    pub(crate) culprit: String,
-    pub(crate) regressing: String,
-    pub(crate) at: DateTime<Utc>,
-    pub(crate) classification: RegressionClassification,
+pub(in crate::application::agents) struct RegressionLink {
+    pub(in crate::application::agents) culprit: String,
+    pub(in crate::application::agents) regressing: String,
+    pub(in crate::application::agents) at: DateTime<Utc>,
+    pub(in crate::application::agents) classification: RegressionClassification,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct TaskFacts {
-    pub(crate) id: String,
-    pub(crate) title: String,
-    pub(crate) status: TaskStatus,
+pub(in crate::application::agents) struct TaskFacts {
+    pub(in crate::application::agents) id: String,
+    pub(in crate::application::agents) title: String,
+    pub(in crate::application::agents) status: TaskStatus,
     /// The task's orchestrator attribution, when it names one.
-    pub(crate) orchestrator: Option<String>,
+    pub(in crate::application::agents) orchestrator: Option<String>,
     /// The orchestrator's model recorded when the task was created.
-    pub(crate) orchestrator_model: Option<String>,
-    pub(crate) origin: Option<TaskOrigin>,
+    pub(in crate::application::agents) orchestrator_model: Option<String>,
+    pub(in crate::application::agents) origin: Option<TaskOrigin>,
     /// The task's tags, for task-type classification.
-    pub(crate) tags: Vec<String>,
+    pub(in crate::application::agents) tags: Vec<String>,
     /// The task's context-file selectors, for task-type classification.
-    pub(crate) context_files: Vec<String>,
-    pub(crate) complexity: Option<TaskComplexity>,
-    pub(crate) created_at: DateTime<Utc>,
+    pub(in crate::application::agents) context_files: Vec<String>,
+    pub(in crate::application::agents) complexity: Option<TaskComplexity>,
+    pub(in crate::application::agents) created_at: DateTime<Utc>,
     /// Done, or archived after it was done.
-    pub(crate) landed: bool,
+    pub(in crate::application::agents) landed: bool,
     /// Rejected or archived without ever being done.
-    pub(crate) dropped: bool,
-    pub(crate) attempts: Vec<Attempt>,
+    pub(in crate::application::agents) dropped: bool,
+    pub(in crate::application::agents) attempts: Vec<Attempt>,
     /// The attempt whose candidate landed: the last one started before the
     /// task was done.
-    pub(crate) final_attempt: Option<usize>,
+    pub(in crate::application::agents) final_attempt: Option<usize>,
     /// When the task was last done.
-    pub(crate) landed_at: Option<DateTime<Utc>>,
-    pub(crate) records: Vec<Record>,
-    pub(crate) reviews: Vec<Review>,
+    pub(in crate::application::agents) landed_at: Option<DateTime<Utc>>,
+    pub(in crate::application::agents) records: Vec<Record>,
+    pub(in crate::application::agents) reviews: Vec<Review>,
     /// Set when the task is a finding a review job filed.
-    pub(crate) filed: Option<FiledFinding>,
+    pub(in crate::application::agents) filed: Option<FiledFinding>,
     /// How each task-pilot assessment's warnings settled.
     pub(in crate::application::agents) warnings: Warnings,
 }
@@ -282,7 +293,7 @@ pub(crate) struct TaskFacts {
 impl TaskFacts {
     /// The attempt whose span contains `at`, else the most recent one that
     /// started before it.
-    pub(crate) fn attempt_at(&self, at: DateTime<Utc>) -> Option<usize> {
+    pub(in crate::application::agents) fn attempt_at(&self, at: DateTime<Utc>) -> Option<usize> {
         self.attempts
             .iter()
             .rposition(|attempt| attempt.start <= at && attempt.end.is_none_or(|end| at <= end))
@@ -297,7 +308,7 @@ impl TaskFacts {
 /// The review job attempt that filed `task`: the attempt of the task it was
 /// spawned from whose span contains the filing. `None` for a task no review
 /// job filed, or whose filer is outside the scan or has no attempt then.
-pub(crate) fn filing_attempt<'a>(
+pub(in crate::application::agents) fn filing_attempt<'a>(
     by_id: &HashMap<&str, &'a TaskFacts>,
     task: &TaskFacts,
 ) -> Option<(&'a TaskFacts, usize)> {
@@ -308,12 +319,12 @@ pub(crate) fn filing_attempt<'a>(
 /// One scan of a workspace: every role and the attribution strip slice it.
 #[derive(Debug)]
 pub struct AgentFacts {
-    pub(crate) computed_at: DateTime<Utc>,
-    pub(crate) tasks_scanned: usize,
-    pub(crate) tasks: Vec<TaskFacts>,
-    pub(crate) charges: Vec<Charge>,
-    pub(crate) run_costs: BTreeMap<String, Option<f64>>,
-    pub(crate) credits: Vec<Credit>,
+    pub(in crate::application::agents) computed_at: DateTime<Utc>,
+    pub(in crate::application::agents) tasks_scanned: usize,
+    pub(in crate::application::agents) tasks: Vec<TaskFacts>,
+    pub(in crate::application::agents) charges: Vec<Charge>,
+    pub(in crate::application::agents) run_costs: BTreeMap<String, Option<f64>>,
+    pub(in crate::application::agents) credits: Vec<Credit>,
     /// Each pilot assessment of a scanned done task, graded.
     pub(in crate::application::agents) pilots: Vec<Graded>,
 }

@@ -21,7 +21,7 @@ impl OrbitRuntime {
     /// activity input, provider output, response envelopes or a display's
     /// synthetic terminal-state projection. Checkpoints remain the authority
     /// for commit/landing bytes; these records bind execution and timestamps.
-    pub(crate) fn delivery_execution_records(
+    pub(in crate::application::job::run) fn delivery_execution_records(
         &self,
         run: &JobRun,
         shape: &DeliveryJobShape,

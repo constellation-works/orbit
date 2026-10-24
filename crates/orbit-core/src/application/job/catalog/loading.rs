@@ -1,4 +1,23 @@
-use super::*;
+use std::borrow::Cow;
+use std::cell::{OnceCell, RefCell};
+use std::collections::{BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+
+use orbit_common::fs::git::{GIT_LOCAL_TIMEOUT, GIT_OUTPUT_LIMIT};
+use orbit_common::process::run_bounded_capped;
+use orbit_common::{NotFoundKind, OrbitError};
+use orbit_engine::activity_job::{
+    CatalogDirectory, CatalogDirectoryList, CatalogError, V2JobCatalog, catalog_error_to_orbit,
+};
+use orbit_types::workflow::{JobKind, JobRun, JobScheduleState, JobV2};
+use serde_json::Value;
+
+use super::DEFAULT_JOB_FILES;
+use super::projection::{JobCatalogEntry, JobCatalogFilter};
+use crate::OrbitRuntime;
+use crate::application::managed_assets::{
+    ManagedAssetLayout, ManagedAssetReconciliation, reconcile_managed_assets,
+};
 
 /// The job catalog one multi-run read parses once; see
 /// [`OrbitRuntime::v2_job_by_name_cached`].
@@ -235,7 +254,9 @@ impl OrbitRuntime {
         Err(OrbitError::not_found(NotFoundKind::Job, job_id.to_string()))
     }
 
-    pub(crate) fn load_v2_job_assets(&self) -> Result<V2JobCatalog, OrbitError> {
+    pub(in crate::application::job) fn load_v2_job_assets(
+        &self,
+    ) -> Result<V2JobCatalog, OrbitError> {
         self.load_v2_job_catalog(self.v2_job_asset_dirs())
     }
 
@@ -582,7 +603,7 @@ pub(super) enum V2JobCatalogDirKind {
     Global,
 }
 
-pub(crate) fn is_default_job_name(job_id: &str) -> bool {
+pub(in crate::application::job) fn is_default_job_name(job_id: &str) -> bool {
     DEFAULT_JOB_FILES
         .iter()
         .any(|(default_job_id, _)| *default_job_id == job_id)
@@ -605,7 +626,7 @@ pub(super) fn matches_job_filter(kind: JobKind, filter: JobCatalogFilter) -> boo
 /// When `overwrite` is false, existing files are preserved — users who've
 /// edited a previously-seeded workflow won't lose their changes on re-init.
 /// Parse the job asset compiled into this binary.
-pub(crate) fn shipped_job_spec(job_id: &str) -> Result<JobV2, OrbitError> {
+pub(in crate::application::job) fn shipped_job_spec(job_id: &str) -> Result<JobV2, OrbitError> {
     let (_, yaml) = DEFAULT_JOB_FILES
         .iter()
         .find(|(name, _)| *name == job_id)

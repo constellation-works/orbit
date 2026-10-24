@@ -1,4 +1,26 @@
-use super::*;
+use orbit_common::OrbitError;
+use orbit_common::governance::authorization::agent_context_declared;
+use orbit_common::security::redaction::redact_all;
+use orbit_types::identity::normalize_attribution_label;
+use orbit_types::record::OrbitEvent;
+use orbit_types::task::{
+    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, FINAL_RECOVERY_DECIDED_EVENT, RecordedFinalRecovery,
+    Task, TaskDecision, TaskHistoryEntry, TaskStatus, canonical_artifact_path,
+};
+
+use super::super::TaskRecordUpdateParams;
+use super::super::helpers::{
+    SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution, build_task_comments,
+    describe_optional_field_value,
+};
+use super::super::lifecycle::{
+    FORCED_STATUS_EVENT, ensure_completion_run_stopped, ensure_post_deploy_criteria_met,
+    ensure_status_change_allowed, ensure_status_change_not_run_owned,
+};
+use super::super::params::TaskUpdateParams;
+use super::artifacts::admit_agent_artifact;
+use super::entry::{LockedTaskUpdate, StatusAuthority, TaskUpdateContext, task_field_writer};
+use crate::OrbitRuntime;
 
 impl OrbitRuntime {
     /// Apply an update, holding the task's write lock across the whole

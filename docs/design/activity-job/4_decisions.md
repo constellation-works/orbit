@@ -1358,7 +1358,7 @@ Declare one orbit-engine RuntimeHost capability boundary with one OrbitRuntime i
 ## Track bundled activity and job ownership by content digest before retirement
 
 **Recorded:** 2026-08-09 22:01:13.919070Z · [ORB-10684]
-**Paths:** `crates/orbit-core/src/application/mod.rs`, `crates/orbit-core/src/bootstrap/activity.rs`, `crates/orbit-core/src/application/job/catalog.rs`, `crates/orbit-core/src/bootstrap/init.rs`
+**Paths:** `crates/orbit-core/src/application/mod.rs`, `crates/orbit-core/src/bootstrap/activity.rs`, `crates/orbit-core/src/application/job/catalog/loading.rs`, `crates/orbit-core/src/bootstrap/init.rs`
 
 ### Context
 Embedded activity and job assets are materialized into the global resource catalog, but an additive refresh cannot distinguish a retired bundled file from an operator-authored file by name alone. Filename-only pruning would deactivate stale shipped subsystems, but it could also destroy legitimate local resources on legacy installations.

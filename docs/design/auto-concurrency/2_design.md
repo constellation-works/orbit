@@ -1116,7 +1116,7 @@ relabels stored minutes.
 
 To measure how much of a delivery-shaped workload the worker's tree
 captures, run `scripts/build-budget.py -- cargo test -p orbit-core --lib
-application::job::pipeline::worker::tests::usage_tree::native_tree_attributes_a_build_like_workload
+application::job::pipeline::worker::tests::usage::tree::native_tree_attributes_a_build_like_workload
 -- --ignored --exact --nocapture` on macOS. It prints one JSON line with the
 workload's own CPU by component, what the session tree and parent links
 alone recorded, and host-wide non-idle CPU over the same window, and it

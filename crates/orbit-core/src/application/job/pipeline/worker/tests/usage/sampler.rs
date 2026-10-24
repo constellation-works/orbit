@@ -12,7 +12,7 @@ use tempfile::TempDir;
 
 use crate::application::job::pipeline::worker::delivery_class::DeliveryResourceClass;
 use crate::application::job::pipeline::worker::scope::WorkerScopeCgroup;
-use crate::application::job::pipeline::worker::usage::RunResourceSampler;
+use crate::application::job::pipeline::worker::usage::sampler::RunResourceSampler;
 
 const GB: u64 = 1_000_000_000;
 const CPUS: u64 = 4;
