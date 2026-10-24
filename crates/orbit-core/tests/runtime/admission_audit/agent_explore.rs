@@ -533,7 +533,15 @@ fn explorer_draws_record_pressure_and_retries_keep_the_original_pool() {
         "the governed tool exposes the frozen draw too"
     );
 
-    finish(&fx.runtime, &submission.run_id);
+    let current = jobs(&fx.runtime)
+        .get_job_run(&submission.run_id)
+        .expect("read explorer before finishing")
+        .expect("explorer exists");
+    if current.state == JobRunState::Pending {
+        // The substitute worker can win the enqueue race and interrupt the
+        // run before this fixture gets to its manual start.
+        finish(&fx.runtime, &submission.run_id);
+    }
     let pinned = explore(
         &fx.runtime,
         AgentInvokeRequest {
