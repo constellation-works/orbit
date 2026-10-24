@@ -171,7 +171,7 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             message,
             payload,
         } => OrbitError::RemoteTool {
-            code: redact(&code),
+            code: redact(code.as_str()).into(),
             message: redact(&message),
             payload: redact_json_with(payload, redact),
         },

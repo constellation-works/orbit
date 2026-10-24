@@ -1,6 +1,7 @@
 //! Worktree GC: which runs' worktrees are delivered, and the owner lookups it needs.
 
 use chrono::{DateTime, Duration, Utc};
+use orbit_common::RemoteToolCode;
 use orbit_engine::{
     RuntimeHost, WorktreeGcOptions, WorktreeGcResult, WorktreeGcTaskLookup, collect_worktrees,
     run_worktree_has_reclaim_output,
@@ -251,9 +252,10 @@ impl OrbitRuntime {
                 lookup
             }
             Err(OrbitError::NotFound { .. }) => WorktreeGcTaskLookup::Unresolved,
-            Err(OrbitError::RemoteTool { code, .. }) if code == "not_found" => {
-                WorktreeGcTaskLookup::Unresolved
-            }
+            Err(OrbitError::RemoteTool {
+                code: RemoteToolCode::NotFound,
+                ..
+            }) => WorktreeGcTaskLookup::Unresolved,
             Err(error @ (OrbitError::UnknownSelector(_) | OrbitError::AmbiguousDestination(_))) => {
                 WorktreeGcTaskLookup::NoOwnerRoute(format!("{route}: {error}"))
             }

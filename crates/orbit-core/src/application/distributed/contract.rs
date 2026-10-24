@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, RemoteToolCode};
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionRefusal, AdmissionRequest, AdmissionReviewContract,
     AdmissionRunContext, AdmissionShipContract, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
@@ -473,14 +473,16 @@ pub(crate) fn probe_pull_contract(
 /// Recover the typed protocol refusal across a structured remote tool error.
 pub(crate) fn owner_protocol_error(error: OrbitError) -> OrbitError {
     match error {
-        OrbitError::RemoteTool { code, message, .. } if code == "protocol_skew" => {
-            OrbitError::ProtocolSkew(
-                message
-                    .strip_prefix("protocol_skew: ")
-                    .unwrap_or(&message)
-                    .to_string(),
-            )
-        }
+        OrbitError::RemoteTool {
+            code: RemoteToolCode::ProtocolSkew,
+            message,
+            ..
+        } => OrbitError::ProtocolSkew(
+            message
+                .strip_prefix("protocol_skew: ")
+                .unwrap_or(&message)
+                .to_string(),
+        ),
         other => other,
     }
 }

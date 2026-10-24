@@ -3,8 +3,8 @@ use thiserror::Error;
 
 use super::{
     ArtifactOrigin, CandidateAbsorbed, ClaimRefusalKind, DependencyNotDelivered, FrictionNotLocal,
-    HostRegistryCode, NotFoundKind, PrivateVcsFailure, RecoverableVcsConflict, SqliteContention,
-    StorageLayer, WorkspaceClaimHeld,
+    HostRegistryCode, NotFoundKind, PrivateVcsFailure, RecoverableVcsConflict, RemoteToolCode,
+    SqliteContention, StorageLayer, WorkspaceClaimHeld,
 };
 
 #[derive(Debug, Error, Serialize)]
@@ -148,7 +148,7 @@ pub enum OrbitError {
     },
     #[error("remote tool failed ({code}): {message}")]
     RemoteTool {
-        code: String,
+        code: RemoteToolCode,
         message: String,
         payload: serde_json::Value,
     },

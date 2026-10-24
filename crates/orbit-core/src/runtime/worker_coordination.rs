@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use orbit_common::{LOCK_BUSY_ERROR_CODE, OrbitError};
+use orbit_common::{OrbitError, RemoteToolCode};
 use orbit_tools::OwnerCoordinator;
 use orbit_types::tool::{McpCapability, ToolSessionContext, WorkerInvocation};
 use serde_json::Value;
@@ -340,10 +340,10 @@ fn owner_route_failure(error: OrbitError) -> OrbitError {
         OrbitError::StaleRoute(message) => OrbitError::StaleRoute(typed(message)),
         OrbitError::OwnerNegotiation(message) => OrbitError::OwnerNegotiation(typed(message)),
         OrbitError::RemoteTool {
-            code,
+            code: code @ RemoteToolCode::LockBusy,
             message,
             payload,
-        } if code == LOCK_BUSY_ERROR_CODE => OrbitError::RemoteTool {
+        } => OrbitError::RemoteTool {
             code,
             message: format!(
                 "{} {} {message}",

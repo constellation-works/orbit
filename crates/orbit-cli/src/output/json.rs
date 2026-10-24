@@ -1,4 +1,4 @@
-use orbit_common::LOCK_BUSY_ERROR_CODE;
+use orbit_common::{LOCK_BUSY_ERROR_CODE, RemoteToolCode};
 use orbit_core::{NotFoundKind, OrbitError};
 use serde_json::{Value, json};
 
@@ -97,7 +97,7 @@ fn error_code(error: &OrbitError) -> &str {
         // Catalog-role refusal, not an operator capability grant: the CLI
         // surfaces the same stable code MCP does [ORB-11012].
         OrbitError::CapabilityRefused(_) => "capability_refused",
-        OrbitError::ProtocolSkew(_) => "protocol_skew",
+        OrbitError::ProtocolSkew(_) => const { RemoteToolCode::ProtocolSkew.as_str() },
         OrbitError::HostRegistry { code, .. } => code.as_str(),
         OrbitError::UnknownSelector(_) => "unknown_selector",
         OrbitError::AmbiguousDestination(_) => "ambiguous_destination",

@@ -17,7 +17,7 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use chrono::Utc;
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, RemoteToolCode};
 use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
 use orbit_types::workflow::{
     REVIEW_CONTRACT_VERSION, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT,
@@ -214,11 +214,14 @@ fn read_refused() -> OrbitError {
 /// Whether an owner error says the artifact does not exist, in process or
 /// across the owner route.
 fn not_found(error: &OrbitError) -> bool {
-    match error {
-        OrbitError::NotFound { .. } => true,
-        OrbitError::RemoteTool { code, .. } => code == "not_found",
-        _ => false,
-    }
+    matches!(
+        error,
+        OrbitError::NotFound { .. }
+            | OrbitError::RemoteTool {
+                code: RemoteToolCode::NotFound,
+                ..
+            }
+    )
 }
 
 /// The artifact bytes in an owner's `orbit.task.artifact.get` answer.

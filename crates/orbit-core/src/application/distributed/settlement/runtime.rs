@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, RemoteToolCode};
 use orbit_store::contracts::{ClaimMutation, LocalPullPhase};
 use orbit_types::workflow::{
     CrewExclusion, CrewExclusionSource, PullAuthExclusion, PullCrewPreflight,
@@ -562,13 +562,16 @@ impl crate::OrbitRuntime {
 /// same request committed, so the request stays pending and is retried.
 pub(crate) fn is_owner_refusal(error: &OrbitError) -> bool {
     match error {
-        OrbitError::RemoteTool { code, .. } => matches!(
+        OrbitError::RemoteTool {
+            code: RemoteToolCode::ProtocolSkew,
+            ..
+        } => true,
+        OrbitError::RemoteTool {
+            code: RemoteToolCode::Other(code),
+            ..
+        } => matches!(
             code.as_str(),
-            "invalid_input"
-                | "capability_refused"
-                | "capability_denied"
-                | "policy_denied"
-                | "protocol_skew"
+            "invalid_input" | "capability_refused" | "capability_denied" | "policy_denied"
         ),
         OrbitError::InvalidInput(_)
         | OrbitError::ClaimRefused { .. }

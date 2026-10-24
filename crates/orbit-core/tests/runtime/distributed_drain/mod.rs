@@ -429,7 +429,7 @@ impl DrainOwnerTransport for Wire {
         }
         if let Some((code, message)) = self.task_reads_remote_error.lock().unwrap().clone() {
             return Err(OrbitError::RemoteTool {
-                code: code.clone(),
+                code: code.as_str().into(),
                 message: message.clone(),
                 payload: json!({"code": code, "message": message}),
             });
