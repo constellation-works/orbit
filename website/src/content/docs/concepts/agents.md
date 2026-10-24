@@ -201,7 +201,7 @@ Every provider id, and what it can run today:
 | `cursor` | `cursor-agent` | Not supported | Active |
 | `pi` | `pi` | `low`–`max`, via `--thinking` | Active |
 | `opencode` | `opencode run` | `high`, `max`, via `--variant` | Active |
-| `muse` | `muse exec` | `low`–`max`, via `--reasoning-effort` | Active on macOS only |
+| `muse` | `muse exec` | `low`–`max`, via `--reasoning-effort` | Active on macOS and Linux |
 | `gemini` | `gemini` | Not supported | Legacy |
 | `ollama` | — | Not supported | No shipped crew or executor |
 | `openai_compat` | — | Not supported | No CLI runtime; dispatch fails |
@@ -211,9 +211,9 @@ and `orbit init` never seeds one. A crew that names either id still loads, but
 dispatch refuses it. Orbit never re-points the run at a family that has an
 executor.
 
-Muse Code is the `muse` lane. On macOS, a crew can name `provider = "muse"`
+Muse Code is the `muse` lane. On macOS and Linux, a crew can name `provider = "muse"`
 and `model = "muse-spark-1.3"`; `orbit init` detects its `muse` binary. Orbit
-does not dispatch this executor on Linux or native Windows.
+does not ship a native Windows executor.
 
 Orbit ships one more executor, **`local-shell`**, which is not a provider. It
 runs deterministic local commands for `local_shell` steps. It carries no model,
@@ -509,7 +509,7 @@ model = "anthropic/claude-sonnet-4-5"
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
-<div class="ose-note"><p><code>low</code>, <code>medium</code>, and <code>xhigh</code> are missing because <code>opencode run --variant</code> forwards the value to whichever model provider <code>--model</code> selected, and OpenCode publishes no provider-independent vocabulary. Orbit accepts only the two values OpenCode's help text names, and rejects the rest instead of remapping them to <code>minimal</code> or <code>high</code>.</p><p>The vendor prefix in <code>anthropic/claude-sonnet-4-5</code> is OpenCode's own model addressing. It does not make this an Anthropic lane: Orbit dispatches through <code>provider = "opencode"</code>.</p></div>
+<div class="ose-note"><p><code>low</code>, <code>medium</code>, and <code>xhigh</code> are missing because <code>opencode run --variant</code> forwards the value to whichever model provider <code>--model</code> selected, and OpenCode publishes no provider-independent vocabulary. Orbit accepts only the two values OpenCode's help text names. Other values are ignored with a warning at config load and refused by <code>orbit config set</code>, instead of being remapped to <code>minimal</code> or <code>high</code>.</p><p>The vendor prefix in <code>anthropic/claude-sonnet-4-5</code> is OpenCode's own model addressing. It does not make this an Anthropic lane: Orbit dispatches through <code>provider = "opencode"</code>.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-gemini">
 <dl class="ose-facts">
@@ -635,8 +635,13 @@ effort = "high"
 ```
 
 A task created without a crew gets one at creation: a draw from the pool for
-its complexity (`workflow.<complexity>_complexity_crews`), else
-`default_crew`. The task's history records which.
+its purpose when configured, otherwise its complexity
+(`workflow.<complexity>_complexity_crews`), else `default_crew`. The task's
+history records which.
+
+A crew with an `env` list has its own provider account for usage limits,
+holds and budgets. Crews without one share the provider's default account.
+Allowlisting a crew on that account does not also allow an environment-backed crew.
 
 `effort` is passed through each provider's own argument and validated against
 the provider **and** model at config load. An invalid or unsupported value is
@@ -664,8 +669,11 @@ reach later managed prompts. A bounded checkpoint holds promotion while new
 guidance is undelivered. Both exploration and steering are off by default;
 see [Configuration](../../reference/config/).
 
-Moving work to another provider is always explicit: `orbit task update <id>
---crew <name>`. Orbit never moves a task to a different provider on its own.
+Use `orbit task update <id> --crew <name>` to select a crew explicitly.
+Automatic admission can redraw pool assignments and reassign an auto-task's
+crew when a provider limit excludes it; a later operator crew change is
+preserved. The run records its selection; see
+[crew pools](../../reference/config/#crews).
 
 ## Platform support
 
