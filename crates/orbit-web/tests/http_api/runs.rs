@@ -1306,6 +1306,137 @@ fn run_detail_projects_shared_provider_processes_and_worker_identity() {
     );
 }
 
+/// The run-log API serves the shared projection's HTTP preview profile: every
+/// record field, streams cut to 120 lines and redacted even when the stored
+/// capture predates write-time redaction, with truncation flags per stream.
+#[test]
+fn run_logs_serve_the_http_preview_profile_of_each_invocation() {
+    isolated(
+        "runs::run_logs_serve_the_http_preview_profile_of_each_invocation",
+        || {
+            let fixture = Fixture::new();
+            let run = fixture.seed_run("jrun-logs", "fixture", JobRunState::Failed);
+            let workspace = fixture.runtime.workspace_id().unwrap();
+            let secret = format!("ghp_{}", "L".repeat(36));
+            // A legacy capture written before blobs were redacted on write.
+            let blob = |name: char, text: String| {
+                let blob_ref = name.to_string().repeat(64);
+                let dir = fixture
+                    .runtime
+                    .data_root()
+                    .join("state/audit/blobs")
+                    .join(&blob_ref[..2]);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join(&blob_ref), text).unwrap();
+                blob_ref
+            };
+            let stdout_ref = blob(
+                'a',
+                (0..130)
+                    .map(|line| format!("line {line} {secret}\n"))
+                    .collect(),
+            );
+            let stderr_ref = blob('b', format!("warning {secret}\n"));
+            for (event_id, ts, parent, body) in [
+                (
+                    "evt-step",
+                    "2026-10-10T08:00:00Z",
+                    None,
+                    json!({"body_kind": "step_started", "step_id": "invoke"}),
+                ),
+                (
+                    "evt-finished",
+                    "2026-10-10T08:00:05Z",
+                    Some("evt-step"),
+                    json!({
+                        "body_kind": "cli_invocation_finished",
+                        "provider": "codex",
+                        "exit_code": 1,
+                        "timed_out": false,
+                        "duration_ms": 5000,
+                        "stdout_blob_ref": stdout_ref,
+                        "stderr_blob_ref": stderr_ref,
+                    }),
+                ),
+            ] {
+                let mut payload = body;
+                payload["event_id"] = json!(event_id);
+                payload["ts"] = json!(ts);
+                payload["run_id"] = json!(run.run_id);
+                payload["parent_event_id"] = json!(parent);
+                fixture
+                    .runtime
+                    .insert_v2_audit_event(&V2AuditEventInsertParams {
+                        workspace_id: workspace.clone(),
+                        event_id: event_id.into(),
+                        source: "v2_envelope".into(),
+                        schema_version: 1,
+                        event_type: "test.event".into(),
+                        ts: ts.parse::<DateTime<Utc>>().unwrap(),
+                        run_id: run.run_id.clone(),
+                        agent_identity: "codex".into(),
+                        parent_event_id: parent.map(str::to_string),
+                        workspace_path: None,
+                        payload_json: payload.to_string(),
+                    })
+                    .unwrap();
+            }
+
+            let server = fixture.server(false);
+            let logs = json_ok(server.get(&format!("/api/runs/{}/logs", run.run_id)));
+            let records = logs.as_array().expect("bare record array");
+            assert_eq!(records.len(), 1, "{logs}");
+            let record = records[0].as_object().unwrap();
+            assert_eq!(
+                record.keys().map(String::as_str).collect::<Vec<_>>(),
+                [
+                    "run_id",
+                    "event_id",
+                    "ts",
+                    "step_id",
+                    "step_index",
+                    "provider",
+                    "stdout_blob_ref",
+                    "stderr_blob_ref",
+                    "stdout_preview",
+                    "stderr_preview",
+                    "stdout_truncated",
+                    "stderr_truncated",
+                    "exit_code",
+                    "timed_out",
+                    "duration_ms",
+                ],
+                "{logs}"
+            );
+            assert_eq!(record["run_id"], "jrun-logs");
+            assert_eq!(record["event_id"], "evt-finished");
+            assert_eq!(record["ts"], "2026-10-10T08:00:05+00:00");
+            assert_eq!(record["step_id"], "invoke");
+            assert_eq!(record["step_index"], 0);
+            assert_eq!(record["stdout_blob_ref"], stdout_ref);
+            assert_eq!(
+                (
+                    &record["exit_code"],
+                    &record["timed_out"],
+                    &record["duration_ms"]
+                ),
+                (&json!(1), &json!(false), &json!(5000))
+            );
+            let stdout = record["stdout_preview"].as_str().unwrap();
+            let stderr = record["stderr_preview"].as_str().unwrap();
+            assert!(
+                !stdout.contains(&secret) && !stderr.contains(&secret),
+                "previews never expose the raw capture: {logs}"
+            );
+            assert_eq!(stdout.lines().count(), 120, "{stdout}");
+            assert!(stdout.starts_with("line 0 ") && stdout.contains("\nline 119 "));
+            assert_eq!(record["stdout_truncated"], true);
+            assert!(stderr.starts_with("warning ") && stderr.ends_with('\n'));
+            assert_eq!(record["stderr_truncated"], false);
+        },
+    );
+}
+
 /// A drain that holds requests must expose its live breaker and refused
 /// settlements over HTTP, including after the run ends. Healthy and ordinary
 /// runs retain the same response shape with no hold records.

@@ -5,12 +5,12 @@ use axum::response::{IntoResponse, Json, Response};
 use orbit_cmd::DiagnosticsCommands;
 use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::OrbitRuntime;
+use orbit_core::runtime::audit::run_logs::HTTP_PREVIEW_MAX_BYTES;
 use orbit_types::record::FrictionEntry;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use super::super::runs::RUN_LOG_PREVIEW_MAX_BYTES;
 use super::super::{
     DiagnosticsQuery, Excerpt, HISTORY_DEFAULT_LIMIT, bounded_limit, current_year_month_utc,
     map_runtime_error, message_excerpt, month_bounds_utc, validate_year_month,
@@ -192,11 +192,11 @@ fn read_blob_excerpt_best_effort(blob_store: &BlobStore, blob_ref: &str) -> Exce
     // Reads the run-log preview prefix, which is wider than the excerpt, so
     // redaction sees past the cut; one extra byte tells an exact-size blob
     // from a longer one without loading the rest of the file.
-    let Ok(bytes) = blob_store.read_prefix(blob_ref, RUN_LOG_PREVIEW_MAX_BYTES + 1) else {
+    let Ok(bytes) = blob_store.read_prefix(blob_ref, HTTP_PREVIEW_MAX_BYTES + 1) else {
         return message_excerpt("");
     };
     let mut excerpt = message_excerpt(&String::from_utf8_lossy(&bytes));
-    excerpt.truncated |= bytes.len() > RUN_LOG_PREVIEW_MAX_BYTES;
+    excerpt.truncated |= bytes.len() > HTTP_PREVIEW_MAX_BYTES;
     excerpt
 }
 

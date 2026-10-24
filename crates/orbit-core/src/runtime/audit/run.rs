@@ -163,6 +163,8 @@ pub struct RunRecoveryAttemptsPage {
     pub per_run_fetch_limit: usize,
 }
 
+/// One finished CLI invocation. Surfaces render it through a named
+/// [`super::run_logs::RunCliInvocationProfile`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunCliInvocationRecord {
     pub run_id: String,
@@ -177,9 +179,9 @@ pub struct RunCliInvocationRecord {
     pub stderr: String,
     /// True when
     /// `read_blob_text_preview_best_effort`
-    /// cut the blob before its end. Independent of the caller's own
-    /// line-budget truncation check, which cannot see past whatever window
-    /// was read here.
+    /// cut the blob before its end. Independent of the preview profile's own
+    /// truncation ([`super::run_logs::RunCliInvocationProfile`]), which cannot
+    /// see past whatever window was read here.
     pub stdout_blob_truncated: bool,
     pub stderr_blob_truncated: bool,
     pub exit_code: Option<i64>,

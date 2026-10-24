@@ -5,7 +5,7 @@ use orbit_common::{OrbitError, protocol::tool_input::required_string};
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 
-use super::read::bounded_text;
+use crate::runtime::audit::run_logs::bounded_redacted_text;
 use crate::{
     OrbitRuntime,
     application::{
@@ -35,7 +35,7 @@ const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
 ];
 
 fn text(value: &str) -> String {
-    let (value, truncated) = bounded_text(value, 4096);
+    let (value, truncated) = bounded_redacted_text(value, 4096);
     if truncated {
         format!("{value} [display truncated]")
     } else {

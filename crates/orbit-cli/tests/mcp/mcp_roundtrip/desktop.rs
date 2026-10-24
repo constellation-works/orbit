@@ -529,7 +529,9 @@ fn desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates(
 
 /// The bounded run detail reads a fixed metadata budget however long the
 /// run's audit trail is, yet still counts every log, places early logs in
-/// their step, reports the newest provider child and redacts previews.
+/// their step, reports the newest provider child and redacts previews. Its
+/// bounded-excerpt log records and `orbit run logs`' raw records of the same
+/// run keep their own profiles of the shared projection.
 fn bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history() {
     const RUN_ID: &str = "jrun-20261011-0000-bd";
     const INVOCATIONS: usize = 600;
@@ -658,6 +660,68 @@ fn bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history() {
         "previews are redacted and bounded: {preview}"
     );
     assert_eq!(items[0]["stdout_truncated"], true);
+    assert_eq!(logs["excerpt_max_bytes"], 4096);
+    assert_eq!(
+        items[1]
+            .as_object()
+            .expect("log item")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "event_id",
+            "ts",
+            "step_id",
+            "step_index",
+            "provider",
+            "stdout",
+            "stderr",
+            "stdout_truncated",
+            "stderr_truncated",
+            "exit_code",
+            "timed_out",
+            "duration_ms",
+        ],
+        "the bounded excerpt carries no run id or blob refs"
+    );
+    assert_eq!(
+        (&items[1]["stdout"], &items[1]["stdout_truncated"]),
+        (&json!("done\n"), &json!(false)),
+        "a short capture is complete in the excerpt"
+    );
+
+    // The same run through `orbit run logs` keeps its raw profile: the six
+    // record fields and every captured byte, with no truncation flags.
+    let cli = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "run",
+            "logs",
+            RUN_ID,
+            "--step",
+            "implement",
+            "--no-reconcile",
+            "--json",
+        ]),
+    );
+    let cli: Value = serde_json::from_slice(&cli.stdout).expect("run logs JSON");
+    assert_eq!(
+        (&cli["run_id"], &cli["job_id"]),
+        (&json!(RUN_ID), &json!("task_pr_pipeline"))
+    );
+    let records = cli["records"].as_array().expect("CLI records");
+    assert_eq!(records.len(), INVOCATIONS - 1);
+    assert_eq!(
+        records[0],
+        json!({
+            "step_id": "implement",
+            "provider": "codex",
+            "stdout_blob_ref": long_stdout,
+            "stderr_blob_ref": null,
+            "stdout": String::from_utf8(blobs.read(&long_stdout).expect("stored capture")).unwrap(),
+            "stderr": "",
+        }),
+        "the raw profile returns the stored capture whole"
+    );
 
     input["log_offset"] = json!(150);
     input["limit"] = json!(1);
