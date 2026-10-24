@@ -1,10 +1,11 @@
 //! The executor census rows admission orders against [ORB-17304].
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, TransactionBehavior, params};
 
+use super::super::codec::stamp;
 use crate::Store;
 use crate::contracts::{ExecutorCapability, ExecutorCensusEntry};
 
@@ -31,7 +32,7 @@ pub(crate) fn upsert_executor_census_in(
             entry.machine_id,
             capability,
             entry.run_id,
-            entry.seen_at.to_rfc3339_opts(SecondsFormat::Micros, true),
+            stamp(entry.seen_at),
         ],
     )
     .map_err(sqlite_store_error)?;
