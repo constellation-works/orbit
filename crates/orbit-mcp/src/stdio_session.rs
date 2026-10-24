@@ -535,9 +535,7 @@ impl<W: AsyncWrite + Unpin> AsyncWrite for TrackingWriter<W> {
 mod unix {
     //! Reading fd 0 without buffering past one partial line.
 
-    use std::io::Read;
-    use std::mem::ManuallyDrop;
-    use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -546,22 +544,24 @@ mod unix {
 
     use super::{MAX_CARRYOVER, READ_CHUNK, Tracker, lock};
 
-    pub(super) struct StdinFd;
+    pub(super) struct StdinFd(OwnedFd);
 
     impl AsRawFd for StdinFd {
         fn as_raw_fd(&self) -> RawFd {
-            libc::STDIN_FILENO
+            self.0.as_raw_fd()
         }
     }
 
-    /// Register stdin with Tokio's reactor.
-    ///
-    /// # Safety
-    /// File descriptor 0 must stay open and refer to the same file while the
-    /// returned `AsyncFd` is alive.
-    unsafe fn register_stdin() -> std::io::Result<AsyncFd<StdinFd>> {
-        // SAFETY: forwarded to this function's caller.
-        unsafe { Ok(AsyncFd::register(StdinFd)?) }
+    impl StdinFd {
+        fn duplicate() -> std::io::Result<Self> {
+            let fd = unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_DUPFD_CLOEXEC, 0) };
+            if fd < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // SAFETY: a successful F_DUPFD_CLOEXEC returns a new descriptor
+            // owned by the caller.
+            Ok(Self(unsafe { OwnedFd::from_raw_fd(fd) }))
+        }
     }
 
     pub(super) struct NonBlockingStdin(AsyncFd<StdinFd>);
@@ -570,9 +570,16 @@ mod unix {
         /// `None` when stdin cannot be polled (a regular file, `/dev/null`).
         pub(super) fn new() -> Option<Self> {
             set_nonblocking(true)?;
-            // SAFETY: the input session keeps process stdin open and unchanged;
-            // `pump` wraps its borrowed `File` in `ManuallyDrop` and only reads it.
-            match unsafe { register_stdin() } {
+            let fd = match StdinFd::duplicate() {
+                Ok(fd) => fd,
+                Err(_) => {
+                    set_nonblocking(false);
+                    return None;
+                }
+            };
+            // SAFETY: `fd` owns its duplicated descriptor. This module keeps
+            // it open and unchanged for the lifetime of the registration.
+            match unsafe { AsyncFd::register(fd) } {
                 Ok(fd) => Some(Self(fd)),
                 Err(_) => {
                     set_nonblocking(false);
@@ -592,9 +599,12 @@ mod unix {
             return false;
         };
         let _entered = runtime.enter();
-        // SAFETY: fd 0 remains open and unchanged during this synchronous probe;
-        // the temporary `AsyncFd` is dropped before the runtime.
-        unsafe { register_stdin() }.is_ok()
+        let Ok(fd) = StdinFd::duplicate() else {
+            return false;
+        };
+        // SAFETY: `fd` owns its duplicated descriptor and remains open and
+        // unchanged until the temporary registration is dropped below.
+        unsafe { AsyncFd::register(fd) }.is_ok()
     }
 
     fn set_nonblocking(enabled: bool) -> Option<()> {
@@ -645,10 +655,8 @@ mod unix {
         undelivered: Arc<AtomicUsize>,
         mut stopped: mpsc::Receiver<PumpStop>,
     ) -> std::io::Result<PumpOutcome> {
-        // Borrow fd 0 unbuffered; it must never be closed from here.
-        // SAFETY: fd 0 stays open for the process lifetime and ManuallyDrop
-        // keeps this File from closing it.
-        let file = ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(libc::STDIN_FILENO) });
+        // Read the same owned duplicate that Tokio registered for readiness.
+        let fd = stdin.0.get_ref().as_raw_fd();
         if !forward_lines(&mut buffer, &lines, &tracker, &undelivered).await {
             return Ok(PumpOutcome::Closed);
         }
@@ -671,7 +679,16 @@ mod unix {
                 }
                 ready = stdin.0.readable() => ready?,
             };
-            let read = ready.try_io(|_| (&*file).read(&mut chunk));
+            let read = ready.try_io(|_| {
+                // SAFETY: `stdin` owns `fd` for the full pump and this buffer
+                // is writable for its length.
+                let read = unsafe { libc::read(fd, chunk.as_mut_ptr().cast(), chunk.len()) };
+                if read < 0 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(read as usize)
+                }
+            });
             let read = match read {
                 Ok(Ok(read)) => read,
                 Ok(Err(error)) if error.kind() == std::io::ErrorKind::Interrupted => continue,

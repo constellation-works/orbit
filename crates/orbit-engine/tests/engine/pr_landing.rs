@@ -6516,6 +6516,143 @@ fn a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle() {
     );
 }
 
+const WORKTREE_FAILURE: &str = "could not resolve host: github.com while fetching the base";
+
+/// The shipped `task_pr_pipeline` failure hook, run after its `worktree` step
+/// fails: the engine dispatches the hook with the run's checkpoints so far,
+/// which hold no `worktree` entry.
+fn run_shipped_worktree_failure(host: &DeliveryHost) -> Result<(), String> {
+    let shipped = fs::read_to_string(
+        workspace_root().join("crates/orbit-core/assets/jobs/task_pr_pipeline.yaml"),
+    )
+    .unwrap();
+    let shipped = load_job_asset(&shipped).unwrap().spec;
+    let mut job = job_asset(json!([{
+        "id": "worktree",
+        "spec": { "type": "deterministic", "action": "test_stub_worktree", "config": {} },
+    }]));
+    job.failure_activity = shipped.failure_activity.clone();
+    let yaml = fs::read_to_string(
+        workspace_root().join("crates/orbit-core/assets/activities/pr_failure_handoff.yaml"),
+    )
+    .unwrap();
+    let asset = load_activity_asset(&yaml).unwrap();
+    let mut catalog = V2ActivityCatalog::new();
+    catalog.insert(asset.name, asset.spec);
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
+
+    let audit = tempfile::tempdir().unwrap();
+    let (writer, _, _) = build_writer_and_sinks(audit.path(), RUN_ID);
+    match execute_job_with_resume(
+        &job,
+        json!({ "task_ids": [TASK_ID], "base_sync": "local" }),
+        RUN_ID,
+        writer,
+        host,
+        None,
+    ) {
+        Ok(outcome) if outcome.success => Ok(()),
+        Ok(outcome) => Err(outcome.message.unwrap_or_default()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// [ORB-17710] A `worktree` step that fails before its checkpoint leaves the
+/// run without a checkout. The shipped hook ends as `no_candidate`, so the
+/// run's recorded failure is the worktree error alone, with no second
+/// missing-checkpoint refusal, and nothing is pushed or opened as a PR.
+fn a_worktree_step_failure_ends_the_failure_hook_as_no_candidate() {
+    isolated(
+        "a_worktree_step_failure_ends_the_failure_hook_as_no_candidate",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let remote_before = fx.remote_tip(BRANCH);
+            host.fail("test_stub_worktree", WORKTREE_FAILURE);
+
+            let error = run_shipped_worktree_failure(&host)
+                .expect_err("the failed worktree step fails the run");
+            assert!(
+                error.contains(WORKTREE_FAILURE),
+                "the original worktree error stays the recorded failure: {error}"
+            );
+            assert!(
+                !error.contains("missing pipeline.worktree checkpoint"),
+                "the hook raises no secondary refusal: {error}"
+            );
+
+            let checkpoints = host.failure_checkpoints();
+            let [(activity, failed_step, output)] = checkpoints.as_slice() else {
+                panic!("the hook completes once and is checkpointed: {checkpoints:?}");
+            };
+            assert_eq!(activity, "pr_failure_handoff");
+            assert_eq!(failed_step, "worktree");
+            assert_eq!(output["decision"], "no_candidate", "{output}");
+            assert_eq!(fx.forge_state("pr-head"), None, "no PR is opened");
+            assert_eq!(fx.remote_tip(BRANCH), remote_before, "nothing was pushed");
+            assert_eq!(host.status(TASK_ID), TaskStatus::InProgress);
+        },
+    );
+}
+
+/// [ORB-17710] The no-op closes the run's admitted review attempts first and
+/// touches nothing else. A missing `worktree` checkpoint after a later step is
+/// still an inconsistency and keeps the existing refusal.
+fn a_failure_before_the_worktree_checkpoint_releases_reviews_and_a_later_gap_is_refused() {
+    isolated(
+        "a_failure_before_the_worktree_checkpoint_releases_reviews_and_a_later_gap_is_refused",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let admission =
+                admitted_review("rvw-worktree-1", "ws/T-LANDING/agent-main/jrun-landing");
+
+            let handoff = action(
+                &host,
+                "pr_failure_handoff",
+                &json!({
+                    "failed_step_id": "worktree",
+                    "error_code": "pipeline_step_failed",
+                    "error_message": WORKTREE_FAILURE,
+                    "run_id": RUN_ID,
+                    "job_input": {"task_ids": [TASK_ID]},
+                    "pipeline": {"review_gate_admit": admission},
+                }),
+            )
+            .expect("a worktree failure before its checkpoint is a no-op");
+            assert_eq!(handoff["decision"], "no_candidate", "{handoff}");
+            let released = host
+                .releases()
+                .into_iter()
+                .map(|request| request.attempt_id)
+                .collect::<Vec<_>>();
+            assert_eq!(released, vec!["rvw-worktree-1".to_string()]);
+            assert_eq!(fx.forge_state("pr-head"), None, "no PR is opened");
+            assert_eq!(host.status(TASK_ID), TaskStatus::InProgress);
+
+            let error = action(
+                &host,
+                "pr_failure_handoff",
+                &json!({
+                    "failed_step_id": "implement_bundle",
+                    "error_code": "pipeline_step_failed",
+                    "error_message": "implementer exited",
+                    "run_id": RUN_ID,
+                    "job_input": {"task_ids": [TASK_ID]},
+                    "pipeline": {},
+                }),
+            )
+            .expect_err("a later step with no worktree checkpoint is refused");
+            assert!(
+                error
+                    .to_string()
+                    .contains("missing pipeline.worktree checkpoint"),
+                "the existing refusal names the missing checkpoint: {error}"
+            );
+        },
+    );
+}
+
 /// [ORB-13990] Owner revalidation of a reviewer commit accepts a path no
 /// delivered task owns, widening the task's selectors with review provenance
 /// instead of refusing; a path the selectors already own widens nothing.
@@ -7922,6 +8059,11 @@ struct DeliveryHost {
     /// Outputs of the actions a job graph scripts, by action; every other
     /// action is the engine's own.
     scripted: Mutex<BTreeMap<String, Value>>,
+    /// Scripted actions that raise a deterministic failure, by action.
+    failing: Mutex<BTreeMap<String, String>>,
+    /// Terminal failure-hook checkpoints recorded, as (activity, failed step,
+    /// output), oldest first.
+    failure_checkpoints: Mutex<Vec<(String, String, Value)>>,
     /// Simulate a chunk stored with an unknown attachment response.
     fail_evidence_writes: Mutex<bool>,
     /// Attached task artifacts, by task id and path.
@@ -7980,6 +8122,8 @@ impl DeliveryHost {
             required_commands: Mutex::default(),
             baseline_commands: Mutex::default(),
             scripted: Mutex::default(),
+            failing: Mutex::default(),
+            failure_checkpoints: Mutex::default(),
             artifacts: Mutex::default(),
             fail_evidence_writes: Mutex::default(),
             artifact_creators: Mutex::default(),
@@ -8021,6 +8165,19 @@ impl DeliveryHost {
             .lock()
             .unwrap()
             .insert(action.to_string(), output);
+    }
+
+    /// Make a scripted action raise a deterministic failure with `message`.
+    fn fail(&self, action: &str, message: &str) {
+        self.failing
+            .lock()
+            .unwrap()
+            .insert(action.to_string(), message.to_string());
+    }
+
+    /// The failure-hook checkpoints the engine recorded, oldest first.
+    fn failure_checkpoints(&self) -> Vec<(String, String, Value)> {
+        self.failure_checkpoints.lock().unwrap().clone()
     }
 
     fn scripted_input(&self, action: &str) -> Value {
@@ -8529,6 +8686,12 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         if action == "test_ci_repair" {
             return auto_fix::perform_ci_repair(self, input);
         }
+        if let Some(message) = self.failing.lock().unwrap().get(action).cloned() {
+            return Err(DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message,
+            });
+        }
         if let Some(output) = self.scripted.lock().unwrap().get(action).cloned() {
             self.scripted_inputs
                 .lock()
@@ -8541,6 +8704,22 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
                 action: action.to_string(),
                 message: error.to_string(),
             })
+    }
+
+    /// The engine records a failure hook's output only when the hook succeeds.
+    fn checkpoint_failure_activity(
+        &self,
+        _run_id: &str,
+        activity_name: &str,
+        failed_step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        self.failure_checkpoints.lock().unwrap().push((
+            activity_name.to_string(),
+            failed_step_id.to_string(),
+            output.clone(),
+        ));
+        Ok(())
     }
 
     fn run_private_vcs_operation(
@@ -9361,6 +9540,14 @@ fn failure_handoff_contracts() {
             (
                 "an_admission_refusal_for_held_evidence_stays_held_not_escalated",
                 an_admission_refusal_for_held_evidence_stays_held_not_escalated,
+            ),
+            (
+                "a_worktree_step_failure_ends_the_failure_hook_as_no_candidate",
+                a_worktree_step_failure_ends_the_failure_hook_as_no_candidate,
+            ),
+            (
+                "a_failure_before_the_worktree_checkpoint_releases_reviews_and_a_later_gap_is_refused",
+                a_failure_before_the_worktree_checkpoint_releases_reviews_and_a_later_gap_is_refused,
             ),
         ]);
     });
