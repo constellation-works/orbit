@@ -56,6 +56,8 @@ use super::environment::{
 use super::evidence::{
     emit_build_waits, record_scratch_removals, step_error_after_provider_evidence,
 };
+use super::grok_usage::GrokUsageRequest;
+use super::limit::UsageWindowContext;
 
 /// How often a running provider's stdout is sampled for progress. Bounds the
 /// staleness of `last_activity_at` and the progress rows one invocation writes.
@@ -728,9 +730,14 @@ pub(crate) fn run_cli_backend_for_step(
         });
     };
 
-    let codex_home = (provider == "codex")
-        .then(|| codex_home(&child_env))
-        .flatten();
+    let usage_context = UsageWindowContext {
+        codex_home: (provider == "codex")
+            .then(|| codex_home(&child_env))
+            .flatten(),
+        grok: (provider == "grok")
+            .then(|| GrokUsageRequest::from_env(&child_env))
+            .flatten(),
+    };
     // A managed Linux Bubblewrap launch snapshots the write-policy gaps its
     // mounts cannot cover while compiling those mounts; take that snapshot off
     // the spawned child rather than walking the worktree a second time.
@@ -889,7 +896,7 @@ pub(crate) fn run_cli_backend_for_step(
         stalled,
         stall_window: stall_window.unwrap_or_default(),
         print_timeout,
-        codex_home,
+        usage_context,
         build_budget_waits,
     });
     step_error_after_provider_evidence(

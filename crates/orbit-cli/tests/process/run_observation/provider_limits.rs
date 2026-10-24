@@ -70,6 +70,60 @@ fn doctor_row<'a>(rows: &'a Value, check: &str) -> &'a Value {
 }
 
 #[test]
+fn grok_billing_events_are_visible_in_readiness_and_weekly_pressure() {
+    if !isolated_run_observation(
+        "run_observation::provider_limits::grok_billing_events_are_visible_in_readiness_and_weekly_pressure",
+    ) {
+        return;
+    }
+    let fixture = Fixture::init();
+    configure_crews(&fixture);
+    let runtime = orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
+        orbit_core::runtime::OrbitRuntimeRoots {
+            global_root: fixture.home.join(".orbit"),
+            shared_root: fixture.work.join(".orbit"),
+            local_root: fixture.work.join(".orbit"),
+        },
+    )
+    .unwrap();
+    // The captured billing response is a 2% weekly account window. Keep the
+    // reset live independently of the calendar date this fixture runs on.
+    let mut observation = reading("grok", 2.0, Duration::days(7));
+    observation.window = Some("weekly".into());
+    observation.window_minutes = Some(10080);
+    runtime.record_provider_limit(&observation).unwrap();
+    let readiness = fixture.json(&["run", "readiness", "--json"]);
+    let grok = readiness["provider_limits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|limit| limit["provider"] == "grok")
+        .unwrap();
+    assert_eq!(grok["source"], "event");
+    assert_eq!(grok["window"], "weekly");
+    assert_eq!(grok["used_percent"], 2.0);
+    assert_eq!(
+        grok["resets_at"],
+        observation
+            .resets_at
+            .unwrap()
+            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+    );
+    let pressure = readiness["provider_pressures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|account| account["provider"] == "grok")
+        .unwrap();
+    assert_eq!(
+        pressure["reports_usage"], true,
+        "Grok billing must be recognized by readiness"
+    );
+    assert_eq!(pressure["pressure_window"]["window"], "weekly");
+    assert_eq!(pressure["pressure_window"]["used_percent"], 2.0);
+}
+
+#[test]
 fn every_surface_reads_the_seeded_provider_limit_store() {
     if !isolated_run_observation(
         "run_observation::provider_limits::every_surface_reads_the_seeded_provider_limit_store",

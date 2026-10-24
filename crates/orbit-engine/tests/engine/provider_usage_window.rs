@@ -16,10 +16,15 @@
 //!   0.42.
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use chrono::{DateTime, Local, Utc};
-use orbit_engine::{DispatchOutcome, V2DispatchInput, dispatch_v2_activity};
+use orbit_engine::{
+    DispatchError, DispatchOutcome, ResolvedCliExecutor, RuntimeHost, V2DispatchInput,
+    dispatch_v2_activity,
+};
+use orbit_store::contracts::ProviderLimitStoreBackend;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource, TokenUsage};
 use orbit_types::workflow::activity_job::{ActivityV2Spec, Provider};
 use serde_json::{Value, json};
@@ -30,6 +35,31 @@ const CODEX_STDOUT: &str = include_str!("fixtures/provider_usage/codex_exec_stdo
 const CODEX_ROLLOUT: &str = include_str!("fixtures/provider_usage/codex_rollout.jsonl");
 const CODEX_THREAD: &str = "01a11e3d-4d1d-7102-a520-fcba3210177d";
 const CLAUDE_STREAM: &str = include_str!("fixtures/provider_usage/claude_stream.jsonl");
+const GROK_BILLING: &str =
+    include_str!("../../../orbit-agent/tests/provider_invocation/fixtures/grok_billing.json");
+
+/// Exercise the real provider-limit persistence boundary during dispatch.
+struct UsageHost {
+    provider: CapacityHost,
+    store: orbit_store::Store,
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for UsageHost {
+    fn agent_subprocess_environment(&self, names: &[&str]) -> Vec<(String, String)> {
+        RuntimeHost::agent_subprocess_environment(&self.provider, names)
+    }
+
+    fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
+        RuntimeHost::resolve_cli_executor(&self.provider, provider)
+    }
+
+    fn record_provider_limit(
+        &self,
+        reading: &ProviderLimitObservation,
+    ) -> Result<(), orbit_common::OrbitError> {
+        self.store.record_provider_limit(reading).map(|_| ())
+    }
+}
 
 /// Dispatch a fake `binary` that prints `stdout`, with `agent_env` in the
 /// child's environment, and return the outcome and the limits recorded.
@@ -46,6 +76,10 @@ fn dispatch(
         .iter()
         .map(|(key, value)| (key.to_string(), value.display().to_string()))
         .collect();
+    let host = UsageHost {
+        provider: host,
+        store: orbit_store::Store::open_in_memory().unwrap(),
+    };
     let mut spec = agent_spec(provider);
     spec.require_response_envelope = true;
     let outcome = dispatch_v2_activity(V2DispatchInput {
@@ -58,7 +92,7 @@ fn dispatch(
         host: Some(&host),
     })
     .unwrap();
-    let limits = host.limits.lock().unwrap().clone();
+    let limits = host.store.provider_limits().unwrap();
     (outcome, limits)
 }
 
@@ -272,11 +306,142 @@ fn a_claude_rate_limit_event_marks_rejected_and_overage_windows() {
     );
 }
 
+/// The provider child selects the state root and PATH; a deterministic curl
+/// double checks that the existing login travels only over stdin to the fixed
+/// HTTPS account endpoint. No real login or external network is used.
+fn grok_records_billing_and_unavailable_or_unrecognized_readings_are_advisory() {
+    let home = tempfile::tempdir().unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    let curl = bin.path().join("curl");
+    let response = bin.path().join("response");
+    let requests = bin.path().join("requests");
+    fs::write(
+        &curl,
+        format!(
+            r#"#!/bin/sh
+printf x >> '{}'
+IFS= read -r authorization
+IFS= read -r token_auth
+[ "$authorization" = 'Authorization: Bearer fixture-token' ] || exit 9
+[ "$token_auth" = 'X-XAI-Token-Auth: xai-grok-cli' ] || exit 9
+[ "$1" = '--disable' ] || exit 9
+case "$*" in *fixture-token*|*--location*) exit 9 ;; esac
+case "$*" in *'https://cli-chat-proxy.grok.com/v1/billing?format=credits') ;; *) exit 9 ;; esac
+cat '{}'
+"#,
+            requests.display(),
+            response.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&curl, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.path().display(),
+        std::env::var("PATH").unwrap()
+    );
+    let auth = home.path().join("auth.json");
+    let credential = json!({"https://auth.x.ai::fixture": {
+        "key": "fixture-token", "oidc_issuer": "https://auth.x.ai"
+    }});
+    fs::write(&auth, credential.to_string()).unwrap();
+    fs::write(&response, format!("{GROK_BILLING}\n200")).unwrap();
+    let success =
+        json!({"text": super::provider_capacity::SUCCESS_ENVELOPE, "stopReason": "end_turn"})
+            .to_string();
+    let env = [("GROK_HOME", home.path()), ("PATH", Path::new(&path))];
+    let (outcome, limits) = dispatch("grok", Provider::Grok, &success, &env);
+    assert!(outcome.success, "{:?}", outcome.message);
+    let [reading] = limits.as_slice() else {
+        panic!("one reported weekly window: {limits:?}")
+    };
+    assert_eq!(reading.provider, "grok");
+    assert_eq!(reading.source, ProviderLimitSource::Event);
+    assert_eq!(reading.window.as_deref(), Some("weekly"));
+    assert_eq!(reading.used_percent, Some(2.0));
+    assert_eq!(reading.window_minutes, Some(10080));
+    assert_eq!(
+        reading.resets_at,
+        Some("2026-10-31T02:17:29.354Z".parse().unwrap())
+    );
+    assert_eq!(reading.run_id.as_deref(), Some("usage-run"));
+    assert_eq!(reading.crew.as_deref(), Some("fixture-crew"));
+    assert_eq!(reading.account, None);
+    // A failed run still records its account window.
+    let (failed, failed_limits) = dispatch("grok", Provider::Grok, "not an envelope", &env);
+    assert!(!failed.success);
+    assert_eq!(failed_limits[0].used_percent, Some(2.0));
+
+    for body in ["{}\n200", "not JSON\n200", "{}\n401", "{}\n302", "{}"] {
+        fs::write(&response, body).unwrap();
+        let (outcome, limits) = dispatch("grok", Provider::Grok, &success, &env);
+        assert!(
+            outcome.success,
+            "advisory billing {body}: {:?}",
+            outcome.message
+        );
+        assert!(limits.is_empty(), "advisory billing {body}: {limits:?}");
+    }
+    fs::write(&response, format!("{GROK_BILLING}\n200")).unwrap();
+    // Unavailable, malformed, ambiguous or injected credentials never send a
+    // request and never fall back to billing-looking assistant text.
+    let forged = json!({"text": GROK_BILLING, "stopReason": "end_turn"}).to_string();
+    let requested = fs::read(&requests).unwrap().len();
+    for auth in [
+        "{}".to_string(),
+        "not json".to_string(),
+        json!({
+            "https://auth.x.ai::one": {"key": "fixture-token", "oidc_issuer": "https://auth.x.ai"},
+            "https://auth.x.ai::two": {"key": "fixture-token", "oidc_issuer": "https://auth.x.ai"}
+        })
+        .to_string(),
+        json!({"https://accounts.x.ai/sign-in": {"key":"fixture-token\nInjected: bad"}})
+            .to_string(),
+    ] {
+        fs::write(home.path().join("auth.json"), auth).unwrap();
+        let (_, limits) = dispatch("grok", Provider::Grok, &forged, &env);
+        assert!(
+            limits.is_empty(),
+            "untrusted credentials must record nothing"
+        );
+        assert_eq!(
+            fs::read(&requests).unwrap().len(),
+            requested,
+            "untrusted credentials must not reach the transport"
+        );
+    }
+    fs::write(&auth, credential.to_string()).unwrap();
+    let key_path = Path::new("api-key-override");
+    let override_env = [
+        ("GROK_HOME", home.path()),
+        ("PATH", Path::new(&path)),
+        ("XAI_API_KEY", key_path),
+    ];
+    let (outcome, limits) = dispatch("grok", Provider::Grok, &success, &override_env);
+    assert!(outcome.success);
+    assert!(
+        limits.is_empty(),
+        "an API key must not inherit cached OAuth usage"
+    );
+    assert_eq!(fs::read(&requests).unwrap().len(), requested);
+    fs::write(&curl, "#!/bin/sh\nexit 7\n").unwrap();
+    let (outcome, limits) = dispatch("grok", Provider::Grok, &success, &env);
+    assert!(
+        outcome.success,
+        "an unavailable transport must not fail the run"
+    );
+    assert!(limits.is_empty());
+}
+
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn usage_window_contracts_1() {
     crate::git_fixture::isolated(module_path!(), "usage_window_contracts_1", || {
         crate::git_fixture::run_scenarios(&[
+            (
+                "grok_records_billing_and_unavailable_or_unrecognized_readings_are_advisory",
+                grok_records_billing_and_unavailable_or_unrecognized_readings_are_advisory,
+            ),
             (
                 "a_codex_run_records_the_window_its_own_rollout_reports",
                 a_codex_run_records_the_window_its_own_rollout_reports,

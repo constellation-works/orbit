@@ -245,6 +245,13 @@ impl orbit_engine::test_support::NullRuntimeHost for CapacityHost {
 
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
         let mut env = allowlisted_child_env(&[], required_env_vars);
+        // Fake Grok runs must never read the host's real login or billing API.
+        if required_env_vars.contains(&"GROK_HOME") {
+            env.push((
+                "GROK_HOME".to_string(),
+                self.worktree.join("grok-home").display().to_string(),
+            ));
+        }
         env.extend(self.agent_env.iter().cloned());
         env
     }

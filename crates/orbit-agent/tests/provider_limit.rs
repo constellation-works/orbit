@@ -260,6 +260,77 @@ fn grok_failure_texts_are_classified_as_provider_usage_limits() {
 /// The fixture keeps that payload and minimal surrounding stream records.
 const MUSE_USAGE: &[u8] = include_bytes!("provider_invocation/fixtures/muse_usage.jsonl");
 
+/// Captured from Grok 1.0.67's CLI billing API on dk-server-2, 2026-10-24.
+const GROK_BILLING: &[u8] = include_bytes!("provider_invocation/fixtures/grok_billing.json");
+
+#[test]
+fn grok_billing_records_the_reported_weekly_window_without_invocation_tokens() {
+    use orbit_types::telemetry::ProviderLimitSource;
+    let now = Utc.with_ymd_and_hms(2026, 10, 24, 5, 0, 0).unwrap();
+    let readings = provider_usage_windows("grok", GROK_BILLING, None, now);
+    assert_eq!(readings.len(), 1);
+    let reading = &readings[0];
+    assert_eq!(reading.provider, "grok");
+    assert_eq!(reading.source, ProviderLimitSource::Event);
+    assert_eq!(reading.used_percent, Some(2.0));
+    assert_eq!(reading.window.as_deref(), Some("weekly"));
+    assert_eq!(reading.window_minutes, Some(10080));
+    assert_eq!(
+        reading.resets_at,
+        Some("2026-10-31T02:17:29.354Z".parse().unwrap())
+    );
+    assert_eq!(reading.observed_at, now);
+    assert!(reading.gating && !reading.exhausted);
+    assert_eq!(reading.account, None);
+    assert_eq!(reading.model, None);
+}
+
+#[test]
+fn grok_billing_ignores_unknown_shapes_and_never_reads_assistant_text() {
+    use serde_json::{Value, json};
+    let now = Utc.with_ymd_and_hms(2026, 10, 24, 5, 0, 0).unwrap();
+    let billing: Value = serde_json::from_slice(GROK_BILLING).unwrap();
+    let mut cases = vec![
+        Value::Null,
+        json!({"text": billing.to_string(), "stopReason": "end_turn"}),
+        json!({"type": "assistant", "message": billing}),
+        json!({"usage": {"input_tokens": 100, "output_tokens": 10}}),
+        json!({"schemaVersion": 1, "config": billing["config"]}),
+    ];
+    for (pointer, value) in [
+        ("/config/creditUsagePercent", json!(-1)),
+        ("/config/creditUsagePercent", json!("2")),
+        ("/config/creditUsagePercent", Value::Null),
+        ("/config/currentPeriod/type", json!("unknown")),
+        ("/config/currentPeriod/start", json!("invalid")),
+        ("/config/currentPeriod/end", Value::Null),
+        (
+            "/config/currentPeriod/end",
+            json!("2026-10-23T02:17:29.354Z"),
+        ),
+        (
+            "/config/currentPeriod/end",
+            json!("2026-10-24T02:17:29.354Z"),
+        ),
+    ] {
+        let mut invalid = billing.clone();
+        *invalid.pointer_mut(pointer).unwrap() = value;
+        cases.push(invalid);
+    }
+    for case in cases {
+        assert!(
+            provider_usage_windows("grok", case.to_string().as_bytes(), None, now).is_empty(),
+            "unrecognized billing must not gate: {case}"
+        );
+    }
+    assert!(provider_usage_windows("grok", b"not json", None, now).is_empty());
+    let mut over = billing;
+    over["config"]["creditUsagePercent"] = json!(102.5);
+    let readings = provider_usage_windows("grok", over.to_string().as_bytes(), None, now);
+    assert_eq!(readings[0].used_percent, Some(102.5));
+    assert!(readings[0].exhausted);
+}
+
 #[test]
 fn muse_run_usage_records_account_windows_at_completion() {
     let now = Utc.with_ymd_and_hms(2026, 10, 23, 4, 14, 0).unwrap();
