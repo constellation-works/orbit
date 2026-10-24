@@ -106,6 +106,7 @@ fn explore_response(
         "timeout_seconds": submission.timeout_seconds,
         "parent_run_id": submission.parent_run_id,
         "crew": submission.crew,
+        "eligible_pool": submission.eligible_pool,
         "workspace_path": submission.workspace_path,
         "cwd": submission.cwd,
         "sandboxed": true,

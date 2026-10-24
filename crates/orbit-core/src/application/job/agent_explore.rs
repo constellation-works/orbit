@@ -38,12 +38,12 @@ use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::activity_job::{
     EXPLORE_CALLER_ACTIVITIES, EXPLORE_JOB, EXPLORE_PARENT_RUN_KEY,
 };
-use orbit_types::workflow::{CrewPurpose, JobRun};
+use orbit_types::workflow::{ActivityCrewPoolMember, CrewPurpose, JobRun};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{random_crew_ticket, weighted_draw};
+use crate::application::job::crew_pools::{CrewPoolDraw, random_crew_ticket};
 use crate::application::job::log_best_effort;
 use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission, input_hash};
 use crate::runtime::authorization::ManagedRunCaller;
@@ -103,6 +103,8 @@ pub struct ExploreSubmission {
     pub parent_run_id: String,
     /// The explorer crew.
     pub crew: String,
+    /// The eligible members and weights frozen in the explorer run's input.
+    pub eligible_pool: Vec<ActivityCrewPoolMember>,
     /// Effective wall-clock bound, in seconds.
     pub timeout_seconds: u64,
     /// The exact checkout root the explorer reads.
@@ -253,7 +255,8 @@ impl OrbitRuntime {
         }
         let prompt = require_non_empty(request.prompt, "prompt")?;
         let (root, cwd) = self.explore_checkout(&parent, request.cwd)?;
-        let crew = self.explore_crew(request.crew)?;
+        let draw = self.explore_crew(request.crew)?;
+        let crew = draw.crew.name;
         let timeout_seconds = explore_timeout(request.timeout_seconds, settings.timeout_seconds)?;
         let idempotency_key = request
             .idempotency_key
@@ -269,6 +272,7 @@ impl OrbitRuntime {
             "repo_root": root.display().to_string(),
             "cwd": cwd.display().to_string(),
             "crew": crew,
+            "eligible_pool": draw.eligible_pool,
             "timeout_seconds": timeout_seconds,
             EXPLORE_PARENT_RUN_KEY: parent.run_id,
             EXPLORE_PARENT_ACTIVITY_KEY: activity,
@@ -313,6 +317,7 @@ impl OrbitRuntime {
                     deduplicated: true,
                     calls_used: u32::try_from(prior.len()).unwrap_or(u32::MAX),
                     crew: settings.crew,
+                    eligible_pool: settings.eligible_pool,
                     timeout_seconds: settings.timeout_seconds,
                     workspace_path: settings.workspace_path,
                     cwd: settings.cwd,
@@ -343,6 +348,7 @@ impl OrbitRuntime {
             let state = if invoke.queued { "queued" } else { "submitted" };
             Ok(ExploreAdmission {
                 crew: crew.clone(),
+                eligible_pool: draw.eligible_pool.clone(),
                 timeout_seconds,
                 workspace_path: root.display().to_string(),
                 cwd: cwd.display().to_string(),
@@ -372,6 +378,7 @@ impl OrbitRuntime {
             deduplicated: admitted.deduplicated,
             parent_run_id: parent.run_id,
             crew: admitted.crew,
+            eligible_pool: admitted.eligible_pool,
             timeout_seconds: admitted.timeout_seconds,
             workspace_path: admitted.workspace_path,
             cwd: admitted.cwd,
@@ -441,7 +448,7 @@ impl OrbitRuntime {
     /// The explorer crew: the named one when the explorer pool holds it with
     /// a weight above 0, else a weighted draw over the pool. With no usable
     /// pool there is no explorer.
-    fn explore_crew(&self, requested: Option<&str>) -> Result<String, OrbitError> {
+    fn explore_crew(&self, requested: Option<&str>) -> Result<CrewPoolDraw, OrbitError> {
         let Some((candidates, source)) =
             self.purpose_pool_candidates(CrewPurpose::Explorer, false)?
         else {
@@ -452,20 +459,20 @@ impl OrbitRuntime {
             )));
         };
         if let Some(named) = self.canonical_crew_name(requested)? {
-            return candidates
+            let selected = candidates
                 .iter()
                 .find(|candidate| candidate.crew.name == named && candidate.weight > 0)
-                .map(|candidate| candidate.crew.name.clone())
+                .cloned()
                 .ok_or_else(|| {
                     OrbitError::CapabilityDenied(format!(
                         "crew '{named}' is not an explorer crew on this host; name one from \
                          `{}` or omit `crew`",
                         CrewPurpose::Explorer.config_key()
                     ))
-                });
+                })?;
+            return self.draw_crew_pool(vec![selected], &source, &mut random_crew_ticket);
         }
-        weighted_draw(&candidates, &source, &mut random_crew_ticket)
-            .map(|candidate| candidate.crew.name.clone())
+        self.draw_crew_pool(candidates, &source, &mut random_crew_ticket)
     }
 
     /// Whether an implement or review-repair run is offered read-only
@@ -657,6 +664,7 @@ fn run_input_str<'a>(run: &'a JobRun, key: &str) -> Option<&'a str> {
 /// retry that resolved it.
 struct PersistedExploreSettings {
     crew: String,
+    eligible_pool: Vec<ActivityCrewPoolMember>,
     timeout_seconds: u64,
     workspace_path: String,
     cwd: String,
@@ -668,6 +676,7 @@ struct ExploreAdmission {
     deduplicated: bool,
     calls_used: u32,
     crew: String,
+    eligible_pool: Vec<ActivityCrewPoolMember>,
     timeout_seconds: u64,
     workspace_path: String,
     cwd: String,
@@ -706,6 +715,15 @@ fn persisted_explore_settings(run: &JobRun) -> Result<PersistedExploreSettings, 
         })?;
     Ok(PersistedExploreSettings {
         crew: required_str("crew")?,
+        eligible_pool: input
+            .get("eligible_pool")
+            .map(|value| {
+                serde_json::from_value(value.clone()).map_err(|error| {
+                    OrbitError::Execution(format!("invalid persisted explorer draw: {error}"))
+                })
+            })
+            .transpose()?
+            .unwrap_or_default(),
         timeout_seconds,
         workspace_path: required_str("workspace_path")?,
         cwd: required_str("cwd")?,

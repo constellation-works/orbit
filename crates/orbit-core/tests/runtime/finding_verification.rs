@@ -567,6 +567,63 @@ fn a_doubtful_verdict_is_reverified_by_the_next_tier_and_names_every_crew() {
     assert_eq!(fixture.status(&unsure), TaskStatus::Rejected);
 }
 
+/// The initial and escalation checkpoints must explain each task's own
+/// pressure-weighted draw, including when several tasks share a partition.
+fn verification_partitions_record_pressure_in_both_rounds() {
+    let config = FIXTURE_CONFIG
+        .replace(
+            "[workflow]",
+            "[workflow]\ncrew_selection = \"usage_pressure\"",
+        )
+        .replace(
+            "[\"medium_codex\", \"medium_claude\"]",
+            "[\"medium_codex:3\", \"medium_claude:1\", \"low_lane:0\"]",
+        );
+    let fixture = Fixture::with_config(&format!("{config}\n[review]\nverify_findings = true\n"));
+    crate::usage_pressure_draws::record_week(&fixture.runtime, "claude", 10.0, Duration::hours(6));
+    crate::usage_pressure_draws::record_week(&fixture.runtime, "codex", 0.0, Duration::days(7));
+    let medium = fixture.finding("Weighted initial verifier", TaskComplexity::Medium);
+    let low = fixture.finding("Weighted escalation verifier", TaskComplexity::Low);
+    let prepared = fixture.prepare(&[&medium.id, &low.id]);
+    let assert_draw = |prepared: &Value, task: &Task| {
+        let entry = Fixture::prepared_entry(prepared, task);
+        crate::usage_pressure_draws::assert_pool(
+            &entry["eligible_pool"],
+            &[("medium_claude", 1, 8.0), ("medium_codex", 3, 3.0)],
+        );
+        let partition = prepared["partitions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|partition| {
+                partition["task_ids"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!(task.id))
+            })
+            .unwrap();
+        let recorded = partition["draws"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|draw| draw["task_id"] == task.id)
+            .unwrap();
+        assert_eq!(recorded["eligible_pool"], entry["eligible_pool"]);
+    };
+    assert_draw(&prepared, &medium);
+    assert_eq!(
+        Fixture::prepared_crew(&fixture.prepare(&[&medium.id]), &medium),
+        Fixture::prepared_crew(&prepared, &medium),
+        "seeded retry is stable"
+    );
+    let applied = fixture.apply(
+        &prepared,
+        &[confirmed(&medium, "high"), rejected(&low, "high")],
+        None,
+    );
+    assert_draw(&applied["escalation_prepared"], &low);
+}
+
 fn the_verifier_is_not_the_filers_crew_when_the_pool_offers_another() {
     let fixture = Fixture::new();
     let params = |title: &str, complexity| TaskAddParams {
@@ -1584,6 +1641,7 @@ crate::scenario_table!(
     a_verdict_citing_lines_absent_at_the_pinned_revision_is_not_recorded,
     a_doubtful_verdict_is_reverified_by_the_next_tier_and_names_every_crew,
     the_verifier_is_not_the_filers_crew_when_the_pool_offers_another,
+    verification_partitions_record_pressure_in_both_rounds,
     verifiers_are_drawn_only_from_inspection_capable_crews,
     without_a_capable_pool_crew_the_default_verifies_and_without_one_preparation_fails,
     promotion_and_backlog_admission_refuse_an_unverified_review_finding,

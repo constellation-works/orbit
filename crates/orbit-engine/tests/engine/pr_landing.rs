@@ -6419,6 +6419,7 @@ fn admitted_review(attempt_id: &str, lineage: &str) -> Value {
                 provider: "codex".into(),
                 model: "review-model".into(),
                 reasoning_effort: None,
+                eligible_pool: Vec::new(),
             },
             owed_evidence: Vec::new(),
             owner_owed_evidence: Vec::new(),

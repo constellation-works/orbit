@@ -8,7 +8,7 @@ last_validated: 2026-10-24
 
 # Scope: usage-pressure crew selection
 
-Status: phase 1 pressure view, phase 2 task draws and phase 4 pull drains ([`workflow.crew_selection`](../../CONFIG.md#usage-pressure-draws)) implemented; phase 3 remains proposed.
+Status: phases 1–4 (pressure view, task draws, shared pool draws and pull drains) ([`workflow.crew_selection`](../../CONFIG.md#usage-pressure-draws)) implemented.
 Bearing: [provider usage limits](../../CONFIG.md#provider-usage-limits) already record every
 window a provider reports ([ORB-14695] failures, [ORB-14696] post-run readings, [ORB-17644] Muse)
 and gate crews that reach a threshold ([ORB-14697]). Weighted pools

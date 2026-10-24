@@ -25,7 +25,7 @@ use serde_json::json;
 
 use super::TaskRecordUpdateParams;
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{InspectionPool, seeded_crew_ticket, weighted_draw};
+use crate::application::job::crew_pools::{InspectionPool, seeded_crew_ticket};
 
 /// The job that verifies review-filed findings.
 pub const FINDING_VERIFICATION_JOB: &str = "finding_verification_pipeline";
@@ -428,10 +428,12 @@ pub(crate) enum VerdictWrite {
 }
 
 /// One verifier dispatched for a task: its crew and the tier it was drawn from.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct VerifierAssignment {
     pub(crate) crew: String,
     pub(crate) tier: TaskComplexity,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) eligible_pool: Vec<orbit_types::workflow::ActivityCrewPoolMember>,
 }
 
 /// The tier a task is first verified at: its complexity, with an unassessed
@@ -508,10 +510,11 @@ impl OrbitRuntime {
         let source = format!("pool:{tier}");
         let mut ticket =
             seeded_crew_ticket(format!("{FINDING_VERIFICATION_JOB}:{}:{tier}", task.id));
-        let selected = weighted_draw(&candidates, &source, &mut ticket)?;
+        let draw = self.draw_crew_pool(candidates, &source, &mut ticket)?;
         Ok(Some(VerifierAssignment {
-            crew: selected.crew.name.clone(),
+            crew: draw.crew.name,
             tier,
+            eligible_pool: draw.eligible_pool,
         }))
     }
 
@@ -532,6 +535,7 @@ impl OrbitRuntime {
         Ok(VerifierAssignment {
             crew: crew.name,
             tier,
+            eligible_pool: Vec::new(),
         })
     }
 

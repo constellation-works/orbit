@@ -167,7 +167,7 @@ pub(super) fn minted_review_crew(
             &implementers,
             &mut seeded_crew_ticket(format!("review:{}", attempt.action_key)),
         )
-        .map(|crew| Some(crew.name))
+        .map(|draw| Some(draw.crew.name))
 }
 
 /// The sentence `orbit auto-task show` and `update` print when `definition`

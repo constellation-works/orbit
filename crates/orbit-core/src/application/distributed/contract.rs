@@ -204,7 +204,7 @@ impl crate::OrbitRuntime {
             .and_then(|candidates| {
                 self.draw_review_crew(candidates, &BTreeSet::new(), &mut random_crew_ticket)
             })
-            .map(|crew| crew.name)
+            .map(|draw| draw.crew.name)
             .ok()
             .or(first)
     }

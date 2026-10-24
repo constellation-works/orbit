@@ -22,7 +22,8 @@
 //! 3. a member that implemented the reviewed work drops out, unless every
 //!    remaining member did, so the review stays independent wherever the pool
 //!    allows it;
-//! 4. one of the rest is drawn by weight.
+//! 4. one of the rest is drawn by weight, adjusted by the shared usage-pressure
+//!    helper when enabled. The returned choice carries each eligible weight.
 //!
 //! A single crew is a one-member pool, so past step 0 it is chosen whatever
 //! its state and the caller's refusal names it exactly as before pools
@@ -35,13 +36,12 @@ use std::collections::BTreeSet;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_config::{PRE_LANDING_REVIEW_CREW_KEY, REVIEW_CREW_KEY, canonical_crew_pool};
-use orbit_types::identity::Crew;
 use orbit_types::task::TaskOsRequirement;
 use orbit_types::workflow::ReviewCrewPoolMember;
 use orbit_types::workflow::automation::recovery::OsExcludedCrew;
 
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{CrewCandidate, weighted_draw};
+use crate::application::job::crew_pools::{CrewCandidate, CrewPoolDraw};
 
 /// How each review picks from a pool, as `orbit config show` and `orbit
 /// doctor` state it.
@@ -101,7 +101,7 @@ impl OrbitRuntime {
         candidates: Vec<CrewCandidate>,
         implementers: &BTreeSet<String>,
         random: &mut impl FnMut() -> Result<u64, OrbitError>,
-    ) -> Result<Crew, OrbitError> {
+    ) -> Result<CrewPoolDraw, OrbitError> {
         let gate = self.provider_limit_gate(Utc::now());
         let candidates = prefer(candidates, |candidate| {
             gate.limit_for(&candidate.crew).is_none()
@@ -109,7 +109,7 @@ impl OrbitRuntime {
         let candidates = prefer(candidates, |candidate| {
             !implementers.contains(&candidate.crew.name)
         });
-        weighted_draw(&candidates, REVIEW_CREW_KEY, random).map(|chosen| chosen.crew.clone())
+        self.draw_crew_pool(candidates, REVIEW_CREW_KEY, random)
     }
 
     /// Step 0: discard parked members (weight 0), then split the positive-ticket
@@ -161,7 +161,7 @@ impl OrbitRuntime {
         eligible: &[ReviewCrewPoolMember],
         implementers: &BTreeSet<String>,
         random: &mut impl FnMut() -> Result<u64, OrbitError>,
-    ) -> Result<Crew, OrbitError> {
+    ) -> Result<CrewPoolDraw, OrbitError> {
         let candidates = self.review_crew_candidates(eligible)?;
         self.draw_review_crew(candidates, implementers, random)
     }

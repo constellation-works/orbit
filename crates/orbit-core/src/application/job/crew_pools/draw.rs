@@ -44,22 +44,61 @@ pub(crate) fn complexity_of_crews_key(key: &str) -> Option<TaskComplexity> {
         .find(|complexity| complexity_crews_key(*complexity) == key)
 }
 
-/// The run-state record of an activity crew draw over `candidates`.
-pub(super) fn activity_crew_draw(
-    selected: &CrewCandidate,
-    source: &str,
-    candidates: &[CrewCandidate],
-) -> ActivityCrewDraw {
-    ActivityCrewDraw {
-        crew: selected.crew.name.clone(),
-        source: source.to_string(),
-        eligible_pool: candidates
-            .iter()
-            .map(|candidate| ActivityCrewPoolMember {
-                name: candidate.crew.name.clone(),
-                weight: candidate.weight,
-            })
-            .collect(),
+/// A selected crew and the exact eligible weights used for this draw.
+pub(crate) struct CrewPoolDraw {
+    pub(crate) crew: Crew,
+    pub(crate) source: String,
+    pub(crate) eligible_pool: Vec<ActivityCrewPoolMember>,
+}
+
+impl CrewPoolDraw {
+    pub(crate) fn into_activity_draw(self) -> ActivityCrewDraw {
+        ActivityCrewDraw {
+            crew: self.crew.name,
+            source: self.source,
+            eligible_pool: self.eligible_pool,
+        }
+    }
+}
+
+impl crate::OrbitRuntime {
+    /// Draw after the caller's existing membership filters, using the same
+    /// pressure helper as task draws. Static mode consumes the same tickets
+    /// over the same weights; explicit choices pass a singleton pool.
+    pub(crate) fn draw_crew_pool(
+        &self,
+        mut candidates: Vec<CrewCandidate>,
+        source: &str,
+        random: &mut impl FnMut() -> Result<u64, OrbitError>,
+    ) -> Result<CrewPoolDraw, OrbitError> {
+        let weighting = pressure_weighted_candidates(
+            &mut candidates,
+            &self.provider_limit_policy().usage_pressure,
+            || self.usage_pressure_read(chrono::Utc::now()),
+        );
+        let selected = weighted_draw(&candidates, source, random)?;
+        Ok(CrewPoolDraw {
+            crew: selected.crew.clone(),
+            source: if weighting.is_some() {
+                format!("{source}; usage pressure")
+            } else {
+                source.to_string()
+            },
+            eligible_pool: candidates
+                .iter()
+                .map(|candidate| {
+                    weighting.as_ref().map_or_else(
+                        || ActivityCrewPoolMember {
+                            name: candidate.crew.name.clone(),
+                            weight: candidate.weight,
+                            pressure: None,
+                            effective_weight: None,
+                        },
+                        |weighting| weighting.pool_member(candidate),
+                    )
+                })
+                .collect(),
+        })
     }
 }
 
@@ -135,25 +174,30 @@ impl PressureWeighting {
     /// The `eligible_pool` entry of a weighted member: its configured
     /// `weight`, raw `pressure` and the `effective_weight` it drew on.
     pub(crate) fn member(&self, candidate: &CrewCandidate) -> Value {
+        json!(self.pool_member(candidate))
+    }
+
+    fn pool_member(&self, candidate: &CrewCandidate) -> ActivityCrewPoolMember {
         let (weight, pressure) = self
             .members
             .get(&candidate.crew.name)
             .map_or((candidate.weight, 1.0), |(weight, pressure)| {
                 (*weight, pressure.pressure)
             });
-        json!({
-            "name": candidate.crew.name,
-            "weight": weight,
-            "pressure": pressure,
-            "effective_weight": f64::from(candidate.weight) / PRESSURE_TICKET_SCALE,
-        })
+        ActivityCrewPoolMember {
+            name: candidate.crew.name.clone(),
+            weight,
+            pressure: Some(pressure),
+            effective_weight: Some(f64::from(candidate.weight) / PRESSURE_TICKET_SCALE),
+        }
     }
 }
 
 /// Scale `candidates`' tickets by their crews' weekly usage pressure:
 /// `weight × clamp(pressure^strength, 1/cap, cap)`, ×1000 and rounded to
 /// whole tickets [ORB-17770]. Apply it to a pool after hold and limit
-/// narrowing and before [`permitted_candidates`]; membership is unchanged.
+/// narrowing; membership is unchanged. Task admission applies its allowlist
+/// afterward; other draws keep their existing membership filters first.
 /// A weight of 0 stays 0 and a positive weight keeps at least one ticket.
 /// `None` leaves the draw as it was: the policy is off or there is no
 /// choice to weigh.

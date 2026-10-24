@@ -22,6 +22,58 @@ use orbit_types::workflow::{JobRunState, JobRunTrigger};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+/// A provider reading at the public telemetry boundary. Used by the other
+/// pool-draw regression scenarios as well as task admission.
+pub(crate) fn record_week(
+    runtime: &OrbitRuntime,
+    provider: &str,
+    used_percent: f64,
+    resets_in: Duration,
+) {
+    runtime
+        .record_provider_limit(&ProviderLimitObservation {
+            provider: provider.into(),
+            account: None,
+            model: None,
+            window: Some("seven_day".into()),
+            exhausted: false,
+            source: ProviderLimitSource::Event,
+            resets_at: Some(Utc::now() + resets_in),
+            used_percent: Some(used_percent),
+            window_minutes: Some(10080),
+            gating: true,
+            partial: false,
+            observed_at: Utc::now(),
+            run_id: None,
+            crew: None,
+            detail: String::new(),
+        })
+        .unwrap();
+}
+
+/// Configured weights stay observable beside the actual pressure-adjusted
+/// weights; membership and parked-member filtering remain the caller's.
+pub(crate) fn assert_pool(pool: &Value, expected: &[(&str, u32, f64)]) {
+    let members = pool
+        .as_array()
+        .unwrap_or_else(|| panic!("missing eligible pool: {pool}"));
+    assert_eq!(members.len(), expected.len(), "{pool}");
+    for (name, weight, effective) in expected {
+        let member = members
+            .iter()
+            .find(|member| member["name"] == *name)
+            .unwrap();
+        assert_eq!(member["weight"], *weight, "{pool}");
+        assert_eq!(member["effective_weight"], *effective, "{pool}");
+        assert!(
+            member["pressure"]
+                .as_f64()
+                .is_some_and(|pressure| pressure > 0.0),
+            "{pool}"
+        );
+    }
+}
+
 /// Two Claude crews and a Codex crew, `pool` as the hard-complexity pool,
 /// `purpose` as the baseline-red repair pool, and `extra` under `[workflow]`.
 fn config(pool: &str, purpose: &str, extra: &str) -> String {
@@ -108,25 +160,7 @@ impl Fixture {
     /// Record a weekly reading of `provider`: `used_percent` used, resetting
     /// in `resets_in`.
     fn week(&self, provider: &str, used_percent: f64, resets_in: Duration) {
-        self.runtime()
-            .record_provider_limit(&ProviderLimitObservation {
-                provider: provider.into(),
-                account: None,
-                model: None,
-                window: Some("seven_day".into()),
-                exhausted: false,
-                source: ProviderLimitSource::Event,
-                resets_at: Some(Utc::now() + resets_in),
-                used_percent: Some(used_percent),
-                window_minutes: Some(10080),
-                gating: true,
-                partial: false,
-                observed_at: Utc::now(),
-                run_id: None,
-                crew: None,
-                detail: String::new(),
-            })
-            .unwrap();
+        record_week(&self.runtime(), provider, used_percent, resets_in);
     }
 
     /// The run input a replay of a failed delivery, submitted with `input`,
