@@ -50,6 +50,8 @@ const DIAG_SUBTABS = ["incidents", "doctor"];
 // Health › Incidents views: `#diagnostics/incidents[/events|/errors]`.
 const INCIDENTS_VIEWS = ["incidents", "events", "errors"];
 const ANALYTICS_SUBTABS = ["metrics", "reliability", "codebase", "resources", "cost", "agents"];
+// Analytics › Cost tabs: `#analytics/cost?tab=exploration`; no `tab` is Spend.
+const COST_TABS = ["spend", "exploration"];
 // Analytics › Reliability views: `#analytics/reliability[/tools]`.
 const RELIABILITY_VIEWS = ["pipeline", "tools"];
 const OPERATIONS_SUBTABS = ["routines", "auto-tasks"];
@@ -110,6 +112,57 @@ function analyticsSubtabRoute(ctx, sub) {
   return `analytics/${sub}`;
 }
 
+// The Cost tab on screen. It lives here, not in app.js, because only the hash
+// and the tab strip read it: a tab switch is a view change, so it rewrites the
+// hash in place and never routes, which would refetch.
+let costTab = COST_TABS[0];
+
+function setCostTabView(tab) {
+  costTab = COST_TABS.includes(tab) ? tab : COST_TABS[0];
+  for (const btn of document.querySelectorAll("#scoreboard-tabs [data-cost-tab]")) {
+    const on = btn.dataset.costTab === costTab;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+    btn.tabIndex = on ? 0 : -1;
+  }
+  for (const name of COST_TABS) {
+    const panel = $(`scoreboard-panel-${name}`);
+    if (panel) panel.hidden = name !== costTab;
+  }
+}
+
+function selectCostTab(ctx, tab) {
+  setCostTabView(tab);
+  const url = new URL(window.location.href);
+  url.hash = analyticsHash(ctx, parseHashRoute(window.location.hash).query).replace(/^#/, "");
+  if (url.href !== window.location.href) window.history.replaceState(null, "", url);
+}
+
+function wireCostTabs(ctx) {
+  const strip = $("scoreboard-tabs");
+  if (!strip) return;
+  const tabs = () => Array.from(strip.querySelectorAll("[data-cost-tab]"));
+  strip.addEventListener("click", (event) => {
+    const btn = event.target?.closest?.("[data-cost-tab]");
+    if (btn && strip.contains(btn)) selectCostTab(ctx, btn.dataset.costTab);
+  });
+  strip.addEventListener("keydown", (event) => {
+    const btn = event.target?.closest?.("[data-cost-tab]");
+    const all = tabs();
+    const index = btn ? all.indexOf(btn) : -1;
+    if (index < 0) return;
+    let next = null;
+    if (event.key === "ArrowRight") next = (index + 1) % all.length;
+    else if (event.key === "ArrowLeft") next = (index - 1 + all.length) % all.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = all.length - 1;
+    if (next == null) return;
+    event.preventDefault();
+    all[next].focus();
+    selectCostTab(ctx, all[next].dataset.costTab);
+  });
+}
+
 function windowQuery() {
   return `window=${encodeURIComponent(getWindow())}`;
 }
@@ -136,6 +189,7 @@ function analyticsHash(ctx, query) {
   if (sub === "codebase") return ctx.buildCodebaseHash();
   if (sub === "agents") return agentsHash(ctx);
   let hash = `#${analyticsSubtabRoute(ctx, sub)}?${windowQuery()}`;
+  if (sub === "cost" && costTab !== COST_TABS[0]) hash += `&tab=${costTab}`;
   if (sub === "metrics") hash += `&outcome=${query.get("outcome") === "all" ? "all" : "succeeded"}`;
   return hash;
 }
@@ -507,6 +561,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
       adoptHashedWindow();
     }
     setAnalyticsSubtabImpl(ctx, sub, view);
+    setCostTabView(sub === "cost" ? query.get("tab") : null);
     if (sub === "agents") {
       const role = AGENT_ROLES.includes(segments[2]) ? segments[2] : ctx.getAgentsRole();
       setAgentsRoleImpl(ctx, role);
@@ -637,6 +692,7 @@ function initTabsImpl(ctx) {
       setActiveTabImpl(ctx, analyticsSubtabRoute(ctx, btn.dataset.subtab), { refresh: false }),
     );
   }
+  wireCostTabs(ctx);
   for (const btn of document.querySelectorAll("#agents-roles .subtab")) {
     btn.addEventListener("click", () =>
       setActiveTabImpl(ctx, `analytics/agents/${btn.dataset.view}`, { refresh: false }),

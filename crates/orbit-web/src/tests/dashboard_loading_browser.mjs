@@ -655,13 +655,13 @@ async function assertCostPage(page) {
   if (!painted.subtab.startsWith('Cost')) throw new Error(`Analytics subtab must read Cost: ${painted.subtab}`);
   if (painted.windows.join() !== '1h,24h,7d,30d,all') throw new Error(`Cost window selector missing windows: ${painted.windows}`);
   if (painted.removed.length) throw new Error(`Retired scoreboard nodes still in the page: ${painted.removed}`);
-  if (!painted.text.includes('$1.2500') || !painted.text.includes('$1.5000') || !painted.text.includes('1.5K')) {
+  if (!painted.text.includes('$1.25') || !painted.text.includes('$1.50') || !painted.text.includes('1.5K')) {
     throw new Error(`Cost numbers changed for the fixed payload: ${painted.text}`);
   }
-  if (!painted.text.includes('named orchestrator: claude') || !painted.text.includes('claude-sonnet 1.5K')) {
+  if (!painted.text.includes('Orchestrator: claude') || !painted.text.includes('claude-sonnet 1.5K')) {
     throw new Error(`Cost attribution missing: ${painted.text}`);
   }
-  if (painted.count !== '1 buckets') throw new Error(`Cost bucket count changed: ${painted.count}`);
+  if (painted.count !== '1 bucket') throw new Error(`Cost bucket count changed: ${painted.count}`);
   for (const width of [1280, 375]) {
     await page.setViewportSize({ width, height: 900 });
     const layout = await page.evaluate(() => {
@@ -678,7 +678,7 @@ async function assertCostPage(page) {
     });
     if (!layout.shown || !layout.selector) throw new Error(`Cost panel or window selector hidden at ${width}px: ${JSON.stringify(layout)}`);
     if (layout.pageOverflow) throw new Error(`Cost page widens the viewport at ${width}px`);
-    if (!layout.text.includes('$1.2500')) throw new Error(`Cost dollars missing at ${width}px`);
+    if (!layout.text.includes('$1.25')) throw new Error(`Cost dollars missing at ${width}px`);
     await page.screenshot({ path: path.join(evidence, `cost-${width}.png`), fullPage: true });
   }
   const routed = await page.evaluate(async () => {
@@ -717,7 +717,7 @@ async function assertCostPage(page) {
     throw new Error(`#analytics/cost did not select Analytics › Cost: ${JSON.stringify(routed)}`);
   }
   if (routed.window !== '7d' || !routed.shown) throw new Error(`Cost window was not restored: ${JSON.stringify(routed)}`);
-  if (!routed.text.includes('$1.2500') || routed.removed.length) {
+  if (!routed.text.includes('$1.25') || routed.removed.length) {
     throw new Error(`Routing disturbed the painted cost panel: ${JSON.stringify({ removed: routed.removed, text: routed.text.slice(0, 240) })}`);
   }
 }

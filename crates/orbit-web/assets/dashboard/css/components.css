@@ -411,6 +411,56 @@ th,
   flex: 0 0 auto;
 }
 
+/* Header band and raised tabs. A panel's title and controls sit on a darker
+   band (--bg) above its tab strip. The active tab takes the content colour
+   (--bg-elev) with a 2px accent top edge and an open bottom, so it joins the
+   content below with no seam. The strip's baseline is drawn in its 1px bottom
+   padding, inside the overflow clip, so the active tab can overlap it. */
+.band {
+  display: grid;
+  gap: 14px;
+  padding: 16px 20px 0;
+  background: var(--bg);
+}
+.band-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  margin: 2px -20px 0;
+  padding: 0 12px 1px;
+  background: linear-gradient(var(--border), var(--border)) bottom / 100% 1px no-repeat;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.band-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  min-height: 40px;
+  margin-bottom: -1px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--fg-mute);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.band-tab:hover { color: var(--fg); }
+.band-tab.active {
+  background: var(--bg-elev);
+  border-color: var(--border);
+  border-bottom: 0;
+  box-shadow: inset 0 2px 0 var(--accent);
+  color: var(--fg-strong);
+  font-weight: 500;
+}
+.band-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.band-tab-count { color: var(--fg-mute); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
+
 .scoreboard-table-wrap {
   padding: 0;
   overflow-x: auto;

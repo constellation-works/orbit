@@ -160,7 +160,7 @@ function summary(marker) {
   return {
     window: '24h',
     agents: { claude: { tasks_created: 12, tasks_planned: 1, tasks_completed: 1, tool_calls: 4 } },
-    orchestration: { since: marker, until: 'cutoff', as_of: 'now', buckets: [], normalized_tokens: { normalized_token_total: 10, invocation_count: 1, linked_task_count: 1 } },
+    orchestration: { since: 'start', until: 'cutoff', as_of: 'now', buckets: [{ kind: 'orchestrator', orchestrator: marker }], normalized_tokens: { normalized_token_total: 10, invocation_count: 1, linked_task_count: 1 } },
   };
 }
 
