@@ -139,4 +139,19 @@ fn malformed_proc_files_read_as_unknown() {
             "{stat:?} / {meminfo:?}"
         );
     }
+    // A symlinked source must also be unknown: injected roots may not redirect
+    // either fixed leaf to an external file containing valid telemetry.
+    #[cfg(unix)]
+    for leaf in ["stat", "meminfo"] {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        write_proc(root.path(), &stat(1_000, 5_000, 100), MEMINFO);
+        std::fs::rename(root.path().join(leaf), outside.path().join(leaf)).unwrap();
+        std::os::unix::fs::symlink(outside.path().join(leaf), root.path().join(leaf)).unwrap();
+
+        assert!(
+            read_host_usage(root.path()).is_none(),
+            "symlinked {leaf} must be unknown rather than reading outside the proc root"
+        );
+    }
 }

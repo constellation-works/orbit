@@ -9,6 +9,8 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
 
+use orbit_common::fs::io::open_read_only_no_follow;
+
 /// How often a delivery worker samples its scope and the host. A run minute's
 /// `samples` count therefore bounds how much of the minute it covered.
 pub const RESOURCE_SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
@@ -64,7 +66,8 @@ impl HostUsageReading {
 }
 
 /// Read native macOS statistics for the default `/proc` root, otherwise
-/// `<proc_root>/{stat,meminfo}`. A failed source is unknown, never zero use.
+/// `<proc_root>/{stat,meminfo}` through read-only, no-follow descriptors.
+/// Symlinked or non-regular leaves and failed sources are unknown, never zero use.
 pub fn read_host_usage(proc_root: &Path) -> Option<HostUsageReading> {
     #[cfg(target_os = "macos")]
     if proc_root == Path::new("/proc") {
@@ -98,12 +101,14 @@ pub fn read_host_usage(proc_root: &Path) -> Option<HostUsageReading> {
 }
 
 fn read(path: &Path) -> Option<String> {
+    let file = open_read_only_no_follow(path).ok()?;
+    // Inspect and read the same descriptor: a leaf replaced after the shared
+    // pathname check must not become a symlink read or a blocking FIFO read.
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
     let mut data = String::new();
-    std::fs::File::open(path)
-        .ok()?
-        .take(1 << 20)
-        .read_to_string(&mut data)
-        .ok()?;
+    file.take(1 << 20).read_to_string(&mut data).ok()?;
     Some(data)
 }
 
