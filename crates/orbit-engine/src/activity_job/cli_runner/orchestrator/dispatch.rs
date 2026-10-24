@@ -28,7 +28,7 @@ use super::super::argv::{
     codex_mcp_server_launch_args, neutralize_inner_sandbox, try_audit_argv_for_dispatch,
 };
 use super::super::envelope::{cli_agent_envelope_json, task_id_from_input, task_ids_from_input};
-use super::super::inspection_tools::{admit_inspection, prepare_inspection_tools};
+use super::super::inspection::{admit_inspection, prepare_inspection_tools};
 use super::super::launcher::{orbit_tool_env, resolve_provider_launcher};
 use super::super::plugin_broker::RunPluginBroker;
 use super::super::prompt_file::PromptFile;

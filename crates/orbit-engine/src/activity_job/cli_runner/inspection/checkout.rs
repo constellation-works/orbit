@@ -29,14 +29,14 @@ use orbit_common::fs::git::{
 use orbit_common::fs::io::atomic_write_text;
 use serde_json::Value;
 
-use super::super::dispatcher::DispatchError;
+use super::super::super::dispatcher::DispatchError;
 
 const SLOT_COUNT: usize = 16;
 const POOL_DIR: &str = "source-inspections-v1";
 const LEGACY_POOL_DIR: &str = "orbit-source-inspections-v1";
 const OWNER: &str = "orbit-source-inspection-v1\n";
 
-pub(super) struct SourceInspection {
+pub(in crate::activity_job::cli_runner) struct SourceInspection {
     root: PathBuf,
     revision: String,
     // Drop removes the checkout before the file is closed and releases its lock.
@@ -44,7 +44,7 @@ pub(super) struct SourceInspection {
 }
 
 impl SourceInspection {
-    pub(super) fn from_input(
+    pub(in crate::activity_job::cli_runner) fn from_input(
         input: &Value,
         source: Option<&Path>,
         fs_profile: Option<&str>,
@@ -89,7 +89,7 @@ impl SourceInspection {
     /// Lease a slot and materialize `revision` in it. `copy_deadline` bounds
     /// the full-ancestry fetch; a copy that overruns it fails the lease and
     /// drops the half-built checkout, leaving the slot free for the next lease.
-    pub(super) fn create(
+    pub(in crate::activity_job::cli_runner) fn create(
         source: &Path,
         revision: &str,
         copy_deadline: Duration,
@@ -195,11 +195,11 @@ impl SourceInspection {
         ))
     }
 
-    pub(super) fn root(&self) -> &Path {
+    pub(in crate::activity_job::cli_runner) fn root(&self) -> &Path {
         &self.root
     }
 
-    pub(super) fn bind_input(&self, input: &Value) -> Value {
+    pub(in crate::activity_job::cli_runner) fn bind_input(&self, input: &Value) -> Value {
         let mut bound = input.clone();
         bound["workspace_path"] = self.root.display().to_string().into();
         bound["repo_root"] = self.root.display().to_string().into();
@@ -207,7 +207,7 @@ impl SourceInspection {
         bound
     }
 
-    pub(super) fn verify(&self) -> Result<(), DispatchError> {
+    pub(in crate::activity_job::cli_runner) fn verify(&self) -> Result<(), DispatchError> {
         if git(&self.root, &["rev-parse", "HEAD"])?.trim() != self.revision
             || !git(
                 &self.root,

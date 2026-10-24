@@ -3,7 +3,7 @@
 use orbit_types::workflow::activity_job::{Provider, requires_native_inspection};
 use serde_json::Value;
 
-use super::super::dispatcher::DispatchError;
+use super::super::super::dispatcher::DispatchError;
 
 /// The one instruction every provider gets for a native inspection run:
 /// each agent CLI ships its own file-read and shell tools, separate from
@@ -15,7 +15,7 @@ const GENERIC_INSTRUCTION: &str = "Provider inspection surface: use this CLI's o
 /// Refuse an inspection that cannot start before executor lookup: a profile
 /// other than `reviewer`, or a provider with no CLI runtime. A null revision
 /// still denotes a non-Git inspection.
-pub(super) fn admit_inspection(
+pub(in crate::activity_job::cli_runner) fn admit_inspection(
     provider: &str,
     input: &Value,
     fs_profile: Option<&str>,
@@ -43,7 +43,7 @@ pub(super) fn admit_inspection(
 /// or starting a session. An executor that declares none is refused here,
 /// so a crew that cannot read the pinned source never launches only to fail
 /// its observed-revision proof.
-pub(super) fn prepare_inspection_tools(
+pub(in crate::activity_job::cli_runner) fn prepare_inspection_tools(
     provider: &str,
     input: &Value,
     inspection_args: Option<&[String]>,
@@ -74,7 +74,7 @@ fn unavailable(provider: &str, reason: &str) -> DispatchError {
     }
 }
 
-pub(super) struct InspectionTools {
-    pub(super) args: Vec<String>,
-    pub(super) instruction: &'static str,
+pub(in crate::activity_job::cli_runner) struct InspectionTools {
+    pub(in crate::activity_job::cli_runner) args: Vec<String>,
+    pub(in crate::activity_job::cli_runner) instruction: &'static str,
 }
