@@ -449,8 +449,7 @@ impl OrbitRuntime {
     /// a weight above 0, else a weighted draw over the pool. With no usable
     /// pool there is no explorer.
     fn explore_crew(&self, requested: Option<&str>) -> Result<CrewPoolDraw, OrbitError> {
-        let Some((candidates, source)) =
-            self.purpose_pool_candidates(CrewPurpose::Explorer)?
+        let Some((candidates, source)) = self.purpose_pool_candidates(CrewPurpose::Explorer)?
         else {
             return Err(OrbitError::CapabilityDenied(format!(
                 "no explorer crew can run on this host: `{}` is unset, disabled, or excluded \
