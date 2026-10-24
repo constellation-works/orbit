@@ -14,7 +14,9 @@ spec:
     unjudged candidate for `orbit job resume`, opening no PR and pushing
     nothing. A `child_timeout` (the parent's wait on this run expired and it
     cancelled the run) commits what the run left, carries it to its durable
-    ref and opens no PR, leaving the task's status to the cancellation.
+    ref and opens no PR, leaving the task's status to the cancellation. A
+    `worktree` failure before its checkpoint created no checkout, so it returns
+    `no_candidate` and publishes nothing.
     Every preserved candidate records the task's spec digest, so the
     task's next run can resume it (`candidate_resume`).
   input_schema_json:

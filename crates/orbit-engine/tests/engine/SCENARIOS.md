@@ -432,6 +432,8 @@ certifies the repaired head as both the original head and publication lease.
 - `a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking`
 - `an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks`
 - `an_admission_refusal_for_held_evidence_stays_held_not_escalated`
+- `a_worktree_step_failure_ends_the_failure_hook_as_no_candidate`
+- `a_failure_before_the_worktree_checkpoint_releases_reviews_and_a_later_gap_is_refused`
 
 ### `pr_landing::implementation_handoff_contracts`
 
