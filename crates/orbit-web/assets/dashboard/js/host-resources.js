@@ -163,7 +163,8 @@ export function describeProviderReading(reading, now = Date.now()) {
     : used >= limit - NEAR_POINTS ? 'elevated'
     : 'ok';
   const short = windowLabel(reading.window);
-  const provider = `${reading.provider}${reading.scope ? ` ${reading.scope}` : ''}`;
+  const account = reading.account ? `${reading.provider}/${reading.account}` : reading.provider;
+  const provider = `${account}${reading.scope ? ` ${reading.scope}` : ''}`;
   const key = `${provider}${short ? ` ${short}` : ''}`;
   const value = used != null ? `${Math.round(used)}%` : exhausted ? 'full' : '-';
   const crews = Array.isArray(reading.crews) && reading.crews.length ? `: ${reading.crews.join(', ')} skipped` : '';
@@ -171,11 +172,25 @@ export function describeProviderReading(reading, now = Date.now()) {
     : gated ? `gated${used != null ? ` at ${used}% ≥ ${limit}%` : ''} until ${shortTime(reading.until)}${crews}`
     : reading.gating === false ? 'overage window; never gates'
     : `limit ${limit}%`;
-  const detail = `${reading.provider}${scope} ${reading.window || 'usage window'} ${used != null ? `${used}%` : 'usage not reported'}`
+  const detail = `${account}${scope} ${reading.window || 'usage window'} ${used != null ? `${used}%` : 'usage not reported'}`
     + `${reading.partial === true ? ' (partial: some invocations report no cost)' : ''}`
     + ` · observed ${reading.observed_at || 'at an unknown time'} (${age.label}${age.stale ? ' · stale' : ''}) · ${state}`;
   const flag = age.stale ? 'old' : gatingOff ? 'off' : '';
-  return { key, provider, window: short, order: WINDOW_ORDER[reading.window] ?? 2, value, severity, stale: age.stale, gatingOff, flag, detail };
+  return { key, provider, account, window: short, order: WINDOW_ORDER[reading.window] ?? 2, value, severity, stale: age.stale, gatingOff, flag, detail };
+}
+
+// Values are supplied by the host read model; no pressure arithmetic runs here.
+function pressureValue(pressure) {
+  const value = pressure.pressure;
+  return `×${value === 0 || (value >= 0.01 && value < 10000) ? Number(value.toFixed(2)) : value}`;
+}
+
+function describePressure(pressure) {
+  const label = pressure.account ? `${pressure.provider}/${pressure.account}` : pressure.provider;
+  const window = pressure.pressure_window;
+  return `${label} ${pressureValue(pressure)} (${window
+    ? `${window.window || 'weekly'}${window.scope ? ` [${window.scope}]` : ''} ${window.used_percent}%, resets ${shortTime(window.resets_at)}`
+    : 'no live weekly usage'})`;
 }
 
 const RANK = { critical: 3, elevated: 2, ok: 1, unknown: 0 };
@@ -187,23 +202,31 @@ function chip(className, title, children) {
 const states = item => `${item.stale ? ' stale' : ''}${item.gatingOff ? ' gating-off' : ''}`;
 const flagNodes = item => item.flag ? [el('span', { class: 'provider-usage-flag', text: item.flag })] : [];
 
-/// Readings grouped by provider (and scope), each group's windows shortest
+/// Readings grouped by account when pressure is available, otherwise by provider
+/// and scope for older hosts. Each group's windows read shortest
 /// first. A group takes its worst reading's severity, and is stale or gating
 /// off only when every one of its readings is, since each window also flags
 /// itself.
-function providerGroups(described) {
+function providerGroups(described, pressures) {
   const groups = new Map();
   for (const item of described) {
-    if (!groups.has(item.provider)) groups.set(item.provider, []);
-    groups.get(item.provider).push(item);
+    const key = pressures ? item.account : item.provider;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  for (const pressure of pressures || []) {
+    const label = pressure.account ? `${pressure.provider}/${pressure.account}` : pressure.provider;
+    if (!groups.has(label)) groups.set(label, []);
   }
   return [...groups].map(([provider, items]) => {
     items.sort((a, b) => a.order - b.order);
-    const worst = items.reduce((a, b) => RANK[b.severity] > RANK[a.severity] ? b : a);
+    const worst = items.reduce((a, b) => RANK[b.severity] > RANK[a.severity] ? b : a, { severity: 'unknown' });
+    const pressure = pressures?.find(value => (value.account ? `${value.provider}/${value.account}` : value.provider) === provider);
+    const detail = pressure ? describePressure(pressure) : '';
     return {
-      provider, items, severity: worst.severity,
-      stale: items.every(item => item.stale), gatingOff: items.every(item => item.gatingOff),
-      detail: items.map(item => item.detail).join('\n'),
+      provider, items, pressure, severity: worst.severity,
+      stale: items.length > 0 && items.every(item => item.stale), gatingOff: items.length > 0 && items.every(item => item.gatingOff),
+      detail: [detail, ...items.map(item => item.detail)].filter(Boolean).join('\n'),
     };
   }).sort((a, b) => RANK[b.severity] - RANK[a.severity]);
 }
@@ -231,7 +254,9 @@ export function renderProviderUsage(payload, host = document.getElementById('pro
   if (!host) return;
   const readings = Array.isArray(payload?.provider_limits)
     ? payload.provider_limits.filter(reading => reading && reading.provider) : null;
-  if (!readings || readings.length === 0) {
+  const pressures = Array.isArray(payload?.provider_pressures)
+    ? payload.provider_pressures.filter(value => value?.provider && Number.isFinite(value.pressure)) : null;
+  if ((!readings || readings.length === 0) && !pressures?.length) {
     const title = !payload ? 'Provider usage unavailable: the host resource API did not answer'
       : readings ? 'No provider usage readings on this host'
       : 'Provider usage is not reported by this host';
@@ -242,24 +267,28 @@ export function renderProviderUsage(payload, host = document.getElementById('pro
     return;
   }
   const now = Date.now();
-  const described = readings.map(reading => describeProviderReading(reading, now))
+  const described = (readings || []).map(reading => describeProviderReading(reading, now))
     .sort((a, b) => RANK[b.severity] - RANK[a.severity]);
-  const all = described.map(item => item.detail).join('\n');
-  const groups = providerGroups(described);
+  const groups = providerGroups(described, pressures);
+  const all = groups.map(group => group.detail).join('\n');
   const chips = groups.slice(0, MAX_CHIPS).map(group =>
     chip(`host-resource provider-usage provider-usage-item ${group.severity}${states(group)}`, group.detail, [
       el('span', { class: 'k', text: group.provider }),
-      ...group.items.flatMap(windowNodes),
+      ...(group.pressure ? [el('span', { class: 'v', text: pressureValue(group.pressure) })] : []),
+      ...group.items.flatMap((item, index) => windowNodes({ ...item,
+        window: pressures && item.provider !== item.account ? `${item.provider.slice(item.account.length + 1)} ${item.window}` : item.window,
+      }, index)),
     ]));
   if (groups.length > MAX_CHIPS) {
     chips.push(chip('host-resource provider-usage provider-usage-item provider-usage-more unknown', all, [
       el('span', { class: 'k', text: `+${groups.length - MAX_CHIPS} more` }),
     ]));
   }
-  const worst = described[0];
+  const worst = described[0] || { severity: 'unknown', value: '-', stale: false, gatingOff: false };
+  const account = groups[0];
   const summary = chip(`host-resource provider-usage provider-usage-summary ${worst.severity}${states(worst)}`, all, [
-    el('span', { class: 'k', text: 'usage' }),
-    el('span', { class: 'v', text: worst.value }),
+    el('span', { class: 'k', text: account?.pressure ? account.provider : 'usage' }),
+    el('span', { class: 'v', text: account?.pressure ? pressureValue(account.pressure) : worst.value }),
   ]);
   host.replaceChildren(summary, ...chips);
 }

@@ -350,3 +350,18 @@ const beforeRetarget = urls.length;
 await fetchHostResourcePayloadFor('remote', { shareSelected: true, identity: { name: 'remote', machine_id: 'remote-id', ssh: 'new-target' } });
 assert.equal(urls.length, beforeRetarget + 1, 'a retargeted SSH destination cannot borrow the previous destination reading');
 console.log('resource request sharing: registry retarget invalidates the selected snapshot');
+
+// Pressure is host-computed, uncapped, and grouped by credential account.
+const pressures = [
+  { provider: 'claude', pressure: 25.2, pressure_window: { window: 'seven_day', used_percent: 10, resets_at: '2026-10-24T18:00:00Z' } },
+  { provider: 'claude', account: 'credits', pressure: 0.5, pressure_window: { window: 'seven_day', used_percent: 50, resets_at: '2026-10-30T18:00:00Z' } },
+  { provider: 'gemini', pressure: 1, pressure_window: null },
+];
+renderProviderUsage({ provider_limits: [usage({ used_percent: 10, window: 'seven_day' }), usage({ account: 'credits', used_percent: 50, window: 'seven_day' })], provider_pressures: pressures });
+assert.deepEqual(providerItems().map(line), ['claude ×25.2 10% 7d', 'claude/credits ×0.5 50% 7d', 'gemini ×1']);
+assert.match(providerItems()[0].title, /claude ×25.2 \(seven_day 10%, resets 2026-10-24 18:00Z\)/);
+assert.match(providerItems()[2].title, /no live weekly usage/);
+assert.deepEqual(kv(providerSummary()), { k: 'claude', v: '×25.2' });
+renderProviderUsage({ provider_limits: [], provider_pressures: [{ provider: 'codex', pressure: 0, pressure_window: null }] });
+assert.deepEqual(providerItems().map(line), ['codex ×0'], 'zero pressure is displayed, not treated as missing');
+console.log('weekly pressure: raw values, account isolation, neutral and zero display passed');

@@ -335,7 +335,7 @@ pub fn provider_limit_findings(
             let readings = view
                 .provider_readings(&provider.provider, provider.account.as_deref())
                 .collect::<Vec<_>>();
-            let finding = if provider.gated {
+            let mut finding = if provider.gated {
                 let gated = readings
                     .iter()
                     .filter(|reading| reading.gated)
@@ -404,6 +404,9 @@ pub fn provider_limit_findings(
                     None,
                 )
             };
+            finding
+                .message
+                .push_str(&format!("; pressure {}", provider.usage.describe(now)));
             (Some(provider.provider.clone()), finding)
         })
         .collect::<Vec<_>>();

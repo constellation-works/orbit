@@ -285,7 +285,7 @@ fn muse_run_usage_records_account_windows_at_completion() {
         assert!(!reading.exhausted);
         assert_eq!(reading.model, None);
         assert_eq!(reading.account, None);
-        assert_eq!(reading.window_minutes, None, "no duration was reported");
+        assert_eq!(reading.window_minutes, (label == "weekly").then_some(10080));
         assert_eq!(reading.run_id, None);
         assert_eq!(reading.crew, None);
     }

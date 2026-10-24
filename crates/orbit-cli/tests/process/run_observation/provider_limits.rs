@@ -17,12 +17,26 @@ fn configure_crews(fixture: &Fixture) {
     for (name, provider, model) in [
         ("opus", "claude", "opus-model"),
         ("gem", "gemini", "gem-model"),
+        ("sonnet", "claude", "sonnet-model"),
+        ("credits", "claude", "opus-model"),
+        ("ledger", "grok", "grok-model"),
+        ("error", "claude", "opus-model"),
+        ("lapsed", "claude", "opus-model"),
+        ("no-reset", "claude", "opus-model"),
+        ("overage", "claude", "opus-model"),
     ] {
         config["crews"][name]["enabled"] = value(true);
         config["crews"][name]["provider"] = value(provider);
         config["crews"][name]["model"] = value(model);
         config["crews"][name]["backend"] = value("cli");
     }
+    for account in ["credits", "error", "lapsed", "no-reset", "overage"] {
+        config["crews"][account]["env"] = value(toml_edit::Array::from_iter([
+            "ANTHROPIC_API_KEY=PRESSURE_FIXTURE_KEY",
+        ]));
+    }
+    config["workflow"]["provider_limit_budgets"] =
+        value(toml_edit::Array::from_iter(["grok:100usd/7d"]));
     config["workflow"]["purpose_crews"]["review"] = value("opus");
     fs::write(&path, config.to_string()).unwrap();
 }
@@ -244,7 +258,7 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
     assert_eq!(silent["status"], "info", "{silent}");
     assert_eq!(
         silent["message"],
-        "gemini: no usage signal; Orbit learns limits from failures"
+        "gemini: no usage signal; Orbit learns limits from failures; pressure ×1 (no live weekly usage)"
     );
     let lane = "workflow.purpose_crews.review";
     let row = doctor_row(&rows, &format!("provider-limits:{lane}"));
@@ -287,5 +301,164 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
         executor("gemini")["provider_limits"][0]["status"],
         "info",
         "{providers:#}"
+    );
+
+    // A seven-day ledger reading with a live reset still stays neutral.
+    runtime
+        .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
+            job_run_id: "pressure-ledger-fixture".into(),
+            account: None,
+            activity_id: "implement_one".into(),
+            agent: "grok".into(),
+            provider: Some("grok".into()),
+            model: None,
+            task_ids: Vec::new(),
+            trace: orbit_types::telemetry::InvocationTrace {
+                provider_cost_usd: Some(90.0),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    // The same public snapshot adds pressure without changing the existing gate.
+    let weekly = |provider, window: &str, used, remaining| {
+        let mut observation = reading(provider, used, remaining);
+        observation.window = Some(window.into());
+        observation.window_minutes = Some(10080);
+        observation
+    };
+    for observation in [
+        weekly("claude", "seven_day", 10.0, Duration::hours(6)),
+        // Deliberately not named seven_day: duration defines the weekly window.
+        weekly("codex", "secondary", 0.0, Duration::days(7)),
+    ] {
+        runtime.record_provider_limit(&observation).unwrap();
+    }
+    let mut opus = weekly("claude", "seven_day_opus", 95.0, Duration::days(6));
+    opus.model = Some("opus".into());
+    runtime.record_provider_limit(&opus).unwrap();
+    let mut credits = weekly("claude", "seven_day", 50.0, Duration::days(7));
+    credits.account = Some("credits".into());
+    runtime.record_provider_limit(&credits).unwrap();
+    for account in ["error", "lapsed", "no-reset", "overage"] {
+        let mut observation = weekly("claude", "seven_day", 90.0, Duration::hours(1));
+        observation.account = Some(account.into());
+        match account {
+            "error" => observation.source = ProviderLimitSource::Error,
+            "lapsed" => observation.resets_at = Some(Utc::now() - Duration::minutes(1)),
+            "no-reset" => observation.resets_at = None,
+            "overage" => observation.gating = false,
+            _ => unreachable!(),
+        }
+        runtime.record_provider_limit(&observation).unwrap();
+    }
+    let readiness = fixture.json(&["run", "readiness", "--json"]);
+    let account = |provider: &str, account: Option<&str>| {
+        readiness["provider_pressures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["provider"] == provider && item["account"].as_str() == account)
+            .unwrap()
+    };
+    let crew = |name: &str| {
+        readiness["crew_pressures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["crew"] == name)
+            .unwrap()
+    };
+    let near = |item: &Value, expected: f64| {
+        let actual = item["pressure"].as_f64().unwrap();
+        assert!(
+            (actual - expected).abs() < expected.abs().max(1.0) * 0.005,
+            "{expected} expected, got {item}"
+        );
+    };
+    near(account("claude", None), 25.2);
+    assert_eq!(
+        account("claude", None)["pressure_window"]["window"],
+        "seven_day"
+    );
+    near(account("codex", None), 1.0);
+    assert_eq!(
+        account("codex", None)["pressure_window"]["window"],
+        "secondary"
+    );
+    near(crew("opus"), 0.05 / (6.0 / 7.0));
+    assert_eq!(crew("opus")["pressure_window"]["window"], "seven_day_opus");
+    near(crew("sonnet"), 25.2);
+    near(crew("credits"), 0.5);
+    near(account("claude", Some("credits")), 0.5);
+    for name in ["gem", "ledger", "error", "lapsed", "no-reset", "overage"] {
+        assert_eq!(
+            crew(name)["pressure"],
+            1.0,
+            "neutral {name}: {}",
+            crew(name)
+        );
+        assert!(crew(name)["pressure_window"].is_null(), "{}", crew(name));
+    }
+    assert!(
+        readiness["provider_limits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| {
+                item["provider"] == "grok"
+                    && item["source"] == "ledger"
+                    && item["used_percent"] == 90.0
+                    && item["resets_at"].is_string()
+            }),
+        "the neutral budget case must exercise a real ledger reading"
+    );
+    // Replacing only the five-hour usage cannot change weekly pressure.
+    runtime
+        .record_provider_limit(&reading("claude", 5.0, Duration::hours(2)))
+        .unwrap();
+    let changed = fixture.json(&["run", "readiness", "--json"]);
+    for (old, new) in readiness["crew_pressures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(changed["crew_pressures"].as_array().unwrap())
+    {
+        assert_eq!(old["crew"], new["crew"]);
+        assert!(
+            (old["pressure"].as_f64().unwrap() - new["pressure"].as_f64().unwrap()).abs() < 0.01
+        );
+        assert_eq!(old["pressure_window"], new["pressure_window"]);
+    }
+    let text = fixture.orbit().args(["run", "readiness"]).output().unwrap();
+    assert!(text.status.success(), "{text:?}");
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with("Provider pressure: claude ×25.")
+                && line.contains("(seven_day 10%, resets ")),
+        "{text}"
+    );
+    assert!(
+        text.contains("Crew pressure: opus ×0.06 (seven_day_opus [opus] 95%, resets "),
+        "{text}"
+    );
+    let doctor = fixture.orbit().args(["doctor", "--json"]).output().unwrap();
+    let rows: Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    let row = doctor_row(&rows, "provider-limits:claude");
+    assert!(
+        row["message"].as_str().unwrap().contains("pressure ×25.")
+            && row["message"]
+                .as_str()
+                .unwrap()
+                .contains("(seven_day 10%, resets "),
+        "{row}"
+    );
+    let row = doctor_row(&rows, "provider-limits:claude/credits");
+    assert!(
+        row["message"]
+            .as_str()
+            .unwrap()
+            .contains("pressure ×0.5 (seven_day 50%, resets "),
+        "{row}"
     );
 }

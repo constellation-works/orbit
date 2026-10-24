@@ -166,6 +166,28 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
         },
     ));
     lines.extend(provider_limit_lines(&payload["provider_limits"]));
+    let now = Utc::now();
+    if let Ok(providers) = serde_json::from_value::<
+        Vec<orbit_core::application::task::ProviderUsageStatus>,
+    >(payload["provider_pressures"].clone())
+    {
+        lines.extend(providers.iter().map(|provider| {
+            format!(
+                "Provider pressure: {} {}",
+                provider.label(),
+                provider.usage.describe(now)
+            )
+        }));
+    }
+    if let Ok(crews) = serde_json::from_value::<Vec<orbit_core::application::task::CrewUsagePressure>>(
+        payload["crew_pressures"].clone(),
+    ) {
+        lines.extend(
+            crews
+                .iter()
+                .map(|crew| format!("Crew pressure: {} {}", crew.crew, crew.usage.describe(now))),
+        );
+    }
     if let Some(budget) = cpu_light_budget_line(&capacity["cpu_light_budget"]) {
         lines.push(budget);
     }
