@@ -11,6 +11,8 @@ use std::collections::BTreeSet;
 
 use orbit_engine::DispatchError;
 use orbit_store::contracts::{TaskLockConflict, TaskLockHolder};
+use orbit_tools::ToolContext;
+use orbit_types::policy::Role;
 use orbit_types::telemetry::AuditEventStatus;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
@@ -22,24 +24,26 @@ use crate::runtime::audit::system::{
 };
 use crate::runtime::task::locks::{workspace_orbit_dir, workspace_task_reservation_id};
 
+use super::gate_reservation::{context_conflict_check, dependency_admission_for_input};
+
 /// Parsed once where the rendered step input enters the dispatcher.
 #[derive(Deserialize)]
-pub(crate) struct GateStarvationInput {
+struct GateStarvationInput {
     #[serde(default, deserialize_with = "string_list")]
-    pub(crate) task_ids: Vec<String>,
+    task_ids: Vec<String>,
     #[serde(default)]
-    pub(crate) expired: bool,
+    expired: bool,
     #[serde(default)]
-    pub(crate) reservation: GateReservationInput,
+    reservation: GateReservationInput,
     #[serde(flatten)]
-    pub(crate) window: GateWindow,
-    pub(crate) max_wait_seconds: Option<f64>,
-    pub(crate) run_id: Option<String>,
+    window: GateWindow,
+    max_wait_seconds: Option<f64>,
+    run_id: Option<String>,
 }
 
 /// Absence is the legacy flat input; null means the loop never polled.
 #[derive(Default)]
-pub(crate) enum GateReservationInput {
+enum GateReservationInput {
     #[default]
     Missing,
     Unpolled,
@@ -57,17 +61,17 @@ impl<'de> Deserialize<'de> for GateReservationInput {
 /// Preserve unconsumed grant metadata in the persisted reservation, including
 /// deferred footprints and publication details, even after releasing a late grant.
 #[derive(Deserialize, Serialize)]
-pub(crate) struct GateReservation {
+struct GateReservation {
     #[serde(flatten)]
-    pub(crate) window: GateWindow,
+    window: GateWindow,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) reservation_id: Option<String>,
+    reservation_id: Option<String>,
     #[serde(flatten)]
     metadata: serde_json::Map<String, Value>,
 }
 
 impl GateReservation {
-    pub(crate) fn unpolled(conflicts: Vec<TaskLockConflict>, waiting_on_deps: Vec<String>) -> Self {
+    fn unpolled(conflicts: Vec<TaskLockConflict>, waiting_on_deps: Vec<String>) -> Self {
         Self {
             window: GateWindow {
                 reserved: Some(TemplateReserved::Bool(false)),
@@ -84,20 +88,20 @@ impl GateReservation {
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]
-pub(crate) struct GateWindow {
+struct GateWindow {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) reserved: Option<TemplateReserved>,
+    reserved: Option<TemplateReserved>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) conflicts: Option<Vec<TaskLockConflict>>,
+    conflicts: Option<Vec<TaskLockConflict>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) waiting_on_deps: Option<Vec<String>>,
+    waiting_on_deps: Option<Vec<String>>,
 }
 
 /// Templates can render the success flag as either a boolean or text. Keep
 /// its wire representation while interpreting it only at this boundary.
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(untagged)]
-pub(crate) enum TemplateReserved {
+enum TemplateReserved {
     Bool(bool),
     Text(String),
     Other(Value),
@@ -110,7 +114,7 @@ impl Default for TemplateReserved {
 }
 
 impl TemplateReserved {
-    pub(crate) fn granted(&self) -> bool {
+    fn granted(&self) -> bool {
         match self {
             Self::Bool(value) => *value,
             Self::Text(value) => value.trim().parse().unwrap_or(false),
@@ -119,11 +123,85 @@ impl TemplateReserved {
     }
 }
 
+/// The gate's post-wait step [ORB-15514]. A gate that never polled observes
+/// its blockers here without acquiring a late reservation; an expired window
+/// whose late poll was granted releases that grant through the audited
+/// `orbit.task.locks.release` tool before deferring.
+pub(crate) fn gate_starvation_step(
+    runtime: &OrbitRuntime,
+    action: &str,
+    input: &Value,
+    tool_context: ToolContext,
+) -> Result<Value, DispatchError> {
+    let mut gate: GateStarvationInput = serde_json::from_value(input.clone())
+        .map_err(|err| DispatchError::action_failed(action, format!("parse gate input: {err}")))?;
+    match &gate.reservation {
+        GateReservationInput::Unpolled => {
+            // A zero/expired budget observes blockers without ever
+            // acquiring a late reservation.
+            let admission = dependency_admission_for_input(runtime, input)
+                .map_err(|err| DispatchError::action_failed(action, err.to_string()))?;
+            if !admission.unsatisfiable.is_empty() {
+                return Err(DispatchError::action_failed(
+                    action,
+                    admission.unsatisfiable_message(),
+                ));
+            }
+            // Errors keep naming the conflict-check action this step used to
+            // dispatch through.
+            let conflicts = context_conflict_check(runtime, "context_conflict_check", input)?;
+            #[derive(Deserialize)]
+            struct ConflictCheckOutput {
+                conflicts: Vec<TaskLockConflict>,
+            }
+            let conflicts: ConflictCheckOutput = serde_json::from_value(conflicts)
+                .map_err(|err| DispatchError::action_failed(action, err.to_string()))?;
+            gate.reservation = GateReservationInput::Observed(Box::new(GateReservation::unpolled(
+                conflicts.conflicts,
+                admission.waiting_on,
+            )));
+        }
+        GateReservationInput::Missing | GateReservationInput::Observed(_) => {}
+    }
+    if let GateReservationInput::Observed(reservation) = &gate.reservation {
+        gate.window = reservation.window.clone();
+    }
+    // Only a boolean grant authorizes late-grant cleanup. Legacy
+    // text flags retain the template boundary's existing interpretation.
+    if gate.expired && matches!(gate.window.reserved, Some(TemplateReserved::Bool(true))) {
+        let reservation_id = match &gate.reservation {
+            GateReservationInput::Observed(reservation) => reservation.reservation_id.as_deref(),
+            _ => None,
+        }
+        .ok_or_else(|| {
+            DispatchError::action_failed(action, "late reservation missing reservation_id")
+        })?;
+        runtime
+            .run_tool_with_context_and_role(
+                "orbit.task.locks.release",
+                json!({"reservation_id": reservation_id}),
+                Role::Admin,
+                tool_context,
+            )
+            .map_err(|err| DispatchError::action_failed("release_locks", format!("{err}")))?;
+        gate.window.reserved = Some(TemplateReserved::Bool(false));
+        if let GateReservationInput::Observed(reservation) = &mut gate.reservation {
+            reservation.window.reserved = Some(TemplateReserved::Bool(false));
+        }
+    }
+    let mut output = gate_starvation_defer(runtime, action, &gate)?;
+    output["reservation"] = match gate.reservation {
+        GateReservationInput::Observed(reservation) => json!(reservation),
+        _ => json!({}),
+    };
+    Ok(output)
+}
+
 /// The gate's post-wait step. Runs on every gate run so later steps may read
 /// its output: a reserved window is `{deferred: false}`; an expired one is
 /// audited as `gate.starvation` and returned as the deferral `invoke_and_wait`
 /// stops on.
-pub(crate) fn gate_starvation_defer(
+fn gate_starvation_defer(
     runtime: &OrbitRuntime,
     action: &str,
     input: &GateStarvationInput,
