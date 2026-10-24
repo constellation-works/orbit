@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Color and Styling"
 last_updated: 2026-10-14
-last_validated: 2026-10-19
+last_validated: 2026-10-24
 ---
 
 # Spec: Color and Styling
