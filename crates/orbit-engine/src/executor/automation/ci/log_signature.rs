@@ -29,8 +29,10 @@ pub const ERROR_MARKERS: &[&str] = &[
 /// Preference order, so a generic wrapper cannot fragment one evidenced
 /// failure or collapse distinct ones:
 /// 1. A coded compiler diagnostic (`error[E0062]: …`).
-/// 2. A concrete test/panic identity (`thread '…' panicked`, `test … FAILED`,
-///    nextest `FAIL […]`, a name listed after libtest `failures:`).
+/// 2. A concrete test/panic identity: first the harness verdict naming the
+///    failing test (`test … FAILED`, nextest `FAIL […]`, a name listed after
+///    libtest `failures:`), then that test's captured `thread '…' panicked`
+///    output, which is detail of the same failure rather than its identity.
 /// 3. A specific `##[error]` annotation.
 /// 4. A labelled diagnostic (`error[vulnerability]: …`).
 /// 5. Any remaining marker diagnostic (compiler `error:`, `assertion failed`).
@@ -38,7 +40,8 @@ pub const ERROR_MARKERS: &[&str] = &[
 /// 7. The failing step name, labelled as a fallback — used when the excerpt
 ///    only has wrappers, bookkeeping, or assertion payload.
 ///
-/// Equal-ranked diagnostics prefer the last one before the process-exit trailer.
+/// Within one rank (and within the two concrete tiers) diagnostics prefer
+/// the last one before the process-exit trailer.
 ///
 /// Generic trailers include GitHub's process-completed / `The process '…'
 /// failed with exit code` / action-failed annotations, cargo's
@@ -80,9 +83,29 @@ pub fn diagnostic_anchor(lines: &[(LineKind, &str)]) -> Option<usize> {
         })
         .map_or(lines.len(), |index| index + 1);
     let lines = &lines[..end];
+    if let Some(index) = lines
+        .iter()
+        .rposition(|(kind, _)| *kind == LineKind::CompilerDiagnostic)
+    {
+        return Some(index);
+    }
+    // A harness verdict names the failing test; a `thread '…' panicked` line
+    // below it is that same test's captured output. Preferring the verdict
+    // keeps one stable identity when both are emitted (for example nextest's
+    // `FAIL […]` line followed by the test's panic detail).
+    if let Some(index) = lines
+        .iter()
+        .rposition(|(kind, line)| *kind == LineKind::ConcreteDiagnostic && !is_captured_panic(line))
+    {
+        return Some(index);
+    }
+    if let Some(index) = lines
+        .iter()
+        .rposition(|(kind, _)| *kind == LineKind::ConcreteDiagnostic)
+    {
+        return Some(index);
+    }
     for wanted in [
-        LineKind::CompilerDiagnostic,
-        LineKind::ConcreteDiagnostic,
         LineKind::ErrorAnnotated,
         LineKind::LabelledDiagnostic,
         LineKind::Marker,
@@ -363,6 +386,16 @@ fn is_concrete_diagnostic(payload: &str, lowered: &str, after_failures_header: b
 fn is_panic_line(lowered: &str) -> bool {
     lowered.contains("panicked at")
         && (lowered.contains("thread '") || lowered.contains("thread \""))
+}
+
+/// Captured `thread '…' panicked` output from the failing test itself, as
+/// opposed to the harness verdict lines that name that test. Partitioning
+/// concrete diagnostics this way is exact: a verdict line never contains a
+/// panic attribution, and a panic line always contains spaces, so it never
+/// matches the verdict shapes (`FAIL [`, `test … ... FAILED`, or a bare
+/// listed failure name).
+fn is_captured_panic(line: &str) -> bool {
+    is_panic_line(&signature_payload(line))
 }
 
 fn is_failed_test_result(lowered: &str) -> bool {
