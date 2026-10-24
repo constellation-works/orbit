@@ -4948,10 +4948,16 @@ function buildQuickAction(task, context) {
   // Ship reads in the accent while nothing holds the task, and quietly while
   // the drain snapshot says it waits; it ships either way.
   const ready = spec.kind === "ship" && drainReadinessFor(task.id)?.pool === "eligible";
+  // Pending keeps the idle label so the button keeps its idle width: the
+  // longer "Approving…"/"Shipping…" labels overflow the 73px desktop action
+  // column into the crew control. The pending state is named for assistive
+  // technology and shown by the spinner in tasks.css.
+  const pendingLabel = spec.kind === "ship" ? "Shipping…" : "Approving…";
   const btn = el("button", {
-    class: `task-quick ${spec.kind}${ready ? " ready" : ""}`,
-    text: pending ? (spec.kind === "ship" ? "Shipping…" : "Approving…") : spec.text,
-    title: canRunQuickAction(task) ? spec.title : aggregateRefusalTitle(spec.title, spec.kind),
+    class: `task-quick ${spec.kind}${ready ? " ready" : ""}${pending ? " pending" : ""}`,
+    text: spec.text,
+    title: pending ? pendingLabel : (canRunQuickAction(task) ? spec.title : aggregateRefusalTitle(spec.title, spec.kind)),
+    ...(pending ? { "aria-label": pendingLabel, "aria-busy": "true" } : {}),
   });
   btn.type = "button";
   btn.disabled = pending || !canRunQuickAction(task);
