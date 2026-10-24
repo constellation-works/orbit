@@ -5,6 +5,7 @@ import http.server
 import json
 import os
 from pathlib import Path
+import fnmatch
 import re
 import self_test_hang
 import shutil
@@ -467,17 +468,27 @@ class NextestShardWorkflowTests(unittest.TestCase):
         shard_jobs = {job_id: job for job_id, job in jobs.items() if job_id.startswith("test-")
                       and job_id != "test-build"}
         self.assertGreater(shards, 1)
-        # The shards start on the build's upload step; the partition guard
-        # follows it. A renamed upload step would leave them waiting for the
-        # whole build job.
+        # The shards start on the build's last upload step; the partition
+        # guard follows it. A renamed upload step would leave them waiting for
+        # the whole build job, and a step after the awaited one would let
+        # them download before every part exists.
+        parts = int(self.document["env"]["NEXTEST_ARCHIVE_PARTS"])
+        self.assertGreater(parts, 1)
         build_steps = [step.get("name") for step in jobs["test-build"]["steps"]]
-        upload = "Upload nextest archive"
-        self.assertIn(upload, build_steps)
+        uploads = [f"Upload nextest archive part {k}/{parts}" for k in range(1, parts + 1)]
+        self.assertEqual([name for name in build_steps if name and name.startswith("Upload nextest archive")],
+                         uploads)
+        upload = uploads[-1]
         self.assertLess(build_steps.index(upload), build_steps.index("Prove the shards cover every test"))
         [pack] = self.run_step(jobs["test-build"], "Pack nextest archive for transfer")
         self.assertEqual(pack[1], "pack")
-        upload_step = next(step for step in jobs["test-build"]["steps"] if step.get("name") == upload)
-        self.assertEqual(upload_step["with"]["path"].replace("${{ runner.temp }}", str(self.root)), pack[3])
+        self.assertEqual(pack[4:], ["--parts", str(parts)])
+        names = set()
+        for k, name in enumerate(uploads, 1):
+            upload_step = next(step for step in jobs["test-build"]["steps"] if step.get("name") == name)
+            self.assertEqual(upload_step["with"]["path"].replace("${{ runner.temp }}", str(self.root)),
+                             f"{pack[3]}.{k}")
+            names.add(upload_step["with"]["name"])
         partitions = {}
         for job_id, job in shard_jobs.items():
             with self.subTest(job=job_id):
@@ -486,7 +497,13 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 [nextest] = self.run_step(job, "Run nextest shard")
                 [unpack] = self.run_step(job, "Restore native nextest archive")
                 self.assertEqual(unpack[:2], [pack[0], "unpack"])
-                self.assertEqual(unpack[2:], [pack[3], pack[2]])
+                self.assertEqual(unpack[2:], [pack[3], pack[2], "--parts", str(parts)])
+                download = next(step for step in job["steps"] if step.get("name") == "Download nextest archive")
+                self.assertTrue(download["with"]["merge-multiple"])
+                uploaded = {step["with"]["name"] for other in jobs.values() for step in other["steps"]
+                            if step.get("uses", "").startswith("actions/upload-artifact@")}
+                self.assertEqual({name for name in uploaded if fnmatch.fnmatchcase(name, download["with"]["pattern"])},
+                                 names, "every shard downloads every part and nothing else")
                 self.assertEqual(nextest[nextest.index("--archive-file") + 1], unpack[3])
                 self.assertEqual(nextest[:4], ["--label", "nextest", "--", "cargo"])
                 self.assertIn("--no-fail-fast", nextest)

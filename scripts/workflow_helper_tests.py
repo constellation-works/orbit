@@ -133,11 +133,12 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
             bin_dir = root / "bin"
             bin_dir.mkdir()
             gh = bin_dir / "gh"
-            # Transport fixture: the upload succeeded but the build is still
-            # running, so success requires the real helper's --step behavior.
+            # Transport fixture: the last upload succeeded but the build is
+            # still running, so success requires the real helper's --step behavior.
+            upload = [step["name"] for step in self.document["jobs"]["test-build"]["steps"]
+                      if step.get("name", "").startswith("Upload nextest archive")][-1]
             job = {"name": "Test build", "status": "in_progress", "conclusion": None,
-                   "steps": [{"name": "Upload nextest archive", "status": "completed",
-                              "conclusion": "success"}]}
+                   "steps": [{"name": upload, "status": "completed", "conclusion": "success"}]}
             gh.write_text(f"#!{sys.executable}\nprint({json.dumps(job)!r})\n")
             gh.chmod(0o755)
             env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}",
@@ -170,9 +171,9 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
                         result = run(["bash", "-euo", "pipefail", "-c", step["run"]],
                                      cwd=checkout, check=False, env=env)
                         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                        self.assertIn("passed step 'Upload nextest archive'", result.stdout)
+                        self.assertIn(f"passed step '{upload}'", result.stdout)
                         negative = run([sys.executable, "scripts/ci-await-jobs.py", "--job", "Test build",
-                                        "--step", "Upload nextest archive"], cwd=checkout, check=False)
+                                        "--step", upload], cwd=checkout, check=False)
                         self.assertEqual(negative.returncode, 2, negative.stderr)
                         self.assertIn("unrecognized arguments: --step", negative.stderr)
                     self.assertEqual(run(["git", "rev-parse", "HEAD"], cwd=checkout).stdout.strip(), old)

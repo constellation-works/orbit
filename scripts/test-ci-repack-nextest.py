@@ -24,9 +24,9 @@ class RepackTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 
-    def run_repack(self, mode, source, destination, **kwargs):
-        return subprocess.run([sys.executable, str(SCRIPT), mode, str(source), str(destination)],
-                              capture_output=True, **kwargs)
+    def run_repack(self, mode, source, destination, parts=1, **kwargs):
+        return subprocess.run([sys.executable, str(SCRIPT), mode, str(source), str(destination),
+                               "--parts", str(parts)], capture_output=True, **kwargs)
 
     def test_repeated_binary_content_transfers_once_and_roundtrips_every_tar_byte(self):
         # Linked Rust executables repeat sections at distances beyond the
@@ -43,12 +43,20 @@ class RepackTests(unittest.TestCase):
         native = self.root / "native.tar.zst"
         subprocess.run(["zstd", "-q", "-3", "-o", str(native)], input=original, check=True)
         transfer = self.root / "transfer.tar.zst"
-        result = self.run_repack("pack", native, transfer)
+        result = self.run_repack("pack", native, transfer, parts=3)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertLess(transfer.stat().st_size, native.stat().st_size * 0.6,
+        parts = [self.root / f"transfer.tar.zst.{index}" for index in (1, 2, 3)]
+        self.assertLess(sum(part.stat().st_size for part in parts), native.stat().st_size * 0.6,
                         "repeated linked binaries must not bloat the transfer beyond the native window")
         restored = self.root / "restored.tar.zst"
-        result = self.run_repack("unpack", transfer, restored)
+        # A missing part, or a count that drops the last one, must not
+        # restore an apparently valid prefix of the tar stream.
+        for count in (2, 4):
+            with self.subTest(parts=count):
+                result = self.run_repack("unpack", transfer, restored, parts=count)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(restored.exists())
+        result = self.run_repack("unpack", transfer, restored, parts=3)
         self.assertEqual(result.returncode, 0, result.stderr)
         # No larger-window option: this must work with the decoder budget
         # nextest uses. Exact bytes retain metadata, paths, modes and members.
@@ -57,7 +65,9 @@ class RepackTests(unittest.TestCase):
         self.assertEqual(decoded, original)
 
     def test_unavailable_corrupt_and_failed_setup_never_publish_or_replace(self):
-        source = self.root / "source.zst"
+        # One-part transfer names: unpack reads SOURCE.1 and pack writes
+        # DESTINATION.1.
+        source = self.root / "source.zst.1"
         subprocess.run(["zstd", "-q", "-o", str(source)], input=b"tar bytes", check=True)
         original = source.read_bytes()
         absent = self.root / "no-tools"
@@ -67,7 +77,7 @@ class RepackTests(unittest.TestCase):
         zstd = broken / "zstd"
         zstd.write_text("#!/bin/sh\nexit 7\n")
         zstd.chmod(0o755)
-        corrupt = self.root / "truncated.zst"
+        corrupt = self.root / "truncated.zst.1"
         corrupt.write_bytes(source.read_bytes()[:-3])
         for mode in ("pack", "unpack"):
             for name, archive, env in (
@@ -77,13 +87,20 @@ class RepackTests(unittest.TestCase):
             ):
                 with self.subTest(mode=mode, failure=name):
                     destination = self.root / f"{mode}-{name}.zst"
+                    if mode == "unpack":
+                        archive = archive.with_suffix("")
                     result = self.run_repack(mode, archive, destination, env=env)
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertFalse(destination.exists())
+                    self.assertFalse(list(self.root.glob(f"{mode}-{name}.zst*")))
                     self.assertFalse(list(self.root.glob("nextest-repack-*")))
-            result = self.run_repack(mode, source, source)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(source.read_bytes(), original)
+        # Neither mode replaces its input or an existing output: pack's
+        # first part here is its own source, and unpack's output is that part.
+        for mode, archive, destination in (("pack", source, source.with_suffix("")),
+                                           ("unpack", source.with_suffix(""), source)):
+            with self.subTest(mode=mode, failure="existing destination"):
+                result = self.run_repack(mode, archive, destination)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(source.read_bytes(), original)
 
 
 if __name__ == "__main__":
