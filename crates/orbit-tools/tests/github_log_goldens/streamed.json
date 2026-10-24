@@ -3627,5 +3627,37 @@
       7,
       4096
     ]
+  },
+  {
+    "name": "capped_tail_at_bearer_introducer_does_not_leak_value",
+    "parts": [
+      "filler0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller3 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller4 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nAuthorization: Bearer SYNTHETICVALUE1234567890\ntailend1234567890\n"
+    ],
+    "max_bytes": 99,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "capped_tail_at_bearer_value_does_not_leak_value",
+    "parts": [
+      "filler0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller3 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller4 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nAuthorization: Bearer SYNTHETICVALUE1234567890\ntailend1234567890\n"
+    ],
+    "max_bytes": 85,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "capped_tail_at_api_key_equals_does_not_leak_value",
+    "parts": [
+      "filler0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller3 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller4 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\napi_key = SYNTHETICVALUE1234567890\ntailend1234567890\n"
+    ],
+    "max_bytes": 89,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "capped_tail_at_api_key_value_does_not_leak_value",
+    "parts": [
+      "filler0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller3 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller4 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\napi_key = SYNTHETICVALUE1234567890\ntailend1234567890\n"
+    ],
+    "max_bytes": 85,
+    "max_evidence_lines": 40
   }
 ]

@@ -856,19 +856,113 @@ fn excerpt_without_orphaned_tail_token(bytes: &[u8], lookbehind: &[u8]) -> Strin
     let Some(ws_len) = rest.find(|character: char| !character.is_whitespace()) else {
         return rest.to_string();
     };
-    let body = &rest[ws_len..];
-    let token_len = body.find(char::is_whitespace).unwrap_or(body.len());
-    let token = &body[..token_len];
     let prefix = tail_token_prefix(lookbehind, partial, &rest[..ws_len]);
-    let sensitive_alone = WindowBoundaryTokens::context_redacts_token("", token);
-    let sensitive_with_introducer = WindowBoundaryTokens::context_redacts_token(&prefix, token);
-    // The visible lookbehind has to be what makes the token sensitive.
-    // Guessing at an introducer beyond the retained window would also drop
-    // ordinary tail markers from a long capped log.
-    if sensitive_alone || !sensitive_with_introducer {
-        return rest.to_string();
+    // Walk an introducer chain (e.g. `Authorization: Bearer <value>` left as
+    // `Bearer <value>`, or `api_key` left as `= <value>`). Dropping only the
+    // first token would strand the credential value without its introducer,
+    // so `redact_all` in `finish` could no longer mask it. Drop every
+    // introducer token and the value that follows it; a non-introducer
+    // sensitive token is the value itself, so the walk stops after it.
+    let mut chain_prefix = prefix;
+    let mut cursor = 0usize;
+    let mut dropped_sensitive = false;
+    loop {
+        let remaining = &rest[cursor..];
+        let Some(next_ws) = remaining.find(|character: char| !character.is_whitespace()) else {
+            return if dropped_sensitive {
+                remaining.to_string()
+            } else {
+                rest.to_string()
+            };
+        };
+        let body = &remaining[next_ws..];
+        let token_len = body.find(char::is_whitespace).unwrap_or(body.len());
+        let token = &body[..token_len];
+        let after_token = &body[token_len..];
+        let sensitive_alone = WindowBoundaryTokens::context_redacts_token("", token);
+        if sensitive_alone {
+            // A token the redactor masks on its own stays (in place) when it
+            // is first; after an introducer was dropped it also stays, as
+            // the redactor still masks it without the introducer.
+            return if cursor == 0 {
+                rest.to_string()
+            } else {
+                remaining.to_string()
+            };
+        }
+        let sensitive_with_introducer =
+            WindowBoundaryTokens::context_redacts_token(&chain_prefix, token);
+        let introducer = token_is_introducer(token);
+        if !sensitive_with_introducer && !introducer {
+            return if dropped_sensitive {
+                remaining.to_string()
+            } else {
+                rest.to_string()
+            };
+        }
+        if !sensitive_with_introducer && cursor > 0 && !dropped_sensitive {
+            // A tentative introducer chain that does not lead to a sensitive
+            // value (only reachable for a leading api-key key token) keeps
+            // the original tail.
+            return rest.to_string();
+        }
+        if !sensitive_with_introducer && cursor == 0 && !token_is_api_key_key(token) {
+            // The visible lookbehind has to be what makes the token
+            // sensitive. Guessing at an introducer beyond the retained
+            // window would also drop ordinary tail markers.
+            return rest.to_string();
+        }
+        // This token is dropped: either it is sensitive with its introducer,
+        // or it is an introducer (possibly a leading api-key key) whose value
+        // still has to be checked against the extended chain.
+        dropped_sensitive |= sensitive_with_introducer;
+        if !introducer {
+            return after_token.to_string();
+        }
+        let after_ws = after_token
+            .find(|character: char| !character.is_whitespace())
+            .unwrap_or(after_token.len());
+        chain_prefix = format!("{chain_prefix}{token}{}", &after_token[..after_ws]);
+        cursor += next_ws + token_len;
+        if after_token.is_empty() {
+            return String::new();
+        }
     }
-    rest[ws_len + token_len..].to_string()
+}
+
+/// Whether `token` can introduce a credential value rather than be one:
+/// an auth scheme, a `key:`/`key=` separator, a bare `=`/`:` separator, or
+/// an api-key/authorization key name.
+fn token_is_introducer(token: &str) -> bool {
+    let stripped = token.trim_matches(|c| matches!(c, '"' | '\'' | '`' | ',' | ';'));
+    let core = stripped.trim_matches(|c| matches!(c, '[' | ']' | '{' | '}' | '(' | ')'));
+    if core.eq_ignore_ascii_case("bearer") || core.eq_ignore_ascii_case("basic") {
+        return true;
+    }
+    if core == "=" || core == ":" || core.ends_with(':') || core.ends_with('=') {
+        return true;
+    }
+    token_is_api_key_key(token)
+        || core.eq_ignore_ascii_case("authorization")
+        || core.eq_ignore_ascii_case("x-api-key")
+}
+
+/// Whether `token` names an api-key key (any spelling the assignment check
+/// in [`WindowBoundaryTokens::context_redacts_token`] accepts), e.g.
+/// `api_key`, `apiKey`, `"api_key":`.
+fn token_is_api_key_key(token: &str) -> bool {
+    let key = token.trim_matches(|c| {
+        matches!(
+            c,
+            '"' | '\'' | '`' | ',' | ';' | '[' | ']' | '{' | '}' | '(' | ')' | ':' | '='
+        )
+    });
+    let normalized: String = key
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    normalized == "apikey" || normalized.ends_with("apikey")
 }
 
 /// Line-prefix context that applies to the tail's first whole token.
