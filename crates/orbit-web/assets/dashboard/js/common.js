@@ -576,6 +576,12 @@ function scopedHref(hash, { host, workspace }) {
   return `${search ? `?${search}` : ""}${hash}`;
 }
 
+/// The dashboard address of `hash` in the selected host and workspace, for an
+/// in-dashboard link that should survive a new tab, a copy or a reload.
+export function scopedHashHref(hash) {
+  return scopedHref(hash, { host: selectedRunHost(), workspace: currentWorkspace });
+}
+
 /// The dashboard address of run `runId`, on `host` in `workspace`. Every run
 /// link is built here: the query names the host, the workspace (the reserved
 /// `all` token for the aggregate view) and the time window, so a link opened in

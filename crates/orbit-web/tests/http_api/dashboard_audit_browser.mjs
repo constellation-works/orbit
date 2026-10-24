@@ -66,6 +66,7 @@ const analytics = {
   ] },
 };
 const analyticsRequests = [];
+const relatedRequests = [];
 // When set, /api/audit pages through it like the real endpoint: newest first,
 // `before` keyset cursor, `x-audit-next-before` while a full page may have more.
 let pagedEvents = null;
@@ -95,6 +96,10 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/api/codebase/analytics') {
       analyticsRequests.push(url.searchParams);
       payload = analytics;
+    }
+    if (url.pathname === '/api/codebase/related') {
+      relatedRequests.push(url.searchParams);
+      payload = { path: url.searchParams.get('path'), path_support: 3, min_support: 15, rows: [], empty_reason: { kind: 'path_below_minimum', path_support: 3, min_support: 15 } };
     }
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify(payload));
@@ -525,76 +530,8 @@ try {
   });
   assert.ok(fullWidth.panel >= fullWidth.main - 2, `Codebase takes the full width: ${JSON.stringify(fullWidth)}`);
 
-  // Seven tiles are toggle buttons; the overlap list is open by default and
-  // holds exactly the paths in two or more of the four path rankings.
-  const tiles = page.locator('#codebase-body .codebase-tile');
-  assert.equal(await tiles.count(), 7);
-  assert.deepEqual(await tiles.evaluateAll(nodes => nodes.map(node => [node.tagName, node.getAttribute('aria-pressed')])),
-    [['BUTTON', 'true'], ...Array.from({ length: 6 }, () => ['BUTTON', 'false'])]);
-  const rowPaths = () => page.locator('#codebase-list .codebase-row .codebase-path').evaluateAll(nodes => nodes.map(node => node.textContent));
-  assert.deepEqual(await rowPaths(), ['crates/orbit-core/src/application/task/mod.rs', 'docs/README.md', 'src/blocked.rs']);
-  const selectedPath = () => page.locator('#codebase-list .codebase-row[aria-current="true"] .codebase-path').textContent();
-  assert.equal(await selectedPath(), 'crates/orbit-core/src/application/task/mod.rs', 'the first row is selected');
-  assert.equal(await page.locator('#codebase-detail .codebase-task').count(), 1);
-  await page.locator('#codebase-list .codebase-row').nth(1).click();
-  assert.equal(await selectedPath(), 'docs/README.md');
-  assert.match(await page.locator('#codebase-detail [data-ranking="regressions"] .codebase-standing-rank').textContent(), /^not in the top 25$/);
-
-  // A poll with the same payload keeps the tile, the row and the scroll.
-  await page.locator('#codebase-body .codebase-tile[data-tile="footprint_misses"]').click();
-  assert.equal(await page.locator('#codebase-body .codebase-tile[data-tile="footprint_misses"]').getAttribute('aria-pressed'), 'true');
-  const scroller = page.locator('.tab-pane[data-tab="analytics"]');
-  await page.setViewportSize({ width: 1440, height: 600 });
-  const scrolled = await scroller.evaluate(node => { node.scrollTop = 200; return node.scrollTop; });
-  assert.ok(scrolled > 0, 'the fixture page is tall enough to scroll');
-  await refreshCodebase();
-  assert.equal(await scroller.evaluate(node => node.scrollTop), scrolled, 'a poll keeps the scroll position');
-  assert.equal(await page.locator('#codebase-body .codebase-tile[data-tile="footprint_misses"]').getAttribute('aria-pressed'), 'true', 'a poll keeps the tile');
-  assert.equal(await selectedPath(), 'docs/README.md', 'a poll keeps the row');
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.screenshot({ path: path.join(evidence, 'codebase-1440.png'), fullPage: true, animations: 'disabled' });
-
-  // The segments and the empty-coupling action rewrite the hash and the request.
-  await page.locator('#codebase-rollup .codebase-seg[data-value="crate"]').click();
-  assert.equal(await page.locator('#codebase-rollup .codebase-seg[data-value="crate"]').getAttribute('aria-pressed'), 'true');
-  assert.deepEqual(await page.evaluate(() => globalThis.codebaseHashes), ['#analytics/codebase?rollup=crate']);
-  await refreshCodebase();
-  assert.equal(analyticsRequests.at(-1).get('rollup'), 'crate', 'the rollup segment changes the request');
-  await page.locator('#codebase-body .codebase-tile[data-tile="change_coupling"]').click();
-  await page.getByRole('button', { name: 'Group by directory' }).click();
-  assert.equal(await page.evaluate(() => globalThis.codebaseHashes.at(-1)), '#analytics/codebase?rollup=dir');
-  await refreshCodebase();
-  assert.equal(analyticsRequests.at(-1).get('rollup'), 'dir');
-
-  // 375 px: no horizontal page scroll, every tile and row inside the body,
-  // the detail stacked under the list, and readable text.
-  await page.locator('#codebase-body .codebase-tile[data-tile="overlap"]').click();
-  for (const width of [375, 1280]) {
-    await page.setViewportSize({ width, height: 900 });
-    await page.evaluate(() => new Promise(requestAnimationFrame));
-    const fit = await page.evaluate(() => {
-      const body = document.getElementById('codebase-body').getBoundingClientRect();
-      const pane = document.querySelector('.tab-pane[data-tab="analytics"]');
-      const outside = [...document.querySelectorAll('#codebase-body .codebase-tile, #codebase-body .codebase-row, #codebase-body .codebase-metric, #codebase-controls .codebase-seg')]
-        .map(node => node.getBoundingClientRect())
-        .filter(box => box.left < body.left - 1 || box.right > body.right + 1);
-      const list = document.getElementById('codebase-list').getBoundingClientRect();
-      const detail = document.getElementById('codebase-detail').getBoundingClientRect();
-      return {
-        page: document.documentElement.scrollWidth - innerWidth,
-        pane: pane.scrollWidth - pane.clientWidth,
-        outside: outside.length,
-        stacked: detail.top >= list.bottom - 1,
-      };
-    });
-    assert.equal(fit.page, 0, `no horizontal page scroll at ${width}: ${JSON.stringify(fit)}`);
-    assert.equal(fit.pane, 0, `no horizontal pane scroll at ${width}: ${JSON.stringify(fit)}`);
-    assert.equal(fit.outside, 0, `tiles, rows and segments fit at ${width}: ${JSON.stringify(fit)}`);
-    assert.equal(fit.stacked, width < 1280, `the detail stacks under the list only on a narrow screen at ${width}`);
-    await page.screenshot({ path: path.join(evidence, `codebase-${width}.png`), fullPage: true, animations: 'disabled' });
-  }
   // Text contrast against the composited background, through the alpha
-  // washes of selected rows and hints.
+  // washes of shaded cells and hints.
   const contrastFailures = () => page.evaluate(() => {
     const parse = value => (value.match(/[\d.]+/g) || []).map(Number);
     const blend = (top, under) => {
@@ -631,12 +568,90 @@ try {
     }
     return failures;
   });
-  assert.deepEqual(await contrastFailures(), [], 'codebase text meets 4.5:1');
+  // Hotspots: one column per signal with data, the paths in two or more
+  // rankings first, then the top three of each signal no other flags.
+  const columns = await page.locator('#codebase-body .codebase-hot-table thead th[data-signal]').evaluateAll(nodes => nodes.map(node => node.dataset.signal));
+  assert.deepEqual(columns, ['regressions', 'footprint_misses', 'blocked', 'rejected']);
+  const rowPaths = () => page.locator('#codebase-body .codebase-hot-row').evaluateAll(nodes => nodes.map(node => node.dataset.path));
+  assert.deepEqual((await rowPaths()).slice(0, 3), ['crates/orbit-core/src/application/task/mod.rs', 'docs/README.md', 'src/blocked.rs']);
+  assert.equal(await page.locator('#codebase-body .codebase-tile, #codebase-body .codebase-crosstab').count(), 0, 'no ranking tiles or cross-tabs');
+  assert.match(await page.locator('#codebase-body .codebase-notes').textContent(), /Blocks from infrastructure \(3\) and manual holds \(0\) never count against paths\./);
+
+  // A poll with the same payload keeps the scroll position.
+  const scroller = page.locator('.tab-pane[data-tab="analytics"]');
+  await page.setViewportSize({ width: 1440, height: 600 });
+  const scrolled = await scroller.evaluate(node => { node.scrollTop = 200; return node.scrollTop; });
+  assert.ok(scrolled > 0, 'the fixture page is tall enough to scroll');
+  await refreshCodebase();
+  assert.equal(await scroller.evaluate(node => node.scrollTop), scrolled, 'a poll keeps the scroll position');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.screenshot({ path: path.join(evidence, 'codebase-1440.png'), fullPage: true, animations: 'disabled' });
+
+  // A path opens its deep-linked file view: tiles, regressed tasks and the
+  // related files, which explain a path below the minimum.
+  await page.locator('#codebase-body .codebase-hot-row').first().locator('a.codebase-path-link').click();
+  assert.equal(await page.evaluate(() => globalThis.codebaseHashes.at(-1)), '#analytics/codebase/file?path=crates%2Forbit-core%2Fsrc%2Fapplication%2Ftask%2Fmod.rs');
+  assert.equal(await page.locator('#codebase-file-path').textContent(), 'mod.rs');
+  assert.equal(await page.locator('#codebase-toolbar').isVisible(), false, 'the file view has no toolbar');
+  assert.equal(await page.locator('#codebase-body .codebase-file-tile').count(), 4);
+  assert.equal(await page.locator('#codebase-body .codebase-task').count(), 1);
+  await page.waitForFunction(() => /ranking partners needs 15/.test(document.getElementById('codebase-body').textContent));
+  assert.equal(relatedRequests.at(-1).get('path'), 'crates/orbit-core/src/application/task/mod.rs');
+  assert.match(await page.locator('#codebase-body .codebase-file-related .codebase-empty').textContent(), /^Only 3 landed tasks changed this file in the last 90 days; ranking partners needs 15\.$/);
+  assert.equal(await page.getByRole('button', { name: 'Use all time' }).isVisible(), true);
+  const contrastFile = await contrastFailures();
+  await page.screenshot({ path: path.join(evidence, 'codebase-file-1440.png'), fullPage: true, animations: 'disabled' });
+  await page.locator('#codebase-body a.codebase-back').click();
+  assert.equal(await page.evaluate(() => globalThis.codebaseHashes.at(-1)), '#analytics/codebase');
+
+  // The segments, the view tabs and the empty-coupling action rewrite the
+  // hash and the request.
+  await page.locator('#codebase-rollup .codebase-seg[data-value="crate"]').click();
+  assert.equal(await page.locator('#codebase-rollup .codebase-seg[data-value="crate"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.evaluate(() => globalThis.codebaseHashes.at(-1)), '#analytics/codebase?rollup=crate');
+  await refreshCodebase();
+  assert.equal(analyticsRequests.at(-1).get('rollup'), 'crate', 'the rollup segment changes the request');
+  await page.locator('#codebase-views a[data-view="coupling"]').click();
+  assert.equal(await page.evaluate(() => globalThis.codebaseHashes.at(-1)), '#analytics/codebase/coupling?rollup=crate');
+  assert.equal(await page.locator('#codebase-views a[data-view="coupling"]').getAttribute('aria-current'), 'page');
+  await page.getByRole('button', { name: 'Group by directory' }).click();
+  assert.equal(await page.evaluate(() => globalThis.codebaseHashes.at(-1)), '#analytics/codebase/coupling?rollup=dir');
+  await refreshCodebase();
+  assert.equal(analyticsRequests.at(-1).get('rollup'), 'dir');
+  const contrastCoupling = await contrastFailures();
+  await page.locator('#codebase-views a[data-view="hotspots"]').click();
+
+  // 375 px: no horizontal page scroll, the toolbar wraps inside the body and
+  // the table scrolls inside its own box; readable text.
+  for (const width of [375, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    const fit = await page.evaluate(() => {
+      const body = document.getElementById('codebase-body').getBoundingClientRect();
+      const pane = document.querySelector('.tab-pane[data-tab="analytics"]');
+      const outside = [...document.querySelectorAll('#codebase-body .codebase-hot-scroll, #codebase-body .codebase-filters, #codebase-body .codebase-note, #codebase-controls .codebase-seg, #codebase-controls .codebase-select, #codebase-search')]
+        .map(node => node.getBoundingClientRect())
+        .filter(box => box.left < body.left - 1 || box.right > body.right + 1);
+      const box = document.querySelector('#codebase-body .codebase-hot-scroll');
+      return {
+        page: document.documentElement.scrollWidth - innerWidth,
+        pane: pane.scrollWidth - pane.clientWidth,
+        outside: outside.length,
+        tableScrolls: box.scrollWidth > box.clientWidth,
+      };
+    });
+    assert.equal(fit.page, 0, `no horizontal page scroll at ${width}: ${JSON.stringify(fit)}`);
+    assert.equal(fit.pane, 0, `no horizontal pane scroll at ${width}: ${JSON.stringify(fit)}`);
+    assert.equal(fit.outside, 0, `the toolbar, filters, table box and notes fit at ${width}: ${JSON.stringify(fit)}`);
+    assert.equal(fit.tableScrolls, width < 1280, `the table scrolls inside its box only on a narrow screen at ${width}`);
+    await page.screenshot({ path: path.join(evidence, `codebase-${width}.png`), fullPage: true, animations: 'disabled' });
+  }
+  assert.deepEqual([await contrastFailures(), contrastFile, contrastCoupling], [[], [], []], 'codebase text meets 4.5:1 in Hotspots, the file view and Coupling');
 
   await page.setViewportSize({ width: 1440, height: 900 });
   assert.deepEqual(errors, []);
   fs.writeFileSync(path.join(evidence, 'measurements.json'), JSON.stringify({ events: measurements, codebase: { fullWidth }, errors }, null, 2));
-  console.log('Audit browser: Tools flush column bottoms (both height cases, every side-card subset, 1500/1600/1920 and single-column 1499/375), Events statuses and Tools summary columns at 1440/1024/1920/375, duplicate targets, duration buckets, keyboard expansion, paging order across a filter change, and the full-width Analytics › Codebase view (tiles, overlap list, detail, poll stability, hash, 375 px and contrast) passed');
+  console.log('Audit browser: Tools flush column bottoms (both height cases, every side-card subset, 1500/1600/1920 and single-column 1499/375), Events statuses and Tools summary columns at 1440/1024/1920/375, duplicate targets, duration buckets, keyboard expansion, paging order across a filter change, and the full-width Analytics › Codebase views (Hotspots table, file view and related files, Coupling, poll stability, hashes, 375 px and contrast) passed');
 } catch (error) {
   if (page) await page.screenshot({ path: path.join(evidence, 'failure.png'), fullPage: true }).catch(() => {});
   throw error;
