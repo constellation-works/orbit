@@ -630,13 +630,23 @@ async function assertCostPage(page) {
       comparable_cost_count: 2, comparable_provider_cost_usd: 1.25,
       comparable_derived_cost_usd: 1.5, comparable_cost_delta_usd: 0.25,
       models: [{ model: 'claude-sonnet', tokens: { normalized_token_total: 1500 } }],
+    }, {
+      kind: 'unattributed', invocation_count: 1, linked_task_count: 0,
+      provider_cost_count: 0, missing_provider_count: 1,
+      derived_cost_count: 0, unpriced_derived_count: 1, comparable_cost_count: 0,
+      models: [{ model: 'provider-a', tokens: { normalized_token_total: 80 } }],
+    }, {
+      kind: 'missing', invocation_count: 1, linked_task_count: 0,
+      provider_cost_count: 0, missing_provider_count: 1,
+      derived_cost_count: 0, unpriced_derived_count: 1, comparable_cost_count: 0,
+      models: [{ model: 'provider-b', tokens: { normalized_token_total: 40 } }],
     }],
   };
   const painted = await page.evaluate(async (orchestration) => {
     const { getWindow } = await import('/js/common.js');
     const { renderScoreboard } = await import('/js/scoreboard.js');
-    for (const pane of document.querySelectorAll('.tab-pane')) pane.classList.toggle('active', pane.dataset.tab === 'analytics');
-    document.getElementById('analytics-cost-main').style.display = 'grid';
+    const { setActiveTab } = await import('/js/router.js');
+    setActiveTab('analytics/cost', { refresh: false, updateHash: false });
     const selected = getWindow();
     renderScoreboard({ window: selected, agents: {}, orchestration });
     const host = document.getElementById('scoreboard-orchestration');
@@ -648,11 +658,15 @@ async function assertCostPage(page) {
       text: host.textContent,
       count: document.getElementById('scoreboard-orchestration-count').textContent,
       subtab: subtab ? subtab.textContent.replace(/\s+/g, ' ').trim() : '',
+      activeSubtab: subtab?.classList.contains('active') || false,
+      costVisible: document.getElementById('analytics-cost-main').checkVisibility(),
       windows,
       removed,
     };
   }, orchestration);
-  if (!painted.subtab.startsWith('Cost')) throw new Error(`Analytics subtab must read Cost: ${painted.subtab}`);
+  if (!painted.subtab.startsWith('Cost') || !painted.activeSubtab || !painted.costVisible) {
+    throw new Error(`Analytics › Cost must be the visible route: ${JSON.stringify(painted)}`);
+  }
   if (painted.windows.join() !== '1h,24h,7d,30d,all') throw new Error(`Cost window selector missing windows: ${painted.windows}`);
   if (painted.removed.length) throw new Error(`Retired scoreboard nodes still in the page: ${painted.removed}`);
   if (!painted.text.includes('$1.25') || !painted.text.includes('$1.50') || !painted.text.includes('1.5K')) {
@@ -661,8 +675,9 @@ async function assertCostPage(page) {
   if (!painted.text.includes('Orchestrator: claude') || !painted.text.includes('claude-sonnet 1.5K')) {
     throw new Error(`Cost attribution missing: ${painted.text}`);
   }
-  if (painted.count !== '1 bucket') throw new Error(`Cost bucket count changed: ${painted.count}`);
-  for (const width of [1280, 375]) {
+  if (painted.count !== '3 buckets') throw new Error(`Cost bucket count changed: ${painted.count}`);
+  const contrastEvidence = [];
+  for (const width of [1280, 1440, 375]) {
     await page.setViewportSize({ width, height: 900 });
     const layout = await page.evaluate(() => {
       const main = document.getElementById('analytics-cost-main');
@@ -679,8 +694,66 @@ async function assertCostPage(page) {
     if (!layout.shown || !layout.selector) throw new Error(`Cost panel or window selector hidden at ${width}px: ${JSON.stringify(layout)}`);
     if (layout.pageOverflow) throw new Error(`Cost page widens the viewport at ${width}px`);
     if (!layout.text.includes('$1.25')) throw new Error(`Cost dollars missing at ${width}px`);
+    const contrast = await page.evaluate(() => {
+      const luminance = (color) => {
+        const [red, green, blue] = color.match(/[\d.]+/g).slice(0, 3).map(Number).map((channel) => {
+          const normalized = channel / 255;
+          return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+      };
+      const ratio = (foreground, background) => {
+        const [lighter, darker] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+        return (lighter + 0.05) / (darker + 0.05);
+      };
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--fg-disabled)';
+      document.body.append(probe);
+      const disabledColor = getComputedStyle(probe).color;
+      probe.remove();
+      const labels = [...document.querySelectorAll('#scoreboard-orchestration .scoreboard-orchestration-bucket .token-models-label')]
+        .map((label) => {
+          let background = 'rgba(0, 0, 0, 0)';
+          for (let ancestor = label; ancestor; ancestor = ancestor.parentElement) {
+            const color = getComputedStyle(ancestor).backgroundColor;
+            if (color !== 'rgba(0, 0, 0, 0)' && color !== 'transparent') {
+              background = color;
+              break;
+            }
+          }
+          const foreground = getComputedStyle(label).color;
+          return { foreground, background, visible: label.checkVisibility(), ratio: ratio(foreground, background) };
+        });
+      const disabledText = [...document.querySelectorAll('#analytics-cost-main *')]
+        .filter((node) => node.children.length === 0 && node.textContent.trim() && node.checkVisibility())
+        .filter((node) => getComputedStyle(node).color === disabledColor
+          && !node.closest(':disabled, [aria-disabled="true"]'))
+        .map((node) => ({ tag: node.tagName, className: node.className, text: node.textContent.trim() }));
+      return { disabledColor, bucketCount: document.querySelectorAll('#scoreboard-orchestration .scoreboard-orchestration-bucket').length, labels, disabledText };
+    });
+    if (contrast.labels.length !== contrast.bucketCount || contrast.bucketCount !== 3) {
+      throw new Error(`Every Cost bucket must have a measured model-token caption: ${JSON.stringify(contrast)}`);
+    }
+    for (const label of contrast.labels) {
+      if (!label.visible || !Number.isFinite(label.ratio) || label.ratio < 4.5 || label.foreground === contrast.disabledColor) {
+        throw new Error(`Model-token caption must reach 4.5:1 without the disabled token at ${width}px: ${JSON.stringify(label)}`);
+      }
+    }
+    if (contrast.disabledText.length) {
+      throw new Error(`Informational Cost text uses the disabled color: ${JSON.stringify(contrast.disabledText)}`);
+    }
+    contrastEvidence.push({ width, ...contrast });
+    if (width === 375) {
+      const label = page.locator('#scoreboard-orchestration .token-models-label').first();
+      await label.scrollIntoViewIfNeeded();
+      const bounds = await label.boundingBox();
+      if (!bounds || bounds.x < 0 || bounds.x + bounds.width > width || bounds.y < 0 || bounds.y + bounds.height > 900) {
+        throw new Error(`The model-token caption must fit in the 375px Cost viewport: ${JSON.stringify(bounds)}`);
+      }
+    }
     await page.screenshot({ path: path.join(evidence, `cost-${width}.png`), fullPage: true });
   }
+  fs.writeFileSync(path.join(evidence, 'cost-contrast-result.json'), JSON.stringify({ passed: true, viewports: contrastEvidence }, null, 2));
   const routed = await page.evaluate(async () => {
     const { setActiveTab } = await import('/js/router.js');
     // Refresh and the hash write stay off: this fixture has already replaced
