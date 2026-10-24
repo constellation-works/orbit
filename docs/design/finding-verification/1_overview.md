@@ -2,7 +2,7 @@
 title: Finding Verification — Overview
 owner: claude
 last_updated: 2026-10-11
-last_validated: 2026-10-19
+last_validated: 2026-10-23
 status: Accepted
 feature: finding-verification
 doc_role: overview
