@@ -162,15 +162,36 @@ impl StateInner {
         }
 
         // Build outside the lock (no lock held across construction).
-        let runtime = RegisteredRuntimeFactory::open_resolved_checkout_for(
+        let runtime = match RegisteredRuntimeFactory::open_resolved_checkout_for(
             &self.global_root,
             &orbit_dir,
             &orbit_dir,
             binding.clone(),
             HostLifetime::LongLived,
-        )
-        .map_err(|e| WsRejection::build_failed(id, &e))?;
-        let runtime = Arc::new(runtime);
+        ) {
+            Ok(runtime) => Arc::new(runtime),
+            Err(error)
+                if matches!(
+                    error,
+                    OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. }
+                ) =>
+            {
+                // A broken layered config stays repairable through the file
+                // view, which reads the files directly and reports a 400 with
+                // the file path. Serve the stale runtime it was built from so
+                // that view is reachable instead of failing the workspace
+                // resolution itself with a 500.
+                let cache = self.lock_runtimes();
+                if let Some(cached) = cache.get(id)
+                    && cached.binding == binding
+                    && cached.orbit_dir == orbit_dir
+                {
+                    return Ok(cached.runtime.clone());
+                }
+                return Err(WsRejection::build_failed(id, &error));
+            }
+            Err(error) => return Err(WsRejection::build_failed(id, &error)),
+        };
 
         // Test seam: pause between build and publish so a test can rebind +
         // refresh and prove this (now older-generation) build cannot republish.
@@ -249,18 +270,23 @@ impl StateInner {
         let Some(runtime) = runtime else {
             return Ok(None);
         };
-        if config_current
-            && !runtime
-                .plugin_state_changed()
-                .map_err(|error| WsRejection::build_failed(id, &error))?
+        if !config_current {
+            // A config-layer edit: keep the stale entry so a rebuild that
+            // fails on the broken layer can fall back to it in
+            // `resolve_runtime` (the file view stays repairable). A
+            // successful rebuild replaces it via `publish_runtime`.
+            return Ok(None);
+        }
+        if !runtime
+            .plugin_state_changed()
+            .map_err(|error| WsRejection::build_failed(id, &error))?
         {
             return Ok(Some(runtime));
         }
 
-        // A config edit or a lifecycle verb rewrote state after this
-        // runtime's load pass. Remove only the exact stale entry observed
-        // above: a concurrent request may already have published its
-        // replacement.
+        // A lifecycle verb rewrote the host plugin rows after this runtime's
+        // load pass. Remove only the exact stale entry observed above: a
+        // concurrent request may already have published its replacement.
         let mut cache = self.lock_runtimes();
         if cache
             .get(id)
