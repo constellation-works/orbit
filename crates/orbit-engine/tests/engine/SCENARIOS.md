@@ -101,6 +101,7 @@ after the wrapper signals that its queue interval earned the capped credit.
 - `replica_worktree_gc_fences_unreachable_owners_by_route`
 - `worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty`
 - `worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root`
+- `worktree_gc_rejects_non_string_target_run_id_and_deletes_nothing`
 
 ### `v2_worktree_lifecycle::worktree_contracts_2`
 
@@ -812,3 +813,18 @@ and require the pipeline's outside-sandbox final validation. The absorbed tables
 reported no coverage refusal. This pair does not establish a complete affected
 workspace pass or the complete CI job's 900 s budget. All four normal final gates
 remain pipeline-owned; full CI is separately run on the PR.
+
+## Worktree lifecycle shared setup
+
+All 42 `v2_worktree_lifecycle::worktree_contracts_N` rows keep their scenario
+functions, names, `cfg(unix)` gates and assertions. The rows now share the
+fixture steps they used to repeat: checkout setup (`setup_checkout`,
+`gc_checkout`, `landing_checkout`), GC reports, Git queries (`head`, `status`,
+`branch`), substitute providers (`install_provider`,
+`PreparedRebase::with_provider`), conflict fields and recovery input, the
+agent-loop spec and audit sink, and the preserved-candidate requeue and
+resume steps. The two held-candidate rows share one body
+(`assert_held_candidate_resumes_carried`). The `scenarios!` macro builds each
+family's rows from the function names, so the reported row names are
+unchanged. Scenarios no longer wrap themselves in `isolated`, because the
+family test already runs them in an isolated child under the same deadline.
