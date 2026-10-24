@@ -111,7 +111,8 @@ pub(crate) fn run_cli_backend_for_step(
     }
     let provider = spec.provider.as_str().to_string();
     let trusted_host = trusted_host_admission(spec, activity_name, input)?;
-    // Reject an unsupported inspection provider before executor lookup can
+    // Reject an inspection configuration that cannot start (a non-reviewer
+    // profile, a provider with no CLI runtime) before executor lookup can
     // classify it as a transient missing-CLI error.
     prepare_inspection_tools(&provider, input, fs_profile, &[])?;
     let mut cli_executor = host.resolve_cli_executor(&provider)?;
@@ -829,6 +830,12 @@ pub(crate) fn run_cli_backend_for_step(
             });
         }
     };
+
+    // The provider has exited, so its prompt file has served its purpose:
+    // delete it before the post-run checks, or an inspection run whose
+    // scratch directory sits inside its read-only checkout would see the
+    // host's own prompt file as a provider change to that checkout.
+    drop(prompt_file);
 
     // A post-run check fails the step, but the run trail must still hold the
     // provider's output. Refresh before those writes: a sandboxed provider may

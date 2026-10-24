@@ -107,6 +107,10 @@ spec:
     properties:
       partition_index:
         type: number
+      observed_revision:
+        type: [string, "null"]
+      observed_tree:
+        type: [string, "null"]
       tasks:
         type: array
         items:
@@ -129,7 +133,15 @@ spec:
     warning you never make one. Treat the workspace as read-only. The CLI
     host materializes `inspection_revision` (equal to `source_revision`) in
     an invocation-owned checkout and binds `workspace_path` and filesystem
-    reads to it.
+    reads to it. Before recording any decision, read the inspection proof
+    from this checkout with its native tools: `git rev-parse HEAD` and
+    `git rev-parse 'HEAD^{tree}'`. Pass `"source_revision":"<the input's
+    source_revision>","observed_revision":"<HEAD>","observed_tree":"<tree>"`
+    on every `orbit.task.block_triage` decision call below, and report
+    `observed_revision` and `observed_tree` at partition level in your
+    result. The tool checks the observed pair against the pinned
+    revision's tree and records nothing when it is missing or mismatched,
+    so read both values from git; never copy a tree value from the input.
 
     ## Subject `pilot_warning`
 
@@ -152,8 +164,8 @@ spec:
        `context_files`, and the task-pilot audit comment the holding
        findings came from.
     3. Check each holding finding against the source at `source_revision`
-       with read-only `git`/`rg` commands and file reads through the native
-       inspection surface. Confirm HEAD equals `source_revision`. Decide
+       with read-only `git`/`rg` commands and file reads through this
+       CLI's own native tools. Confirm HEAD equals `source_revision`. Decide
        whether the finding is right, and what it would take to resolve it.
        Use `orbit.search` and `orbit.task.list` for related tasks named by a
        prerequisite or conflict finding.

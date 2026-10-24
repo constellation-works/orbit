@@ -55,6 +55,10 @@ struct ApplyContext<'a> {
     /// The prepared payload verbatim, for the receipt and write boundaries.
     prepared: &'a Value,
     source: Option<&'a SourceSnapshot>,
+    /// The pinned revision's tree id, recomputed host-side: the value a
+    /// result's `observed_tree` must match. `None` for a non-Git workspace,
+    /// which skips the inspection proof.
+    source_tree: Option<&'a str>,
     policy: &'a PreparationPolicy,
     authority: &'a PromotionAuthority<'a>,
     /// Tasks whose material the branch changed since preparation.
@@ -88,9 +92,13 @@ pub(crate) fn apply(
     let policy = crate::application::automation::preparation::claim_policy(runtime, claim.as_ref())
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     let source = SourceSnapshot::from_prepared(&envelope.prepared, action)?;
-    if let Some(source) = &source {
-        source.ensure_commit(action, &workspace_root)?;
-    }
+    let source_tree = match &source {
+        Some(source) => {
+            source.ensure_commit(action, &workspace_root)?;
+            Some(source.tree_id(action, &workspace_root)?)
+        }
+        None => None,
+    };
     let prepared_before = input::snapshots(action, &envelope.tasks, source.as_ref())?;
     // Tasks whose material the branch changed since preparation settle
     // superseded, whatever their pilot returned, so their members are claimed
@@ -127,6 +135,7 @@ pub(crate) fn apply(
         workspace_root: &workspace_root,
         prepared: &envelope.prepared,
         source: source.as_ref(),
+        source_tree: source_tree.as_deref(),
         policy: &policy,
         authority: &authority,
         source_superseded: &source_superseded,

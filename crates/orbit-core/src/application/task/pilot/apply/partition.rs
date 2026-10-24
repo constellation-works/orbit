@@ -32,18 +32,17 @@ pub(super) fn settle_partition(
     partition: &Partition,
     result: Option<&Record<PartitionResult>>,
 ) -> Value {
-    let (assessments, normalizations) =
-        match assessments(context.action, position, partition, result) {
-            Ok(checked) => checked,
-            Err(error) => {
-                return failed_partition(
-                    partition.index,
-                    &partition.task_ids,
-                    error,
-                    context.source_superseded,
-                );
-            }
-        };
+    let (assessments, normalizations) = match assessments(context, position, partition, result) {
+        Ok(checked) => checked,
+        Err(error) => {
+            return failed_partition(
+                partition.index,
+                &partition.task_ids,
+                error,
+                context.source_superseded,
+            );
+        }
+    };
     let mut outcomes = Vec::with_capacity(partition.task_ids.len());
     let mut applied_task_ids = Vec::new();
     for task_id in &partition.task_ids {
@@ -78,11 +77,12 @@ pub(super) fn settle_partition(
 /// The result's assessments by task id, with the host's notes on the
 /// result's formatting, or why the result is unusable.
 fn assessments<'a>(
-    action: &str,
+    context: &ApplyContext<'_>,
     position: usize,
     partition: &Partition,
     result: Option<&'a Record<PartitionResult>>,
 ) -> Result<(BTreeMap<String, &'a Value>, Vec<Value>), String> {
+    let action = context.action;
     let index = partition.index;
     let Some(result) = result else {
         return Err(format!("partition result {position} is missing"));
@@ -148,6 +148,23 @@ fn assessments<'a>(
         return Err(format!(
             "partition {index} task assessment identities do not match the prepared partition"
         ));
+    }
+    // The proof the pilot read the pinned source, checked before any
+    // assessment is trusted (structural refusals above keep their own
+    // errors): a crew whose native tools never ran cannot report the
+    // pinned revision's tree, which the envelope never carries. A non-Git
+    // workspace (no pinned source) skips it. The failure settles the
+    // partition invalid, so the repair loop re-runs the pilot with this
+    // error like any other validation error.
+    if let (Some(source), Some(source_tree)) = (context.source, context.source_tree)
+        && let Some(error) = super::super::source::inspection_proof_error(
+            result.observed_revision.get().map(String::as_str),
+            result.observed_tree.get().map(String::as_str),
+            &source.source_revision,
+            source_tree,
+        )
+    {
+        return Err(format!("partition {index}: {error}"));
     }
     Ok((by_id, normalizations))
 }

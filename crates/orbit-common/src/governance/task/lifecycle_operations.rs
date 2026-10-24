@@ -301,7 +301,7 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
     verb: TaskVerb::BlockTriage,
     cli_path: &[],
     tool_name: "orbit.task.block_triage",
-    tool_description: "Triage escalated blocks. `candidates` lists every blocked task with whether its current block episode awaits triage: its final-recovery decision escalated, or it has none and the backstop will never decide it; an episode already triaged or touched by a human after the block is excluded. Each other action records one decision on a qualifying episode, as one task comment plus a history marker, and refuses any other episode. `requeue` returns the task to the backlog as a final-recovery requeue, counted against the shared final-recovery requeue bound (2 per 24 hours): past the bound, for a task tagged security or security-review, or for a run another machine executed, it is recorded as refused and the task stays blocked; when the count cannot be read nothing is written. `propose` records the quoted blocker, two or three options with consequences and ready-to-apply replacement text, and a recommendation, and changes nothing else. `report` records the human action and changes nothing else. Never completes, rejects or archives a task. With `subject` `pilot_warning`, the same actions read `proposed` tasks whose latest task-pilot assessment holds promotion on warning findings instead: `candidates` lists each held assessment not yet triaged and without an operator decision, quoting its holding findings; `propose` and `report` record one comment quoting those findings plus a `pilot_warning_triaged` history marker that excludes the assessment afterwards, and refuse a task that no longer qualifies; `requeue` is refused. A pilot warning triage never approves, promotes, clears a hold or edits any other task field.",
+    tool_description: "Triage escalated blocks. `candidates` lists every blocked task with whether its current block episode awaits triage: its final-recovery decision escalated, or it has none and the backstop will never decide it; an episode already triaged or touched by a human after the block is excluded. Each other action records one decision on a qualifying episode, as one task comment plus a history marker, and refuses any other episode. `requeue` returns the task to the backlog as a final-recovery requeue, counted against the shared final-recovery requeue bound (2 per 24 hours): past the bound, for a task tagged security or security-review, or for a run another machine executed, it is recorded as refused and the task stays blocked; when the count cannot be read nothing is written. `propose` records the quoted blocker, two or three options with consequences and ready-to-apply replacement text, and a recommendation, and changes nothing else. `report` records the human action and changes nothing else. Never completes, rejects or archives a task. With `subject` `pilot_warning`, the same actions read `proposed` tasks whose latest task-pilot assessment holds promotion on warning findings instead: `candidates` lists each held assessment not yet triaged and without an operator decision, quoting its holding findings; `propose` and `report` record one comment quoting those findings plus a `pilot_warning_triaged` history marker that excludes the assessment afterwards, and refuse a task that no longer qualifies; `requeue` is refused. A pilot warning triage never approves, promotes, clears a hold or edits any other task field. A decision may carry an inspection proof: `source_revision` (the pinned commit the caller inspected) with `observed_revision` and `observed_tree` read from that checkout (`git rev-parse HEAD` and `git rev-parse 'HEAD^{tree}'`); when supplied, the observed pair is checked against the pinned revision's tree and a missing or mismatched proof records nothing.",
     cli_about: "",
     cli_help: CliHelp::NONE,
     // `candidates` only reads, but the decisions write.
@@ -343,6 +343,21 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
                 "recommended",
                 ParamType::Integer,
                 "propose: 1-based index of the recommended option",
+            ),
+            mcp_only(
+                "source_revision",
+                ParamType::String,
+                "inspection proof: the pinned commit id the caller inspected; supply with observed_revision and observed_tree",
+            ),
+            mcp_only(
+                "observed_revision",
+                ParamType::String,
+                "inspection proof: `git rev-parse HEAD` in the inspection checkout",
+            ),
+            mcp_only(
+                "observed_tree",
+                ParamType::String,
+                "inspection proof: `git rev-parse 'HEAD^{tree}'` in the inspection checkout",
             ),
         ],
         IDENTITY_PARAMS,

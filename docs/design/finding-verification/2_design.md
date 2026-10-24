@@ -105,15 +105,20 @@ drawn from `workflow.<tier>_complexity_crews`. The tier is the task's
 complexity, and an unassessed task reads as `medium`. Only pool members with
 a positive weight are drawn.
 
-`verify_finding` inspects the pinned source with the provider's native
-file-read and command tools, which only Codex and Claude have
-(`Provider::has_native_inspection`). The draw therefore keeps only enabled
-members of those providers; Gemini, Grok and other crews are never drawn as
-verifiers [ORB-15792]. A tier whose pool has no such member passes to the
-next tier up (low → medium → hard → xhard), and the assignment records the
-tier actually drawn from. When no tier from the task's upward has one, the
-default crew verifies if it can inspect. Otherwise preparation fails with
-`inspection_crew_unavailable` before any verifier is dispatched.
+`verify_finding` inspects the pinned source with each CLI's own native
+file-read and command tools, so any configured crew can verify, whatever
+its provider; the draw filters by nothing but pool membership and weight.
+A tier whose pool has no member holding a ticket passes to the next tier
+up (low → medium → hard → xhard), and the assignment records the tier
+actually drawn from. When no tier from the task's upward has one, the
+default crew verifies. Trust in a verdict comes from its inspection
+proof, not its provider: each partition result reports `observed_revision`
+(`git rev-parse HEAD`) and `observed_tree` (`git rev-parse 'HEAD^{tree}'`)
+from its checkout, and apply leaves every task in the partition
+unverified (`inspection_revision_mismatch`) when the proof is missing or
+the tree is not the pinned revision's tree, recomputed host-side. The
+envelope carries the revision but never its tree, so a verifier whose
+tools never ran cannot forge the pair.
 
 When the pool offers another crew, a crew named by the task's filer
 (`created_by`, matched by crew name, model, provider or agent family) is
@@ -123,9 +128,9 @@ draws the same crew.
 In the initial round, a REJECTED verdict from the `low` tier, or a verdict of
 `low` confidence from any tier, is not recorded. The task is judged again by
 a crew from the next tier's pool (low → medium → hard → xhard), under the same
-inspection rule: a tier with no inspection-capable member passes upward. That
+rule: a tier with no member holding a ticket passes upward. That
 draw passes over every crew that already judged the task, and the filer's.
-The second verdict decides. With no inspection-capable member from the next
+The second verdict decides. With no member from the next
 tier upward, or from `xhard`, the first verdict stands. There is one escalation round. The escalation checkpoint
 retains the initial finding fingerprint, even when its task re-read sees edited
 material; the final write checks that original fingerprint.

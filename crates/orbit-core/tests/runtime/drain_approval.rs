@@ -324,6 +324,28 @@ impl Workspace {
     }
 
     fn action(&self, action: &str, input: Value) -> Result<Value, String> {
+        // A fixture pilot read its checkout: fill in its observed-revision
+        // proof (the prepared revision and its tree) where a result does
+        // not carry one itself.
+        let mut input = input;
+        if action == "apply_task_pilot_results"
+            && let Some(revision) = input["prepared"]["source"]["source_revision"]
+                .as_str()
+                .map(str::to_string)
+        {
+            let tree = self.git(&["rev-parse", &format!("{revision}^{{tree}}")]);
+            if let Some(results) = input["results"].as_array_mut() {
+                for result in results {
+                    if result.is_object()
+                        && result.get("observed_revision").is_none()
+                        && result.get("observed_tree").is_none()
+                    {
+                        result["observed_revision"] = json!(revision);
+                        result["observed_tree"] = json!(tree);
+                    }
+                }
+            }
+        }
         self.runtime
             .run_deterministic(action, &json!({}), &input, ToolContext::default())
             .map_err(|error| error.to_string())

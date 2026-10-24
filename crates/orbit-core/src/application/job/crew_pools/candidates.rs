@@ -1,6 +1,5 @@
 use orbit_common::OrbitError;
 use orbit_config::{canonical_crew_pool, canonical_crew_pool_entries, executor_host_os};
-use orbit_types::identity::Crew;
 use orbit_types::task::{
     Task, TaskComplexity, TaskHistoryEntry, TaskOsRequirement, TaskPriority, TaskStatus, TaskType,
 };
@@ -10,14 +9,13 @@ use crate::OrbitRuntime;
 use crate::runtime::run_input::non_empty;
 
 use super::draw::{
-    INSPECTION_CREW_UNAVAILABLE, can_inspect, complexity_crews_key, permitted_candidates,
-    pools_from_input, pressure_weighted_candidates, random_crew_ticket, seeded_crew_ticket,
-    sole_candidate, weighted_draw,
+    permitted_candidates, pools_from_input, pressure_weighted_candidates, random_crew_ticket,
+    seeded_crew_ticket, sole_candidate, weighted_draw,
 };
 use super::purpose::{PURPOSE_SOURCE_PREFIX, automatic_crew_source, task_crew_purpose};
 use super::types::{
     COMPLEXITIES, CapturedCrewPool, CapturedCrewPools, CreationCrewAssignment, CrewCandidate,
-    InspectionPool, POOLS_KEY,
+    POOLS_KEY,
 };
 
 impl OrbitRuntime {
@@ -417,7 +415,7 @@ impl OrbitRuntime {
             || purpose_source.is_some()
             || source.as_deref() == Some("default"))
             && let Some(purpose) = task_crew_purpose(&task.tags)
-            && let Some((candidates, pool_source)) = self.purpose_pool_candidates(purpose, false)?
+            && let Some((candidates, pool_source)) = self.purpose_pool_candidates(purpose)?
         {
             if purpose_source == Some(purpose.as_str())
                 && let Some(candidate) = candidates.iter().find(|candidate| {
@@ -599,56 +597,28 @@ impl OrbitRuntime {
             .map(|(candidates, _)| candidates))
     }
 
-    /// The pool an inspection-requiring draw for `tier` uses [ORB-15792].
-    ///
-    /// A pool whose enabled members cannot inspect, or hold no ticket, passes
-    /// to the next tier up (low → medium → hard → xhard). `None` when no tier
-    /// from `tier` upward has an inspection-capable member, which sends the
-    /// caller to [`Self::inspection_capable_default_crew`].
-    pub(crate) fn inspection_capable_pool(
+    /// The first complexity pool from `tier` upward (low → medium → hard →
+    /// xhard) that has an enabled member holding a ticket, with the tier it
+    /// came from. `None` when no such tier exists, which sends the caller to
+    /// `workflow.default_crew`. Any configured crew may be drawn; an
+    /// inspection activity's trust comes from the observed-revision proof
+    /// its apply step checks, not from the crew's provider.
+    pub(crate) fn complexity_pool_from(
         &self,
         tier: TaskComplexity,
-    ) -> Result<Option<InspectionPool>, OrbitError> {
-        let mut skipped = Vec::new();
+    ) -> Result<Option<(TaskComplexity, Vec<CrewCandidate>)>, OrbitError> {
         for tier in COMPLEXITIES.into_iter().skip_while(|each| *each != tier) {
-            let (capable, unable): (Vec<_>, Vec<_>) = self
+            let candidates = self
                 .configured_complexity_pool(tier)?
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|candidate| candidate.weight > 0)
-                .partition(|candidate| can_inspect(&candidate.crew));
-            skipped.extend(unable.into_iter().map(|candidate| candidate.crew.name));
-            if !capable.is_empty() {
-                return Ok(Some(InspectionPool {
-                    tier,
-                    candidates: capable,
-                    skipped,
-                }));
+                .collect::<Vec<_>>();
+            if !candidates.is_empty() {
+                return Ok(Some((tier, candidates)));
             }
         }
         Ok(None)
-    }
-
-    /// `workflow.default_crew` for an inspection-requiring activity whose
-    /// pools from `tier` upward hold no inspection-capable member. Refused
-    /// with [`INSPECTION_CREW_UNAVAILABLE`] before dispatch when it cannot
-    /// inspect either [ORB-15792].
-    pub(crate) fn inspection_capable_default_crew(
-        &self,
-        tier: TaskComplexity,
-    ) -> Result<Crew, OrbitError> {
-        let crew = self.resolve_crew_for_task(None, None)?;
-        if can_inspect(&crew) {
-            return Ok(crew);
-        }
-        Err(OrbitError::InvalidInput(format!(
-            "{INSPECTION_CREW_UNAVAILABLE}: this activity inspects pinned source natively, but \
-             no crew in `{}` or a higher tier, nor workflow.default_crew `{}` (provider `{}`), \
-             has a native file-read and command surface; add a Codex or Claude crew to a pool",
-            complexity_crews_key(tier),
-            crew.name,
-            crew.assignment.provider,
-        )))
     }
 
     /// Decide the crew a task is created with [ORB-12717].
@@ -680,7 +650,7 @@ impl OrbitRuntime {
             }));
         }
         if let Some(purpose) = task_crew_purpose(tags)
-            && let Some((candidates, _)) = self.purpose_pool_candidates(purpose, false)?
+            && let Some((candidates, _)) = self.purpose_pool_candidates(purpose)?
         {
             let source = format!("{PURPOSE_SOURCE_PREFIX}{purpose}");
             let candidates = self.creation_pressure_weighted(candidates);

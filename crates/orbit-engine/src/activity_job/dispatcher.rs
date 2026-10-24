@@ -240,8 +240,11 @@ pub enum DispatchError {
     #[error("cli invocation failed (permanent): {0}")]
     CliInvocationPermanent(String),
 
-    /// An inspection cannot start without a supported native read and
-    /// command surface. Configuration errors never spend a provider session.
+    /// An inspection cannot start: the filesystem profile is not
+    /// `reviewer`, the provider has no CLI runtime, or its executor
+    /// configuration disables the native tools inspection needs (Claude's
+    /// `--tools`/`--disallowedTools`). Configuration errors never spend a
+    /// provider session.
     #[error("inspection_tools_unavailable: provider `{provider}`: {reason}")]
     InspectionToolsUnavailable { provider: String, reason: String },
 

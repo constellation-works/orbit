@@ -89,6 +89,10 @@ spec:
     properties:
       partition_index:
         type: number
+      observed_revision:
+        type: [string, "null"]
+      observed_tree:
+        type: [string, "null"]
       tasks:
         type: array
         items:
@@ -150,9 +154,15 @@ spec:
        criteria, tags and `context_files`: these state the claimed defect and
        where the review saw it.
     2. Inspect the code at `source_revision` with read-only `git`/`rg`
-       commands and file reads through the native inspection surface. Confirm
-       HEAD equals `source_revision`. Follow the claimed defect to its cause:
-       read the code path, its callers and its tests.
+       commands and file reads through this CLI's own native tools. Confirm
+       HEAD equals `source_revision`. Report the inspection proof at
+       partition level: `observed_revision` is `git rev-parse HEAD` and
+       `observed_tree` is `git rev-parse 'HEAD^{tree}'`, both run in this
+       checkout. Apply leaves every verdict in the partition unverified
+       when the proof is missing or does not match the pinned
+       `source_revision` and its tree, so read both values from git; never
+       copy a tree value from the input. Follow the claimed defect to its
+       cause: read the code path, its callers and its tests.
     3. Return `CONFIRMED` only when the code at `source_revision` exhibits the
        defect. Cite each location as `path:line` (a repository-relative path
        and a 1-based line of that file at `source_revision`) with a `note`

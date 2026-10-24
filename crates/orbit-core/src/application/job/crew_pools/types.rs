@@ -55,15 +55,3 @@ pub(crate) struct CrewCandidate {
 }
 
 pub(crate) type CapturedCrewPools = BTreeMap<String, CapturedCrewPool>;
-
-/// The members of one complexity pool that can inspect pinned source natively
-/// [ORB-15792]: the first tier, from the one asked for upward, whose enabled
-/// pool has such a member with a positive weight.
-pub(crate) struct InspectionPool {
-    /// The tier the members were drawn from.
-    pub(crate) tier: TaskComplexity,
-    pub(crate) candidates: Vec<CrewCandidate>,
-    /// Enabled members passed over, in this tier and the ones below it,
-    /// because their provider has no native inspection surface.
-    pub(crate) skipped: Vec<String>,
-}

@@ -18,7 +18,6 @@ use crate::application::sweep_filing::ci_failure::filing::CI_FAILURE_TAG;
 use crate::application::sweep_filing::dependabot::filing::{CODE_TAG, DEPENDABOT_TAG};
 use crate::application::task::BASELINE_RED_REPAIR_TAG;
 
-use super::draw::can_inspect;
 use super::types::CrewCandidate;
 
 /// Prefix of the provenance a task records when its crew was drawn from its
@@ -80,14 +79,11 @@ impl OrbitRuntime {
     /// the source a draw over them records.
     ///
     /// `None` when the pool is unset, empty or wholly disabled, which keeps the
-    /// purpose on its fallback route. With `inspection`, only members whose
-    /// provider inspects source natively and that hold a ticket are kept; a
-    /// pool with none of those is `None` too, so the fallback's own inspection
-    /// rules apply.
+    /// purpose on its fallback route. Any configured crew may be drawn,
+    /// whatever its provider.
     pub(crate) fn purpose_pool_candidates(
         &self,
         purpose: CrewPurpose,
-        inspection: bool,
     ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
         if !purpose.has_purpose_key() {
             return Ok(None);
@@ -128,31 +124,7 @@ impl OrbitRuntime {
             );
             return Ok(None);
         }
-        if !inspection {
-            return Ok(Some((candidates, key.to_string())));
-        }
-        let (capable, unable): (Vec<_>, Vec<_>) = candidates
-            .into_iter()
-            .filter(|candidate| candidate.weight > 0)
-            .partition(|candidate| can_inspect(&candidate.crew));
-        if capable.is_empty() {
-            tracing::warn!(
-                pool = %key,
-                "no crew in the purpose pool can inspect natively; the purpose keeps its fallback route",
-            );
-            return Ok(None);
-        }
-        let source = if unable.is_empty() {
-            format!("{key}; native inspection")
-        } else {
-            let skipped = unable
-                .iter()
-                .map(|candidate| candidate.crew.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("{key}; native inspection, skipped: {skipped}")
-        };
-        Ok(Some((capable, source)))
+        Ok(Some((candidates, key.to_string())))
     }
 
     /// The enabled members of the purpose pool `task` was assigned from, when
@@ -174,6 +146,6 @@ impl OrbitRuntime {
         else {
             return Ok(None);
         };
-        self.purpose_pool_candidates(purpose, false)
+        self.purpose_pool_candidates(purpose)
     }
 }

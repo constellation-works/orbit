@@ -355,11 +355,11 @@ fn assessment_author(
         .and_then(crate::application::distributed::pilot_run_crew))
 }
 
-/// `task`'s triager: a hard-tier draw that can inspect source natively,
-/// passing over the assessment's author while the pool offers another, else
-/// the inspection-capable default crew, exactly as a finding verifier is
-/// drawn. With neither, preparation fails with `inspection_crew_unavailable`
-/// before any triager launches.
+/// `task`'s triager: a hard-tier draw passing over the assessment's author
+/// while the pool offers another, else the default crew, exactly as a
+/// finding verifier is drawn. Any configured crew may triage; the
+/// observed-revision proof on its `orbit.task.block_triage` decisions, not
+/// the draw, establishes that it read the pinned source.
 fn triager(
     runtime: &OrbitRuntime,
     task: &Task,
@@ -369,7 +369,7 @@ fn triager(
     if let Some(assignment) = runtime.draw_finding_verifier(task, TRIAGE_TIER, &avoid)? {
         return Ok(assignment);
     }
-    let crew = runtime.inspection_capable_default_crew(TRIAGE_TIER)?;
+    let crew = runtime.resolve_crew_for_task(None, None)?;
     Ok(VerifierAssignment {
         crew: crew.name,
         tier: TRIAGE_TIER,
