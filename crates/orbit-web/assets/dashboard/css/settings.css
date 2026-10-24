@@ -51,6 +51,12 @@
 .config-note { color: var(--fg-dim); font-size: 11px; }
 
 .config-section-title { color: var(--fg); }
+/* The System header places the key prefix directly after the title with no
+   whitespace text node, so the two fuse into one unbreakable run. An atomic
+   inline-block adds soft wrap opportunities around the key and lets its own
+   min-content bound the line at narrow widths instead of clipping at the card
+   edge under .panel's overflow:hidden. */
+.config-section-prefix { display: inline-block; max-width: 100%; margin-left: 8px; overflow-wrap: anywhere; }
 .config-section-blurb { color: var(--fg-dim); margin-left: 8px; text-transform: none; letter-spacing: 0; font-weight: 400; }
 .config-header-right { display: inline-flex; gap: 8px; align-items: center; }
 .config-section-body { background: var(--bg); }
