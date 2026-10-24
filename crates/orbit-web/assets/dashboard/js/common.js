@@ -242,6 +242,7 @@ export function rememberWorkspace() {
 // hash query so reload and shared links restore the same cutoff.
 export const DASHBOARD_WINDOWS = ["1h", "24h", "7d", "30d", "all"];
 export const RELIABILITY_WINDOWS = ["1h", "24h", "7d", "30d"];
+export const TOOLS_WINDOWS = ["24h", "7d", "30d"];
 export const DEFAULT_DASHBOARD_WINDOW = "24h";
 export const INDEPENDENT_RELIABILITY_WINDOW = "7d";
 
@@ -281,6 +282,14 @@ export function reliabilityWindowFor(selected = currentWindow) {
     return { window: selected, independent: false };
   }
   return { window: INDEPENDENT_RELIABILITY_WINDOW, independent: true };
+}
+
+// Tools summaries support only these bounded windows. Derive the fallback
+// from the shared selection without keeping a second window state.
+export function toolsWindowFor(selected = currentWindow) {
+  return TOOLS_WINDOWS.includes(selected)
+    ? { window: selected, independent: false }
+    : { window: DEFAULT_DASHBOARD_WINDOW, independent: true };
 }
 
 /// True only when the payload's reported window matches the active selection.
@@ -347,15 +356,23 @@ function syncWindowTabState(selector, target) {
 export function syncWindowSelectors() {
   const selected = currentWindow;
   const rel = reliabilityWindowFor(selected);
+  const tools = toolsWindowFor(selected);
   for (const [id, target] of [
     ["scoreboard-window-selector", selected],
     ["metrics-window-selector", selected],
     ["agents-window-selector", selected],
     ["reliability-window-selector", rel.window],
+    ["tools-window-selector", tools.window],
   ]) {
     const selector = document.getElementById(id);
     if (!selector) continue;
     syncWindowTabState(selector, target);
+  }
+  const toolsMeta = document.getElementById("tools-meta");
+  if (toolsMeta) {
+    toolsMeta.textContent = tools.independent
+      ? `Using an independent ${tools.window} window · Analytics: ${selected}`
+      : `${tools.window} window`;
   }
 }
 
@@ -372,7 +389,7 @@ export function wireWindowSelector(selectorId, opts = {}) {
   const selector = document.getElementById(selectorId);
   if (!selector || selector.dataset.wired === "true") return;
   selector.dataset.wired = "true";
-  const allowed = opts.allowAll === false ? RELIABILITY_WINDOWS : DASHBOARD_WINDOWS;
+  const allowed = opts.windows || (opts.allowAll === false ? RELIABILITY_WINDOWS : DASHBOARD_WINDOWS);
   selector.addEventListener("click", (event) => {
     const tab = event.target && event.target.closest(".scoreboard-window-seg");
     if (!tab || !selector.contains(tab)) return;

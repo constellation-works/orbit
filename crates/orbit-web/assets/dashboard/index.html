@@ -515,6 +515,18 @@
       <main id="analytics-tools-main" style="grid-template-columns: 1fr; display: none;">
         <section class="panel" id="audit-summary-panel">
           <header><span id="audit-summary-title">Tool calls</span></header>
+          <div class="scoreboard-controls" id="tools-controls">
+            <div class="scoreboard-control-group">
+              <span class="scoreboard-control-label">window</span>
+              <div class="scoreboard-window-selector" id="tools-window-selector" role="tablist" aria-label="Tools time window">
+                <button type="button" role="tab" class="scoreboard-window-seg on" data-window="24h" aria-selected="true" tabindex="0">24h</button>
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="7d" aria-selected="false" tabindex="-1">7d</button>
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="30d" aria-selected="false" tabindex="-1">30d</button>
+              </div>
+            </div>
+            <span class="scoreboard-controls-spacer"></span>
+            <span class="scoreboard-controls-meta" id="tools-meta" aria-live="polite">24h window</span>
+          </div>
           <div class="body" id="audit-summary-body" tabindex="0" role="region" aria-labelledby="audit-summary-title">
           </div>
         </section>
