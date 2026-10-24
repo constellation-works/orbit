@@ -129,6 +129,7 @@ fn seed_executor(runtime: &OrbitRuntime, provider: &str) {
             executor_type: ExecutorType::DirectAgent,
             command: Some(provider.to_string()),
             args: Vec::new(),
+            inspection_args: None,
             stdout_format: None,
             model_pair_override: None,
             model_flag: None,

@@ -96,6 +96,7 @@ fn git_protection_tolerates_object_store_leftovers_and_refuses_outside_aliases()
                 executor_type: ExecutorType::DirectAgent,
                 command: Some("claude".to_string()),
                 args: vec![],
+                inspection_args: None,
                 stdout_format: None,
                 model_pair_override: None,
                 model_flag: None,

@@ -58,6 +58,7 @@ impl crate::test_support::NullRuntimeHost for TestHost {
         Ok(ResolvedCliExecutor {
             command: self.command.clone(),
             args: Vec::new(),
+            inspection_args: None,
         })
     }
 

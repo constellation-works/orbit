@@ -155,6 +155,12 @@ impl SourceInspection {
                     &format!("--object-format={}", format.trim()),
                 ],
             )?;
+            // The invocation's scratch directory (`.orbit/tmp`, which holds
+            // host-owned files such as a provider's prompt file) sits inside
+            // this checkout. Exclude it from the snapshot `verify` compares,
+            // so no host write there can read as a provider change, whatever
+            // order the host releases its files in.
+            exclude_scratch(&inspection.root).map_err(io_failure)?;
             // Fetch this revision with its full ancestry into a private object
             // set: the task-pilot contract inspects history from this checkout
             // (merge-base, log, show at an older commit), so the slot needs
@@ -369,6 +375,18 @@ fn remove_checkout(root: &Path) -> io::Result<()> {
         ));
     }
     fs::remove_dir_all(root)
+}
+
+/// Write the checkout's private exclude file (`--template=` leaves none) so
+/// Git status never lists the invocation scratch directory. Tracked content
+/// there is still compared.
+fn exclude_scratch(root: &Path) -> io::Result<()> {
+    let info = root.join(".git").join("info");
+    directory(&info)?;
+    let exclude = info.join("exclude");
+    reject_symlink(&exclude)?;
+    let scratch = orbit_common::fs::path::orbit_scratch_dir(Path::new(""));
+    atomic_write_text(&exclude, &format!("/{}/\n", scratch.display()))
 }
 
 fn directory(path: &Path) -> io::Result<()> {

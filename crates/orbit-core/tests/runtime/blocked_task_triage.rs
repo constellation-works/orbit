@@ -18,7 +18,7 @@ use orbit_core::application::task::{FinalRecoveryCompletion, FinalRecoveryReques
 use orbit_core::{ActorIdentity, OrbitRuntime};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{ExecutionLocation, TaskStatus};
-use orbit_types::workflow::JobRunState;
+use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -197,6 +197,42 @@ impl Fixture {
             .as_str()
             .unwrap()
             .to_string()
+    }
+
+    /// Hold `task` in a live escalation triage run with a real successful
+    /// prepare checkpoint, as a run is while its triagers work.
+    fn hold_in_triage_run(&self, task: &str) -> String {
+        let jobs = orbit_store::compose::workspace_job_run_store(
+            self.runtime.sqlite_store().unwrap(),
+            self.runtime.workspace_id().unwrap(),
+        );
+        let run = jobs
+            .insert_job_run("escalation_triage_pipeline", 1, Utc::now(), None, None)
+            .unwrap();
+        jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+            .unwrap();
+        let prepared = self
+            .runtime
+            .run_deterministic(
+                "prepare_escalation_triage",
+                &json!({}),
+                &json!({
+                    "subject": "block", "task_ids": [task],
+                    "workspace_path": self.repo, "base_branch": "main",
+                    "run_id": run.run_id,
+                }),
+                orbit_tools::ToolContext::default(),
+            )
+            .unwrap();
+        assert_eq!(prepared["task_ids"], json!([task]), "{prepared}");
+        let mut state = PipelineState::new(
+            run.run_id.clone(),
+            "escalation_triage_pipeline".into(),
+            json!({}),
+        );
+        state.record_step(0, JobRunState::Success, Some(prepared), None);
+        self.runtime.write_run_state(&run.run_id, &state).unwrap();
+        run.run_id
     }
 
     fn triage_comments(&self, task: &str) -> Vec<String> {
@@ -647,11 +683,7 @@ fn the_block_escalated_trigger_admits_each_escalated_episode_once() {
 }
 
 #[test]
-fn a_decision_with_a_bad_inspection_proof_records_nothing() {
-    // The escalation triager inspects a pinned checkout and passes the
-    // observed pair with each decision. Echoing the pinned revision is
-    // not proof (its envelope carries it); only the revision's tree,
-    // recomputed by the tool, settles it.
+fn a_task_a_live_triage_run_holds_is_decided_only_with_its_inspection_proof() {
     let fx = fixture();
     let git = |args: &[&str]| -> String {
         let output = crate::git_test_support::command()
@@ -674,23 +706,107 @@ fn a_decision_with_a_bad_inspection_proof_records_nothing() {
 
     let task = fx.task(&[]);
     fx.escalate(&task);
-    let decide = |observed_tree: &str| {
-        fx.triage(json!({
-            "action": "report",
+    fx.hold_in_triage_run(&task);
+    let decide = |action: &str, proof: Value| {
+        let mut input = json!({
+            "action": action,
             "id": task,
             "blocker": "the worker crashed while the host was rebooting",
-            "reason": "the operator checks the host",
-            "source_revision": revision,
-            "observed_revision": revision,
-            "observed_tree": observed_tree,
-        }))
+            "reason": "the host is back and a later run on it succeeded",
+            "options": [
+                {"summary": "Requeue", "consequences": "it runs again", "replacement": "- Recovered."},
+                {"summary": "Archive", "consequences": "nobody recovers it", "replacement": "- Recovered."},
+            ],
+            "recommended": 1,
+        });
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(proof.as_object().unwrap().clone());
+        fx.triage(input)
     };
-    let refused = decide(&"0".repeat(40)).expect_err("a tree the caller invented proves nothing");
-    assert!(refused.contains("inspection proof"), "{refused}");
-    assert!(fx.triage_comments(&task).is_empty(), "nothing was recorded");
-    assert_eq!(fx.qualifying(), std::slice::from_ref(&task));
+    // The run's triager owes the proof on every decision: one without it,
+    // or with a pair it did not read from the pinned checkout, records,
+    // proposes and requeues nothing.
+    for action in ["report", "propose", "requeue"] {
+        for proof in [
+            json!({}),
+            json!({"source_revision": revision}),
+            json!({
+                "source_revision": revision, "observed_revision": revision,
+                "observed_tree": "0".repeat(40),
+            }),
+        ] {
+            decide(action, proof.clone()).expect_err(&format!("{action} with {proof} is refused"));
+            assert!(fx.triage_comments(&task).is_empty(), "nothing was recorded");
+            assert_eq!(fx.status(&task), "blocked", "nothing was requeued");
+        }
+    }
 
-    let reported = decide(&tree).unwrap();
+    // The pair read from the checkout, in whatever hex case Git printed it,
+    // records the decision.
+    let reported = decide(
+        "report",
+        json!({
+            "source_revision": revision.to_ascii_uppercase(),
+            "observed_revision": revision.to_ascii_uppercase(),
+            "observed_tree": tree.to_ascii_uppercase(),
+        }),
+    )
+    .unwrap();
     assert_eq!(reported["outcome"], "reported");
     assert_eq!(fx.triage_comments(&task).len(), 1);
+}
+
+#[test]
+fn a_non_git_triage_run_pins_no_revision_and_its_decisions_report_none() {
+    let fx = fixture();
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    fx.hold_in_triage_run(&task);
+    let report = |proof: Value| {
+        let mut input = json!({
+            "action": "report", "id": task,
+            "blocker": "the worker crashed while the host was rebooting",
+            "reason": "the operator checks the host",
+        });
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(proof.as_object().unwrap().clone());
+        fx.triage(input)
+    };
+    let stale = "0".repeat(40);
+    report(json!({"source_revision": null, "observed_revision": stale, "observed_tree": stale}))
+        .expect_err("a non-Git checkout has no HEAD to observe");
+    assert!(fx.triage_comments(&task).is_empty(), "nothing was recorded");
+    let reported = report(json!({"source_revision": null})).unwrap();
+    assert_eq!(reported["outcome"], "reported");
+    assert_eq!(fx.triage_comments(&task).len(), 1);
+}
+
+#[test]
+fn a_pilot_warning_requeue_is_refused_as_a_requeue_whatever_proof_it_carries() {
+    let fx = fixture();
+    let task = fx.task(&[]);
+    let requeue = |proof: Value| {
+        let mut input = json!({
+            "action": "requeue", "subject": "pilot_warning", "id": task,
+            "reason": "the finding is wrong",
+        });
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(proof.as_object().unwrap().clone());
+        fx.triage(input)
+            .expect_err("pilot warning triage never requeues")
+    };
+    let stale = "0".repeat(40);
+    assert_eq!(
+        requeue(json!({
+            "source_revision": stale, "observed_revision": stale, "observed_tree": stale,
+        })),
+        requeue(json!({})),
+        "an unsupported action is refused before its proof is read"
+    );
 }

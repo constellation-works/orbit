@@ -16,6 +16,7 @@ fn base_def(name: &str, executor_type: ExecutorType) -> ExecutorDef {
         executor_type,
         command: Some("noop".to_string()),
         args: Vec::new(),
+        inspection_args: None,
         stdout_format: None,
         model_pair_override: None,
         model_flag: None,

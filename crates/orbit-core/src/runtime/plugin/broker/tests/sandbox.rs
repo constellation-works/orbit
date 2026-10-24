@@ -329,6 +329,7 @@ impl orbit_engine::test_support::NullRuntimeHost for BrokerHost {
         Ok(ResolvedCliExecutor {
             command: self.command.display().to_string(),
             args: Vec::new(),
+            inspection_args: None,
         })
     }
 

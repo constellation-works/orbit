@@ -28,13 +28,14 @@
 #   subject per run.
 #
 # Prepare pins one landing-branch revision without touching the primary
-# checkout and fails before any agent call outside a Git work tree.
+# checkout. Outside a Git work tree it pins none (`source_revision` null),
+# as task pilot does, and triagers read the supplied filesystem.
 #
 # Crew resolution
 # - Every triager is drawn from `workflow.hard_complexity_crews`, keeping
-#   only crews that can inspect source natively (a tier without one passes
-#   to xhard), or is the inspection-capable `workflow.default_crew` when no
-#   pool has one. For a pilot warning, the crew that wrote the held
+#   only crews whose provider executor declares `inspection_args` (a tier
+#   without one passes to xhard), or is `workflow.default_crew` when its
+#   executor declares them and no pool has one. For a pilot warning, the crew that wrote the held
 #   assessment (the pilot run's frozen draw) is passed over while the pool
 #   offers another. Prepare
 #   records every draw; the triager step names the crew of its partition, so

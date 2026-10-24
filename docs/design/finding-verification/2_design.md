@@ -1,7 +1,7 @@
 ---
 title: Finding Verification — Design
 owner: claude
-last_updated: 2026-10-17
+last_updated: 2026-10-24
 last_validated: 2026-10-19
 status: Accepted
 feature: finding-verification
@@ -105,20 +105,36 @@ drawn from `workflow.<tier>_complexity_crews`. The tier is the task's
 complexity, and an unassessed task reads as `medium`. Only pool members with
 a positive weight are drawn.
 
-`verify_finding` inspects the pinned source with each CLI's own native
-file-read and command tools, so any configured crew can verify, whatever
-its provider; the draw filters by nothing but pool membership and weight.
-A tier whose pool has no member holding a ticket passes to the next tier
-up (low → medium → hard → xhard), and the assignment records the tier
-actually drawn from. When no tier from the task's upward has one, the
-default crew verifies. Trust in a verdict comes from its inspection
-proof, not its provider: each partition result reports `observed_revision`
-(`git rev-parse HEAD`) and `observed_tree` (`git rev-parse 'HEAD^{tree}'`)
-from its checkout, and apply leaves every task in the partition
-unverified (`inspection_revision_mismatch`) when the proof is missing or
-the tree is not the pinned revision's tree, recomputed host-side. The
-envelope carries the revision but never its tree, so a verifier whose
-tools never ran cannot forge the pair.
+`verify_finding` inspects the pinned source with a CLI's own native
+file-read and command tools, which an executor turns on by declaring
+`inspection_args` (the shipped Codex and Claude executors do; no other
+shipped executor does). The draw therefore keeps only enabled members whose
+provider has a CLI runtime and whose executor declares the field; no
+provider is named in code [ORB-15792]. A tier whose pool has no such member
+passes to the next tier up (low → medium → hard → xhard), and the assignment
+records the tier actually drawn from. When no tier from the task's upward
+has one, the default crew verifies if it can inspect. Otherwise preparation
+fails with `inspection_crew_unavailable` before any verifier is dispatched.
+
+Trust in a verdict comes from its inspection proof, not its provider: each
+partition result reports `observed_revision` (`git rev-parse HEAD`) and
+`observed_tree` (`git rev-parse 'HEAD^{tree}'`) from its checkout, compared
+case-insensitively with the pinned revision and its tree, recomputed
+host-side. A partition that fails leaves every task in it unverified with
+one of two reasons:
+
+| Reason | Cause |
+|---|---|
+| `inspection_proof_missing` | Either observed value is absent or empty. |
+| `inspection_revision_mismatch` | Both are reported, but the revision is not the pinned one or the tree is not its tree. |
+
+The envelope carries the revision but never its tree, so a verifier whose
+tools never ran cannot forge the pair. A non-Git workspace pins no revision
+and skips the check. Prepare stamps its checkpoint
+`inspection_proof_required: true`, and so does the escalation checkpoint
+apply writes. A checkpoint without the stamp was prepared before the proof
+existed: its results are checked only when they report a proof, so a run in
+flight across an upgrade keeps its verdicts.
 
 When the pool offers another crew, a crew named by the task's filer
 (`created_by`, matched by crew name, model, provider or agent family) is
@@ -128,9 +144,9 @@ draws the same crew.
 In the initial round, a REJECTED verdict from the `low` tier, or a verdict of
 `low` confidence from any tier, is not recorded. The task is judged again by
 a crew from the next tier's pool (low → medium → hard → xhard), under the same
-rule: a tier with no member holding a ticket passes upward. That
+inspection rule: a tier with no inspection-capable member passes upward. That
 draw passes over every crew that already judged the task, and the filer's.
-The second verdict decides. With no member from the next
+The second verdict decides. With no inspection-capable member from the next
 tier upward, or from `xhard`, the first verdict stands. There is one escalation round. The escalation checkpoint
 retains the initial finding fingerprint, even when its task re-read sees edited
 material; the final write checks that original fingerprint.
@@ -238,5 +254,12 @@ uses the shared member host:
   by batching per crew.
 - **Evidence is checked for existence, not meaning.** Apply proves each
   cited line exists at the pinned revision, not that it shows the defect.
+- **The proof's upgrade window.** Runs prepared by the release that first
+  required the proof, before the checkpoint stamp, carry no stamp, so their
+  proofless results are accepted like any pre-proof run's. The window closes
+  when those runs finish.
+- **Inspection needs a declaration.** A crew whose executor declares no
+  `inspection_args` never verifies, even when its CLI could read the
+  checkout; an operator opts it in on the executor definition.
 - **Filer matching is by label.** A filer recorded only as a human or
   generic label matches no crew, so nothing is passed over.

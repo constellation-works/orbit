@@ -721,6 +721,7 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
         Ok(ResolvedCliExecutor {
             command: self.codex.to_string_lossy().into_owned(),
             args: Vec::new(),
+            inspection_args: None,
         })
     }
 

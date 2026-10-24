@@ -280,6 +280,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
         Ok(ResolvedCliExecutor {
             command: self.provider.display().to_string(),
             args: Vec::new(),
+            inspection_args: None,
         })
     }
 

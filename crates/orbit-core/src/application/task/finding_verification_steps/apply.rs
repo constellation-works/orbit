@@ -19,7 +19,9 @@ use super::prepare::task_snapshot;
 use crate::application::task::pilot::input::{
     requested_workspace_root, required_string, required_string_array,
 };
-use crate::application::task::pilot::source::SourceSnapshot;
+use crate::application::task::pilot::source::{
+    INSPECTION_PROOF_KEY, SourceSnapshot, inspection_proof_error, inspection_proof_required,
+};
 
 const MAX_PARTITION_SIZE: usize = 5;
 
@@ -63,6 +65,7 @@ pub(crate) fn apply(
     let claim =
         crate::application::automation::members::claim(runtime, prepared).map_err(failed)?;
     let escalation_round = prepared.get("round").and_then(Value::as_str) == Some("escalation");
+    let proof_required = inspection_proof_required(prepared);
     let partitions = prepared
         .get("partitions")
         .and_then(Value::as_array)
@@ -124,10 +127,12 @@ pub(crate) fn apply(
         // The proof the verifier read the pinned source, checked before any
         // verdict in this partition is trusted: a crew whose native tools
         // never ran cannot report the pinned revision's tree, which the
-        // envelope never carries. Every task it held stays unverified.
+        // envelope never carries. Every task it held stays unverified. A run
+        // prepared before the proof existed keeps a proofless verdict.
         let proof_error = reports.and_then(|_| {
             let result = results.get(position);
-            crate::application::task::pilot::source::inspection_proof_error(
+            inspection_proof_error(
+                proof_required,
                 result
                     .and_then(|result| result.get("observed_revision"))
                     .and_then(Value::as_str),
@@ -157,8 +162,8 @@ pub(crate) fn apply(
             if let Some(error) = &proof_error {
                 task_outcomes.push(unverified(
                     task_id,
-                    "inspection_revision_mismatch",
-                    error.clone(),
+                    error.reason(),
+                    error.message().to_string(),
                 ));
                 continue;
             }
@@ -302,6 +307,8 @@ pub(crate) fn apply(
         .collect::<Vec<_>>();
     let mut escalation_prepared = prepared.clone();
     escalation_prepared["round"] = json!("escalation");
+    // This apply drew the escalation verifiers under the proof contract.
+    escalation_prepared[INSPECTION_PROOF_KEY] = json!(true);
     escalation_prepared["task_ids"] = json!(
         escalation_tasks
             .iter()

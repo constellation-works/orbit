@@ -6,6 +6,8 @@
 
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{Task, TaskStatus};
+use orbit_engine::RuntimeHost;
+use orbit_tools::ToolContext;
 use serde_json::{Value, json};
 
 use super::Workspace;
@@ -274,62 +276,50 @@ fn a_ui_finding_adds_the_ui_tag_and_never_removes_one() {
 }
 
 // Related boundary scenarios share the isolated table fixture.
-fn a_result_without_the_observed_revision_proof_is_invalid_and_repairable() {
+fn a_run_prepared_before_the_proof_existed_applies_its_result_without_one() {
     let workspace = Workspace::new();
-    // Echoing the pinned revision is not proof: the envelope already
-    // carries it. Only the revision's tree, read from the checkout,
-    // settles the partition. Each blind variant is invalid and reaches
-    // the repair loop with the proof error as its validation error.
-    for (label, proof) in [
-        (
-            "echoed revision only",
-            json!({"observed_revision": "placeholder"}),
-        ),
-        (
-            "wrong tree",
-            json!({"observed_revision": "placeholder", "observed_tree": "0".repeat(40)}),
-        ),
-    ] {
-        let task = workspace.pilot_task(label);
-        let prepared = workspace.prepare_partitioned(&[&task.id], 1);
-        let mut blind = result(&task.id, Some(0));
-        for (field, value) in proof.as_object().unwrap() {
-            blind[field] = if field == "observed_revision" {
-                prepared["source"]["source_revision"].clone()
-            } else {
-                value.clone()
-            };
-        }
-        let refused = workspace.apply_results(&prepared, json!([blind]));
-        assert_eq!(refused["status"], "failed", "{label}: {refused}");
-        assert_eq!(refused["applied_count"], 0, "{label}: {refused}");
-        assert_eq!(refused["repair_count"], 1, "{label}: {refused}");
-        let errors = &refused["repair_partitions"][0]["validation_errors"];
-        assert!(
-            errors[0].as_str().unwrap().contains("inspection proof"),
-            "{label}: {errors}"
-        );
-        assert!(
-            workspace
-                .runtime
-                .get_task(&task.id)
-                .unwrap()
-                .context_files
-                .is_empty(),
-            "{label}: no assessment was applied"
-        );
+    // Applied directly: the fixture's `action` fills in a proof.
+    let apply = |prepared: &Value, task: &Task| {
+        workspace
+            .runtime
+            .run_deterministic(
+                "apply_task_pilot_results",
+                &json!({}),
+                &json!({
+                    "workspace_path": workspace.repo, "prepared": prepared,
+                    "results": [result(&task.id, Some(0))],
+                }),
+                ToolContext::default(),
+            )
+            .unwrap()
+    };
+    // A run prepared for the proof sends a proofless result to repair.
+    let task = workspace.pilot_task("prepared for the proof");
+    let prepared = workspace.prepare_partitioned(&[&task.id], 1);
+    let refused = apply(&prepared, &task);
+    assert_eq!(refused["applied_count"], 0, "{refused}");
+    assert_eq!(refused["repair_count"], 1, "{refused}");
 
-        // The same partition with the observed pair applies.
-        let applied = workspace.apply_results(&prepared, json!([result(&task.id, Some(0))]));
-        assert_eq!(applied["status"], "succeeded", "{label}: {applied}");
-        assert_eq!(applied["applied_count"], 1, "{label}: {applied}");
-    }
+    // A run still in flight from before the upgrade keeps its result.
+    let task = workspace.pilot_task("in flight across the upgrade");
+    let mut legacy = workspace.prepare_partitioned(&[&task.id], 1);
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("inspection_proof_required");
+    let applied = apply(&legacy, &task);
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(applied["applied_count"], 1, "{applied}");
+    assert_eq!(
+        workspace.runtime.get_task(&task.id).unwrap().context_files,
+        ["file:README.md"]
+    );
 }
 
 crate::scenario_table!(
     host_index_applies_to_a_missing_or_wrong_partition_index_scenarios,
     host_index_applies_to_a_missing_or_wrong_partition_index,
-    a_result_without_the_observed_revision_proof_is_invalid_and_repairable,
+    a_run_prepared_before_the_proof_existed_applies_its_result_without_one,
     missing_or_scalar_evidence_gaps_are_normalised_to_an_array,
     a_ui_finding_adds_the_ui_tag_and_never_removes_one
 );

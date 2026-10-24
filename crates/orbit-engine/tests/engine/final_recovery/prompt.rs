@@ -55,6 +55,7 @@ fn the_recovery_prompt_lists_only_the_steps_admitted_for_this_failure() {
     host.cli = Some(orbit_engine::ResolvedCliExecutor {
         command: cli.to_string_lossy().into_owned(),
         args: Vec::new(),
+        inspection_args: None,
     });
     let mut job = pipeline(false);
     // Load the canonical activity rather than reproducing its instruction.

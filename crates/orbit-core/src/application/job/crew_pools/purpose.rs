@@ -79,11 +79,14 @@ impl OrbitRuntime {
     /// the source a draw over them records.
     ///
     /// `None` when the pool is unset, empty or wholly disabled, which keeps the
-    /// purpose on its fallback route. Any configured crew may be drawn,
-    /// whatever its provider.
+    /// purpose on its fallback route. With `inspection`, only members whose
+    /// provider inspects source natively and that hold a ticket are kept; a
+    /// pool with none of those is `None` too, so the fallback's own inspection
+    /// rules apply.
     pub(crate) fn purpose_pool_candidates(
         &self,
         purpose: CrewPurpose,
+        inspection: bool,
     ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
         if !purpose.has_purpose_key() {
             return Ok(None);
@@ -124,7 +127,33 @@ impl OrbitRuntime {
             );
             return Ok(None);
         }
-        Ok(Some((candidates, key.to_string())))
+        if !inspection {
+            return Ok(Some((candidates, key.to_string())));
+        }
+        let (capable, unable) = self.partition_inspecting(
+            candidates
+                .into_iter()
+                .filter(|candidate| candidate.weight > 0)
+                .collect(),
+        )?;
+        if capable.is_empty() {
+            tracing::warn!(
+                pool = %key,
+                "no crew in the purpose pool can inspect natively; the purpose keeps its fallback route",
+            );
+            return Ok(None);
+        }
+        let source = if unable.is_empty() {
+            format!("{key}; native inspection")
+        } else {
+            let skipped = unable
+                .iter()
+                .map(|candidate| candidate.crew.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{key}; native inspection, skipped: {skipped}")
+        };
+        Ok(Some((capable, source)))
     }
 
     /// The enabled members of the purpose pool `task` was assigned from, when
@@ -146,6 +175,6 @@ impl OrbitRuntime {
         else {
             return Ok(None);
         };
-        self.purpose_pool_candidates(purpose)
+        self.purpose_pool_candidates(purpose, false)
     }
 }

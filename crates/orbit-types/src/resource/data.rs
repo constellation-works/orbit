@@ -177,6 +177,9 @@ pub struct ExecutorResourceSpec {
     pub command: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
+    /// See [`crate::workflow::ExecutorDef::inspection_args`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inspection_args: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stdout_format: Option<StdoutFormat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

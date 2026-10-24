@@ -128,6 +128,17 @@ pub struct ExecutorDef {
     pub command: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Arguments appended to a pinned-source inspection run (task pilot,
+    /// finding verification, escalation triage) to turn on this CLI's own
+    /// native file-read and shell tools. An empty list declares that `args`
+    /// already leave them on. `None` declares no inspection surface: crew
+    /// draws for those activities pass over the executor's crews, and a run
+    /// that still names one is refused before launch. Read-only stays
+    /// enforced by the `reviewer` filesystem profile, and the apply step's
+    /// observed-revision proof, not this declaration, establishes that a run
+    /// read the pinned source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inspection_args: Option<Vec<String>>,
     /// Expected stdout format, serialized as "envelope", "json", or "text".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stdout_format: Option<StdoutFormat>,
@@ -245,6 +256,7 @@ impl ExecutorDef {
             executor_type,
             command,
             args,
+            inspection_args,
             stdout_format,
             model_pair_override,
             model_flag,
@@ -263,6 +275,7 @@ impl ExecutorDef {
             executor_type,
             command,
             args,
+            inspection_args,
             stdout_format,
             model_pair_override,
             model_flag,

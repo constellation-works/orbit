@@ -275,6 +275,7 @@ impl orbit_engine::test_support::NullRuntimeHost for CapacityHost {
         Ok(ResolvedCliExecutor {
             command: self.cli.to_string_lossy().into_owned(),
             args: Vec::new(),
+            inspection_args: None,
         })
     }
 

@@ -139,9 +139,13 @@ spec:
     source_revision>","observed_revision":"<HEAD>","observed_tree":"<tree>"`
     on every `orbit.task.block_triage` decision call below, and report
     `observed_revision` and `observed_tree` at partition level in your
-    result. The tool checks the observed pair against the pinned
-    revision's tree and records nothing when it is missing or mismatched,
-    so read both values from git; never copy a tree value from the input.
+    result. The proof is required: the tool checks the observed pair
+    against the pinned revision's tree and records nothing, requeues
+    nothing and proposes nothing when it is missing or mismatched, so read
+    both values from git; never copy a tree value from the input. For a
+    non-Git workspace (`source_revision` null), inspect the supplied
+    filesystem directly, pass `"source_revision":null` and no observed
+    values on each decision call, and report both null in your result.
 
     ## Subject `pilot_warning`
 
@@ -165,7 +169,8 @@ spec:
        findings came from.
     3. Check each holding finding against the source at `source_revision`
        with read-only `git`/`rg` commands and file reads through this
-       CLI's own native tools. Confirm HEAD equals `source_revision`. Decide
+       CLI's own native tools. Confirm HEAD equals `source_revision` when
+       set. Decide
        whether the finding is right, and what it would take to resolve it.
        Use `orbit.search` and `orbit.task.list` for related tasks named by a
        prerequisite or conflict finding.

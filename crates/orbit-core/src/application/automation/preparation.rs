@@ -583,14 +583,51 @@ pub(crate) fn active_escalation_triages(
     active_preparations(runtime, crate::application::task::ESCALATION_TRIAGE_JOB)
 }
 
+/// The prepared checkpoint of each live escalation triage run that holds
+/// `task_id`, by run id.
+pub(crate) fn escalation_triage_checkpoints_holding(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+) -> Result<BTreeMap<String, Value>, OrbitError> {
+    let mut holding = BTreeMap::new();
+    for_each_active_preparation(
+        runtime,
+        crate::application::task::ESCALATION_TRIAGE_JOB,
+        |run_id, output, task_ids| {
+            if task_ids.iter().any(|id| id == task_id) {
+                holding.insert(run_id.to_string(), output.clone());
+            }
+        },
+    )?;
+    Ok(holding)
+}
+
 /// The tasks each live run of `job_id` holds by a successful preparation
 /// checkpoint, keyed by task.
 fn active_preparations(
     runtime: &OrbitRuntime,
     job_id: &str,
 ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
-    let workspace_root = runtime.paths().repo_root.canonicalize()?;
     let mut prepared_by_task = BTreeMap::<String, BTreeSet<String>>::new();
+    for_each_active_preparation(runtime, job_id, |run_id, _, task_ids| {
+        for task_id in task_ids {
+            prepared_by_task
+                .entry(task_id)
+                .or_default()
+                .insert(run_id.to_string());
+        }
+    })?;
+    Ok(prepared_by_task)
+}
+
+/// Visit each live run of `job_id` that holds tasks by a successful
+/// preparation checkpoint, with that checkpoint and the tasks it holds.
+fn for_each_active_preparation(
+    runtime: &OrbitRuntime,
+    job_id: &str,
+    mut visit: impl FnMut(&str, &Value, Vec<String>),
+) -> Result<(), OrbitError> {
+    let workspace_root = runtime.paths().repo_root.canonicalize()?;
     for state in [
         JobRunState::Pending,
         JobRunState::Running,
@@ -615,22 +652,20 @@ fn active_preparations(
             let Some(state) = runtime.read_run_state(&run.run_id)? else {
                 continue;
             };
-            let Some(task_ids) = state.step_outputs.iter().find_map(|(step_index, output)| {
-                (state.step_states.get(step_index) == Some(&JobRunState::Success))
-                    .then(|| prepared_task_ids(output, &workspace_root))
-                    .flatten()
-            }) else {
+            let Some((output, task_ids)) =
+                state.step_outputs.iter().find_map(|(step_index, output)| {
+                    (state.step_states.get(step_index) == Some(&JobRunState::Success))
+                        .then(|| prepared_task_ids(output, &workspace_root))
+                        .flatten()
+                        .map(|task_ids| (output, task_ids))
+                })
+            else {
                 continue;
             };
-            for task_id in task_ids {
-                prepared_by_task
-                    .entry(task_id)
-                    .or_default()
-                    .insert(run.run_id.clone());
-            }
+            visit(&run.run_id, output, task_ids);
         }
     }
-    Ok(prepared_by_task)
+    Ok(())
 }
 
 /// The enabled state-triggered task pilots this host evaluates, read once per
