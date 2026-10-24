@@ -62,7 +62,10 @@ pub(super) use landing::handoff_land;
 pub use light_delivery::judge_light_delivery;
 pub(crate) use owed_criteria::accept_implementer_owed_criteria;
 pub use pr::PullRequestStatus;
-pub(crate) use pr::recovery_published_head;
+pub(crate) use pr::{
+    AUTHENTICATED_PUBLISHED_HEAD_SHA, apply_authenticated_published_head,
+    provider_authenticated_published_head, recovery_published_head,
+};
 pub(super) use pr::{git_merge, pr_complete, pr_open, pr_promote, ship_done_attribution};
 pub(super) use push::push_batch_changes;
 pub(crate) use remote_probe::fixed_wait;

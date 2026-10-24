@@ -371,9 +371,15 @@ re-preparation checks; it does not edit any earlier certificate.
 
 Conflict recovery projects the failed target's rendered task IDs and assigned
 worktree into its own input. `repo_root` defaults to that same assigned path,
-and `failed_step_input` retains the candidate branch, pre-rewrite HEAD, and
-other phase checkpoints. The run ID comes from the executor. This lets normal
-task-context loading, worktree-pair validation, and sandbox preparation use the
+and `failed_step_input` retains the candidate branch, the original
+publication (`head_sha` / `published_head_sha`), and other phase checkpoints.
+The host nests `authenticated_published_head_sha` for the leaf: the stopped
+rebase's pre-rewrite HEAD. Completion recovery sets it by walking the
+host-recorded contiguous auto-fix chain from that publication; `sync_base`
+sets it to `head_sha`. The leaf does not infer a head from the live branch.
+Admission recomputes the chain and does not read the pin. The run ID comes
+from the executor. This lets normal task-context loading, worktree-pair
+validation, and sandbox preparation use the
 same assignment as the failed step; no primary-checkout fallback is needed.
 System-crew selection still enforces the original run's crew allowlist.
 The dedicated conflict-recovery leaf edits conflict files only. Its managed
@@ -417,8 +423,9 @@ integration branch `origin/<base>` has usually advanced past the pin before
 the leaf even starts; requiring the ref to still equal the pin turned the
 common case into a guaranteed failure. The leaf instruction lists only the
 identity checks that remain (cancelled run, task refusing writes, checked-out
-branch or pre-rewrite HEAD mismatch, missing completion authority) and treats
-the repository gates as advisory: `make ci-fast` / `make ci-lint` outcomes are
+branch or pre-rewrite HEAD mismatch against `authenticated_published_head_sha`,
+missing completion authority) and treats the repository gates as advisory:
+`make ci-fast` / `make ci-lint` outcomes are
 reported in the result's `gates` field, and only a failure involving a
 resolved path is the leaf's to fix. After the pinned continuation the host
 reads the base ref again; when its tip descends from the pin it rebases the

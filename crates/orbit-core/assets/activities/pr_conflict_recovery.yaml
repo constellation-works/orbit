@@ -187,7 +187,14 @@ spec:
          not evaluated in a claimed leaf);
        - the checked-out branch is not `failed_step_input.head`, or the
          stopped rebase's pre-rewrite HEAD (`git rev-parse ORIG_HEAD`) is not
-         `failed_step_input.head_sha` / `published_head_sha`;
+         `failed_step_input.authenticated_published_head_sha`;
+       `authenticated_published_head_sha` is the host-authenticated candidate
+       pin. For `pr_complete` it is the contiguous auto-fix chain the host
+       recorded after the original publication; otherwise it is `head_sha`.
+       `head_sha` and `published_head_sha` stay that original publication and
+       are not the pin. Do not replace the pin from the live branch, the
+       remote, or those raw fields. A missing pin is a mismatch: stop before
+       editing.
        - for `pr_complete`, both the retained `completion: done` and
          `auto_fix: true` authorizations, or `pr_number`, are missing.
        `target_base_sha` no longer being the tip of `origin/<base>` is NOT a

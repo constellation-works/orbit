@@ -74,6 +74,8 @@ impl WorktreeBoundaryGuard {
         // after its watcher publishes a check repair. Authenticate that input
         // first, then bind Git's original head (and the publication lease) to
         // the contiguous repair heads the host recorded for this PR.
+        // `authenticated_published_head_sha` is only the provider's pin;
+        // reading it here would let a rendered input widen this boundary.
         let published_original = original;
         let original = if input.get("activity_name").and_then(Value::as_str) == Some("pr_complete")
         {

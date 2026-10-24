@@ -63,39 +63,51 @@ fn completion_conflict_follows_only_recorded_auto_fix_pushes() {
             input["failed_step_input"]["published_head_sha"] = json!(prepared.candidate);
             let provider = prepared.fixture.root.path().join("codex");
             let launched = prepared.fixture.root.path().join("launched");
+            // The stub applies the leaf's ORIG_HEAD rule: edit only when the
+            // host pin matches the stopped rebase, and the raw publication
+            // fields are still the original candidate.
             write_executable(
                 &provider,
-                &provider_script(&format!(
-                    ": > '{}'\nprintf 'candidate and target\\n' > README.md",
-                    launched.display()
-                )),
+                &publication_pin_provider(&launched, &prepared.candidate),
             );
             let host = prepared.host.with_provider(&provider);
             let original = &prepared.candidate;
             let first = pushed("42", &prepared.run_id, original, &repair);
             let second = pushed("42", &prepared.run_id, &repair, &latest);
+            assert_ne!(
+                prepared.base_sha, prepared.target,
+                "the wrong-base case needs a pin distinct from the stopped rebase"
+            );
 
-            for (case, entries) in [
-                ("unrecorded", vec![]),
+            for (case, entries, wrong_base) in [
+                ("unrecorded", vec![], false),
                 (
                     "other PR",
                     vec![pushed("43", &prepared.run_id, original, &latest)],
+                    false,
                 ),
                 (
                     "other run",
                     vec![pushed("42", "jrun-unrelated", original, &latest)],
+                    false,
                 ),
                 (
                     "disconnected head",
                     vec![pushed("42", &prepared.run_id, &repair, &latest)],
+                    false,
                 ),
-                ("only earlier repair recorded", vec![first.clone()]),
+                ("only earlier repair recorded", vec![first.clone()], false),
+                ("wrong base", vec![first.clone(), second.clone()], true),
             ] {
                 host.clear_history("T-REBASE");
                 for entry in entries {
                     host.record_history("T-REBASE", entry);
                 }
-                let error = recover(&host, &prepared.run_id, input.clone())
+                let mut case_input = input.clone();
+                if wrong_base {
+                    case_input["target_base_sha"] = json!(prepared.base_sha);
+                }
+                let error = recover(&host, &prepared.run_id, case_input)
                     .expect_err("an unauthenticated head must refuse before dispatch");
                 assert!(
                     error.to_string().contains("existing rebase matching"),
@@ -134,4 +146,58 @@ fn completion_conflict_follows_only_recorded_auto_fix_pushes() {
             assert_eq!(git(checkout, &["status", "--porcelain"]), "");
         },
     );
+}
+
+/// Provider stand-in for the leaf's pre-rewrite check.
+///
+/// Touches `launched` as soon as it is dispatched, then edits only when the
+/// host pin equals `ORIG_HEAD` and the raw publication fields are still
+/// `original_publication`. A missing pin refuses before any edit.
+fn publication_pin_provider(launched: &std::path::Path, original_publication: &str) -> String {
+    format!(
+        r#"#!/bin/sh
+set -eu
+: > '{launched}'
+python3 -c '
+import json, subprocess, sys
+payload = sys.stdin.read()
+marker = "Execution envelope:\n"
+start = payload.find(marker)
+text = payload[start + len(marker):] if start >= 0 else payload
+try:
+    env = json.loads(text)
+except json.JSONDecodeError:
+    env = {{}}
+failed = env.get("input", {{}}).get("failed_step_input", {{}})
+if not isinstance(failed, dict):
+    failed = {{}}
+pin = failed.get("authenticated_published_head_sha") or ""
+published = failed.get("published_head_sha") or ""
+head = failed.get("head_sha") or ""
+orig = subprocess.check_output(["git", "rev-parse", "ORIG_HEAD"], text=True).strip()
+expected = sys.argv[1]
+if pin != orig or published != expected or head != expected:
+    json.dump({{
+        "schemaVersion": 1,
+        "status": "failed",
+        "result": {{}},
+        "error": {{
+            "code": "pre_rewrite_head_mismatch",
+            "message": "ORIG_HEAD is not the host-authenticated publication",
+        }},
+    }}, sys.stdout)
+    raise SystemExit(0)
+with open("README.md", "w", encoding="utf-8") as handle:
+    handle.write("candidate and target\n")
+json.dump({{
+    "schemaVersion": 1,
+    "status": "success",
+    "result": {{}},
+    "error": None,
+}}, sys.stdout)
+' '{original_publication}'
+"#,
+        launched = launched.display(),
+        original_publication = original_publication,
+    )
 }

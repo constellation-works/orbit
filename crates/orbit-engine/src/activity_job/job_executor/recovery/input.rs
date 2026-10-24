@@ -91,6 +91,34 @@ pub(super) fn bind_recovery_context(
     {
         input["final_validation"] = Value::Bool(true);
     }
+    // The provider compares ORIG_HEAD to this pin. The raw publication stays
+    // in head_sha / published_head_sha so receipts remain the original input.
+    // Admission recomputes the chain and does not read the pin.
+    if input.get("recovery_kind").and_then(Value::as_str) == Some("vcs_conflict") {
+        let pin = crate::executor::automation::vcs::provider_authenticated_published_head(
+            ctx.host,
+            &ctx.run_id,
+            input,
+            &failed_input,
+        )
+        .ok()
+        .flatten();
+        if let Some(object) = failed_input.as_object_mut() {
+            match pin {
+                Some(head) => {
+                    object.insert(
+                        crate::executor::automation::vcs::AUTHENTICATED_PUBLISHED_HEAD_SHA
+                            .to_string(),
+                        Value::String(head),
+                    );
+                }
+                None => {
+                    object
+                        .remove(crate::executor::automation::vcs::AUTHENTICATED_PUBLISHED_HEAD_SHA);
+                }
+            }
+        }
+    }
     input["failed_step_input"] = bounded_recovery_input(&ctx.run_id, failed_input);
     Ok(())
 }
