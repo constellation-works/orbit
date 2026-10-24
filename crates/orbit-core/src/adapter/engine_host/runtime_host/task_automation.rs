@@ -7,6 +7,7 @@ use orbit_types::task::{
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecordUpdateParams as StoreTaskUpdateParams;
+use crate::application::task::TaskRecords;
 use crate::application::task::{
     SYSTEM_ACTOR_LABEL, TaskAttributionInput, TaskUpdateParams, assemble_task_attribution,
 };

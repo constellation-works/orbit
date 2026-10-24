@@ -49,11 +49,17 @@ allowed_internal_deps() {
     orbit-automation)
       echo "orbit-common orbit-store orbit-types"
       ;;
+    orbit-runtime)
+      # The runtime kernel sits below Core's use cases. It reaches them only
+      # through the port Core supplies, so it never depends on orbit-core.
+      # Its dev-only self dependency enables the `test-support` feature.
+      echo "orbit-common orbit-config orbit-engine orbit-exec orbit-policy orbit-runtime orbit-search orbit-store orbit-tools orbit-types"
+      ;;
     orbit-core)
       # ORB-10617: Linux sandbox regression tests compose Core with Exec; this
       # remains test-only and does not widen Core's production dependency graph.
       # Its dev-only self dependency enables the `test-support` feature.
-      echo "orbit-automation orbit-common orbit-config orbit-core orbit-search orbit-engine orbit-exec orbit-policy orbit-registry orbit-store orbit-tools orbit-types"
+      echo "orbit-automation orbit-common orbit-config orbit-core orbit-search orbit-engine orbit-exec orbit-policy orbit-registry orbit-runtime orbit-store orbit-tools orbit-types"
       ;;
     orbit-cmd)
       # The shared application composition layer joins Core runtime kernels to
@@ -95,6 +101,10 @@ allowed_dev_only_deps() {
       # Engine's own tests enable its `test-support` feature to build host
       # doubles on the null host base; no other crate is reached.
       echo "orbit-engine"
+      ;;
+    orbit-runtime)
+      # The kernel's unit tests enable its `test-support` feature.
+      echo "orbit-runtime"
       ;;
     orbit-core)
       # Core's own integration tests enable its `test-support` feature to
@@ -249,16 +259,10 @@ while IFS=$'\t' read -r crate manifest dependency kind; do
 done < <(load_workspace_dependencies)
 
 # orbit-core is one crate, but its internal boundaries are directional too.
-# Keep the runtime kernel independent from use cases and protocol adapters;
-# composition is the only owner allowed to join resolved config, bootstrap,
-# runtime construction, and adapter registration.
-if rg -n 'crate::(command|application|bootstrap|adapter)' \
-  "$repo_root/crates/orbit-core/src/runtime" \
-  -g '*.rs' -g '!**/tests/**'; then
-  echo "forbidden orbit-core runtime-to-command/application/bootstrap/adapter import"
-  fail=1
-fi
-
+# The runtime kernel lives in orbit-runtime, which cannot reach Core's use
+# cases or adapters (the dependency policy above); composition is the only
+# owner allowed to join resolved config, bootstrap, runtime construction, and
+# adapter registration.
 if rg -n 'crate::adapter' \
   "$repo_root/crates/orbit-core/src/application" \
   -g '*.rs' -g '!**/tests/**'; then
@@ -267,9 +271,9 @@ if rg -n 'crate::adapter' \
 fi
 
 if rg -n 'ResolvedConfig::load|ConfigRoots::' \
-  "$repo_root/crates/orbit-core/src/runtime" \
+  "$repo_root/crates/orbit-runtime/src" \
   -g '*.rs' -g '!**/tests/**'; then
-  echo "orbit-core runtime must consume resolved config supplied by composition"
+  echo "orbit-runtime must consume resolved config supplied by composition"
   fail=1
 fi
 
@@ -315,10 +319,10 @@ done
 
 for retired_path in \
   "$repo_root/crates/orbit-core/src/command" \
-  "$repo_root/crates/orbit-core/src/runtime/orbit_tool_host" \
-  "$repo_root/crates/orbit-core/src/runtime/engine/runtime_host.rs"; do
+  "$repo_root/crates/orbit-runtime/src/orbit_tool_host" \
+  "$repo_root/crates/orbit-runtime/src/engine/runtime_host.rs"; do
   if [[ -e "$retired_path" ]]; then
-    echo "retired orbit-core ownership path still exists: $retired_path"
+    echo "retired runtime ownership path still exists: $retired_path"
     fail=1
   fi
 done

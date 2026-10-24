@@ -139,6 +139,8 @@ jobs:
           ORBIT_REQUIRE_SANDBOX_EXEC: "1"
         run: |
           python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked sandbox
+          # The runtime kernel's sandbox tests moved to orbit-runtime with their sources.
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-runtime --locked sandbox
           # This table also retains the sandbox-command grammar refusal row.
           python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked a_self_skipped_host_run_holds_the_review_scenarios
           python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked blocked_recovery
@@ -147,7 +149,7 @@ jobs:
       # inside the run's sandbox-exec is answered, another run's client and a
       # same-UID host process are refused.
       - name: Run agent-call broker tests (real sandbox-exec)
-        run: python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core --locked runtime::plugin::broker
+        run: python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-runtime --locked plugin::broker
 
       # [ORB-12553] Generation admission turns on Darwin descriptor and flock
       # behavior. The orbit-common unit tests that drove it directly were

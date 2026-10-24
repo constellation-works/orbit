@@ -59,7 +59,7 @@ pub const MANAGED_RUN_ENV: &[&str] = &[
 /// two of these variables are durable routing authority.
 /// `ORBIT_REGISTRY_ROOT` selects the host-global registry regardless of
 /// `HOME`, and `ORBIT_WORKSPACE` selects a registered workspace inside it
-/// (see `orbit-core/src/runtime/resolve.rs` and
+/// (see `orbit-runtime/src/resolve.rs` and
 /// `orbit-cmd/src/registry_runtime.rs`). Both are honored only behind the
 /// managed-run trust boundary — but an agent running the suite from inside a
 /// managed Orbit run supplies exactly that boundary, so a fixture that resets

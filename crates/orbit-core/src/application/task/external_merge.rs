@@ -71,6 +71,7 @@ use super::helpers::SYSTEM_ACTOR_LABEL;
 use super::lifecycle::EXTERNAL_MERGE_SETTLED_EVENT;
 use super::pr_closure::unsettled_claim_reason;
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecords;
 use crate::application::workspace_auto::read_live_leaf_runs;
 use crate::runtime::task_pr_forge::MergedPullRequest;
 

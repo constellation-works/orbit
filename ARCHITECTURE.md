@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Layered crate graph, dependency rules, per-crate roles, store internals and scoping"
-last_validated: 2026-10-23
+last_validated: 2026-10-24
 ---
 
 # Architecture
@@ -12,6 +12,7 @@ Orbit is a Rust workspace of layered crates. **Lower layers never depend on high
 Surfaces      orbit-cli · orbit-web · orbit-mcp
 Composition   orbit-cmd
 Application   orbit-core
+Runtime       orbit-runtime
 Domain        orbit-engine · orbit-automation · orbit-agent · orbit-tools · orbit-store
               orbit-search · orbit-registry · orbit-config
 Kernel        orbit-exec · orbit-policy
@@ -36,8 +37,9 @@ Domain crates own their data and transport. Application layers compose them. Ker
 | `orbit-agent` | internal | common, types |
 | `orbit-automation` | internal | common, store, types |
 | `orbit-engine` | internal | agent, common, exec, store, tools, types |
+| `orbit-runtime` | internal | common, config, engine, exec, policy, search, store, tools, types (dev: runtime) |
 | `orbit-mcp` | internal | common, registry, tools, types (dev: mcp) |
-| `orbit-core` | internal | automation, common, config, engine, exec, policy, registry, search, store, tools, types (dev: core) |
+| `orbit-core` | internal | automation, common, config, engine, exec, registry, runtime, search, store, tools, types (dev: core, policy) |
 | `orbit-cmd` | internal | common, config, core, mcp, registry, store, tools, types |
 | `orbit-web` | internal | cmd, common, core, registry, types (dev: engine, store) |
 | `orbit-cli` | internal | cmd, common, config, core, mcp, registry, types, web (dev: engine, exec, tools) |
@@ -84,6 +86,13 @@ Both clocks are thread-local, restored on unwind, and absent from shipped builds
 It also enables Store's `test-support` feature, whose thread-local task-commit
 lock deadline lets a drain admission fixture wait out a held lock in seconds;
 it is restored the same way and is equally absent from shipped builds.
+It also enables Runtime's `test-support` feature, which exposes the kernel's
+test-only seams (the transition read hook, the Git scan hook and the
+ancestry peer anchor) to Core's unit tests.
+
+Runtime's dev-only edge to itself enables its `test-support` feature for its
+own unit tests, which also enable Engine's `test-support` feature for its
+null runtime host.
 
 Engine's dev-only edge to itself enables its `test-support` feature for its own
 unit and integration tests. The feature exports `test_support::NullRuntimeHost`,
@@ -119,7 +128,8 @@ in member manifests with `workspace = true`.
 
 ### Application and surfaces
 
-- **orbit-core** composes the runtime. Its internal graph is `runtime ← application ← adapter`, with `composition` as the only module that joins config, bootstrap, runtime, and adapters. It exposes `OrbitRuntime` and never depends on `orbit-agent`, `orbit-cmd`, or transport crates. Store retention reads the workspace registry read-only, through `orbit-registry`, to tell a live partition from an id no checkout still owns. Notable application modules:
+- **orbit-runtime** is the runtime kernel: `RuntimeKernel` and its stores, engine handles, event bus, audit, claims, reservations, plugin host, workspace binding, host probes and process/tool execution mechanisms, plus the actor context, root paths and cost types. It is built from a config value that composition has already resolved, and it never depends on `orbit-core`. Where a kernel mechanism finishes through a use case (task reads, automation updates, audit records, run reconciliation, crew redraws), it calls `ApplicationPort`, which Core implements and passes in when it builds the kernel.
+- **orbit-core** composes the runtime. Its internal graph is `runtime ← application ← adapter`, with `composition` as the only module that joins config, bootstrap, runtime, and adapters. Its `runtime` module re-exports `orbit-runtime` and defines `OrbitRuntime`, which owns a `RuntimeKernel` and dereferences to it. Application and adapter methods are inherent on `OrbitRuntime`. Core never depends on `orbit-agent`, `orbit-cmd`, or transport crates. Store retention reads the workspace registry read-only, through `orbit-registry`, to tell a live partition from an id no checkout still owns. Notable application modules:
   - `review` runs the before-PR review gate (admit, settle, certificates, landing verification).
   - `landing` is the owner-side landing consumer for distributed drains, dispatched from the coordination outbox.
   - `config` projects `orbit-config` as structured data for the dashboard. Writes go through the same `ConfigStore`.

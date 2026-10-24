@@ -2,7 +2,7 @@
 # Orbit SessionStart hook: tell the session when the user's cwd is not inside
 # an initialized Orbit workspace. Pure filesystem walk — no `orbit` binary
 # dependency and no state mutation. Mirrors the discovery rules in
-# `crates/orbit-core/src/runtime/resolve.rs` (find_orbit_dir_walk_up +
+# `crates/orbit-runtime/src/resolve.rs` (find_orbit_dir_walk_up +
 # is_initialized_orbit_root); the `plugin_hook_workspace_probe` integration test
 # runs this script against a real `orbit workspace init` so the two cannot drift.
 set -eu

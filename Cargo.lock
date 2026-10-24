@@ -1919,6 +1919,7 @@ dependencies = [
  "orbit-exec",
  "orbit-policy",
  "orbit-registry",
+ "orbit-runtime",
  "orbit-search",
  "orbit-store",
  "orbit-tools",
@@ -2022,6 +2023,35 @@ dependencies = [
  "tempfile",
  "toml",
  "tracing",
+]
+
+[[package]]
+name = "orbit-runtime"
+version = "0.31.0"
+dependencies = [
+ "blake3",
+ "chrono",
+ "fs2",
+ "getrandom 0.3.4",
+ "libc",
+ "orbit-common",
+ "orbit-config",
+ "orbit-engine",
+ "orbit-exec",
+ "orbit-policy",
+ "orbit-runtime",
+ "orbit-search",
+ "orbit-store",
+ "orbit-tools",
+ "orbit-types",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "toml",
+ "tracing",
+ "yaml_serde",
 ]
 
 [[package]]

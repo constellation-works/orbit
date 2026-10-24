@@ -43,6 +43,7 @@ use super::MAX_EPISODE_AGE_HOURS;
 use super::episode::{FinalRecoveryRecord, LaterTouch, later_touch};
 use super::readout::{blocking_run_id, current_block, is_escalation};
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecords;
 
 /// History event that marks a block episode triaged.
 pub const BLOCKED_TASK_TRIAGED_EVENT: &str = "blocked_task_triaged";

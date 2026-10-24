@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: "One owner, multiple execution hosts: idempotent claims, routed authority, manual recovery, explicit landing, retained ship sweep, owner-captured review timing, and non-pruning context footprints."
 tags: [distributed-drain, multi-host, pull, federated-mcp]
-paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks/", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
+paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-runtime/src/task/locks/", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, policy-sandbox]
 related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625, ORB-13642, ORB-13663, ORB-13941, ORB-13992, ORB-14149, ORB-14247, ORB-14260]
 ---
@@ -1290,7 +1290,7 @@ manually before treating a workspace as migrated (see the runbook checklist in
 **Enforcement.** `orbit_types::task::inherited_only_epic_roots` is the one definition of the
 withheld population: `backlog_snapshot` excludes such roots (`inherited_only_epic_root`, naming
 descendants and repair), `list_backlog_tasks` applies it to explicit ship overrides, and
-`reserve_with_index` in `crates/orbit-core/src/runtime/task/locks/commands.rs` refuses them before the
+`reserve_with_index` in `crates/orbit-runtime/src/task/locks/commands.rs` refuses them before the
 `EmptyTaskSurfacePolicy` compatibility `Admit`.
 
 ### 7.2 Failed-run triage

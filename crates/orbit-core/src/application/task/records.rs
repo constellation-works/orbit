@@ -11,8 +11,14 @@ use orbit_types::task::Task;
 use super::params::TaskRecordUpdateParams;
 use crate::context::OrbitStores;
 
-impl OrbitStores {
-    pub(crate) fn task_records(&self) -> TaskRecordService<'_> {
+/// Coordinated task-record writes over [`OrbitStores`], which the runtime
+/// kernel crate owns.
+pub(crate) trait TaskRecords {
+    fn task_records(&self) -> TaskRecordService<'_>;
+}
+
+impl TaskRecords for OrbitStores {
+    fn task_records(&self) -> TaskRecordService<'_> {
         TaskRecordService {
             store: self.tasks(),
             document: self.task_documents(),

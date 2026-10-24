@@ -15,6 +15,7 @@ use super::draw::{
 };
 use super::types::{COMPLEXITIES, CapturedCrewPools, POLICY_PIPELINES, POOLS_KEY, SELECTION_KEY};
 use super::{PROVIDER_LIMIT_REASSIGNMENT_PREFIX, auto_task_minted};
+use crate::application::task::TaskRecords;
 
 /// A planned provider-limit reassignment of an auto-task's explicit crew
 /// [ORB-17638], decided before the admission draw.

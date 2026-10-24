@@ -1105,7 +1105,7 @@ Typed definition hashes retain their existing struct field order.
 
 - `requires.host_api` must equal the host's `PLUGIN_HOST_API` or be one major behind it; one
   behind still registers, and `doctor` prints a deprecation. Anything else refuses
-  (`unmet_requirement` in `orbit-core/src/runtime/plugin/requirements.rs`).
+  (`unmet_requirement` in `orbit-runtime/src/plugin/requirements.rs`).
 - `requires.orbit` is checked on `enable` and again at runtime build; a mismatch after an
   upgrade flips the plugin Inactive with a diagnostic rather than failing the runtime.
 - v1 `*.orbit-tool.yaml` sidecars and `orbit tool add` keep working;

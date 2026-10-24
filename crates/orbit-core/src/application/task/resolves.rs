@@ -24,6 +24,7 @@ use serde_json::Value;
 
 use super::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecords;
 
 const RELATION_RESOLVES: &str = "resolves";
 /// Task history event recording that resolving one `resolves` target failed

@@ -10,7 +10,7 @@ last_validated: 2026-10-23
 The process-boundary fixtures in `crates/orbit-cli/tests/process/` run update-root routing, stale-updater refusal, live-run cancellation and dashboard handover on Linux and macOS. `mcp_roundtrip::upgrade` also verifies drain handover and safe-point yielding across both hosts. Handover reads a live process's locked image registration rather than `/proc/<pid>/exe`; the updater race uses a nonblocking FIFO rendezvous available on both systems. The macOS workflow runs these suites. Linux `/proc` owner/namespace proofs and the Linux-only privileged host-preparation opt-out retain explicit gates, and Darwin libproc probes retain theirs.
 
 The shipped catalog is `DEFAULT_JOB_FILES` in
-[`runtime/assets.rs`](../../crates/orbit-core/src/runtime/assets.rs): 23 jobs;
+[`orbit-runtime/src/assets.rs`](../../crates/orbit-runtime/src/assets.rs): 23 jobs;
 `assets/jobs/examples/` is excluded. A catalog parse or a persisted row bearing
 one of these names does **not** prove that its shipped graph executed.
 

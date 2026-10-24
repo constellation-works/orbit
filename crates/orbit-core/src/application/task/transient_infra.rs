@@ -51,6 +51,7 @@ use orbit_types::workflow::{
 use rusqlite::TransactionBehavior;
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
+use crate::application::task::TaskRecords;
 
 /// Transient authentication errors one block may take before it waits for an
 /// operator.

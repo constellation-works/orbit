@@ -9,6 +9,7 @@ use orbit_types::task::{
 };
 
 use super::super::TaskRecordUpdateParams;
+use super::super::TaskRecords;
 use super::super::helpers::{
     SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution, build_task_comments,
     describe_optional_field_value,

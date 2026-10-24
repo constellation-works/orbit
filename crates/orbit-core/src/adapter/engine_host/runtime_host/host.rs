@@ -75,11 +75,11 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn register_worker_process(&self, pid: u32) -> Result<(), OrbitError> {
-        OrbitRuntime::register_worker_process(self, pid)
+        crate::runtime::RuntimeKernel::register_worker_process(self, pid)
     }
 
     fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
-        OrbitRuntime::worker_invocation(self).cloned()
+        crate::runtime::RuntimeKernel::worker_invocation(self).cloned()
     }
     fn record_direct_landing_intent(
         &self,
@@ -520,7 +520,7 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn record_event(&self, event: OrbitEvent) -> Result<(), OrbitError> {
-        OrbitRuntime::record_event(self, event)
+        crate::runtime::RuntimeKernel::record_event(self, event)
     }
 
     fn repo_root(&self) -> Result<String, OrbitError> {
@@ -586,14 +586,14 @@ impl RuntimeHost for OrbitRuntime {
         &self,
         query: InvocationQuery,
     ) -> Result<Vec<InvocationRecord>, OrbitError> {
-        OrbitRuntime::invocation_records(self, query)
+        crate::runtime::RuntimeKernel::invocation_records(self, query)
     }
 
     fn record_provider_limit(
         &self,
         observation: &ProviderLimitObservation,
     ) -> Result<(), OrbitError> {
-        OrbitRuntime::record_provider_limit(self, observation).map(|_| ())
+        crate::runtime::RuntimeKernel::record_provider_limit(self, observation).map(|_| ())
     }
 
     fn activity_implementer_identity(
@@ -639,7 +639,7 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn pr_config(&self) -> orbit_engine::PrConfig {
-        OrbitRuntime::pr_config(self).clone()
+        crate::runtime::RuntimeKernel::pr_config(self).clone()
     }
 
     fn run_deterministic(

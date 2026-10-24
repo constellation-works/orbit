@@ -15,7 +15,11 @@ workspace = true
 clap = ["orbit-types/clap"]
 # Test-only hooks for downstream crates' tests (`orbit_core::test_support`).
 # Enable it only from `[dev-dependencies]`, never in a shipped build.
-test-support = ["orbit-engine/test-support", "orbit-store/test-support"]
+test-support = [
+  "orbit-engine/test-support",
+  "orbit-runtime/test-support",
+  "orbit-store/test-support",
+]
 
 [dependencies]
 getrandom.workspace = true
@@ -31,8 +35,8 @@ orbit-types = { path = "../orbit-types" }
 orbit-search = { path = "../orbit-search" }
 orbit-engine = { path = "../orbit-engine" }
 orbit-exec = { path = "../orbit-exec" }
-orbit-policy = { path = "../orbit-policy" }
 orbit-registry = { path = "../orbit-registry" }
+orbit-runtime = { path = "../orbit-runtime" }
 orbit-store = { path = "../orbit-store" }
 orbit-tools = { path = "../orbit-tools" }
 regex.workspace = true
@@ -51,4 +55,5 @@ libc.workspace = true
 [dev-dependencies]
 # Integration tests substitute the detached pipeline worker (`test_support`).
 orbit-core = { path = ".", features = ["test-support"] }
+orbit-policy = { path = "../orbit-policy" }
 tracing-subscriber.workspace = true

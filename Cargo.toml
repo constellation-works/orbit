@@ -10,6 +10,7 @@ members = [
   "crates/orbit-registry",
   "crates/orbit-search",
   "crates/orbit-core",
+  "crates/orbit-runtime",
   "crates/orbit-engine",
   "crates/orbit-store",
   "crates/orbit-policy",

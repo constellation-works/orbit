@@ -15,6 +15,7 @@ use super::binding::{
 use super::completion_repair::{grant_completion_repair, rewind_to_completion};
 use crate::OrbitRuntime;
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
+use crate::application::task::TaskRecords;
 use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::runtime::task::resumed_task_run_id;
 

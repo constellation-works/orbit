@@ -21,6 +21,7 @@ use super::request::{FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecover
 use super::revision::FinalRecoveryTaskRevision;
 use super::verify::verify_on_base;
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecords;
 
 const COMPLETED_EVENT: &str = "final_recovery_completed";
 const REJECTED_EVENT: &str = "final_recovery_rejected";

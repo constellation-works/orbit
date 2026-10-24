@@ -109,7 +109,7 @@ Before narrowing a listing by parent, the store verifies the generated `child_of
 | V2 bundle primitives (file layout, atomic writes, JSONL append) | [crates/orbit-store/src/driver/file/task_bundle/](../../../crates/orbit-store/src/driver/file/task_bundle/) | — |
 | V2 task backend adapter (create/get/list/search/mutations) | [crates/orbit-store/src/repository/task/v2/](../../../crates/orbit-store/src/repository/task/v2/) | — |
 | Home registry: allocator, workspace bindings, generated indexes | [crates/orbit-store/src/driver/sqlite/task_registry/](../../../crates/orbit-store/src/driver/sqlite/task_registry/) | — |
-| V2 runtime wiring (`build_v2_task_backends`) | [crates/orbit-core/src/runtime/builder.rs](../../../crates/orbit-core/src/runtime/builder.rs) | — |
+| V2 runtime wiring (`build_v2_task_backends`) | [crates/orbit-runtime/src/builder.rs](../../../crates/orbit-runtime/src/builder.rs) | — |
 | Local task store and canonical lookup | [2_design.md §6](./2_design.md#6-local-task-store-and-canonical-lookup) | — |
 | Task ID local-only doctrine after graph attribution removal | [docs/POSITIONING.md](../../POSITIONING.md) | [T20260506-11] |
 | V2 task bundle contract | [specs/task-bundle-v2.md](./specs/task-bundle-v2.md) | — |

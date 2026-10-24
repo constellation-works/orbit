@@ -1674,7 +1674,7 @@ Seeded assets are part of the design. Today they include:
 - higher-level dispatch workflows such as `task_auto_pipeline`
 
 The seeded catalog is defined by `DEFAULT_ACTIVITY_FILES` and
-`DEFAULT_JOB_FILES` in `crates/orbit-core/src/runtime/assets.rs`. Reference
+`DEFAULT_JOB_FILES` in `crates/orbit-runtime/src/assets.rs`. Reference
 activities such as `agent_loop_reference` and `agent_loop_cli_reference` live
 under `crates/orbit-core/assets/activities/examples/` and are not seeded.
 
