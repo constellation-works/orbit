@@ -695,6 +695,27 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 107,
         resolve: |raw: Option<Vec<String>>| crate::provider_limit::admit_overrides(raw),
     },
+    workflow_crew_selection: String => String {
+        key: "workflow.crew_selection", value_type: "string",
+        description: "How task crew draws weigh pool members: static weights, or usage_pressure.",
+        section: ConfigSection::Delivery, order: 110,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| crate::provider_limit::admit_crew_selection(raw),
+    },
+    workflow_usage_pressure_cap: f64 => f64 {
+        key: "workflow.usage_pressure_cap", value_type: "number",
+        description: "Largest factor usage pressure scales a crew's draw weight up or down by.",
+        section: ConfigSection::Delivery, order: 111,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<f64>| crate::provider_limit::admit_usage_pressure_cap(raw),
+    },
+    workflow_usage_pressure_strength: f64 => f64 {
+        key: "workflow.usage_pressure_strength", value_type: "number",
+        description: "Exponent applied to usage pressure before the cap; 0 disables weighting.",
+        section: ConfigSection::Delivery, order: 112,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<f64>| crate::provider_limit::admit_usage_pressure_strength(raw),
+    },
     workflow_purpose_crews_auto_fix: Vec<String> => Vec<String> {
         key: "workflow.purpose_crews.auto_fix", value_type: "array<string>",
         description: "Weighted crew pool for pull-request auto-fix repairs.",

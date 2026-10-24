@@ -291,6 +291,9 @@ provider_limit_max_used_pct = 90
 provider_limit_overrides = []
 provider_limit_budgets = []
 provider_limit_explicit_crews = "wait"
+crew_selection = "static"
+usage_pressure_cap = 8
+usage_pressure_strength = 1.0
 ```
 
 | Key | Default | What it does |
@@ -307,6 +310,9 @@ provider_limit_explicit_crews = "wait"
 | `workflow.provider_limit_overrides` | `[]` | Per-provider thresholds replacing the one above, each `provider:percent` (`["claude:80", "grok:100"]`) or `provider:off` (`["codex:off"]`, record readings without gating admission). One entry per provider, percent `1`–`100`, an alias such as `anthropic` stored as its provider. An entry may instead name a crew that sets [`env`](#per-crew-credentials-env) (`opus-credits:off`), its own account. |
 | `workflow.provider_limit_budgets` | `[]` | **Advanced.** Rolling budgets for providers that report no usage, each `provider:<amount><usd\|tokens>/<n><h\|d>` (`["grok:30usd/5h"]`), or for one crew that sets [`env`](#per-crew-credentials-env) (`opus-credits:200usd/30d`). See [budgets](#budgets-for-providers-that-report-no-usage). |
 | `workflow.provider_limit_explicit_crews` | `wait` | **Advanced.** A task whose explicit crew is limited: `wait` keeps it in the backlog; `pool` draws from the unlimited members of its complexity pool. |
+| `workflow.crew_selection` | `static` | **Advanced.** How task creation, complexity re-rate and admission draws weigh pool members: `static` uses the configured weights; `usage_pressure` scales each by its crew's weekly usage pressure and re-draws a system-chosen crew at admission. This is the policy key; the `crew_selection` object in `orbit run show` and run input is the recorded draw. See [usage-pressure draws](#usage-pressure-draws). |
+| `workflow.usage_pressure_cap` | `8` | **Advanced.** Under `usage_pressure`, the weight multiplier is clamped to `[1/cap, cap]`. A number of at least `1`; `1` leaves every weight as configured. |
+| `workflow.usage_pressure_strength` | `1.0` | **Advanced.** Under `usage_pressure`, the exponent applied to pressure before the cap. A number of at least `0`; `0` disables weighting and the admission re-draw. |
 | `workflow.auto_ship` | `false` | Opt this workspace in to `orbit run ship-sweep`, the cross-workspace unattended ship command (skipped with `auto_ship_disabled` while `false`). The seeded `ship-sweep` routine ignores this key; its `enabled:` flag is its only switch. Neither grants `--complete` or `--approve-proposed`, and a `no-auto-approve` task is never auto-approved by either flag's drain or the CI sweep. |
 | `workflow.required_validation_commands` | `[]` | Commands every delivered candidate must pass before push or merge. Empty runs no required check. See [required validation](#required-validation). |
 | `workflow.distributed_completion` | `review` | How far this owner takes an accepted distributed-drain handoff: `review` waits for an operator's **Approve handoff**; `done` authorizes it on acceptance and lands it through `task_landing_pipeline`, rechecking this key before the merge. |
@@ -1159,7 +1165,7 @@ hard_complexity_crews   = ["opus", "sol"]          # bare = uniform
 
 **Allowlists.** With `--allow-crew`, the draw renormalizes over permitted members, keeping their ratios. A pool with no permitted positive-weight member is disjoint, and `orbit run readiness --allow-crew <crew>` reports `crew_not_allowed`. Without `--allow-crew`, readiness (and the dashboard Drain card) applies the live drain's own set and reports it as `capacity.allowed_crews`. The allowlist is checked against `task.crew` and still applies to system and review activities at dispatch.
 
-**Frozen per run.** The admitting run captures the effective pools in run input `auto_crew_pools`, inherited by descendants. Each admitted leaf records `crew` and `crew_selection` (task ID, complexity, source, and the eligible `[{name, weight}]` after renormalization), shown as `Crew Selection:` in `orbit run show`. Retries and resumes keep it.
+**Frozen per run.** The admitting run captures the effective pools in run input `auto_crew_pools`, inherited by descendants. Each admitted leaf records `crew` and `crew_selection` (task ID, complexity, source, and the eligible `[{name, weight}]` after renormalization, with `pressure` and `effective_weight` under [usage-pressure draws](#usage-pressure-draws)), shown as `Crew Selection:` in `orbit run show`. Retries and resumes keep it.
 
 ### Provider failure holds
 
@@ -1217,8 +1223,8 @@ provider_limit_explicit_crews = "wait"      # or "pool"
 
 **Gated draws.** Only delivery admission (the crew draw of drains and `orbit run ship`, and the pull window); system, review, final-recovery and task-pilot crews are not gated. The complexity-pool draw of the task pilot, step-failure and PR conflict recovery still skips crews at a provider limit while another member remains, but never waits or redirects the way the gate does. It also skips crews under a host provider failure hold for unavailability or capacity, and that hold alone can withhold the task-pilot routine ([Routines](#provider-failure-holds) above).
 
-- **Purpose tasks** (`crew_source` `purpose:<purpose>`): a limited assigned crew is redrawn from the unlimited enabled positive-weight members of that purpose pool. Their weights and the run's allowlist are kept, and the task record is not rewritten. With none left, the draw continues as a pool task does.
-- **Pool and default tasks** (`crew_source` `pool:<tier>` or `default`, or no crew): limited members are removed and the rest renormalized, as with `--allow-crew`. A limited assigned crew is redrawn from the unlimited members of the current complexity pool; the task record is not rewritten.
+- **Purpose tasks** (`crew_source` `purpose:<purpose>`): a limited assigned crew is redrawn from the unlimited enabled positive-weight members of that purpose pool. Their weights and the run's allowlist are kept, and the task record is not rewritten, except by a weighted [usage-pressure re-draw](#usage-pressure-draws). With none left, the draw continues as a pool task does.
+- **Pool and default tasks** (`crew_source` `pool:<tier>` or `default`, or no crew): limited members are removed and the rest renormalized, as with `--allow-crew`. A limited assigned crew is redrawn from the unlimited members of the current complexity pool; the task record is not rewritten, except by a weighted [usage-pressure re-draw](#usage-pressure-draws) that changes the crew.
 - **No default fallback.** With every member limited the task waits; filtering never falls through to `workflow.default_crew`, usually the most expensive crew and often on the same provider.
 - **Explicit crews** (`crew_source` `explicit`, or a legacy pin): `wait` (default) keeps the task in the backlog; `pool` draws from the unlimited members of its complexity pool.
 - **Explicit run crews** (`--input crew=<name>` on `orbit run job`) are the operator's decision and not gated; `crew_selection.provider_limit` records the limit.
@@ -1234,7 +1240,25 @@ A redrawn task's `crew_selection.source` names the limit. A task left with no un
 - `orbit doctor`: one `provider-limits:<provider>` row per provider an enabled crew without `env` uses, and one `provider-limits:<provider>/<crew>` row per enabled crew that sets `env` (a provider with no usage windows and no budget, which is every provider but Codex, Claude and Muse, shows `info`; a budgeted one shows its `ledger` reading, such as `grok 5h budget 67%`; a provider set to `off` says gating is off and lists its readings), plus a `provider-limits:workflow.purpose_crews.review` warning when that ungated lane uses a gated provider (and a `provider-limits:workflow.purpose_crews.pre_landing_review` warning for that pool while it is set). Each account row appends its raw weekly pressure and binding window/reset (or neutral unknown usage). Row semantics: [health checks](runbooks/health-checks.md#run-orbit-doctor). `orbit doctor providers` shows the same per executor (`LIMITS` column, `provider_limits` in `--json`).
 - Dashboard: the provider strip shows each account's raw weekly pressure beside its readings, with the binding window and reset in its accessible title. Narrow bars show a summary account's pressure with every account and window in the title. The Settings › Crews Limit column (tightest window, used percent, reset, `gated` badge, or `gating off` when the provider's gate is off); the Drain card names gated readings, lists every live reading with its age (`today` on the observation's UTC date, otherwise how long ago) and a stale marker when `stale` is set (a reading whose gate is off is marked `gating off`), lists each standing `provider_auth_failures` item with its host, provider, run links and fix command, and lists tasks waiting with `provider_limit`.
 
-**Weekly usage pressure** is display-only; crew admission, configured weights and draws are unchanged. For live provider-reported gating windows of exactly 10080 minutes, pressure is `max(0, 1 - used_percent / 100) / clamp(time_to_reset / 7 days, ε, 1)`, shown uncapped (for example `claude ×25.2 (seven_day 10%, resets 18:00Z)` with six hours left). Five-hour and overage windows do not count. Account pressure uses account-wide weekly readings; crew pressure takes the minimum across those and weekly model windows covering its model. Crews with `env` use only their own account. With no valid weekly reading, a missing/past reset, an error reading or a ledger budget, pressure is neutral `1`. A neutral unknown does not constrain other valid weekly windows. Muse's `weekly` window is normalized to 10080 minutes when parsed.
+**Weekly usage pressure** is shown raw on these surfaces; it changes draws only under [`workflow.crew_selection = "usage_pressure"`](#usage-pressure-draws). For live provider-reported gating windows of exactly 10080 minutes, pressure is `max(0, 1 - used_percent / 100) / clamp(time_to_reset / 7 days, ε, 1)`, shown uncapped (for example `claude ×25.2 (seven_day 10%, resets 18:00Z)` with six hours left). Five-hour and overage windows do not count. Account pressure uses account-wide weekly readings; crew pressure takes the minimum across those and weekly model windows covering its model. Crews with `env` use only their own account. With no valid weekly reading, a missing/past reset, an error reading or a ledger budget, pressure is neutral `1`. A neutral unknown does not constrain other valid weekly windows. Muse's `weekly` window is normalized to 10080 minutes when parsed.
+
+#### Usage-pressure draws
+
+```toml
+[workflow]
+crew_selection = "usage_pressure"   # default "static"
+usage_pressure_cap = 8              # default
+usage_pressure_strength = 1.0       # default; 0 disables
+```
+
+With `workflow.crew_selection = "usage_pressure"` and a positive strength, task crew draws spend weekly capacity that is about to reset before capacity that is not: a Claude week 10% used with six hours left (pressure about 25) wins over a fresh Codex week (pressure 1).
+
+- **Effective weight.** Each pool member draws on `weight × clamp(pressure ^ strength, 1/cap, cap)`, where pressure is its crew's [weekly usage pressure](#provider-usage-limits) on this host. Tickets are whole numbers, ×1000 and rounded, so a weight-1 member at the default `1/8` floor keeps 125 tickets; a positive weight never rounds to zero, and a weight of `0` stays undrawable. The multiplier applies after provider-hold and usage-limit narrowing and before the run's `--allow-crew` list; pool membership is unchanged, and a crew at its limit is still skipped only by `provider_limit_max_used_pct` or its override. A draw with a single candidate has nothing to weigh.
+- **Draws it covers.** Task creation, `task update --crew ""` and the re-draw after a complexity change (each a fresh draw from the purpose or complexity pool, recorded under that pool's source), and delivery admission. Activity, review, finding-verification and explorer draws, and pull-drain followers, keep static weights.
+- **Admission re-draw.** At admission, a task whose crew the system chose (`crew_source` `pool:<tier>`, `purpose:<purpose>` or `default`) is drawn again from that source's whole pool instead of keeping its assigned member, under the same OS, hold, usage-limit and allowlist narrowing. When the weighted draw picks another crew, the task record takes the new crew and keeps its `crew_source` unchanged, and its history gains a `crew_redrawn` entry naming both crews and their pressures (``crew redrawn from pool:hard (`sol`) to pool:hard (`opus`) at admission under usage pressure: `sol` ×1 (…), `opus` ×25.2 (…)``). An explicit crew (`crew_source` `explicit`, a legacy pin, or an explicit run-input `crew`) is never re-drawn.
+- **Provenance.** A weighted admission's `crew_selection.source` ends in `; usage pressure`, and each `eligible_pool` member gains `pressure` (raw) and `effective_weight` (the weight it drew on) beside its configured `weight`.
+
+Under `static`, or with the keys unset, every draw and its recorded `crew_selection` are exactly as without them. The pressure is this host's reading; a drain admitting on this host weighs its own readings.
 
 #### Budgets for providers that report no usage
 

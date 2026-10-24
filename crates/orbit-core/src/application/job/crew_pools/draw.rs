@@ -1,11 +1,16 @@
+use std::collections::BTreeMap;
+
 use orbit_common::OrbitError;
+use orbit_config::UsagePressurePolicy;
 use orbit_types::identity::Crew;
 use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::activity_job::Provider;
 use orbit_types::workflow::{ActivityCrewDraw, ActivityCrewPoolMember};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::application::task::UsagePressure;
+use crate::application::task::provider_limit::UsagePressureRead;
 use crate::runtime::engine::crew::{CrewAllowlist, enforce_crew_allowlist};
 use crate::runtime::run_input::singular_task_id_from_input;
 
@@ -109,6 +114,77 @@ pub(super) fn permitted_candidates(
         )));
     }
     Ok(permitted)
+}
+
+/// Tickets per unit of configured weight in a usage-pressure draw, so a
+/// weight-1 member at the `1/8` floor keeps 125 tickets [ORB-17770].
+const PRESSURE_TICKET_SCALE: f64 = 1000.0;
+
+/// What one usage-pressure weighting did to a draw's members [ORB-17770]:
+/// each member's configured weight and crew pressure, by crew name.
+pub(crate) struct PressureWeighting {
+    members: BTreeMap<String, (u32, UsagePressure)>,
+}
+
+impl PressureWeighting {
+    /// `crew`'s pressure in this draw.
+    pub(crate) fn pressure(&self, crew: &str) -> Option<&UsagePressure> {
+        self.members.get(crew).map(|(_, pressure)| pressure)
+    }
+
+    /// The `eligible_pool` entry of a weighted member: its configured
+    /// `weight`, raw `pressure` and the `effective_weight` it drew on.
+    pub(crate) fn member(&self, candidate: &CrewCandidate) -> Value {
+        let (weight, pressure) = self
+            .members
+            .get(&candidate.crew.name)
+            .map_or((candidate.weight, 1.0), |(weight, pressure)| {
+                (*weight, pressure.pressure)
+            });
+        json!({
+            "name": candidate.crew.name,
+            "weight": weight,
+            "pressure": pressure,
+            "effective_weight": f64::from(candidate.weight) / PRESSURE_TICKET_SCALE,
+        })
+    }
+}
+
+/// Scale `candidates`' tickets by their crews' weekly usage pressure:
+/// `weight × clamp(pressure^strength, 1/cap, cap)`, ×1000 and rounded to
+/// whole tickets [ORB-17770]. Apply it to a pool after hold and limit
+/// narrowing and before [`permitted_candidates`]; membership is unchanged.
+/// A weight of 0 stays 0 and a positive weight keeps at least one ticket.
+/// `None` leaves the draw as it was: the policy is off or there is no
+/// choice to weigh.
+pub(crate) fn pressure_weighted_candidates(
+    candidates: &mut [CrewCandidate],
+    policy: &UsagePressurePolicy,
+    read: impl FnOnce() -> UsagePressureRead,
+) -> Option<PressureWeighting> {
+    if !policy.applies() || candidates.len() < 2 {
+        return None;
+    }
+    let read = read();
+    let mut members = BTreeMap::new();
+    for candidate in candidates.iter_mut() {
+        let pressure = read.crew(&candidate.crew);
+        let configured = candidate.weight;
+        if configured > 0 {
+            let tickets = (f64::from(configured)
+                * policy.multiplier(pressure.pressure)
+                * PRESSURE_TICKET_SCALE)
+                .round()
+                .clamp(1.0, f64::from(u32::MAX));
+            // In range by the clamp above.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            {
+                candidate.weight = tickets as u32;
+            }
+        }
+        members.insert(candidate.crew.name.clone(), (configured, pressure));
+    }
+    Some(PressureWeighting { members })
 }
 
 /// Draw one ticket in `[0, total_weight)` and walk the cumulative weights.
