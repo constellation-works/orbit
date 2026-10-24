@@ -1126,9 +1126,9 @@ input.field-editor-input {
 .row-detail .file-list .selector-kind, .row-detail .file-list .selector-dim { color: var(--fg-dim); line-height: 1.45; }
 .row-detail .file-list .selector-kind { font-weight: 500; white-space: nowrap; flex: 0 0 auto; }
 .row-detail .file-list .selector-kind[data-kind="file"] { display: none; }
-.row-detail .file-list.cf-flat .selector-dim { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; flex: 1 1 auto; min-width: 0; }
+.row-detail .file-list.cf-flat .selector-dim { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; flex: 1 1 0; min-width: 0; }
 .row-detail .file-list.cf-flat .selector-dim wbr { display: none; }
-.row-detail .file-list.cf-flat .selector-base { flex-shrink: 0; overflow-wrap: normal; }
+.row-detail .file-list.cf-flat .selector-base { overflow-wrap: normal; }
 .row-detail .file-list .selector-root { color: var(--fg); font-weight: 600; }
 .cf-pill { flex: 0 0 auto; font-size: 11px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--warn-line); background: var(--warn-wash); color: var(--warn-fg); white-space: nowrap; }
 .cf-pill-unknown { border-color: var(--hair); background: transparent; color: var(--fg-dim); border-style: dashed; }
