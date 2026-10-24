@@ -14,6 +14,7 @@ use orbit_common::OrbitError;
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 
+use crate::application::contracts::CI_FAILURE_TAG;
 use crate::application::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
 use crate::application::sweep_filing::{bounded_error, digest, is_open_ci_owner_status};
 use crate::application::task::TaskAddParams;
@@ -21,8 +22,8 @@ use crate::application::task::TaskAddParams;
 use super::evidence::retryable_pipeline_error;
 use super::fields::{truncate_bytes, value_string};
 use super::filing::{
-    CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_SWEEP_TITLE_PREFIX, CI_FAILURE_TAG,
-    DESCRIPTION_LOG_BYTES, MAX_LISTED_RUNS,
+    CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_SWEEP_TITLE_PREFIX, DESCRIPTION_LOG_BYTES,
+    MAX_LISTED_RUNS,
 };
 
 /// Tag marking a task filed without a diagnosis.

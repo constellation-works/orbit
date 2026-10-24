@@ -10,9 +10,11 @@
 mod claimed_leaf;
 mod crew_draw;
 mod drain_entry;
+mod filing_tags;
 mod host_provider_hold;
 mod jobs;
 mod pilot;
+mod published_delivery;
 mod pull_settlement;
 mod retry_key;
 mod review_layer;
@@ -23,10 +25,15 @@ pub(crate) use crew_draw::{
     PURPOSE_SOURCE_PREFIX, auto_task_minted, automatic_crew_source,
 };
 pub use drain_entry::DrainEntryPoint;
+pub(crate) use filing_tags::{
+    CI_FAILURE_TAG, CODE_SCANNING_TAG, DEPENDABOT_TAG, RECONCILIATION_FOLLOW_UP_TAG_PREFIX,
+};
 pub(crate) use host_provider_hold::{HostProviderHold, canonical_provider};
+pub(crate) use jobs::LOCAL_ROUTE_JOB;
 pub use jobs::{ESCALATION_TRIAGE_JOB, FINDING_VERIFICATION_JOB, PULL_DRAIN_JOB};
 pub(crate) use pilot::PilotFingerprints;
 pub(in crate::application) use pilot::SUPERSEDED_BY_SOURCE;
+pub(crate) use published_delivery::PublishedDelivery;
 pub(in crate::application) use pull_settlement::SETTLEMENT_REFUSAL_REMEDY;
 pub use pull_settlement::{PullSettlementEntry, PullSettlementOutcome};
 pub(crate) use retry_key::RetryKey;

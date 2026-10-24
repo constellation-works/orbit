@@ -16,6 +16,7 @@ use super::checkpoint::{
 };
 use super::parsing::{observe_commit, observe_landing, parse_commit_output, summarize};
 use crate::OrbitRuntime;
+use crate::application::job::JobAutomationPort;
 use crate::application::job::catalog::V2JobNameCache;
 
 pub(super) const COMMIT_ACTIVITY: &str = "git_commit";
@@ -471,9 +472,7 @@ impl OrbitRuntime {
     }
 
     pub(super) fn delivery_repository(&self) -> Option<String> {
-        crate::application::automation::source::Source::new(&self.paths().repo_root)
-            .repository()
-            .ok()
+        self.source_repository()
     }
 
     /// The first of `runs`, the task's runs newest first as `(run_id,

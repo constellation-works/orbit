@@ -33,7 +33,9 @@ use crate::application::SYSTEM_AUDIT_IDENTITY;
 use crate::application::job::claimed::CLAIMED_LEAF_JOBS;
 use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission};
 use crate::application::job::resume::ResumePlan;
-use crate::application::job::{JobDrainPort, ReviewAdmissionHook};
+use crate::application::job::{
+    JobAutoConcurrencyPort, JobAutomationPort, JobDrainPort, ReviewAdmissionHook,
+};
 
 /// The hold an unsuccessful run of `job_id` ends on instead of failing, if
 /// its failure `message` names one. A claimed leaf also holds on its
@@ -206,7 +208,7 @@ impl OrbitRuntime {
         }
         let mut input = input;
         super::delivery::normalize_delivery_input(&spec, &mut input)?;
-        self.capture_auto_concurrency(
+        self.install_auto_concurrency(
             &job_name,
             &mut input,
             resume.is_some() || retry_source_run_id.is_some(),
@@ -263,7 +265,7 @@ impl OrbitRuntime {
         // Once Start succeeds, setup errors belong to this run and must reach
         // the same terminal lifecycle as execution errors in detached workers.
         let outcome = (|| {
-            let bundle = crate::application::automation::members::bundle_crews(self, &run, &input);
+            let bundle = self.run_bundle_crews(&run, &input);
             self.record_run_crew_for_job(&run.run_id, &input, yaml_path, bundle)?;
             self.record_event(OrbitEvent::JobRunStarted {
                 job_id: run.job_id.clone(),

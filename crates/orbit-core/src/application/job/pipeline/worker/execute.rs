@@ -1,7 +1,7 @@
 //! The child process's own work: execute the run it was handed.
 
 use super::*;
-use crate::application::job::JobPullSettlementPort;
+use crate::application::job::{JobAutomationPort, JobPullSettlementPort};
 
 impl OrbitRuntime {
     pub fn execute_pipeline_run_worker(&self, run_id: &str) -> Result<(), OrbitError> {
@@ -158,7 +158,7 @@ impl OrbitRuntime {
         // validation, event persistence, and resume-state reads cannot escape
         // with a durable `running` projection.
         let outcome = (|| {
-            let bundle = crate::application::automation::members::bundle_crews(self, run, &input);
+            let bundle = self.run_bundle_crews(run, &input);
             self.record_run_crew_for_job(&run.run_id, &input, yaml_path, bundle)?;
 
             if announce_start {

@@ -9,6 +9,7 @@ mod direct;
 mod evaluation;
 pub(crate) mod incidents;
 mod inspect;
+mod job_port;
 pub(crate) mod members;
 mod ownership;
 mod pilot_presence;

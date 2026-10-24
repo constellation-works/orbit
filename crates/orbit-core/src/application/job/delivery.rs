@@ -23,7 +23,7 @@ use orbit_types::workspace::{git_remote_network_host, redact_git_remote};
 
 use super::catalog::{DEFAULT_JOB_FILES, is_default_job_name, shipped_job_spec};
 use crate::OrbitRuntime;
-use crate::application::review::LOCAL_ROUTE_JOB;
+use crate::application::contracts::LOCAL_ROUTE_JOB;
 use crate::runtime::task::locks::parse_task_ids;
 
 /// `git_commit` defaults to the singleton `all` scope in both PR and local

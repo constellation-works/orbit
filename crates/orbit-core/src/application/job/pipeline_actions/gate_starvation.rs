@@ -18,7 +18,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::admission::claim_holders::ClaimHolders;
+use crate::application::job::JobAdmissionPort;
 use crate::runtime::audit::system::{
     AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
 };
@@ -236,8 +236,7 @@ fn gate_starvation_defer(
     for task_id in task_ids {
         blocking_task_ids.remove(task_id);
     }
-    let claim_holders = ClaimHolders::read(runtime);
-    let blocking_claims = claim_holders.json_for(blocking_task_ids.iter().map(String::as_str));
+    let (blocking_claims, claims_detail) = runtime.execution_claims_holding(&blocking_task_ids);
 
     let mut detail = format!(
         "admission window never opened within {}; deferred to backlog",
@@ -255,7 +254,7 @@ fn gate_starvation_defer(
                 .join(", ")
         ));
     }
-    if let Some(claims) = claim_holders.detail_for(blocking_task_ids.iter().map(String::as_str)) {
+    if let Some(claims) = claims_detail {
         detail.push_str(&format!(" ({claims})"));
     }
 

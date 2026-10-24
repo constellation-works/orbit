@@ -42,6 +42,7 @@ use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType, is_v
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::CI_FAILURE_TAG;
 use crate::application::sweep_filing::duplicate_tasks::{
     DuplicateTaskLookup, DuplicateTaskMatch, SnapshotDuplicateLookup,
 };
@@ -79,8 +80,6 @@ const OUTCOME_DEFERRED: &str = "deferred";
 /// Snapshot schema this step knows how to read.
 const SUPPORTED_SCHEMA_VERSION: u64 = 2;
 
-/// Provenance tag: every task this step files carries it.
-pub(crate) const CI_FAILURE_TAG: &str = "ci-failure-sweep";
 /// Prefix of the dedupe tag, completed by the failure key.
 pub(crate) use orbit_types::task::CI_FAILURE_KEY_TAG_PREFIX;
 /// Title prefix on every task this step files, so a sweep-filed task is

@@ -31,7 +31,8 @@ use super::code_groups::{
     CodeAlertGroup, CodeGroupTaskRequest, cause_key, code_group_task_params, evidence_to_alert,
     group_alert_numbers, group_bounds, group_code_alerts, group_paths,
 };
-use super::filing::{CODE_KEY_PREFIX, CODE_TAG, field};
+use super::filing::{CODE_KEY_PREFIX, field};
+use crate::application::contracts::CODE_SCANNING_TAG;
 use crate::application::sweep_filing::bounded_u64;
 
 const DEFAULT_MAX_GROUPS: u64 = 10;
@@ -65,7 +66,7 @@ pub(crate) fn consolidate_code_scanning_tasks(
         .unwrap_or_default();
     let max_groups = bounded_u64(input, "max_groups", DEFAULT_MAX_GROUPS, MAX_GROUPS)? as usize;
 
-    let mut tasks = runtime.list_tasks_by_tags(&[CODE_TAG.to_string()])?;
+    let mut tasks = runtime.list_tasks_by_tags(&[CODE_SCANNING_TAG.to_string()])?;
     tasks.sort_by(|left, right| left.id.cmp(&right.id));
 
     let mut skipped = Vec::new();
