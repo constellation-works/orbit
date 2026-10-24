@@ -1,3 +1,9 @@
+---
+type: context
+summary: "Contributor guide: setup, change workflow, required checks, review process and agent use"
+last_validated: 2026-10-23
+---
+
 # Contributing to Orbit
 
 Thanks for pitching in. Orbit welcomes bug fixes, docs, new features, new agent executors, plugins, and skills.
@@ -42,7 +48,6 @@ Start with [ARCHITECTURE.md](ARCHITECTURE.md) for the crate layout and layering 
    `task.final_validation_commands`, configured through
    `workflow.required_validation_commands`. See
    [Validation and CI](docs/DEVELOPMENT.md#validation-and-ci) for details.
-
 6. **Write a clear commit message** with a type prefix: `feat:`, `fix:`, `docs:`, `refactor:`, or `chore:`.
 
 Tests that mutate Orbit state, spawn pipeline runs, or depend on the sandbox have specific isolation rules. Read [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) before writing one. The same file covers coverage targets, MSRV bumps, dependency and license policy, and vendored dashboard JS.

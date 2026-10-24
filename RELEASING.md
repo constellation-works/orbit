@@ -1,3 +1,9 @@
+---
+type: context
+summary: "Release checklist: versioning, bumps, tagging, CI, promotion and hotfixes"
+last_validated: 2026-10-23
+---
+
 # Releasing Orbit
 
 How to cut an Orbit release. Follow the checklist top to bottom. Plugin, npm, signing-key, and MCP Registry details live in [docs/runbooks/release.md](docs/runbooks/release.md).

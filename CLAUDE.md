@@ -1,3 +1,9 @@
+---
+type: context
+summary: "Orbit agent guide: rules, branching, gates, code and test standards, local CodeQL"
+last_validated: 2026-10-23
+---
+
 # Orbit — agent guide
 
 Loaded as both `AGENTS.md` and `CLAUDE.md`. For any Orbit lifecycle work, invoke the `orbit` skill.
@@ -10,6 +16,7 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`. For any Orbit lifecycle work, invoke
 - Historical ADRs are not an authority; judge from current code, tests and requirements.
 - Don't touch `CHANGELOG.md`; it is compiled at release time ([`RELEASING.md`](RELEASING.md)).
 - Update affected docs in the same PR as the code. Stale docs are a review blocker.
+- The `doc-duties` auto-task also validates the root `CLAUDE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `ARCHITECTURE.md` and `RELEASING.md`; keep their `last_validated` frontmatter.
 - Report commands and outcomes at handoff — passed, failed, not run — never "tested". Report unavailable capabilities honestly, not as passing checks.
 
 ## Branching
