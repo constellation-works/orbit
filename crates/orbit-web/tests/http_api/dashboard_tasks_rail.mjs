@@ -459,13 +459,13 @@ contextDraftDetail = paneBody.querySelector('#detail-ORB-37');
 assert.equal(contextTabOf(contextDraftDetail).querySelector('.detail-tab-count').textContent, '1', 'The tab count refreshes alongside selectors while another editor holds a draft');
 const refreshedSelector = contextDraftDetail.querySelector('.context-selector');
 assert.ok(
-  refreshedSelector && refreshedSelector.textContent.includes('file:src/') && refreshedSelector.textContent.includes('shared.rs'),
+  refreshedSelector && refreshedSelector.textContent.includes('shared.rs') && refreshedSelector.title.includes('file:src/shared.rs'),
   'empty-to-populated refresh renders the selector',
 );
 const activeContention = contextDraftDetail.querySelector('.context-contended-active');
-assert.ok(!activeContention.textContent.includes('ORB-38'), 'contention adds no blocker metadata');
+assert.ok(activeContention.textContent.includes('ORB-38'), 'contention pill names the holding task');
 assert.ok(activeContention.querySelector('a.context-selector').href.includes('open=ORB-37'), 'the context links to its owning task');
-assert.ok(activeContention.textContent.includes('file:src/') && activeContention.textContent.includes('shared.rs'), 'the selector text remains intact');
+assert.ok(activeContention.textContent.includes('shared.rs'), 'the selector text remains intact');
 assert.equal(contextDraftDetail.querySelector('.field-editor-input'), descriptionDraft, 'refresh preserves the separate editor control');
 assert.equal(descriptionDraft.value, 'Unsaved description', 'refresh preserves the editor text');
 assert.equal(document.activeElement, descriptionDraft, 'refresh preserves editor focus');
@@ -497,20 +497,14 @@ contextDraftTask.context_files = [
 ];
 renderTasks(currentTasks, contextDraftContext);
 contextDraftDetail = paneBody.querySelector('#detail-ORB-37');
-const contextRows = contextDraftDetail.querySelectorAll('.file-list li');
+const contextGroups = contextDraftDetail.querySelectorAll('.cf-group');
+assert.equal(contextGroups.length, 2, 'groups selectors by crate and top-level root');
+assert.deepEqual(contextGroups.map(g => g.querySelector('.cf-group-name').textContent), ['orbit-core', 'plugin'], 'group heads name each root');
+const contextRows = contextDraftDetail.querySelectorAll('.cf-row');
 assert.equal(contextRows.length, 3, 'renders 3 context files');
-const dups = contextDraftDetail.querySelectorAll('.context-duplicate-base');
-assert.equal(dups.length, 2, 'identifies duplicate basenames for recovery.md');
-const disambigAttrs = dups.map(li => li.querySelector('.selector-base').dataset.disambig);
-assert.deepEqual(disambigAttrs, ['crates', 'plugin'], 'disambiguates duplicate basenames with directory context');
-const firstDir = dups[0].querySelector('.selector-dim');
-assert.ok(firstDir.querySelector('wbr'), 'directory line includes wbr break opportunities after separators');
-assert.equal(firstDir.querySelector('.selector-root').textContent, 'crates/', 'directory line highlights the root segment');
-assert.equal(
-  dups[0].querySelector('.context-selector').textContent.replace(/[\n\r\t]+/g, '').trim(),
-  'file:crates/orbit-core/assets/skills/recovery.md',
-  'full selector text is preserved on duplicate item',
-);
+assert.deepEqual(contextRows.map(li => li.querySelector('.selector-base').textContent), ['recovery.md', 'mod.rs', 'recovery.md'], 'grouped rows list basenames without duplicate disambiguation');
+assert.equal(contextDraftDetail.querySelectorAll('.context-duplicate-base').length, 0, 'grouping makes duplicate disambiguation unnecessary');
+assert.ok(contextRows[0].querySelector('.context-selector').title.startsWith('file:crates/orbit-core/assets/skills/recovery.md'), 'full selector is preserved in the row title');
 
 const repaints = [];
 const stopListening = drainWaits.onDrainReadinessChange(() => { repaints.push('changed'); paintBacklog(); });

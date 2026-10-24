@@ -1819,11 +1819,51 @@ function buildCriteriaList(criteria) {
   return ul;
 }
 
+const CF_VIEW_KEY = "orbit.contextFiles.view";
+const CF_COLLAPSED_KEY = "orbit.contextFiles.collapsed";
+
+function cfStoreGet(key) {
+  try { return globalThis.localStorage ? globalThis.localStorage.getItem(key) : null; } catch (_) { return null; }
+}
+function cfStoreSet(key, value) {
+  try { if (globalThis.localStorage) globalThis.localStorage.setItem(key, value); } catch (_) { /* per-viewer convenience only */ }
+}
+function cfViewMode() { return cfStoreGet(CF_VIEW_KEY) === "flat" ? "flat" : "grouped"; }
+function cfCollapsed() {
+  try { const v = JSON.parse(cfStoreGet(CF_COLLAPSED_KEY) || "{}"); return v && typeof v === "object" ? v : {}; } catch (_) { return {}; }
+}
+function cfSetCollapsed(key, collapsed) {
+  const next = { ...cfCollapsed() };
+  if (collapsed) next[key] = true; else delete next[key];
+  cfStoreSet(CF_COLLAPSED_KEY, JSON.stringify(next));
+}
+
 function buildFileList(task) {
+  const wrap = el("div", { class: "context-files-view" });
+  const summary = el("span", { class: "cf-summary" });
+  const groupedBtn = el("button", { class: "cf-toggle-btn", type: "button", text: "By crate" });
+  const flatBtn = el("button", { class: "cf-toggle-btn", type: "button", text: "Flat paths" });
+  groupedBtn.setAttribute("aria-pressed", "true");
+  flatBtn.setAttribute("aria-pressed", "false");
+  const toggle = el("div", { class: "cf-toggle", role: "group", "aria-label": "Context files view" }, [groupedBtn, flatBtn]);
+  const copyAll = el("button", { class: "cf-copy-all", type: "button", text: "Copy selectors" });
+  copyAll.addEventListener("click", () => {
+    const t = ul.contentionTask;
+    const paths = t && Array.isArray(t.context_files) ? t.context_files : [];
+    if (paths.length) copyWithFeedback(copyAll, paths.join("\n"));
+  });
+  const header = el("div", { class: "cf-header" }, [summary, toggle, copyAll]);
+  const banner = el("div", { class: "cf-banner", role: "status" });
   const ul = el("ul", { class: "file-list mono" });
   ul.contentionTask = task;
+  ul.cfRefs = { wrap, summary, banner, header, groupedBtn, flatBtn };
+  groupedBtn.addEventListener("click", () => { cfStoreSet(CF_VIEW_KEY, "grouped"); refreshFileList(ul); });
+  flatBtn.addEventListener("click", () => { cfStoreSet(CF_VIEW_KEY, "flat"); refreshFileList(ul); });
+  wrap.appendChild(header);
+  wrap.appendChild(banner);
+  wrap.appendChild(ul);
   refreshFileList(ul);
-  return ul;
+  return wrap;
 }
 
 function parseContextSelector(selector) {
@@ -1846,23 +1886,6 @@ function parseContextSelector(selector) {
   };
 }
 
-function disambiguateSelector(target, allTargets) {
-  if (allTargets.length <= 1) return "";
-  const segs = target.split("/");
-  segs.pop();
-  if (segs.length === 0) return "root";
-  const root = segs[0];
-  const rootCount = allTargets.filter((t) => t.split("/")[0] === root).length;
-  if (rootCount === 1) return root;
-  for (let i = 0; i < segs.length; i++) {
-    const prefix = segs.slice(0, i + 1).join("/") + "/";
-    if (allTargets.filter((t) => t.startsWith(prefix)).length === 1) {
-      return segs[i];
-    }
-  }
-  return segs[segs.length - 1];
-}
-
 function formatDirectory(dirPath) {
   const span = el("span", { class: "selector-dim" });
   if (!dirPath) return span;
@@ -1883,39 +1906,144 @@ function formatDirectory(dirPath) {
   return span;
 }
 
+function cfGroupFor(p) {
+  let target = p.target || "";
+  if (p.kind === "symbol") {
+    let gt = target.split("#")[0];
+    const ci = gt.indexOf("::");
+    if (ci > 0) gt = gt.slice(0, ci);
+    const g = cfGroupFor({ kind: "file", target: gt, base: gt.split("/").pop() || gt });
+    return { ...g, displayBase: target };
+  }
+  const segs = target.split("/").filter(Boolean);
+  if (segs.length >= 2 && segs[0] === "crates") {
+    const rest = segs.slice(2).join("/");
+    const idx = rest.lastIndexOf("/");
+    return { key: `crates/${segs[1]}`, prefix: "crates/", name: segs[1], isCrate: true, subDir: idx >= 0 ? `${rest.slice(0, idx + 1)}` : "", displayBase: p.base || segs[segs.length - 1] || target };
+  }
+  if (segs.length >= 2) {
+    const rest = segs.slice(1).join("/");
+    const idx = rest.lastIndexOf("/");
+    return { key: segs[0], prefix: "", name: segs[0], isCrate: false, subDir: idx >= 0 ? `${rest.slice(0, idx + 1)}` : "", displayBase: p.base || segs[segs.length - 1] || target };
+  }
+  return { key: "root", prefix: "", name: "root", isCrate: false, subDir: "", displayBase: p.base || target };
+}
+
+function cfGroups(entries) {
+  const groups = [];
+  const byKey = new Map();
+  for (const entry of entries) {
+    const g = cfGroupFor(entry.p);
+    entry.groupKey = g.key; entry.subDir = g.subDir; entry.displayBase = g.displayBase;
+    let group = byKey.get(g.key);
+    if (!group) { group = { ...g, dirs: new Map() }; byKey.set(g.key, group); groups.push(group); }
+    if (!group.dirs.has(g.subDir)) group.dirs.set(g.subDir, []);
+    group.dirs.get(g.subDir).push(entry);
+  }
+  for (const g of groups) g.count = [...g.dirs.values()].reduce((n, a) => n + a.length, 0);
+  return groups;
+}
+
+function cfSummaryText(total, groups) {
+  const crates = groups.filter((g) => g.isCrate);
+  const others = groups.filter((g) => !g.isCrate);
+  const fileLabel = `${total} file${total === 1 ? "" : "s"}`;
+  const parts = [];
+  if (crates.length) parts.push(`${crates.length} crate${crates.length === 1 ? "" : "s"}`);
+  for (const g of others) parts.push(g.name);
+  return parts.length ? `${fileLabel} in ${parts.join(" and ")}` : fileLabel;
+}
+
+function cfHolderLabel(holder) { return `${holder.id} · ${String(holder.status || "").replaceAll("-", " ")}`; }
+
+function makeContextRow(entry, task, { flat = false } = {}) {
+  const { selector, p, matches } = entry;
+  const state = matches === null ? "Contention unknown: current workspace data unavailable"
+    : matches && matches.length ? task.status === "backlog" ? "Contended context" : "Active context contention" : "";
+  const children = [];
+  if (p.kind && p.kind !== "file") {
+    const kindNode = el("span", { class: "selector-kind", text: `${p.kind}:` });
+    kindNode.dataset.kind = p.kind;
+    children.push(kindNode);
+  }
+  if (flat && p.kind !== "symbol") children.push(formatDirectory(p.dir || (p.target.includes("/") ? p.target.slice(0, p.target.lastIndexOf("/") + 1) : "")));
+  children.push(el("span", { class: "selector-base", text: flat ? (p.base || p.target) : entry.displayBase }));
+  const link = el("a", { class: "context-selector", title: [selector, state].filter(Boolean).join(" · ") }, children);
+  bindTaskLink(link, task.id, task.workspace_id ? { workspace: task.workspace_id } : {});
+  if (state) link.setAttribute("aria-label", `${selector}: ${state}`);
+  const rowChildren = [link];
+  if (matches && matches.length) {
+    rowChildren.push(el("span", { class: "cf-pill cf-pill-contended", text: `held by ${matches.map(cfHolderLabel).join(", ")}` }));
+  } else if (matches === null && (task.status === "backlog" || task.status === "in-progress")) {
+    rowChildren.push(el("span", { class: "cf-pill cf-pill-unknown", text: "contention unknown" }));
+  }
+  const copyBtn = el("button", { class: "cf-copy", type: "button", title: "Copy selector" }, [el("span", { text: "⧉", "aria-hidden": "true" })]);
+  copyBtn.setAttribute("aria-label", `Copy ${selector}`);
+  copyBtn.addEventListener("click", (event) => { event.stopPropagation(); copyText(selector); });
+  rowChildren.push(copyBtn);
+  const li = el("li", { class: "cf-row" }, rowChildren);
+  if (matches === null) li.classList.add("context-contention-unknown");
+  if (matches && matches.length) li.classList.add(task.status === "backlog" ? "context-contended-backlog" : "context-contended-active");
+  return li;
+}
+
 function refreshFileList(ul) {
   const task = ul.contentionTask;
+  if (!task) return;
   const applicable = task.status === "backlog" || task.status === "in-progress";
-  const nodes = [];
   const rawPaths = Array.isArray(task.context_files) ? task.context_files : [];
-  const parsed = rawPaths.map(parseContextSelector);
-  const baseMap = new Map();
-  for (const p of parsed) {
-    if (!p.base) continue;
-    if (!baseMap.has(p.base)) baseMap.set(p.base, []);
-    baseMap.get(p.base).push(p.target);
+  const entries = rawPaths.map((selector) => {
+    const p = parseContextSelector(selector);
+    return { selector, p, matches: applicable ? taskContextContenders(task, selector) : [] };
+  });
+  const groups = cfGroups(entries);
+  const view = cfViewMode();
+  const refs = ul.cfRefs;
+  if (refs) {
+    refs.header.hidden = entries.length === 0;
+    refs.summary.textContent = cfSummaryText(entries.length, groups);
+    refs.groupedBtn.setAttribute("aria-pressed", String(view === "grouped"));
+    refs.flatBtn.setAttribute("aria-pressed", String(view === "flat"));
+    refs.groupedBtn.classList.toggle("is-on", view === "grouped");
+    refs.flatBtn.classList.toggle("is-on", view === "flat");
+    const contended = entries.filter((e) => e.matches && e.matches.length);
+    if (contended.length) {
+      const holders = [...new Set(contended.flatMap((e) => e.matches.map((h) => h.id)))];
+      refs.banner.hidden = false;
+      refs.banner.textContent = `${contended.length} file${contended.length === 1 ? "" : "s"} overlap${contended.length === 1 ? "s" : ""} an in-progress task: held by ${holders.join(", ")}`;
+    } else { refs.banner.hidden = true; refs.banner.textContent = ""; }
   }
-
-  for (let i = 0; i < rawPaths.length; i++) {
-    const path = rawPaths[i];
-    const p = parsed[i];
-    const dups = p.base ? baseMap.get(p.base) || [] : [];
-    const isDuplicate = dups.length > 1;
-    const disambig = isDuplicate ? disambiguateSelector(p.target, dups) : "";
-
-    const matches = applicable ? taskContextContenders(task, path) : [];
-    const state = matches === null ? "Contention unknown: current workspace data unavailable"
-      : matches.length ? task.status === "backlog" ? "Contended context" : "Active context contention" : "";
-    const link = el("a", { class: "context-selector", title: [path, state].filter(Boolean).join(" · ") }, selectorParts(path, { isDuplicate, disambig }));
-    bindTaskLink(link, task.id, task.workspace_id ? { workspace: task.workspace_id } : {});
-    if (state) link.setAttribute("aria-label", `${path}: ${state}`);
-    const li = el("li", {}, [link]);
-    if (isDuplicate) li.classList.add("context-duplicate-base");
-    if (matches === null) li.classList.add("context-contention-unknown");
-    if (matches?.length) li.classList.add(task.status === "backlog" ? "context-contended-backlog" : "context-contended-active");
-    nodes.push(li);
-  }
-  if (nodes.length === 0) nodes.push(el("li", { class: "field-empty", text: "no context files" }));
+  ul.classList.toggle("cf-flat", view === "flat");
+  ul.classList.toggle("cf-grouped", view !== "flat");
+  if (entries.length === 0) { ul.replaceChildren(el("li", { class: "field-empty", text: "no context files" })); return; }
+  if (view === "flat") { ul.replaceChildren(...entries.map((e) => makeContextRow(e, task, { flat: true }))); return; }
+  const collapsed = cfCollapsed();
+  const nodes = groups.map((group) => {
+    const isCollapsed = Boolean(collapsed[group.key]);
+    const head = el("button", { class: "cf-group-head", type: "button" }, [
+      el("span", { class: "cf-chevron", text: "›", "aria-hidden": "true" }),
+      ...(group.prefix ? [el("span", { class: "cf-group-prefix", text: group.prefix })] : []),
+      el("span", { class: "cf-group-name", text: group.name }),
+      el("span", { class: "cf-group-count", text: `${group.count} file${group.count === 1 ? "" : "s"}` }),
+    ]);
+    head.setAttribute("aria-expanded", String(!isCollapsed));
+    const body = el("div", { class: "cf-group-body" });
+    body.hidden = isCollapsed;
+    for (const [dir, dirEntries] of group.dirs) {
+      if (dir) body.appendChild(el("div", { class: "cf-dir", text: dir }));
+      const inner = el("ul", { class: "cf-files" });
+      for (const e of dirEntries) inner.appendChild(makeContextRow(e, task));
+      body.appendChild(inner);
+    }
+    head.addEventListener("click", () => {
+      const nextCollapsed = !body.hidden;
+      body.hidden = nextCollapsed;
+      head.setAttribute("aria-expanded", String(!nextCollapsed));
+      cfSetCollapsed(group.key, nextCollapsed);
+    });
+    const li = el("li", { class: "cf-group" }, [head, body]);
+    return li;
+  });
   ul.replaceChildren(...nodes);
 }
 
@@ -1926,35 +2054,6 @@ onTaskRuntimeChange(() => {
     if (ul.contentionTask) refreshFileList(ul);
   }
 });
-
-// A context selector is `kind:target`. The basename — what an operator scans
-// for — leads on its own line, with the kind and, for path selectors, the
-// directory dimmed under it; the text content is still the whole selector.
-function selectorParts(selector, { isDuplicate = false, disambig = "" } = {}) {
-  const match = /^([a-z]+):(.*)$/.exec(selector);
-  if (!match) return [el("span", { class: "selector-base", text: selector })];
-  const [, kind, target] = match;
-  let cut = 0;
-  if (kind === "file") {
-    cut = target.lastIndexOf("/") + 1;
-  } else if (kind === "dir") {
-    const trimmed = target.endsWith("/") ? target.slice(0, -1) : target;
-    cut = trimmed.lastIndexOf("/") + 1;
-  }
-  const kindNode = el("span", { class: "selector-kind", text: `${kind}:` });
-  kindNode.dataset.kind = kind;
-
-  const baseNode = el("span", { class: "selector-base", text: target.slice(cut) });
-  if (disambig) {
-    baseNode.dataset.disambig = disambig;
-  }
-
-  return [
-    kindNode,
-    formatDirectory(target.slice(0, cut)),
-    baseNode,
-  ];
-}
 
 function linesToText(values) {
   return Array.isArray(values) ? values.join("\n") : "";
