@@ -9,13 +9,12 @@ use orbit_engine::DispatchError;
 use orbit_types::task::{CI_FAILURE_KEY_TAG_PREFIX, NO_AUTO_APPROVE_TAG, Task, TaskStatus};
 use serde_json::{Value, json};
 
+use crate::application::contracts::CI_FAILURE_TAG;
 use crate::application::task::pilot::input::{required_string, required_string_array};
 use crate::application::task::pilot::{
     PromotionFindings, auto_approval_opted_out, promotion_findings, recommendation_has_evidence,
 };
 use crate::application::task::{CiSweepAdmission, PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
-
-use super::filing::CI_FAILURE_TAG;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn assess(

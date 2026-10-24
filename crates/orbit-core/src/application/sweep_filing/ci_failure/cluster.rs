@@ -8,14 +8,15 @@ use serde_json::{Value, json};
 
 use super::fields::{truncate_bytes, value_string};
 use super::filing::{
-    CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_SWEEP_TITLE_PREFIX, CI_FAILURE_TAG,
-    DESCRIPTION_LOG_BYTES, MAX_LISTED_RUNS,
+    CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_SWEEP_TITLE_PREFIX, DESCRIPTION_LOG_BYTES,
+    MAX_LISTED_RUNS,
 };
 use super::grouping::{failure_test_names, legacy_source_matches, tested_commit};
 use super::log_signature::{
     FailedStepExcerpt, compiler_cause, compiler_diagnostic_set, relevant_log_query_errors,
     render_failed_step_excerpt, specific_command_from_log, specific_error_anchors,
 };
+use crate::application::contracts::CI_FAILURE_TAG;
 use crate::application::sweep_filing::duplicate_tasks::{
     CoverageAnchor, CoverageFingerprint, DuplicateCandidate, DuplicateTaskLookup,
     DuplicateTaskMatch, find_covering_task,

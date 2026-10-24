@@ -9,3 +9,7 @@ pub const ESCALATION_TRIAGE_JOB: &str = "escalation_triage_pipeline";
 
 /// The job that verifies review-filed findings.
 pub const FINDING_VERIFICATION_JOB: &str = "finding_verification_pipeline";
+
+/// The job that delivers locally and therefore cannot honour `review.timing`
+/// as a final route.
+pub(crate) const LOCAL_ROUTE_JOB: &str = "task_local_pipeline";

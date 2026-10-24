@@ -369,16 +369,31 @@ if rg -n "crate::application::(${job_drain_modules})\\b" \
   fail=1
 fi
 
-review_admission_items='admission|install_review_admission|admit_review_request|run_review_admission|input_run_review_admission|upgrade_resume_admission_mismatch|completion_admission_mismatch|local_route_run_option_refusal|review_layer_json'
-if rg -n "review::(${review_admission_items})\\b" \
+# [ORB-17938] `job` reaches review admission, state automation, backlog
+# admission and the auto drain's concurrency mode only through the ports it
+# owns (`ReviewAdmissionHook`, `JobAutomationPort`, `JobAdmissionPort`,
+# `JobAutoConcurrencyPort`), which `review`, `automation`, `admission` and
+# `workspace_auto` implement on `OrbitRuntime`; the job name and filing tags
+# it shares with `review` and `sweep_filing` are contracts. A path, a grouped
+# tree, a `super::` chain out of `job` into any of them, or a call to the
+# inherent methods and functions the automation, admission and
+# auto-concurrency ports wrap is a reintroduced edge. (The review hook's
+# methods share their names with the inherent ones it wraps, so a path is
+# the only way back into `review`.)
+job_upper_modules='admission|automation|review|sweep_filing|workspace_auto'
+job_upper_calls='bundle_crews|task_pilot_warning|deferred_footprint_reservation|capture_auto_concurrency'
+if rg -n "crate::application::(${job_upper_modules})\\b" \
   "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
-  rg -n -U "review::\\{[^}]*\\b(${review_admission_items})\\b" \
-    "$app_src/job" -g '*.rs' -g '!**/tests/**'; then
-  echo "orbit-core job must reach review admission through job::ReviewAdmissionHook"
+  rg -n -U "crate::application::\\{[^}]*\\b(${job_upper_modules})\\b" \
+    "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
+  rg -n "\\b(${job_upper_calls})\\s*(::<[^>]*>)?\\s*\\(" \
+    "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
+  ! super_chains_into "$app_src" job "$job_upper_modules"; then
+  echo "orbit-core job must reach review, automation, admission and workspace_auto through its job ports"
   fail=1
 fi
 
-shared_contracts='PULL_DRAIN_JOB|DrainClaimedLeaf|ClaimedLeafStage|HostProviderHold|ESCALATION_TRIAGE_JOB|FINDING_VERIFICATION_JOB|DrainEntryPoint|PullSettlementEntry|PullSettlementOutcome|SUPERSEDED_BY_SOURCE|PilotFingerprints|review_layer_json|CreationCrewAssignment|CrewCandidate|InspectionPool|PURPOSE_SOURCE_PREFIX|PROVIDER_LIMIT_REASSIGNMENT_PREFIX|auto_task_minted|automatic_crew_source|RetryKey'
+shared_contracts='PULL_DRAIN_JOB|DrainClaimedLeaf|ClaimedLeafStage|HostProviderHold|ESCALATION_TRIAGE_JOB|FINDING_VERIFICATION_JOB|DrainEntryPoint|PullSettlementEntry|PullSettlementOutcome|SUPERSEDED_BY_SOURCE|PilotFingerprints|review_layer_json|CreationCrewAssignment|CrewCandidate|InspectionPool|PURPOSE_SOURCE_PREFIX|PROVIDER_LIMIT_REASSIGNMENT_PREFIX|auto_task_minted|automatic_crew_source|RetryKey|LOCAL_ROUTE_JOB|CI_FAILURE_TAG|DEPENDABOT_TAG|CODE_SCANNING_TAG|RECONCILIATION_FOLLOW_UP_TAG_PREFIX|PublishedDelivery'
 if rg -n "\\b(const|enum|struct|fn) (${shared_contracts})\\b" \
   "$repo_root/crates/orbit-core/src" -g '*.rs' -g "!**/application/contracts/**" ||
   rg -n "\\b(${app_modules})(::[a-z_]+)*::(${shared_contracts})\\b" \

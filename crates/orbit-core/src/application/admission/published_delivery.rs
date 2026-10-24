@@ -35,10 +35,10 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::TaskLockConflict;
 use orbit_tools::ReservationOwnerContext;
 use orbit_types::workflow::JobRunState;
-use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::PublishedDelivery;
 use crate::application::job::JobRunListParams;
 use crate::runtime::task::locks::{
     EmptyTaskSurfacePolicy, ReservationOutcome, TaskLockIndex, parse_task_ids,
@@ -62,13 +62,6 @@ const FOOTPRINT_TTL_SECONDS: u32 = 14400;
 
 /// The decision-only activity that edits nothing, so never waits on locks.
 const FINAL_RECOVERY_ACTIVITY: &str = "final_recovery";
-
-/// Publication metadata carried only by a deferred gate grant.
-#[derive(Serialize)]
-pub(crate) struct PublishedDelivery {
-    source_run_id: String,
-    pull_request: Option<String>,
-}
 
 impl OrbitRuntime {
     /// The reservation a gate takes for a resumed published delivery the
@@ -104,10 +97,7 @@ impl OrbitRuntime {
             reserve_deferred_footprint(self, input, agent, model, owner, conflicts.clone())?;
         Ok(Some((
             output,
-            PublishedDelivery {
-                source_run_id: resume.source_run_id,
-                pull_request: resume.pull_request,
-            },
+            PublishedDelivery::new(resume.source_run_id, resume.pull_request),
         )))
     }
 

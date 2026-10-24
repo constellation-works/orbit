@@ -13,7 +13,7 @@ use orbit_types::workflow::ResourceThrottle;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::job::JobDrainPort;
+use crate::application::job::{JobAutomationPort, JobDrainPort};
 
 /// The submission the notices describe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,7 +126,7 @@ impl OrbitRuntime {
                 .then(|| self.claude_worker_credential_warning())
                 .flatten(),
             task_pilot_warning: (kind == SubmissionKind::Drain)
-                .then(|| self.task_pilot_warning())
+                .then(|| self.pilot_routine_warning())
                 .flatten(),
             required_validation_note: kind
                 .is_drain()

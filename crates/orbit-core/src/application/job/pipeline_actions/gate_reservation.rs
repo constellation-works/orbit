@@ -17,6 +17,7 @@ use orbit_types::task::{
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::job::JobAdmissionPort;
 use crate::runtime::task::locks::{
     EmptyTaskSurfacePolicy, ReservationOutcome, TaskLockIndex, emit_expired_reservation_events,
     merge_task_lock_conflicts, parse_task_ids, requested_task_files_indexed, reserve_with_index,
@@ -128,7 +129,7 @@ pub(crate) fn reserve_locks(
     // gate does not wait on the holders that refused it; the leaf
     // takes its footprint before its first edit.
     let published_delivery = if let Some((deferred, publication)) = runtime
-        .deferred_footprint_reservation(
+        .published_delivery_reservation(
             input,
             &output,
             tool_context.agent_name.clone(),

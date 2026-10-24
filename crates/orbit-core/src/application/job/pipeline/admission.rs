@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::application::job::{ReviewAdmissionHook, crew_pools, delivery};
+use crate::application::job::{JobAutoConcurrencyPort, ReviewAdmissionHook, crew_pools, delivery};
 use orbit_common::fs::io::open_read_only_no_follow;
 
 impl OrbitRuntime {
@@ -131,7 +131,7 @@ impl OrbitRuntime {
             delivery::normalize_delivery_input(spec, &mut input)?;
         }
         let reuse_admission = resume.is_some() && !source_repair;
-        self.capture_auto_concurrency(
+        self.install_auto_concurrency(
             job_name,
             &mut input,
             reuse_admission || replay_source_run_id.is_some(),

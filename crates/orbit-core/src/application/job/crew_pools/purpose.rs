@@ -13,10 +13,10 @@ use orbit_types::task::{Task, TaskComplexity};
 use orbit_types::workflow::{CREW_PURPOSE_TAG_PREFIX, CrewPurpose};
 
 use crate::OrbitRuntime;
-use crate::application::contracts::{CrewCandidate, PURPOSE_SOURCE_PREFIX};
-use crate::application::review::reconciliation::FOLLOW_UP_TAG_PREFIX;
-use crate::application::sweep_filing::ci_failure::filing::CI_FAILURE_TAG;
-use crate::application::sweep_filing::dependabot::filing::{CODE_TAG, DEPENDABOT_TAG};
+use crate::application::contracts::{
+    CI_FAILURE_TAG, CODE_SCANNING_TAG, CrewCandidate, DEPENDABOT_TAG, PURPOSE_SOURCE_PREFIX,
+    RECONCILIATION_FOLLOW_UP_TAG_PREFIX,
+};
 use crate::application::task::BASELINE_RED_REPAIR_TAG;
 
 /// The purpose `tags` name for a task's crew: an explicit
@@ -33,8 +33,8 @@ pub(crate) fn task_crew_purpose(tags: &[String]) -> Option<CrewPurpose> {
 fn system_tag_purpose(tag: &str) -> Option<CrewPurpose> {
     match tag {
         BASELINE_RED_REPAIR_TAG => Some(CrewPurpose::BaselineRedRepair),
-        CI_FAILURE_TAG | DEPENDABOT_TAG | CODE_TAG => Some(CrewPurpose::SweepTasks),
-        _ if tag.starts_with(FOLLOW_UP_TAG_PREFIX) => Some(CrewPurpose::SweepTasks),
+        CI_FAILURE_TAG | DEPENDABOT_TAG | CODE_SCANNING_TAG => Some(CrewPurpose::SweepTasks),
+        _ if tag.starts_with(RECONCILIATION_FOLLOW_UP_TAG_PREFIX) => Some(CrewPurpose::SweepTasks),
         _ => None,
     }
 }

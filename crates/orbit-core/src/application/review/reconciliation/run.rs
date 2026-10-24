@@ -22,10 +22,11 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
+use super::RECONCILIATION_AUDIT;
 use super::observe::observe;
 use super::submit::bind_attempt_run;
-use super::{FOLLOW_UP_TAG_PREFIX, RECONCILIATION_AUDIT};
 use crate::OrbitRuntime;
+use crate::application::contracts::RECONCILIATION_FOLLOW_UP_TAG_PREFIX;
 use crate::application::task::{TaskAddParams, TaskListFilter, TaskUpdateParams};
 
 /// An authenticated step of one admitted attempt.
@@ -582,7 +583,10 @@ fn file_follow_up(
     if let Some(existing) = &record.follow_up_task_id {
         return Ok(existing.clone());
     }
-    let tag = format!("{FOLLOW_UP_TAG_PREFIX}{}", record.reconciliation_id);
+    let tag = format!(
+        "{RECONCILIATION_FOLLOW_UP_TAG_PREFIX}{}",
+        record.reconciliation_id
+    );
     let found = runtime.task_candidates(
         &TaskListFilter {
             tags: vec![tag.clone()],

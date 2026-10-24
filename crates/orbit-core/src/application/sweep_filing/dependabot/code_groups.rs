@@ -30,10 +30,11 @@ use orbit_types::task::{
 };
 use serde_json::{Value, json};
 
+use crate::application::contracts::CODE_SCANNING_TAG;
 use crate::application::task::TaskAddParams;
 
 use super::filing::{
-    CODE_GROUP_KEY_PREFIX, CODE_KEY_PREFIX, CODE_TAG, CODE_TITLE_PREFIX, alert_number,
+    CODE_GROUP_KEY_PREFIX, CODE_KEY_PREFIX, CODE_TITLE_PREFIX, alert_number,
     append_collection_bounds, field, line_suffix, priority_for_rank, repository_name,
     severity_rank,
 };
@@ -199,7 +200,7 @@ pub(super) fn code_group_task_params(request: &CodeGroupTaskRequest<'_>) -> Task
         _ => None,
     };
 
-    let mut tags = vec![CODE_TAG.to_string()];
+    let mut tags = vec![CODE_SCANNING_TAG.to_string()];
     tags.extend(
         alerts
             .iter()

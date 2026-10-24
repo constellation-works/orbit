@@ -86,10 +86,6 @@ pub(crate) const REVIEW_ADMITTED_JOBS: &[&str] = &[
     "task_local_pipeline",
 ];
 
-/// The job that delivers locally and therefore cannot honour `review.timing`
-/// as a final route.
-pub(crate) const LOCAL_ROUTE_JOB: &str = "task_local_pipeline";
-
 /// Longest resume chain followed back to its first run.
 const MAX_RESUME_CHAIN: usize = 64;
 

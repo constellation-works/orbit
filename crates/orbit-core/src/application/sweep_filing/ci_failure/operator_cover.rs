@@ -9,9 +9,10 @@ use orbit_types::task::{TaskRelationType, TaskStatus, is_valid_orb_task_id};
 use serde_json::{Value, json};
 
 use super::cluster::{FailureCluster, task_open_compiler_identity};
-use super::filing::{CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_TAG};
+use super::filing::CI_FAILURE_KEY_TAG_PREFIX;
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
+use crate::application::contracts::CI_FAILURE_TAG;
 use crate::application::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
 use crate::application::sweep_filing::{full_revision, landed_task_commit};
 

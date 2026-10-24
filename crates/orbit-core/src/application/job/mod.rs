@@ -1,6 +1,9 @@
 mod activity_tool_requirements;
+mod admission_port;
 pub(crate) mod agent_explore;
 pub(crate) mod agent_invoke;
+mod auto_concurrency_port;
+mod automation_port;
 pub(crate) mod catalog;
 pub(crate) mod claimed;
 pub(crate) mod crew_pools;
@@ -44,6 +47,7 @@ pub(crate) fn log_best_effort<T>(
 }
 
 pub(crate) use activity_tool_requirements::drops_disallowed_requirements;
+pub(in crate::application) use admission_port::JobAdmissionPort;
 pub use agent_explore::{
     AgentInvocation, BoundedExploreAnswer, EXPLORE_JOB_ID, ExploreInvocationSummary,
     ExploreSubmission,
@@ -52,6 +56,8 @@ pub use agent_invoke::{
     AGENT_INVOKE_JOB_ID, AgentInvokeRequest, AgentInvokeResult, AgentInvokeSubmission,
     DEFAULT_AGENT_INVOKE_TIMEOUT_SECONDS, MAX_AGENT_INVOKE_TIMEOUT_SECONDS, agent_invoke_result,
 };
+pub(in crate::application) use auto_concurrency_port::JobAutoConcurrencyPort;
+pub(in crate::application) use automation_port::JobAutomationPort;
 pub use catalog::CatalogReferenceLayer;
 pub(crate) use catalog::{DEFAULT_JOB_FILES, seed_default_jobs};
 pub use catalog::{JobCatalogEntry, JobCatalogFilter, job_catalog_to_json_with_last_run};
