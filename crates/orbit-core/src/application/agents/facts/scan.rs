@@ -1,8 +1,28 @@
-use super::*;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use chrono::{DateTime, Duration, Utc};
+use orbit_common::OrbitError;
+use orbit_store::contracts::InvocationQuery;
+use orbit_types::task::{TaskHistoryEntry, TaskRelationType};
+
+use super::super::attribution;
+use super::super::candidates::Candidates;
+use super::super::records::block_cause;
+use super::super::roles::pilots::grade_all;
+use super::attempts::implementation_runs;
+use super::model::{AgentFacts, RegressionLink, Runner, SCAN_DAYS};
+use super::review::judge_rejects;
+use super::task::task_facts;
+use crate::OrbitRuntime;
+use crate::application::codebase::{
+    PilotEvidence, PilotRuns, failed_claim_settlements_of, pilot_evidence,
+};
 
 /// Scan the workspace once. A task whose history or comments cannot be read
 /// keeps its envelope facts rather than failing the whole view.
-pub(crate) fn scan(runtime: &OrbitRuntime) -> Result<AgentFacts, OrbitError> {
+pub(in crate::application::agents) fn scan(
+    runtime: &OrbitRuntime,
+) -> Result<AgentFacts, OrbitError> {
     let computed_at = Utc::now();
     let horizon = computed_at - Duration::days(SCAN_DAYS);
     let tasks = runtime.list_task_metadata()?;

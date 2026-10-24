@@ -2,7 +2,8 @@
 //! implementers, reviewers, pilots), ranked by crew and model, where every
 //! problem counts against exactly one role or is Not scored.
 //!
-//! [`OrbitRuntime::agent_scan`] reads the workspace once ([`AgentFacts`]):
+//! [`OrbitRuntime::agent_scan`](crate::OrbitRuntime::agent_scan) reads the
+//! workspace once ([`AgentFacts`]):
 //! tasks with activity in the last 90 days, the implementation job runs that
 //! name them, the review gate's settlements, the verdicts on review-filed
 //! findings and the typed regressions, and gives each problem its one owner
@@ -17,6 +18,8 @@
 //! above the fleet average, pulled down toward it with K = 30. Cost is never
 //! a term.
 
+use orbit_common::OrbitError;
+
 mod api;
 mod attribution;
 mod candidates;
@@ -27,19 +30,6 @@ mod records;
 mod roles;
 mod score;
 mod shadow;
-
-#[allow(unused_imports)]
-use std::time::Duration;
-
-#[allow(unused_imports)]
-use chrono::{DateTime, SecondsFormat, Utc};
-#[allow(unused_imports)]
-use orbit_common::OrbitError;
-#[allow(unused_imports)]
-use serde_json::{Value, json};
-
-#[allow(unused_imports)]
-use crate::OrbitRuntime;
 
 pub use attribution::{Charge, Credit, Owner};
 pub use facts::{AgentFacts, Problem};

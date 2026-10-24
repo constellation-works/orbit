@@ -1,4 +1,13 @@
-use super::*;
+use orbit_common::OrbitError;
+use orbit_common::governance::authorization::agent_context_declared;
+use orbit_engine::TaskActivityUpdate;
+use orbit_types::identity::{all_agent_families, infer_agent_family_from_model};
+use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
+
+use super::super::helpers::SYSTEM_ACTOR_LABEL;
+use super::super::params::TaskUpdateParams;
+use crate::OrbitRuntime;
+use crate::application::job::crew_pools::CreationCrewAssignment;
 
 /// Which lifecycle rules a status change on this write must satisfy
 /// [ORB-12245].
@@ -14,7 +23,8 @@ pub(super) enum StatusAuthority {
     /// table and local run ownership decide.
     Lifecycle,
     /// A human overriding the table or local run ownership from the bare CLI or the dashboard,
-    /// recorded in task history as [`FORCED_STATUS_EVENT`].
+    /// recorded in task history as
+    /// [`FORCED_STATUS_EVENT`](crate::application::task::lifecycle::FORCED_STATUS_EVENT).
     Forced,
 }
 
@@ -31,7 +41,8 @@ pub(super) struct TaskUpdateContext {
     /// Trusted entrypoint authority; task/tool input cannot populate it.
     pub(super) operator_decision_authority: bool,
     /// Orbit's own deterministic writer: artifacts record
-    /// [`ArtifactWriter::System`]. Only `update_task_as_system` sets it.
+    /// [`ArtifactWriter::System`](orbit_types::task::ArtifactWriter::System).
+    /// Only `update_task_as_system` sets it.
     pub(super) system_writer: bool,
     /// A move into `in-progress` by a caller that is not a trusted operator
     /// starts work, so it is written as a `started` event and the store runs
@@ -48,13 +59,13 @@ pub(super) struct LockedTaskUpdate {
     pub(super) status_note: Option<String>,
 }
 
-pub(crate) struct ValidatedTaskFieldEdits {
-    pub(crate) params: TaskUpdateParams,
+pub(in crate::application::task) struct ValidatedTaskFieldEdits {
+    pub(in crate::application::task) params: TaskUpdateParams,
     /// Set when this write assigned a crew explicitly or drew a replacement;
     /// the caller includes the draw source in the change history [ORB-12717].
-    pub(crate) crew_assignment: Option<CreationCrewAssignment>,
-    pub(crate) crew_source: Option<Option<String>>,
-    pub(crate) crew_redraw_history: Option<TaskHistoryEntry>,
+    pub(in crate::application::task) crew_assignment: Option<CreationCrewAssignment>,
+    pub(in crate::application::task) crew_source: Option<Option<String>>,
+    pub(in crate::application::task) crew_redraw_history: Option<TaskHistoryEntry>,
 }
 
 /// Who is editing an existing task's fields [ORB-16872].
@@ -65,7 +76,7 @@ pub(crate) struct ValidatedTaskFieldEdits {
 /// or model is an agent writer even when that envelope is absent, which is
 /// how a user-launched MCP server calls tools.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TaskFieldWriter {
+pub(in crate::application::task) enum TaskFieldWriter {
     /// May add `skip-review` and `skip-validation`.
     Operator,
     /// Attributed agent or tool writer, or any writer inside an agent envelope.
@@ -80,7 +91,7 @@ pub(crate) enum TaskFieldWriter {
 /// family, is an agent writer. A bare label such as `human` is not: trusted
 /// in-process callers store that label in the model slot without attributing
 /// an agent.
-pub(crate) fn task_field_writer(
+pub(in crate::application::task) fn task_field_writer(
     operator_decision_authority: bool,
     canonical_agent: Option<&str>,
     canonical_model: Option<&str>,

@@ -1,4 +1,13 @@
-use super::*;
+use chrono::Utc;
+use orbit_automation::AutomationError;
+use orbit_automation::members::{MemberAdmission, MemberHost};
+use orbit_common::{NotFoundKind, OrbitError};
+use orbit_types::workflow::automation::members::{StateMember, StateTriggerKind};
+
+use super::super::super::preparation;
+use super::super::Host;
+use super::host::{Escalation, already_preparing, already_triaging, already_verifying};
+use crate::application::task::{finding_fingerprint, needs_verification};
 
 impl Host<'_> {
     pub(super) fn admission_for(

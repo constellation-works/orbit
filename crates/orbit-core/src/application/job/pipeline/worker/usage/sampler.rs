@@ -482,7 +482,7 @@ impl OrbitRuntime {
     /// scope and skips a worker that has none. macOS has no scopes and
     /// samples the worker's process tree. `adopted` marks a worker that took
     /// the run over mid-flight.
-    pub(crate) fn start_resource_sampler(
+    pub(in crate::application::job::pipeline::worker) fn start_resource_sampler(
         &self,
         run: &JobRun,
         adopted: bool,
