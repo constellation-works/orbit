@@ -1,4 +1,9 @@
 ---
+title: "Scope: usage-pressure crew selection"
+owner: claude
+status: Draft
+feature: usage-pressure
+doc_role: scope
 type: design
 summary: "Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not"
 tags: [usage-pressure, crews, crew-pools, provider-limits, admission]
