@@ -1116,9 +1116,9 @@ input.field-editor-input {
 .cf-group-name { color: var(--fg-strong); font-weight: 600; }
 .cf-group-count { margin-left: auto; color: var(--fg-dim); font-size: 11px; }
 .cf-group-body { padding: 0 14px 8px 28px; min-width: 0; max-width: 100%; }
-.cf-dir { color: var(--fg-dim); font-size: 11px; padding: 6px 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cf-dir { color: var(--fg-dim); font-size: 11px; padding: 4px 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cf-files { list-style: none; margin: 0; padding: 0; min-width: 0; max-width: 100%; }
-.cf-row { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 4px; min-width: 0; max-width: 100%; }
+.cf-row { position: relative; display: flex; align-items: center; gap: 8px; min-height: 24px; box-sizing: border-box; padding: 2px 6px; border-radius: 4px; min-width: 0; max-width: 100%; }
 .cf-row:hover { background: var(--bg-hover); }
 .row-detail .file-list .context-selector { display: inline-flex; align-items: baseline; gap: 5px; flex: 1 1 auto; min-width: 0; max-width: 100%; text-decoration: none; color: inherit; overflow: hidden; }
 .row-detail .file-list.cf-flat .context-selector { flex: 1 1 0; width: 0; white-space: nowrap; text-overflow: ellipsis; }
@@ -1135,7 +1135,7 @@ input.field-editor-input {
 .row-detail .file-list .context-contended-backlog .context-selector, .row-detail .file-list .context-contended-backlog .selector-base { color: var(--warn-fg); }
 .row-detail .file-list .context-contended-active .context-selector, .row-detail .file-list .context-contended-active .selector-base { color: var(--danger-fg); }
 .row-detail .file-list .context-contended-active .cf-pill { border-color: var(--danger-line); background: var(--danger-wash); color: var(--danger-fg); }
-.cf-copy { flex: 0 0 auto; opacity: 0; border: 1px solid var(--hair); background: var(--bg-control); color: var(--fg-dim); border-radius: 6px; width: 26px; height: 26px; cursor: pointer; font: inherit; }
+.cf-copy { position: absolute; right: 6px; top: 2px; width: 20px; height: 20px; box-sizing: border-box; padding: 0; display: inline-flex; align-items: center; justify-content: center; opacity: 0; border: 1px solid var(--hair); background: var(--bg-control); color: var(--fg-dim); border-radius: 4px; cursor: pointer; font: inherit; font-size: 11px; line-height: 1; }
 .cf-row:hover .cf-copy, .cf-row:focus-within .cf-copy, .cf-copy:focus-visible { opacity: 1; }
 .row-detail .file-list .context-selector:hover { text-decoration: underline; }
 .row-detail .file-list .context-selector:focus-visible, .cf-copy:focus-visible, .cf-group-head:focus-visible, .cf-toggle-btn:focus-visible, .cf-copy-all:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

@@ -98,7 +98,7 @@ try {
   assert(flat.baseClient >= flat.baseScroll - 1, `flat basename stays whole at 560px (client ${flat.baseClient} vs scroll ${flat.baseScroll})`);
   assert(flat.dimScroll > flat.dimClient + 1 && flat.dimHeight <= 20, `flat directory ellipsizes on one line at 560px (client ${flat.dimClient} vs scroll ${flat.dimScroll}, height ${flat.dimHeight})`);
   await block().screenshot({ path: path.join(evidence, 'context-files-flat-dark-560.png'), animations: 'disabled' });
-  await page.locator('#detail-CTX-1').getByRole('button', { name: 'By crate', exact: true }).click();
+  await page.locator('#detail-CTX-1').getByRole('button', { name: 'By folder', exact: true }).click();
   await page.locator('#detail-CTX-1 .file-list.cf-grouped').waitFor();
   await setPaneWidth(375);
   const grouped = await page.locator('#detail-CTX-1 .file-list').evaluate(node => {
@@ -115,7 +115,7 @@ try {
   await page.locator('#detail-CTX-1 .file-list.cf-flat').waitFor();
   await block().screenshot({ path: path.join(evidence, 'context-files-flat-dark-375.png'), animations: 'disabled' });
   await setPaneWidth(560);
-  await page.locator('#detail-CTX-1').getByRole('button', { name: 'By crate', exact: true }).click();
+  await page.locator('#detail-CTX-1').getByRole('button', { name: 'By folder', exact: true }).click();
   await page.locator('#detail-CTX-1 .file-list.cf-grouped').waitFor();
   await block().screenshot({ path: path.join(evidence, 'context-files-grouped-dark-560.png'), animations: 'disabled' });
   await page.locator('[data-key="task-CTX-3"] .title').click();
@@ -147,7 +147,7 @@ try {
     await longBlock().screenshot({ path: path.join(evidence, `context-files-long-flat-dark-${width}.png`), animations: 'disabled' });
     longFlat.push({ width, ...row });
   }
-  const longGrouped = await longRow({ view: 'By crate', cls: 'cf-grouped', width: 375 });
+  const longGrouped = await longRow({ view: 'By folder', cls: 'cf-grouped', width: 375 });
   assert(longGrouped.paneScroll <= longGrouped.paneClient + 1, `long basename grouped pane does not overflow at 375px (scroll ${longGrouped.paneScroll} vs client ${longGrouped.paneClient})`);
   assert.equal(longGrouped.baseText, longBasename);
   assert(longGrouped.baseInsideLink, 'long grouped basename stays inside its link at 375px');
