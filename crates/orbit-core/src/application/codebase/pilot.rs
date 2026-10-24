@@ -9,14 +9,17 @@
 //! receipt names its pilot job run (`pilot_run_id`), whose record holds the
 //! frozen activity crew draw; invocation evidence holds the pilot model. A
 //! receipt written before that field is matched to the one task-pilot run
-//! active when it was written, or among several, the one whose step outputs
-//! carry its operation id.
+//! active when it was written, or among several, the one whose apply report
+//! carries its exact operation id. Models come from the producing worker step
+//! when its apply report is available, otherwise the first recorded pilot
+//! invocation (including a repair-only run).
 
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
+use orbit_types::workflow::{JobV2Step, JobV2StepBody};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -45,11 +48,14 @@ struct RunRecord {
     started_at: Option<DateTime<Utc>>,
     finished_at: Option<DateTime<Utc>>,
     run: PilotRun,
+    /// Per apply step: absent invocation, or its recorded (possibly absent) model.
+    models: Vec<Option<Option<String>>>,
 }
 
 /// The workspace's task-pilot runs, read once per scan without their steps.
 struct PilotRuns {
     runs: Vec<RunRecord>,
+    apply_steps: Vec<String>,
 }
 
 impl PilotRuns {
@@ -76,12 +82,18 @@ impl PilotRuns {
             .iter()
             .map(|run| run.run_id.to_string())
             .collect::<Vec<_>>();
-        let mut models = runtime
-            .recorded_activity_models("task_pilot", &ids)
-            .unwrap_or_else(|error| {
-                tracing::warn!(%error, "pilot scorecard: invocation models unreadable");
-                Default::default()
-            });
+        // Invocation activity ids are worker step ids, not activity catalog
+        // names. Pair each apply report with the fan-out whose results it reads.
+        let steps = pilot_steps(runtime);
+        let models: Vec<_> = steps
+            .iter()
+            .map(|(_, worker)| {
+                runtime.recorded_activity_models(worker, &ids).unwrap_or_else(|error| {
+                    tracing::warn!(%error, worker, "pilot scorecard: invocation models unreadable");
+                    Default::default()
+                })
+            })
+            .collect();
         let runs = runs
             .into_iter()
             .map(|run| RunRecord {
@@ -90,19 +102,29 @@ impl PilotRuns {
                 run: PilotRun {
                     run_id: run.run_id.to_string(),
                     crew: crews.crews(&run, None).into_iter().next(),
-                    model: models.remove(run.run_id.as_str()).flatten(),
+                    model: models
+                        .iter()
+                        .find_map(|models| models.get(run.run_id.as_str()))
+                        .cloned()
+                        .flatten(),
                     seconds: run.started_at.zip(run.finished_at).map(|(start, end)| {
                         (end - start).num_milliseconds().max(0) as f64 / 1000.0
                     }),
                 },
+                models: models
+                    .iter()
+                    .map(|models| models.get(run.run_id.as_str()).cloned())
+                    .collect(),
             })
             .collect();
-        Self { runs }
+        Self {
+            runs,
+            apply_steps: steps.into_iter().map(|(apply, _)| apply).collect(),
+        }
     }
 
-    /// The run a receipt names, else the one task-pilot run active when it
-    /// was written, else among several the one whose step outputs carry its
-    /// operation id.
+    /// Explicit run ids win. Legacy receipts use a unique active run, or
+    /// disambiguate overlapping runs by exact operation id in an apply report.
     fn attribute(
         &self,
         runtime: &OrbitRuntime,
@@ -111,40 +133,94 @@ impl PilotRuns {
         operation_id: &str,
         now: DateTime<Utc>,
     ) -> Option<PilotRun> {
-        if let Some(run_id) = run_id {
-            return self
-                .runs
-                .iter()
-                .find(|record| record.run.run_id == run_id)
-                .map(|record| record.run.clone());
-        }
-        let active: Vec<&RunRecord> = self
+        let candidates: Vec<_> = self
             .runs
             .iter()
             .filter(|record| {
-                record.started_at.is_some_and(|started| started <= at)
-                    && record.finished_at.unwrap_or(now) >= at
+                if let Some(run_id) = run_id {
+                    record.run.run_id == run_id
+                } else {
+                    record.started_at.is_some_and(|started| started <= at)
+                        && record.finished_at.unwrap_or(now) >= at
+                }
             })
             .collect();
-        let found: Vec<&RunRecord> = if active.len() > 1 {
-            active
-                .into_iter()
-                .filter(|record| {
-                    runtime
-                        .read_run_state(&record.run.run_id)
-                        .ok()
-                        .flatten()
-                        .and_then(|state| serde_json::to_string(&state.step_outputs).ok())
-                        .is_some_and(|outputs| outputs.contains(operation_id))
-                })
-                .collect()
-        } else {
-            active
-        };
-        match found.as_slice() {
-            [record] => Some(record.run.clone()),
-            _ => None,
+        let mut found = candidates.iter().filter_map(|record| {
+            // A linked or uniquely active run with only one recorded worker
+            // already has an unambiguous model; avoid hydrating its state.
+            let needs_report = candidates.len() > 1
+                || record.models.iter().filter(|model| model.is_some()).count() > 1;
+            let producing = if needs_report {
+                runtime
+                    .read_run_state(&record.run.run_id)
+                    .ok()
+                    .flatten()
+                    .and_then(|state| {
+                        self.apply_steps.iter().rposition(|step| {
+                            state.pipeline_step_output(step).is_some_and(|output| {
+                                output["tasks"].as_array().is_some_and(|tasks| {
+                                    tasks.iter().any(|task| {
+                                        task["operation_id"].as_str() == Some(operation_id)
+                                    })
+                                })
+                            })
+                        })
+                    })
+            } else {
+                None
+            };
+            if candidates.len() > 1 && producing.is_none() {
+                return None;
+            }
+            let mut run = record.run.clone();
+            if let Some(model) = producing.and_then(|index| record.models[index].as_ref()) {
+                run.model = model.clone();
+            }
+            Some(run)
+        });
+        let run = found.next()?;
+        found.next().is_none().then_some(run)
+    }
+}
+
+/// Apply step ids paired with their pilot worker ids, in pipeline order.
+/// Read the job definition so renaming a worker or apply step preserves attribution.
+fn pilot_steps(runtime: &OrbitRuntime) -> Vec<(String, String)> {
+    let job = match runtime.resolved_job_spec(PILOT_JOB) {
+        Ok(job) => job,
+        Err(error) => {
+            tracing::warn!(%error, "pilot scorecard: task-pilot definition unreadable");
+            return Vec::new();
         }
+    };
+    job.steps
+        .iter()
+        .filter_map(|apply| {
+            let input = activity_input(apply, "apply_task_pilot_results")?;
+            let results = input.get("results")?.as_str()?;
+            let worker = job.steps.iter().find_map(|step| {
+                let JobV2StepBody::FanOut { fan_out, fan_in } = &step.body else {
+                    return None;
+                };
+                activity_input(&fan_out.worker, "task_pilot")?;
+                let collect = fan_in.collect.as_deref().unwrap_or(&step.id);
+                (results == format!("{{{{ steps.{collect}.output }}}}"))
+                    .then_some(&fan_out.worker.id)
+            })?;
+            Some((apply.id.clone(), worker.clone()))
+        })
+        .collect()
+}
+
+fn activity_input<'a>(step: &'a JobV2Step, name: &str) -> Option<&'a Value> {
+    match &step.body {
+        JobV2StepBody::Target(target) if target.activity_name.as_deref() == Some(name) => {
+            target.default_input.as_ref()
+        }
+        JobV2StepBody::TargetRef(target) if target.target == format!("activity:{name}") => {
+            target.default_input.as_ref()
+        }
+        _ => None,
     }
 }
 

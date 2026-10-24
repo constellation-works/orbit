@@ -14,8 +14,8 @@ use serde_json::{Value, json};
 
 use super::agents::implementation_run;
 use super::codebase::{
-    add, add_with_status, append_event, init_repo, land, pilot_receipt, reserve, reserve_request,
-    seed_pilot_run,
+    add, add_with_status, append_event, init_repo, land, pilot_receipt, pilot_run, reserve,
+    reserve_request, seed_pilot_run,
 };
 use super::support::{Fixture, isolated, json_ok};
 
@@ -108,16 +108,29 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                 (2, Some(purpose), "haiku", None),
                 (3, None, "ignored", Some("unattributed-pilot-model")),
                 (4, Some(purpose), "haiku", Some("actual-pilot-model")),
+                (5, Some(purpose), "luna", Some("repair-only-model")),
+                (6, Some(purpose), "uninvoked", None),
             ] {
                 let run_id = format!("jrun-pilot-attribution-{index}");
-                seed_pilot_run(
-                    &fixture,
-                    &run_id,
-                    "sol",
-                    "task-model",
-                    now - Duration::minutes(2),
-                    now,
-                );
+                if index < 5 {
+                    seed_pilot_run(
+                        &fixture,
+                        &run_id,
+                        "sol",
+                        "task-model",
+                        now - Duration::minutes(2),
+                        now,
+                    );
+                } else {
+                    pilot_run(
+                        &fixture,
+                        &run_id,
+                        "sol",
+                        "task-model",
+                        now - Duration::minutes(2),
+                        now,
+                    );
+                }
                 let mut state = fixture.runtime.read_run_state(&run_id).unwrap().unwrap();
                 state.activity_crew_draws.clear();
                 if let Some(key) = key {
@@ -145,9 +158,12 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                 // The latest task-pilot invocation, even with no model, wins over
                 // older evidence. Other activities on the run must not supply it.
                 for (activity, model) in [
-                    ("task_pilot", model),
+                    (if index == 5 { "repair_pilot" } else { "pilot" }, model),
                     ("prepare_task_pilot", Some("wrong-activity-model")),
-                ] {
+                ]
+                .into_iter()
+                .filter(|_| index != 6)
+                {
                     fixture
                         .runtime
                         .insert_invocation_trace_record(&InvocationInsertParams {
@@ -179,10 +195,149 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                 );
                 land(&fixture, &repo, &task, &["src/pilot.rs"], now);
             }
+            // Two overlapping runs: only structured apply entries identify which
+            // run wrote each legacy receipt. One run also repaired an assessment
+            // with a different model, so matching the producing step matters.
+            let mut overlap_operations = Vec::new();
+            for (index, crew, minutes, cost) in
+                [(0, "overlap-a", 10, 2.0), (1, "overlap-b", 20, 6.0)]
+            {
+                let run = format!("jrun-overlap-{index}");
+                pilot_run(
+                    &fixture,
+                    &run,
+                    crew,
+                    "task-model",
+                    now - Duration::minutes(60),
+                    now - Duration::minutes(60 - minutes),
+                );
+                for (activity, model) in
+                    [("pilot", "initial-model"), ("repair_pilot", "repair-model")]
+                {
+                    if index == 0 && activity == "repair_pilot" {
+                        continue;
+                    }
+                    fixture
+                        .runtime
+                        .insert_invocation_trace_record(&InvocationInsertParams {
+                            job_run_id: run.clone(),
+                            account: None,
+                            activity_id: activity.into(),
+                            agent: "fixture".into(),
+                            provider: None,
+                            model: Some(model.into()),
+                            task_ids: vec![],
+                            trace: InvocationTrace {
+                                provider_cost_usd: Some(cost),
+                                ..Default::default()
+                            },
+                        })
+                        .unwrap();
+                }
+                let mut state = fixture.runtime.read_run_state(&run).unwrap().unwrap();
+                for (step, linked) in [
+                    ("apply", false),
+                    ("apply_repairs", false),
+                    ("apply_repairs", true),
+                ] {
+                    if index == 0 && step == "apply_repairs" {
+                        continue;
+                    }
+                    let task = add_with_status(
+                        &fixture,
+                        &format!("{crew} {step} {linked}"),
+                        &[],
+                        vec![],
+                        TaskStatus::Done,
+                    );
+                    pilot_receipt(
+                        &fixture,
+                        &task,
+                        now - Duration::minutes(55),
+                        linked.then_some(run.as_str()),
+                        &[],
+                        &["file:src/overlap.rs"],
+                    );
+                    let operation = fixture
+                        .runtime
+                        .get_task_comments(&task)
+                        .unwrap()
+                        .last()
+                        .unwrap()
+                        .receipt()
+                        .unwrap()
+                        .operation_id
+                        .to_string();
+                    overlap_operations.push((run.clone(), operation.clone()));
+                    if state.pipeline.get(step).is_none() {
+                        state.pipeline[step] = json!({"tasks": []});
+                    }
+                    state.pipeline[step]["tasks"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!({"operation_id": operation}));
+                    // A substring in unrelated output must never select this run.
+                    state.step_outputs.insert(
+                        99,
+                        json!({"diagnostic": format!("prefix-{operation}-suffix")}),
+                    );
+                    land(&fixture, &repo, &task, &["src/overlap.rs"], now);
+                }
+                fixture.runtime.write_run_state(&run, &state).unwrap();
+            }
+            // Another run may mention the operation as part of a longer field.
+            // Only exact structured operation ids can break the overlap tie.
+            for run in ["jrun-overlap-0", "jrun-overlap-1"] {
+                let mut state = fixture.runtime.read_run_state(run).unwrap().unwrap();
+                for (_, operation) in overlap_operations.iter().filter(|(owner, _)| owner != run) {
+                    state.pipeline["apply"]["tasks"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!({"operation_id": format!("prefix-{operation}-suffix")}));
+                }
+                fixture.runtime.write_run_state(run, &state).unwrap();
+            }
             let server = fixture.server(false);
             let card = json_ok(server.get(&format!(
                 "/api/agents/pilots/scorecard?{WS}&window=7d&min_support=1"
             )));
+            let observed: Vec<_> = card["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| {
+                    (
+                        row["crew"].as_str().unwrap(),
+                        row["model"].as_str().unwrap(),
+                        row["units"].as_u64().unwrap(),
+                    )
+                })
+                .collect();
+            let expected = [
+                ("haiku", "actual-pilot-model", 2),
+                ("overlap-a", "initial-model", 1),
+                ("overlap-b", "initial-model", 1),
+                ("overlap-b", "repair-model", 2),
+            ];
+            let missing: Vec<_> = expected
+                .iter()
+                .filter(|expected| !observed.contains(expected))
+                .collect();
+            assert!(
+                missing.is_empty(),
+                "recorded model and overlapping legacy attribution failures: {missing:?}; observed {observed:?}"
+            );
+            for (crew, model, units, cost, seconds) in [
+                ("overlap-a", "initial-model", 1, 2.0, 600),
+                ("overlap-b", "initial-model", 1, 12.0, 1200),
+                ("overlap-b", "repair-model", 2, 6.0, 1200),
+            ] {
+                let attributed = row(&card, crew, model);
+                assert_eq!(attributed["units"], units);
+                assert_eq!(attributed["runs_without_model"], 0);
+                assert_eq!(stat(attributed, "cost_per_assessment"), cost);
+                assert_eq!(stat(attributed, "median_run_seconds"), seconds);
+            }
             assert_eq!(
                 row(&card, "haiku", "actual-pilot-model")["units"],
                 2,
@@ -191,12 +346,24 @@ fn pilots_attribute_assessments_to_recorded_activity() {
             assert_eq!(row(&card, "luna", "legacy-pilot-model")["units"], 1);
             assert_eq!(row(&card, "haiku", "model unknown")["units"], 1);
             assert_eq!(
+                row(&card, "haiku", "model unknown")["runs_without_model"],
+                1
+            );
+            assert_eq!(
+                row(&card, "luna", "repair-only-model")["runs_without_model"],
+                0
+            );
+            assert_eq!(
+                row(&card, "uninvoked", "model unknown")["runs_without_model"],
+                1
+            );
+            assert_eq!(
                 row(&card, "crew unknown", "unattributed-pilot-model")["units"],
                 1
             );
             assert_eq!(
                 card["rows"].as_array().unwrap().len(),
-                4,
+                9,
                 "no task-crew or other-activity rows: {card}"
             );
         },
