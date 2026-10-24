@@ -13,7 +13,7 @@ last_validated: 2026-10-23
 
 # Scope: performance-weighted crew selection
 
-Status: phase 1 implemented (type list, classification and the by-type cell report); phases 2–4 proposed.
+Status: phases 1–2 implemented (type list, classification, the by-type cell report, and the persisted hourly snapshot with its readiness line); phases 3–4 proposed.
 Bearing: complexity and purpose pools (`workflow.<complexity>_complexity_crews`,
 `workflow.purpose_crews.*`) decide which crews may run a task, and their weights express the
 operator's preference among them. [Usage pressure](../usage-pressure/1_scope.md) scales those

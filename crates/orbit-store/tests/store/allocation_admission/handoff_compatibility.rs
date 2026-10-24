@@ -353,6 +353,9 @@ fn already_open_inline_writers_are_refused_atomically_at_the_store_boundary() {
             before
         );
     }
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(
+        migrated.schema_version().unwrap(),
+        SUPPORTED_SCHEMA_VERSION
+    );
     delivery.accept(Some(OWNER_POLICY)).unwrap();
 }

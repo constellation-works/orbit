@@ -40,6 +40,7 @@ macro_rules! deterministic_action_catalog {
                 ClassifyWorkspaceAutoTasks => "classify_workspace_auto_tasks",
                 ConsolidateCodeScanningTasks => "consolidate_code_scanning_tasks",
                 ContextConflictCheck => "context_conflict_check",
+                CrewPerformanceRefresh => "crew_performance_refresh",
                 DrainWindow => "drain_window",
                 FileCiFailureTasks => "file_ci_failure_tasks",
                 FileDependabotAlertTasks => "file_dependabot_alert_tasks",

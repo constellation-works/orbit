@@ -469,6 +469,10 @@ pub(crate) struct OrbitRuntimeSettings {
     explore: orbit_config::ExploreSettings,
     /// `workflow.crew_performance_types`: the scorecard's task-type lens.
     crew_performance_types: Vec<orbit_config::CrewPerformanceType>,
+    /// `workflow.crew_performance`: whether the snapshot refresh scans.
+    crew_performance: orbit_config::CrewPerformanceMode,
+    /// `workflow.crew_performance_window_days`: the snapshot's window.
+    crew_performance_window_days: u32,
 }
 
 impl OrbitRuntimeSettings {
@@ -511,6 +515,8 @@ impl OrbitRuntimeSettings {
         regression_risk: orbit_config::RegressionRiskSettings,
         explore: orbit_config::ExploreSettings,
         crew_performance_types: Vec<orbit_config::CrewPerformanceType>,
+        crew_performance: orbit_config::CrewPerformanceMode,
+        crew_performance_window_days: u32,
     ) -> Self {
         Self {
             persistence,
@@ -550,11 +556,21 @@ impl OrbitRuntimeSettings {
             regression_risk,
             explore,
             crew_performance_types,
+            crew_performance,
+            crew_performance_window_days,
         }
     }
 
     pub(crate) fn crew_performance_types(&self) -> &[orbit_config::CrewPerformanceType] {
         &self.crew_performance_types
+    }
+
+    pub(crate) fn crew_performance(&self) -> orbit_config::CrewPerformanceMode {
+        self.crew_performance
+    }
+
+    pub(crate) fn crew_performance_window_days(&self) -> u32 {
+        self.crew_performance_window_days
     }
 
     pub(crate) fn explore(&self) -> orbit_config::ExploreSettings {

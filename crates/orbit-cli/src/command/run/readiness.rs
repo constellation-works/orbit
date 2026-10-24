@@ -166,6 +166,7 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
         },
     ));
     lines.extend(provider_limit_lines(&payload["provider_limits"]));
+    lines.push(crew_performance_line(&payload["crew_performance"]));
     let now = Utc::now();
     if let Ok(providers) = serde_json::from_value::<
         Vec<orbit_core::application::task::ProviderUsageStatus>,
@@ -404,6 +405,42 @@ fn provider_limit_lines(readings: &Value) -> Vec<String> {
         .filter(|reading| reading.gated)
         .map(|reading| format!("Provider limits: {}", reading.skipped_line(now)))
         .collect()
+}
+
+/// The crew-performance snapshot draws read: when it was computed, its
+/// window and type list, or the reason a draw ignores it.
+fn crew_performance_line(crew_performance: &Value) -> String {
+    let mode = crew_performance["mode"].as_str().unwrap_or("off");
+    let snapshot = &crew_performance["snapshot"];
+    if snapshot.is_null() {
+        let reason = crew_performance["unusable_reason"]
+            .as_str()
+            .unwrap_or("missing");
+        return format!("Crew performance snapshot: {reason} (mode {mode}).");
+    }
+    let types = snapshot["types"]
+        .as_array()
+        .map(|types| {
+            types
+                .iter()
+                .filter_map(|entry| entry["name"].as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|types| !types.is_empty())
+        .unwrap_or_else(|| "other only".to_string());
+    let detail = format!(
+        "computed {} (window {}d, types: {types}; {} cells)",
+        snapshot["computed_at"].as_str().unwrap_or("-"),
+        snapshot["window_days"],
+        snapshot["cells"],
+    );
+    match crew_performance["unusable_reason"].as_str() {
+        Some(reason) => {
+            format!("Crew performance snapshot: unusable ({reason}); {detail} (mode {mode}).")
+        }
+        None => format!("Crew performance snapshot: {detail} (mode {mode})."),
+    }
 }
 
 /// [ORB-14624] While CPU alone throttles, the reserved light slots are the

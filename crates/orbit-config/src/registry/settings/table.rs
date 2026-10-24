@@ -724,6 +724,20 @@ define_config_settings! {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<Vec<CrewPerformanceType>>| crate::crew_performance::admit_crew_performance_types(raw),
     },
+    workflow_crew_performance: String => String {
+        key: "workflow.crew_performance", value_type: "string",
+        description: "Whether the hourly crew-performance snapshot is built: off, absolute or comparative.",
+        section: ConfigSection::Delivery, order: 114,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| crate::crew_performance::admit_crew_performance(raw),
+    },
+    workflow_crew_performance_window_days: u32 => u32 {
+        key: "workflow.crew_performance_window_days", value_type: "integer",
+        description: "Evidence window in days (1-90) the crew-performance snapshot is built from.",
+        section: ConfigSection::Delivery, order: 115,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<u32>| crate::crew_performance::admit_crew_performance_window_days(raw),
+    },
     workflow_purpose_crews_auto_fix: Vec<String> => Vec<String> {
         key: "workflow.purpose_crews.auto_fix", value_type: "array<string>",
         description: "Weighted crew pool for pull-request auto-fix repairs.",
