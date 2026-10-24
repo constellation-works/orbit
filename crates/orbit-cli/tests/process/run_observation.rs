@@ -910,6 +910,106 @@ fn explicit_run_lookup_preserves_store_errors() {
         );
     }
 }
+/// `orbit run events` reads the complete trail in its enriched projection:
+/// a step selector resolves by audit id or index, `--type` is exact, a child
+/// event carries the `step_id` it inherits, and payloads that are not JSON
+/// or carry no `event_id` are dropped.
+fn run_events_select_resolved_steps_and_add_inherited_step_ids() {
+    let fixture = Fixture::init();
+    let workspace_id = fixture.workspace_id();
+    let db = fixture.db();
+    let rows = [
+        (
+            "e0",
+            r#"{"event_id":"e0","body_kind":"step_started","event_type":"step.started","step_id":"implement"}"#,
+        ),
+        (
+            "e1",
+            r#"{"event_id":"e1","parent_event_id":"e0","body_kind":"cli_invocation_finished","event_type":"cli.invocation.finished"}"#,
+        ),
+        ("bad", "not json"),
+        (
+            "anon",
+            r#"{"body_kind":"activity_progress","event_type":"activity.progress"}"#,
+        ),
+        (
+            "e2",
+            r#"{"event_id":"e2","body_kind":"step_started","event_type":"step.started","step_id":"review"}"#,
+        ),
+        (
+            "e3",
+            r#"{"event_id":"e3","parent_event_id":"e2","body_kind":"cli_invocation_finished","event_type":"cli.invocation.finished"}"#,
+        ),
+    ];
+    for (second, (event_id, payload)) in rows.into_iter().enumerate() {
+        let ts = format!("2026-09-20T03:01:{second:02}+00:00");
+        db.execute("INSERT INTO v2_audit_events (workspace_id, event_id, source, schema_version, event_type, ts, run_id, agent_identity, payload_json) VALUES (?1, ?2, 'v2_envelope', 1, 'fixture', ?3, ?4, 'test', ?5)", params![workspace_id, event_id, ts, FAILED, payload]).expect("seed audit event");
+    }
+    let ids = |doc: &Value| -> Vec<String> {
+        doc["events"]
+            .as_array()
+            .expect("events")
+            .iter()
+            .map(|event| event["event_id"].as_str().unwrap_or("-").to_string())
+            .collect()
+    };
+
+    let all = fixture.json(&["run", "events", FAILED, "--no-reconcile", "--json"]);
+    assert_eq!(all["run_id"], FAILED);
+    assert_eq!(all["job_id"], "fixture_job");
+    assert_eq!(
+        ids(&all),
+        ["e0", "e1", "e2", "e3"],
+        "chronological, malformed and id-less rows dropped: {all}"
+    );
+    assert_eq!(
+        all["events"][1]["step_id"], "implement",
+        "child event inherits its step: {all}"
+    );
+
+    let by_index = fixture.json(&[
+        "run",
+        "events",
+        FAILED,
+        "-s",
+        "1",
+        "--type",
+        "cli.invocation.finished",
+        "--no-reconcile",
+        "--json",
+    ]);
+    assert_eq!(ids(&by_index), ["e3"], "{by_index}");
+    assert_eq!(by_index["events"][0]["step_id"], "review");
+
+    let by_id = fixture.json(&[
+        "run",
+        "events",
+        FAILED,
+        "--step",
+        "implement",
+        "--type",
+        "step.started",
+        "--no-reconcile",
+        "--json",
+    ]);
+    assert_eq!(ids(&by_id), ["e0"], "{by_id}");
+
+    let error = fixture.failure(&[
+        "run",
+        "events",
+        FAILED,
+        "-s",
+        "missing",
+        "--no-reconcile",
+        "--json",
+    ]);
+    assert!(
+        error["error"]
+            .as_str()
+            .is_some_and(|m| m.contains("does not match any step")),
+        "an unknown step selector is refused: {error}"
+    );
+}
 fn job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable() {
     let fixture = Fixture::init();
     let jobs = fixture.home.join(".orbit/resources/jobs");
@@ -2275,7 +2375,8 @@ contract!(
     job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage,
     no_reconcile_run_reads_leave_stale_runs_and_reservations_unchanged,
     default_run_reads_still_reconcile_stale_runs,
-    explicit_run_lookup_preserves_store_errors
+    explicit_run_lookup_preserves_store_errors,
+    run_events_select_resolved_steps_and_add_inherited_step_ids
 );
 #[test]
 fn run_observation_contracts_2() {

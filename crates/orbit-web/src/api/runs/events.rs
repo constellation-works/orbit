@@ -4,7 +4,7 @@ use crate::state::Ws;
 use axum::extract::{Path, Query};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::V2AuditEventFilter;
+use orbit_core::runtime::audit::run_events::{RunEventsPage, RunEventsPageResult};
 use orbit_core::runtime::audit::run_logs::RunCliInvocationProfile;
 use serde_json::{Value, json};
 
@@ -14,12 +14,6 @@ use super::super::{
 };
 
 const RUN_EVENTS_DEFAULT_LIMIT: usize = 100;
-/// Hard cap on rows scanned from a single run's persisted v2 audit events.
-pub(in crate::api) const RUN_EVENTS_MAX_SCAN_LINES: usize = 50_000;
-/// Capacity hint for the returned events page. A fixed constant rather than
-/// the caller-supplied `limit` so the allocation size never derives from
-/// request input, regardless of how large a `limit` a caller requests.
-const RUN_EVENTS_PAGE_CAPACITY_HINT: usize = 64;
 
 pub(in crate::api) async fn list_run_events(
     Ws(runtime): Ws,
@@ -45,82 +39,33 @@ pub(in crate::api) async fn list_run_events(
 
     let run_id = run_id.to_string();
     match blocking("run events", move || {
-        runtime.show_job_run(&run_id)?;
-        if q.tail {
-            let filter = V2AuditEventFilter {
-                workspace_id: runtime.workspace_id()?,
-                run_id: Some(run_id),
-                source: Some("v2_envelope".to_string()),
-                limit: Some(limit),
-                offset: Some(offset),
-                ..Default::default()
-            };
-            let store = runtime.v2_audit_store()?;
-            // One read snapshot: a row committed after the count cannot move
-            // this page relative to the total that describes it.
-            let page = store.list_v2_audit_event_tail(&filter)?;
-            let total = usize::try_from(page.total).unwrap_or(0);
-            let events: Vec<Value> = page
-                .events
-                .into_iter()
-                .filter_map(|row| serde_json::from_str(&row.payload_json).ok())
-                .collect();
-            return Ok((json!({"events": events, "total": total, "offset": offset}), false));
-        }
-        // Pages read forward from the run's first event. Without a kind
-        // filter the page is a plain SQL window; `body_kind` lives inside the
-        // payload, so a filtered page scans under a row budget instead.
-        let (sql_offset, sql_limit, skip) = match kind {
-            None => (offset, limit, 0),
-            Some(_) => (0, RUN_EVENTS_MAX_SCAN_LINES + 1, offset),
+        let run = runtime.show_job_run(&run_id)?;
+        let page = if q.tail {
+            RunEventsPage::Tail { offset, limit }
+        } else {
+            RunEventsPage::Forward {
+                kind: kind.as_deref(),
+                offset,
+                limit,
+            }
         };
-        let rows = runtime.list_v2_audit_events(V2AuditEventFilter {
-            workspace_id: String::new(),
-            run_id: Some(run_id),
-            source: Some("v2_envelope".to_string()),
-            limit: Some(sql_limit),
-            offset: Some(sql_offset),
-            oldest_first: true,
-            ..Default::default()
-        })?;
-        let budget_exceeded = kind.is_some() && rows.len() > RUN_EVENTS_MAX_SCAN_LINES;
-        let mut page: Vec<Value> = Vec::with_capacity(RUN_EVENTS_PAGE_CAPACITY_HINT);
-        let mut matched: usize = 0;
-
-        for row in rows.into_iter().take(RUN_EVENTS_MAX_SCAN_LINES) {
-            let value: Value = match serde_json::from_str(&row.payload_json) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            if let Some(ref needle) = kind {
-                let body_kind = value.get("body_kind").and_then(Value::as_str).unwrap_or("");
-                if body_kind != needle {
-                    continue;
-                }
-            }
-            if matched < skip {
-                matched = matched.saturating_add(1);
-                continue;
-            }
-            page.push(value);
-            matched = matched.saturating_add(1);
-            if page.len() >= limit {
-                break;
-            }
-        }
-
-        Ok((Value::Array(page), budget_exceeded))
+        runtime.run_events_page(&run, page)
     })
     .await
     {
-        Ok((page, budget_exceeded)) if budget_exceeded && page.as_array().is_some_and(|p| p.len() < limit) => (
+        Ok(RunEventsPageResult::Tail {
+            events,
+            total,
+            offset,
+        }) => Json(json!({"events": events, "total": total, "offset": offset})).into_response(),
+        Ok(RunEventsPageResult::Forward(page)) => Json(Value::Array(page)).into_response(),
+        Ok(RunEventsPageResult::ScanBudgetExceeded) => (
             StatusCode::PAYLOAD_TOO_LARGE,
             Json(json!({
                 "error": "run-events audit rows exceed bounded scan budget; narrow the kind filter or reduce offset"
             })),
         )
             .into_response(),
-        Ok((page, _)) => Json(page).into_response(),
         Err(response) => *response,
     }
 }
