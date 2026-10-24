@@ -8,7 +8,7 @@
 //! findings lives here once so the two modes cannot drift.
 
 use orbit_engine::DispatchError;
-use orbit_types::task::{NO_AUTO_APPROVE_TAG, TaskComment, TaskStatus};
+use orbit_types::task::{NO_AUTO_APPROVE_TAG, TaskComment, TaskStatus, is_valid_orb_task_id};
 use orbit_types::workflow::DrainHoldFinding;
 use serde_json::{Value, json};
 
@@ -45,6 +45,54 @@ pub(super) fn warning_text(finding: &Value) -> Option<&str> {
         .or_else(|| finding.get("text").and_then(Value::as_str))
 }
 
+fn task_id_character(character: char) -> bool {
+    character.is_alphanumeric() || matches!(character, '-' | '_')
+}
+
+/// Whole task IDs named in one `blocked_by` finding's text.
+fn blocked_by_task_ids(finding: &Value) -> Vec<String> {
+    let Some(text) = warning_text(finding) else {
+        return Vec::new();
+    };
+    text.split(|character| !task_id_character(character))
+        .filter(|id| id.starts_with("ORB-") && is_valid_orb_task_id(id))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether one `blocked_by` finding withholds promotion. A prerequisite
+/// already enforced as a dependency edge (or already `done` in this
+/// workspace) holds nothing: the dependency graph gates admission instead.
+/// Prose naming no task, a missing or other-workspace task, or an unfinished
+/// task that is not a recorded dependency still holds, because no edge
+/// enforces it.
+pub(super) fn blocked_by_holds_promotion(
+    finding: &Value,
+    dependencies: &[String],
+    is_done: &dyn Fn(&str) -> bool,
+) -> bool {
+    let ids = blocked_by_task_ids(finding);
+    ids.is_empty()
+        || ids
+            .iter()
+            .any(|id| !dependencies.iter().any(|dep| dep == id) && !is_done(id))
+}
+
+/// Whether `field`'s `finding` withholds promotion, with `blocked_by`
+/// decided against the task's current `dependencies` and done lookup.
+fn holds_promotion(
+    field: &str,
+    finding: &Value,
+    dependencies: &[String],
+    is_done: &dyn Fn(&str) -> bool,
+) -> bool {
+    if field == "blocked_by" {
+        blocked_by_holds_promotion(finding, dependencies, is_done)
+    } else {
+        finding_holds_promotion(field, finding)
+    }
+}
+
 /// Whether the task's filer opted it out of automatic approval. The tag is
 /// also the hold reason, so the report names what to remove.
 pub(crate) fn auto_approval_opted_out(tags: &[String]) -> bool {
@@ -65,6 +113,8 @@ pub(crate) fn promotion_findings<'a>(
     action: &str,
     task_id: &str,
     assessment: &'a Value,
+    dependencies: &[String],
+    is_done: &dyn Fn(&str) -> bool,
 ) -> Result<PromotionFindings<'a>, DispatchError> {
     let duplicate_of = assessment.get("duplicate_of").ok_or_else(|| {
         DispatchError::action_failed(action, format!("task {task_id} is missing duplicate_of"))
@@ -91,7 +141,7 @@ pub(crate) fn promotion_findings<'a>(
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter(move |value| finding_holds_promotion(field, value))
+                .filter(move |value| holds_promotion(field, value, dependencies, is_done))
                 .map(move |value| json!({ "field": field, "value": value }))
         })
         .collect();
@@ -104,7 +154,11 @@ pub(crate) fn promotion_findings<'a>(
 
 /// The warning findings an approval hold can show: one entry per warning-field
 /// item, with the original kind and full text.
-pub(crate) fn warning_hold_findings(assessment: &Value) -> Vec<DrainHoldFinding> {
+pub(crate) fn warning_hold_findings(
+    assessment: &Value,
+    dependencies: &[String],
+    is_done: &dyn Fn(&str) -> bool,
+) -> Vec<DrainHoldFinding> {
     WARNING_FIELDS
         .iter()
         .flat_map(|field| {
@@ -113,7 +167,7 @@ pub(crate) fn warning_hold_findings(assessment: &Value) -> Vec<DrainHoldFinding>
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter(move |value| finding_holds_promotion(field, value))
+                .filter(move |value| holds_promotion(field, value, dependencies, is_done))
                 .filter_map(|value| {
                     finding_text(value).map(|text| DrainHoldFinding {
                         kind: (*field).to_string(),
@@ -151,7 +205,12 @@ pub(crate) fn recommendation_has_evidence(value: &Value) -> bool {
 /// Ordinary edits and comments preserve the last findings until re-piloted;
 /// a clean verification or leaving proposed clears the readout. No live
 /// drain or drain-pass snapshot is needed, and advisory findings are excluded.
-pub fn task_pilot_warnings(status: TaskStatus, comments: &[TaskComment]) -> Vec<DrainHoldFinding> {
+pub fn task_pilot_warnings(
+    status: TaskStatus,
+    comments: &[TaskComment],
+    dependencies: &[String],
+    is_done: &dyn Fn(&str) -> bool,
+) -> Vec<DrainHoldFinding> {
     if status != TaskStatus::Proposed {
         return Vec::new();
     }
@@ -160,6 +219,10 @@ pub fn task_pilot_warnings(status: TaskStatus, comments: &[TaskComment]) -> Vec<
     };
     serde_json::from_str::<Value>(receipt.body)
         .ok()
-        .and_then(|audit| audit.get("assessment").map(warning_hold_findings))
+        .and_then(|audit| {
+            audit
+                .get("assessment")
+                .map(|assessment| warning_hold_findings(assessment, dependencies, is_done))
+        })
         .unwrap_or_default()
 }

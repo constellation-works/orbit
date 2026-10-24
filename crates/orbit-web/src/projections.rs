@@ -110,7 +110,15 @@ impl TaskListProjection {
         let mut object = task_to_json(task, status_by_id, &self.pull_request_links);
         object.insert(
             "pilot_warnings".into(),
-            json!(task_pilot_warnings(task.status, &row.comments)),
+            json!(task_pilot_warnings(
+                task.status,
+                &row.comments,
+                &task.dependencies(),
+                &|id: &str| matches!(
+                    runtime.get_task(id),
+                    Ok(found) if found.status == TaskStatus::Done
+                ),
+            )),
         );
         self.os_readout
             .as_ref()

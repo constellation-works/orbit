@@ -162,6 +162,8 @@ pub(super) fn assess(
     selectors: &[String],
     complexity: TaskComplexity,
     authority: &DrainAuthority,
+    dependencies: &[String],
+    is_done: &dyn Fn(&str) -> bool,
 ) -> Result<Value, DispatchError> {
     let disposition = assessment
         .get("disposition")
@@ -171,7 +173,7 @@ pub(super) fn assess(
         duplicate_of,
         already_landed,
         warnings,
-    } = promotion_findings(action, task_id, assessment)?;
+    } = promotion_findings(action, task_id, assessment, dependencies, is_done)?;
     let release_action = assessment
         .get("release_action_required")
         .filter(|finding| !finding.is_null());

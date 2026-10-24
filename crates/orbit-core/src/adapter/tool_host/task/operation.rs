@@ -368,7 +368,15 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
                 os_readout.insert_into(&row.task, &mut object);
                 object.insert(
                     "pilot_warnings".into(),
-                    json!(task_pilot_warnings(row.task.status, &row.comments)),
+                    json!(task_pilot_warnings(
+                        row.task.status,
+                        &row.comments,
+                        &row.task.dependencies(),
+                        &|id: &str| matches!(
+                            runtime.get_task(id),
+                            Ok(found) if found.status == TaskStatus::Done
+                        ),
+                    )),
                 );
                 Ok(Value::Object(object))
             }

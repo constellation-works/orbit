@@ -22,6 +22,7 @@ pub(crate) enum AdmissionOutcome {
     Superseded(Value),
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn assess(
     action: &str,
     task_id: &str,
@@ -30,6 +31,8 @@ pub(crate) fn assess(
     selectors: &[String],
     filing: &Value,
     promotion_authorized: bool,
+    dependencies: &[String],
+    is_done: &dyn Fn(&str) -> bool,
 ) -> Result<AdmissionOutcome, DispatchError> {
     let filed_task_id = required_string(filing, "task_id", action)?;
     if filed_task_id != task_id {
@@ -83,7 +86,7 @@ pub(crate) fn assess(
         duplicate_of,
         already_landed,
         warnings,
-    } = promotion_findings(action, task_id, assessment)?;
+    } = promotion_findings(action, task_id, assessment, dependencies, is_done)?;
 
     // A release failure may share a cluster with a pull-request run of the
     // same commit. It is release-only for remediation purposes as long as no

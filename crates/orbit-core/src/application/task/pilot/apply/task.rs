@@ -388,6 +388,36 @@ fn admit(
     assessed: &Assessed,
     operation_id: &str,
 ) -> Settled<Option<Admission>> {
+    // Prerequisites this assessment will record as edges in its atomic
+    // write already enforce themselves, so promotion decides against the
+    // dependencies the task will carry, not only the ones it carried at
+    // preparation. Missing and other-workspace IDs add no edge and are
+    // absent from the done lookup, so their findings keep holding.
+    let runtime = context.runtime;
+    let is_done = |id: &str| {
+        matches!(
+            runtime.stores().tasks().get_task(id),
+            Ok(Some(task)) if task.status == TaskStatus::Done
+        )
+    };
+    let mut dependencies = assessed.current.dependencies();
+    for id in crate::application::task::pilot_blocker_task_ids(&assessed.assessment) {
+        if dependencies.contains(&id) {
+            continue;
+        }
+        if let Ok(Some(target)) = runtime.stores().tasks().get_task(&id)
+            && matches!(
+                target.status,
+                TaskStatus::Proposed
+                    | TaskStatus::Backlog
+                    | TaskStatus::InProgress
+                    | TaskStatus::Blocked
+                    | TaskStatus::Review
+            )
+        {
+            dependencies.push(id);
+        }
+    }
     let admission = match context.authority {
         PromotionAuthority::CiSweep(filing, authorized) => {
             let mut admission_task = assessed.current.clone();
@@ -422,6 +452,8 @@ fn admit(
                 &assessed.after,
                 filing,
                 *authorized,
+                &dependencies,
+                &is_done,
             )
             .map(|outcome| match outcome {
                 ci_failure_admission::AdmissionOutcome::Decision(decision) => {
@@ -441,6 +473,8 @@ fn admit(
             &assessed.after,
             assessed.complexity,
             drain,
+            &dependencies,
+            &is_done,
         )
         .map(|decision| CheckedAdmission::Apply(Some(Admission::Drain(decision)))),
         PromotionAuthority::None => Ok(CheckedAdmission::Apply(None)),

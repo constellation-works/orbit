@@ -45,7 +45,12 @@ pub fn task_record_json(
     TaskOsReadout::new(runtime)?.insert_into(task, &mut object);
     object.insert(
         "pilot_warnings".into(),
-        serde_json::json!(task_pilot_warnings(task.status, &row.comments)),
+        serde_json::json!(task_pilot_warnings(
+            task.status,
+            &row.comments,
+            &task.dependencies(),
+            &|id: &str| status_by_id.get(id).copied() == Some(TaskStatus::Done),
+        )),
     );
     object.insert(
         "comments".to_string(),
@@ -126,7 +131,15 @@ pub fn task_show_field_json(
     match field {
         "pilot_warnings" => Ok(serde_json::json!(task_pilot_warnings(
             task.status,
-            &runtime.get_task_comments(&task.id)?
+            &runtime.get_task_comments(&task.id)?,
+            &task.dependencies(),
+            &|id: &str| match status_by_id {
+                Some(index) => index.get(id).copied() == Some(TaskStatus::Done),
+                None => matches!(
+                    runtime.get_task(id),
+                    Ok(found) if found.status == TaskStatus::Done
+                ),
+            },
         ))),
         "os_requirement" => Ok(TaskOsReadout::new(runtime)?.requirement(task)),
         "comments" => serde_json::to_value(runtime.get_task_comments(&task.id)?)
