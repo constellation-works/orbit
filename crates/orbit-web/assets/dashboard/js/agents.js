@@ -14,7 +14,6 @@
 
 import { el, syncNodes, fetchJson, getWindow, wireWindowSelector, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, bindTaskLink, formatDateTime } from './common.js';
 import { orchestratorsPanel } from './agents-orchestrators.js';
-import { implementersPanel } from './agents-implementers.js';
 import { reviewersPanel } from './agents-reviewers.js';
 import { pilotsPanel } from './agents-pilots.js';
 
@@ -36,7 +35,6 @@ const ROLE_LABELS = {
 // paragraphs "How the score works" adds for the role.
 const ROLE_PANELS = {
   orchestrators: orchestratorsPanel,
-  implementers: implementersPanel,
   reviewers: reviewersPanel,
   pilots: pilotsPanel,
 };
@@ -549,7 +547,8 @@ function detailNode(row) {
   };
   stat(`${scorecard.unit[0].toUpperCase()}${scorecard.unit.slice(1)}`, String(row.units));
   for (const entry of Array.isArray(row.stats) ? row.stats : []) {
-    // Structured stats (tier comparisons, the tier matrix) render in the role panel.
+    // Structured stats render in the role panel (the pilots' tier matrix); a
+    // role without one skips them.
     if (entry.value !== null && typeof entry.value === "object") continue;
     stat(entry.label, statText(entry.value));
   }

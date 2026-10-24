@@ -1,7 +1,7 @@
 ---
 title: Agent Scorecards — Design
 owner: claude
-last_updated: 2026-10-23
+last_updated: 2026-10-24
 last_validated: 2026-10-23
 status: Draft
 feature: agent-scorecards
@@ -35,7 +35,7 @@ Every role tab has the same layout:
 2. **Ranking.** One row per crew and model: rank, crew and model, support (the role's unit of work), four or five role-specific columns, and the score as a bar and number. A row is a button that selects it. Rows below the minimum support are greyed, tagged `below 10` and listed last.
 3. **Detail** (right column) for the selected row: rank, score, raw score and the fleet average it was pulled toward, a **Score breakdown** (each term's weight, contribution and bar), **Biggest penalty** (the tasks behind the largest negative term, each linking to the task), and **Shown, not scored** (cost, time and other context).
 4. **How the score works.** A disclosure listing every term with its weight and definition, plus the smoothing formula.
-5. **One role-specific panel.** Orchestrators show where each orchestrator's rework went by cause. Implementers show score against cost, with the frontier of crews nothing beats on both, plus first reviews needing changes compared with the tier average. Reviewers show how each reviewer's verdicts turned out, and flag an accept rate well above peers. Pilots show assessed tier against observed tier.
+5. **One role-specific panel**, for the roles that have one. Orchestrators show where each orchestrator's rework went by cause. Implementers show no panel: the score-against-cost chart and first-reviews tier comparison were removed as a product decision, so the ranking, detail column and disclosure are the whole tab. Reviewers show how each reviewer's verdicts turned out, and flag an accept rate well above peers. Pilots show assessed tier against observed tier.
 
 Reviewers also carry a **provisional** banner under the strip while any review in the window is younger than the 30-day miss lookback (§4.4). It counts those reviews against the window's total. A reviewer whose accept rate is well above its peers' carries an `accepts often` tag under its name in the ranking (§5.3). A role module supplies the banner and the row tags through optional hooks beside its panel.
 
@@ -140,7 +140,7 @@ A role's **unit** decides window membership (§5). Problems count whenever they 
 
 ### 4.5 Cost is shown, never scored
 
-Dollar cost, tokens and wall time are never terms. Implementers show them as a score-against-cost panel, and every role shows them under **Shown, not scored**. See [Cost is shown, never scored](./4_decisions.md#cost-is-shown-never-scored).
+Dollar cost, tokens and wall time are never terms. Every role shows them under **Shown, not scored**. Implementers previously plotted score against cost in a role panel; that panel was removed as a product decision, so cost now appears only under **Shown, not scored**. See [Cost is shown, never scored](./4_decisions.md#cost-is-shown-never-scored).
 
 Today's per-8-active-hours rate toggle is dropped: active hours mean something only for orchestrators. Orchestrators show active hours under **Shown, not scored**.
 
@@ -223,12 +223,12 @@ Each tier row reports implemented tasks, first reviews, those needing changes
 on the same tier, including this row. A task contributes its first review per
 crew and model; unreviewed tasks have a null rate.
 
-The role panel plots each priced row's score against cost per weighted landed
-task. A dashed line joins supported rows for which no other supported row has
-both an equal-or-higher score and equal-or-lower cost, with at least one strict
-improvement. Ties remain on the frontier; below-support rows are grey context
-and cannot set it. Missing costs are omitted from the plot. A per-tier table
-shows review rates beside the fleet rate and scrolls within its box on phones.
+Implementers have no role panel. The score-against-cost plot and per-tier
+review table were removed as a product decision; the ranking, detail column
+and disclosure are the whole tab. Cost per weighted landed task, median run
+duration and tasks by tier stay under **Shown, not scored**, and the
+`tier_comparison` rows remain in the API even though the dashboard no longer
+renders them.
 
 ### 5.3 Reviewers
 
@@ -426,7 +426,8 @@ Each track updates the docs its change makes stale in the same PR. That includes
 
 - ORB-16952 — track B: the core scan, one-owner attribution, shared score, role registry with Orchestrators computed, and the `/api/agents` routes and cache.
 - ORB-16953 — track C: the Agents destination, its role tabs, the shared renderer and the orchestrators panel; retired Analytics › Orchestrators and `/api/orchestrators/*`.
-- ORB-16954 — track D: the Implementers role and cost/tier panel (current).
+- ORB-16954 — track D: the Implementers role (current) and cost/tier panel (removed by ORB-17736).
+- ORB-17736 — removed the Implementers score-against-cost and first-reviews role panel; the tab keeps its ranking, detail and disclosure, and the API is unchanged.
 - ORB-16955 — track E: the Reviewers role (current), its scan additions (false rejects judged from cited paths, incomplete reviews, findings rejected by finding verification), the provisional count, the banner, the `accepts often` tag and the outcomes panel.
 - ORB-16956 — track F: the Pilots role, its lock-wait holders and calibration panel; removed the Task pilot ranking from Analytics › Codebase (current).
 - ORB-16957 — track G: CLI and MCP (current).

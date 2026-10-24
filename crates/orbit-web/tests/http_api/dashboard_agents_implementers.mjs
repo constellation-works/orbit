@@ -16,17 +16,19 @@ await settle();
 assert.equal(byId['agents-count-implementers'].textContent, '5');
 assert.equal(part('ranking').querySelectorAll('tr.agents-row').length, 6);
 assert.equal(part('detail').querySelector('h3').textContent, 'sol');
-const panel = part('panel');
-assert.equal(panel.querySelectorAll('.agents-cost-point').length, 5, 'unpriced work has no plotted point');
-assert.deepEqual(panel.querySelectorAll('.agents-cost-point.is-frontier').map(point => point.dataset.row), ['sol\0model-b', 'sol\0model-a', 'peer\0model-c'], 'ties stay on the frontier; dominated and below-support rows cannot set it');
-assert.equal(panel.querySelectorAll('.agents-cost-frontier').length, 2);
-assert.equal(panel.querySelectorAll('.agents-tier-table tbody tr').length, 12);
-assert.match(panel.querySelector('.agents-tier-table').textContent, /20%20\.59%/);
-assert.ok(panel.querySelectorAll('.agents-tier-table td').some(cell => cell.textContent === '—'), 'unreviewed work has no invented review rate');
+const body = byId['agents-body'];
+assert.equal(part('panel'), undefined, 'implementers show no role panel');
+assert.equal(body.querySelectorAll('.agents-role-panel').length, 0, 'no empty role-panel container is left behind');
+assert.deepEqual(body.children.map(node => node.dataset.key).filter(Boolean), ['strip', 'ranking', 'detail', 'how']);
+for (const selector of ['.agents-cost-plot', '.agents-cost-point', '.agents-cost-frontier', '.agents-cost-axis', '.agents-cost-legend', '.agents-tier-table']) {
+  assert.equal(body.querySelectorAll(selector).length, 0, `the removed panel leaves no ${selector}`);
+}
+assert.ok(!body.textContent.includes('Score against cost') && !body.textContent.includes('First reviews by tier'), 'the removed panel leaves no chart, frontier or tier copy');
+assert.match(part('detail').textContent, /Cost per weighted landed task/, 'cost stays in Shown, not scored');
 for (const request of takeAll()) request.resolve(response(implementerDetail('sol', 'model-b')));
 await settle();
 assert.match(part('detail').textContent, /model-b/);
-assert.ok(!part('detail').textContent.includes('[object Object]'), 'structured tier data is rendered as a table');
+assert.ok(!part('detail').textContent.includes('[object Object]'), 'structured tier data never leaks into the detail column');
 click(selectButton('costly'));
 const requests = takeAll();
 assert.equal(requests[0].url.searchParams.get('model'), 'model-d');
