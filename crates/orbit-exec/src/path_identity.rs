@@ -10,92 +10,19 @@
 //! path then falls back to a name-only reading that ignores the link
 //! [ORB-12799].
 //!
-//! [`physical_with_missing_tail`] is the single resolution both sides use:
-//! the longest existing prefix resolved by the kernel, with the names that do
-//! not exist yet appended to it. [`create_write_root`] then materialises that
-//! same path without following a link into anywhere else, and refuses when
-//! what it created does not resolve to the identity that was validated.
+//! [`physical_with_missing_tail`] (defined in `orbit_common::fs::physical`) is
+//! the single resolution both sides use: the longest existing prefix resolved
+//! by the kernel, with the names that do not exist yet appended to it.
+//! [`create_write_root`] then materialises that same path without following a
+//! link into anywhere else, and refuses when what it created does not resolve
+//! to the identity that was validated.
 
-use std::ffi::{OsStr, OsString};
-use std::path::{Component, Path, PathBuf};
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-
-/// The path as the kernel resolves it, for a path that need not exist.
-///
-/// Components are resolved left to right. Every component that exists is
-/// canonicalized — symlinks followed — and the names that do not exist yet are
-/// appended to that resolved prefix. A path that exists in full is therefore
-/// its canonical path, and one whose tail is missing still lands under the
-/// directory its existing ancestors physically live in, rather than under the
-/// names they are spelled with.
-///
-/// A `..` is applied where the kernel would apply it: to the resolved prefix
-/// when nothing is missing (so it follows a symlink before it climbs), and to
-/// the last missing name otherwise (a directory that does not exist cannot be
-/// a link, so the two cancel). No `..` is ever appended to a resolved prefix,
-/// and a path whose `..` leaves the tail is still read under the physical
-/// ancestor, never under its spelling. That matters wherever a spelling and a
-/// physical path differ (macOS `/var` and `/tmp`, a symlinked home): a
-/// containment check compares this answer against protected roots resolved the
-/// same way, so a whole-path lexical fallback would let a traversal through a
-/// missing directory slip past a root spelled through a symlink.
-pub fn physical_with_missing_tail(path: &Path) -> PathBuf {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        match std::env::current_dir() {
-            Ok(cwd) => cwd.join(path),
-            Err(_) => return lexical_normalize(path),
-        }
-    };
-    let mut resolved = PathBuf::new();
-    let mut missing: Vec<OsString> = Vec::new();
-    for component in absolute.components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir => resolved.push(component.as_os_str()),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if missing.pop().is_none() {
-                    resolved.pop();
-                }
-            }
-            Component::Normal(name) => {
-                if missing.is_empty()
-                    && let Ok(canonical) = resolved.join(name).canonicalize()
-                {
-                    resolved = canonical;
-                } else {
-                    missing.push(name.to_os_string());
-                }
-            }
-        }
-    }
-    for name in missing {
-        resolved.push(name);
-    }
-    resolved
-}
-
-/// Collapse `.` and `..` by name alone, without asking the filesystem.
-///
-/// Used for a path no existing ancestor can resolve, and for comparisons that
-/// must not depend on what happens to exist on this host.
-pub fn lexical_normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if out.parent().is_some() {
-                    out.pop();
-                }
-            }
-            other => out.push(other),
-        }
-    }
-    out
-}
+// Sibling modules still reach it through this path.
+pub(crate) use orbit_common::fs::physical::physical_with_missing_tail;
 
 /// Create a granted write directory at the identity
 /// [`physical_with_missing_tail`] gives it, and return that identity.

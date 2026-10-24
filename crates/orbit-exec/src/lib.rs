@@ -97,7 +97,8 @@ pub use macos_sandbox::{
     sandbox_exec_available, sandbox_exec_path, sandbox_exec_program_for_audit,
     sandbox_exec_unavailable_message, seatbelt_deferral_notice, spawn_under_macos_sandbox,
 };
-pub use path_identity::{lexical_normalize, physical_with_missing_tail};
+// Compatibility paths; the definitions live in `orbit_common::fs::physical`.
+pub use orbit_common::fs::physical::{lexical_normalize, physical_with_missing_tail};
 pub use process::{InheritedFd, spawn_with_inherited_fds};
 pub use result::ExecutionResult;
 pub use runner::{

@@ -9,6 +9,7 @@ pub mod overlap_index;
 pub mod path;
 pub mod path_filter;
 pub mod path_glob;
+pub mod physical;
 pub mod reverse_lines;
 pub mod selector;
 

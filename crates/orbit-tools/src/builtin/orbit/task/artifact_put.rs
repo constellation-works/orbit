@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::open_read_only_no_follow;
+use orbit_common::fs::physical::resolve_symlinks;
 use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
 use orbit_common::tracing;
-use orbit_policy::resolve_symlinks;
 use orbit_types::policy::FsOperation;
 use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, TaskArtifact, canonical_artifact_path};
 use orbit_types::workflow::{REVIEW_REPORT_ARTIFACT, ReviewReport};
