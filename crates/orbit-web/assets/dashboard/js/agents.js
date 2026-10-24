@@ -196,7 +196,7 @@ function setRoleCount(forRole, payload) {
   }
   const rows = Array.isArray(payload.rows) ? payload.rows : [];
   const ranked = rows.filter((row) => row.rank != null).length;
-  node.textContent = String(ranked);
+  node.textContent = `${ranked} ranked`;
   node.title = `${plural(ranked, "ranked row")}; ${rows.length - ranked} below ${payload.min_support} ${payload.unit}`;
 }
 
@@ -327,7 +327,10 @@ function render() {
   const title = $(TITLE_ID);
   if (title) title.textContent = ROLE_LABELS[role];
   const count = $(COUNT_ID);
-  if (count) count.textContent = scorecard.status === "ok" ? String(ranking.length) : "—";
+  if (count) {
+    const ranked = ranking.filter((row) => row.rank != null).length;
+    count.textContent = scorecard.status === "ok" ? `${ranking.length} rows · ${ranked} ranked` : "—";
+  }
   const meta = $(META_ID);
   if (meta) {
     const units = ranking.reduce((sum, row) => sum + (row.units || 0), 0);

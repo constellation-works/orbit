@@ -20,7 +20,8 @@ answer(takeAll(), url => {
 });
 await loading;
 await settle();
-assert.equal(byId['agents-count-pilots'].textContent, '2', 'two ranked crews; the below-support row is not counted');
+assert.equal(byId['agents-count-pilots'].textContent, '2 ranked', 'the tab names its ranked-crew count');
+assert.equal(byId['agents-count'].textContent, '3 rows · 2 ranked', 'the panel names all rows and the ranked subset');
 assert.equal(part('ranking').querySelectorAll('tr.agents-row').length, 3);
 assert.equal(part('detail').querySelector('h3').textContent, 'luna');
 

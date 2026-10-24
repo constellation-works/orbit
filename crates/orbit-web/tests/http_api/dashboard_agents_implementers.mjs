@@ -13,7 +13,8 @@ answer(takeAll(), url => {
 });
 await loading;
 await settle();
-assert.equal(byId['agents-count-implementers'].textContent, '5');
+assert.equal(byId['agents-count-implementers'].textContent, '5 ranked');
+assert.equal(byId['agents-count'].textContent, '6 rows · 5 ranked');
 assert.equal(part('ranking').querySelectorAll('tr.agents-row').length, 6);
 assert.equal(part('detail').querySelector('h3').textContent, 'sol');
 const body = byId['agents-body'];

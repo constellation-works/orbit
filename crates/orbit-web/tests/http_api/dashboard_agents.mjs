@@ -283,8 +283,9 @@ answer(requests, routeV1);
 await loading;
 await settle();
 
-// The tabs count ranked rows; a role not computed yet reads as a dash.
-assert.equal(byId['agents-count-orchestrators'].textContent, '2', 'two ranked rows; the below-support row is not counted');
+// Tab badges name ranked rows; the panel count names all rows and the ranked subset.
+assert.equal(byId['agents-count-orchestrators'].textContent, '2 ranked', 'the tab count names its ranked-row population');
+assert.equal(byId['agents-count'].textContent, '3 rows · 2 ranked', 'the panel names all rows and the ranked subset');
 for (const role of ['implementers', 'reviewers', 'pilots']) assert.equal(byId[`agents-count-${role}`].textContent, '—');
 assert.equal(byId['agents-title'].textContent, 'Orchestrators');
 assert.match(byId['agents-meta'].textContent, /63 owned tasks in 30d · fleet average 71\.4/);
@@ -430,7 +431,7 @@ assert.equal(part('panel'), undefined, 'a role without a panel module shows none
 assert.equal(how().querySelectorAll('dt').length, 2, 'the not-computed role still lists its terms');
 assert.equal(how().open, true, 'the disclosure keeps its state across roles');
 assert.ok(part('strip').querySelectorAll('li')[1].classList.contains('is-current'), 'the strip highlights the role on screen');
-assert.equal(byId['agents-count-orchestrators'].textContent, '2', 'the other tabs keep their counts');
+assert.equal(byId['agents-count-orchestrators'].textContent, '2 ranked', 'the other tabs keep their ranked-row counts');
 assert.equal(pending.length, 0, 'a not-computed role reads no detail');
 
 // A computed role with no rows in the window says so.
@@ -446,7 +447,8 @@ await settle();
 assert.ok(part('state').classList.contains('agents-state-empty'));
 assert.match(part('state').textContent, /No owned tasks in the 30d window/);
 assert.match(part('strip').textContent, /No problem was recorded in this window/);
-assert.equal(byId['agents-count-orchestrators'].textContent, '0');
+assert.equal(byId['agents-count-orchestrators'].textContent, '0 ranked');
+assert.equal(byId['agents-count'].textContent, '0 rows · 0 ranked');
 takeAll();
 
 // Reviewers: a banner while any review is younger than the miss lookback,
@@ -489,7 +491,7 @@ await loading;
 await settle();
 answer(takeAll(), routeReviewers(16, '2026-10-19T08:10:00.000Z'));
 await settle();
-assert.equal(byId['agents-count-reviewers'].textContent, '2');
+assert.equal(byId['agents-count-reviewers'].textContent, '2 ranked');
 assert.deepEqual(view().children.map(node => node.dataset.key).filter(Boolean), ['strip', 'banner', 'ranking', 'detail', 'how', 'panel'], 'the banner sits under the strip');
 assert.match(part('banner').textContent, /Provisional\. 16 of 32 reviews in this window are younger than the 30-day miss lookback/);
 assert.deepEqual(rankingRows().map(entry => entry.querySelector('span.agents-tag')?.dataset.tag ?? null), [null, 'accepts_often'], 'only the row well above its peers is tagged');
