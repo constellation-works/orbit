@@ -74,12 +74,14 @@ let pagedEvents = null;
 // even though it is short: a capped scan that stopped before the window ended.
 let cappedHead = null;
 const auditRequests = [];
+const summaryRequests = [];
 // Paged requests `holdAudit` matches wait in `heldAudit` until the test answers
 // or fails them, so it decides the order responses settle in.
 let holdAudit = null;
 const heldAudit = [];
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
+  if (url.pathname === '/api/log/stream') { res.writeHead(204); res.end(); return; }
   if (url.pathname === '/api/audit' && pagedEvents) {
     auditRequests.push(url.searchParams);
     if (holdAudit && holdAudit(url.searchParams)) {
@@ -93,6 +95,16 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname.startsWith('/api/')) {
     let payload = events;
+    // Contract-shaped background responses let the Tools window scenario run
+    // the complete app, including scope changes, requests and URL restoration.
+    if (url.pathname === '/api/workspaces') payload = [{ id: 'ws_fixture', name: 'orbit', status: 'active', is_default: true }];
+    else if (url.pathname === '/api/log') payload = { events: [], offset: 0 };
+    else if (url.pathname === '/api/crews') payload = { default_crew: null, crews: [] };
+    else if (url.pathname === '/api/workflows/auto/readiness') payload = { capacity: { drain_phase: 'idle' }, tasks: [] };
+    else if (url.pathname === '/api/audit/summary') {
+      summaryRequests.push(url.searchParams.get('since'));
+      payload = { ...summary, window: url.searchParams.get('since') };
+    } else if (url.pathname !== '/api/audit') payload = { items: [], total: 0, limit: 100, truncated: false };
     if (url.pathname === '/api/codebase/analytics') {
       analyticsRequests.push(url.searchParams);
       payload = analytics;
@@ -108,7 +120,7 @@ const server = http.createServer((req, res) => {
   const served = dashboardFile(url.pathname);
   if (!served) { res.writeHead(404); res.end(); return; }
   let data = served.data;
-  if (url.pathname === '/') data = data.toString().replace(/<script[^>]*src="[^"]*app.js"[^>]*><\/script>/g, '');
+  if (url.pathname === '/' && !url.searchParams.has('app')) data = data.toString().replace(/<script[^>]*src="[^"]*app.js"[^>]*><\/script>/g, '');
   res.setHeader('content-type', served.type);
   res.end(data);
 });
@@ -145,6 +157,103 @@ try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
   page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
+  page.on('pageerror', error => errors.push(String(error)));
+  const origin = `http://127.0.0.1:${server.address().port}/?app=1&workspace=ws_fixture`;
+  const before = process.argv.includes('--before');
+  const windowResults = [];
+  const selector = page.locator('#tools-window-selector');
+  const tab = value => selector.locator(`[data-window="${value}"]`);
+  const loadTools = async window => {
+    const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/audit/summary');
+    await page.goto(`${origin}&window=${window}#analytics/reliability/tools`);
+    await response;
+    await page.waitForFunction(() => document.querySelector('#audit-summary-body .audit-summary-card'));
+    await page.evaluate(() => document.fonts.ready);
+  };
+  const assertWindow = async (selected, shared = selected) => {
+    await page.waitForFunction(selected => document.querySelector('#audit-summary-title').textContent.includes(selected), selected);
+    assert.equal(summaryRequests.at(-1), selected, 'Tools requests the effective summary cutoff');
+    assert.equal(new URL(page.url()).searchParams.get('window'), shared, 'the URL retains the shared Analytics window');
+    assert.equal(await page.evaluate(async () => (await import('/static/js/common.js')).getWindow()), shared);
+    assert.equal(await tab(selected).getAttribute('aria-selected'), 'true');
+    assert.equal(await tab(selected).getAttribute('tabindex'), '0');
+    assert.equal(await selector.locator('[aria-selected="true"]').count(), 1);
+    assert.equal(await selector.locator('[tabindex="0"]').count(), 1);
+    assert.match(await page.locator('#tools-meta').innerText(), new RegExp(selected));
+    windowResults.push({ selected, shared, since: summaryRequests.at(-1) });
+  };
+  await loadTools('24h');
+  if (!before) {
+    assert.deepEqual(await selector.locator('[role="tab"]').evaluateAll(tabs => tabs.map(tab => tab.dataset.window)), ['24h', '7d', '30d']);
+    assert.equal(await selector.getAttribute('role'), 'tablist');
+    await assertWindow('24h');
+    // Clicks must issue a fresh request, update the single shared window, and
+    // restore both the request and selected tab on reload of that URL.
+    for (const selected of ['7d', '30d', '24h']) {
+      const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/audit/summary'
+        && new URL(response.url()).searchParams.get('since') === selected);
+      await tab(selected).click();
+      await response;
+      await assertWindow(selected);
+      const reloadResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/audit/summary');
+      await page.reload();
+      await reloadResponse;
+      await assertWindow(selected);
+    }
+    // The shared helper activates tabs as focus moves and wraps at either end.
+    for (const [key, selected] of [['ArrowRight', '7d'], ['End', '30d'], ['ArrowRight', '24h'], ['ArrowLeft', '30d'], ['Home', '24h']]) {
+      await selector.locator('[tabindex="0"]').focus();
+      const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/audit/summary');
+      await page.keyboard.press(key);
+      await response;
+      await assertWindow(selected);
+      assert.equal(await tab(selected).evaluate(node => node === document.activeElement), true);
+    }
+    for (const shared of ['1h', 'all']) {
+      await loadTools(shared);
+      await assertWindow('24h', shared);
+      assert.match(await page.locator('#tools-meta').innerText(), /independent 24h window/i);
+      for (const width of [1440, 375]) {
+        await page.setViewportSize({ width, height: 1000 });
+        assert.equal(await page.locator('#tools-meta').isVisible(), true);
+        await page.screenshot({ path: path.join(evidence, `tools-window-${shared}-fallback-dark-${width}.png`), animations: 'disabled' });
+      }
+      // Clicking the already-highlighted fallback makes it the shared window.
+      await tab('24h').click();
+      await page.waitForFunction(() => new URL(location.href).searchParams.get('window') === '24h');
+      await assertWindow('24h');
+      assert.doesNotMatch(await page.locator('#tools-meta').innerText(), /independent/i);
+    }
+  }
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const selected of ['24h', '7d', '30d']) {
+      await loadTools(selected);
+      if (!before) {
+        await assertWindow(selected);
+        const fit = await page.locator('#tools-controls').evaluate(node => {
+          const box = node.getBoundingClientRect();
+          return { overflow: document.documentElement.scrollWidth > innerWidth,
+            outside: [...node.querySelectorAll('button, #tools-meta')].some(child => {
+              const rect = child.getBoundingClientRect();
+              return rect.left < box.left || rect.right > box.right;
+            }) };
+        });
+        assert.deepEqual(fit, { overflow: false, outside: false }, `Tools controls fit at ${width}px`);
+      }
+      await page.screenshot({ path: path.join(evidence, `tools-window-${selected}-dark-${width}${before ? '-before' : ''}.png`), animations: 'disabled' });
+    }
+  }
+  fs.writeFileSync(path.join(evidence, 'tools-windows.json'), JSON.stringify({ before, windows: windowResults, requests: summaryRequests, errors }, null, 2));
+  assert.deepEqual(errors, []);
+  if (before) {
+    console.log('Tools window before screenshots captured');
+  } else {
+    console.log('Tools windows: clicks, reload, shared state, bounded fallbacks, keyboard and desktop/phone controls passed');
+  }
+  // Retire the complete-app page before the renderer-only scenarios below.
+  await page.close();
+  page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.on('pageerror', error => errors.push(String(error)));
   await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture&window=24h#diagnostics/incidents/events`);
   await page.evaluate(() => document.fonts.ready);
