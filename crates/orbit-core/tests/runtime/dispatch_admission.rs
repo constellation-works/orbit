@@ -19,8 +19,9 @@
 //! - Gap fit: under `machine.auto_concurrency.mode` `enforce` a local drain
 //!   admits only what fits under the host load forecast; `shadow` records
 //!   those decisions and admits as `off`.
-//! - A drain admission pass held out by a busy task-store lock is deferred
-//!   and retried, up to a limit, instead of failing the drain.
+//! - A drain admission pass held out by a busy task-store lock, or by another
+//!   connection's SQLite writer lock, is deferred and retried, up to a limit,
+//!   instead of failing the drain.
 //! - Submission notices: what a drain or ship start reports as it proceeds
 //!   (throttle, validation environment, host-OS backlog, unset env-pass
 //!   names, the required-validation note), and the drain stop projection.
@@ -60,6 +61,7 @@ mod gap_fit;
 mod lock_busy_pass;
 mod replay_crew;
 mod reservation_grants;
+mod sqlite_busy_pass;
 mod submission_notices;
 mod task_pilot_warning;
 mod unknown_footprint;

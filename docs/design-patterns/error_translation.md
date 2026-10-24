@@ -56,6 +56,11 @@ and codes exactly like the variant it refines:
   `is_readonly_or_access_failure()` and `storage_layer()`. Wrap a
   `rusqlite::Error` with `.map_err(sqlite_store_error)`, or `sqlite_error` to
   add context; `OrbitError::Store(e.to_string())` drops the class.
+- `StorageLockBusy { layer, message }`: a SQLite `SQLITE_BUSY` or
+  `SQLITE_LOCKED` result, classified by the same `sqlite_error` helpers. It
+  reads and codes as the error named by `layer`, so a remote caller still sees
+  `store_error`. Query it with `is_lock_busy()`, which also covers
+  `FileLockTimeout`, `SqliteContention` and a remote `lock_busy` reply.
 - `ClaimRefused { kind, message }`: an owner claim or handoff refusal. It reads
   and codes as `InvalidInput`. Query it with `claim_refusal()`.
 - `ExecutionTimeout { timeout_ms, message }`: an execution failure caused by a

@@ -145,7 +145,8 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::WorkspaceError(_) => "workspace_error",
         OrbitError::Io(_) => "io_error",
         OrbitError::Migration(_) => "migration_failed",
-        OrbitError::StorageAccessDenied { layer, .. } => layer.error_code(),
+        OrbitError::StorageAccessDenied { layer, .. }
+        | OrbitError::StorageLockBusy { layer, .. } => layer.error_code(),
         // OrbitError is non-exhaustive so newly added errors can cross this
         // crate boundary without forcing an MCP release. Unknown variants are
         // intentionally classified conservatively until given a stable code.

@@ -297,6 +297,10 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             layer,
             message: redact(&message),
         },
+        OrbitError::StorageLockBusy { layer, message } => OrbitError::StorageLockBusy {
+            layer,
+            message: redact(&message),
+        },
     }
 }
 
