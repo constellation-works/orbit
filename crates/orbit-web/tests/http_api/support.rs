@@ -694,6 +694,26 @@ pub(super) fn serve_fixture() {
             .unwrap()
             .with_host_resource_probe(Arc::new(Probe(AtomicUsize::new(0))));
         orbit_web::serve(&runtime, args).unwrap();
+    } else if std::env::var("ORBIT_HTTP_EMBEDDED").as_deref() == Ok("1") {
+        let global = root.join("global");
+        let registry = orbit_registry::workspace_registry::load_registry_from(
+            &orbit_registry::workspace_registry::registry_path_for(&global),
+        )
+        .unwrap();
+        let runtime =
+            orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
+                &global,
+                &registry.workspaces[0],
+                &registry.checkouts[0],
+            )
+            .unwrap();
+        // fixture_command runs from root, outside repo and its .orbit directory.
+        assert_eq!(
+            std::env::current_dir().unwrap(),
+            root.canonicalize().unwrap()
+        );
+        assert_ne!(runtime.workspace_id().unwrap(), "default");
+        orbit_web::serve(&runtime, args).unwrap();
     } else {
         orbit_web::serve_from_env(args, Some(&root.join("global"))).unwrap();
     }
