@@ -868,6 +868,8 @@ pub fn explain_workspace_auto_readiness(
         },
         "approvals": approvals,
         "provider_limits": provider_limits.readings,
+        "provider_pressures": provider_limits.providers,
+        "crew_pressures": provider_limits.crew_pressures,
         "provider_auth_failures": provider_auth_failures,
         "total": total,
         "tasks": tasks,

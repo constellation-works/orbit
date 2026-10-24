@@ -208,7 +208,7 @@ fn bound_terminal_error(text: &str) -> String {
 /// Account windows from the last top-level `status` / `run_usage` allowance
 /// (Muse Code 1.4.12), observed at run completion. Prompt echoes, answer text,
 /// tool results and child-task records never supply account telemetry.
-/// Preserve the provider's labels; neither window reports its duration.
+/// Preserve the provider's labels; normalize the weekly allowance to seven days.
 pub(crate) fn muse_usage_windows(
     stdout: &[u8],
     now: DateTime<Utc>,
@@ -244,7 +244,7 @@ pub(crate) fn muse_usage_windows(
                 source: ProviderLimitSource::Event,
                 resets_at: Some(resets_at),
                 used_percent: Some(used_percent),
-                window_minutes: None,
+                window_minutes: (window == "weekly").then_some(10080),
                 gating: true,
                 partial: false,
                 observed_at: now,

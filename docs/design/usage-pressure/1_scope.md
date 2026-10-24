@@ -8,7 +8,7 @@ last_validated: 2026-10-23
 
 # Scope: usage-pressure crew selection
 
-Status: proposed, nothing implemented.
+Status: phase 1 pressure view implemented; selection phases 2–4 remain proposed.
 Bearing: [provider usage limits](../../CONFIG.md#provider-usage-limits) already record every
 window a provider reports ([ORB-14695] failures, [ORB-14696] post-run readings, [ORB-17644] Muse)
 and gate crews that reach a threshold ([ORB-14697]). Weighted pools
@@ -144,8 +144,8 @@ Readings stay per host.
   member, and `source` gains `; usage pressure`, so `orbit run show` explains a draw that went
   against the configured odds.
 - **Readiness, doctor and the dashboard limit strip** show each account's pressure next to its
-  readings ([ORB-14698]), e.g. `claude ×8 (seven_day 10%, resets 18:00)`, plus which window set
-  it.
+  readings ([ORB-14698]), e.g. `claude ×25.2 (seven_day 10%, resets 18:00)` (raw pressure,
+  before any draw cap), plus which window set it.
 - **Task history.** An admission re-draw that changes the crew records `crew_assigned` with the
   old crew, the new one and the pressures that decided it.
 

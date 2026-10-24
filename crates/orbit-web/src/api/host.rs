@@ -13,17 +13,21 @@ use crate::state::DashboardState;
 
 /// Always reports the serving host, without a workspace extractor or remote
 /// routing. Beside the resource sample it carries `provider_limits`: the host's
-/// live provider usage readings (readiness's shape), or `null` when they cannot
-/// be read, so the top bar polls both in one request.
+/// live provider usage readings (readiness's shape), plus `provider_pressures`
+/// and `crew_pressures`. Each is `null` when unavailable, so the top bar polls
+/// resources and weekly pressure in one request.
 pub(super) async fn resources(State(state): State<DashboardState>) -> Response {
     match blocking("host resource sampling", move || {
         let status = state.host_resource_status()?;
         let mut body = to_json(&status)?;
         if let Some(object) = body.as_object_mut() {
-            object.insert(
-                "provider_limits".into(),
-                state.host_provider_limits().unwrap_or(Value::Null),
-            );
+            if let Some(Value::Object(limits)) = state.host_provider_limits() {
+                object.extend(limits);
+            } else {
+                for key in ["provider_limits", "provider_pressures", "crew_pressures"] {
+                    object.insert(key.into(), Value::Null);
+                }
+            }
         }
         Ok(body)
     })

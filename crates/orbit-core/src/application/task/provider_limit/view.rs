@@ -26,6 +26,7 @@ use orbit_config::ProviderLimitThreshold;
 
 use super::gate::{reading_at_limit, reading_covers, reading_lifetime};
 use super::ledger::PARTIAL_NOTE;
+use super::pressure::{CrewUsagePressure, UsagePressure};
 use crate::OrbitRuntime;
 
 /// One live reading of a provider usage window.
@@ -158,7 +159,7 @@ impl ProviderLimitReading {
 
 /// What the host knows about one configured provider account's usage: a
 /// provider's default login, or [ORB-17288] a crew that sets `env`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderUsageStatus {
     /// Canonical provider name.
     pub provider: String,
@@ -173,6 +174,9 @@ pub struct ProviderUsageStatus {
     pub threshold: ProviderLimitThreshold,
     /// Whether any live reading gates it now.
     pub gated: bool,
+    /// Display-only pressure of this account's account-wide weekly windows.
+    #[serde(flatten, default)]
+    pub usage: UsagePressure,
     /// Its enabled configured crews.
     pub crews: Vec<String>,
 }
@@ -228,6 +232,8 @@ pub struct ProviderLimitsView {
     pub providers: Vec<ProviderUsageStatus>,
     /// Each configured crew some live gating reading covers, by name.
     pub crews: Vec<CrewProviderLimit>,
+    /// Display-only weekly pressure for every enabled crew.
+    pub crew_pressures: Vec<CrewUsagePressure>,
     /// The review lane, when every member's provider is gated; v1 does not
     /// gate it, so its runs may fail until the limit lifts. System work draws
     /// from the complexity pools, which skip limited crews [ORB-15663].
@@ -317,6 +323,14 @@ impl ProviderLimitsView {
         let providers = providers
             .into_iter()
             .map(|((provider, account), crews)| ProviderUsageStatus {
+                usage: UsagePressure::from_readings(
+                    observations.iter().filter(|reading| {
+                        canonical_provider(&reading.provider) == provider
+                            && reading.account == account
+                            && reading.model.is_none()
+                    }),
+                    now,
+                ),
                 reports_usage: USAGE_REPORTING_PROVIDERS.contains(&provider.as_str()),
                 threshold: policy.account_threshold(&provider, account.as_deref()),
                 gated: readings.iter().any(|reading| {
@@ -325,6 +339,25 @@ impl ProviderLimitsView {
                 crews: crews.into_iter().collect(),
                 provider,
                 account,
+            })
+            .collect();
+
+        let crew_pressures = crews
+            .iter()
+            .filter(|crew| crew.enabled)
+            .map(|crew| CrewUsagePressure {
+                crew: crew.name.clone(),
+                usage: UsagePressure::from_readings(
+                    observations.iter().filter(|reading| {
+                        reading_covers(
+                            &reading.provider,
+                            reading.account.as_deref(),
+                            reading.model.as_deref(),
+                            crew,
+                        )
+                    }),
+                    now,
+                ),
             })
             .collect();
 
@@ -392,6 +425,7 @@ impl ProviderLimitsView {
             readings,
             providers,
             crews: crew_limits,
+            crew_pressures,
             ungated_lanes,
             error: None,
         }

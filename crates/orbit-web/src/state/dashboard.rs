@@ -476,9 +476,9 @@ impl DashboardState {
         Ok(monitor.snapshot(&paths))
     }
 
-    /// The serving host's live provider usage readings, as readiness lists
-    /// them, for the top bar. The store is host-wide; thresholds and crew
-    /// coverage come from the default workspace's effective config, so with no
+    /// The serving host's live provider usage readings and weekly account/crew
+    /// pressures, as readiness lists them, for the top bar. The store is host-wide;
+    /// thresholds and crew coverage come from the default workspace's effective config, so with no
     /// servable workspace (or an unreadable store) this is `None` and the bar
     /// shows the readings as unavailable. May read files and must be called
     /// through `blocking`.
@@ -490,7 +490,11 @@ impl DashboardState {
             tracing::warn!("top bar shows no provider usage: {error}");
             return None;
         }
-        serde_json::to_value(view.readings).ok()
+        Some(serde_json::json!({
+            "provider_limits": view.readings,
+            "provider_pressures": view.providers,
+            "crew_pressures": view.crew_pressures,
+        }))
     }
 
     /// The serving host's host file: its last valid snapshot, reloaded when

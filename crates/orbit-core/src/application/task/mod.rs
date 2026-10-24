@@ -103,8 +103,9 @@ pub(crate) use pilot::{
 };
 pub(crate) use post_deploy::owed_criteria_json;
 pub use provider_limit::{
-    CrewProviderLimit, ProviderLimitReading, ProviderLimitThreshold, ProviderLimitsView,
-    ProviderUsageStatus, UngatedLaneLimit, short_time,
+    CrewProviderLimit, CrewUsagePressure, PressureWindow, ProviderLimitReading,
+    ProviderLimitThreshold, ProviderLimitsView, ProviderUsageStatus, UngatedLaneLimit,
+    UsagePressure, short_time,
 };
 pub use pull_request_links::PullRequestLinks;
 pub use record_json::{task_record_json, task_show_field_json, task_show_json};
