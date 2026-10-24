@@ -1,7 +1,7 @@
 // Usage: node dashboard_agents_browser.mjs "$PLAYWRIGHT_MODULE" .orbit/tmp/agents-browser
-// Observe › Agents through the shipped app, router, renderer and CSS, fed
+// Analytics › Agents through the shipped app, router, renderer and CSS, fed
 // contract-shaped `/api/agents` payloads: `#analytics/orchestrators` opening
-// `#agents/orchestrators`, the role tabs and their counts, row selection
+// `#analytics/agents/orchestrators`, the role tabs and their counts, row selection
 // driving the detail column, the disclosure surviving a refresh, no
 // Implementers role panel or the empty grid row and gap that track would
 // reserve (16px at 1440, 12px at 375), the Reviewers provisional
@@ -314,15 +314,16 @@ try {
     return placed;
   };
 
-  // The retired Analytics › Orchestrators link opens Agents › Orchestrators.
+  // The retired Analytics › Orchestrators link opens Analytics › Agents › Orchestrators.
   await page.goto(`${origin}#analytics/orchestrators?window=30d`);
   await body.locator('.agents-row').first().waitFor();
   await page.evaluate(async () => { await document.fonts.ready; });
-  assert.equal(new URL(page.url()).hash, '#agents/orchestrators?window=30d');
-  assert.equal(await page.locator('.tab-pane.active').getAttribute('data-tab'), 'agents');
-  assert.equal(await page.locator('.rail .tab.active').getAttribute('data-tab'), 'agents', 'Agents is the active rail destination');
-  assert.equal(await page.locator('#analytics-subtabs [data-subtab="orchestrators"]').count(), 0, 'Analytics lists no Orchestrators');
-  assert.match(await page.locator('.rail-group', { has: page.locator('[data-tab="agents"]') }).locator('.rail-group-label').textContent(), /Observe/);
+  assert.equal(new URL(page.url()).hash, '#analytics/agents/orchestrators?window=30d');
+  assert.equal(await page.locator('.tab-pane.active').getAttribute('data-tab'), 'analytics');
+  assert.equal(await page.locator('.rail .tab.active').getAttribute('data-tab'), 'analytics', 'Analytics is the active rail destination');
+  assert.equal(await page.locator('.rail [data-tab="agents"]').count(), 0, 'the rail has no standalone Agents destination');
+  assert.equal(await page.locator('#analytics-subtabs [data-subtab="agents"]').count(), 1, 'Analytics lists Agents');
+  assert.equal(await page.locator('#analytics-subtabs [data-subtab="agents"]').evaluate(node => node.classList.contains('active')), true, 'Agents is the active Analytics view');
   pass('legacy route opens Agents');
 
   // Role tabs and their counts; the strip; the default selection.
@@ -374,7 +375,7 @@ try {
   // `accepts often` tag, the detail and each reviewer's verdict outcomes.
   await page.locator('#agents-roles [data-view="reviewers"]').click();
   await body.locator('.agents-banner').waitFor();
-  assert.equal(new URL(page.url()).hash, '#agents/reviewers?window=30d');
+  assert.equal(new URL(page.url()).hash, '#analytics/agents/reviewers?window=30d');
   assert.match(await body.locator('.agents-banner').textContent(), /Provisional\. 77 of 118 reviews in this window are younger than the 30-day miss lookback/);
   assert.deepEqual(await body.locator('.agents-row .agents-crew').allTextContents(), ['codex-review', 'claude-review', 'gemini-review']);
   assert.deepEqual(await body.locator('.agents-row .agents-tag').allTextContents(), ['accepts often']);
@@ -452,7 +453,7 @@ try {
   await page.locator('#agents-roles [data-view="pilots"]').click();
   await body.locator('.agents-tier-card').first().waitFor();
   await body.locator('.agents-penalty .agents-task').first().waitFor();
-  assert.equal(new URL(page.url()).hash, '#agents/pilots?window=30d');
+  assert.equal(new URL(page.url()).hash, '#analytics/agents/pilots?window=30d');
   assert.equal(await body.locator('.agents-row').count(), 3);
   assert.equal(await body.locator('#agents-detail h3').textContent(), 'luna');
   assert.equal(await body.locator('.agents-penalty').getAttribute('data-term'), 'lock_wait_hours');
@@ -490,7 +491,7 @@ try {
   await page.locator('#agents-window-selector [data-window="1h"]').click();
   await body.locator('.agents-state-empty').waitFor();
   assert.match(await body.locator('.agents-state').textContent(), /No owned tasks in the 1h window/);
-  assert.equal(new URL(page.url()).hash, '#agents/orchestrators?window=1h');
+  assert.equal(new URL(page.url()).hash, '#analytics/agents/orchestrators?window=1h');
   const emptyTail = await disclosureTail();
   assertNoEmptyPanelTrack(emptyTail);
   await shot('agents-orchestrators-empty-dark-1440');

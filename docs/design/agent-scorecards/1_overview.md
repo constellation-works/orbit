@@ -43,7 +43,7 @@ The orchestrator composite also charges the orchestrator for crew-caused rework.
 | API, CLI and MCP contract | [2_design.md §6–§7](./2_design.md#6-api-contract) | ORB-16952 (API) |
 | Delivery tracks and their order | [2_design.md §10](./2_design.md#10-delivery-plan) | — |
 | Standing rules | [4_decisions.md](./4_decisions.md) | — |
-| The Agents dashboard view | [2_design.md §1](./2_design.md#1-destination-and-layout), [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-observe--agents) | ORB-16953 |
+| The Agents dashboard view | [2_design.md §1](./2_design.md#1-destination-and-layout), [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-analytics--agents) | ORB-16953 |
 
 ## Task References
 

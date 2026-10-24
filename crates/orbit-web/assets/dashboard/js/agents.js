@@ -1,4 +1,4 @@
-// Observe › Agents: one scorecard per agent role, ranked by crew and model.
+// Analytics › Agents: one scorecard per agent role, ranked by crew and model.
 // Reads GET /api/agents/<role>/scorecard for the ranking and its terms,
 // GET /api/agents/attribution for the strip of who each problem counts
 // against, and GET /api/agents/<role>/detail for the tasks behind the
@@ -298,7 +298,7 @@ function windowLabel() {
 }
 
 function roleHref(forRole) {
-  return `#agents/${forRole}?window=${encodeURIComponent(getWindow())}`;
+  return `#analytics/agents/${forRole}?window=${encodeURIComponent(getWindow())}`;
 }
 
 function contribution(term, row) {
