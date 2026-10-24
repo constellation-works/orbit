@@ -172,12 +172,26 @@
   grid-column: 1 / -1;
 }
 
+/* Everything above the tab content (the pane head, the state block, the
+   callouts, delivery progress and the tab strip) sits on one darker band.
+   The band runs to the detail's edges and up to the sticky head; the strip's
+   bottom edge is its 1px border line. */
+.detail-band {
+  display: grid;
+  gap: 16px;
+  margin: -16px -20px 0;
+  padding: 16px 20px 0;
+  background: var(--bg);
+}
 .detail-tabs {
   display: flex;
-  gap: 20px;
+  align-items: flex-end;
+  gap: 2px;
   margin: 2px -20px 0;
-  padding: 0 20px;
-  border-bottom: 1px solid var(--hair);
+  /* The 1px bottom padding is the band's edge: it is drawn here, inside the
+     strip's overflow clip, so the active tab can overlap it. */
+  padding: 0 12px 1px;
+  background: linear-gradient(var(--border), var(--border)) bottom / 100% 1px no-repeat;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -185,11 +199,13 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 38px;
+  flex: none;
+  min-height: 40px;
   margin-bottom: -1px;
-  padding: 0 1px;
-  border: 0;
-  border-bottom: 2px solid transparent;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
   background: transparent;
   color: var(--fg-mute);
   font: inherit;
@@ -198,12 +214,22 @@
   cursor: pointer;
 }
 .detail-tab:hover { color: var(--fg); }
-.detail-tab.active { color: var(--fg-strong); font-weight: 500; border-bottom-color: var(--accent); }
+/* The raised tab takes the content colour and its bottom edge is open, so it
+   joins the content below with no seam. */
+.detail-tab.active {
+  background: var(--bg-elev);
+  border-color: var(--border);
+  border-bottom: 0;
+  box-shadow: inset 0 2px 0 var(--accent);
+  color: var(--fg-strong);
+  font-weight: 500;
+}
 .detail-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* Narrow panes scroll the tab strip as labels and counts outgrow the sheet. */
 @container task-pane (max-width: 440px) {
   .task-detail-pane .row-detail { padding: 14px 16px 16px; }
-  .detail-tabs { gap: 12px; margin: 2px -16px 0; padding: 0 16px; }
+  .task-detail-pane .detail-band { margin: -14px -16px 0; padding: 14px 16px 0; }
+  .detail-tabs { gap: 2px; margin: 2px -16px 0; padding: 0 8px 1px; }
   .detail-tab { gap: 4px; }
 }
 .detail-tab-count { color: var(--fg-mute); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
