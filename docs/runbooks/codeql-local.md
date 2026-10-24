@@ -340,11 +340,13 @@ taint. An explicit `remote` source model keeps the fixture independent of the
 suite's disabled-by-default command-argument threat model. Its unmodelled
 control must alert, as must the Result-field cases using `?`, explicit `Ok`
 matching, and nested Result/Option extraction. The Result whole-return, nested
-whole-return and Option whole-return cases must have no alert. The fixture
-checks SARIF locations and retains its generated sources, models, runner log,
-`report.json` and the runner's extraction/SARIF evidence in that scratch tree.
-It never executes the deliberately unsafe Rust program or adds its models to
-production scanning.
+whole-return and Option whole-return cases must have no alert. Each validator
+sits in a private submodule and its model names that defining module. The
+`reexport_stale` control names only the re-exporting module, matches no call,
+and must alert. The fixture checks SARIF locations and retains its generated
+sources, models, runner log, `report.json` and the runner's extraction/SARIF
+evidence in that scratch tree. It never executes the deliberately unsafe Rust
+program or adds its models to production scanning.
 
 The extension schema gate refuses the known ineffective Result-field barrier
 form in repository path models. This guard supplements the opt-in flow test;
