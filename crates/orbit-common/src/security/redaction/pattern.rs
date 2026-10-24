@@ -20,7 +20,7 @@ static HIGH_CONFIDENCE_SINGLE_TOKEN_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::n
 /// Builds to `default()` cover Authorization / x-api-key / URL key params /
 /// Bearer / raw header lines, high-confidence provider credentials, and
 /// structurally recognizable SSH fingerprints, public-key comments, and
-/// connection hosts. Use [`argv_redactor`] or [`PatternRedactor::with_argv_secrets`]
+/// connection hosts. Use [`argv_redactor`]
 /// to also catch short bare `sk-…` tokens — needed when scrubbing subprocess
 /// argv where a provider key sometimes ends up mis-configured.
 ///
@@ -190,15 +190,6 @@ impl PatternRedactor {
             ),
         ];
         Self { patterns }
-    }
-
-    /// HTTP defaults plus a bare `sk-…` token pattern suitable for scrubbing
-    /// CLI argv where a provider key occasionally ends up as a flag value.
-    ///
-    /// Clones the process-cached argv redactor; patterns are compiled once.
-    /// Prefer [`argv_redactor`] when an owned clone is not needed.
-    pub fn with_argv_secrets() -> Self {
-        argv_redactor().clone()
     }
 
     fn compile_argv_secrets() -> Self {

@@ -28,18 +28,6 @@ pub enum OrbitError {
     UnknownSelector(String),
     #[error("ambiguous federated destination: {0}")]
     AmbiguousDestination(String),
-    /// A destination's callers file names one caller twice, so the grant it
-    /// would serve that caller is undecidable. Fails the whole file closed at
-    /// load, mirroring [`Self::AmbiguousDestination`] [ORB-11052].
-    #[error("ambiguous MCP caller: {0}")]
-    AmbiguousCaller(String),
-    /// The authenticated key a destination observed does not match the one its
-    /// callers file pins that caller to, so the session is refused at
-    /// establishment rather than served at a lower ceiling [ORB-11053]. A
-    /// silent downgrade would make a key mismatch indistinguishable from a
-    /// caller that simply holds a smaller grant.
-    #[error("unauthorized MCP caller: {0}")]
-    UnauthorizedCaller(String),
     #[error("federated destination unreachable: {0}")]
     UnreachableDestination(String),
     #[error("stale federated route: {0}")]
@@ -223,14 +211,11 @@ pub enum OrbitError {
         .0.path, .0.phase, .0.detail
     )]
     SqliteContention(Box<SqliteContention>),
-    #[error("invalid task status transition: {0}")]
-    TaskStatusTransition(String),
     #[error("cannot drop system identity tag '{tag}'; pass --allow-drop-system-tags to override")]
     SystemIdentityTagDropped { tag: String },
     /// A workflow run was refused because a dependency that reached `done` has
     /// not been delivered into the base the run would be cut from
-    /// [ORB-10464]. Distinct from [`Self::TaskStatusTransition`]: the
-    /// lifecycle transition is legal, the *baseline* is wrong.
+    /// [ORB-10464]. The lifecycle transition is legal, but the *baseline* is wrong.
     #[error(
         "task '{}' depends on '{}', which is done but not delivered into base '{}' ({}): {}",
         .0.task_id, .0.dependency_id, .0.base_ref, .0.base_sha, .0.detail

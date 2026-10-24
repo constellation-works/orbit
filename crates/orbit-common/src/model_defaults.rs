@@ -19,9 +19,7 @@
 //! ## Aliases vs. version pins
 //!
 //! The Claude CLI accepts the unversioned `opus`/`sonnet`/`haiku` aliases and resolves
-//! them to the current flagship, so the CLI defaults never drift. The Anthropic
-//! **HTTP Messages API** rejects bare aliases and requires a fully-qualified
-//! model id, so [`ANTHROPIC_HTTP_DEFAULT_MODEL`] stays version pinned. codex,
+//! them to the current flagship, so the CLI defaults never drift. codex,
 //! gemini, and grok use provider-specific version pins because no stable
 //! unversioned aliases are available for those CLIs.
 
@@ -38,13 +36,6 @@ pub const CLAUDE_HAIKU_MODEL: &str = "haiku";
 
 /// Claude CLI alias used by the standard Fable crew.
 pub const CLAUDE_FABLE_MODEL: &str = "fable";
-
-/// Default model for the Anthropic **HTTP Messages API** path.
-///
-/// Unlike the CLI, the Messages API requires a fully-qualified model id and
-/// rejects bare aliases like `opus`/`sonnet`, so this default stays version
-/// pinned. Bump it in lockstep with Anthropic's published API model ids.
-pub const ANTHROPIC_HTTP_DEFAULT_MODEL: &str = "claude-sonnet-4-5";
 
 /// Codex model used by the standard Sol crew.
 pub const CODEX_SOL_MODEL: &str = "gpt-6.1-sol";

@@ -11,7 +11,7 @@ targets=(
   "crates/orbit-tools/src/builtin/orbit/operation.rs"
   # [ORB-00417] Write-time redaction paths: task creation (dashboard + core
   # choke point) and provider CLI argv. Redaction must flow through
-  # orbit_common::utility::redaction (redact_all / with_argv_secrets), never a
+  # orbit_common::security::redaction (redact_all / argv_redactor), never a
   # surface-local helper here.
   "crates/orbit-core/src/application/task/add.rs"
   "crates/orbit-web/src/api/tasks.rs"

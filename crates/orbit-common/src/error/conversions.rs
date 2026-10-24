@@ -44,7 +44,6 @@ impl From<TaskError> for OrbitError {
     fn from(error: TaskError) -> Self {
         match error {
             TaskError::Invalid(message) => Self::InvalidInput(message),
-            TaskError::StatusTransition(message) => Self::TaskStatusTransition(message),
             TaskError::SystemIdentityTagDropped { tag } => Self::SystemIdentityTagDropped { tag },
             unassessed @ TaskError::UnassessedComplexity => {
                 Self::InvalidInput(unassessed.to_string())

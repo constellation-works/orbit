@@ -25,9 +25,6 @@ pub enum NotFoundKind {
     Skill,
     Job,
     JobRun,
-    Activity,
-    DesignFeature,
-    AgentSession,
     Workspace,
 }
 
@@ -41,9 +38,6 @@ impl std::fmt::Display for NotFoundKind {
             Self::Skill => "skill",
             Self::Job => "job",
             Self::JobRun => "job run",
-            Self::Activity => "activity",
-            Self::DesignFeature => "design feature",
-            Self::AgentSession => "agent session",
             Self::Workspace => "workspace",
         };
         f.write_str(kind)

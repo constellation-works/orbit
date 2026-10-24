@@ -4,8 +4,6 @@ use thiserror::Error;
 pub enum TaskError {
     #[error("{0}")]
     Invalid(String),
-    #[error("{0}")]
-    StatusTransition(String),
     #[error("cannot drop system identity tag '{tag}'; pass override flag to confirm")]
     SystemIdentityTagDropped { tag: String },
     /// A create or update surface supplied `unassessed`, which only automated

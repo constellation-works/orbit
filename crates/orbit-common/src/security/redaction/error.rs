@@ -82,8 +82,6 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
         },
         OrbitError::CapabilityDenied(m) => OrbitError::CapabilityDenied(redact(&m)),
         OrbitError::UnknownSelector(m) => OrbitError::UnknownSelector(redact(&m)),
-        OrbitError::AmbiguousCaller(m) => OrbitError::AmbiguousCaller(redact(&m)),
-        OrbitError::UnauthorizedCaller(m) => OrbitError::UnauthorizedCaller(redact(&m)),
         OrbitError::AmbiguousDestination(m) => OrbitError::AmbiguousDestination(redact(&m)),
         OrbitError::UnreachableDestination(m) => OrbitError::UnreachableDestination(redact(&m)),
         OrbitError::StaleRoute(m) => OrbitError::StaleRoute(redact(&m)),
@@ -244,7 +242,6 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
         OrbitError::SqliteContention(contention) => {
             OrbitError::SqliteContention(redact_sqlite_contention(*contention, redact))
         }
-        OrbitError::TaskStatusTransition(m) => OrbitError::TaskStatusTransition(redact(&m)),
         OrbitError::SystemIdentityTagDropped { tag } => {
             OrbitError::SystemIdentityTagDropped { tag: redact(&tag) }
         }

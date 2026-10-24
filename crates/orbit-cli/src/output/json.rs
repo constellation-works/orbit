@@ -88,9 +88,6 @@ fn error_code(error: &OrbitError) -> &str {
             NotFoundKind::Skill => "skill_not_found",
             NotFoundKind::Job => "job_not_found",
             NotFoundKind::JobRun => "job_run_not_found",
-            NotFoundKind::Activity => "activity_not_found",
-            NotFoundKind::DesignFeature => "design_feature_not_found",
-            NotFoundKind::AgentSession => "agent_session_not_found",
             NotFoundKind::Workspace => "workspace_not_found",
         },
         OrbitError::CapabilityDenied(_) => const { RemoteToolCode::CapabilityDenied.as_str() },
@@ -134,7 +131,6 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::Store(_) => "store_error",
         // The same retryable code MCP reports [ORB-15088].
         OrbitError::FileLockTimeout(_) | OrbitError::SqliteContention(_) => LOCK_BUSY_ERROR_CODE,
-        OrbitError::TaskStatusTransition(_) => "task_status_transition",
         OrbitError::JobRunStateTransition(_) => "job_run_state_transition",
         OrbitError::JobRunStartConflict(_) => "job_run_start_conflict",
         OrbitError::JobRunControlConflict(_) => "conflict",
