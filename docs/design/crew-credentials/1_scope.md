@@ -1,4 +1,9 @@
 ---
+title: "Scope: per-crew credentials (`crews.<name>.env`)"
+owner: claude
+status: Draft
+feature: crew-credentials
+doc_role: scope
 type: design
 summary: "Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider"
 tags: [crew-credentials, crews, execution-env, provider-limits]

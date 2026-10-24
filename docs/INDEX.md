@@ -109,7 +109,8 @@ Incident reviews preserve impact, timelines, causal evidence, uncertainty, and f
 ## Designs
 
 Active feature designs live under `docs/design/<feature>/`. Each row links to
-`1_overview.md` when present, or to the folder's best available top-level entry doc.
+`1_overview.md` (full track) or `1_scope.md` (scope track) when present, or to the
+folder's best available top-level entry doc.
 Metadata comes from that document's frontmatter; folders without frontmatter use
 a conservative title/status fallback.
 
@@ -122,9 +123,9 @@ a conservative title/status fallback.
 | [Auto-concurrency](./design/auto-concurrency/1_overview.md) | Partly implemented predictive admission — Orbit records per-task CPU and memory samples, builds resource profiles, forecasts host load, and supports shadow or forecast-based admission for local and pull drains; operational accuracy evidence remains limited. | Draft | claude |
 | [Auto-tasks](./design/auto-tasks/1_overview.md) | Dynamically-defined recurring task templates minted by the host clock tick — periodic work as data, not code. | Accepted | claude |
 | [Automation Triggers](./design/automation-triggers/1_overview.md) | Proposed bounded state-driven triggers for routines and auto-tasks with durable work identity and honest coverage. | Draft | codex |
-| [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Scope: a cloud delivery mode that ships a task through a Claude Code cloud session, polls GitHub for its PR, and adopts that PR's number and summary onto the task | Draft | — |
-| [Crew Credentials](./design/crew-credentials/1_scope.md) | Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider | Draft | — |
-| [Crew Performance](./design/crew-performance/1_scope.md) | Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative) | Draft | — |
+| [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Scope: a cloud delivery mode that ships a task through a Claude Code cloud session, polls GitHub for its PR, and adopts that PR's number and summary onto the task | Draft | claude |
+| [Crew Credentials](./design/crew-credentials/1_scope.md) | Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider | Draft | claude |
+| [Crew Performance](./design/crew-performance/1_scope.md) | Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative) | Draft | claude |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Run the workspace drain on more than one host against one owner store — followers pull one task at a time from the owner's ready queue over federated MCP, validate where they built, and land through the owner. | Draft | claude |
 | [Executors](./design/executors/4_decisions.md) | Decision log for executor registration, the local-shell executor, and the (now retired) External Executor Protocol. | Draft | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | Mux that presents one MCP namespace over the accepting machine plus operator-configured SSH remotes, keyed by machine_id, without becoming a fleet registry. | Draft | grok |
@@ -148,7 +149,7 @@ a conservative title/status fallback.
 | [Task Migration](./design/task-migration/1_overview.md) | Move orbit tasks between hosts with export/import (tar.zst); task_prefix identifies each task's canonical owner, while an admitted follower may execute a fenced claim without taking authority. | Draft | claude |
 | [Task Publication](./design/task-publication/1_overview.md) | Explicitly publish authority-owned task snapshots to a dedicated Git repository for labelled inspection and deliberate recovery. | Accepted | codex |
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | House style for orbit-cli terminal output — machine-readable first, borderless single-line tables, semantic color resolved at the sink. | Accepted | claude |
-| [Usage Pressure](./design/usage-pressure/1_scope.md) | Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not | Draft | — |
+| [Usage Pressure](./design/usage-pressure/1_scope.md) | Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not | Draft | claude |
 | [User Interface](./design/user-interface/1_overview.md) | Orbit UI covers the dashboard and HTTP API owned by `orbit-web`; `orbit-cli` is the thin `orbit web serve` / `connect` command adapter. | Draft | gemini |
 
 Folder layout, frontmatter, ADR, and ownership rules live in

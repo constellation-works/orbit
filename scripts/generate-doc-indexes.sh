@@ -125,10 +125,12 @@ design_entry_doc() {
   local directory="$1"
   local candidate
 
-  if [[ -f "$directory/1_overview.md" ]]; then
-    printf '%s\n' "$directory/1_overview.md"
-    return
-  fi
+  for candidate in 1_overview.md 1_scope.md; do
+    if [[ -f "$directory/$candidate" ]]; then
+      printf '%s\n' "$directory/$candidate"
+      return
+    fi
+  done
 
   candidate="$(find "$directory" -maxdepth 1 -type f -name '*.md' ! -name 'CONVENTIONS.md' | sort | sed -n '1p')"
   if [[ -z "$candidate" ]]; then
@@ -261,7 +263,12 @@ render_design_rows() {
       continue
     fi
 
-    title="$(frontmatter_value "$entry" title)"
+    # A scope doc's H1 is a sentence ("Scope: …"); the Feature column wants the folder's name.
+    if [[ "$(basename "$entry")" == "1_scope.md" ]]; then
+      title="$(titleize_slug "$(basename "$directory")")"
+    else
+      title="$(frontmatter_value "$entry" title)"
+    fi
     summary="$(frontmatter_value "$entry" summary)"
     status="$(frontmatter_value "$entry" status)"
     owner="$(frontmatter_value "$entry" owner)"
@@ -361,7 +368,8 @@ render_index() {
     printf '\n'
     printf '## Designs\n\n'
     printf 'Active feature designs live under `docs/design/<feature>/`. Each row links to\n'
-    printf '`1_overview.md` when present, or to the folder\047s best available top-level entry doc.\n'
+    printf '`1_overview.md` (full track) or `1_scope.md` (scope track) when present, or to the\n'
+    printf 'folder\047s best available top-level entry doc.\n'
     printf 'Metadata comes from that document\047s frontmatter; folders without frontmatter use\n'
     printf 'a conservative title/status fallback.\n\n'
     printf '| Feature | Summary | Status | Lead |\n'
