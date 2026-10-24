@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit development reference: validation, tests, docs index, MSRV, supply chain, vendored JS"
-last_validated: 2026-10-19
+last_validated: 2026-10-24
 ---
 
 # Development Reference
@@ -379,7 +379,11 @@ Candidate validation scripts such as `ci-guardrails.sh` stay in the primary
 checkout so they validate the PR's code and tests. Workflow/helper interface
 changes therefore require neither compatibility with older PR-head helpers nor
 rebasing older PRs. `scripts/test-pr-state-workflows.py` guards helper ownership
-and executes an old-head/two-revision checkout fixture.
+and executes an old-head/two-revision checkout fixture. The CI-failure sweep
+reads the workspace-root checkout as the commit under test and ignores a
+checkout whose directory is a strict descendant of another checkout directory
+in the same job log, so that nested helper checkout is not a second identity.
+Two workspace checkouts that name different commits stay ambiguous.
 
 In `ci.yml`, a `Change scope` job ([ci-change-scope.sh](../scripts/ci-change-scope.sh)) narrows each run before build runners start:
 

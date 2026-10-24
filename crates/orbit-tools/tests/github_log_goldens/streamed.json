@@ -3659,5 +3659,29 @@
     ],
     "max_bytes": 85,
     "max_evidence_lines": 40
+  },
+  {
+    "name": "a_nested_helper_checkout_is_not_a_second_commit",
+    "parts": [
+      "2026-09-06T06:07:50.0000000Z Working directory is '/home/runner/work/orbit/orbit/.orbit/tmp/workflow-ci'\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git init /home/runner/work/orbit/orbit/.orbit/tmp/workflow-ci\n2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force 4444444444444444444444444444444444444444\n2026-09-06T06:07:50.0000000Z HEAD is now at 4444444 Merge 4968f137ab9969c35634496414fdc1637d22fe37 into abcdef0123456789abcdef0123456789abcdef01\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T06:07:50.0000000Z 4444444444444444444444444444444444444444\n2026-09-06T06:07:50.0000000Z Working directory is '/home/runner/work/orbit/orbit'\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git init /home/runner/work/orbit/orbit\n2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force 4968f137ab9969c35634496414fdc1637d22fe37\n2026-09-06T06:07:50.0000000Z HEAD is now at 4968f13 first\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T06:07:50.0000000Z 4968f137ab9969c35634496414fdc1637d22fe37\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "two_checkouts_of_one_workspace_directory_stay_two_commits",
+    "parts": [
+      "2026-09-06T06:07:50.0000000Z Working directory is '/home/runner/work/orbit/orbit'\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git init /home/runner/work/orbit/orbit\n2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force 4968f137ab9969c35634496414fdc1637d22fe37\n2026-09-06T06:07:50.0000000Z HEAD is now at 4968f13 first\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T06:07:50.0000000Z 4968f137ab9969c35634496414fdc1637d22fe37\n2026-09-06T06:07:50.0000000Z Working directory is '/home/runner/work/orbit/orbit'\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git init /home/runner/work/orbit/orbit\n2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force 4444444444444444444444444444444444444444\n2026-09-06T06:07:50.0000000Z HEAD is now at 4444444 second\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T06:07:50.0000000Z 4444444444444444444444444444444444444444\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "a_checkout_directory_without_an_ancestor_is_kept",
+    "parts": [
+      "2026-09-06T06:07:50.0000000Z Working directory is '/home/runner/work/orbit/orbit/.orbit/tmp/workflow-ci'\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git init /home/runner/work/orbit/orbit/.orbit/tmp/workflow-ci\n2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force 4444444444444444444444444444444444444444\n2026-09-06T06:07:50.0000000Z HEAD is now at 4444444 only\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T06:07:50.0000000Z 4444444444444444444444444444444444444444\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40
   }
 ]

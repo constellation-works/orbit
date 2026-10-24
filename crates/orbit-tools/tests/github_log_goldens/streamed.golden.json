@@ -2390,5 +2390,85 @@
     "checkout_evidence_scanned_bytes": 299,
     "checkout_evidence_source_truncated": false,
     "checkout_evidence_display_truncated": false
+  },
+  "a_nested_helper_checkout_is_not_a_second_commit": {
+    "log": "2026-09-06T06:07:50.0000000Z Working directory is '/home/runner/work/orbit/orbit/.orbit/tmp/workflow-ci'\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git init /home/runner/work/orbit/orbit/.orbit/tmp/workflow-ci\n2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force 4444444444444444444444444444444444444444\n2026-09-06T06:07:50.0000000Z HEAD is now at 4444444 Merge 4968f137ab9969c35634496414fdc1637d22fe37 into abcdef0123456789abcdef0123456789abcdef01\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T06:07:50.0000000Z 4444444444444444444444444444444444444444\n2026-09-06T06:07:50.0000000Z Working directory is '/home/runner/work/orbit/orbit'\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git init /home/runner/work/orbit/orbit\n2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force 4968f137ab9969c35634496414fdc1637d22fe37\n2026-09-06T06:07:50.0000000Z HEAD is now at 4968f13 first\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T06:07:50.0000000Z 4968f137ab9969c35634496414fdc1637d22fe37\n",
+    "truncated": false,
+    "total_bytes": 1223,
+    "returned_bytes": 1223,
+    "source_complete": true,
+    "diagnostic_unit": null,
+    "failure_regions": null,
+    "checkout_commits": [
+      "4968f137ab9969c35634496414fdc1637d22fe37"
+    ],
+    "checkout_evidence": [
+      "##[group]Checking out the ref",
+      "[command]/usr/bin/git checkout --progress --force 4444444444444444444444444444444444444444",
+      "HEAD is now at 4444444 Merge 4968f137ab9969c35634496414fdc1637d22fe37 into abcdef0123456789abcdef0123456789abcdef01",
+      "/usr/bin/git log -1 --format=%H",
+      "4444444444444444444444444444444444444444",
+      "##[group]Checking out the ref",
+      "[command]/usr/bin/git checkout --progress --force 4968f137ab9969c35634496414fdc1637d22fe37",
+      "HEAD is now at 4968f13 first",
+      "/usr/bin/git log -1 --format=%H",
+      "4968f137ab9969c35634496414fdc1637d22fe37"
+    ],
+    "checkout_evidence_complete": true,
+    "checkout_evidence_scanned_bytes": 1223,
+    "checkout_evidence_source_truncated": false,
+    "checkout_evidence_display_truncated": false
+  },
+  "two_checkouts_of_one_workspace_directory_stay_two_commits": {
+    "log": "2026-09-06T06:07:50.0000000Z Working directory is '/home/runner/work/orbit/orbit'\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git init /home/runner/work/orbit/orbit\n2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force 4968f137ab9969c35634496414fdc1637d22fe37\n2026-09-06T06:07:50.0000000Z HEAD is now at 4968f13 first\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T06:07:50.0000000Z 4968f137ab9969c35634496414fdc1637d22fe37\n2026-09-06T06:07:50.0000000Z Working directory is '/home/runner/work/orbit/orbit'\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git init /home/runner/work/orbit/orbit\n2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force 4444444444444444444444444444444444444444\n2026-09-06T06:07:50.0000000Z HEAD is now at 4444444 second\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T06:07:50.0000000Z 4444444444444444444444444444444444444444\n",
+    "truncated": false,
+    "total_bytes": 1091,
+    "returned_bytes": 1091,
+    "source_complete": true,
+    "diagnostic_unit": null,
+    "failure_regions": null,
+    "checkout_commits": [
+      "4968f137ab9969c35634496414fdc1637d22fe37",
+      "4444444444444444444444444444444444444444"
+    ],
+    "checkout_evidence": [
+      "##[group]Checking out the ref",
+      "[command]/usr/bin/git checkout --progress --force 4968f137ab9969c35634496414fdc1637d22fe37",
+      "HEAD is now at 4968f13 first",
+      "/usr/bin/git log -1 --format=%H",
+      "4968f137ab9969c35634496414fdc1637d22fe37",
+      "##[group]Checking out the ref",
+      "[command]/usr/bin/git checkout --progress --force 4444444444444444444444444444444444444444",
+      "HEAD is now at 4444444 second",
+      "/usr/bin/git log -1 --format=%H",
+      "4444444444444444444444444444444444444444"
+    ],
+    "checkout_evidence_complete": true,
+    "checkout_evidence_scanned_bytes": 1091,
+    "checkout_evidence_source_truncated": false,
+    "checkout_evidence_display_truncated": false
+  },
+  "a_checkout_directory_without_an_ancestor_is_kept": {
+    "log": "2026-09-06T06:07:50.0000000Z Working directory is '/home/runner/work/orbit/orbit/.orbit/tmp/workflow-ci'\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git init /home/runner/work/orbit/orbit/.orbit/tmp/workflow-ci\n2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force 4444444444444444444444444444444444444444\n2026-09-06T06:07:50.0000000Z HEAD is now at 4444444 only\n2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T06:07:50.0000000Z 4444444444444444444444444444444444444444\n",
+    "truncated": false,
+    "total_bytes": 590,
+    "returned_bytes": 590,
+    "source_complete": true,
+    "diagnostic_unit": null,
+    "failure_regions": null,
+    "checkout_commits": [
+      "4444444444444444444444444444444444444444"
+    ],
+    "checkout_evidence": [
+      "##[group]Checking out the ref",
+      "[command]/usr/bin/git checkout --progress --force 4444444444444444444444444444444444444444",
+      "HEAD is now at 4444444 only",
+      "/usr/bin/git log -1 --format=%H",
+      "4444444444444444444444444444444444444444"
+    ],
+    "checkout_evidence_complete": true,
+    "checkout_evidence_scanned_bytes": 590,
+    "checkout_evidence_source_truncated": false,
+    "checkout_evidence_display_truncated": false
   }
 }

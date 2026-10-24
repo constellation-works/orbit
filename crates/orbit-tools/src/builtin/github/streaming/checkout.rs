@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use orbit_common::security::redaction::redact_all;
 use orbit_common::text::ceil_char_boundary;
@@ -20,6 +20,13 @@ pub(super) struct CheckoutEvidenceCollector {
     /// that was checked out — as opposed to a merge parent or a fetched ref
     /// that happened to share the line.
     named_commits: HashSet<String>,
+    /// Directory of the checkout step in effect, from `Working directory is
+    /// '<path>'` or an absolute `git init`.
+    checkout_directory: Option<String>,
+    /// Every distinct directory in which a SHA token was seen, including
+    /// `None` when the line named no directory. A later sighting has to be
+    /// kept: the helper checkout's merge subject quotes the workspace SHA.
+    commit_directories: HashMap<String, Vec<Option<String>>>,
     /// A recognized command whose immediately following output line may name
     /// the checkout. Keep only one bounded line: an unrelated intervening
     /// line consumes it instead of letting a later SHA inherit its authority.
@@ -41,6 +48,8 @@ impl CheckoutEvidenceCollector {
             commits: Vec::new(),
             seen_commits: HashSet::new(),
             named_commits: HashSet::new(),
+            checkout_directory: None,
+            commit_directories: HashMap::new(),
             pending_checkout_command: None,
             lines: Vec::new(),
             complete: true,
@@ -89,8 +98,12 @@ impl CheckoutEvidenceCollector {
         if !self.pending_line.is_empty() && !self.dropping_line {
             self.observe_pending_line();
         }
+        let sightings = &self.commit_directories;
+        let observed = std::mem::take(&mut self.commits);
+        let named = std::mem::take(&mut self.named_commits);
+        let (commits, named) = omit_side_path_checkouts(observed, named, sightings);
         CheckoutEvidence {
-            commits: canonical_checkout_commits(&self.commits, &self.named_commits),
+            commits: canonical_checkout_commits(&commits, &named),
             lines: self.lines,
             complete: self.complete,
             scanned_bytes: self.scanned_bytes,
@@ -115,6 +128,9 @@ impl CheckoutEvidenceCollector {
             return;
         }
         let (step, payload) = split_log_line(line);
+        if let Some(directory) = checkout_directory_announcement(payload) {
+            self.checkout_directory = Some(directory);
+        }
         let lowered = payload.to_ascii_lowercase();
         let marked = CHECKOUT_MARKERS
             .iter()
@@ -140,6 +156,7 @@ impl CheckoutEvidenceCollector {
             in_checkout_step || command_output.is_some(),
         );
         for token in commit_sha_tokens(payload) {
+            self.note_directory_sighting(token);
             if named == Some(token) {
                 self.named_commits.insert(token.to_string());
             }
@@ -163,6 +180,18 @@ impl CheckoutEvidenceCollector {
         } else {
             self.display_truncated = true;
         }
+    }
+
+    fn note_directory_sighting(&mut self, token: &str) {
+        if let Some(places) = self.commit_directories.get_mut(token) {
+            if places.iter().any(|place| place == &self.checkout_directory) {
+                return;
+            }
+            places.push(self.checkout_directory.clone());
+            return;
+        }
+        self.commit_directories
+            .insert(token.to_string(), vec![self.checkout_directory.clone()]);
     }
 }
 
@@ -295,15 +324,129 @@ fn named_checkout_commit<'a>(
     (in_checkout_step && is_bare_commit_sha(payload)).then(|| payload.trim())
 }
 
+/// The directory `actions/checkout` announced for the step now being read.
+///
+/// `Working directory is '<path>'` is the primary signal. An absolute
+/// `git init <path>` is the same announcement in command form. A relative
+/// `path:` input is not a directory: it does not say where the checkout
+/// landed.
+fn checkout_directory_announcement(payload: &str) -> Option<String> {
+    let trimmed = payload.trim();
+    if let Some(path) = working_directory_path(trimmed) {
+        return Some(normalize_checkout_directory(path));
+    }
+    absolute_git_init_path(trimmed).map(normalize_checkout_directory)
+}
+
+fn working_directory_path(trimmed: &str) -> Option<&str> {
+    let path = trimmed
+        .strip_prefix("Working directory is '")?
+        .strip_suffix('\'')?;
+    (!path.is_empty()).then_some(path)
+}
+
+fn absolute_git_init_path(trimmed: &str) -> Option<&str> {
+    let command = trimmed.strip_prefix("[command]")?.trim();
+    let mut words = command.split_ascii_whitespace();
+    let program = words.next()?;
+    if program.rsplit(['/', '\\']).next()? != "git" || words.next()? != "init" {
+        return None;
+    }
+    let path = words.next()?;
+    if words.next().is_some() || !is_absolute_checkout_path(path) {
+        return None;
+    }
+    Some(path)
+}
+
+fn is_absolute_checkout_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    if bytes.first() == Some(&b'/') {
+        return true;
+    }
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'/' || bytes[2] == b'\\')
+}
+
+fn normalize_checkout_directory(path: &str) -> String {
+    let mut normalized = path.replace('\\', "/");
+    while normalized.len() > 1 && normalized.ends_with('/') {
+        normalized.pop();
+    }
+    normalized
+}
+
+/// A directory nested under another checkout directory in the same log.
+///
+/// Equal directories are not nested, and a path that only shares a prefix
+/// (`/repo` and `/repo-other`) is not nested. The filesystem root is not
+/// treated as an ancestor: a checkout there must not swallow every other path.
+fn is_strict_descendant(child: &str, parent: &str) -> bool {
+    let Some(rest) = child.strip_prefix(parent) else {
+        return false;
+    };
+    rest.starts_with('/') && rest.len() > 1
+}
+
+/// Drop commits seen only inside a nested helper checkout.
+///
+/// The sparse helper checkout of the workflow revision lands in a directory
+/// under the workspace root. Its commit is not the workspace under test.
+/// A commit stays when any sighting is outside those nested directories,
+/// including a workspace SHA the helper's merge subject only quotes. A
+/// directory with no ancestor in this log stays too, so a job that checked
+/// out only a side path is not reported as missing. Two checkouts that do
+/// not nest are left for [`canonical_checkout_commits`] to report as a
+/// disagreement.
+fn omit_side_path_checkouts(
+    mut observed: Vec<String>,
+    mut named: HashSet<String>,
+    sightings: &HashMap<String, Vec<Option<String>>>,
+) -> (Vec<String>, HashSet<String>) {
+    let mut directories: Vec<&str> = Vec::new();
+    for places in sightings.values() {
+        for place in places.iter().flatten() {
+            if !directories.contains(&place.as_str()) {
+                directories.push(place.as_str());
+            }
+        }
+    }
+    let side: HashSet<&str> = directories
+        .iter()
+        .copied()
+        .filter(|directory| {
+            directories
+                .iter()
+                .any(|other| is_strict_descendant(directory, other))
+        })
+        .collect();
+    if side.is_empty() {
+        return (observed, named);
+    }
+    let keep = |token: &str| match sightings.get(token) {
+        Some(places) if !places.is_empty() => places.iter().any(|place| match place {
+            Some(directory) => !side.contains(directory.as_str()),
+            None => true,
+        }),
+        _ => true,
+    };
+    observed.retain(|token| keep(token));
+    named.retain(|token| keep(token));
+    (observed, named)
+}
+
 /// Reduce the observed SHA tokens to the distinct commits actually checked out.
 ///
+/// [`omit_side_path_checkouts`] has already removed a nested helper checkout.
 /// Two reductions, neither of which relaxes identity. A line that *names* the
 /// checked-out commit outranks one that merely quotes a merge parent or a
 /// fetched ref. An abbreviation and the full SHA it prefixes are one commit,
 /// not two — the same runner routinely prints both forms. A real disagreement
-/// between two checkout steps survives both reductions and is still reported
-/// as two commits, and an abbreviation with more than one distinct expansion
-/// is left abbreviated rather than resolved to a guess.
+/// between two remaining checkout steps survives both reductions and is still
+/// reported as two commits, and an abbreviation with more than one distinct
+/// expansion is left abbreviated rather than resolved to a guess.
 fn canonical_checkout_commits(observed: &[String], named: &HashSet<String>) -> Vec<String> {
     let identity: Vec<&String> = if observed.iter().any(|commit| named.contains(commit)) {
         observed
