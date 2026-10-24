@@ -365,11 +365,26 @@ spec:
        its recommended complexity, and still applies the list: a genuinely
        wide repair stays proposable, while a swept one is visible to the
        orchestrator.
-    4. If the task genuinely requires no repository diff, return an empty
-       `context_files_after`, disposition `verified_no_diff`, and concrete
-       `evidence`. For host-operational work use `host_operational` with
-       evidence. Otherwise use disposition `selectors`. Never use an empty list
-       merely because inspection was inconclusive.
+    4. Choose the disposition by who can perform the deliverable, not by whether
+       the change touches the repository. A deliverable that a managed worker
+       can produce with its own agent tools is managed work. A deliverable that
+       needs an action outside every managed lane is host-only work.
+       - `verified_no_diff`: the task genuinely requires no repository diff, and
+         a managed worker can produce every deliverable with agent tools (reading
+         code, filing tasks with `orbit.task.add`, comments, attaching artifacts
+         with `orbit.task.artifact.put`, recording a review cursor). Return an
+         empty `context_files_after` and concrete `evidence`. A task tagged
+         `no-diff-expected` whose outputs are only Orbit tasks, comments or
+         artifacts is `verified_no_diff`. Example: a parity audit that files each
+         gap as an Orbit task and attaches `surface-parity.json`.
+       - `host_operational`: a deliverable needs an action no managed lane can
+         perform, such as restarting or reloading a service or the clock,
+         deploying or installing a binary, changing host or global config,
+         credentials or the sandbox, or acting on another host. The `evidence`
+         must name that host-only action. Example: restarting the sweep clock
+         after a schedule change.
+       Otherwise use disposition `selectors`. Never use an empty list merely
+       because inspection was inconclusive.
        For a `ci-failure-sweep` task, compare the runner-tested commit and
        original run evidence in the task description with the pinned
        `source_revision`. Inspect relevant history and code at that commit. A failure from an
