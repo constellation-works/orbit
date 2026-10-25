@@ -34,12 +34,6 @@ impl IdentityError {
 pub enum ProviderModelError {
     #[error("provider '{provider}' does not support configured reasoning effort")]
     EffortUnsupportedByProvider { provider: String },
-    #[error(
-        "OpenCode CLI supports effort values high, max (`opencode run --variant`); '{effort}' is \
-         unsupported. Values are not remapped; choose a supported effort or set a model whose \
-         provider defines the variant."
-    )]
-    OpenCodeEffort { effort: ReasoningEffort },
     /// `model` is a verified Grok model whose documented efforts, listed in
     /// `supported`, exclude `effort`.
     #[error("Grok model '{model}' supports effort values {supported}; '{effort}' is unsupported")]

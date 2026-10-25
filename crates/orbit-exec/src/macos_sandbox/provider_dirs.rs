@@ -121,90 +121,6 @@ pub(crate) fn copilot_cache_dir(
         .or_else(|| non_empty_env_path(home).map(|path| path.join(".cache").join("copilot")))
 }
 
-/// Cursor CLI stores configuration, permissions, and session state under
-/// `$HOME/.cursor`. On macOS the default logged-in credential lives in the
-/// login keychain (`cursor-access-token` / `cursor-refresh-token`); the file
-/// store at `$HOME/.cursor/auth.json` is used only when
-/// `AGENT_CLI_CREDENTIAL_STORE=file` was set at login time. `CURSOR_API_KEY`
-/// is the environment opt-in that skips both stores. The caller gates this
-/// directory on an active Cursor executor so other providers do not receive
-/// Cursor-specific write access. [ORB-10945] [ORB-12261]
-pub(crate) fn cursor_state_dir(home: Option<&OsStr>) -> Option<PathBuf> {
-    non_empty_env_path(home).map(|path| path.join(".cursor"))
-}
-
-/// Pi CLI stores login credentials, settings, trust decisions, packages, and
-/// session state under its agent directory: `$PI_CODING_AGENT_DIR` when set,
-/// otherwise `$HOME/.pi` (whose `agent/` subdirectory is the documented
-/// default). The caller gates this directory on an active Pi executor so other
-/// providers do not receive Pi-specific write access. [ORB-11296]
-pub(crate) fn pi_state_dir(
-    home: Option<&OsStr>,
-    pi_coding_agent_dir: Option<&OsStr>,
-) -> Option<PathBuf> {
-    non_empty_env_path(pi_coding_agent_dir)
-        .or_else(|| non_empty_env_path(home).map(|path| path.join(".pi")))
-}
-
-/// Writable directories an **active** OpenCode executor needs. [ORB-11295]
-///
-/// OpenCode resolves every root through `xdg-basedir` and creates `data`,
-/// `config`, and `state` at startup — before it ever reads Orbit's envelope —
-/// so all of them must be writable or the CLI aborts during initialization.
-/// `cache` is included because the same startup path takes a lock under it.
-///
-/// 1. `$XDG_DATA_HOME/opencode`, else `$HOME/.local/share/opencode` —
-///    `auth.json` from `opencode auth login`, session/message stores, `log/`,
-///    and `repos/`.
-/// 2. `$OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`, else
-///    `$HOME/.config/opencode` — `opencode.json` plus the `agents/`,
-///    `commands/`, `plugins/`, `skills/`, `tools/`, and `themes/` trees.
-/// 3. `$XDG_STATE_HOME/opencode`, else `$HOME/.local/state/opencode`.
-/// 4. `$XDG_CACHE_HOME/opencode`, else `$HOME/.cache/opencode`.
-///
-/// Like Copilot's, Cursor's, and Pi's entries, this is gated on the active
-/// provider by its caller so an unrelated lane is not handed OpenCode's
-/// credential store.
-pub(crate) fn opencode_state_dirs(env: OpencodeDirEnv<'_>) -> Vec<PathBuf> {
-    let OpencodeDirEnv {
-        home,
-        xdg_data_home,
-        xdg_config_home,
-        xdg_state_home,
-        xdg_cache_home,
-        opencode_config_dir,
-    } = env;
-    let mut dirs = Vec::with_capacity(4);
-    let mut push = |dir: Option<PathBuf>| {
-        if let Some(dir) = dir {
-            dirs.push(dir);
-        }
-    };
-    push(xdg_scoped_dir(
-        home,
-        xdg_data_home,
-        &[".local", "share"],
-        "opencode",
-    ));
-    push(
-        non_empty_env_path(opencode_config_dir)
-            .or_else(|| xdg_scoped_dir(home, xdg_config_home, &[".config"], "opencode")),
-    );
-    push(xdg_scoped_dir(
-        home,
-        xdg_state_home,
-        &[".local", "state"],
-        "opencode",
-    ));
-    push(xdg_scoped_dir(
-        home,
-        xdg_cache_home,
-        &[".cache"],
-        "opencode",
-    ));
-    dirs
-}
-
 /// Writable directories an **active** Muse Code executor needs. [ORB-16577]
 ///
 /// 1. `$XDG_CONFIG_HOME/muse`, else `$HOME/.config/muse` — `settings.json`
@@ -231,17 +147,6 @@ pub(crate) fn muse_state_dirs(
     .into_iter()
     .flatten()
     .collect()
-}
-
-/// Env inputs that locate OpenCode's XDG roots.
-#[derive(Default, Clone, Copy)]
-pub(crate) struct OpencodeDirEnv<'a> {
-    pub(crate) home: Option<&'a OsStr>,
-    pub(crate) xdg_data_home: Option<&'a OsStr>,
-    pub(crate) xdg_config_home: Option<&'a OsStr>,
-    pub(crate) xdg_state_home: Option<&'a OsStr>,
-    pub(crate) xdg_cache_home: Option<&'a OsStr>,
-    pub(crate) opencode_config_dir: Option<&'a OsStr>,
 }
 
 /// Resolve one `<xdg base>/<app>` root: the explicit XDG variable when set,

@@ -16,8 +16,6 @@ pub const STATE_ROOT_OVERRIDES: &[(&str, &str)] = &[
     ("CLAUDE_CONFIG_DIR", "synthetic-claude-config-dir"),
     ("GROK_HOME", "synthetic-grok-home"),
     ("COPILOT_HOME", "synthetic-copilot-home"),
-    ("PI_CODING_AGENT_DIR", "synthetic-pi-coding-agent-dir"),
-    ("OPENCODE_CONFIG_DIR", "synthetic-opencode-config-dir"),
     ("XDG_DATA_HOME", "synthetic-xdg-data-home"),
     ("XDG_CONFIG_HOME", "synthetic-xdg-config-home"),
     ("XDG_STATE_HOME", "synthetic-xdg-state-home"),

@@ -5,7 +5,10 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
-use orbit_types::workflow::activity_job::{RETIRED_BACKEND_MIGRATION, check_retired_backend_value};
+use orbit_types::workflow::activity_job::{
+    RETIRED_BACKEND_MIGRATION, RETIRED_PROVIDER_MIGRATION, check_retired_backend_value,
+    retired_provider_id,
+};
 
 use crate::layering::value_at_path;
 use crate::raw::RawTaskSection;
@@ -38,6 +41,24 @@ pub(super) fn reject_retired_backend_overrides(
     })?;
     check_retired_backend_value(raw)
         .map_err(|error| OrbitError::InvalidInput(format!("[runtime] {error}")))
+}
+
+/// A crew naming a retired provider (`cursor`, `pi`, `opencode`) fails to
+/// load naming the crew, the retired provider and the remedy — never a
+/// generic unknown-provider error (ORB-18096).
+pub(super) fn reject_retired_crew_provider(
+    crew: &str,
+    raw: Option<&str>,
+) -> Result<(), OrbitError> {
+    let Some(value) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(());
+    };
+    match retired_provider_id(value) {
+        Some(retired) => Err(OrbitError::InvalidInput(format!(
+            "[crews.{crew}] provider '{retired}' is retired and no longer supported; {RETIRED_PROVIDER_MIGRATION}"
+        ))),
+        None => Ok(()),
+    }
 }
 
 pub(super) fn reject_stale_agent_tables(

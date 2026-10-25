@@ -513,6 +513,10 @@ impl ExecutorDefStoreBackend for ExecutorDefFileStore {
     fn upsert_executor_def(&self, def: &ExecutorDef) -> Result<(), OrbitError> {
         self.upsert_executor_def(def)
     }
+
+    fn delete_executor_def(&self, name: &str) -> Result<bool, OrbitError> {
+        self.delete_executor_def(name)
+    }
 }
 
 impl PolicyDefStoreBackend for PolicyDefFileStore {

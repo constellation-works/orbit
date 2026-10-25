@@ -17,7 +17,7 @@ use orbit_types::identity::{
 use orbit_types::task::HostOs;
 use orbit_types::workflow::activity_job::Provider;
 
-use super::compatibility::reject_retired_crew_backend;
+use super::compatibility::{reject_retired_crew_backend, reject_retired_crew_provider};
 use super::config::ResolvedConfig;
 use crate::crew_pools::reject_unpoolable_crew_name_in_config;
 use crate::raw::RawCrewEntry;
@@ -303,6 +303,7 @@ fn crew_assignment_from_raw(
         )));
     }
     reject_retired_crew_backend(crew, raw.backend.as_deref())?;
+    reject_retired_crew_provider(crew, raw.provider.as_deref())?;
     let model = required_crew_field(crew, "model", raw.model.as_deref())?;
     let provider = required_crew_field(crew, "provider", raw.provider.as_deref())?;
     if Provider::parse(&provider).ok() == Some(Provider::Antigravity) {
@@ -387,13 +388,12 @@ fn crew_effort_from_raw(
 fn effort_accepted_values(provider: &str, model: Option<&str>) -> &'static str {
     match provider {
         "antigravity" => "low, medium, high",
-        "opencode" => "high, max",
         "grok" => match model.map(str::trim).filter(|model| !model.is_empty()) {
             Some("grok-4.7" | "grok-4.6") => "low, medium, high, xhigh",
             Some("grok-4.5") => "low, medium, high",
             _ => "omit the key",
         },
-        "claude" | "codex" | "pi" | "muse" => ReasoningEffort::VALUES,
+        "claude" | "codex" | "muse" => ReasoningEffort::VALUES,
         _ => "omit the key",
     }
 }

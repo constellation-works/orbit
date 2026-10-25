@@ -1,6 +1,7 @@
 use orbit_common::OrbitError;
 use orbit_store::contracts::ExecutorDefStoreBackend;
 use orbit_types::resource::{EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource, ResourceKind};
+use orbit_types::workflow::activity_job::RETIRED_PROVIDER_IDS;
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, ExecutorType};
 
 pub(crate) const DEFAULT_EXECUTOR_FILES: &[(&str, &str)] = &[
@@ -15,12 +16,6 @@ pub(crate) const DEFAULT_EXECUTOR_FILES: &[(&str, &str)] = &[
     (
         "copilot",
         include_str!("../../assets/executors/copilot.yaml"),
-    ),
-    ("cursor", include_str!("../../assets/executors/cursor.yaml")),
-    ("pi", include_str!("../../assets/executors/pi.yaml")),
-    (
-        "opencode",
-        include_str!("../../assets/executors/opencode.yaml"),
     ),
     ("muse", include_str!("../../assets/executors/muse.yaml")),
     (
@@ -45,6 +40,11 @@ pub(crate) fn seed_default_executors_for_platform(
     overwrite: bool,
     target_os: &str,
 ) -> Result<usize, OrbitError> {
+    // Retire stale shipped executors for removed provider lanes (ORB-18096)
+    // so an upgraded host does not keep listing them as available or broken.
+    for retired in RETIRED_PROVIDER_IDS {
+        store.delete_executor_def(retired)?;
+    }
     let mut created = 0usize;
     for (name, yaml) in DEFAULT_EXECUTOR_FILES {
         let def = parse_default_executor_for_platform(name, yaml, target_os)?;

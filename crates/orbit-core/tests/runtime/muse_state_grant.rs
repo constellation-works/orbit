@@ -55,7 +55,7 @@ fn only_the_muse_lane_may_write_muse_state_roots() {
     std::fs::create_dir_all(&worktree).expect("managed fixture checkout");
 
     let default_roots = [home.join(".config/muse"), home.join(".local/share/muse")];
-    for provider in ["claude", "codex", "opencode", "pi"] {
+    for provider in ["claude", "codex", "grok", "copilot"] {
         let modify = resolved_modify(&runtime, provider, &worktree);
         for root in &default_roots {
             assert!(

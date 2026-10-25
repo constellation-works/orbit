@@ -59,6 +59,15 @@ impl ExecutorDefFileStore {
         Ok(Some(def))
     }
 
+    pub fn delete_executor_def(&self, name: &str) -> Result<bool, OrbitError> {
+        let path = self.executor_path(name)?;
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(OrbitError::Io(error.to_string())),
+        }
+    }
+
     pub fn upsert_executor_def(&self, def: &ExecutorDef) -> Result<(), OrbitError> {
         let path = self.executor_path(&def.name)?;
         let dir = self.executors_dir();

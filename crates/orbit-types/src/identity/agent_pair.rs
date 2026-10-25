@@ -66,48 +66,26 @@ impl ReasoningEffort {
 
     /// Validates the provider-model contract before an effort reaches argv.
     ///
-    /// Claude and Codex expose the complete crew vocabulary. Pi does too: its
-    /// `--thinking` flag validates against a fixed, model-independent set
-    /// (`off, minimal, low, medium, high, xhigh, max`) that is a strict
-    /// superset of this enum, and it rejects a value outside that set with a
-    /// diagnostic rather than ignoring it. [ORB-11296] Muse does as well:
-    /// `muse exec --reasoning-effort` accepts
+    /// Claude and Codex expose the complete crew vocabulary. Muse does as
+    /// well: `muse exec --reasoning-effort` accepts
     /// `none, minimal, low, medium, high, xhigh, max, ultra` (Muse Code
     /// 1.4.10), a strict superset of this enum. [ORB-16577]
     ///
     /// Grok's published contract is model-specific, so unknown models fail
     /// closed instead of accepting a setting the CLI might silently
-    /// reinterpret. OpenCode is narrower still: see
-    /// `Self::validate_opencode_effort`. [ORB-11295]
+    /// reinterpret.
     pub fn validate_for_provider_model(
         self,
         provider: &str,
         model: Option<&str>,
     ) -> Result<(), ProviderModelError> {
         match provider {
-            "claude" | "codex" | "pi" | "muse" => Ok(()),
+            "claude" | "codex" | "muse" => Ok(()),
             "grok" => Self::validate_grok_model_effort(self, model),
             "antigravity" => Self::validate_antigravity_effort(self, model),
-            "opencode" => Self::validate_opencode_effort(self),
             other => Err(ProviderModelError::EffortUnsupportedByProvider {
                 provider: other.to_string(),
             }),
-        }
-    }
-
-    /// OpenCode renders effort as `--variant`, documented as "model variant
-    /// (provider-specific reasoning effort, e.g., high, max, minimal)". The
-    /// value is forwarded verbatim to whichever model provider `--model`
-    /// selected, and OpenCode publishes no provider-independent vocabulary, so
-    /// only the two spellings its own help text names *and* that exist in
-    /// Orbit's crew vocabulary are accepted. `low`, `medium`, and `xhigh` fail
-    /// closed rather than being remapped onto `minimal`/`high`: a variant the
-    /// underlying provider does not define is a configuration error, not
-    /// something Orbit should guess at. [ORB-11295]
-    fn validate_opencode_effort(self) -> Result<(), ProviderModelError> {
-        match self {
-            Self::High | Self::Max => Ok(()),
-            effort => Err(ProviderModelError::OpenCodeEffort { effort }),
         }
     }
 

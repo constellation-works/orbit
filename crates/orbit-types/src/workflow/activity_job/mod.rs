@@ -167,8 +167,9 @@ pub use activity_v2::{
     ActivityV2, ActivityV2Spec, AgentLoopSpec, DeterministicSpec, OnDenial, Provider,
     ProviderAlias, ProviderDeprecation, ProviderDiagnostic, ProviderEntryPoint, ProviderIdentity,
     ProviderParseError, ProviderResolution, ProviderResolveRequest, ProviderSource,
-    RETIRED_BACKEND_MIGRATION, RetiredAgentBackend, check_retired_backend_value,
-    requires_native_inspection,
+    RETIRED_BACKEND_MIGRATION, RETIRED_PROVIDER_IDS, RETIRED_PROVIDER_MIGRATION,
+    RetiredAgentBackend, check_retired_backend_value, requires_native_inspection,
+    retired_provider_id,
 };
 pub use audit_envelope::{
     AUDIT_ENVELOPE_SCHEMA_VERSION, BranchOutcome, StepRecoveryDecisionRecord,
