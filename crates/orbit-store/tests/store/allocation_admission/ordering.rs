@@ -9,13 +9,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{Duration as ChronoDuration, Utc};
 use orbit_store::contracts::{
-    AdmissionAffinityClass, AdmissionCrewCapability, AdmissionCrewPressure, ExecutorCapability,
-    ExecutorCensus, EXECUTOR_CENSUS_LIVENESS_SECONDS, ExecutorCensusEntry,
+    AdmissionAffinityClass, AdmissionCrewCapability, AdmissionCrewPressure,
+    EXECUTOR_CENSUS_LIVENESS_SECONDS, ExecutorCapability, ExecutorCensus, ExecutorCensusEntry,
     TaskDocumentUpdateParams,
 };
-use orbit_types::task::{
-    AdmissionAffinityReach, ExecutorOsLimit, HostOs, Task, TaskComplexity,
-};
+use orbit_types::task::{AdmissionAffinityReach, ExecutorOsLimit, HostOs, Task, TaskComplexity};
 
 use super::*;
 
@@ -68,16 +66,19 @@ fn crews(runnable: &[&str]) -> AdmissionCrewCapability {
 fn capability(machine: &str) -> ExecutorCapability {
     match machine {
         MAC => ExecutorCapability {
+            labels: Vec::new(),
             os: Some(HostOs::Macos),
             crews: Some(crews(&["codex", "opus", "xcode"])),
             browser_kit: false,
         },
         DK => ExecutorCapability {
+            labels: Vec::new(),
             os: Some(HostOs::Linux),
             crews: Some(crews(&["codex", "xcode"])),
             browser_kit: true,
         },
         _ => ExecutorCapability {
+            labels: Vec::new(),
             os: Some(HostOs::Linux),
             crews: Some(crews(&["codex", "xcode"])),
             browser_kit: false,
@@ -122,9 +123,8 @@ fn host_os_limits() -> BTreeMap<String, ExecutorOsLimit> {
 /// canonical order, and a retry keeps its first decision.
 #[test]
 fn census_orders_exclusive_work_first_within_a_band() {
-    if !allocation_admission_isolated(
-        "ordering::census_orders_exclusive_work_first_within_a_band",
-    ) {
+    if !allocation_admission_isolated("ordering::census_orders_exclusive_work_first_within_a_band")
+    {
         return;
     }
     use AdmissionAffinityClass::{Exclusive, Fungible, Shared};
@@ -197,7 +197,10 @@ fn census_orders_exclusive_work_first_within_a_band() {
             requester: MAC,
             census: Some(FULL),
             reach: Band,
-            candidates: &[("fungible critical", Critical, Feature, &[], None), OPUS_HIGH],
+            candidates: &[
+                ("fungible critical", Critical, Feature, &[], None),
+                OPUS_HIGH,
+            ],
             expiring: &[],
             takes: "fungible critical",
             class: Some((Fungible, 3)),
@@ -360,7 +363,9 @@ fn census_orders_exclusive_work_first_within_a_band() {
             assert_eq!(owner.task_status(&task.id), expected, "{}", case.name);
         }
         // A retry keeps its first decision even when the census is gone.
-        let AdmissionLookup::Found { receipt: replay, .. } = owner
+        let AdmissionLookup::Found {
+            receipt: replay, ..
+        } = owner
             .try_pull_as(case.requester, &request, &AdmissionOrdering::default())
             .unwrap()
         else {
@@ -425,13 +430,20 @@ fn census_rows_land_with_receipts_and_stay_live_while_claiming() {
     boundary
         .record_executor_census(&entry(OWNER, now - ChronoDuration::hours(1)))
         .unwrap();
-    assert!(!live(now).contains_key(OWNER), "a stale owner row is not live");
+    assert!(
+        !live(now).contains_key(OWNER),
+        "a stale owner row is not live"
+    );
     boundary.record_executor_census(&entry(OWNER, now)).unwrap();
     assert!(live(now).contains_key(OWNER), "a fresh owner row is live");
     let mut older = entry(OWNER, now - ChronoDuration::minutes(1));
     older.run_id = "an older drain".into();
     boundary.record_executor_census(&older).unwrap();
-    assert_eq!(live(now)[OWNER].run_id, "owner-drain", "older never replaces newer");
+    assert_eq!(
+        live(now)[OWNER].run_id,
+        "owner-drain",
+        "older never replaces newer"
+    );
 }
 
 /// [ORB-17773] The requester's reported weekly pressure is the lowest
@@ -491,8 +503,20 @@ fn pressure_orders_tied_candidates_below_priority_and_expiry() {
 
     // (name, older priority, pressure reported, older expiring, takes older)
     let cases = [
-        ("tied: the pressured pool leads age", Medium, true, false, false),
-        ("no pressure reported: age order", Medium, false, false, true),
+        (
+            "tied: the pressured pool leads age",
+            Medium,
+            true,
+            false,
+            false,
+        ),
+        (
+            "no pressure reported: age order",
+            Medium,
+            false,
+            false,
+            true,
+        ),
         ("higher priority still leads", High, true, false, true),
         ("an expiring task still leads", Medium, true, true, true),
     ];
@@ -539,9 +563,8 @@ fn pressure_orders_tied_candidates_below_priority_and_expiry() {
             crew_pools: pools(),
             ..Default::default()
         };
-        let AdmissionLookup::Found { receipt, .. } = owner
-            .try_pull_as(DK, &request, &ordering)
-            .unwrap()
+        let AdmissionLookup::Found { receipt, .. } =
+            owner.try_pull_as(DK, &request, &ordering).unwrap()
         else {
             panic!("{name}: no receipt");
         };

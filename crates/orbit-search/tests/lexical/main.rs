@@ -7,6 +7,7 @@ use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 fn task(id: &str, title: &str) -> Task {
     let at = "2026-09-21T00:00:00Z".parse().expect("timestamp");
     Task {
+        requires_labels: Vec::new(),
         id: id.into(),
         title: title.into(),
         description: String::new(),

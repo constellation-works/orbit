@@ -411,6 +411,9 @@ pub fn explain_workspace_auto_readiness(
                         object.insert("host_fleet".to_string(), json!(fleet));
                     }
                 }
+                if let Some(wait) = runtime.task_host_labels_wait(task) {
+                    object.insert("host_labels_wait".to_string(), json!(wait));
+                }
                 return Value::Object(object.clone());
             }
             if let Some(excluded) = excluded_by_id.get(task.id.as_str()) {
@@ -474,6 +477,23 @@ pub fn explain_workspace_auto_readiness(
                             .and_then(|task| runtime.task_host_fleet_note(task));
                         if let Some(fleet) = fleet {
                             object.insert("host_fleet".to_string(), json!(fleet));
+                        }
+                    }
+                    BacklogTaskExclusionReason::HostLabelsMissing => {
+                        // A host carrying the labels clears it: this one once
+                        // `machine.labels` declares them, or a follower that
+                        // does. The detail names the labels this host lacks.
+                        object.insert(
+                            "reason".to_string(),
+                            Value::String("host_labels_missing".to_string()),
+                        );
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                        if let Some(wait) = snapshot
+                            .task_lookup
+                            .get(&excluded.id)
+                            .and_then(|task| runtime.task_placement_wait(task))
+                        {
+                            object.insert("placement_wait".to_string(), json!(wait));
                         }
                     }
                     BacklogTaskExclusionReason::CrewNotAllowed => {

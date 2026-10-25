@@ -223,6 +223,13 @@ impl TaskV2Store {
                 bundle.envelope.tags = tags;
                 envelope_changed = true;
             }
+            if let Some(value) = &fields.requires_labels {
+                bundle.envelope.requires_labels = orbit_types::task::normalize_host_labels(
+                    value.clone(),
+                    orbit_types::task::REQUIRES_LABELS_FIELD,
+                )?;
+                envelope_changed = true;
+            }
             if let Some(value) = &fields.context_files {
                 append_creation_grant(
                     &self.bundle_store,

@@ -265,6 +265,14 @@ impl OrbitRuntime {
                         .map_or(std::env::consts::OS, orbit_types::task::HostOs::as_str)
                 )));
             }
+            // Nor a task requiring a capability label this host lacks.
+            if let Some(wait) = self.task_host_labels_wait(&task) {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "explicit ship task '{task_id}' {wait}; ship it on a host whose \
+                     `machine.labels` carry them (a pull-drain follower that does claims it \
+                     from the backlog) or change its `requires_labels`"
+                )));
+            }
             // Nor a `ui` task on a host whose browser kit is not verified: its
             // worker could not render the change it must screenshot.
             if orbit_types::task::requires_browser_kit(&task.tags) && !self.browser_kit_verified() {

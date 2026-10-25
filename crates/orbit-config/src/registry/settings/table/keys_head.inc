@@ -119,6 +119,12 @@ with_tail_keys! {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| resolve_host_shutdown_hold_minutes(raw),
     },
+    machine_labels: Vec<String> => Vec<String> {
+        key: "machine.labels", value_type: "array<string>",
+        description: "Capability labels this machine carries for tasks that require them; its OS is an implicit label.",
+        section: ConfigSection::Machine, order: 25,
+        resolve: |raw: Option<Vec<String>>| resolve_machine_labels(raw),
+    },
     machine_name: Option<String> => String {
         key: "machine.name", value_type: "string",
         description: "Operator-chosen display name for this machine.",

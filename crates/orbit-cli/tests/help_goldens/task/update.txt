@@ -31,6 +31,9 @@ Options:
       --tag <TAGS>
           Replacement task tags. Repeat or comma-separate for multiple tags. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task from its next admission; any other `os:` value is rejected
 
+      --requires-labels <LABEL>
+          Replacement capability labels a host must carry, all of them, to run the task (empty string clears). Repeat or comma-separate for multiple labels
+
       --plan <PLAN>
           New task plan (empty string clears)
 

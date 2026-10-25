@@ -46,6 +46,10 @@ impl OrbitRuntime {
         Self::from_kernel(self.kernel.with_host_os(os))
     }
 
+    pub fn with_machine_labels(self, labels: Vec<String>) -> Self {
+        Self::from_kernel(self.kernel.with_machine_labels(labels))
+    }
+
     pub fn with_registered_host_oses(
         self,
         hosts: impl IntoIterator<Item = (String, HostOs)>,

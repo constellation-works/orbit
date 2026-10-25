@@ -201,6 +201,7 @@ impl orbit_engine::test_support::NullRuntimeHost for VerifierHost {
 fn fixture_task() -> Task {
     let now = Utc::now();
     Task {
+        requires_labels: Vec::new(),
         job_run_machine: None,
         id: TASK_ID.to_string(),
         title: "Test Task".to_string(),

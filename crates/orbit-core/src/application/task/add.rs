@@ -4,8 +4,9 @@ use orbit_store::contracts::TaskCreateParams as StoreTaskCreateParams;
 use orbit_types::identity::Crew;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    OrchestratorModelSource, Task, TaskOrigin, TaskStatus, TaskType, normalize_required_tools,
-    normalize_task_dependencies, normalize_task_tags, validate_os_tags,
+    OrchestratorModelSource, REQUIRES_LABELS_FIELD, Task, TaskOrigin, TaskStatus, TaskType,
+    normalize_host_labels, normalize_required_tools, normalize_task_dependencies,
+    normalize_task_tags, validate_os_tags,
 };
 
 use crate::OrbitRuntime;
@@ -148,6 +149,11 @@ impl OrbitRuntime {
 
         let normalized_tags = normalize_task_tags(params.tags.clone());
         validate_os_tags(&normalized_tags)?;
+        // A label requirement no registered serving host carries is refused
+        // before anything is stored, naming the labels and the known sets.
+        let requires_labels =
+            normalize_host_labels(params.requires_labels.clone(), REQUIRES_LABELS_FIELD)?;
+        self.refuse_unservable_labels(&normalized_tags, &requires_labels)?;
         let provenance_prefix = provenance_title_prefix(&normalized_tags);
         // A system filer, or a sweep finding its provenance tag marks, is
         // automation unless the caller stated an origin. Any other filing
@@ -188,6 +194,7 @@ impl OrbitRuntime {
             Some(params.complexity),
             params.crew.as_deref(),
             &normalized_tags,
+            &requires_labels,
             &params.context_files,
             &mut creation_crew_ticket(self, action_key),
         )?;
@@ -253,6 +260,7 @@ impl OrbitRuntime {
                     relations: params.relations.clone(),
                     tags: normalized_tags.clone(),
                     required_tools: normalize_required_tools(params.required_tools.clone()),
+                    requires_labels: requires_labels.clone(),
                     plan: params.plan.clone(),
                     execution_summary: String::new(),
                     context_files,

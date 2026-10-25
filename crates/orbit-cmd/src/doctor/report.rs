@@ -8,7 +8,7 @@
 
 use orbit_config::{ConfigRoots, ResolvedConfig, canonical_crew_pool};
 use orbit_core::OrbitRuntime;
-use orbit_types::task::HostOs;
+use orbit_types::task::{HostOs, quoted_labels};
 use orbit_types::workflow::{ExecutorDef, provider_account_label};
 use serde_json::{Value, json};
 
@@ -43,7 +43,35 @@ const REPORT_PROBES: &[DoctorProbe] = &[
         crate::hosts::doctor_hosts_row(&runtime.global_root())
     }),
     DoctorProbe::many("browser-kit", |runtime, _| browser_kit_rows(runtime)),
+    DoctorProbe::one("host-labels", |runtime, _| host_labels_row(runtime)),
 ];
+
+/// The capability labels this host carries for tasks' `requires_labels`:
+/// its `machine.labels` plus its OS as an implicit label.
+fn host_labels_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    let labels = runtime.host_labels().into_iter().collect::<Vec<_>>();
+    let message = if labels.is_empty() {
+        "This host carries no capability labels: `machine.labels` is unset and its OS is \
+         unknown."
+            .to_string()
+    } else {
+        format!(
+            "This host carries capability labels {} (`machine.labels` plus its OS).",
+            quoted_labels(&labels)
+        )
+    };
+    WorkspaceDoctorResult {
+        duration_ms: 0,
+        check_name: "host-labels".into(),
+        status: WorkspaceDoctorStatus::Info,
+        message,
+        remediation: runtime.machine_labels().is_empty().then(|| {
+            "Declare `machine.labels` in machine settings for tasks that require a capability \
+             this host has."
+                .to_string()
+        }),
+    }
+}
 
 fn build_budget_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
     match runtime.build_budget_capacity_warnings() {

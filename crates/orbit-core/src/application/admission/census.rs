@@ -170,6 +170,7 @@ impl OrbitRuntime {
                 os: self.host_os(),
                 crews,
                 browser_kit: self.browser_kit_verified(),
+                labels: self.machine_labels().to_vec(),
             },
             run_id: run_id.to_string(),
             seen_at: Utc::now(),

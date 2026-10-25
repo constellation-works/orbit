@@ -20,6 +20,7 @@ pub(crate) struct TaskRecordUpdateParams {
     pub(crate) dependencies: Option<Vec<String>>,
     pub(crate) relations: Option<Vec<TaskRelation>>,
     pub(crate) tags: Option<Vec<String>>,
+    pub(crate) requires_labels: Option<Vec<String>>,
     pub(crate) plan: Option<String>,
     pub(crate) execution_summary: Option<String>,
     pub(crate) context_files: Option<Vec<String>>,
@@ -63,6 +64,7 @@ impl TaskRecordUpdateParams {
             || self.dependencies.is_some()
             || self.relations.is_some()
             || self.tags.is_some()
+            || self.requires_labels.is_some()
             || self.plan.is_some()
             || self.execution_summary.is_some()
             || self.context_files.is_some()
@@ -106,6 +108,8 @@ pub struct TaskAddParams {
     pub tags: Vec<String>,
     /// Exact canonical tools to add to the selected activity baseline.
     pub required_tools: Vec<String>,
+    /// Capability labels a host must all carry to run the task.
+    pub requires_labels: Vec<String>,
     pub plan: String,
     pub comment: Option<String>,
     pub context_files: Vec<String>,
@@ -154,6 +158,7 @@ impl Default for TaskAddParams {
             relations: Vec::new(),
             tags: Vec::new(),
             required_tools: Vec::new(),
+            requires_labels: Vec::new(),
             plan: String::new(),
             comment: None,
             context_files: Vec::new(),
@@ -185,6 +190,8 @@ pub struct TaskUpdateParams {
     pub dependencies: Option<Vec<OrbitId>>,
     pub relations: Option<Vec<TaskRelation>>,
     pub tags: Option<Vec<String>>,
+    /// Replacement capability labels; an empty list clears the requirement.
+    pub requires_labels: Option<Vec<String>>,
     pub plan: Option<String>,
     pub execution_summary: Option<String>,
     pub comment: Option<String>,
@@ -236,6 +243,7 @@ impl TaskUpdateParams {
             dependencies,
             relations,
             tags,
+            requires_labels,
             plan,
             execution_summary,
             comment,
@@ -262,6 +270,7 @@ impl TaskUpdateParams {
             && dependencies.is_none()
             && relations.is_none()
             && tags.is_none()
+            && requires_labels.is_none()
             && plan.is_none()
             && execution_summary.is_none()
             && status.is_none()
@@ -292,6 +301,7 @@ impl From<TaskUpdateParams> for TaskRecordUpdateParams {
             dependencies: p.dependencies,
             relations: p.relations,
             tags: p.tags,
+            requires_labels: p.requires_labels,
             plan: p.plan,
             execution_summary: p.execution_summary,
             status: p.status,

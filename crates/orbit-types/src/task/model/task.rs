@@ -17,6 +17,11 @@ pub struct Task {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub required_tools: Vec<String>,
+    /// Capability labels a host must all carry to run the task: its
+    /// `machine.labels` plus its OS as an implicit label. Empty places no
+    /// label requirement. Normalized (lowercase, sorted, deduplicated).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_labels: Vec<String>,
     #[serde(default, alias = "instructions")]
     pub plan: String,
     #[serde(default)]
@@ -148,6 +153,7 @@ impl Task {
             acceptance_criteria,
             tags: normalize_task_tags(envelope.tags),
             required_tools: normalize_required_tools(envelope.required_tools),
+            requires_labels: envelope.requires_labels,
             plan,
             execution_summary,
             context_files: envelope.context_files,

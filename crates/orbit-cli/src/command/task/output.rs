@@ -97,6 +97,33 @@ pub(super) struct TaskTableFilters {
 /// Build the list view for `orbit task list` from the tool's task records.
 /// The renderer decides how it is projected; this only describes the columns
 /// and the rows.
+/// The `RUNS ON` cell: the effective OS requirement, the capability labels
+/// the task requires, and the named wait while no host carrying them pulls.
+fn runs_on_cell(task: &Value, crew_unassigned: bool) -> String {
+    let mut cell = task
+        .get("os_requirement")
+        .and_then(|os| os.get("describe"))
+        .and_then(Value::as_str)
+        .unwrap_or(if crew_unassigned {
+            "any host from OS tags (crew unassigned)"
+        } else {
+            "any host"
+        })
+        .to_string();
+    let labels = task
+        .get("requires_labels")
+        .and_then(Value::as_array)
+        .map(|labels| labels.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if !labels.is_empty() {
+        cell.push_str(&format!("; labels: {}", labels.join(", ")));
+    }
+    if let Some(wait) = task.get("placement_wait").and_then(Value::as_str) {
+        cell.push_str(&format!("; {wait}"));
+    }
+    cell
+}
+
 pub(super) fn task_table(
     tasks: &[Value],
     full: bool,
@@ -113,9 +140,9 @@ pub(super) fn task_table(
         Column::new("TYPE").fixed().filtered(filtered.task_type),
         Column::new("RUNS ON").filtered(
             filtered.runs_on
-                || tasks
-                    .iter()
-                    .any(|task| task.get("os_requirement").is_some()),
+                || tasks.iter().any(|task| {
+                    task.get("os_requirement").is_some() || task.get("requires_labels").is_some()
+                }),
         ),
     ];
     if full {
@@ -135,16 +162,7 @@ pub(super) fn task_table(
             crate::output::color::cell(field("status"), Domain::TaskStatus),
             crate::output::color::cell(field("priority"), Domain::Priority),
             crate::output::color::cell(field("type"), Domain::TaskType),
-            Cell::new(
-                task.get("os_requirement")
-                    .and_then(|os| os.get("describe"))
-                    .and_then(Value::as_str)
-                    .unwrap_or(if field("crew").is_empty() {
-                        "any host from OS tags (crew unassigned)"
-                    } else {
-                        "any host"
-                    }),
-            ),
+            Cell::new(runs_on_cell(task, field("crew").is_empty())),
         ];
         if full {
             row.extend([

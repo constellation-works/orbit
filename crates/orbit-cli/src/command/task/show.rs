@@ -207,6 +207,18 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
         };
         let _ = writeln!(out, "{} {runs_on}", bold("Runs on:"));
     }
+    let requires_labels = list("requires_labels");
+    if !requires_labels.is_empty() {
+        let _ = writeln!(
+            out,
+            "{} {}",
+            bold("Requires Labels:"),
+            requires_labels.join(", ")
+        );
+    }
+    if let Some(wait) = task.get("placement_wait").and_then(Value::as_str) {
+        let _ = writeln!(out, "{} {wait}", bold("Placement:"));
+    }
     let required_tools = list("required_tools");
     if !required_tools.is_empty() {
         let _ = writeln!(
@@ -460,7 +472,12 @@ fn write_field(value: &Value, field: &str, text: &mut String) -> Result<(), Orbi
                 let _ = writeln!(text, "- {}", criterion);
             }
         }
-        "dependencies" | "resolved_dependencies" | "tags" | "required_tools" | "context_files" => {
+        "dependencies"
+        | "resolved_dependencies"
+        | "tags"
+        | "required_tools"
+        | "requires_labels"
+        | "context_files" => {
             for item in strings(value) {
                 let _ = writeln!(text, "{}", item);
             }

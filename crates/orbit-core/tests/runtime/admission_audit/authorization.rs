@@ -35,6 +35,7 @@ fn context_with(capabilities: [McpCapability; 1]) -> ToolContext {
 fn seed_task(runtime: &OrbitRuntime) -> String {
     crate::admission_audit::store_support::tasks(runtime)
         .create_task(TaskCreateParams {
+            requires_labels: Vec::new(),
             actor: "test".to_string(),
             parent_id: None,
             title: "Governed operation fixture".to_string(),

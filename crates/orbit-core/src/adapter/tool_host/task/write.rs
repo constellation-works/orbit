@@ -139,6 +139,8 @@ pub(super) fn add(
             tags: optional_csv_or_string_list_alias(input, &["tags"])?.unwrap_or_default(),
             required_tools: optional_csv_or_string_list_alias(input, &["required_tools"])?
                 .unwrap_or_default(),
+            requires_labels: optional_csv_or_string_list_alias(input, &["requires_labels"])?
+                .unwrap_or_default(),
             plan: optional_raw_string(options, "plan")?.unwrap_or_default(),
             crew_source: None,
             comment: filed_by.map(|binding| {
@@ -517,6 +519,7 @@ fn task_update_params_from_input(
         dependencies: optional_csv_or_string_list_alias(input, &["dependencies"])?,
         relations: parse_relations(input)?,
         tags: optional_csv_or_string_list_alias(input, &["tags"])?,
+        requires_labels: optional_csv_or_string_list_alias(input, &["requires_labels"])?,
         plan: optional_plan(input)?,
         execution_summary: optional_raw_string(input, "execution_summary")?,
         comment: optional_string(input, "comment")?,

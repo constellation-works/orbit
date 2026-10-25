@@ -291,6 +291,13 @@ pub(super) fn resolve_worker_tasks_max(raw: Option<u32>) -> Result<u32, OrbitErr
 /// idle the host all day.
 pub(super) const DEFAULT_HOST_SHUTDOWN_HOLD_MINUTES: u32 = 180;
 
+/// Admit `machine.labels`: opaque capability labels, normalized the way a
+/// task's `requires_labels` are, so the two compare exactly.
+pub(super) fn resolve_machine_labels(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
+    orbit_types::task::normalize_host_labels(raw.unwrap_or_default(), "machine.labels")
+        .map_err(|error| OrbitError::InvalidInput(error.to_string()))
+}
+
 /// Admit a positive shutdown-hold horizon. There is no upper bound: a host
 /// that wants a longer quiet period before a reboot may set one.
 pub(super) fn resolve_host_shutdown_hold_minutes(raw: Option<u32>) -> Result<u32, OrbitError> {

@@ -49,6 +49,7 @@ pub(in crate::application) trait TaskJobPort {
         complexity: Option<TaskComplexity>,
         explicit: Option<&str>,
         tags: &[String],
+        requires_labels: &[String],
         context_files: &[String],
         random: &mut dyn FnMut() -> Result<u64, OrbitError>,
     ) -> Result<Option<CreationCrewAssignment>, OrbitError>;

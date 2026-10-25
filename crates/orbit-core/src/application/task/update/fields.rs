@@ -1,9 +1,9 @@
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_types::task::{
-    LIGHT_DELIVERY_TAGS, Task, TaskStatus, is_system_identity_tag, is_valid_orb_task_id,
-    normalize_task_dependencies, normalize_task_tags, validate_os_tags,
-    validate_task_dependencies_with,
+    LIGHT_DELIVERY_TAGS, REQUIRES_LABELS_FIELD, Task, TaskStatus, is_system_identity_tag,
+    is_valid_orb_task_id, normalize_host_labels, normalize_task_dependencies, normalize_task_tags,
+    validate_os_tags, validate_task_dependencies_with,
 };
 
 use super::super::params::TaskUpdateParams;
@@ -161,6 +161,13 @@ impl OrbitRuntime {
             }
             params.tags = Some(tags);
         }
+        // A replacement label requirement must be one some registered
+        // serving host carries, together with the tags this write leaves.
+        if let Some(labels) = params.requires_labels.take() {
+            let labels = normalize_host_labels(labels, REQUIRES_LABELS_FIELD)?;
+            self.refuse_unservable_labels(params.tags.as_deref().unwrap_or(&task.tags), &labels)?;
+            params.requires_labels = Some(labels);
+        }
         // [ORB-12717] Clearing the crew is "no crew supplied", so the pools
         // decide again for the complexity this write leaves the task with —
         // a re-queue after a provider failure lands on a fresh draw instead of
@@ -175,6 +182,10 @@ impl OrbitRuntime {
                     params.complexity.or(task.complexity),
                     None,
                     params.tags.as_deref().unwrap_or(&task.tags),
+                    params
+                        .requires_labels
+                        .as_deref()
+                        .unwrap_or(&task.requires_labels),
                     params
                         .context_files
                         .as_deref()
@@ -205,6 +216,9 @@ impl OrbitRuntime {
             let mut rerated = task.clone();
             if let Some(tags) = &params.tags {
                 rerated.tags.clone_from(tags);
+            }
+            if let Some(labels) = &params.requires_labels {
+                rerated.requires_labels.clone_from(labels);
             }
             if let Some(context_files) = &params.context_files {
                 rerated.context_files.clone_from(context_files);

@@ -481,6 +481,9 @@ pub struct OrbitRuntimeSettings {
     crew_performance_window_days: u32,
     /// `[decision_channel] enabled`: raise decision requests for held work.
     decision_channel_enabled: bool,
+    /// Admitted `machine.labels`: the capability labels this host carries,
+    /// beside its OS as an implicit label.
+    machine_labels: Vec<String>,
 }
 
 impl OrbitRuntimeSettings {
@@ -528,6 +531,7 @@ impl OrbitRuntimeSettings {
         crew_performance: orbit_config::CrewPerformanceMode,
         crew_performance_window_days: u32,
         decision_channel_enabled: bool,
+        machine_labels: Vec<String>,
     ) -> Self {
         Self {
             persistence,
@@ -572,7 +576,16 @@ impl OrbitRuntimeSettings {
             crew_performance,
             crew_performance_window_days,
             decision_channel_enabled,
+            machine_labels,
         }
+    }
+
+    pub(crate) fn machine_labels(&self) -> &[String] {
+        &self.machine_labels
+    }
+
+    pub(crate) fn set_machine_labels(&mut self, labels: Vec<String>) {
+        self.machine_labels = labels;
     }
 
     pub(crate) fn decision_channel_enabled(&self) -> bool {
@@ -847,6 +860,10 @@ impl OrbitContext {
 
     pub(crate) fn set_host_shutdown_hold_minutes(&mut self, minutes: u32) {
         self.runtime.set_host_shutdown_hold_minutes(minutes);
+    }
+
+    pub(crate) fn set_machine_labels(&mut self, labels: Vec<String>) {
+        self.runtime.set_machine_labels(labels);
     }
 
     pub fn settings(&self) -> &OrbitRuntimeSettings {

@@ -18,6 +18,7 @@ pub(crate) const FOOTPRINT_HELD: &str = "context_lock_conflict";
 pub(crate) const DEPENDENCY_NOT_DONE: &str = "dependency_not_done";
 pub(crate) const HOST_OS_MISMATCH: &str = "host_os_mismatch";
 pub(crate) const BROWSER_KIT_MISSING: &str = "browser_kit_missing";
+pub(crate) const HOST_LABELS_MISSING: &str = "host_labels_missing";
 pub(crate) const CREW_UNAVAILABLE: &str = "crew_unavailable";
 pub(crate) const CAPACITY_UNAVAILABLE: &str = "capacity_unavailable";
 pub(crate) const OWNER_HOLD: &str = "owner_hold";
@@ -100,6 +101,12 @@ impl PullWaiting {
                     .browser_kit_unavailable
                     .iter()
                     .map(|diagnostic| (diagnostic, BROWSER_KIT_MISSING)),
+            )
+            .chain(
+                receipt
+                    .labels_unavailable
+                    .iter()
+                    .map(|diagnostic| (diagnostic, HOST_LABELS_MISSING)),
             )
             .chain(
                 receipt

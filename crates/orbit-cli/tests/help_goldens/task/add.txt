@@ -32,6 +32,9 @@ Options:
       --required-tools <REQUIRED_TOOLS>
           Exact canonical tool names the task adds to its agent activity baseline
 
+      --requires-labels <LABEL>
+          Capability labels a host must carry, all of them, to run the task (its `machine.labels` plus its OS). Repeat or comma-separate for multiple labels
+
       --plan <PLAN>
           Optional task plan payload. Leave blank for the executing agent or planning activity to author later
           

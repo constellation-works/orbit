@@ -83,6 +83,18 @@ The connected tool schema is authoritative for supported fields.
   `github.auth.status` can still yield a structured `available: false` or
   `authenticated: false` capability-unavailable result when the lane has no
   GitHub client or credentials; that is not a clean CI pass.
+- `requires_labels: ["<label>", ...]` — capability labels a host must carry,
+  **all of them**, to run the task. A host carries its `machine.labels` setting
+  plus its OS as an implicit label (`linux`, `macos`, `windows`); `orbit doctor`
+  prints the effective set. `os:` tags keep their any-of meaning and both
+  apply. Labels are opaque, trimmed and lowercased. Add and update refuse a
+  requirement no known serving host carries with the task's `os:` tags, naming
+  the missing labels: this host, plus followers that pulled from the workspace
+  in the last seven days. Update replaces the list; `[]` (CLI
+  `--requires-labels ""`) clears it. A host lacking a label skips the task
+  (`host_labels_missing`), and while no live host carries them task show/list
+  and `orbit run readiness` name the wait in `placement_wait`. Use it for a
+  real capability (a GPU, a signed toolchain), not to pin a hostname.
 - `origin` records why the task was filed, from a closed set:
   `operator_request` (a human operator asked for the work),
   `orchestrator_initiative` (the orchestrator judged it necessary on its own)

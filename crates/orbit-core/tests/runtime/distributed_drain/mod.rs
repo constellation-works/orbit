@@ -80,6 +80,7 @@ mod failure_class;
 mod flaky_validation;
 #[cfg(unix)]
 mod forge_hold;
+mod host_labels;
 mod host_os_executor;
 #[cfg(unix)]
 mod interrupted_review;

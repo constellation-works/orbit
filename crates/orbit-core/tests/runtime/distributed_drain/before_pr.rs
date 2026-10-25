@@ -206,6 +206,7 @@ impl ReviewedHandoff {
         )
         .unwrap();
         let request = AdmissionRequest {
+            labels: Vec::new(),
             request_id: "reviewed-pull".into(),
             caller_version: "test".into(),
             caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,

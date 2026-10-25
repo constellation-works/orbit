@@ -121,6 +121,7 @@ impl Owner {
     fn create(&self, spec: Spec<'_>) -> Task {
         self.tasks
             .create_task(TaskCreateParams {
+                requires_labels: Vec::new(),
                 actor: "codex".into(),
                 parent_id: None,
                 title: spec.title.into(),
@@ -226,6 +227,7 @@ impl<'a> Spec<'a> {
 
 fn request(id: &str) -> AdmissionRequest {
     AdmissionRequest {
+        labels: Vec::new(),
         request_id: id.into(),
         caller_version: "test".into(),
         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,

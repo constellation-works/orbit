@@ -28,10 +28,18 @@ impl TaskJobPort for OrbitRuntime {
         complexity: Option<TaskComplexity>,
         explicit: Option<&str>,
         tags: &[String],
+        requires_labels: &[String],
         context_files: &[String],
         mut random: &mut dyn FnMut() -> Result<u64, OrbitError>,
     ) -> Result<Option<CreationCrewAssignment>, OrbitError> {
-        self.creation_crew_assignment(complexity, explicit, tags, context_files, &mut random)
+        self.creation_crew_assignment(
+            complexity,
+            explicit,
+            tags,
+            requires_labels,
+            context_files,
+            &mut random,
+        )
     }
 
     fn random_crew_draw_ticket(&self) -> Result<u64, OrbitError> {

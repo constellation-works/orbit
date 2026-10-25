@@ -168,6 +168,9 @@ pub fn task_show_field_json(
             &|id: &str| task_is_done(runtime, status_by_id, id),
         ))),
         "os_requirement" => Ok(TaskOsReadout::new(runtime)?.requirement(task)),
+        "placement_wait" => Ok(TaskOsReadout::new(runtime)?
+            .placement_wait(task)
+            .map_or(Value::Null, Value::String)),
         "open_decisions" => runtime.open_decisions_json(&task.id),
         "comments" => serde_json::to_value(runtime.get_task_comments(&task.id)?)
             .map_err(serialize_error("comments")),

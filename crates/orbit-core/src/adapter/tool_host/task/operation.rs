@@ -508,6 +508,10 @@ fn project_listed_task(
             field.clone(),
             if field == "os_requirement" {
                 os_readout.requirement(task)
+            } else if field == "placement_wait" {
+                os_readout
+                    .placement_wait(task)
+                    .map_or(Value::Null, Value::String)
             } else {
                 task_fields_to_json(runtime, task, std::slice::from_ref(field))?
             },

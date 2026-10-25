@@ -307,6 +307,7 @@ impl Fixture {
             review: None,
         };
         let request = AdmissionRequest {
+            labels: Vec::new(),
             request_id: format!("req-{number}"),
             caller_version: "test".into(),
             caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,

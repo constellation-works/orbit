@@ -375,6 +375,7 @@ impl TaskCommitBoundary {
             crew_unavailable: Vec::new(),
             os_unavailable: Vec::new(),
             browser_kit_unavailable: Vec::new(),
+            labels_unavailable: Vec::new(),
             capacity_unavailable: Vec::new(),
             queue_depth: snapshot
                 .backlog
@@ -570,6 +571,11 @@ impl TaskCommitBoundary {
     /// Upsert `entry` as its machine's census row [ORB-17304].
     pub fn record_executor_census(&self, entry: &ExecutorCensusEntry) -> Result<(), OrbitError> {
         self.store.upsert_executor_census(&self.workspace_id, entry)
+    }
+
+    /// Every census row of this workspace, however old.
+    pub fn recorded_executor_census(&self) -> Result<Vec<ExecutorCensusEntry>, OrbitError> {
+        self.store.executor_census_rows(&self.workspace_id)
     }
 
     /// The census rows live at `now`: each seen within

@@ -34,6 +34,7 @@ use orbit_types::task::{ExternalRef, TaskComment, TaskPriority, TaskStatus, Task
 pub fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams {
     let now = Utc.with_ymd_and_hms(2026, 5, 11, 12, 0, 0).unwrap();
     TaskCreateParams {
+        requires_labels: Vec::new(),
         actor: "codex:gpt-5.5".to_string(),
         parent_id: None,
         title: title.to_string(),

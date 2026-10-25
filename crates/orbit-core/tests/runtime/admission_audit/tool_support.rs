@@ -89,6 +89,7 @@ fn create_task_with_crew(
 ) -> Task {
     crate::admission_audit::store_support::tasks(runtime)
         .create_task(TaskCreateParams {
+            requires_labels: Vec::new(),
             actor: "test".to_string(),
             parent_id: None,
             title: title.to_string(),

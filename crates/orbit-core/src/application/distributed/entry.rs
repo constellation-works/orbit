@@ -345,6 +345,7 @@ impl crate::OrbitRuntime {
             crews: None,
             os: None,
             browser_kit: false,
+            labels: Vec::new(),
             admissible: None,
         };
         orbit_store::admission_refusal(&identity, &request, owner_binary_version())

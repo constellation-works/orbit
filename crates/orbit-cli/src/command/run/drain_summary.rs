@@ -365,6 +365,7 @@ fn kept_off_cause(reason: &str) -> &str {
         "context_lock_conflict" => "footprint holds",
         "dependency_not_done" | "unmet_dependency" => "unmet dependencies",
         "host_os_mismatch" => "for another OS",
+        "host_labels_missing" => "needing a host with other capability labels",
         "browser_kit_missing" => "needing a host with the browser kit",
         "native_os_required" => "needing native evidence from another OS",
         "unverified_review_finding" => "review findings awaiting verification",
@@ -491,6 +492,7 @@ fn waiting_line(
         task.reason.as_deref(),
         Some(
             "host_os_mismatch"
+                | "host_labels_missing"
                 | "browser_kit_missing"
                 | "native_os_required"
                 | "local_route_before_pr"

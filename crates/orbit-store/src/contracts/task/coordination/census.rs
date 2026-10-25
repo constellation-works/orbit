@@ -39,6 +39,9 @@ pub struct ExecutorCapability {
     /// Whether it has a verified headless browser kit for `ui` work.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub browser_kit: bool,
+    /// Its `machine.labels`; `os` counts as an implicit label beside them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
 }
 
 impl ExecutorCapability {
@@ -49,15 +52,18 @@ impl ExecutorCapability {
             os: request.os,
             crews: request.crews.clone(),
             browser_kit: request.browser_kit,
+            labels: request.labels.clone(),
         }
     }
 
     /// Whether this executor passes every capability predicate for `task`:
-    /// its effective OS requirement, its browser kit and its crew.
+    /// its effective OS requirement, its browser kit, its labels and its
+    /// crew.
     #[must_use]
     pub fn runs(&self, task: &Task, limits: &BTreeMap<String, ExecutorOsLimit>) -> bool {
         os_unavailable(self.os, task, limits).is_none()
             && browser_kit_unavailable(self.browser_kit, task).is_none()
+            && labels_unavailable(self.os, &self.labels, task).is_none()
             && self
                 .crews
                 .as_ref()
@@ -95,6 +101,19 @@ pub fn browser_kit_unavailable(browser_kit: bool, task: &Task) -> Option<String>
             orbit_types::task::browser_kit_wait()
         )
     })
+}
+
+/// Why `task`'s `requires_labels` exclude an executor on `os` declaring
+/// `labels`, or `None` when it carries every one.
+#[must_use]
+pub fn labels_unavailable(os: Option<HostOs>, labels: &[String], task: &Task) -> Option<String> {
+    if task.requires_labels.is_empty() {
+        return None;
+    }
+    orbit_types::task::host_labels_unavailable(
+        &task.requires_labels,
+        &orbit_types::task::effective_host_labels(labels, os),
+    )
 }
 
 /// One executor's latest declaration, as the owner persists it per
