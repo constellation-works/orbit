@@ -14,6 +14,7 @@ use crate::contracts::{
 use crate::fs::path_safety::normalize_path;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_common::{NotFoundKind, OrbitError};
+use orbit_types::workspace::{git_remotes_equivalent, validate_source_repository_fingerprint};
 use rusqlite::{TransactionBehavior, params};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -287,12 +288,39 @@ impl TaskRegistryStore {
     ///
     /// Ordinary task-runtime bootstrap deliberately does not infer remote
     /// identity. Explicit publication binding supplies the registry-validated
-    /// value instead. Once recorded, a different value is a pairing conflict,
-    /// never an implicit source move.
+    /// value instead. Legacy raw URLs are compared by portable repository
+    /// identity. A different identity is a pairing conflict, never an implicit
+    /// source move.
     pub fn record_workspace_repo_fingerprint(
         &self,
         partition_id: &str,
         repo_fingerprint: &str,
+    ) -> Result<WorkspaceBinding, OrbitError> {
+        self.write_workspace_repo_fingerprint(partition_id, repo_fingerprint, false)
+    }
+
+    /// Replace a task partition's source pairing after an explicit, authorized
+    /// source-remote rebind. The caller must validate the local workspace owner
+    /// and persist the authoritative workspace registration first.
+    ///
+    /// Retrying is safe, including when an older source rebind left this pairing
+    /// stale. Ordinary publication binding must use
+    /// [`Self::record_workspace_repo_fingerprint`] instead.
+    pub fn rebind_workspace_repo_fingerprint(
+        &self,
+        partition_id: &str,
+        repo_fingerprint: &str,
+    ) -> Result<WorkspaceBinding, OrbitError> {
+        validate_source_repository_fingerprint(repo_fingerprint)
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        self.write_workspace_repo_fingerprint(partition_id, repo_fingerprint, true)
+    }
+
+    fn write_workspace_repo_fingerprint(
+        &self,
+        partition_id: &str,
+        repo_fingerprint: &str,
+        rebind: bool,
     ) -> Result<WorkspaceBinding, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
         if repo_fingerprint.trim() != repo_fingerprint || repo_fingerprint.is_empty() {
@@ -308,13 +336,15 @@ impl TaskRegistryStore {
         let existing = workspace_by_id(&tx, &partition_id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, partition_id.clone()))?;
         match existing.repo_fingerprint.as_deref() {
-            Some(current) if current == repo_fingerprint => {}
-            Some(_) => {
+            Some(current)
+                if current == repo_fingerprint
+                    || git_remotes_equivalent(current, repo_fingerprint).unwrap_or(false) => {}
+            Some(_) if !rebind => {
                 return Err(OrbitError::InvalidInput(format!(
-                    "workspace '{partition_id}' is registered with a different source-repository fingerprint"
+                    "workspace '{partition_id}' is registered with a different source-repository fingerprint; inspect `orbit workspace source-remote show --json` and use `orbit workspace source-remote rebind --remote <URL>` on the declared owner machine for a repository transfer"
                 )));
             }
-            None => {
+            _ => {
                 tx.execute(
                     "UPDATE workspace_bindings
                      SET repo_fingerprint = ?2, updated_at = ?3

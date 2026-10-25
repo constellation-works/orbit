@@ -230,7 +230,7 @@ pub fn rebind_workspace_source_remote(
         .find(|binding| binding.workspace_id == workspace_id)
     {
         return Err(OrbitError::WorkspaceError(format!(
-            "workspace '{workspace_id}' has publication binding '{}' tied to source '{}'; refusing to rewrite publication lineage. Inspect it with `orbit --workspace {workspace_id} workspace publication show --json`, record its settings, remove it with `orbit --workspace {workspace_id} workspace publication remove --confirm`, perform the source-remote rebind, then create a new binding explicitly",
+            "workspace '{workspace_id}' has publication binding '{}' tied to source '{}'; refusing to rewrite publication lineage. Inspect it with `orbit --workspace {workspace_id} workspace publication show --json`, record its settings, remove it with `orbit --workspace {workspace_id} workspace publication remove --confirm`, perform the source-remote rebind, then use `orbit --workspace {workspace_id} workspace publication rebind` with a new publication ID and an empty publication branch",
             binding.publication_id,
             redact_git_remote(&binding.source_repository_fingerprint),
         )));

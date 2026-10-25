@@ -67,11 +67,21 @@ remote. A missing binding is expected during first setup.
 When the source repository itself moves, do not edit the binding fingerprint or registry by
 hand. `workspace source-remote rebind` refuses a changed source identity while a publication
 binding exists. Capture this command's JSON output, remove the binding explicitly, perform and
-verify the source rebind, then use `workspace publication bind` with the reviewed captured
-remote, branch, and publication ID. The new local binding starts without last-success metadata;
-the operation does not migrate or rewrite any existing publication snapshot. See
+verify the source rebind, then use `workspace publication rebind` with the reviewed captured
+remote, a new publication ID, and an empty publication branch. The new local binding starts
+without last-success metadata; the operation does not migrate or rewrite any existing
+publication snapshot. See
 [Rebind the source remote after a repository move](./state-and-backup.md#rebind-the-source-remote-after-a-repository-move)
 for the full inspection, dry-run, verification, and rollback sequence.
+
+Source rebinding also reconciles the task-registry source pairing. Existing raw-URL rows
+remain compatible: pairing comparisons use portable host/owner/repository identity, so SSH
+and HTTPS URLs for the same repository compare equal. A different owner or repository still
+requires the audited source rebind. If an older version already moved the registered source
+but left a stale task pairing, repeat `workspace source-remote rebind --remote <registered-source-url>`
+before binding publication. It repairs the pairing even when the source reports `unchanged`.
+The workspace registration is saved first; repeat that command after an interruption or a
+task-pairing write failure. Dry runs change neither pairing. Never edit either store by hand.
 
 ## Choose durable authentication
 
