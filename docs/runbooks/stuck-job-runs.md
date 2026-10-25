@@ -1450,8 +1450,11 @@ The task details panel shows **Fix PR** beside approve, reject and archive on a
 above for that one task, through the same checks, ledger, budget, footprint
 locks and `pr_auto_fix_out_of_run` record, with no drain. The record and the
 resumed run's `out_of_run_auto_fix` input name no `drain_run_id`. When the panel
-opens, it reads the pull request's state from GitHub once
+opens, it reads the pull request's state from GitHub
 (`GET /api/tasks/<task>/auto-fix`), skipping the drain's five-minute recheck.
+That reading is cached for 60 seconds; a dashboard refresh after the cache
+interval reads it again, so a pull request whose checks or mergeability
+changed is re-evaluated without reopening the task.
 The button is enabled only when the pull request conflicts with its base or a
 required check failed on its head. Otherwise it is disabled, and its title names
 the reason: no blocker, mergeability still being calculated, budget spent, a
