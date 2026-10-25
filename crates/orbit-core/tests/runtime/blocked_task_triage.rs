@@ -8,7 +8,7 @@
 //! `blocked_task_triage` routine's `block_escalated` trigger admits each
 //! qualifying episode once, under the same rule.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::{Duration, Utc};
 use orbit_core::application::auto_tasks::state::{cursor_state_path, load_cursor_state};
@@ -46,6 +46,7 @@ template:
 
 struct Fixture {
     _root: TempDir,
+    _git_ceiling: orbit_common::test_env::ScopedEnv,
     global: PathBuf,
     repo: PathBuf,
     runtime: OrbitRuntime,
@@ -57,7 +58,24 @@ fn fixture() -> Fixture {
 }
 
 fn fixture_with_config(config: &str) -> Fixture {
-    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    fixture_in(&orbit_common::test_env::bulk_write_temp_dir(), config)
+}
+
+/// A fixture rooted under `parent`, so a test can nest the non-Git workspace
+/// inside a checkout it builds.
+fn fixture_in(parent: &Path, config: &str) -> Fixture {
+    let root = TempDir::new_in(parent).unwrap();
+    // Git walks past a plain directory when looking for a repository, so a
+    // fixture rooted under a checkout (a managed run's nested TMPDIR) would
+    // discover the enclosing checkout's `.git` and lock/fetch it. Stop lookup
+    // at the fixture root. The canonical spelling matches what `getcwd`
+    // reports, including the macOS `/var` to `/private/var` link.
+    let ceiling = std::fs::canonicalize(root.path())
+        .unwrap_or_else(|_| root.path().to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+    let git_ceiling =
+        orbit_common::test_env::scoped([("GIT_CEILING_DIRECTORIES", Some(ceiling.as_str()))]);
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&global).unwrap();
@@ -68,6 +86,7 @@ fn fixture_with_config(config: &str) -> Fixture {
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
     Fixture {
         _root: root,
+        _git_ceiling: git_ceiling,
         global,
         repo,
         runtime,
@@ -790,6 +809,43 @@ fn a_non_git_triage_run_pins_no_revision_and_its_decisions_report_none() {
     let reported = report(json!({"source_revision": null})).unwrap();
     assert_eq!(reported["outcome"], "reported");
     assert_eq!(fx.triage_comments(&task).len(), 1);
+}
+
+#[test]
+fn a_non_git_workspace_inside_a_checkout_pins_no_enclosing_revision() {
+    // The enclosing checkout is built here, so the regression holds under any
+    // TMPDIR: without the fixture's Git ceiling, triage pins this checkout's
+    // `main` and the null report below is refused.
+    let checkout = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let git = |args: &[&str]| {
+        let output = crate::git_test_support::command()
+            .args(args)
+            .current_dir(checkout.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.name", "Orbit Test"]);
+    git(&["config", "user.email", "orbit-test@example.com"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    std::fs::write(checkout.path().join("README.md"), "enclosing\n").unwrap();
+    git(&["add", "README.md"]);
+    git(&["commit", "-m", "seed"]);
+
+    let fx = fixture_in(checkout.path(), "");
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    fx.hold_in_triage_run(&task);
+    let reported = fx
+        .triage(json!({
+            "action": "report", "id": task,
+            "blocker": "the worker crashed while the host was rebooting",
+            "reason": "the operator checks the host",
+            "source_revision": null,
+        }))
+        .unwrap();
+    assert_eq!(reported["outcome"], "reported");
 }
 
 fn decision_requests(fx: &Fixture, task: &str) -> Vec<orbit_types::task::DecisionRequest> {
