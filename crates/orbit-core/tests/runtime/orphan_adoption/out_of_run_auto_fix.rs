@@ -734,8 +734,135 @@ fn a_newer_finished_delivery_of_the_task_keeps_its_older_stopped_leaf_from_resum
     assert!(fx.retries(&leaf.run).is_empty());
 }
 
+/// The dashboard's Fix PR starts one task's repair through the drain pass's
+/// own verdict, ledger and start, with no drain, and refuses with the pass's
+/// reason everything the pass would leave alone.
+fn one_tasks_repair_starts_without_a_drain_and_refusals_are_typed() {
+    use orbit_core::application::job::TaskAutoFixError;
+    let fx = fixture();
+    let refusal = |task: &str, completion_done: bool| -> String {
+        let readiness = fx
+            .runtime
+            .task_pr_auto_fix_readiness(task, completion_done)
+            .unwrap();
+        assert_eq!(readiness["available"], false, "{readiness}");
+        match fx
+            .runtime
+            .start_task_pr_auto_fix(task, completion_done, Some("dashboard"))
+        {
+            Err(TaskAutoFixError::Refused(refusal)) => {
+                assert_eq!(readiness["reason"], refusal.reason(), "{readiness}");
+                assert_eq!(
+                    refusal.code(),
+                    format!("task_auto_fix_{}", refusal.reason())
+                );
+                refusal.reason().to_string()
+            }
+            other => panic!("{task}: expected a refusal, got {other:?}"),
+        }
+    };
+
+    let leaf = fx.stopped_leaf(121, "review", Shelf::Review);
+    fx.blocked(&leaf, "fff1", "orbit-bot", true, &[]);
+    let readiness = fx
+        .runtime
+        .task_pr_auto_fix_readiness(&leaf.task, false)
+        .unwrap();
+    assert_eq!(readiness["available"], true, "{readiness}");
+    assert_eq!(readiness["blocker"], "conflict", "{readiness}");
+    assert!(fx.retries(&leaf.run).is_empty(), "readiness starts nothing");
+    let started = fx
+        .runtime
+        .start_task_pr_auto_fix(&leaf.task, false, Some("dashboard"))
+        .unwrap();
+    let retries = fx.retries(&leaf.run);
+    assert_eq!(retries.len(), 1, "{started}");
+    assert_eq!(started["resumed_run_id"], retries[0].run_id);
+    let input = retries[0].input.as_ref().unwrap();
+    assert_eq!(input["auto_fix"], true);
+    assert_eq!(input["footprint_deferred"], true);
+    assert_eq!(
+        input["completion"], "review",
+        "a dashboard repair never gains merge authority the leaf lacked"
+    );
+    assert_eq!(input["out_of_run_auto_fix"]["drain_run_id"], Value::Null);
+    let history = fx.runtime.get_task_history(&leaf.task).unwrap();
+    let recorded: Vec<Value> = history
+        .iter()
+        .filter(|entry| entry.event == "pr_auto_fix_out_of_run")
+        .map(|entry| serde_json::from_str(entry.note.as_deref().unwrap()).unwrap())
+        .collect();
+    assert_eq!(recorded.len(), 1, "{history:?}");
+    assert_eq!(recorded[0]["resumed_run_id"], retries[0].run_id);
+    assert!(recorded[0].get("drain_run_id").is_none(), "{}", recorded[0]);
+    // The resumed leaf is live now.
+    assert_eq!(refusal(&leaf.task, false), "live_run");
+
+    // A dashboard start spends the same ledger a drain pass reads.
+    fx.fail(&retries[0].run_id);
+    let drain = fx.drain();
+    let pass = fx.pass(&drain, "review", true);
+    assert_eq!(
+        repair_skip(&pass, &leaf.task).as_deref(),
+        Some("already_started"),
+        "{pass}"
+    );
+
+    let held = fx.stopped_leaf(122, "review", Shelf::OperatorHold);
+    fx.blocked(&held, "fff2", "orbit-bot", true, &[]);
+    let opted_out = fx.stopped_leaf(123, "review", Shelf::OptedOut);
+    fx.blocked(&opted_out, "fff3", "orbit-bot", true, &[]);
+    let foreign = fx.stopped_leaf(124, "review", Shelf::Review);
+    fx.blocked(&foreign, "fff4", "someone-else", true, &[]);
+    let wants_merge = fx.stopped_leaf(125, "done", Shelf::Review);
+    fx.blocked(&wants_merge, "fff5", "orbit-bot", true, &[]);
+    let clean = fx.stopped_leaf(126, "review", Shelf::Review);
+    fx.blocked(&clean, "fff6", "orbit-bot", false, &[]);
+    let closed = fx.stopped_leaf(127, "review", Shelf::Review);
+    let undelivered = fx
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Never delivered".into(),
+            description: "No delivery run of its own.".into(),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+    for (task, completion_done, reason) in [
+        (held.task.as_str(), true, "operator_hold"),
+        (&opted_out.task, true, "opted_out"),
+        (&foreign.task, true, "not_orbit_pull_request"),
+        (&wants_merge.task, false, "authority"),
+        (&clean.task, true, "no_blocker"),
+        (&closed.task, true, "pull_request_not_open"),
+        (&undelivered, true, "no_delivery_leaf"),
+    ] {
+        assert_eq!(refusal(task, completion_done), reason, "{task}");
+    }
+    for leaf in [&held, &opted_out, &foreign, &wants_merge, &clean, &closed] {
+        assert!(fx.retries(&leaf.run).is_empty(), "{}", leaf.task);
+    }
+    assert!(matches!(
+        fx.runtime
+            .start_task_pr_auto_fix("ORB-99999", true, Some("dashboard")),
+        Err(TaskAutoFixError::Runtime(OrbitError::NotFound { .. }))
+    ));
+
+    // A leaf started with `--complete` resumes under completion authority,
+    // and keeps that grant.
+    let started = fx
+        .runtime
+        .start_task_pr_auto_fix(&wants_merge.task, true, Some("dashboard"))
+        .unwrap();
+    let resumed = &fx.retries(&wants_merge.run)[0];
+    assert_eq!(started["resumed_run_id"], resumed.run_id);
+    assert_eq!(resumed.input.as_ref().unwrap()["completion"], "done");
+}
+
 crate::scenario_table!(
     out_of_run_auto_fix_scenarios,
+    one_tasks_repair_starts_without_a_drain_and_refusals_are_typed,
     a_conflicting_pull_request_its_delivery_blocked_is_handed_back_for_an_auto_fix,
     skipped_repairs_are_checkpointed_and_visible_in_readiness,
     full_capacity_still_reports_the_pull_requests_left_alone,

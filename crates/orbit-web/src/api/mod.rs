@@ -32,6 +32,7 @@ mod routes;
 pub(crate) mod routines;
 mod runs;
 mod search;
+mod task_auto_fix;
 mod task_create;
 mod task_pilot;
 mod tasks;

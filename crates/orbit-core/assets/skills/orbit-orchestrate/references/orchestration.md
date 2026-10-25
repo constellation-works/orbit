@@ -757,6 +757,9 @@ It cannot be combined with `--pull` or `--stop`.
   `blocked` or `backlog` that records a PR, not a window of recent leaves. A write-free pass scans and persists nothing.
   Operator holds, `no-auto-approve` tasks, PRs not opened by Orbit and a leaf
   started with `--complete` under a drain without it are left alone.
+  The dashboard's **Fix PR** action on a `review` task starts the same
+  hand-back for that one task without a drain (operator session, governed as
+  `auto_drain.auto_fix`); a refusal is a `409` coded `task_auto_fix_<reason>`.
 
 Submission stays asynchronous, so a `--complete` run's eventual outcome is not
 known when the command returns — confirm with `orbit run show <run_id>` and
