@@ -149,21 +149,31 @@ scoped by the activity's filesystem profile:
 Shipped assets declare their sandbox intent once, and seeding translates it
 for the host: a shipped executor installs with `linux-bwrap` on Linux and
 keeps `macos-sandbox-exec` on macOS. A value you set yourself is not
-translated. Declaring a backend the host cannot apply fails closed before the
-provider launches, unless you also set `allow_fallback: true`:
+translated. Declaring a backend unsupported on the host OS (such as
+`macos-sandbox-exec` on Linux or `linux-bwrap` on macOS) is always refused
+before provider launch; `allow_fallback` does not override an OS/backend
+mismatch. The remedy is to configure the host's native backend (`linux-bwrap` on
+Linux, `macos-sandbox-exec` on macOS; WSL2 on Windows) or explicitly set
+`sandbox: off`.
+
+On a supported host OS, `allow_fallback: true` permits running without an OS
+wrapper if the host's native sandbox primitive is missing or unusable (for
+example, on Linux when Bubblewrap is absent or its user namespace probe fails,
+or on macOS if `/usr/bin/sandbox-exec` is missing):
 
 ```yaml
+# Supported Linux host where Bubblewrap may be unavailable:
 spec:
   sandbox: linux-bwrap
   allow_fallback: true
 ```
 
-`allow_fallback: true` means an unavailable sandbox primitive (a missing
-`/usr/bin/sandbox-exec`, or a Bubblewrap whose namespace probe fails) degrades
-to running the CLI with no OS wrapper. The activity's tool policy and
-in-process guards still apply, but the filesystem profile is no longer
-kernel-enforced. Leave it `false` unless that trade-off is acceptable on this
-machine. Check readiness before a run with `orbit doctor providers`.
+With `allow_fallback: true`, an unavailable sandbox primitive on a supported OS
+degrades to running the CLI with no OS wrapper rather than refusing dispatch.
+The activity's tool policy and in-process guards still apply, but the filesystem
+profile is no longer kernel-enforced. Leave it `false` unless that trade-off is
+acceptable on this machine. Check readiness before a run with
+`orbit doctor providers`.
 
 ## Host constraint: `host_os`
 
