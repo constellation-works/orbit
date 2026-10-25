@@ -13,6 +13,7 @@ private fixtures driving that behavior.
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -241,6 +242,23 @@ class DiscoveryCliTest(unittest.TestCase):
         lines = proc.stderr.splitlines()
         self.assertEqual(len(lines), 1, f"expected one error line, got: {proc.stderr!r}")
         self.assertIn("stdin", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_non_utf8_export_reports_one_line_error_without_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            export = Path(tmp) / "export.json"
+            export.write_bytes(b"\xff\xfe\x00not utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), str(export)],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.stdout, "")
+        lines = proc.stderr.splitlines()
+        self.assertEqual(len(lines), 1, f"expected one error line, got: {proc.stderr!r}")
+        self.assertIn(str(export), proc.stderr)
         self.assertNotIn("Traceback", proc.stderr)
 
     def test_reserved_fallback_name_never_becomes_ready_to_paste_name(self):

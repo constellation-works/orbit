@@ -338,7 +338,7 @@ def main(argv=None) -> int:
         detail = exc.strerror or exc
         print(f"error: cannot read export from {source_label(args.source)}: {detail}", file=sys.stderr)
         return 1
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         print(f"error: invalid JSON in export from {source_label(args.source)}: {exc}", file=sys.stderr)
         return 1
     groups, suggestions, unsupported = analyse(
