@@ -1077,6 +1077,80 @@ fn answering_a_superseded_request_is_refused_and_changes_nothing() {
 }
 
 #[test]
+fn answering_an_expired_request_is_refused_and_changes_nothing() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    let history = fx.runtime.get_task_history(&task).unwrap();
+    let blocked_at = history
+        .iter()
+        .rfind(|entry| entry.to_status == Some(TaskStatus::Blocked))
+        .expect("seeded blocked task records its block")
+        .at;
+    let mut request = orbit_types::task::DecisionRequest::new(
+        task.clone(),
+        orbit_types::task::DecisionGate::BlockTriage,
+        vec![
+            orbit_types::task::DecisionAnswer {
+                id: "1".to_string(),
+                label: "Drop criterion 2".to_string(),
+                consequence: "the old API stays retired".to_string(),
+            },
+            orbit_types::task::DecisionAnswer {
+                id: "dismiss".to_string(),
+                label: "Dismiss".to_string(),
+                consequence: "Leave blocked, stop asking for this episode.".to_string(),
+            },
+        ],
+        orbit_types::task::DecisionBinding::BlockEpisode {
+            episode: blocked_at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+        },
+        "block_triage".to_string(),
+        chrono::Utc::now(),
+    );
+    request.expires_at = chrono::Utc::now() - chrono::Duration::hours(1);
+    assert_eq!(request.state, orbit_types::task::DecisionRequestState::Open);
+    fx.runtime
+        .apply_task_automation_update(
+            &task,
+            TaskAutomationUpdate {
+                append_history: vec![request.history_entry("system")],
+                ..Default::default()
+            },
+        )
+        .expect("record the expired decision request");
+    assert_eq!(
+        decision_requests(&fx, &task)[0].state,
+        orbit_types::task::DecisionRequestState::Expired
+    );
+    let human = fx.human();
+    let status_before = fx.runtime.get_task(&task).unwrap().status;
+    let comments_before = fx.runtime.get_task_comments(&task).unwrap().len();
+    let history_before = fx.runtime.get_task_history(&task).unwrap().len();
+    let expired = human
+        .answer_decision_request_as_human(
+            &request.id,
+            "1",
+            None,
+            "human:operator".to_string(),
+            Some("cli".to_string()),
+        )
+        .expect_err("an expired answer is refused");
+    assert!(expired.to_string().contains("request_expired"), "{expired}");
+    assert_eq!(fx.runtime.get_task(&task).unwrap().status, status_before);
+    assert_eq!(
+        fx.runtime.get_task_comments(&task).unwrap().len(),
+        comments_before,
+        "the refusal wrote no comment"
+    );
+    assert_eq!(
+        fx.runtime.get_task_history(&task).unwrap().len(),
+        history_before,
+        "the refusal wrote no history"
+    );
+}
+
+#[test]
 fn a_pilot_warning_requeue_is_refused_as_a_requeue_whatever_proof_it_carries() {
     let fx = fixture();
     let task = fx.task(&[]);
