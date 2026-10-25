@@ -12,7 +12,7 @@ pub use lookup::{
 pub use mutations::{
     WorkspaceShipModeRebind, WorkspaceSourceRemoteRebind, assign_checkout_role,
     rebind_workspace_ship_mode, rebind_workspace_source_remote, reconcile_workspace_source_remote,
-    register_checkout, register_workspace, remove_workspace, set_path_override,
+    register_checkout, register_workspace, remove_workspace,
 };
 pub use validation::{parse_workspace_registry, validate_workspace_registry, validate_workspaces};
 

@@ -1,5 +1,5 @@
 //! Workspace and checkout mutations: registration, source-remote and
-//! ship-mode rebinding, role assignment, removal, and path overrides.
+//! ship-mode rebinding, role assignment, and removal.
 
 use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError};
@@ -9,7 +9,6 @@ use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, git_remote_identity,
     git_remotes_equivalent, redact_git_remote, validate_source_repository_fingerprint,
 };
-use std::path::PathBuf;
 
 use super::find_workspace;
 
@@ -445,51 +444,4 @@ pub fn remove_workspace(
         .publication_bindings
         .retain(|binding| binding.workspace_id != removed.id);
     Ok(removed)
-}
-
-/// Sets a path override binding a directory to a workspace.
-///
-/// The path must not already be another checkout's `repo_root` or override.
-/// Persistence repeats this uniqueness rule so a hand-edited or CLI-rewritten
-/// registry cannot save a collision that would make `find_checkout_by_path`
-/// order-dependent.
-pub fn set_path_override(
-    registry: &mut WorkspaceRegistry,
-    path: PathBuf,
-    workspace_id: &str,
-) -> Result<(), OrbitError> {
-    let checkout_index = registry
-        .checkouts
-        .iter()
-        .position(|checkout| checkout.workspace_id == workspace_id)
-        .ok_or_else(|| {
-            OrbitError::WorkspaceError(format!(
-                "workspace '{workspace_id}' has no local checkout binding"
-            ))
-        })?;
-    if let Some(existing) = registry
-        .checkouts
-        .iter()
-        .enumerate()
-        .find(|(index, checkout)| {
-            *index != checkout_index
-                && (checkout.repo_root == path
-                    || checkout
-                        .path_overrides
-                        .iter()
-                        .any(|claimed| claimed == &path))
-        })
-        .map(|(_, checkout)| checkout.workspace_id.as_str())
-    {
-        return Err(OrbitError::WorkspaceError(format!(
-            "checkout path '{}' is already registered to workspace '{existing}'",
-            path.display()
-        )));
-    }
-    let checkout = &mut registry.checkouts[checkout_index];
-    if !checkout.path_overrides.contains(&path) {
-        checkout.path_overrides.push(path);
-        checkout.path_overrides.sort();
-    }
-    Ok(())
 }
