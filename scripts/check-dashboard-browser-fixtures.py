@@ -16,8 +16,9 @@ geometry against a changed layout still needs the browser run itself.
 This is a lexical guard, not a JavaScript parser: only literal hooks in
 string/template literals (plus ``getElementById`` and ``dataset.*``
 lookups) are extracted. A ``getElementById`` probe is exempt only when the
-fixture asserts the element absent (compared with null, ``assert.ok(!...)``,
-or a Boolean asserted false); ``Boolean(...)``/``!!`` alone are queries.
+fixture directly asserts the element absent (a null/undefined value or a
+comparison asserted true, ``assert.ok(!...)``, or a Boolean asserted false).
+A null comparison alone and ``Boolean(...)``/``!!`` alone remain queries.
 Computed selectors and paths are skipped. An id or
 class the assets build from a template (``id = `detail-${task.id}```,
 ``class: `chip chip-${tone}```) satisfies only a fixture hook of that kind
@@ -220,6 +221,7 @@ NEGATIVE_COUNT_RE = re.compile(r"\.count\(\)[^\n]*(?:,\s*0\b|===\s*0|==\s*0)")
 
 
 ASSERT_CALL = r"\bassert(?:\.\w+)?\(\s*"
+ASSERT_TRUTHY_CALL = r"\bassert(?:\.ok)?\(\s*"
 ASSERT_EQUAL_CALL = r"\bassert\.(?:equal|strictEqual|deepEqual|deepStrictEqual)\(\s*"
 RECEIVER = r"(?:[A-Za-z_$][\w$]*\.)?"
 
@@ -227,8 +229,9 @@ RECEIVER = r"(?:[A-Za-z_$][\w$]*\.)?"
 def is_asserted_absent(source, match):
     """True when a getElementById probe is a proven absence check.
 
-    Only a call whose result is asserted missing qualifies: compared
-    with null/undefined, negated once directly under an assert, or
+    Only a call whose result is asserted missing qualifies: asserted
+    null/undefined or a null comparison asserted true, negated once
+    directly under an assert, or
     wrapped in Boolean(...)/!! and asserted false. A bare Boolean(...),
     ``!!`` or ``!`` is a positive or property probe
     (``!document.getElementById('x').disabled`` needs the element), so
@@ -239,8 +242,16 @@ def is_asserted_absent(source, match):
     if not closing:
         return False
     rest = source[match.end() + closing.end():][:160]
-    if re.match(r"\s*===?\s*(?:null|undefined)\b", rest):
-        return True
+    comparison = re.match(r"\s*===?\s*(?:null|undefined)\b", rest)
+    if comparison:
+        # The comparison's consumer determines whether absence is intended.
+        # A guard that throws when it is true still requires the element.
+        tail = rest[comparison.end():]
+        if re.search(ASSERT_TRUTHY_CALL + rf"{RECEIVER}$", before):
+            return bool(re.match(r"\s*[,)]", tail))
+        if re.search(ASSERT_EQUAL_CALL + rf"{RECEIVER}$", before):
+            return bool(re.match(r"\s*,\s*true\s*[,)]", tail))
+        return False
     if re.search(ASSERT_CALL + rf"!\s*{RECEIVER}$", before):
         return bool(re.match(r"\s*[,)]", rest))
     if re.search(ASSERT_EQUAL_CALL + rf"{RECEIVER}$", before):
@@ -272,7 +283,7 @@ def extract_hooks(source):
         if "$" in token:
             continue  # templated id, not a literal hook
         if is_asserted_absent(source, match):
-            continue  # intentional absence check, not a query for it
+            continue  # supported absence assertion; a comparison alone queries
         singles.append((line_of(match.start()), "id", token))
     for match in DATASET_RE.finditer(source):
         token = "data-" + camel_to_kebab(match.group(1))

@@ -102,21 +102,23 @@ try {
   assert.match(wide[0].className, /critical gating-off/);
   assert.equal(wide[0].flag, 'no gate', 'a gating-off provider says "no gate", not "off"');
   assert.ok(!wide[0].className.includes('stale'), 'a fresh weekly window keeps the account chip fresh');
-  const layout = await page.evaluate(() => {
-    const divider = getComputedStyle(document.getElementById('provider-usage-chips'), '::before');
-    const warn = document.getElementById('host-warn');
-    const usage = document.querySelector('#provider-usage-chips .provider-usage-item').getBoundingClientRect();
-    const warnShown = !!(warn && !warn.hidden && warn.getClientRects().length);
-    const codex = document.querySelector('#provider-usage-chips .gating-off');
-    return {
-      hostChipsAbsent: document.getElementById('host-resource-chips') === null,
-      hostNameAbsent: document.getElementById('host-resource-name') === null,
-      dividerShown: divider.content !== 'none' && parseFloat(divider.width) > 0,
-      warnShown,
-      after: warnShown ? usage.left > warn.getBoundingClientRect().right : true,
-      dashed: getComputedStyle(codex).borderStyle,
-    };
-  });
+  const layout = {
+    hostChipsAbsent: await page.locator('#host-resource-chips').count() === 0,
+    hostNameAbsent: await page.locator('#host-resource-name').count() === 0,
+    ...await page.evaluate(() => {
+      const divider = getComputedStyle(document.getElementById('provider-usage-chips'), '::before');
+      const warn = document.getElementById('host-warn');
+      const usage = document.querySelector('#provider-usage-chips .provider-usage-item').getBoundingClientRect();
+      const warnShown = !!(warn && !warn.hidden && warn.getClientRects().length);
+      const codex = document.querySelector('#provider-usage-chips .gating-off');
+      return {
+        dividerShown: divider.content !== 'none' && parseFloat(divider.width) > 0,
+        warnShown,
+        after: warnShown ? usage.left > warn.getBoundingClientRect().right : true,
+        dashed: getComputedStyle(codex).borderStyle,
+      };
+    }),
+  };
   assert.equal(layout.hostChipsAbsent, true, 'host readings are not chips in the top bar');
   assert.equal(layout.hostNameAbsent, true, 'the top bar does not name the host');
   assert.equal(layout.dividerShown, layout.warnShown, 'a divider sets provider usage apart only while the host warning chip is shown');
