@@ -175,6 +175,22 @@ pub const DASHBOARD_HANDOFF_REVOKE: GovernedOperation = GovernedOperation {
     rationale: "revocation cancels a pending landing request for work already handed off; only an operator decides that",
 };
 
+/// Requeue a blocked task from the dashboard, keeping or discarding its candidate.
+pub const DASHBOARD_TASK_REQUEUE: GovernedOperation = GovernedOperation {
+    id: "task.requeue",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "requeuing a blocked task overrides a recorded escalation and preserves or discards its published candidate",
+};
+
+/// Settle a task whose delivery PR merged outside the pipeline, from the dashboard.
+pub const DASHBOARD_TASK_SETTLE_MERGED: GovernedOperation = GovernedOperation {
+    id: "task.settle_merged",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "settling a task from a merged pull request completes it without a run; only an operator decides that",
+};
+
 /// Configuration write from the dashboard's Config tab [ORB-12724].
 pub const DASHBOARD_CONFIG_SET: GovernedOperation = GovernedOperation {
     id: "config.set",
@@ -596,6 +612,8 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_HANDOFF_APPROVE,
     DASHBOARD_HANDOFF_REVOKE,
     DASHBOARD_HANDOFF_RETRY,
+    DASHBOARD_TASK_REQUEUE,
+    DASHBOARD_TASK_SETTLE_MERGED,
     DASHBOARD_CLAIM_RECOVER,
     DASHBOARD_CONFIG_SET,
     DASHBOARD_HOST_EDIT,

@@ -120,6 +120,7 @@ onWorkspaceChange(() => {
   taskDetails.clear();
   taskDetailLoads.clear();
   taskDrainLoads.clear();
+  recoveryRefusals.clear();
   taskDecisionLoads.clear();
   expandedComments.clear();
   rawComments.clear();
@@ -149,6 +150,10 @@ const triageRunsByTask = new Map();
 // Run pilot so a refresh that rebuilds the panel does not drop it.
 const triageRefusals = new Map();
 const TRIAGE_REFUSAL_MS = 20000;
+// Recovery (requeue / settle-merged): a refused recovery's typed code and
+// message, kept with the action like a refused Triage.
+const recoveryRefusals = new Map();
+const RECOVERY_REFUSAL_MS = 20000;
 // Fix PR: whether the server would start an out-of-run auto-fix of a review
 // task's pull request, keyed like the ship guard. Read once when the panel
 // shows the task and again after FIX_PR_READINESS_MS or a start, so a list
@@ -4399,6 +4404,7 @@ function buildActionsRow(task, detail, context, { includeLifecycle = true, inclu
   if (includeLifecycle && task.status === "review" && taskPullRequestNumber(task)) appendFixPrControls(actions, task, detail, context, mutable);
   if (includeLifecycle && task.status === "proposed") appendPilotControls(actions, task, detail, context, mutable);
   if (includeLifecycle && escalationTriage(task)) appendTriageControls(actions, task, detail, context, mutable);
+  if (includeLifecycle && (task.status === "blocked" || task.why_stuck)) appendRecoveryControls(actions, task, detail, context, mutable);
   if (includeLifecycle && task.status !== "archived") {
     const btn = el("button", { class: "action archive", text: "archive" });
     btn.disabled = !mutable;
@@ -4975,6 +4981,115 @@ async function watchTriageRun(task, key, runId, visit, context) {
   triageRunsByTask.delete(key);
   if (!visit.isCurrent()) return;
   if (state) taskActionNotice = `${task.id}: triage run ${runId} ${state}`;
+  await refreshTasks(context);
+}
+
+// Recovery actions on a blocked task or a held delivery (a task carrying
+// `why_stuck`): requeue onto its candidate, requeue discarding it, or settle
+// it from a delivery pull request merged outside the pipeline. Each asks for
+// confirmation explaining what it does before anything is sent; requeue also
+// asks for the reason recorded in task history. A refusal shows its typed
+// code and message inline and changes nothing.
+function appendRecoveryControls(actions, task, detail, context, mutable) {
+  const blocked = task.status === "blocked";
+  const settleable = blocked || task.status === "in-progress" || task.status === "review";
+  const disabledTitle = mutable ? "" : aggregateRefusalTitle("Recovery", "recover a task");
+  if (blocked) {
+    const resume = el("button", {
+      class: "action requeue-resume",
+      text: "Resume candidate",
+      title: disabledTitle || "Return this blocked task to the backlog keeping its published candidate: the next run adopts that candidate and pull request without re-implementing, then validates, reviews and lands it afresh",
+    });
+    resume.disabled = !mutable;
+    resume.addEventListener("click", (e) => { e.stopPropagation(); runRecovery(task, detail, resume, context, "resume"); });
+    actions.appendChild(resume);
+    const discard = el("button", {
+      class: "action requeue-discard",
+      text: "Discard and re-implement",
+      title: disabledTitle || "Discard this blocked task's published candidate, close its undelivered pull requests, and return it to the backlog so the next run implements fresh",
+    });
+    discard.disabled = !mutable;
+    discard.addEventListener("click", (e) => { e.stopPropagation(); runRecovery(task, detail, discard, context, "discard"); });
+    actions.appendChild(discard);
+  }
+  if (settleable || task.why_stuck) {
+    const settle = el("button", {
+      class: "action settle-merged",
+      text: "Settle merged PR",
+      title: disabledTitle || "Settle this task as done from its delivery pull request if that pull request already merged outside the pipeline into its target branch; if it has not merged, nothing changes",
+    });
+    settle.disabled = !mutable;
+    settle.addEventListener("click", (e) => { e.stopPropagation(); runRecovery(task, detail, settle, context, "settle"); });
+    actions.appendChild(settle);
+  }
+  const refusal = recoveryRefusals.get(taskDispatchIdentity(task));
+  if (refusal) {
+    const note = actionErrorNode(refusal);
+    note.style.flexBasis = "100%";
+    actions.appendChild(note);
+  }
+}
+
+function recoverySignature(task) {
+  return recoveryRefusals.get(taskDispatchIdentity(task)) || "";
+}
+
+async function runRecovery(task, detail, btnNode, context, kind) {
+  const visit = captureWorkspaceVisit();
+  const key = taskDispatchIdentity(task);
+  if (!canMutateTask(task)) return;
+  let body;
+  let suffix;
+  let successText;
+  if (kind === "settle") {
+    if (typeof window.confirm !== "function" || !window.confirm(
+      `Settle merged PR for ${task.id}? If its delivery pull request already merged outside the pipeline into its target branch, the task moves to done with a landing note naming the pull request and merge commit. If it has not merged, nothing changes and the refusal is shown here.`,
+    )) return;
+    suffix = "/settle-merged";
+    body = {};
+    successText = `${task.id}: settled from its merged pull request`;
+  } else {
+    const discard = kind === "discard";
+    const explain = discard
+      ? `Discard and re-implement ${task.id}? This discards the candidate its stopped run published, closes the task's undelivered pull requests, and returns the task to the backlog so the next run implements fresh.`
+      : `Resume candidate for ${task.id}? This returns the blocked task to the backlog keeping the candidate its stopped run published: the next run adopts that candidate and pull request without re-implementing, then validates, reviews and lands it afresh.`;
+    if (typeof window.confirm !== "function" || !window.confirm(explain)) return;
+    if (typeof window.prompt !== "function") return;
+    const reason = window.prompt(`Reason for requeueing ${task.id} (recorded in task history):`, "");
+    if (reason === null) return;
+    if (!reason.trim()) {
+      const message = "[requeue_reason_required] requeue needs a reason; it is recorded with the decision";
+      recoveryRefusals.set(key, message);
+      renderTasks(taskList(context), context);
+      return;
+    }
+    suffix = "/requeue";
+    body = { reason: reason.trim(), discard_candidate: discard };
+    successText = discard ? `${task.id}: requeued to implement fresh` : `${task.id}: requeued onto its published candidate`;
+  }
+  const requestPath = visit.path(taskMutationPath(task, suffix));
+  recoveryRefusals.delete(key);
+  const prior = detail.querySelector(".action-error");
+  if (prior) prior.remove();
+  for (const b of detail.querySelectorAll(".action")) b.disabled = true;
+  btnNode.innerHTML = `<span class="spinner"></span>wait`;
+  try {
+    await postJson(requestPath, body);
+  } catch (error) {
+    if (!visit.isCurrent()) return;
+    const code = error && error.code ? error.code : "recovery_refused";
+    const message = `[${code}] ${error.message || String(error)}`;
+    recoveryRefusals.set(key, message);
+    renderTasks(taskList(context), context);
+    setTimeout(() => {
+      if (recoveryRefusals.get(key) !== message) return;
+      recoveryRefusals.delete(key);
+      renderTasks(taskList(context), context);
+    }, RECOVERY_REFUSAL_MS);
+    return;
+  }
+  if (!visit.isCurrent()) return;
+  taskActionNotice = successText;
   await refreshTasks(context);
 }
 
@@ -6213,7 +6328,7 @@ function buildListTaskDetail(t, drafts, existing, context) {
   // its read state instead; a detail rendered from the cached projection must
   // not be rebuilt just because a refresh has a read in flight.
   const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${fixPrSignature(t)}-${decisionSignature(t)}`;
+  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${recoverySignature(t)}-${fixPrSignature(t)}-${decisionSignature(t)}`;
   const detailHash = `${baseHash}-${taskDrainSignature(drain)}`;
   const existingDetail = existing.get(key);
   if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;

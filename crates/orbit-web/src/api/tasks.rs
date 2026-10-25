@@ -4,9 +4,12 @@ use std::sync::Arc;
 
 use crate::state::Ws;
 use axum::body::Body;
-use axum::extract::{Path, RawQuery};
-use axum::http::{HeaderName, HeaderValue, header};
+use axum::extract::{Path, RawQuery, State};
+use axum::http::{HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
+use orbit_common::governance::authorization::{
+    DASHBOARD_TASK_REQUEUE, DASHBOARD_TASK_SETTLE_MERGED,
+};
 use orbit_core::application::task::{
     ScreenedTaskWrite, TaskAddParams, TaskUpdateAuthority, TaskUpdateParams,
     TaskWriteResponsePolicy, TaskWriteScreen, screened_task_write_response_json,
@@ -24,11 +27,13 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
 use super::pagination::TaskPageQuery;
+use super::routines::{authorization_denied, authorized_caller};
 use super::{
     OptionalJson, bad_request, blocking, map_runtime_error, non_empty_string, server_error,
     validate_id,
 };
 use crate::projections::{TaskListProjection, task_detail_json};
+use crate::state::DashboardState;
 
 /// Actor recorded for a dashboard-authored comment when the request supplies no
 /// usable human identity. The dashboard is a human-operated surface, so this is
@@ -827,6 +832,110 @@ pub(super) async fn reject_task_action(
             .map(ScreenedTaskWrite::from)
     })
     .await
+}
+
+/// Actor recorded in task history for dashboard recovery actions.
+const DASHBOARD_ACTOR: &str = "dashboard";
+
+#[derive(Deserialize, Default)]
+pub(super) struct RequeueBody {
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    discard_candidate: bool,
+}
+
+fn recovery_refusal(error: orbit_core::OrbitError, code: &'static str) -> Response {
+    match error {
+        orbit_core::OrbitError::NotFound {
+            kind: orbit_core::NotFoundKind::Task,
+            id,
+        } => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("task not found: {id}"), "code": "task_not_found" })),
+        )
+            .into_response(),
+        orbit_core::OrbitError::InvalidInput(message) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": message, "code": code })),
+        )
+            .into_response(),
+        other => map_runtime_error(other),
+    }
+}
+
+/// `POST /tasks/:id/requeue` — operator-gated requeue of a blocked task.
+pub(super) async fn requeue_task_action(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Path(id): Path<String>,
+    OptionalJson(body): OptionalJson<RequeueBody>,
+) -> Response {
+    if let Err(denial) = authorized_caller(&DASHBOARD_TASK_REQUEUE, state.operator_session()) {
+        return authorization_denied(denial);
+    }
+    let id = match validate_id(&id) {
+        Ok(id) => id.to_string(),
+        Err(message) => return bad_request(message),
+    };
+    let reason = body.reason.unwrap_or_default();
+    if reason.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "requeue needs a reason; it is recorded with the decision",
+                "code": "requeue_reason_required"
+            })),
+        )
+            .into_response();
+    }
+    let discard = body.discard_candidate;
+    let result = tokio::task::spawn_blocking(move || {
+        runtime.requeue_blocked_task_as(&id, &reason, discard, Some(DASHBOARD_ACTOR))
+    })
+    .await;
+    match result {
+        Ok(Ok(value)) => Json(value).into_response(),
+        Ok(Err(e)) => recovery_refusal(e, "requeue_refused"),
+        Err(join_err) => server_error(orbit_core::OrbitError::Execution(format!(
+            "task requeue panicked: {join_err}"
+        ))),
+    }
+}
+
+/// `POST /tasks/:id/settle-merged` — operator-gated settle from a merged PR.
+pub(super) async fn settle_merged_task_action(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err(denial) = authorized_caller(&DASHBOARD_TASK_SETTLE_MERGED, state.operator_session())
+    {
+        return authorization_denied(denial);
+    }
+    let id = match validate_id(&id) {
+        Ok(id) => id.to_string(),
+        Err(message) => return bad_request(message),
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        runtime.settle_externally_merged_task_as(&id, Some(DASHBOARD_ACTOR))
+    })
+    .await;
+    match result {
+        Ok(Ok(settlement)) => Json(json!({
+            "task_id": settlement.task_id,
+            "previous_status": settlement.previous_status,
+            "status": "done",
+            "pr_number": settlement.pr_number,
+            "base_branch": settlement.base_branch,
+            "merge_commit": settlement.merge_commit,
+        }))
+        .into_response(),
+        Ok(Err(e)) => recovery_refusal(e, "settle_merged_refused"),
+        Err(join_err) => server_error(orbit_core::OrbitError::Execution(format!(
+            "task settle-merged panicked: {join_err}"
+        ))),
+    }
 }
 
 pub(super) async fn archive_task_action(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
