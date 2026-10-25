@@ -22,8 +22,10 @@ const SCRATCH_DIR: &str = ".orbit/tmp";
 /// widens the task's selectors to cover what it accepts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum NewPathPolicy {
-    /// An owner run: every untracked path outside scratch, refusing any
-    /// candidate Git would stage as something other than a regular file.
+    /// An owner run: every untracked path outside scratch. A symlink,
+    /// directory or `.git` component is refused, except a crate guide at
+    /// `crates/<name>/AGENTS.md` whose literal target is the sibling
+    /// `CLAUDE.md`.
     Owner,
     /// A claimed leaf: every untracked path outside scratch that the owner
     /// can accept as footprint widening at handoff — no traversal, Git or
@@ -38,8 +40,8 @@ pub(super) enum NewPathPolicy {
 /// Resolve the concrete paths a task run delivers: every tracked change and
 /// every untracked path outside the scratch root. Gitignored output is never
 /// listed. Refusing a protected claimed path, or an owner candidate that is
-/// not a regular file, before staging preserves both its bytes and the exact
-/// index the worker left behind.
+/// not a regular file (other than an admitted crate-guide symlink), before
+/// staging preserves both its bytes and the exact index the worker left behind.
 /// Rename detection stays off so both source deletions and destination
 /// additions are available for task attribution and path-scoped commits.
 pub(super) fn task_candidate_paths(
@@ -88,14 +90,18 @@ pub(super) fn task_candidate_paths(
     if policy == NewPathPolicy::Owner {
         // A nested repository would be committed as a gitlink, and every later
         // host status or diff could then run its own config (filters, fsmonitor)
-        // outside the sandbox.
-        let irregular = irregular_candidate_paths(workspace_path, &candidates);
+        // outside the sandbox. The crate-guide exception stays in this branch:
+        // claimed partial snapshots and recovery call `irregular_candidate_paths`
+        // directly and keep refusing every symlink.
+        let irregular = owner_refused_candidates(workspace_path, &candidates);
         if !irregular.is_empty() {
             return Err(OrbitError::Execution(format!(
                 "task delivery refused non-regular candidate paths: {irregular:?}. Delivery \
-                 commits only regular files and removals, never a symlink, a nested Git \
-                 repository (gitlink) or a `.git` path. Orbit did not change the index or any \
-                 listed file"
+                 commits only regular files and removals, plus a crate guide symlink at \
+                 `crates/<name>/AGENTS.md` whose literal target is the sibling `CLAUDE.md` \
+                 when that guide is a regular file in this delivery or already tracked. \
+                 Every other symlink, a nested Git repository (gitlink), a directory and a \
+                 `.git` path stay refused. Orbit did not change the index or any listed file"
             )));
         }
     }
@@ -128,6 +134,94 @@ fn regular_or_removed(workspace_path: &Path, path: &str) -> bool {
         Ok(metadata) => metadata.file_type().is_file(),
         Err(error) => error.kind() == std::io::ErrorKind::NotFound,
     }
+}
+
+/// Owner delivery's irregular set, with one crate-guide symlink removed.
+///
+/// `irregular_candidate_paths` itself stays unconditional. Claimed partial
+/// snapshots and recovery commits call it and must keep refusing every symlink.
+fn owner_refused_candidates(workspace_path: &Path, candidates: &BTreeSet<String>) -> Vec<String> {
+    irregular_candidate_paths(workspace_path, candidates)
+        .into_iter()
+        .filter(|path| !admitted_crate_guide_symlink(workspace_path, path, candidates))
+        .collect()
+}
+
+/// `crates/<name>/AGENTS.md` whose literal link text is `CLAUDE.md`, when that
+/// sibling is a regular file in the same directory and is either in this
+/// candidate set or already tracked.
+///
+/// The link text is the raw symlink target, so `./CLAUDE.md`, `../CLAUDE.md`
+/// and an absolute path stay refused. Parent directories must be real
+/// directories. The sibling is accepted only as a regular file: a dangling
+/// link, a directory, or another symlink stays refused.
+fn admitted_crate_guide_symlink(
+    workspace_path: &Path,
+    path: &str,
+    candidates: &BTreeSet<String>,
+) -> bool {
+    let Some(crate_name) = crate_guide_crate_name(path) else {
+        return false;
+    };
+    let crates_dir = workspace_path.join("crates");
+    let crate_dir = crates_dir.join(crate_name);
+    if !is_real_directory(&crates_dir) || !is_real_directory(&crate_dir) {
+        return false;
+    }
+    let Ok(target) = std::fs::read_link(crate_dir.join("AGENTS.md")) else {
+        return false;
+    };
+    if target.as_os_str() != std::ffi::OsStr::new("CLAUDE.md") {
+        return false;
+    }
+    let guide = format!("crates/{crate_name}/CLAUDE.md");
+    if !is_regular_file(&crate_dir.join("CLAUDE.md")) {
+        return false;
+    }
+    candidates.contains(&guide) || tracked_path(workspace_path, &guide)
+}
+
+/// The single path component of `crates/<name>/AGENTS.md`, when `path` is
+/// exactly that shape.
+fn crate_guide_crate_name(path: &str) -> Option<&str> {
+    let mut parts = path.split('/');
+    if parts.next() != Some("crates") {
+        return None;
+    }
+    let name = parts.next()?;
+    if parts.next() != Some("AGENTS.md") || parts.next().is_some() {
+        return None;
+    }
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.eq_ignore_ascii_case(".git")
+        || name.contains('\\')
+        || name.contains('\0')
+    {
+        return None;
+    }
+    Some(name)
+}
+
+fn is_real_directory(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_dir())
+}
+
+fn is_regular_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+}
+
+/// Whether `path` is already in the index. A Git failure refuses the symlink.
+fn tracked_path(workspace_path: &Path, path: &str) -> bool {
+    let spec = format!(":(literal){path}");
+    let Ok(listed) = git_output_paths(
+        workspace_path,
+        &["ls-files", "-z", "--error-unmatch", "--", spec.as_str()],
+    ) else {
+        return false;
+    };
+    listed.iter().any(|entry| entry == path)
 }
 
 /// Independently read additions and tracked type changes (rename detection
