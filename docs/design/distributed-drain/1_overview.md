@@ -2,7 +2,7 @@
 title: Distributed Drain — Overview
 owner: claude
 last_updated: 2026-10-20
-last_validated: 2026-10-20
+last_validated: 2026-10-24
 status: Draft
 feature: distributed-drain
 doc_role: overview

@@ -2,7 +2,7 @@
 title: Auto-tasks — Vision
 owner: claude
 last_updated: 2026-10-20
-last_validated: 2026-10-20
+last_validated: 2026-10-24
 status: Accepted
 feature: auto-tasks
 doc_role: vision
