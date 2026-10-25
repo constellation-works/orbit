@@ -38,6 +38,8 @@ mod diagnostics_errors;
 mod distributed_contracts;
 #[path = "http_api/doctor.rs"]
 mod doctor;
+#[path = "http_api/embedded.rs"]
+mod embedded;
 #[path = "http_api/friction_writes.rs"]
 mod friction_writes;
 #[path = "http_api/guards.rs"]

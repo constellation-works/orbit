@@ -67,6 +67,9 @@ pub struct ServeArgs {
 /// shutdown (ctrl-c or SIGTERM). Single-workspace mode is no longer reachable
 /// from `orbit web serve` (see [`serve_from_env`], ORB-10029); this stays for
 /// callers that already hold an `OrbitRuntime` and want it embedded directly.
+/// The supplied runtime is retained for the server's lifetime. Config writes
+/// still update its files, but config and plugin changes do not reconstruct
+/// the runtime; the caller controls when to build and serve a new one.
 pub fn serve(runtime: &OrbitRuntime, args: ServeArgs) -> Result<(), OrbitError> {
     heap::configure();
     let state = state::DashboardState::single(Arc::new(runtime.clone()));

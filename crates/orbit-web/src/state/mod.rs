@@ -33,10 +33,13 @@
 //! an `Arc` clone, not a serialized `load`. The fingerprint saved with each
 //! snapshot is sampled before its registry read, so a rewrite during startup
 //! or refresh makes the next `pin` reload instead of treating old data as current.
-//! Each cached runtime also carries a stat-based stamp of the global and
+//! Each registry-built runtime also carries a stat-based stamp of the global and
 //! workspace `config.toml` layers it was built from, sampled before its build;
 //! a mismatch evicts only that exact entry, so the next request for the
 //! workspace rebuilds from the new config without a server restart.
+//! Caller-supplied single-mode runtimes carry no stamp and remain authoritative
+//! for the server's lifetime, including after config and plugin changes. The
+//! synthetic `default` selector is never used to reconstruct their storage.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

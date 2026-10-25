@@ -12,7 +12,10 @@ struct CachedRuntime {
     /// Config layers the runtime was built from, sampled before its build.
     /// A later edit to either `config.toml` makes this stale so the next
     /// request rebuilds instead of serving frozen settings indefinitely.
-    config_stamp: ConfigLayerStamp,
+    /// `None` marks a caller-supplied runtime: its lifecycle belongs to the
+    /// caller, and its synthetic dashboard binding must never be used to
+    /// reconstruct it (including after config or plugin changes).
+    config_stamp: Option<ConfigLayerStamp>,
     runtime: Arc<OrbitRuntime>,
 }
 
@@ -271,7 +274,7 @@ impl StateInner {
             // replacement under the generation rule below.
             if existing.binding == binding
                 && existing.orbit_dir == orbit_dir
-                && existing.config_stamp == config_stamp
+                && existing.config_stamp.as_ref() == Some(&config_stamp)
             {
                 return existing.runtime.clone();
             }
@@ -290,7 +293,7 @@ impl StateInner {
                 binding,
                 orbit_dir,
                 generation,
-                config_stamp,
+                config_stamp: Some(config_stamp),
                 runtime: runtime.clone(),
             },
         );
@@ -311,9 +314,16 @@ impl StateInner {
         let (runtime, config_current) = {
             let cache = self.lock_runtimes();
             match cache.get(id) {
+                Some(cached)
+                    if cached.binding == *binding
+                        && cached.orbit_dir == orbit_dir
+                        && cached.config_stamp.is_none() =>
+                {
+                    return Ok(Some(cached.runtime.clone()));
+                }
                 Some(cached) if cached.binding == *binding && cached.orbit_dir == orbit_dir => (
                     Some(cached.runtime.clone()),
-                    cached.config_stamp == *config_stamp,
+                    cached.config_stamp.as_ref() == Some(config_stamp),
                 ),
                 _ => (None, false),
             }
@@ -373,8 +383,11 @@ impl StateInner {
                 cache.get(&entry.id).and_then(|cached| {
                     (entry.binding.as_ref() == Some(&cached.binding)
                         && cached.orbit_dir == entry.orbit_dir
-                        && cached.config_stamp == *stamp)
-                        .then(|| (entry.id.clone(), cached.runtime.clone()))
+                        && cached
+                            .config_stamp
+                            .as_ref()
+                            .is_none_or(|cached_stamp| cached_stamp == stamp))
+                    .then(|| (entry.id.clone(), cached.runtime.clone()))
                 })
             })
             .collect()
@@ -424,9 +437,6 @@ impl DashboardState {
         };
         let monitor = runtime.host_resource_monitor();
         let global_root = runtime.global_root();
-        // Match the stamp `resolve_runtime` samples for this entry's empty
-        // orbit dir, so the pre-built runtime stays current in single mode.
-        let config_stamp = ConfigLayerStamp::read(&global_root, Path::new(""));
         let mut runtimes = HashMap::new();
         runtimes.insert(
             SINGLE_WORKSPACE_ID.to_string(),
@@ -442,7 +452,7 @@ impl DashboardState {
                 },
                 orbit_dir: PathBuf::new(),
                 generation: INITIAL_GENERATION,
-                config_stamp,
+                config_stamp: None,
                 runtime,
             },
         );
