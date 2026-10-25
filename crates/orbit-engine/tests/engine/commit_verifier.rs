@@ -477,6 +477,59 @@ fn templated_commit_with_long_non_title_placeholder_preserves_marker_and_lands()
     );
 }
 
+/// The marker suffix at and next to the one-character remaining budget must
+/// not overflow when truncation adds an ellipsis and optional separator.
+fn templated_commit_with_near_budget_marker_suffix_preserves_budget() {
+    use orbit_types::workflow::{ConventionTemplate, DeliveryConventions};
+
+    for ref_len in [59, 60, 61] {
+        let temp = tempdir().expect("create tempdir");
+        let repo = temp.path();
+        init_git_repo(repo);
+        let mut task = fixture_task();
+        task.id = "ORB-18018".to_string();
+        task.external_refs = vec![ExternalRef {
+            system: "jira".to_string(),
+            id: "X".repeat(ref_len),
+            url: None,
+        }];
+        let marker = format!("[{}]", task.id);
+        let task_id = task.id.clone();
+        let host = VerifierHost::new(repo, task);
+        host.set_conventions(DeliveryConventions {
+            commit_subject: Some(
+                ConventionTemplate::parse_commit_subject(
+                    "commit.subject_template",
+                    "{{type}}: [{{task_id}}]{{ext.jira}}",
+                )
+                .expect("subject template parses"),
+            ),
+            ..DeliveryConventions::default()
+        });
+        fs::write(repo.join("README.md"), "marker suffix fix\n").expect("write README");
+        let result = action(
+            &host,
+            &json!({
+                "scope": "per_task",
+                "job_run_id": RUN_ID,
+                "workspace_path": repo,
+                "completed_task_ids": [task_id],
+            }),
+        )
+        .expect("deliver commit with a near-budget marker suffix");
+        assert_eq!(result["committed_task_ids"], json!([task_id]));
+        let subject = git_output(repo, &["log", "-1", "--format=%s"]);
+        assert!(
+            subject.chars().count() <= 72,
+            "ref length {ref_len} must keep the subject within budget, got {subject:?}"
+        );
+        assert!(
+            subject.contains(&marker),
+            "ref length {ref_len} must preserve the complete marker, got {subject:?}"
+        );
+    }
+}
+
 fn commit_verifier_refuses_no_diff_with_covering_commit_or_unknown_fields() {
     let temp = tempdir().expect("create tempdir");
     init_git_repo(temp.path());
@@ -1621,6 +1674,10 @@ fn commit_evidence_contracts_1() {
             (
                 "templated_commit_with_long_non_title_placeholder_preserves_marker_and_lands",
                 templated_commit_with_long_non_title_placeholder_preserves_marker_and_lands,
+            ),
+            (
+                "templated_commit_with_near_budget_marker_suffix_preserves_budget",
+                templated_commit_with_near_budget_marker_suffix_preserves_budget,
             ),
         ]);
     });
