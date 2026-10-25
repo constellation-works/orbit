@@ -1,12 +1,12 @@
 //! Provider subprocess dispatch for `backend: cli`: argv and environment
 //! composition, the run's plugin broker, and spawn supervision.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 use std::time::Duration;
 
 use orbit_agent::{Agent, AgentConfig, AgentOperation, AgentRequest};
-use orbit_common::process::build_budget::{WAIT_DIRECTORY_ENV, read_waits};
+use orbit_common::process::build_budget::{BuildBudgetWaits, WAIT_DIRECTORY_ENV, read_waits};
 use orbit_common::process::identity::process_start_identity_token;
 use orbit_common::process::stopped_descendants::{StoppedDescendant, stopped_descendant_threshold};
 use orbit_common::security::child_env::{MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV};
@@ -492,7 +492,7 @@ pub(crate) fn run_cli_backend_for_step(
     audit.emit_lossy(V2AuditEventKind::CliInvocationStarted {
         provider: provider.clone(),
         argv_redacted: argv_redacted.clone(),
-        stdin_blob_ref: Some(stdin_blob_ref.clone()),
+        stdin_blob_ref: stdin_blob_ref.clone(),
         model: model_redacted,
         cwd: subprocess_cwd_string.clone(),
         wall_clock_timeout_ms: wall_clock_timeout.as_millis() as u64,
@@ -687,17 +687,20 @@ pub(crate) fn run_cli_backend_for_step(
 
     // [ORB-13899] Live progress: the newest assistant message and, through
     // the event time, the last moment the child produced output. Silence
-    // emits nothing, so a quiet child adds no rows.
+    // emits nothing, so a quiet child adds no rows; build-budget waits are
+    // recorded only when they change.
     let progress_audit = Arc::clone(&audit);
     let progress_provider = provider.clone();
     let reported_bytes = Cell::new(0usize);
+    let reported_waits = RefCell::new(BuildBudgetWaits::default());
     let report_progress = |progress: &OutputProgress| {
         let waits = read_waits(
             build_wait_directory.path(),
             timeout_seconds.saturating_mul(1000),
         );
-        if waits.count > 0 {
+        if waits.count > 0 && *reported_waits.borrow() != waits {
             emit_build_waits(&progress_audit, &progress_provider, &waits);
+            *reported_waits.borrow_mut() = waits;
         }
         if progress.observed_bytes == reported_bytes.replace(progress.observed_bytes) {
             return;
@@ -868,8 +871,8 @@ pub(crate) fn run_cli_backend_for_step(
         provider: provider.clone(),
         exit_code,
         duration_ms: duration.as_millis() as u64,
-        stdout_blob_ref: Some(stdout_blob_ref.clone()),
-        stderr_blob_ref: Some(stderr_blob_ref.clone()),
+        stdout_blob_ref: stdout_blob_ref.clone(),
+        stderr_blob_ref: stderr_blob_ref.clone(),
         harness_version: None,
         timed_out,
     });
@@ -902,9 +905,10 @@ pub(crate) fn run_cli_backend_for_step(
         redaction,
         timeout_seconds,
         argv_redacted,
-        stdin_blob_ref,
-        stdout_blob_ref: stdout_blob_ref.clone(),
-        stderr_blob_ref: stderr_blob_ref.clone(),
+        // A blob that could not be stored has no ref to cite.
+        stdin_blob_ref: stdin_blob_ref.unwrap_or_default(),
+        stdout_blob_ref: stdout_blob_ref.clone().unwrap_or_default(),
+        stderr_blob_ref: stderr_blob_ref.clone().unwrap_or_default(),
         stdout,
         stderr,
         exit_code,
@@ -919,7 +923,7 @@ pub(crate) fn run_cli_backend_for_step(
     step_error_after_provider_evidence(
         completion,
         post_run_error,
-        &stdout_blob_ref,
-        &stderr_blob_ref,
+        stdout_blob_ref.as_deref().unwrap_or_default(),
+        stderr_blob_ref.as_deref().unwrap_or_default(),
     )
 }

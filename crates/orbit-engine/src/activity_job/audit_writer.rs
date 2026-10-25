@@ -14,7 +14,7 @@ use thiserror::Error;
 
 use orbit_store::contracts::V2AuditStoreBackend;
 
-use super::sqlite_sink::V2SqliteSink;
+use super::sqlite_sink::{BLOB_WRITE_ERROR_PREFIX, V2SqliteSink};
 
 /// Persistence sink for §7 audit envelopes. Abstracted behind a trait
 /// ([ORB-00414]) so the writer can be exercised with an injected failing sink
@@ -371,8 +371,17 @@ impl V2AuditWriter {
     }
 
     /// Proxy: write a blob via the inner sink (sha256-based, per §7.4 / §12 Q11).
-    pub fn write_blob(&self, content: &[u8]) -> String {
-        self.inner.write_blob(content)
+    /// A failed write is counted as an audit failure and yields no ref, so a
+    /// lost blob is never recorded as if it were stored.
+    pub fn write_blob(&self, content: &[u8]) -> Option<String> {
+        let blob_ref = self.inner.write_blob(content);
+        match blob_ref.strip_prefix(BLOB_WRITE_ERROR_PREFIX) {
+            Some(error) => {
+                self.note_audit_failure("blob_write", &error);
+                None
+            }
+            None => Some(blob_ref),
+        }
     }
 
     fn next_event_id(&self) -> Result<String, WriteError> {

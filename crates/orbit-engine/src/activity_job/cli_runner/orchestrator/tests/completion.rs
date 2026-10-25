@@ -50,6 +50,16 @@ struct IdleHost;
 impl NullRuntimeHost for IdleHost {}
 
 fn project(stalled: bool, timed_out: bool) -> crate::DispatchOutcome {
+    project_stdout("fixture", b"", false, stalled, timed_out)
+}
+
+fn project_stdout(
+    provider: &str,
+    stdout: &[u8],
+    exit_success: bool,
+    stalled: bool,
+    timed_out: bool,
+) -> crate::DispatchOutcome {
     let spec: AgentLoopSpec = serde_json::from_value(json!({})).expect("empty agent spec");
     let host = IdleHost;
     let input = json!({});
@@ -59,7 +69,7 @@ fn project(stalled: bool, timed_out: bool) -> crate::DispatchOutcome {
         spec: &spec,
         input: &input,
         run_id: "run",
-        provider: "fixture".to_string(),
+        provider: provider.to_string(),
         model: None,
         task_ids: &[],
         worktree_boundary: None,
@@ -71,9 +81,9 @@ fn project(stalled: bool, timed_out: bool) -> crate::DispatchOutcome {
         stdin_blob_ref: "stdin".to_string(),
         stdout_blob_ref: "stdout".to_string(),
         stderr_blob_ref: "stderr".to_string(),
-        stdout: CapturedOutput::empty(),
+        stdout: CapturedOutput::from_bytes(stdout),
         stderr: CapturedOutput::empty(),
-        exit_code: None,
+        exit_code: exit_success.then_some(0),
         duration: Duration::from_millis(700),
         timed_out,
         stalled,
@@ -109,6 +119,30 @@ fn a_stalled_provider_fails_transient_without_a_wall_clock_timeout() {
             let error = DispatchError::JobExecution(message);
             assert_eq!(error.failure_code(), STALLED_ERROR_CODE);
             assert!(!error.is_non_retryable());
+        }
+    }
+}
+
+// A slice stream reader stops at its first parse error, so an undecodable
+// stdout line used to hide the terminal failure frame behind it.
+#[test]
+fn a_terminal_failure_frame_is_classified_after_an_undecodable_stdout_line() {
+    let limit = r#"{"type":"result","is_error":true,"result":"You've hit your usage limit"}"#;
+    let auth =
+        r#"{"type":"result","is_error":true,"api_error_status":401,"result":"Invalid API key"}"#;
+    let refusal =
+        r#"{"type":"result","is_error":false,"stop_reason":"refusal","result":"declined"}"#;
+    for noise in ["not json at all", r#"{"type":"assistant","text":"\ud83d"}"#] {
+        for (frame, expected) in [
+            (limit, "usage limit"),
+            (auth, "authentication failure (HTTP 401)"),
+            (refusal, "declined"),
+        ] {
+            let stdout = format!("{noise}\n{frame}\n");
+            let outcome = project_stdout("claude", stdout.as_bytes(), true, false, false);
+            assert!(!outcome.success, "{noise} / {frame}");
+            let message = outcome.message.expect("provider failure message");
+            assert!(message.contains(expected), "{noise} / {frame}: {message}");
         }
     }
 }

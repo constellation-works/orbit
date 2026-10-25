@@ -83,16 +83,19 @@ impl V2SqliteSink {
         Ok(())
     }
 
-    /// Persisted envelope events for this run in insertion order. Backs the
-    /// cross-crate `V2AuditWriter::events_snapshot` path.
+    /// Every persisted envelope event for this run, oldest first. Backs the
+    /// cross-crate `V2AuditWriter::events_snapshot` path, so it must not take
+    /// the store's default 1000-row newest-first window: long provider runs
+    /// emit progress rows that would push early recovery evidence out of it.
     pub(crate) fn snapshot_events(&self) -> Result<Vec<V2AuditEvent>, OrbitError> {
-        let mut rows = self.store.list_v2_audit_events(&V2AuditEventFilter {
+        let rows = self.store.list_v2_audit_events(&V2AuditEventFilter {
             workspace_id: self.workspace_id.clone(),
             run_id: Some(self.run_id.clone()),
             source: Some("v2_envelope".to_string()),
+            limit: Some(usize::MAX),
+            oldest_first: true,
             ..Default::default()
         })?;
-        rows.reverse();
         rows.into_iter()
             .map(|row| {
                 serde_json::from_str(&row.payload_json)
@@ -137,6 +140,13 @@ impl V2SqliteSink {
     }
 }
 
+/// What [`AuditSink::write_blob`] returns in place of a ref when the blob
+/// could not be stored. [`V2AuditWriter::write_blob`] turns it into a counted
+/// audit failure, so it never reaches an event as a ref.
+///
+/// [`V2AuditWriter::write_blob`]: super::audit_writer::V2AuditWriter::write_blob
+pub(crate) const BLOB_WRITE_ERROR_PREFIX: &str = "error:";
+
 impl AuditSink for V2SqliteSink {
     fn emit(&self, event: &LoopAuditEvent) {
         if let Err(err) = self.write_loop_event(event) {
@@ -147,7 +157,7 @@ impl AuditSink for V2SqliteSink {
     fn write_blob(&self, content: &[u8]) -> String {
         self.blob_store
             .write(content)
-            .unwrap_or_else(|err| format!("error:{err}"))
+            .unwrap_or_else(|err| format!("{BLOB_WRITE_ERROR_PREFIX}{err}"))
     }
 }
 

@@ -479,7 +479,7 @@ impl WorktreeBoundaryGuard {
         let fingerprints_blob_ref = self
             .audit
             .as_ref()
-            .map(|audit| audit.write_blob(fingerprints.to_string().as_bytes()));
+            .and_then(|audit| audit.write_blob(fingerprints.to_string().as_bytes()));
         let diagnostic = json!({
             "code": code,
             "reason": reason,

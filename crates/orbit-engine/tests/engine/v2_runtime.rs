@@ -2173,6 +2173,35 @@ fn leaf_completion_records_file_and_store_waits_without_leaking_between_steps() 
 }
 
 /// Behavior-distinct rows share one bounded family process.
+/// Each fan-out spawns a thread per item, so a fan-out nested under another
+/// (directly or through a parallel branch) is refused before any worker runs.
+#[test]
+fn nested_fan_out_is_rejected_before_any_worker_runs() {
+    let inner = json!({
+        "id": "inner",
+        "fan_out": {"items": "{{ input.list }}", "max_workers": 2, "worker": echo_item_step("leaf")},
+        "fan_in": {"join": {"mode": "all"}},
+    });
+    for worker in [
+        inner.clone(),
+        json!({"id": "fork", "parallel": {"branches": [inner], "join": {"mode": "all"}}}),
+    ] {
+        let job = job_asset(json!([{
+            "id": "outer",
+            "fan_out": {"items": "{{ input.list }}", "max_workers": 2, "worker": worker},
+            "fan_in": {"join": {"mode": "all"}},
+        }]));
+        let run = run_graph_job(&job, json!({"list": ["A", "B"]}));
+        match &run.result {
+            Err(DispatchError::JobValidation(message)) => {
+                assert!(message.contains("nested fan-outs"), "{message}");
+            }
+            other => panic!("expected JobValidation, got {other:?}"),
+        }
+        assert!(run.host.calls().is_empty(), "no worker runs");
+    }
+}
+
 #[test]
 fn runtime_contracts_1() {
     crate::git_fixture::isolated(module_path!(), "runtime_contracts_1", || {
