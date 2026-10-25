@@ -1049,8 +1049,10 @@ a.exec-origin.remote-run-link { color: var(--accent); }
   text-align: left;
   cursor: pointer;
 }
-.host-block:focus-visible,
-.host-block.open { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
+/* Keyboard focus is the dashboard-wide 2px accent outline, pulled inside the
+   block so the rail foot cannot clip it; the inset ring marks the open state. */
+.host-block:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.host-block.open { box-shadow: inset 0 0 0 2px var(--accent); }
 .host-block.elevated { border-color: var(--warn-line); background: var(--warn-wash); }
 .host-block.critical { border-color: var(--danger-line); background: var(--danger-wash); }
 .host-block.stale { border-style: dashed; border-color: var(--border-strong); opacity: 0.8; }

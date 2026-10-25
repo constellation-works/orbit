@@ -89,9 +89,9 @@ export async function assertPullRequestLinks(page, evidence) {
         const columns = getComputedStyle(row).gridTemplateColumns.trim().split(/\s+/);
         return { id, width: Number.parseFloat(columns.at(-1)) };
       }));
-      // The shared action column is 108px in the wide panel (tasks.css, container
+      // The shared action column is 73px in the wide panel (tasks.css, container
       // min-width 621px) and keeps its 72px compact fallback at 375px.
-      const expectedTrack = width === 1440 ? 108 : 72;
+      const expectedTrack = width === 1440 ? 73 : 72;
       if (actionTracks.some(track => track.width !== expectedTrack)) {
         throw new Error(`Proposed, review and backlog rows keep a ${expectedTrack}px action track at ${width}: ${JSON.stringify(actionTracks)}`);
       }
