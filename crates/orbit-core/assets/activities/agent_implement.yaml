@@ -83,9 +83,9 @@ spec:
         type: string
       # Claimed mode: culprit task IDs the implementer would have recorded as
       # `regression_from` relations. The handoff carries them and the owner
-      # checks and records them when it accepts the handoff. The implement
-      # step fails an output whose entries are not task IDs before any
-      # commit, push or PR.
+      # checks and records them when it accepts the handoff. Absent, `null`
+      # or `[]` means no relation. The implement step fails an output whose
+      # entries are not task IDs before any commit, push or PR.
       regression_from:
         type: array
         items:
@@ -490,7 +490,8 @@ spec:
       `result.blocker`, not only a comment.
     - `regression_from`: when the task asks you to record a
       `regression_from` relation, the culprit task IDs (`["<task-id>"]`),
-      with the culprit commit named in `execution_summary`.
+      with the culprit commit named in `execution_summary`. When no culprit
+      relation is filed, omit `regression_from` or set it to `null`.
     - `task_artifacts`: required task artifacts (ledgers, screenshots) for
       diff and no-diff candidates alike, including `no-diff-expected`, as
       `[{"path":"doc-duties-ledger.json","source_path":".orbit/tmp/doc-duties-ledger.json"}]`,

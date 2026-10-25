@@ -17,8 +17,8 @@ use crate::task::is_valid_orb_task_id;
 pub const REGRESSION_FROM_FIELD: &str = "regression_from";
 
 /// The culprit task IDs the implementer returned, trimmed and deduplicated in
-/// order. Absent or `null` is none. A single string is accepted as one ID.
-/// Anything else, or an entry that is not a task ID, is refused with the
+/// order. Absent, `null`, or `[]` is none. A single string is accepted as one
+/// ID. Anything else, or an entry that is not a task ID, is refused with the
 /// reason.
 pub fn implementer_regression_from(output: &Value) -> Result<Vec<String>, String> {
     let entries = match output.get(REGRESSION_FROM_FIELD) {
@@ -27,7 +27,8 @@ pub fn implementer_regression_from(output: &Value) -> Result<Vec<String>, String
         Some(Value::Array(entries)) => entries.clone(),
         Some(_) => {
             return Err(format!(
-                "the implementer's `{REGRESSION_FROM_FIELD}` must be an array of culprit task IDs"
+                "the implementer's `{REGRESSION_FROM_FIELD}` must be an array of culprit task IDs; \
+                 omit `{REGRESSION_FROM_FIELD}` or set it to `null` when no culprit relation is filed"
             ));
         }
     };
@@ -36,7 +37,8 @@ pub fn implementer_regression_from(output: &Value) -> Result<Vec<String>, String
         let target = entry.as_str().map(str::trim).unwrap_or_default();
         if !is_valid_orb_task_id(target) {
             return Err(format!(
-                "`{REGRESSION_FROM_FIELD}[{index}]` must be a task ID such as `ORB-<number>`"
+                "`{REGRESSION_FROM_FIELD}[{index}]` must be a task ID such as `ORB-<number>`; \
+                 omit `{REGRESSION_FROM_FIELD}` or set it to `null` when no culprit relation is filed"
             ));
         }
         if !targets.iter().any(|known| known == target) {
