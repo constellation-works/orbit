@@ -87,7 +87,7 @@ pub struct TaskEnvelopeV2 {
     pub pr_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_run_id: Option<String>,
-    /// [ORB-12725] `job_run_host` is read for one release; see
+    /// Permanent read alias [ORB-12725, ORB-18313]: `job_run_host`; see
     /// [`crate::task::Task::job_run_machine`].
     #[serde(
         default,

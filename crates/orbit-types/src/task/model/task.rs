@@ -44,8 +44,9 @@ pub struct Task {
     pub job_run_id: Option<String>,
     /// Trusted execution location of the linked run; legacy links are unknown.
     ///
-    /// [ORB-12725] `job_run_host` is read for one release so a task bundle
-    /// written by an older build still loads; only the new name is written.
+    /// Permanent read alias [ORB-12725, ORB-18313]: `job_run_host` stays
+    /// readable because task bundles written before v0.24 still carry it, and
+    /// `TaskEnvelopeV2` denies unknown fields. Only the new name is written.
     #[serde(
         default,
         alias = "job_run_host",
@@ -820,8 +821,9 @@ pub fn automatic_dispatch_cmp_with_affinity(
 /// Persisted execution location. Absence on older records means unknown.
 ///
 /// A machine's display name is metadata; only the stable machine id identifies
-/// execution. [ORB-12725] `host_id` is read for one release so a run record
-/// written by an older build still loads; only `machine_name` is written.
+/// execution. Permanent read alias [ORB-12725, ORB-18313]: `host_id` stays
+/// readable for run records written before v0.24; only `machine_name` is
+/// written.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionLocation {
     pub machine_id: String,

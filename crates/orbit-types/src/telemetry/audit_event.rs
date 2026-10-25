@@ -77,13 +77,13 @@ pub struct AuditEvent {
     pub workspace_id: Option<String>,
     #[serde(default)]
     pub caller_machine_id: Option<String>,
-    /// [ORB-12725] `caller_host_id` is read for one release so an audit
-    /// export written by an older build still loads.
+    /// Permanent read alias [ORB-12725, ORB-18313]: `caller_host_id` stays
+    /// readable for audit exports written before v0.24.
     #[serde(default, alias = "caller_host_id")]
     pub caller_machine_name: Option<String>,
     #[serde(default)]
     pub process_machine_id: Option<String>,
-    /// [ORB-12725] `process_host_id` is read for one release; see
+    /// Permanent read alias [ORB-12725, ORB-18313]: `process_host_id`; see
     /// [`Self::caller_machine_name`].
     #[serde(default, alias = "process_host_id")]
     pub process_machine_name: Option<String>,
