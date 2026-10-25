@@ -664,8 +664,14 @@ function initTabsImpl(ctx) {
   // A late count on any preceding entry shifts the selection, even when the
   // destination itself keeps its width. Observe entries as well as the row so
   // those updates and font/viewport changes repair both nested scroll strips.
-  // Scrolling alone does not resize them, so keyboard exploration stays put.
-  const railLayout = new ResizeObserver(revealActiveRailSelection);
+  // Keyboard exploration takes precedence over the selection after a resize.
+  const railLayout = new ResizeObserver(() => {
+    revealActiveRailSelection();
+    const focused = document.activeElement;
+    if (focused?.matches(".rail .tab, .rail-subtabs .subtab")) {
+      focused.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  });
   for (const entry of document.querySelectorAll(".rail .tabs, .rail .tab, .rail-subtabs .subtab")) {
     railLayout.observe(entry);
   }
