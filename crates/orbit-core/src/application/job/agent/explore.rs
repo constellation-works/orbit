@@ -50,7 +50,7 @@ use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission
 use crate::runtime::authorization::ManagedRunCaller;
 use crate::runtime::host_resource::delivery::RESOURCE_CLASS_KEY;
 
-use super::agent_invoke::{
+use super::invoke::{
     AGENT_INVOKE_JOB_ID, AgentInvokeRequest, AgentInvokeResult, AgentInvokeSubmission,
     require_non_empty,
 };
@@ -403,7 +403,7 @@ impl OrbitRuntime {
             .stores()
             .jobs()
             .list_pending_or_running_job_runs(EXPLORE_JOB_ID)?;
-        let queue_position = super::pipeline::pipeline_run_queue_position(
+        let queue_position = super::super::pipeline::pipeline_run_queue_position(
             &active,
             &run.run_id,
             spec.max_active_runs,
@@ -582,7 +582,7 @@ impl OrbitRuntime {
         let cap = usize::try_from(self.explore_settings().max_answer_bytes).unwrap_or(usize::MAX);
         let mut answer_truncated = false;
         if let Some(answer) = result.answer.as_mut() {
-            let size = |answer: &crate::application::job::agent_invoke::AgentInvokeAnswer| {
+            let size = |answer: &crate::application::job::agent::invoke::AgentInvokeAnswer| {
                 serde_json::to_vec(answer).map_or(usize::MAX, |bytes| bytes.len())
             };
             if size(answer) > cap {
