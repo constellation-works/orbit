@@ -226,6 +226,31 @@
           "no-diff-expected"
         ]
       }
+    },
+    {
+      "comments": [
+        "## Decide",
+        "## Discover the documented budget",
+        "## Discover the measured job",
+        "## Measure and compare",
+        "## Report",
+        "## Rules and command surfaces"
+      ],
+      "digest": "ba81d4d769c74323e76f7621e9797546adb37e5d3d71a2ed549e1b49e0161d2b",
+      "revision": "4af345784467692b882c37dce7479f15e006b621",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "45 1 * * *"
+        },
+        "tags": [
+          "ci-budget-watch",
+          "no-diff-expected"
+        ]
+      }
     }
   ],
   "code-health-sweep": [
@@ -1507,6 +1532,7 @@
       }
     }
   ],
+  "flaky-test-hunt": [],
   "friction-curation": [
     {
       "comments": [

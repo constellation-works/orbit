@@ -108,6 +108,10 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/escape-to-guard.yaml"),
     ),
     (
+        "flaky-test-hunt",
+        include_str!("../../../assets/auto_tasks/flaky-test-hunt.yaml"),
+    ),
+    (
         "friction-curation",
         include_str!("../../../assets/auto_tasks/friction-curation.yaml"),
     ),

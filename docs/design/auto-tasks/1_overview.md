@@ -11,7 +11,7 @@ summary: Dynamically-defined recurring task templates minted by the host clock t
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18124, ORB-18125, ORB-18126, ORB-18127, ORB-18128]
+related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18124, ORB-18125, ORB-18126, ORB-18127, ORB-18128, ORB-18134]
 ---
 
 # Auto-tasks — Overview
@@ -106,7 +106,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These twenty YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These twenty-one YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -347,6 +347,27 @@ definition of the same name.
   one `proposed` repair task is filed with acceptance criteria,
   `context_files`, and a `spawned_from` relation. The minted chore is
   tagged `no-diff-expected` and never edits source, CI, or tests.
+- `flaky-test-hunt` — disabled-by-default weekly hunt for flaky tests in
+  hosted CI history over a 14-day window, on the integration branch and
+  recent pull-request runs. It finds flakes through 2 signals: a failed
+  run followed by a succeeded rerun of the same SHA in the same
+  workflow, and a failed run on one integration-branch commit followed
+  by a succeeded run on its immediate child when the diff between the
+  2 SHAs changed no test file, same-package file, excerpt-named file,
+  or suite-composition file. Test names and bounded failure excerpts
+  come from the failed runs' logs; runs whose logs cannot be parsed
+  are recorded as gaps and contribute nothing. Each run attaches
+  `flaky-test-hunt.json` with the flake count per test, every
+  occurrence's run ids and SHAs, excluded candidates, gaps, and a diff
+  against the previous run, and files at most 4 `proposed` fix tasks,
+  highest flake count first, tagged `ci-flake` with the verified test
+  file as `context_files` and a `spawned_from` relation, deduplicated
+  against open `ci-flake` and CI-failure-sweep tasks. A filed task
+  requires the root cause fixed or the test deleted as redundant, and
+  rejects silent retries or quarantine without an exit plan. With no
+  hosted CI or unreachable run history it is a successful no-op that
+  states the reason. The minted chore is tagged `no-diff-expected`
+  and never builds or runs tests.
 - `structure-sweep` — disabled-by-default weekly scan in one pass over
   source files and test files. It records the thresholds in every run
   summary (a non-test source file over 1,000 lines, a module index file
@@ -484,6 +505,12 @@ encode this repository's branches and gates. Re-init preserves them:
   `ci-budget-watch/report.md` artifact with the last 20 runs and the
   trend, no-op paths for no hosted CI, no documented budget, and
   unreachable history, and the one-open-`ci-budget`-task rule.
+- ORB-18134 — Added the disabled, portable `flaky-test-hunt` default
+  (weekly cadence): same-SHA rerun and adjacent-commit flake signals
+  over a 14-day hosted-CI window, unparseable logs recorded as gaps, a
+  `flaky-test-hunt.json` artifact diffed against the previous run, and
+  at most 4 proposed `ci-flake` tasks per run that reject silent
+  retries or quarantine without an exit plan.
 - ORB-18128 — Added the disabled `path-risk-review` default (3-day cadence)
   over the codebase analytics rankings: min-support no-op reporting each
   ranking's below-support counts, at most five paths investigated, and fixes capped at 3
