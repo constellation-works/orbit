@@ -336,9 +336,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The ten seeded definitions
+## The eleven seeded definitions
 
-`orbit workspace init` seeds all ten, disabled, except any you deleted (see
+`orbit workspace init` seeds all eleven, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -435,6 +435,27 @@ plugin being removed.
   evidence. Its template declares `dir:.`
   because a batch may include root and workspace-specific documents, and omits
   `no-diff-expected` so it holds a context lock while correcting drift.
+- **`comment-hygiene`** (`low`) — daily. The code-comment counterpart of
+  `doc-duties`: checks at most six tracked source files and about 1,500 lines
+  against a generic comment standard stated in its body (comments say why,
+  doc comments state the contract, no history narration or commented-out
+  code, no ownerless TODOs, escape hatches state their reason, stale comments
+  are bugs, density stays low), which a workspace can sharpen through a
+  `comment-hygiene` tag instruction. Each run attaches a
+  `comment-hygiene-ledger.json` artifact with an outcome (`clean`, `fixed`,
+  `partial` or `skipped`), attempt date and `checked_through` commit per
+  selected file, plus the same cumulative `state` carry-forward as
+  `doc-duties`; a file unchanged since its last `clean`/`fixed` check is not
+  re-read, files in an open task's footprint are skipped, and two
+  `skipped`/`partial` outcomes in a row escalate to a dedicated task. Its
+  diff is comment-only — everything outside comments and doc comments stays
+  byte-identical — and a stale comment that reveals a real defect is filed
+  as a task (at most two per run) instead of being fixed in place. Unlike
+  `doc-duties` it declares no `context_files`, so a minted instance holds no
+  workspace lock; its body narrows `context_files` to the selected `file:`
+  selectors and reads them back before editing. A clean batch is a
+  successful no-diff run with validated no-diff evidence, and the ledger is
+  attached on every run.
 - **`backlog-hygiene`** (`medium`) — weekly. Writes one read-only report of
   stalled and untriaged tasks. It does not change task status or dispatch work.
 - **`run-failure-patterns`** (`medium`) — weekly. Mines this workspace's run

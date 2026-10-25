@@ -211,6 +211,17 @@ definition of the same name.
   workspace-specific documentation and does not carry `no-diff-expected`, since
   verified drift corrections produce diffs. Clean batches use validated no-diff
   evidence.
+- `comment-hygiene` — disabled-by-default daily check of code comments, the
+  counterpart of `doc-duties` for source files. At most six files and about
+  1,500 lines per run, judged against a generic language-agnostic standard a
+  workspace may sharpen through a `comment-hygiene` tag instruction. It
+  reuses the doc-duties ledger (`comment-hygiene-ledger.json`, `state`
+  carry-forward, `clean`/`fixed`/`partial`/`skipped`, repeat-skip escalation,
+  clean no-diff evidence), adding a per-row `checked_through` commit so a
+  file unchanged since its last `clean`/`fixed` check is not re-read. Its
+  diff is comment-only, real defects become filed tasks, and it mints
+  without `context_files` — no workspace lock — narrowing to the selected
+  `file:` selectors before editing (design §4e).
 - `run-failure-patterns` — disabled-by-default weekly scan of the workspace's
   own run evidence (failed and interrupted runs, step failures, worker logs)
   since the previous scan's `run-failure-cursor.json` artifact. On an owner it
