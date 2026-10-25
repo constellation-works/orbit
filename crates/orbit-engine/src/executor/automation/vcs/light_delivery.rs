@@ -21,11 +21,16 @@ use orbit_types::task::{
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
+use super::baseline::in_detached_worktree;
 use super::git::{git_output_paths, git_run_bytes};
 use super::required::command::run_required_command;
+use super::scratch_target::{ScratchHostTarget, lease_scratch_host_target};
+use super::worktree::scratch_checkout_path;
 
 /// Ceiling for one review-skip guard run.
 const GUARD_TIMEOUT_MS: u64 = 5 * 60 * 1000;
+/// Name prefix of a guard's candidate checkout under the managed worktree root.
+const GUARD_WORKTREE_DIR: &str = "orbit-review-skip-guard";
 
 /// Judge the paths `head` changes against `base` in `workspace` (deletions
 /// included, renames as a deletion and an addition) against `allow`.
@@ -160,13 +165,17 @@ pub fn review_skip_decision<H: RuntimeHost + ?Sized>(
 
 /// Run `guard` as read from `base` (never the worktree) the way a required
 /// validation command runs: same validation environment and sandbox rules,
-/// in `workspace`, with `base` and `head` as its first two arguments and
-/// as `ORBIT_REVIEW_SKIP_BASE` / `ORBIT_REVIEW_SKIP_HEAD` (the tag as
-/// `ORBIT_REVIEW_SKIP_TAG`). Exit 0 permits the skip.
+/// in a fresh detached checkout of `head` taken from `workspace` (so the
+/// guard sees the judged candidate's `HEAD` and files, whatever `workspace`
+/// has checked out, and leaves its branch and edits alone), with `base` and
+/// `head` as its first two arguments and as `ORBIT_REVIEW_SKIP_BASE` /
+/// `ORBIT_REVIEW_SKIP_HEAD` (the tag as `ORBIT_REVIEW_SKIP_TAG`). Exit 0
+/// permits the skip.
 ///
 /// # Errors
 /// Returns an error only when the guard cannot be materialized outside
-/// the checkout; a missing or failing guard is a [`GuardOutcome`].
+/// the checkout or `head` cannot be checked out; a missing or failing
+/// guard is a [`GuardOutcome`].
 pub fn run_review_skip_guard<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -218,7 +227,28 @@ pub fn run_review_skip_guard<H: RuntimeHost + ?Sized>(
         shell_quote(base),
         shell_quote(head),
     );
-    let run = run_required_command(host, workspace, &command, None, GUARD_TIMEOUT_MS)?;
+    let key = orbit_common::security::release::sha256_hex(
+        format!("{}\0{head}\0{tag}", std::process::id()).as_bytes(),
+    );
+    let worktree =
+        scratch_checkout_path(workspace, &format!("{GUARD_WORKTREE_DIR}-{}", &key[..16]))?;
+    let run = in_detached_worktree(workspace, &worktree, head, |checkout| {
+        // Held until the run ends, so worktree GC cannot reclaim the host
+        // target underneath it and can once the checkout is gone.
+        let _lease = if host
+            .validation_subprocess_environment()
+            .build_output_env
+            .is_empty()
+        {
+            None
+        } else {
+            Some(lease_scratch_host_target(
+                checkout,
+                ScratchHostTarget::HostEvidence,
+            )?)
+        };
+        run_required_command(host, checkout, &command, None, GUARD_TIMEOUT_MS)
+    })??;
     if run.passed {
         Ok(GuardOutcome::Passed)
     } else if run.timed_out {

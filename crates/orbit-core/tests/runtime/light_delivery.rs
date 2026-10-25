@@ -11,7 +11,7 @@ use orbit_core::application::automation::evaluate_auto_task;
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_engine::{RuntimeHost, execute_deterministic_action};
 use orbit_types::task::{
-    LIGHT_DELIVERY_APPLIED_EVENT, LIGHT_DELIVERY_IGNORED_EVENT, SKIP_REVIEW_TAG,
+    LIGHT_DELIVERY_APPLIED_EVENT, LIGHT_DELIVERY_IGNORED_EVENT, ReviewSkipProfile, SKIP_REVIEW_TAG,
     SKIP_VALIDATION_TAG,
 };
 use orbit_types::workflow::automation::DirectLandingRequest;
@@ -191,9 +191,13 @@ fn mapped_delivery_preview(guard_exit: Option<u8>) {
         )
         .unwrap();
     git(&fixture, &["checkout", "--quiet", "main"]);
+    let sentinel = fixture.repo.join(".orbit/guard-ran");
     if let Some(exit) = guard_exit {
+        // Absolute: the guard runs in a detached checkout of the candidate, not
+        // in the owner's checkout, so a relative path would land elsewhere.
         std::fs::write(fixture.repo.join("guard.sh"), format!(
-            "#!/bin/sh\nprintf 'base:%s:%s:%s:%s:%s\\n' \"$1\" \"$2\" \"$ORBIT_REVIEW_SKIP_BASE\" \"$ORBIT_REVIEW_SKIP_HEAD\" \"$ORBIT_REVIEW_SKIP_TAG\" > .orbit/guard-ran\nexit {exit}\n"
+            "#!/bin/sh\nprintf 'base:%s:%s:%s:%s:%s\\n' \"$1\" \"$2\" \"$ORBIT_REVIEW_SKIP_BASE\" \"$ORBIT_REVIEW_SKIP_HEAD\" \"$ORBIT_REVIEW_SKIP_TAG\" > {}\nexit {exit}\n",
+            sentinel.display()
         )).unwrap();
         git(&fixture, &["add", "guard.sh"]);
         git(&fixture, &["commit", "--quiet", "-m", "base guard"]);
@@ -257,7 +261,6 @@ fn mapped_delivery_preview(guard_exit: Option<u8>) {
         .unwrap();
 
     let initial = delivery_state(&fixture, &consumer);
-    let sentinel = fixture.repo.join(".orbit/guard-ran");
     for _ in 0..2 {
         let preview = evaluate(true);
         assert!(
@@ -338,9 +341,90 @@ crate::scenario_table!(
     guarded_mapped_delivery_preview_is_read_only,
 );
 
+/// A mapped guard runs in a checkout of the judged candidate [ORB-18116]: an
+/// owner whose own checkout sits on the base, holding an edit, and a later
+/// tree reaches the follower's decision, because the guard (read from the
+/// base) sees the candidate's `HEAD` and files. The owner's branch, `HEAD`
+/// and edits are left as they were.
+fn a_mapped_guard_sees_the_candidate_not_the_owners_checkout() {
+    const TAG: &str = "docs-review";
+    let fixture = Fixture::new_with_required_commands(&["true"]);
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &fixture.task_id,
+            TaskUpdateParams {
+                tags: Some(vec![TAG.into()]),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    git(&fixture, &["reset", "--quiet", "--hard", "main"]);
+    git(&fixture, &["checkout", "--quiet", "main"]);
+    // The guard exists at the base. It requires the candidate's `HEAD` and a
+    // file only the candidate holds.
+    let guard = fixture.repo.join("scripts/skip-guard.sh");
+    std::fs::create_dir_all(guard.parent().unwrap()).unwrap();
+    std::fs::write(
+        &guard,
+        "#!/bin/sh\ntest \"$(git rev-parse HEAD)\" = \"$2\" && grep -q candidate-only docs/note.md\n",
+    )
+    .unwrap();
+    git(&fixture, &["add", "."]);
+    git(&fixture, &["commit", "--quiet", "-m", "guard"]);
+    let base = git(&fixture, &["rev-parse", "HEAD"]);
+
+    git(&fixture, &["checkout", "--quiet", "-b", "candidate-branch"]);
+    std::fs::create_dir_all(fixture.repo.join("docs")).unwrap();
+    std::fs::write(fixture.repo.join("docs/note.md"), "candidate-only\n").unwrap();
+    git(&fixture, &["add", "."]);
+    git(&fixture, &["commit", "--quiet", "-m", "candidate"]);
+    let head = git(&fixture, &["rev-parse", "HEAD"]);
+    // A later tree the guard must not read instead.
+    std::fs::write(fixture.repo.join("docs/note.md"), "later\n").unwrap();
+    git(&fixture, &["commit", "--quiet", "-am", "later"]);
+    let later = git(&fixture, &["rev-parse", "HEAD"]);
+
+    // The owner's checkout: the base, with an edit it must keep.
+    git(&fixture, &["checkout", "--quiet", "main"]);
+    std::fs::write(fixture.repo.join("owner-edit.txt"), "owner work\n").unwrap();
+    let status = git(&fixture, &["status", "--short"]);
+
+    let decide = |head: &str| {
+        orbit_engine::review_skip_decision(
+            &fixture.runtime,
+            &fixture.repo,
+            &base,
+            head,
+            std::slice::from_ref(&fixture.task_id),
+            TAG,
+            &ReviewSkipProfile {
+                paths: vec!["docs/**".into(), "scripts/**".into()],
+                guard: Some("scripts/skip-guard.sh".into()),
+            },
+        )
+        .unwrap()
+        .expect("the task carries the tag")
+    };
+    assert!(
+        decide(&head).applies(),
+        "the guard saw the candidate's HEAD and files"
+    );
+    assert!(
+        !decide(&later).applies(),
+        "the guard judges the supplied head, not a later tree"
+    );
+    assert_eq!(git(&fixture, &["rev-parse", "HEAD"]), base);
+    assert_eq!(git(&fixture, &["branch", "--show-current"]), "main");
+    assert_eq!(git(&fixture, &["status", "--short"]), status);
+}
+
 crate::scenario_table!(
     light_delivery_scenarios,
     docs_only_candidate_skips_validation_and_every_review,
     a_path_outside_the_allow_list_ignores_both_tags,
     unguarded_mapped_delivery_preview_is_read_only,
+    a_mapped_guard_sees_the_candidate_not_the_owners_checkout,
 );
