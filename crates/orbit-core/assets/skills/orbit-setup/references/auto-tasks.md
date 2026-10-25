@@ -503,15 +503,29 @@ plugin being removed.
   `orbit.task.update` relations write (or in its artifact plus one
   deduplicated gap task when that write cannot change an existing link),
   clusters regressions by nature × escape × layer plus a one-line
-  mechanism, and files at most 3 `proposed` guard tasks for clusters of
-  3 or more regressions in 30 days. A guard is a mechanical check inside
-  the gates that already exist — a lint, a type, a static guard script, a
-  generator check, a skill or review-instruction line for `review_missed`,
-  or a regression test for `no_test` — never a new required status check
-  or merge gate. Each run attaches `escape-to-guard.json` with the
-  clusters, classification counts before and after, and recurrence after
-  earlier guards landed, diffed against the previous run; a workspace
-  with no regression links is a successful no-op.
+  mechanism, and files at most 3 `proposed` remedy tasks for clusters of
+  3 or more regressions in 30 days. Remedies choose the highest-reliability
+  expressive rung: mechanical guard in an existing gate, in-line hazard
+  comment, nested `AGENTS.md`/`CLAUDE.md` pair, tag instruction, then global
+  instruction, explaining why each higher rung cannot work. Review-instruction
+  remedies remain available for `review_missed`. Rungs 3–5 and review
+  instructions remove or merge an existing rule with no word-count growth
+  per edited file, or leave the choice to the operator; comments are exempt.
+  Tag remedies explain tag assignment; host-config mapping stays an operator
+  step outside task acceptance criteria. No new required status checks, merge
+  gates or human-only steps are proposed, and the run never edits guidance.
+  Rung tags and structured cluster keys plus filing counts support follow-up
+  of every landed remedy: `observing` until 30 days after verified delivery,
+  then `effective` for zero recurrences, `partial` for fewer than at filing
+  (kept), or `ineffective` for the same or more in the first 30 days.
+  Ineffective guards compete for strengthening under the normal cap;
+  ineffective instructions get deduplicated retirement proposals, at most 3
+  separately per run, with a higher-reliability replacement where possible.
+  Each run attaches schema-version-2 `escape-to-guard.json` with cluster
+  rungs and higher-rung rejections, classification counts, landing dates,
+  filing/post-landing counts, verdicts and retirement IDs; version-1 artifacts
+  remain comparable. Legacy review-instruction remedies are included. A
+  workspace with no regression links is a successful no-op.
 - **`code-health-sweep`** (`hard`) — every 3 days. Discovers the repository's
   languages, source roots, gate commands and public surface from tracked
   files, then scans for dead code, inventories compatibility paths, and reads
