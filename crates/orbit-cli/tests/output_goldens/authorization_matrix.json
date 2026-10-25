@@ -751,6 +751,19 @@
   },
   {
     "surface": "tool",
+    "operation": "orbit.decision.digest",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
     "operation": "orbit.decision.list",
     "required_any": [],
     "verdicts": {

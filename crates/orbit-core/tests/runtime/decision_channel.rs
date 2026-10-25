@@ -247,6 +247,48 @@ impl Fixture {
             plugin: PLUGIN.to_string(),
         }
     }
+
+    /// A task left in `proposed`, as `orbit.task.add` files it.
+    fn proposed_task(&self, title: &str) -> String {
+        let task = self
+            .runtime
+            .run_tool(
+                "orbit.task.add",
+                json!({
+                    "title": title,
+                    "description": "A proposed task awaiting approval.",
+                    "acceptance_criteria": ["It is decided."],
+                    "complexity": "low",
+                    "type": "chore",
+                    "workspace": self.repo.to_string_lossy(),
+                    "model": "codex"
+                }),
+            )
+            .unwrap();
+        let id = task["id"].as_str().unwrap().to_string();
+        assert_eq!(self.status(&id), TaskStatus::Proposed);
+        id
+    }
+
+    fn digest(
+        &self,
+        caller: DecisionSubmitCaller,
+    ) -> Result<orbit_core::application::task::DecisionDigest, orbit_core::OrbitError> {
+        self.runtime.decision_digest(CHANNEL, caller)
+    }
+
+    fn requests(&self, task: &str) -> Vec<DecisionRequest> {
+        self.runtime.get_task_decision_requests(task).unwrap()
+    }
+
+    fn requested_entries(&self, task: &str) -> usize {
+        self.runtime
+            .get_task_history(task)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.event == orbit_types::task::DECISION_REQUESTED_EVENT)
+            .count()
+    }
 }
 
 #[test]
@@ -803,4 +845,314 @@ fn submission_is_refused_while_the_decision_channel_is_disabled() {
         "{disabled}"
     );
     assert_eq!(fx.status(&task), TaskStatus::Blocked);
+}
+
+#[test]
+fn the_digest_raises_one_proposed_approval_per_proposed_task_idempotently() {
+    let fx = fixture();
+    fx.register();
+    let one = fx.proposed_task("First proposal");
+    let two = fx.proposed_task("Second proposal");
+    // An unrelated open request expiring within the 24-hour digest
+    // window rides along in the same call.
+    let (_blocked, expiring) = fx
+        .blocked_task_with_request_expiring(Some(chrono::Utc::now() + chrono::Duration::hours(1)));
+
+    let digest = fx.digest(Fixture::plugin_caller()).unwrap();
+    assert_eq!(digest.raised.len(), 2, "{:?}", digest.raised);
+    let mut raised_tasks: Vec<&str> = digest
+        .raised
+        .iter()
+        .map(|request| request.task_id.as_str())
+        .collect();
+    raised_tasks.sort_unstable();
+    assert_eq!(raised_tasks, {
+        let mut both = vec![one.as_str(), two.as_str()];
+        both.sort_unstable();
+        both
+    });
+    for request in &digest.raised {
+        assert_eq!(request.gate, DecisionGate::ProposedApproval);
+        assert_eq!(request.raised_by, "digest");
+        assert_eq!(request.state, DecisionRequestState::Open);
+        assert_eq!(
+            request
+                .answers
+                .iter()
+                .map(|answer| answer.id.as_str())
+                .collect::<Vec<_>>(),
+            ["approve", "reject"]
+        );
+    }
+    assert!(
+        digest
+            .expiring
+            .iter()
+            .any(|request| request.id == expiring.id),
+        "the request expiring within the window is returned: {:?}",
+        digest.expiring
+    );
+    for expected in digest.raised.iter().chain([&expiring]) {
+        assert!(
+            digest
+                .requests
+                .iter()
+                .any(|request| request.id == expected.id),
+            "the digest carries {}",
+            expected.id
+        );
+    }
+
+    // A second call raises nothing new and returns the same ids.
+    let again = fx.digest(Fixture::plugin_caller()).unwrap();
+    assert!(again.raised.is_empty(), "{:?}", again.raised);
+    let ids = |requests: &[DecisionRequest]| -> Vec<String> {
+        let mut ids: Vec<String> = requests.iter().map(|request| request.id.clone()).collect();
+        ids.sort_unstable();
+        ids
+    };
+    assert_eq!(ids(&again.requests), ids(&digest.requests));
+    assert_eq!(fx.requested_entries(&one), 1);
+    assert_eq!(fx.requested_entries(&two), 1);
+}
+
+#[test]
+fn a_changed_proposal_supersedes_its_request_and_the_digest_raises_a_fresh_one() {
+    let fx = fixture();
+    fx.register();
+    let task = fx.proposed_task("Mutable proposal");
+    let digest = fx.digest(Fixture::plugin_caller()).unwrap();
+    let first = digest.raised[0].clone();
+
+    // Changing the criteria the digest rendered supersedes the request.
+    fx.update(json!({
+        "id": task,
+        "acceptance_criteria": ["It is decided differently."],
+    }));
+    let requests = fx.requests(&task);
+    assert_eq!(
+        requests
+            .iter()
+            .find(|request| request.id == first.id)
+            .unwrap()
+            .state,
+        DecisionRequestState::Superseded
+    );
+
+    // The task is still proposed, so the next digest raises a fresh one.
+    let digest = fx.digest(Fixture::plugin_caller()).unwrap();
+    assert_eq!(digest.raised.len(), 1);
+    let second = digest.raised[0].clone();
+    assert_ne!(second.id, first.id);
+    assert_eq!(second.state, DecisionRequestState::Open);
+
+    // Changing the description supersedes that one in turn.
+    fx.update(json!({
+        "id": task,
+        "description": "A rewritten proposal.",
+    }));
+    assert_eq!(
+        fx.requests(&task)
+            .into_iter()
+            .find(|request| request.id == second.id)
+            .unwrap()
+            .state,
+        DecisionRequestState::Superseded
+    );
+    let digest = fx.digest(Fixture::plugin_caller()).unwrap();
+    assert_eq!(digest.raised.len(), 1);
+    assert_eq!(fx.status(&task), TaskStatus::Proposed);
+}
+
+#[test]
+fn a_review_approval_binds_to_the_candidate_and_supersedes_on_replacement() {
+    use orbit_types::task::{TaskDecision, TaskHistoryEntry};
+    use orbit_types::workflow::{CANDIDATE_HELD_EVENT, HeldCandidate};
+
+    let fx = fixture();
+    fx.register();
+    let task = fx.task();
+    fx.update(json!({"id": task, "status": "in_progress"}));
+    fx.update(json!({"id": task, "status": "review"}));
+    assert_eq!(fx.status(&task), TaskStatus::Review);
+
+    let hold_candidate = |head: &str| {
+        let held = HeldCandidate {
+            run_id: format!("jrun-{head}"),
+            machine_id: None,
+            branch: "orbit/candidate".to_string(),
+            head_sha: head.to_string(),
+            failed_step_id: "review".to_string(),
+            durable_ref: None,
+            carry_failure: None,
+            task_spec_digest: fx.runtime.get_task(&task).unwrap().spec_digest(),
+        };
+        fx.runtime
+            .apply_task_automation_update(
+                &task,
+                TaskAutomationUpdate {
+                    append_history: vec![TaskHistoryEntry {
+                        at: chrono::Utc::now(),
+                        by: "system".to_string(),
+                        event: CANDIDATE_HELD_EVENT.to_string(),
+                        note: Some(held.text()),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: Some(TaskDecision::CandidateHeld(held)),
+                    }],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    };
+    hold_candidate("candidate-a");
+
+    let digest = fx.digest(Fixture::plugin_caller()).unwrap();
+    let first = digest
+        .raised
+        .iter()
+        .find(|request| request.task_id == task)
+        .expect("the digest raises a review approval")
+        .clone();
+    assert_eq!(first.gate, DecisionGate::ReviewApproval);
+    assert_eq!(first.state, DecisionRequestState::Open);
+    let DecisionBinding::TaskRevision {
+        candidate, status, ..
+    } = &first.binding
+    else {
+        panic!(
+            "a review approval binds to a task revision: {:?}",
+            first.binding
+        );
+    };
+    assert_eq!(status, &TaskStatus::Review);
+    assert_eq!(candidate.as_deref(), Some("candidate-a"));
+
+    // A new candidate replaces the reviewed one: superseded, then the
+    // next digest raises a fresh request bound to the new candidate.
+    hold_candidate("candidate-b");
+    assert_eq!(
+        fx.requests(&task)
+            .into_iter()
+            .find(|request| request.id == first.id)
+            .unwrap()
+            .state,
+        DecisionRequestState::Superseded
+    );
+    let digest = fx.digest(Fixture::plugin_caller()).unwrap();
+    let second = digest
+        .raised
+        .iter()
+        .find(|request| request.task_id == task)
+        .expect("the digest re-raises for the new candidate")
+        .clone();
+    assert_ne!(second.id, first.id);
+    assert_eq!(second.state, DecisionRequestState::Open);
+    let DecisionBinding::TaskRevision { candidate, .. } = &second.binding else {
+        panic!(
+            "a review approval binds to a task revision: {:?}",
+            second.binding
+        );
+    };
+    assert_eq!(candidate.as_deref(), Some("candidate-b"));
+}
+
+#[test]
+fn the_digest_writes_nothing_while_the_decision_channel_is_disabled() {
+    let fx = fixture_with_config("");
+    fx.register();
+    let task = fx.proposed_task("Undecided while disabled");
+    let history = fx.runtime.get_task_history(&task).unwrap().len();
+
+    let digest = fx.digest(Fixture::plugin_caller()).unwrap();
+    assert!(digest.requests.is_empty());
+    assert!(digest.raised.is_empty());
+    assert!(digest.expiring.is_empty());
+    assert_eq!(fx.requested_entries(&task), 0, "no request was written");
+    assert_eq!(
+        fx.runtime.get_task_history(&task).unwrap().len(),
+        history,
+        "the digest wrote no history entry"
+    );
+}
+
+#[test]
+fn the_digest_refuses_agents_and_plugins_the_channel_is_not_bound_to() {
+    let fx = fixture();
+    fx.register();
+    let task = fx.proposed_task("Guarded proposal");
+
+    for (caller, code) in [
+        (DecisionSubmitCaller::Agent, "caller_not_allowed"),
+        (DecisionSubmitCaller::Unknown, "caller_not_allowed"),
+        (
+            DecisionSubmitCaller::PluginCallback {
+                plugin: "other-plugin".to_string(),
+            },
+            "channel_not_registered",
+        ),
+    ] {
+        let error = fx
+            .digest(caller)
+            .expect_err("the digest refuses this caller");
+        assert!(error.to_string().contains(code), "{error}");
+        assert_eq!(fx.requested_entries(&task), 0, "the refusal raised nothing");
+    }
+
+    // The bound plugin and the operator both get the digest.
+    assert_eq!(fx.digest(Fixture::plugin_caller()).unwrap().raised.len(), 1);
+    let operator = fx.digest(DecisionSubmitCaller::Operator).unwrap();
+    assert!(operator.raised.is_empty());
+    assert_eq!(operator.requests.len(), 1);
+}
+
+#[test]
+fn an_approve_through_the_channel_lands_like_a_screened_approval() {
+    let fx = fixture();
+    fx.register();
+    let decided = fx.proposed_task("Decided by channel");
+    let rejected = fx.proposed_task("Rejected by channel");
+    let direct = fx.proposed_task("Decided directly");
+
+    let digest = fx.digest(Fixture::plugin_caller()).unwrap();
+    let request_for = |task: &str| {
+        digest
+            .raised
+            .iter()
+            .find(|request| request.task_id == task)
+            .unwrap()
+            .clone()
+    };
+    let approve_request = request_for(&decided);
+    let token = fx
+        .runtime
+        .mint_decision_token(CHANNEL, &approve_request.id)
+        .unwrap();
+    let answered = fx
+        .submit(
+            &approve_request,
+            "approve",
+            &token,
+            Fixture::plugin_caller(),
+        )
+        .unwrap();
+    assert_eq!(answered.state, DecisionRequestState::Answered);
+    assert_eq!(answered.resolution.clone().unwrap().answered_by, HUMAN);
+
+    // The screened approval a CLI approve runs lands the same way.
+    fx.runtime
+        .approve_task_screened(&direct, None, None, None, None)
+        .unwrap();
+    assert_eq!(fx.status(&decided), fx.status(&direct));
+    assert_eq!(fx.status(&decided), TaskStatus::Backlog);
+
+    let reject_request = request_for(&rejected);
+    let token = fx
+        .runtime
+        .mint_decision_token(CHANNEL, &reject_request.id)
+        .unwrap();
+    fx.submit(&reject_request, "reject", &token, Fixture::plugin_caller())
+        .unwrap();
+    assert_eq!(fx.status(&rejected), TaskStatus::Rejected);
 }

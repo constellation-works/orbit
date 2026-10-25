@@ -357,6 +357,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | DecisionVerb::Show
             | DecisionVerb::Answer
             | DecisionVerb::Submit
+            | DecisionVerb::Digest
             | DecisionVerb::ChannelRegister
             | DecisionVerb::ChannelList
             | DecisionVerb::ChannelRevoke

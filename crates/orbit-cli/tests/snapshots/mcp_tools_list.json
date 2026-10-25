@@ -620,6 +620,41 @@
     }
   },
   {
+    "name": "orbit_decision_digest",
+    "description": "Raise the approval decision requests a digest presents and return the whole digest in one call. Governed: callable only by the plugin the named channel is bound to (through its callback session) or by the operator — never by an agent session (caller_not_allowed), and a plugin the channel is not bound to is refused channel_not_registered, as is an unregistered or revoked channel (channel_not_registered, channel_revoked). For every proposed task without an open proposed_approval request, and every review task without an open review_approval request, one open request is raised idempotently per (task, gate, binding) with answers approve/reject and raised_by digest: proposed_approval binds to the task's description and acceptance criteria plus its proposed status, review_approval also to the candidate under review, and either reads superseded once its binding stops matching. The result carries requests (the digest), raised (what this call raised) and expiring (every still-open request expiring within 24 hours). A second call raises nothing new and returns the same request ids. With the decision channel disabled in this workspace the digest raises nothing, writes nothing and returns no requests.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "channel": {
+          "type": "string",
+          "description": "The registered decision channel the digest is for, as `orbit decision channel list` shows it."
+        },
+        "model": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok",
+            "muse"
+          ],
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "required": [
+        "channel"
+      ],
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": false
+    }
+  },
+  {
     "name": "orbit_decision_list",
     "description": "List the workspace's human decision requests on held work, open ones unless include_closed is set. Each request names its task, gate, allowed answers, expiry and effective state (open, answered, superseded or expired, with supersession and expiry derived when read). Filter by gate or task_id. Read-only: seeing a request never answers it; an operator answers from the CLI or the dashboard.",
     "inputSchema": {

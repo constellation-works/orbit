@@ -391,6 +391,31 @@ expiry, raises what's missing, and sends one digest mail: proposed tasks first
 answers follow §6. The digest is also the re-mail path after key rotation or
 expiry — there is no separate reminder machinery.
 
+Core's half of that call is one governed operation, `orbit.decision.digest`
+(CLI `orbit decision digest --channel <channel>`), implemented in slice 6. One
+call raises what's missing and returns the whole digest: for every `proposed`
+task without an open `proposed_approval` request — and every `review` task
+without an open `review_approval` request — it raises one open request,
+idempotently per (task, gate, binding), with answers `approve`/`reject` and
+`raised_by: digest`; then it returns those requests beside every still-open
+request expiring within **24 hours** (the digest window), split into
+`requests` (the digest), `raised` (what this call raised) and `expiring`. A
+second call raises nothing new and returns the same request ids. The approval
+binding's revision is the task's spec digest — its description and acceptance
+criteria hashed — not `updated_at`: appending the raise itself moves
+`updated_at`, which would supersede every approval request as it was raised,
+while the spec digest changes exactly when what the digest rendered changed.
+`review_approval` additionally binds the candidate identity the task history
+currently names (the latest held candidate or review-gate note candidate), so
+a replacement candidate supersedes it. The operation is governed like
+`orbit.decision.submit`: callable only by the named channel's bound plugin
+through its callback session or by the operator, never by an agent session
+(`caller_not_allowed`); a plugin the channel is not bound to, and an
+unregistered or revoked channel, are refused (`channel_not_registered`,
+`channel_revoked`) and nothing is raised. With `[decision_channel]` disabled
+the digest raises nothing, writes nothing and returns no requests. Rendering,
+batching, quiet hours and multi-answer parsing stay the plugin's (§6, §8).
+
 ## 8. Noise control and transport failure
 
 - **Once per episode.** One notification per (task, gate, binding); the trigger

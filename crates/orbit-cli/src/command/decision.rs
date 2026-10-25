@@ -6,6 +6,8 @@
 //! session can list a request it is waiting on but cannot answer it.
 //! `submit` goes through the governed `orbit.decision.submit` tool so the
 //! operator tests a channel on exactly the path its plugin uses.
+//! `digest` likewise goes through the governed `orbit.decision.digest`
+//! tool, raising the approval requests the plugin's digest presents.
 //! `channel …` administers this host's registrations in core directly;
 //! registering, revoking and rotating are refused from an agent envelope
 //! here, and the CLI's pre-dispatch gate already refuses every plain
@@ -35,10 +37,14 @@ impl Execute for DecisionCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let Invocation { spec, input } = self.command;
         match spec.verb {
-            DecisionVerb::List | DecisionVerb::Show | DecisionVerb::Submit => {
+            DecisionVerb::List
+            | DecisionVerb::Show
+            | DecisionVerb::Submit
+            | DecisionVerb::Digest => {
                 let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
                 let blocks = match spec.verb {
                     DecisionVerb::List => list_blocks(&value),
+                    DecisionVerb::Digest => digest_blocks(&value),
                     DecisionVerb::Submit => vec![Block::text(format!(
                         "Submitted `{}` for {}; the request on {} now reads {}.",
                         text(&value["resolution"]["answer_id"]),
@@ -212,6 +218,16 @@ fn list_blocks(value: &Value) -> Vec<Block> {
         ]);
     }
     vec![Block::table(table)]
+}
+
+fn digest_blocks(value: &Value) -> Vec<Block> {
+    let raised = value["raised"].as_array().map_or(0, Vec::len);
+    let expiring = value["expiring"].as_array().map_or(0, Vec::len);
+    let mut blocks = vec![Block::text(format!(
+        "Digest: {raised} request(s) raised, {expiring} open request(s) expiring within 24 hours."
+    ))];
+    blocks.extend(list_blocks(value));
+    blocks
 }
 
 fn show_blocks(value: &Value) -> Vec<Block> {
