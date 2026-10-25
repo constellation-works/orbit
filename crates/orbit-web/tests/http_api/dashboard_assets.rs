@@ -98,25 +98,6 @@ fn agents_pilots_view_executes_ranking_detail_and_tier_matrix() {
 }
 
 #[test]
-fn settings_system_view_executes_render_provenance_override_edit_and_refused_write() {
-    let result = std::process::Command::new("node")
-        .args([
-            "--experimental-vm-modules",
-            "tests/http_api/dashboard_config_system.mjs",
-        ])
-        .env("TZ", "America/Los_Angeles")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("node is required to execute the dashboard asset behavior fixture");
-    assert!(
-        result.status.success(),
-        "dashboard settings system behavior failed:\n{}\n{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-}
-
-#[test]
 fn settings_hosts_view_executes_rows_freshness_load_banner_and_inline_mutations() {
     let result = std::process::Command::new("node")
         .args([

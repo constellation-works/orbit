@@ -65,7 +65,7 @@ try {
           payload = { capacity: { drain_phase: 'draining', drain_run_id: 'fixture', drain_status_run_id: 'fixture', running_admitted_workers: 1, active_leaf_runs: 1, max_active_leaf_runs: 4, free_slots: 3, ends_at: new Date(Date.now() + 3600000).toISOString() }, tasks: [] };
           break;
         case '/api/config/file':
-          payload = { sections: [], scope: 'workspace', crews: [], paths: [] };
+          payload = { sections: [], scope: 'global', crews: [], paths: [], text: '' };
           break;
         case '/api/runs/fixture':
           payload = { run_id: 'fixture', job_id: 'fixture', state: 'success', steps: [] };
@@ -137,16 +137,16 @@ try {
     await refresh();
     expectClean(await snapshot('offline-recovery'));
     await page.locator('.tab[data-tab="config"]').click();
-    await page.locator('#config-subtabs [data-subtab="workspace-file"]').click();
+    await page.locator('#config-subtabs [data-subtab="machine"]').click();
     await settled();
-    assert.match((await snapshot('workspace-file-clean')).label, /refreshed Settings/);
+    assert.match((await snapshot('machine-clean')).label, /refreshed Settings/);
     failedPath = '/api/config/file';
     runningCount = 18000;
     await refresh();
-    const partial = await snapshot('workspace-file-failure');
+    const partial = await snapshot('machine-failure');
     assert.match(partial.status, /orange/);
     assert.notEqual(partial.color, clean.color, 'A failed panel must not display the clean green dot');
-    assert.match(partial.label, /Settings › Workspace file/);
+    assert.match(partial.label, /Settings › Machine/);
     assert(!partial.label.includes('offline'), 'An HTTP panel failure must remain distinct from offline');
     assert.equal(partial.nodes.find(node => node.id === 'rail-count-jobs').text, '18.0k runs', 'Healthy panels must keep updating during a partial failure');
     expectStale(partial);
