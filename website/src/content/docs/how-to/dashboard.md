@@ -1,6 +1,6 @@
 ---
 title: Use the dashboard
-description: "Open the Orbit dashboard locally or over SSH, pick a workspace, act on tasks and runs, run a delivery window, and edit settings."
+description: "Open the Orbit dashboard locally or over SSH, pick a workspace, act on tasks and runs, read delivery analytics, run a delivery window, and edit settings."
 sidebar:
   order: 6
 ---
@@ -150,7 +150,9 @@ on its host.
 - The URL holds the host, workspace, and time window, so a reload or copied
   link opens the same view.
 - **Analytics → Reliability → Pipeline** covers every workspace, whatever is
-  selected.
+  selected. **Metrics**, **Codebase**, **Resources**, **Cost**, and **Agents**
+  show one workspace; **All workspaces** leaves those panels on "Select a
+  workspace to view this panel". See [Analytics](#analytics).
 
 Confirm the selected workspace before you act. A count or metric does not
 prove that a particular task or run succeeded.
@@ -162,8 +164,7 @@ prove that a particular task or run succeeded.
 | **Tasks** | Tasks, with the ones waiting on you first. The right dock holds the auto-drain card, a simple **Start a window** card, the locks held and a live log; an open task takes its place. |
 | **Runs** | Job runs, newest first, and run detail. |
 | **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
-| **Analytics** | How delivery is trending: **Metrics**, **Reliability** (with **Pipeline** and **Tools** tabs), **Codebase**, and **Cost**. |
-| **Agents** | How well each agent role does its part, ranked by crew and model: **Orchestrators**, **Implementers**, **Reviewers**, and **Pilots**. |
+| **Analytics** | How delivery is trending: **Metrics**, **Reliability** (**Pipeline** and **Tools**), **Codebase**, **Resources**, **Cost**, and **Agents** (**Orchestrators**, **Implementers**, **Reviewers**, **Pilots**). See [Analytics](#analytics), the Reliability notes in [Runs and errors](#runs-and-errors), and [Agents](#agents). |
 | **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Jobs**. |
 | **Knowledge** | Friction records. |
 | **[Plugins](#plugins)** | Installed plugins and the panels they add. |
@@ -427,18 +428,295 @@ counts from the full window, so rates may be understated. Total audited events
 and raw tool-call counts still cover the full window.
 
 Tools follows the Analytics window independently of an Events cutoff. With
-an **all** window, its bounded summary uses **24h**, named in the cards.
+an **all** or **1h** window, its bounded summary uses **24h**, named in the cards.
 Select a tool on **Tools** to open its events for the window the card shows.
 Exact incident-event links select **all** statuses because they list the
-recorded event IDs without a status restriction. **Analytics → Cost** shows
-managed-execution cost and token usage for the selected window.
+recorded event IDs without a status restriction. Spend, tokens, and
+read-only exploration are explained in [Analytics](#analytics).
+
+## Analytics
+
+**Analytics** shows how delivery is trending on the host you are viewing.
+Open it from the rail. The views are **Metrics**, **Reliability**,
+**Codebase**, **Resources**, **Cost**, and **Agents**. Reading them leaves
+tasks, drains, and admission unchanged.
+
+**Metrics**, **Codebase**, **Resources**, **Cost**, and **Agents** show the
+selected workspace. **All workspaces** replaces each of those panels with
+"Select a workspace to view this panel". **Reliability → Pipeline** covers
+every workspace on this host. While it is open, the workspace picker is
+marked fleet-wide. Resources are learned on the host you are viewing.
+Switching hosts shows the profiles that host learned.
+
+The address keeps the host, the workspace, and the dashboard time window
+(`1h`, `24h`, `7d`, `30d`, or **all**). Metrics, Cost, and Agents follow it.
+Codebase and Reliability keep the windows named below. What each agent role
+is scored on, and `orbit agents scorecard`, are in [Agents](#agents).
+
+### Metrics
+
+Open **Metrics** to see whether implementation is getting slower, whether
+tasks are finishing, or where new bugs were filed, for the selected
+workspace.
+
+Three trends share **Chart** and **Table**. Select a series to hide it; one
+series stays visible. A duration point backed by fewer than three runs is
+drawn hollow. An empty trend offers the next wider window.
+
+| Trend | Counts |
+|---|---|
+| **implement_one duration** | Wall-clock time of `implement_one` runs that finished in each bucket, by complexity (**Low**, **Medium**, **Hard**, and **All runs**). **Succeeded**, the default, counts the final attempt in a successful run that committed a candidate. **All** also counts failed, cancelled, no-diff, and unknown outcomes. Pick **Avg**, **p50**, or **p95**. |
+| **Tasks completed** | Tasks that moved to done in each bucket, by the same complexities. |
+| **Defects** | Bug tasks filed in each bucket. **Lineage** groups them by what `regression_from` names as the cause. **Fix-for-a-fix** means that cause was itself a bug fix. **Origin** groups them by the review or sweep that filed them. |
+
+The run bars under a duration chart stack low, medium, and hard, then other.
+Xhard and unset count toward **All runs** only. Bucket times follow the
+dashboard clock. Buckets of six hours or wider are labeled in UTC. The panel
+header counts runs and done tasks in the window.
+
+Under the chart:
+
+- **implement_one by actor** uses the selected window. A row with fewer than
+  five runs is dimmed. The list starts at seven actors; **Show all** lists
+  the rest.
+- **Slowest runs** uses the selected window. Each row opens its task.
+- **Actors within a complexity** is the last 30 days, whatever window is
+  selected above. The bar is the average and the tick is p95.
+- **Outcome by complexity** is all time: done, rejected, archived, and still
+  open. It is separate from the **Succeeded** / **All** switch on the
+  duration trend.
+
+Set the window to `7d`, open **implement_one duration**, leave **Succeeded**
+and **p50** selected, and compare **Medium** with the previous `7d`. A hollow
+point is one or two runs. This chart has no matching `orbit` command.
+
+### Codebase
+
+Open **Codebase** when a path keeps showing up in regressions, mid-run
+footprint widenings, blocked runs, or rejections, or when tasks keep
+reserving the same files. A rate's denominator is tasks that declared the
+path: the footprint, which is not always the diff that landed. Each rate
+shows its numerator and its denominator. How well task pilots predicted
+landed diffs is graded under [Agents](#agents), on **Pilots**.
+
+The view's own window is `7d`, `30d`, `90d`, or **All** (default `90d`).
+Group by **File**, **Directory**, or **Crate**. **Min. tasks** (default 15)
+is the smallest denominator a ranked row needs. At **Crate**, most crates
+clear that minimum and show up under several signals. Group by file or
+directory to find a hotspot.
+
+**Hotspots** (`#analytics/codebase`) is one table:
+
+| Signal | Rate |
+|---|---|
+| **Regressed** | Done tasks that later regressed, over done tasks that declared the path. |
+| **Footprint miss** | Tasks widened onto the path mid-run, over tasks that declared it. |
+| **Blocked** | Tasks blocked by a run failure, over tasks that declared it. |
+| **Rejected** | Tasks rejected after a run, over tasks that had a run. |
+
+**Regressions only** filters the Regressed column by nature, escape, layer,
+and detected-by. **Show all** lists every ranked path; otherwise you see the
+top of each signal. The path search also opens a path that is known and not
+ranked.
+
+**File** opens when you select a path. The address is
+`#analytics/codebase/file` with that path in the query. It shows the path's
+signals and rank, **Regressed tasks** (the task that regressed each one,
+with nature, layer, and detected-by), and **Changes with**: files that
+landed in the same tasks. **Changes with** lists single files, so group by
+file to see it.
+
+**Coupling & locks** (`#analytics/codebase/coupling`) has two lists.
+**Reserved together** is tasks holding both paths, divided by tasks holding
+either. A directory and its own `tests/` child are tagged **expected: its
+tests**. Release files fold into one **Release bump set** while **Group
+release files** is on, because those pairs record a release. **Lock waits**
+is the time a task spent denied a lock on the file, from the first denial
+until admission or until the task left the backlog. A wait still in progress
+is measured to now. Paths under the minimum are hidden.
+
+**Marks** (`#analytics/codebase/marks`) compares regression rates on paths
+that implement and review prompts marked as regression-prone. **With marks**
+is done tasks in the window whose prompt marked the path: regressed divided
+by marked. **Before** is done tasks that touched the path in the days before
+the first mark. Open it from **Per-path comparison** on Hotspots. Until a
+prompt has marked a path, the view says there is nothing to compare. Recent
+tasks have had less time to be named by a regression. Marks are written
+while `workflow.regression_risk.enabled` is true (the default). With it off,
+prompts carry no marks and this comparison stays empty. The key is global;
+see [Settable keys](../../reference/config/#settable-keys).
+
+The same rankings from a terminal, for the active workspace:
+
+```bash
+orbit codebase analytics --window 30d --min-support 15 --rollup file
+orbit codebase analytics --escape no_test --nature broke_existing
+orbit codebase show path/to/file.rs --window 30d
+orbit codebase related path/to/file.rs --window 30d --top 10
+```
+
+`path/to/file.rs` stands in for a repository-relative path. `analytics` and
+`show` take `--window 7d|30d|90d|all` (default `90d`), `--min-support`
+(default 15), and `--rollup file|dir|crate`. `--nature`, `--escape`,
+`--layer`, and `--detected-by` count only regressions of that kind; `absent`
+means the record stored no classification. `related` uses tasks that landed
+together: its `--window` defaults to `30d`, `--min-support` is shared landed
+tasks (default 15), and `--top` is 1–100 (default 10). `--json` on
+`analytics` is the dashboard payload. Pass `--workspace <selector>` for a
+workspace other than the active one. The commands read the rankings and
+change nothing. The full contract is the [CLI reference](../../reference/cli/#observe).
+
+### Resources
+
+Open **Resources** for the curves admission forecasts with: what one delivery
+of a given kind costs on this host, minute by minute since the drain admitted
+it. The [auto-drain](#auto-drain) card shows the last pass's forecast. This
+view shows the profiles behind that forecast. Forecast admission for one
+window is `off`, `shadow`, or `enforce` (`orbit run auto --auto-concurrency`).
+The host default is `machine.auto_concurrency.mode`. See
+[Run a delivery window](../continuous-delivery/).
+
+A profile is learned from the CPU and memory that delivery's workers recorded
+on this host. It appears once a delivery the drain admitted here finishes.
+Each profile keeps the most recent completed deliveries of its kind that were
+admitted within 30 days. How many it keeps is
+`machine.auto_concurrency.profile_window` (default 50). The page prints the
+number in effect, the host's cores and memory, and the admit thresholds.
+
+**Work class** is **Change**, **No-diff**, then each auto-task template that
+already has a profile. Change and no-diff split by complexity: **Low**,
+**Medium**, **Hard**, **Xhard**, **Unassessed**, and **Unset**. A template is
+one series and has no complexity. Select a series to hide it; one series
+stays visible.
+
+**Units** are **Cores · GiB** or **% of host**. Percent is available when the
+host size is known. In percent, the dashed line is the admit threshold. It
+bounds the whole host's forecast, not the one delivery drawn on the chart.
+The defaults are 90% of cores and 75% of memory
+(`machine.auto_concurrency.admit_cpu_percent` and `admit_memory_percent`).
+The page prints the thresholds it is using.
+
+A series with fewer deliveries than
+`machine.auto_concurrency.min_profile_deliveries` (default 10) is **sparse**:
+dimmed, with a hollow end. Admission then uses a wider profile. Each line
+ends at its horizon, the first minute where fewer than 1 in 10 of its
+deliveries are still running, and no later than
+`machine.auto_concurrency.horizon_cap_minutes` (default 120). Each minute
+averages the deliveries still running then, so the tail is the long runs.
+
+The three charts share minutes since admission on the horizontal axis:
+
+- **CPU** is the mean, with a band of one standard deviation.
+- **Memory** draws the p90 solid and the mean dashed.
+- **Still running** is the share of deliveries still going.
+
+The table lists, for each series, deliveries, horizon, peak CPU, peak memory
+p90, spread, and build-like deliveries. Spread is per-minute standard
+deviation over the mean: near 0 the profile forecasts well, near 1 it does
+not. Build-like marks no-diff work that held more than 1 core for 2
+consecutive minutes. `qa-sweep` and `qa-full-sweep` are left out, because
+those templates build by design.
+
+From a terminal, on this host:
+
+```bash
+orbit run profiles
+orbit run profiles --json --workspace <selector>
+```
+
+One row per workspace, work class, and complexity. A template's complexity
+column is `-`. The row's series peak can sit below each delivery's own peak
+p50 and p90, because averaging minute by minute blurs peaks that fall at
+different times. A sparse profile still shows those quantiles. `--json` adds
+the per-minute series. The command reads profiles and changes nothing.
+
+Compare recorded forecasts with the host's measured CPU and memory:
+
+```bash
+orbit run profiles --accuracy
+orbit run profiles --accuracy --wide
+orbit run profiles --accuracy --since 2026-10-15T00:00:00Z --mode enforce
+orbit run profiles --accuracy --drain <run-id> --json
+```
+
+`--accuracy` reads forecasts from drains in `shadow` or `enforce` over the
+last 30 days, unless `--since` sets an RFC3339 bound. Error is forecast minus
+measured, so a positive CPU error means the forecast was high. The summary is
+one row per offset (`+5m`, `+10m`, `+20m`, `+30m`): pairs, mean CPU error and
+mean absolute error in cores, how often the CPU forecast was under, mean
+memory error in GiB, and how often the memory forecast was under. `--wide`
+adds the remaining columns, including the worst miss. `--mode shadow` or
+`--mode enforce`, and `--drain` with a drain run id, choose which forecasts
+are included. A following table counts, per drain, what shadow would have
+held or added and what enforce admitted.
+This command reads those records. Column-by-column detail is in the
+[CLI reference](../../reference/cli/#run-inspection). The limits are
+[settable keys](../../reference/config/#settable-keys), global to the
+machine.
+
+### Cost
+
+Open **Cost** for managed-execution spend and token use in the selected
+workspace, and to compare implement runs that delegated read-only explorer
+calls with runs that did not.
+
+The header reads **Managed execution only**. Interactive
+orchestration-session overhead is excluded. The range under the tabs includes
+the start and excludes the cutoff. **all** has no preceding window to compare
+with.
+
+**Spend & tokens** is the default (`#analytics/cost`).
+
+Normalized token usage adds uncached input, cache read, 5-minute cache write,
+1-hour cache write, and output. An invocation whose model or input basis is
+unknown is left out of the total. A bounded window shows the change against
+the preceding window of the same length. Per-invocation and per-linked-task
+figures are dashes when the count is zero.
+
+Spend is grouped by task ownership: **Orchestrator:** and the name, **Shared
+task ownership**, **Unattributed task ownership**, or **Missing linked
+task**. **Provider-reported** dollars come first. **Derived estimate** is
+labeled as an estimate and has its own coverage. Compare the two under
+**Same-invocation comparison**, the invocations that have both figures. When
+that population is empty, the panel says to leave the partial sums
+unreconciled. A non-zero amount that rounds to $0.00 is shown as `<$0.01`.
+**unknown** means the figure was not reported.
+
+**Read-only exploration** is `#analytics/cost?tab=exploration`. For each
+implementing crew it shows **with explore** and **without**. Each row has the
+run count, mean duration, mean cost with how many runs were priced, and the
+footprint-miss rate (misses over runs whose footprint is known). Explorer
+call count and explorer cost are a separate column. The mean cost is the
+implementing crew's own spend. The sample count stays on the row, so a thin
+cohort stays visible as thin. When the read is truncated, the footnote names
+how many of the newest implement runs it counted. With no implement runs, the
+panel says so.
+
+Explorer delegation follows `workflow.explore.enabled` (default false). While
+it is on, a managed implement or review-repair agent can ask a sandboxed
+explorer a read-only question. See
+[Settable keys](../../reference/config/#settable-keys).
+
+### Reliability
+
+**Pipeline** (`#analytics/reliability`) is fleet-wide on this host. Every rate
+shows its window and its sample size. A sample that is too small shows the
+raw counts and **n too small** in place of a percentage. The window is `1h`,
+`24h`, `7d`, or `30d`. The dashboard window **all** is outside that list, so
+Pipeline uses `7d` and labels that cutoff.
+
+**Tools** (`#analytics/reliability/tools`) is the tool-failure scan. What each
+card counts, and when a count is capped, is under
+[Runs and errors](#runs-and-errors). Tools offers `24h`, `7d`, and `30d`. A
+dashboard window of `1h` or **all** uses `24h`, named on the cards.
 
 ## Agents
 
-**Agents** ranks the crews and models behind each agent role in the
-selected workspace and time window. Pick a role from the tabs above the panel;
-each tab shows how many rows it ranks. A role whose scorecard is not computed
-yet says so and lists the terms it will be scored on.
+**Agents** is an Analytics view. It ranks the crews and models behind each
+agent role in the selected workspace and time window. Pick a role from the
+tabs above the panel; each tab shows how many rows it ranks. A role whose
+scorecard is not computed yet says so and lists the terms it will be scored
+on.
 
 - **Who each problem counts against** splits the window's problems by the role
   they count against. Every problem counts against one role, or is not scored
