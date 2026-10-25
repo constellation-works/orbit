@@ -7,7 +7,9 @@
 //! A `gh run list --workflow` value that matches more than one workflow, or
 //! no workflow at all, means the caller did not identify a workflow. The tool
 //! refuses it as invalid input with file-name guidance instead of reporting
-//! an execution failure, and it never guesses a match [ORB-18196].
+//! an execution failure, and it never guesses a match. A non-string
+//! `workflow` value is refused too, rather than dropped into an unfiltered
+//! listing [ORB-18196].
 
 use std::path::PathBuf;
 
@@ -150,7 +152,7 @@ fn ambiguous_workflow_is_invalid_input_that_names_the_matches() {
     ] {
         assert!(
             message.to_lowercase().contains(phrase),
-            "ambiguous message must tell callers {phrase}: {message}"
+            "ambiguous message must tell callers {phrase} (ORB-18196): {message}"
         );
     }
     for name in ["codeql", "codeql.yml"] {
@@ -158,7 +160,7 @@ fn ambiguous_workflow_is_invalid_input_that_names_the_matches() {
     }
     assert!(
         message.contains("does not choose one"),
-        "the tool must not guess a match: {message}"
+        "the tool must not guess a match (ORB-18196): {message}"
     );
 }
 
@@ -179,7 +181,7 @@ fn unknown_workflow_is_invalid_input_not_an_execution_failure() {
     ] {
         assert!(
             message.to_lowercase().contains(phrase),
-            "unknown-workflow message must tell callers {phrase}: {message}"
+            "unknown-workflow message must tell callers {phrase} (ORB-18196): {message}"
         );
     }
 }
@@ -226,12 +228,25 @@ fn workflow_parameter_points_at_file_names_not_job_names() {
     ] {
         assert!(
             description.to_lowercase().contains(phrase),
-            "workflow description must tell callers {phrase}: {description}"
+            "workflow description must tell callers {phrase} (ORB-18196): {description}"
         );
     }
     assert!(
         description.to_lowercase().contains("not accepted")
             || description.to_lowercase().contains("not a workflow"),
-        "workflow description must say a job name is not accepted: {description}"
+        "workflow description must say a job name is not accepted (ORB-18196): {description}"
     );
+}
+
+#[test]
+fn numeric_workflow_is_refused_instead_of_listing_every_run() {
+    let lane = Lane::new();
+    lane.install_gh();
+
+    // A JSON number used to be dropped from the `gh` arguments, so the call
+    // listed every run with exit 0 (ORB-18196).
+    let error = tool_error(&lane.run_list(r#"{"workflow":12345}"#));
+    assert_eq!(error["code"], "invalid_input", "{error}");
+    let message = error["error"].as_str().expect("error string");
+    assert!(message.contains("invalid input:"), "{message}");
 }

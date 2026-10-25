@@ -19,22 +19,24 @@ const UNKNOWN_WORKFLOW_MARKER: &str = "could not find any workflows named";
 
 /// The `workflow` input the caller asked `gh` to resolve, for error reporting.
 ///
-/// String input is trimmed; numeric input is kept as written because a
-/// numeric workflow id is an accepted value. Anything else reports as empty,
-/// and the `gh` stderr still carries the miss.
+/// Trimmed. `build_exec_request` refuses non-string values before `gh` runs,
+/// so only a string reaches an error message.
 fn requested_workflow(input: &Value) -> String {
-    match input.get("workflow") {
-        Some(Value::String(value)) => value.trim().to_string(),
-        Some(Value::Number(value)) => value.to_string(),
-        _ => String::new(),
-    }
+    input
+        .get("workflow")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string()
 }
 
 /// The match list `gh` prints after `found:` in its ambiguous-workflow
 /// stderr, or `None` when the stderr names no trailing list.
 fn ambiguous_workflow_matches(stderr: &str) -> Option<String> {
     let marker = "found:";
-    let start = stderr.to_lowercase().find(marker)? + marker.len();
+    // ASCII lowercasing keeps byte offsets aligned with `stderr`; full
+    // lowercasing can change byte lengths and misplace the slice.
+    let start = stderr.to_ascii_lowercase().find(marker)? + marker.len();
     let matches = stderr[start..].trim().to_string();
     if matches.is_empty() {
         None
@@ -82,6 +84,16 @@ fn workflow_resolution_error(
 }
 
 pub fn build_exec_request(input: &Value) -> Result<ExecRequest, OrbitError> {
+    // A JSON number is not a string, so `optional_gh_value` would drop it and
+    // list every run. Refuse it instead of running an unfiltered query.
+    if input
+        .get("workflow")
+        .is_some_and(|value| !value.is_string() && !value.is_null())
+    {
+        return Err(OrbitError::InvalidInput(
+            "invalid `workflow`: pass a string, for example \"codeql.yml\" or \"12345\"; a JSON number is not accepted".to_string(),
+        ));
+    }
     let mut args = vec!["run".to_string(), "list".to_string()];
     super::super::push_optional_flag(&mut args, input, "branch", "--branch")?;
     super::super::push_optional_flag(&mut args, input, "workflow", "--workflow")?;
