@@ -62,9 +62,10 @@ pub(crate) fn backlog_snapshot(
 }
 
 /// The readiness projection's snapshot: identical selection and exclusion
-/// rules, but the task population is observed without a commit-boundary
-/// section (see `population::admission_population`), so a dashboard poll
-/// never queues behind — or holds up — a drain's task commits. Observation
+/// rules, but its envelope selections observe the task population without a
+/// commit-boundary section (see `population::admission_population`), so those
+/// reads never queue behind — or hold up — a drain's task commits. Ancestor
+/// and explicit-id loads still settle a pending commit first. Observation
 /// only: nothing admission decides may consume this snapshot.
 pub(crate) fn backlog_snapshot_observed(
     runtime: &OrbitRuntime,

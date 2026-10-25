@@ -30,7 +30,9 @@ use crate::application::task::{TaskListFilter, metadata_task};
 /// selections: no commit-boundary section, recovery, index repair or
 /// persisted freshness proofs. Readiness — a read-only projection that
 /// admits nothing — observes; the drain's own snapshot keeps the
-/// coordinated read its admission decisions require.
+/// coordinated read its admission decisions require. The ancestor loads
+/// (`include_ancestors`) read envelopes by id and settle a pending commit
+/// first in either mode.
 pub(super) fn admission_population(
     store: &dyn TaskStoreBackend,
     observed: bool,

@@ -183,9 +183,11 @@ pub fn explain_workspace_auto_readiness(
         .map(|drain| orbit_types::workflow::ReviewAdmission::from_run_input(&drain.input))
         .transpose()?
         .flatten();
-    // Readiness admits nothing, so its population is observed without the
-    // commit boundary: a poll neither queues behind a drain's exclusive
-    // commit sections nor holds the shared boundary against them.
+    // Readiness admits nothing, so its envelope selections are observed
+    // without the commit boundary: they neither queue behind a drain's
+    // exclusive commit sections nor hold the shared boundary against them.
+    // Ancestor and explicit-id loads (`include_tasks` below) still settle a
+    // pending commit before they read.
     let mut snapshot = backlog_snapshot_observed(
         runtime,
         "explain_workspace_auto_readiness",
