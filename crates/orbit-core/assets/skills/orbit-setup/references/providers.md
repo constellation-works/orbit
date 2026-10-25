@@ -54,8 +54,10 @@ naming the crew: correct the name or deliberately enable it, then recheck.
 3. Run `orbit doctor providers --format table` and read the selected row:
    executor/type identifies the lane, CLI names its binary, FOUND reports
    installation, SANDBOX names the configured boundary, READY reports sandbox
-   readiness (on Linux), and BWRAP identifies its launcher. LIMITS reports usage
-   readings. Neither FOUND nor READY proves authentication or tool access.
+   readiness (on Linux), BWRAP names the selected Bubblewrap source and version
+   (`-` when the sandbox is not linux-bwrap), and LAUNCHER shows the resolved
+   CLI path. LIMITS reports usage readings. Neither FOUND nor READY proves
+   authentication or tool access.
    Fix a missing CLI or sandbox first; see [Linux sandbox](linux-sandbox.md).
 4. Add or update a named crew in the chosen config file, using the model ID
    returned by that CLI. For example, replace the model placeholder before saving:
