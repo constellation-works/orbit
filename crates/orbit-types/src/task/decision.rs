@@ -476,6 +476,17 @@ pub enum DecisionGate {
 }
 
 impl DecisionGate {
+    /// The gate a stable gate name denotes, if it denotes one.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "block_triage" => Some(Self::BlockTriage),
+            "pilot_admission" => Some(Self::PilotAdmission),
+            "proposed_approval" => Some(Self::ProposedApproval),
+            "review_approval" => Some(Self::ReviewApproval),
+            _ => None,
+        }
+    }
+
     /// Stable gate name.
     pub fn as_str(&self) -> &'static str {
         match self {

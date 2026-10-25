@@ -467,3 +467,117 @@ fn dashboard_pr_status_admission() {
         assert!(json_ok(server.get(&uri))["pr_status"].is_null());
     });
 }
+
+/// The dashboard lists a task's open decision request and answers it
+/// through the same core apply step as the CLI: the chosen block-triage
+/// option lands as a human comment, the task returns to backlog, and the
+/// request reads `answered`. A second answer is refused.
+#[test]
+fn dashboard_answers_a_decision_request_as_human() {
+    isolated(
+        "task_writes::dashboard_answers_a_decision_request_as_human",
+        || {
+            use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+            use orbit_types::task::{
+                DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest,
+            };
+
+            let fixture = Fixture::new();
+            let id = seed(&fixture, "Blocked awaiting a decision", TaskStatus::Blocked);
+            let history = fixture.runtime.get_task_history(&id).unwrap();
+            let blocked_at = history
+                .iter()
+                .rfind(|entry| entry.to_status == Some(TaskStatus::Blocked))
+                .expect("seeded blocked task records its block")
+                .at;
+            let request = DecisionRequest::new(
+                id.clone(),
+                DecisionGate::BlockTriage,
+                vec![
+                    DecisionAnswer {
+                        id: "1".to_string(),
+                        label: "Drop criterion 2".to_string(),
+                        consequence: "the old API stays retired".to_string(),
+                    },
+                    DecisionAnswer {
+                        id: "dismiss".to_string(),
+                        label: "Dismiss".to_string(),
+                        consequence: "Leave blocked, stop asking for this episode.".to_string(),
+                    },
+                ],
+                DecisionBinding::BlockEpisode {
+                    episode: blocked_at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+                },
+                "block_triage".to_string(),
+                chrono::Utc::now(),
+            );
+            let request_id = request.id.clone();
+            fixture
+                .runtime
+                .apply_task_automation_update(
+                    &id,
+                    TaskAutomationUpdate {
+                        append_history: vec![request.history_entry("system")],
+                        ..Default::default()
+                    },
+                )
+                .expect("record the decision request");
+
+            let server = fixture.server(true);
+            let listed = json_ok(server.get(&format!("/api/decisions{WORKSPACE}")));
+            assert_eq!(listed["total"], 1, "{listed}");
+            assert_eq!(listed["items"][0]["id"], request_id);
+            assert_eq!(listed["items"][0]["state"], "open");
+
+            let detail = json_ok(server.get(&format!("/api/tasks/{id}{WORKSPACE}")));
+            assert_eq!(detail["open_decisions"][0]["id"], request_id, "{detail}");
+            assert_eq!(detail["open_decisions"][0]["gate"], "block_triage");
+
+            let answered = json_ok(server.send(
+                "POST",
+                &format!("/api/decisions/{request_id}/answer{WORKSPACE}"),
+                json!({"answer": "1", "note": "Criterion 2 goes."}),
+            ));
+            assert_eq!(answered["request"]["state"], "answered", "{answered}");
+            assert_eq!(answered["request"]["resolution"]["answer_id"], "1");
+            assert_eq!(answered["request"]["resolution"]["answered_by"], "human");
+
+            let after = json_ok(server.get(&format!("/api/tasks/{id}{WORKSPACE}")));
+            assert_eq!(after["status"], "backlog", "{after}");
+            assert!(
+                after["open_decisions"].is_null(),
+                "the answered request leaves open_decisions: {after}"
+            );
+            assert!(
+                after["comments"].as_array().unwrap().iter().any(|comment| {
+                    comment["by"] == "human"
+                        && comment["message"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .starts_with("Decision answer:")
+                }),
+                "the answer lands as a human comment: {after}"
+            );
+
+            let refused = server.send(
+                "POST",
+                &format!("/api/decisions/{request_id}/answer{WORKSPACE}"),
+                json!({"answer": "1"}),
+            );
+            assert!(
+                !refused.status().is_success(),
+                "a second answer is refused: {}",
+                refused.status()
+            );
+            let still = json_ok(server.get(&format!("/api/tasks/{id}{WORKSPACE}")));
+            assert_eq!(
+                still["comments"], after["comments"],
+                "the refusal changed nothing"
+            );
+            assert_eq!(
+                still["history"], after["history"],
+                "the refusal changed nothing"
+            );
+        },
+    );
+}

@@ -931,6 +931,226 @@ fn a_second_proposal_supersedes_the_first() {
 }
 
 #[test]
+fn answering_a_proposal_applies_the_choice_as_human_and_reads_answered() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    propose(&fx, &task);
+    let request = decision_requests(&fx, &task).pop().unwrap();
+
+    // The read surfaces see the open request before it is answered.
+    let listed = fx
+        .runtime
+        .run_tool(
+            "orbit.decision.list",
+            json!({"model": "codex", "task_id": task}),
+        )
+        .unwrap();
+    assert_eq!(listed["count"], 1, "{listed}");
+    assert_eq!(listed["requests"][0]["id"], request.id);
+    assert_eq!(listed["requests"][0]["state"], "open");
+    let shown = fx
+        .runtime
+        .run_tool(
+            "orbit.task.show",
+            json!({"id": task, "model": "codex", "fields": ["open_decisions"]}),
+        )
+        .unwrap();
+    // A single selected field answers with that field's value.
+    assert_eq!(shown[0]["id"], request.id, "{shown}");
+    assert_eq!(shown[0]["answers"], json!(["1", "2", "dismiss"]));
+
+    let answered = fx
+        .human()
+        .answer_decision_request_as_human(
+            &request.id,
+            "1",
+            Some("Criterion 2 goes.".to_string()),
+            "human:operator".to_string(),
+            Some("cli".to_string()),
+        )
+        .unwrap();
+    assert_eq!(
+        answered.state,
+        orbit_types::task::DecisionRequestState::Answered
+    );
+    let resolution = answered.resolution.as_ref().unwrap();
+    assert_eq!(resolution.answer_id, "1");
+    assert_eq!(resolution.answered_by, "human:operator");
+    assert_eq!(resolution.provenance.as_deref(), Some("cli"));
+
+    let task_after = fx.runtime.get_task(&task).unwrap();
+    assert_eq!(
+        task_after.status,
+        TaskStatus::Backlog,
+        "choosing an option returns the task to backlog"
+    );
+    let comments = fx.runtime.get_task_comments(&task).unwrap();
+    let answer_comment = comments
+        .iter()
+        .find(|comment| comment.message.starts_with("Decision answer:"))
+        .expect("the human answer comment is recorded");
+    assert_eq!(answer_comment.by, "human:operator", "human provenance");
+    assert!(
+        answer_comment.message.contains("- Recovered."),
+        "the chosen option's replacement text is quoted in the answer: {}",
+        answer_comment.message
+    );
+    assert!(
+        fx.runtime
+            .list_decision_requests(None, Some(&task), false)
+            .unwrap()
+            .is_empty(),
+        "no open request remains"
+    );
+    assert_eq!(
+        fx.runtime
+            .get_decision_request(&request.id)
+            .unwrap()
+            .unwrap()
+            .state,
+        orbit_types::task::DecisionRequestState::Answered
+    );
+}
+
+#[test]
+fn answering_a_superseded_request_is_refused_and_changes_nothing() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    propose(&fx, &task);
+    let request = decision_requests(&fx, &task).pop().unwrap();
+    let human = fx.human();
+
+    // An answer outside the allowed set is refused before anything writes.
+    let refused = human
+        .answer_decision_request_as_human(
+            &request.id,
+            "bogus",
+            None,
+            "human:operator".to_string(),
+            Some("cli".to_string()),
+        )
+        .expect_err("an unlisted answer is refused");
+    assert!(
+        refused.to_string().contains("answer_not_allowed"),
+        "{refused}"
+    );
+    assert_eq!(
+        decision_requests(&fx, &task)[0].state,
+        orbit_types::task::DecisionRequestState::Open
+    );
+
+    // A human answers on another surface: the task leaves blocked and the
+    // request's binding stops matching.
+    human
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": task, "status": "backlog"}),
+        )
+        .unwrap();
+    let status_before = fx.runtime.get_task(&task).unwrap().status;
+    let comments_before = fx.runtime.get_task_comments(&task).unwrap().len();
+    let history_before = fx.runtime.get_task_history(&task).unwrap().len();
+
+    let stale = human
+        .answer_decision_request_as_human(
+            &request.id,
+            "1",
+            None,
+            "human:operator".to_string(),
+            Some("cli".to_string()),
+        )
+        .expect_err("a superseded answer is refused");
+    assert!(stale.to_string().contains("request_superseded"), "{stale}");
+    assert_eq!(fx.runtime.get_task(&task).unwrap().status, status_before);
+    assert_eq!(
+        fx.runtime.get_task_comments(&task).unwrap().len(),
+        comments_before,
+        "the refusal wrote no comment"
+    );
+    assert_eq!(
+        fx.runtime.get_task_history(&task).unwrap().len(),
+        history_before,
+        "the refusal wrote no history"
+    );
+}
+
+#[test]
+fn answering_an_expired_request_is_refused_and_changes_nothing() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    let history = fx.runtime.get_task_history(&task).unwrap();
+    let blocked_at = history
+        .iter()
+        .rfind(|entry| entry.to_status == Some(TaskStatus::Blocked))
+        .expect("seeded blocked task records its block")
+        .at;
+    let mut request = orbit_types::task::DecisionRequest::new(
+        task.clone(),
+        orbit_types::task::DecisionGate::BlockTriage,
+        vec![
+            orbit_types::task::DecisionAnswer {
+                id: "1".to_string(),
+                label: "Drop criterion 2".to_string(),
+                consequence: "the old API stays retired".to_string(),
+            },
+            orbit_types::task::DecisionAnswer {
+                id: "dismiss".to_string(),
+                label: "Dismiss".to_string(),
+                consequence: "Leave blocked, stop asking for this episode.".to_string(),
+            },
+        ],
+        orbit_types::task::DecisionBinding::BlockEpisode {
+            episode: blocked_at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+        },
+        "block_triage".to_string(),
+        chrono::Utc::now(),
+    );
+    request.expires_at = chrono::Utc::now() - chrono::Duration::hours(1);
+    assert_eq!(request.state, orbit_types::task::DecisionRequestState::Open);
+    fx.runtime
+        .apply_task_automation_update(
+            &task,
+            TaskAutomationUpdate {
+                append_history: vec![request.history_entry("system")],
+                ..Default::default()
+            },
+        )
+        .expect("record the expired decision request");
+    assert_eq!(
+        decision_requests(&fx, &task)[0].state,
+        orbit_types::task::DecisionRequestState::Expired
+    );
+    let human = fx.human();
+    let status_before = fx.runtime.get_task(&task).unwrap().status;
+    let comments_before = fx.runtime.get_task_comments(&task).unwrap().len();
+    let history_before = fx.runtime.get_task_history(&task).unwrap().len();
+    let expired = human
+        .answer_decision_request_as_human(
+            &request.id,
+            "1",
+            None,
+            "human:operator".to_string(),
+            Some("cli".to_string()),
+        )
+        .expect_err("an expired answer is refused");
+    assert!(expired.to_string().contains("request_expired"), "{expired}");
+    assert_eq!(fx.runtime.get_task(&task).unwrap().status, status_before);
+    assert_eq!(
+        fx.runtime.get_task_comments(&task).unwrap().len(),
+        comments_before,
+        "the refusal wrote no comment"
+    );
+    assert_eq!(
+        fx.runtime.get_task_history(&task).unwrap().len(),
+        history_before,
+        "the refusal wrote no history"
+    );
+}
+
+#[test]
 fn a_pilot_warning_requeue_is_refused_as_a_requeue_whatever_proof_it_carries() {
     let fx = fixture();
     let task = fx.task(&[]);

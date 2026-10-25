@@ -37,6 +37,7 @@ mod config_show_task_reads;
 mod context_selector_external_root;
 mod context_selector_worktree;
 mod crew_effort_admission;
+mod decision_cli;
 mod delivery_remote_source;
 mod friction_lifecycle_cli;
 mod live_run_status;

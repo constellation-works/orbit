@@ -40,6 +40,14 @@ pub const NOT_ID_ROUTED_TOOLS: &[(&str, &str)] = &[
         "a friction id is workspace-local and carries no host prefix",
     ),
     (
+        "orbit.decision.show",
+        "a decision request id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.decision.answer",
+        "a decision request id is workspace-local and carries no host prefix",
+    ),
+    (
         "orbit.workflow.run.show",
         "a run id is host-local: a run executes where it was admitted",
     ),

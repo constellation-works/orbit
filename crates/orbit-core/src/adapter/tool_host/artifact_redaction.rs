@@ -4,6 +4,7 @@ use orbit_common::OrbitError;
 use orbit_common::governance::agents::AgentsVerb;
 use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::codebase::CodebaseVerb;
+use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::{OperationVerb, ParamSpec, ParamType, Redaction};
@@ -345,6 +346,14 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         },
         OrbitBuiltinAction::Codebase(verb) => match verb {
             CodebaseVerb::Analytics | CodebaseVerb::Show | CodebaseVerb::Related => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
+        },
+        // List and show persist nothing; the answer verb never reaches
+        // dispatch as a tool, and its note redacts per its declared class.
+        OrbitBuiltinAction::Decision(verb) => match verb {
+            DecisionVerb::List | DecisionVerb::Show | DecisionVerb::Answer => ActionPolicy {
                 declared: verb.spec().params,
                 ..NO_REDACTION
             },
@@ -844,6 +853,7 @@ fn response_string<'a>(response: &'a Value, field: &str) -> Result<&'a str, Orbi
 fn tool_name(action: OrbitBuiltinAction) -> &'static str {
     match action {
         OrbitBuiltinAction::Task(verb) => verb.tool_name(),
+        OrbitBuiltinAction::Decision(verb) => verb.tool_name(),
         OrbitBuiltinAction::Friction(verb) => verb.tool_name(),
         OrbitBuiltinAction::AutoTask(verb) => verb.tool_name(),
         OrbitBuiltinAction::Drain(verb) => match verb {

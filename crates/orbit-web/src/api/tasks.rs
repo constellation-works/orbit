@@ -779,7 +779,7 @@ pub(super) async fn add_task_comment_action(
 /// all collapse to [`HUMAN_ACTOR_LABEL`]. That keeps a model constant out of the
 /// `by` field whether it arrives from a confused client or from the ambient
 /// identity the runtime would otherwise supply.
-fn human_comment_author(requested: Option<&str>) -> String {
+pub(super) fn human_comment_author(requested: Option<&str>) -> String {
     let Some(label) = requested.and_then(non_empty_string) else {
         return HUMAN_ACTOR_LABEL.to_string();
     };

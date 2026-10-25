@@ -11,6 +11,7 @@ mod codebase;
 mod config;
 mod cost;
 mod crews;
+mod decisions;
 mod denials;
 mod diagnostics;
 mod distributed;

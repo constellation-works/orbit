@@ -87,6 +87,19 @@ mirror, pass `--workspace` explicitly. `--host <host>` names the host for
 | `orbit task export` \| `import` \| `reindex` | Export and import portable `tar.zst` task bundles, and rebuild the task index. |
 | `orbit task publication publish` \| `status` \| `inspect` \| `restore` | Publish, check, read, or restore a task snapshot. Nothing publishes automatically. |
 
+### Decision requests
+
+With `decision_channel.enabled` on (see [Configuration](../config/)), work
+held on a human decision — a blocked-task triage proposal or a task-pilot
+admission hold — raises a decision request. `orbit task show` lists a task's
+open requests in `open_decisions`.
+
+| Command | Purpose |
+|---|---|
+| `orbit decision list` | List open decision requests. `--gate block_triage\|pilot_admission\|proposed_approval\|review_approval` and `--task <id>` filter; `--all` also shows answered, superseded and expired requests. The MCP tool `orbit.decision.list` returns the same. |
+| `orbit decision show <id>` | Show one request with its allowed answers, binding, expiry and resolution. The MCP tool is `orbit.decision.show`. |
+| `orbit decision answer <id> <answer>` | Answer one open request as the operator; `--note` keeps evidence with the answer (a pilot-admission verdict uses it as its evidence). The answer lands as a human write and the request then reads `answered`. A superseded or expired request is refused and nothing changes. There is no answering tool: an agent can list a request but cannot answer it. The dashboard's task detail offers the same answers as buttons. |
+
 With `task show --fields ... --json`, a single field returns its bare JSON value,
 whether read locally or from another host. The `terminal` field stays keyed as
 `{"terminal": true}` or `{"terminal": false}`. Multiple fields return an object

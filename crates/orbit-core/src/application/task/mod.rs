@@ -10,6 +10,7 @@ pub(crate) mod blocked_recovery;
 pub(crate) mod contention;
 mod context_repair;
 mod context_widening;
+mod decision;
 mod desktop;
 mod distributed_port;
 pub(crate) mod escalation_triage_steps;
@@ -76,6 +77,7 @@ pub use contention::{LockContentionHotspot, LockContentionReport};
 pub use context_repair::{
     CONTEXT_REPAIR_SWEEP_STATUSES, ContextFileRestoration, ContextRepairCandidate,
 };
+pub(crate) use decision::decision_request_json;
 pub(in crate::application) use distributed_port::TaskDistributedPort;
 pub use escalation_triage_steps::{
     PILOT_WARNING_TRIAGED_EVENT, PilotWarningDecision, PilotWarningTriageRequest,
