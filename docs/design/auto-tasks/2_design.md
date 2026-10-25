@@ -43,6 +43,9 @@ durable coverage state rather than time-slot due-math. `template` carries `title
 Context selectors are copied unchanged into minted tasks. Diff-producing
 chores must declare a scope in their YAML template; otherwise admission holds
 them for task-pilot. Older definitions without selectors remain readable.
+`comment-hygiene` (§4e) is the deliberate exception: its batch is known only
+at run time, so it mints selector-free — which holds no context lock — and
+its body narrows `context_files` to the selected files before editing.
 An explicit complexity must be an
 assessed `low`, `medium`, `hard`, or `xhard` value and is copied to every minted task.
 The bundled defaults all carry reviewed explicit assessments. Legacy and custom
@@ -340,6 +343,58 @@ on a 1.3M-line tree), which floods the backlog, while the `code-review`
 rotation already provides steady whole-tree coverage a little at a time. The
 snapshot stays available for the moments a complete, single-SHA reading of
 the entire tree is worth that fan-out.
+
+### 4e. `comment-hygiene`: the doc-duties ledger over code comments
+
+`comment-hygiene` is the daily comment counterpart of `doc-duties`: disabled
+by default, `low` complexity, tagged `comment-hygiene`, and shipped in
+`DEFAULT_AUTO_TASK_FILES` beside the other defaults. Each run checks at most
+six tracked source files and about 1,500 lines against a generic,
+language-agnostic comment standard stated in its body (comments say why, doc
+comments state the contract, no history narration or commented-out code, no
+ownerless TODOs, escape hatches state their reason, stale comments are bugs,
+density stays low). A workspace sharpens that standard through a
+`comment-hygiene` tag instruction (`[workflow.tag_instructions.comment-hygiene]`);
+the shipped body stays project- and language-agnostic. Fixes are ordered
+contradicting comments, history narration, restating comments, then the rest.
+
+It reuses the `doc-duties` ledger scheme rather than inventing a second one:
+each run attaches `comment-hygiene-ledger.json` (`schema_version` 2) with one
+row per selected file and a cumulative `state` map carrying each path's two
+most recent attempts forward, read back through the same newest-ledger
+sequence. Two differences follow from the subject matter. Each row also
+records `checked_through`, the commit the check covered, and a file unchanged
+since its last `clean`/`fixed` check is not a candidate — a comment mostly
+goes stale when its own file changes. Selection is therefore files changed
+since their last check (oldest check first), then never-checked files (oldest
+git date first), ties by path; a missing or unreadable ledger, including a
+predecessor read the run's tool scope refuses, is stated explicitly instead
+of falling back to prose. Outcomes are the same `clean`/`fixed`/`partial`/`skipped`;
+a file over 800 lines is taken alone or as recorded line ranges and is not
+`clean` until every range is checked; two `skipped`/`partial` outcomes in a
+row hold the file back for a dedicated task; and a clean batch is a
+successful no-diff run. The ledger is attached on every run, including
+all-skipped ones. Carry-forward across real instances is confirmed
+post-deploy on the owner host, from the second minted instance's `state`;
+the definition itself is proven by loading and seeding it through the
+existing loader.
+
+Unlike `doc-duties`, which reserves `dir:.`, `comment-hygiene` declares no
+`context_files`: empty context holds no context lock, so an open instance
+never stalls unrelated work in a drain. Files in the footprint of an open or
+in-progress task are skipped during selection. After selecting its batch and
+before editing, the body narrows the task's `context_files` with
+`orbit.task.update` to exactly the selected `file:` selectors (replacing any
+broader preparation scope), reads them back with `orbit.task.show`, and
+quotes them in the execution summary — in claimed mode the same selectors
+are returned as `context_files_added`. The diff is comment-only: everything
+outside comments and doc comments stays byte-identical, confirmed before
+handoff by hunk inspection and the repository's normal validation (or a
+comment-stripped comparison where the language tooling offers one). A stale
+comment that reveals a real code defect is filed as a deduplicated task —
+at most two per run, `spawned_from` the hygiene task — never fixed in place,
+so each delivery stays a trivially reviewable comment-only change through
+normal validation and CI.
 
 ## 5. CRUD surfaces
 
