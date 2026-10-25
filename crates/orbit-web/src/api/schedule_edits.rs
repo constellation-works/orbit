@@ -7,7 +7,7 @@
 
 use std::time::Instant;
 
-use axum::extract::{Query, State};
+use axum::extract::{Query, State, rejection::JsonRejection};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_cmd::registry_routines::routine_statuses;
@@ -74,10 +74,55 @@ pub(super) async fn set_routine_trigger(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
     Ws(runtime): Ws,
-    Json(body): Json<RoutineTriggerRequest>,
+    body: Result<Json<RoutineTriggerRequest>, JsonRejection>,
 ) -> Response {
     let workspace = match explicit_workspace(&query) {
         Ok(workspace) => workspace.to_string(),
+        Err(rejection) => return rejection.into_response(),
+    };
+    // Authorize before touching the body so unauthenticated probes get 403,
+    // not the 422 that JSON extraction would return for a malformed body.
+    let caller = match authorized_caller(&DASHBOARD_ROUTINE_TRIGGER, state.operator_session()) {
+        Ok(caller) => caller,
+        Err(denial) => {
+            let started = Instant::now();
+            match &body {
+                Ok(Json(valid)) => {
+                    record_operation_audit(
+                        &runtime,
+                        &workspace,
+                        DASHBOARD_ROUTINE_TRIGGER.id,
+                        &valid.name,
+                        &valid.machine_name,
+                        &json!({"source": valid.source, "target": valid.target, "trigger": valid.trigger}),
+                        None,
+                        Some(&denial),
+                        None,
+                        started,
+                    )
+                    .await;
+                }
+                Err(_) => {
+                    record_operation_audit(
+                        &runtime,
+                        &workspace,
+                        DASHBOARD_ROUTINE_TRIGGER.id,
+                        "",
+                        "",
+                        &json!({}),
+                        None,
+                        Some(&denial),
+                        None,
+                        started,
+                    )
+                    .await;
+                }
+            }
+            return authorization_denied(denial);
+        }
+    };
+    let Json(body) = match body {
+        Ok(body) => body,
         Err(rejection) => return rejection.into_response(),
     };
     let audit_args = json!({"source": body.source, "target": body.target, "trigger": body.trigger});
@@ -103,13 +148,6 @@ pub(super) async fn set_routine_trigger(
                 started,
             )
             .await;
-        }
-    };
-    let caller = match authorized_caller(&DASHBOARD_ROUTINE_TRIGGER, state.operator_session()) {
-        Ok(caller) => caller,
-        Err(denial) => {
-            audit(None, Some(&denial), None, Instant::now()).await;
-            return authorization_denied(denial);
         }
     };
     let expected = match typed::<RoutineTrigger>(
@@ -209,7 +247,7 @@ pub(super) async fn set_routine_trigger(
 pub(super) async fn set_auto_task_schedule(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
-    Json(body): Json<AutoTaskScheduleRequest>,
+    body: Result<Json<AutoTaskScheduleRequest>, JsonRejection>,
 ) -> Response {
     let workspace = match explicit_workspace(&query) {
         Ok(workspace) => workspace.to_string(),
@@ -218,6 +256,51 @@ pub(super) async fn set_auto_task_schedule(
     let runtime = match resolve_workspace_blocking(&state, &workspace).await {
         Ok(runtime) => runtime,
         Err(response) => return *response,
+    };
+    // Authorize before touching the body so unauthenticated probes get 403,
+    // not the 422 that JSON extraction would return for a malformed body.
+    let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_SCHEDULE, state.operator_session()) {
+        Ok(caller) => caller,
+        Err(denial) => {
+            let started = Instant::now();
+            match &body {
+                Ok(Json(valid)) => {
+                    record_operation_audit(
+                        &runtime,
+                        &workspace,
+                        DASHBOARD_AUTO_TASK_SCHEDULE.id,
+                        &valid.name,
+                        "",
+                        &json!({"schedule": valid.schedule}),
+                        None,
+                        Some(&denial),
+                        None,
+                        started,
+                    )
+                    .await;
+                }
+                Err(_) => {
+                    record_operation_audit(
+                        &runtime,
+                        &workspace,
+                        DASHBOARD_AUTO_TASK_SCHEDULE.id,
+                        "",
+                        "",
+                        &json!({}),
+                        None,
+                        Some(&denial),
+                        None,
+                        started,
+                    )
+                    .await;
+                }
+            }
+            return authorization_denied(denial);
+        }
+    };
+    let Json(body) = match body {
+        Ok(body) => body,
+        Err(rejection) => return rejection.into_response(),
     };
     let audit_args = json!({"schedule": body.schedule});
     let audit = |caller, denial, failure: Option<String>, started| {
@@ -237,13 +320,6 @@ pub(super) async fn set_auto_task_schedule(
                 started,
             )
             .await;
-        }
-    };
-    let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_SCHEDULE, state.operator_session()) {
-        Ok(caller) => caller,
-        Err(denial) => {
-            audit(None, Some(&denial), None, Instant::now()).await;
-            return authorization_denied(denial);
         }
     };
     let expected = match typed::<AutoTaskSchedule>(
