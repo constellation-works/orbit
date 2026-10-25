@@ -6,7 +6,7 @@ last_validated: 2026-10-24
 
 # Orbit Configuration
 
-Reference for Orbit's `config.toml`: every fixed key, its default and what it does. `orbit config keys` prints the same keys with descriptions. `orbit init` writes a minimal template, [`crates/orbit-config/assets/default-config.toml`](../crates/orbit-config/assets/default-config.toml), holding only the agent environment allowlist, the Codex sandbox mode and the `[workflow]` table its crew keys go into; this page is the reference. The website has a shorter overview under [Reference › Configuration](https://orbit-cli.com/reference/config/). To add an execution lane rather than configure a shipped one, see the [executor onboarding runbook](runbooks/executor-onboarding.md).
+Reference for Orbit's `config.toml`: every fixed key, its default and what it does. `orbit config keys` prints the same keys with descriptions. `orbit init` writes a minimal template, [`crates/orbit-config/assets/default-config.toml`](../crates/orbit-config/assets/default-config.toml), with the agent environment allowlist, the Codex sandbox mode, review-skip mappings for shipped auto-task provenance tags, and the `[workflow]` table its crew keys go into; this page is the reference. The website has a shorter overview under [Reference › Configuration](https://orbit-cli.com/reference/config/). To add an execution lane rather than configure a shipped one, see the [executor onboarding runbook](runbooks/executor-onboarding.md).
 
 ## Where config lives
 
@@ -414,6 +414,42 @@ A candidate skips every agent review layer (before-PR, before-landing and after-
 The guard is a repository-provided executable: Orbit only runs it, so a language-specific check (for example, that the non-comment content is unchanged) lives in the workspace. It is read from the delivery's base revision, never the worktree, so a delivery cannot weaken its own guard, and it runs the way required validation commands run (same environment and sandbox rules), in the candidate's workspace, with the candidate's base and head commits as its first two arguments and as `ORBIT_REVIEW_SKIP_BASE` / `ORBIT_REVIEW_SKIP_HEAD` (the tag as `ORBIT_REVIEW_SKIP_TAG`).
 
 Mapped tags have the same protection as `skip-review`: only filing a task (including an auto-task definition) or an operator update may add one; an agent's update that adds one is refused, and removal is always allowed. A mapped tag skips review only, never validation: required validation, workspace gates and hosted CI still run. The built-in `skip-review` and `skip-validation` tags keep their behaviour above and cannot be remapped. Config validation refuses a mapping that reuses a built-in tag name, has an empty or malformed `paths`, or a `guard` that is absolute or contains `..`, naming the key. `orbit config show` lists the effective mappings under `Review skip tags:` (and as `review_skip_tags` in `--json`).
+
+The seeded template includes one mapping for each shipped default auto-task's `auto-task:<name>` provenance tag, all limited to the documentation/CI paths shown above. The template is not migrated into existing config files: `orbit init` leaves an existing config alone unless run with `--force`. To opt in on an existing install, add the same tables to its `config.toml`:
+
+```toml
+[workflow.review_skip_tags."auto-task:backlog-hygiene"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:delivery-code-review"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:code-review"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:doc-duties"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:friction-curation"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:full-code-review"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:qa-full-sweep"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:qa-sweep"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:run-failure-patterns"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:security-review"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+```
+
+These mappings apply only to the auto-task that carries its provenance tag. Do not map finding tags such as `code-review`, `delivery-code-review`, `security-review` or `qa-sweep`: fixes filed by those reviews must keep normal agent review. A wider mapping for a future auto-task should remain disabled unless its config includes an appropriate repository-specific guard.
 
 On a distributed claim, the owner captures its mappings in the claim's validation gates alongside `workflow.light_delivery_paths`. The follower leaf judges its candidate against that copy, guard included, and the owner judges the handed-off candidate again (guard included) when it accepts, recording the decision in the task's history. An owner too old to capture mappings leaves the leaf with none, so no mapped tag applies.
 
