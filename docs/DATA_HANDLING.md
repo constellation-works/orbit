@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit Data Handling — what stays on your machine, what leaves it, and to whom"
-last_validated: 2026-10-23
+last_validated: 2026-10-24
 ---
 
 # Orbit Data Handling
@@ -109,13 +109,35 @@ Two specifics worth knowing:
 
 - **Provider keys are yours and stay on your host.** Provider CLIs read
   their own credentials — from their credential store (for example the macOS
-  login keychain for Claude and Copilot) or from variables you forward through
-  `[execution.env].pass`. Orbit never stores a provider key in its own state.
+  login keychain for Claude and Copilot) or from variables you forward, either
+  to every crew through `[execution.env].pass` or to one crew through its
+  global `[crews.<name>] env` entry. Orbit never stores a provider key in its
+  own state.
 - **Agent subprocesses get an allowlist-composed environment.** Nothing is
-  forwarded to an agent unless it is a named Orbit envelope variable or a
-  name you list in `[execution.env].pass`. A benignly named credential such
-  as `DATABASE_URL` does not reach an agent by accident. See
+  forwarded to an agent unless it is a baseline variable, a named Orbit
+  envelope variable, a name you list in `[execution.env].pass`, a variable its
+  provider runtime declares it needs, or an `env` entry of the crew that agent
+  runs as. A benignly named credential such as `DATABASE_URL` does not reach an
+  agent by accident. See
   [CONFIG.md — `[execution.env]`](./CONFIG.md#executionenv--the-agent-subprocess-environment).
+- **Audit three grant surfaces, not one.** The shared `[execution.env].pass`
+  list is one. The others are the global crew `env` entries and the provider's
+  own credential store. A crew `env` entry reaches only that crew's agents and can
+  admit a name `pass` does not list, so removing a name from `pass` does not
+  stop a crew entry from delivering it. Orbit accepts `env` only in the global
+  `~/.orbit/config.toml`, so a checkout cannot add one, and `orbit config show`
+  prints the entries as written.
+- **Shared and crew-only grants stay separate.** Take `pass` holding
+  `CLAUDE_CODE_OAUTH_TOKEN` and a global crew `opus-credits` with
+  `env = ["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]`. Agents of `opus`
+  get the OAuth token and no API key. Agents of `opus-credits` get the API key
+  and not the OAuth token, because the crew's Claude credential replaces the
+  shared one. Neither crew's agents receive the source name
+  `ANTHROPIC_CREDITS_API_KEY_1`; `opus-credits` gets its value only as
+  `ANTHROPIC_API_KEY`. A bare
+  crew entry such as `env = ["EXTRA_SHARED_VAR"]` reaches only the crew that
+  lists it, even though `pass` does not list it. Where a crew entry and `pass`
+  name the same variable, the crew's entry wins for that crew.
 - **Redaction runs before persistence.** Environment values whose names contain
   `TOKEN`, `SECRET`, `PASSWORD`, or `API_KEY`, or another credential marker such
   as `PRIVATE`, `CREDENTIAL`, `COOKIE`, `BEARER`, or a `_KEY` suffix;
@@ -156,8 +178,8 @@ project security reporting.
   task. Do not paste customer records or PHI into a task.
 - **Choose providers first.** Enable only crews whose provider terms and
   agreements match your obligations; a disabled crew sends nothing.
-- **Pin what agents can see.** Use `[execution.env].pass` deliberately and
-  the sandbox `fsProfile` / `denyRead` policies to keep secrets and
+- **Pin what agents can see.** Use `[execution.env].pass` and each global crew
+  `env` entry deliberately, and the sandbox `fsProfile` / `denyRead` policies to keep secrets and
   out-of-scope directories away from agents.
 - **Treat `~/.orbit/` as sensitive storage.** Back it up and encrypt it under
   the same policy as the repositories it references. The
