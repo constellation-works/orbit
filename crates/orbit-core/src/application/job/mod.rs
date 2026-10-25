@@ -13,6 +13,7 @@ mod explore_analytics;
 mod final_recovery;
 mod forge_hold_resume;
 mod orphan_adoption;
+mod pilot_submit;
 pub(crate) mod pipeline;
 pub(crate) mod pipeline_actions;
 mod pr_repair;
@@ -66,6 +67,7 @@ pub use explore_analytics::{
     EXPLORE_COMPARISON_SCHEMA_VERSION, ExploreCohort, ExploreComparison, ExploreCrewComparison,
 };
 pub(crate) use orphan_adoption::AdoptionAuthority;
+pub use pilot_submit::{TaskPilotRefusal, TaskPilotSubmitError};
 pub use pipeline::{
     PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult, PipelineWaitStatus,
     PipelineWorkerLogSnapshot, SubmissionKind, SubmissionNotices,

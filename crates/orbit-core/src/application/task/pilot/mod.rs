@@ -85,6 +85,12 @@ pub(crate) use source::requested_base_branch;
 use orbit_types::task::{CommentReceipt, TaskComment, TaskStatus};
 use serde_json::{Value, json};
 
+/// Whether an explicit pilot selection may assess a task in `status`. Prepare
+/// and an operator surface's pre-submission check share the predicate.
+pub(crate) fn pilot_assessable_status(status: TaskStatus) -> bool {
+    matches!(status, TaskStatus::Proposed | TaskStatus::Backlog)
+}
+
 /// Actor that seals a task-pilot replay receipt on its audit comment.
 const PILOT_ACTOR: &str = "task-pilot";
 /// The tag a `user_facing_ui` finding adds: tasks whose change a user sees.

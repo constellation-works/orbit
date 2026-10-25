@@ -80,6 +80,7 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         .route("/tasks/:id/approve", post(tasks::approve_task_action))
         .route("/tasks/:id/reject", post(tasks::reject_task_action))
         .route("/tasks/:id/archive", post(tasks::archive_task_action))
+        .route("/tasks/:id/pilot", post(task_pilot::pilot_task_action))
         .route(
             "/frictions",
             get(frictions::list_frictions).post(frictions::create_friction_action),
