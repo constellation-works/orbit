@@ -1,0 +1,398 @@
+schemaVersion: 1
+name: code-health-sweep
+description: Code-health pass every 3 days — dead-code scan with evidence rules, a compatibility-path inventory retired only under a documented support window, and one churn-selected area read in full for duplication, simplification and architectural drift; files up to 6 proposed tasks, one per evidence-backed finding
+enabled: false
+schedule:
+  every_minutes: 4320
+template:
+  title: Code health sweep — file dead-code, deduplication, simplification, architecture and compatibility-retirement tasks
+  description: |-
+    Find code that should be deleted, unified, simplified or moved, and
+    compatibility paths that have outlived the repository's documented support
+    window, and file one Orbit task per evidence-backed finding. This task files
+    work; it does not change code, and it never builds, tests, or times
+    anything. The durable outputs are the filed tasks and the `code-health.json`
+    artifact; the execution summary is the audit trail. A run that finds
+    nothing above the bars below is a successful no-diff outcome when the scan
+    evidence is persisted.
+
+    ## What other work owns
+
+    Do not file these here:
+    - **Lint suppressions.** Counting, inventorying and ratcheting suppression
+      comments and attributes belongs to the `suppression-ratchet` default
+      auto-task. This sweep does not count them. If that definition is not
+      enabled in this workspace, say so in the execution summary instead of
+      counting here.
+    - File size and module layout inside one package, and test placement or
+      test retirement: layout-only work is not a code-health finding.
+    - Latency and performance, documentation drift (the `doc-duties` default
+      owns it), and comment quality (the `comment-hygiene` default owns it).
+    - Whole-repository package-graph structure (cycles, package splits and
+      merges): the `architecture-audit` default owns it. Pass B files an
+      architecture finding only for a rule broken inside the one area read.
+
+    A correctness defect you confirm in passing is filed as a `bug` tagged
+    `code-health` per the installed `orbit` skill's task-authoring reference
+    and does not count toward the cap. File it with
+    `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown with file:line evidence>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<evidence source path>","file:<matching test path>"],"complexity":"medium","tags":["code-health"],"type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium|high|critical>","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+
+    ## Rules and command surfaces
+
+    - Use the registered Orbit tool surface, never direct lifecycle CLI
+      subcommands (they skip agent provenance). Find the previous pass with
+      `orbit tool run orbit.task.list --input '{"status":["done"],"tag":["code-health-sweep","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`
+      and fetch its artifact with
+      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"code-health.json","model":"<agent-family>"}'`.
+      Search coverage with
+      `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"task","all":true,"model":"<agent-family>"}'`
+      (lexical search matches one substring: use a single distinctive token,
+      never a multi-word phrase, and never treat a 0-hit multi-word query as
+      proof that nothing covers a finding). Inspect a candidate with
+      `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
+    - Static analysis only: no builds, tests or timing runs in this task. Put
+      throwaway scripts under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`).
+    - Fail open. A run that finds nothing above the bars is a successful
+      no-diff outcome. Do not invent work to justify the run.
+
+    ## Pin and cursor
+
+    Fetch `__ORBIT_BASE_BRANCH__` and record the full SHA of its tip; read every
+    file at that SHA. Read the previous pass's `code-health.json` (see above):
+    it holds each area's last reviewed SHA and the candidates deferred last
+    time. Absent or unreadable means this is the baseline pass; say so.
+
+    ## Discover the repository's shape
+
+    Discover everything below from tracked files; hard-code nothing from
+    another repository. Record each answer in the artifact:
+
+    1. **Languages and source roots.** From the tracked package manifests,
+       lockfiles and build files, list each package or module and its source
+       root. Name the exclusions from every count below: vendored and
+       generated trees, build output, caches, dependency directories, and test
+       code (test directories, test-named files, fixtures, benchmarks and
+       examples).
+    2. **Public surface.** What this repository exposes to consumers it does
+       not control: command-line commands and flags, network API routes and
+       fields, tool or plugin protocols, configuration keys, persisted or wire
+       formats and their readers, and items a published package exports from
+       its entry point. Take it from the agent guides, contributing and design
+       documents, API schemas, help-text snapshots and package manifests.
+    3. **Gate commands.** The format, lint, test and generated-file checks the
+       repository's agent guides, build files (Makefile, justfile, task
+       runner, package scripts) and CI workflow files run. Filed tasks cite
+       these commands; this task runs none of them.
+    4. **Documented architecture and conventions**, when they exist: an
+       architecture document, design overviews, and the agent guides. Record
+       which document states the intended layering or ownership rules.
+    5. **Support window.** Search the agent guides, contributing guide, release
+       and deprecation documents and the documentation tree for a statement of
+       how long a deprecated or compatibility surface must be supported
+       (a number of days, releases or versions, or a named earliest supported
+       release). Record the document, the exact wording and the resulting
+       window, or record that none is documented. Pass C depends on this.
+
+    Examples — one per ecosystem; use only the row this repository matches
+    and ignore the rest:
+    - Rust example: manifests named `Cargo.toml`, a lint-clean build checked by `cargo clippy`, and dead items surfaced by the compiler's `dead_code` warnings and a word-boundary search.
+    - Go example: modules declared in `go.mod`, packages as directories of `.go` files, and unexported-identifier references found by a word-boundary search within the package.
+    - JavaScript/TypeScript example: workspace packages from the root manifest's workspaces field, with an unused-export check over the entry points listed in each package's `exports` field.
+    - Python example: distributions from `pyproject.toml` or setup files, with module references found by an import scan plus a word-boundary search for dynamic lookups.
+
+    ## Pass A — dead code, whole repository, every run
+
+    Scope is non-test sources under the discovered source roots, plus the
+    package manifests. Candidates:
+
+    1. **Unreferenced items.** Functions, types, interfaces, constants and
+       variables with internal visibility (private, package-private,
+       module-private, unexported) or exported from a package nothing
+       outside the repository consumes, whose identifier appears with word
+       boundaries only at its definition and at re-export lines. Search the
+       whole tracked tree, including scripts, docs, CI files, templates and
+       configuration, with `git grep -nw <identifier>`.
+    2. **Test-only production code.** Items whose only references are in test
+       code. Dedicated test-support modules and items gated behind a test-only
+       build flag are not findings.
+    3. **Unused dependencies and features.** A declared dependency whose
+       import name has no reference in that package's sources; a development
+       dependency with none in its tests; a build feature or optional
+       dependency flag that nothing enables.
+    4. **Dead variants.** Enum members, error codes and union cases that are
+       never constructed or matched.
+    5. **Unreachable branches.** Code behind a condition that is constant in
+       every build configuration the repository defines.
+
+    Do not inventory or count lint suppressions here (see "What other work
+    owns"). A suppression comment next to a candidate is evidence to read, not
+    a candidate on its own.
+
+    **Evidence rules.** Before keeping a candidate, check every route by which
+    code can be reached without a literal reference, and record the route when
+    you reject a candidate:
+    - **Macro and code-generation routes.** Macros, annotation processors,
+      decorators, templates, build-time code generators and generated files
+      that name or emit the identifier.
+    - **String-registry routes.** The identifier, or a string derived from it,
+      is a key in a registry, dispatch table, route table, dependency-injection
+      container, plugin or command manifest, or a name read from
+      configuration.
+    - **Serialization routes.** A field, variant or type whose name is its
+      wire or storage shape: renamed or aliased fields, reflection-based
+      serializers, schema files, database column mappings, and readers of
+      older persisted shapes.
+    - **FFI and export routes.** Symbols exported to another language or
+      runtime: C ABI exports, native addons, WebAssembly exports, JNI or
+      binding-generator inputs, and exports a published package promises.
+    - **Reflection and convention routes.** Dynamic imports, attribute or
+      name lookup at run time, class loading by name, framework conventions
+      (file-based routing, test discovery, lifecycle hooks), and entry points
+      declared in manifests.
+
+    Examples — one per ecosystem; use only the row this repository matches
+    and ignore the rest:
+    - Rust example: `macro_rules!` and proc-macro output, `#[serde(rename)]` and `#[serde(alias)]`, `#[no_mangle]` and `extern "C"` symbols, and `include_str!` of a generated file.
+    - Go example: `go:generate` outputs, struct tags consumed by `encoding/json`, `//export` cgo symbols, and names registered through `init` functions.
+    - JavaScript/TypeScript example: decorators and bundler transforms, string keys in a route or command map, `package.json` `exports` and `bin` entries, and dynamic `import()` with a computed specifier.
+    - Python example: `getattr` and entry points declared in `pyproject.toml`, `__all__`, plugin registries loaded by name, and framework-discovered modules.
+
+    **Never file a public surface for deletion in Pass A.** A command-line
+    command or flag, API route or field, plugin or tool protocol, configuration
+    key, persisted or wire format or reader of one, or an export a published
+    package promises is public surface (discovery step 2). Retiring any of
+    these is Pass C work and only under a documented support window.
+    Unreachable compatibility code with no caller, that is not itself a public
+    surface, is an ordinary item 1 finding.
+
+    ## Pass C — compatibility retirement, whole repository, every run
+
+    **Inventory (always).** Under the discovered source roots and the
+    repository's scripts and plugins, list every compatibility path:
+    serialization aliases, renamed or legacy shapes and their readers,
+    `legacy`/`compat`/`deprecated` items and branches, re-exports of retired
+    names, migration-era shims and version special cases, hidden or alias
+    command-line commands and flags, configuration key aliases, deprecated API
+    fields and routes. Count them per package in the artifact every run so the
+    trend shows.
+
+    **Retirement requires a documented support window.** File a retirement
+    task only when discovery step 5 found a documented support window. Without
+    one, record the inventory counts and every candidate in the artifact and
+    the execution summary, state that no support window is documented, and
+    file no retirement task. Never invent a window.
+
+    With a window, a compatibility path is retirable when every condition below
+    holds; record the evidence for each. Apply the window exactly as the
+    document states it (days, releases or versions).
+    1. **Age.** The commit that made the path compatibility-only (stopped
+       writing the old shape, renamed the surface, hid the command, added the
+       alias) is older than the window measured against the pinned SHA's
+       commit date or release. Find it with `git log -S` or `git blame` and
+       record it.
+    2. **Release.** When the repository tags releases, the oldest release tag
+       containing that commit (`git tag --contains`) falls outside the window
+       or at or below the earliest release the document still supports. When
+       it does not tag releases, record that and rely on condition 1.
+    3. **Consumers (command-line, configuration, API and tool surfaces).** A
+       word-boundary search finds no use outside the definition and its own
+       tests, across the whole tracked tree, the dashboards, packaging and CI
+       files, and every downstream consumer the agent guides or documentation
+       name. A protocol that plugins or third parties implement is never
+       retired here.
+    4. **Stored data (readers of persisted formats only).** Either the
+       retiring task adds or names a migration that rewrites every remaining
+       record in the old shape on open, or its acceptance criteria require a
+       read-only scan on every environment the repository's documents name,
+       showing no record in the old shape. Prefer the migration: it covers
+       environments this sweep cannot reach.
+
+    A path that fails a condition stays; record which condition and the date it
+    becomes eligible.
+
+    ## Pass B — one area, read in full
+
+    **Partition.** One area per discovered package. Split a package over 20,000
+    non-test lines into one area per top-level source directory, with leftover
+    root files as their own area.
+
+    **Select.** Score each area by non-test lines changed since its last
+    reviewed SHA (`git diff --numstat <last_sha> <pinned_sha> -- <area>`,
+    excluding tests); for a never-reviewed area use the last 30 days of
+    history. Skip an area when over half its files sit in the `context_files`
+    of an open `code-health` task or of any in-progress or review task. Review
+    the highest-scoring remaining area. Record every score.
+
+    **Clone scan (whole repository, cheap).** Write a throwaway script under
+    `.orbit/tmp/` that normalises non-test source lines of the discovered
+    languages (trim; drop blanks, comments and lone brackets; collapse
+    whitespace), hashes every 12-line window of at least 300 characters, and
+    reports file pairs sharing windows. Keep the pairs that touch the selected
+    area as leads; record the top 15 pairs repository-wide in the artifact so
+    later passes can track the trend.
+
+    **Read every non-test source line in the area**, chunked as needed: a
+    search, sample or truncated tool response is not a read. Apply three lenses.
+    Each finding must clear its bar; taste alone is never a finding.
+
+    - **Duplication.** Two or more copies of non-trivial logic (about 15 lines
+      or more, or any copy that encodes an invariant such as path
+      normalisation, redaction, retry and backoff, locking, atomic writes,
+      status transitions or data projections) that must change together.
+      Helpers under 10 lines need three copies. Search the repository for each
+      helper-shaped function in the area by name stem and distinctive body
+      tokens, and find where the documented architecture says shared
+      mechanisms live. Diff the copies and list every behavioural difference:
+      the filed task must say for each whether it is kept, unified (and to
+      which behaviour) or a bug filed separately.
+    - **Simplification.** A countable reduction with no behaviour change: an
+      interface with one implementer that is neither a test seam in use nor a
+      plugin boundary; forwarding layers; a generic with one instantiation; a
+      dynamic-dispatch wrapper where a concrete type or enumeration serves; an
+      options or builder object with one call site; error re-wrap chains that
+      add no context; a function over about 150 lines that mixes
+      responsibilities; boolean parameters that switch between two behaviours.
+      State the estimated net lines or abstractions removed.
+    - **Architecture.** Cite the rule broken: the documented layering or
+      dependency direction, a visibility convention in the agent guides, or a
+      single-owner rule the documents state. Or name the concrete cost: one
+      concept modelled twice, or a public surface wider than its consumers.
+      Without a documented rule, file only a concrete cost. When the documented
+      architecture and the code disagree, the task decides which one changes.
+
+    ## Duplicate and conflict safety
+
+    Before filing, list open work with
+    `orbit tool run orbit.task.list --input '{"status":["proposed","backlog","in-progress","review","blocked"],"tag":"code-health","limit":200,"model":"<agent-family>"}'`
+    and search each finding's distinctive symbol with `orbit.search` (see
+    above).
+
+    - **Covered by an open task:** skip the finding, or add the new evidence as
+      a comment (`orbit.task.update` with `comment`) when it extends that
+      task's scope. Cite it in the summary.
+    - **Covered by a rejected `code-health` task:**
+      list them with
+      `orbit tool run orbit.task.list --input '{"status":["rejected"],"tag":"code-health","limit":200,"model":"<agent-family>"}'`,
+      read the rejection rationale, and refile only if the evidence has
+      materially changed, saying what changed.
+    - **Touches a file in the `context_files` of any in-progress or review
+      task, or of an open restructuring task:** defer it to the next pass and
+      record it in the artifact. Do not chain dependencies onto another sweep's
+      proposed tasks.
+
+    ## Filing
+
+    File at most **6** tasks per run, ranked by value over risk (lines and
+    abstractions removed, invariants de-duplicated, layering restored). Record
+    the overflow in the artifact; the next pass files it first after
+    re-verifying.
+
+    Grouping: dead code is one task per package; duplication is one task per
+    duplicated concept, with every copy in it; simplification is one task per
+    module; architecture is one task per rule or concept; compatibility
+    retirement is one task per compatibility concept (an alias family, one
+    legacy reader and its shape, one deprecated command or route group). Before
+    filing, read the installed `orbit` skill's task-authoring reference and
+    follow it for task shape. File each (tool-created tasks start `proposed`) with
+    `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"<assessed>","tags":["code-health","tech-debt","<dead-code|dedup|simplify|architecture|compat-retire>"],"type":"refactor","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium>","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    Read each filed task back with `orbit.task.show` before recording it as
+    delivered. Never file a finding without verified `context_files`.
+
+    - **Type and tags.** `type: refactor`; tags `code-health`, `tech-debt`, and
+      the lens tag from the payload.
+    - **Complexity.** `medium` for dead code, single-module work and
+      compatibility aliases with no stored data; `hard` for cross-module
+      duplication, every architecture finding and every persisted-format
+      reader.
+    - **`context_files`.** Verified `file:`/`dir:` selectors for every copy,
+      definition and call site that changes, plus the tests that cover them.
+    - **Description.** It contains **Outcome**; **Evidence** (paths with line
+      numbers at the pinned SHA, reference counts, the copies side by side or
+      the rule cited, and the routes checked for a dead-code candidate); **Scope
+      and non-goals**; the behavioural-difference table for duplication; a line
+      saying **Owner sign-off required** when the change alters a public
+      surface the repository's documents mark as stable; and the
+      **Conventions** block below, copied verbatim.
+    - **Compatibility retirement** also gives the evidence for each Pass C
+      condition, quotes the documented support window and its source, and names
+      exactly which command-line, API, configuration or persisted shape
+      changes; the Conventions block's behaviour-preserving rule then applies
+      to everything else.
+    - **Acceptance criteria.** The listed items are deleted, unified or
+      simplified as described; every listed behavioural difference is handled
+      as specified; the repository's own gate commands (discovery step 3,
+      named in the task) pass for the affected packages, with generated
+      snapshots unchanged (a compatibility retirement changes only the
+      snapshots for the surface it names); for a persisted-format reader, a
+      test opens a fixture in the old shape and sees it migrated, or the stated
+      scan is attached; a word-boundary search for each deleted identifier
+      finds nothing in the tracked tree; the execution summary reports the net
+      line delta and lists every non-mechanical edit with its reason.
+
+    Conventions block:
+
+    > - Behaviour-preserving. Command-line, API, tool and plugin protocols,
+    >   generated snapshots and persisted data shapes stay identical unless
+    >   this task names the change.
+    > - Delete dead code together with its tests, docs and configuration
+    >   entries. Leave no suppression comment behind that only hid the dead
+    >   code.
+    > - Unify duplicates into the lowest package that owns the concept per the
+    >   documented architecture. A new package edge updates the architecture
+    >   document and the repository's dependency-direction guard, when it has
+    >   them, in the same change.
+    > - A behavioural difference between copies that this task does not list is
+    >   a stop-and-report, not a judgement call.
+    > - No layout-only moves. Narrow visibility in code you touch.
+
+    Tasks land in `proposed`. Do not approve them.
+
+    ## Handoff
+
+    Write `.orbit/tmp/code-health.json` with `schema_version: 1`, `pinned_sha`,
+    the discovered shape (languages, source roots, exclusions, public surface,
+    gate commands, documented architecture, and the support window with its
+    source or `none documented`), the area scores, the area reviewed
+    (selectors, non-test line count, files read), Pass A candidates with
+    dispositions and the routes checked, the Pass C inventory counts per
+    package and every compatibility candidate with its condition evidence and
+    eligibility date (or `no support window documented`), the top clone pairs,
+    every finding (lens, evidence, disposition: filed ID, commented-onto ID,
+    deferred with reason, or rejected with reason), the overflow list and the
+    per-area last reviewed SHAs. Attach it with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/code-health.json","path":"code-health.json","model":"<agent-family>"}'`.
+    The execution summary gives the area and its score with the top five
+    alternatives, counts per lens, the compatibility inventory total against
+    the previous pass, whether a support window was documented, and every
+    finding mapped to its disposition.
+  acceptance_criteria:
+  - The pass is pinned to one `__ORBIT_BASE_BRANCH__` SHA recorded in `code-health.json`, and it reads the previous pass's `code-health.json` or states that it is the baseline pass.
+  - Discovery records the languages, source roots, exclusions, public surface, gate commands and any documented support window from tracked files, and no build, test or timing command was run.
+  - Pass A enumerates unreferenced and test-only items, unused dependencies and features, dead variants and unreachable branches with evidence; the macro, string-registry, serialization, FFI and reflection routes were checked before a candidate was kept; no public command-line, API, configuration or persisted-format surface was filed for deletion by Pass A; and lint suppressions were left to `suppression-ratchet` and not counted.
+  - Pass C inventoried compatibility paths per package; retirement tasks were filed only where a support window is documented and the age, release, consumer and stored-data conditions all hold with evidence; when no window is documented, the inventory is in the execution summary and `code-health.json` and no retirement task was filed.
+  - The reviewed area was chosen by the recorded churn score with conflicted areas skipped, and every non-test line in it was read.
+  - Every filed finding clears its lens bar; duplication findings list each behavioural difference between copies with a resolution.
+  - Open and rejected `code-health` coverage was checked first; findings touching in-flight tasks were deferred, not filed or chained.
+  - At most 6 tasks were filed, all `proposed` with a `spawned_from` relation to this task, type refactor, tags `code-health`, `tech-debt` and the lens tag, verified `context_files`, the Conventions block and the specified acceptance criteria.
+  - The artifact `code-health.json` is attached to this task and the execution summary maps every candidate and finding to a disposition; a run with no findings above the bars succeeds with that evidence.
+  task_type: chore
+  tags:
+  - code-health-sweep
+  - no-diff-expected
+  - tech-debt
+  required_tools:
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
+  - orbit.task.list
+  - orbit.task.show
+  - orbit.task.update
+  priority: low
+  complexity: hard
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-10-24T00:00:00Z
+updated_by: system
+updated_at: 2026-10-24T00:00:00Z

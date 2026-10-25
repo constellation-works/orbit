@@ -488,6 +488,21 @@ plugin being removed.
   prerequisites, each with `context_files` and a `spawned_from` relation to
   the minted chore. The chore itself is tagged `no-diff-expected` and never
   builds or runs tests.
+- **`code-health-sweep`** (`hard`) — every 3 days. Discovers the repository's
+  languages, source roots, gate commands and public surface from tracked
+  files, then scans for dead code, inventories compatibility paths, and reads
+  one churn-selected area in full for duplication, simplification and
+  architectural drift. A dead-code candidate is kept only after the macro,
+  string-registry, serialization, FFI and reflection routes are checked, and a
+  public command-line, API, configuration or persisted-format surface is never
+  filed for deletion by that pass. Compatibility retirement tasks are filed
+  only when the repository documents a support window; otherwise the
+  inventory is recorded in the run summary and nothing is filed for
+  retirement. It does not count lint suppressions; the `suppression-ratchet`
+  default owns that. Each run records a `code-health.json` artifact carried
+  between passes and files at most 6 `proposed` tasks, each with
+  `context_files` and a `spawned_from` relation to the minted chore. The
+  chore itself is tagged `no-diff-expected` and never builds or runs tests.
 - **`dependency-freshness`** (`medium`) — monthly. Inventories direct
   dependencies in every detected ecosystem (for example
   `Cargo.toml`/`Cargo.lock`, `package.json` with a lockfile,

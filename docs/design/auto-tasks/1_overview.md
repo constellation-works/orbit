@@ -11,7 +11,7 @@ summary: Dynamically-defined recurring task templates minted by the host clock t
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18125, ORB-18128]
+related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18124, ORB-18125, ORB-18128]
 ---
 
 # Auto-tasks — Overview
@@ -106,7 +106,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These fourteen YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These fifteen YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -272,6 +272,21 @@ definition of the same name.
   prerequisites, each with `context_files` and a `spawned_from` relation to
   the minted chore, which is itself tagged `no-diff-expected` and never
   builds or runs tests.
+- `code-health-sweep` — disabled-by-default sweep every 3 days of dead code,
+  compatibility paths, and one churn-selected area read in full for
+  duplication, simplification and architectural drift. Repository shape
+  (languages, source roots, gate commands, public surface) is discovered from
+  tracked files. A dead-code candidate is kept only after the macro,
+  string-registry, serialization, FFI and reflection routes are checked, and a
+  public command-line, API, configuration or persisted-format surface is never
+  filed for deletion by the dead-code pass. Compatibility paths are always
+  inventoried, but retirement tasks are filed only when the repository
+  documents a support window; without one the inventory goes in the run
+  summary and nothing is filed for retirement. Lint-suppression counting
+  belongs to the `suppression-ratchet` default. Each run files at most 6
+  `proposed` tasks with `context_files` and a `spawned_from` relation to the
+  minted chore, which is tagged `no-diff-expected` and never builds or runs
+  tests.
 - `dependency-freshness` — disabled-by-default monthly inventory of direct
   dependencies across every detected ecosystem (for example
   `Cargo.toml`/`Cargo.lock`, `package.json` with a lockfile,
@@ -369,6 +384,10 @@ encode this repository's branches and gates. Re-init preserves them:
   inferred-layers fallback that files only cycles and up-calls, and
   measurement-first split, merge, and move filing capped at 3 improvement
   tasks per run.
+- ORB-18124 — Added the disabled, portable `code-health-sweep` default
+  (3-day cadence): language-neutral dead-code evidence rules, compatibility
+  retirement gated on a documented support window, and a churn-selected area
+  read in full, capped at 6 proposed tasks per run.
 - ORB-18128 — Added the disabled `path-risk-review` default (3-day cadence)
   over the codebase analytics rankings: min-support no-op reporting each
   ranking's below-support counts, at most five paths investigated, and fixes capped at 3

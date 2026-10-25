@@ -27,6 +27,10 @@ const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
         include_str!("../assets/auto_tasks/backlog-hygiene.yaml"),
     ),
     (
+        "code-health-sweep",
+        include_str!("../assets/auto_tasks/code-health-sweep.yaml"),
+    ),
+    (
         "code-review",
         include_str!("../assets/auto_tasks/code-review.yaml"),
     ),
