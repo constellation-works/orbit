@@ -93,7 +93,7 @@ source scan, enforces the runtime direction.
 | Concern | File | Task |
 |---|---|---|
 | Runtime mechanisms | `crates/orbit-runtime/src/` | [ORB-10886], [ORB-17906] |
-| Kernel re-export, `OrbitRuntime` wrapper and application port | `crates/orbit-core/src/runtime.rs` | [ORB-17906] |
+| Kernel re-export, `OrbitRuntime` wrapper and application port | `crates/orbit-core/src/runtime/` | [ORB-17906] |
 | Application operations and DTOs | `crates/orbit-core/src/application/` | [ORB-10886] |
 | Shared application constants and DTOs | `crates/orbit-core/src/application/contracts/` | [ORB-17924] |
 | Task-to-automation port | `crates/orbit-core/src/application/task/automation_port.rs`, implemented in `automation/task_port.rs` | [ORB-17924], [ORB-17943] |
