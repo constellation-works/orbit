@@ -56,8 +56,15 @@ export function isOpen(key) {
 }
 
 /** Open an editor for `key`, seeding its draft from the observed value. */
-export function openEditor(key, scope, draft) {
-  editors.set(key, { scope, draft, error: "", pending: false });
+export function openEditor(key, scope, draft, observed) {
+  const snapshot = observed === undefined ? undefined : JSON.parse(JSON.stringify(observed));
+  editors.set(key, { scope, draft, error: "", pending: false, observed: snapshot });
+}
+
+/** The value observed when the editor for `key` opened, for its whole lifetime. */
+export function editorObserved(key) {
+  const observed = editors.get(key)?.observed;
+  return observed === undefined ? undefined : JSON.parse(JSON.stringify(observed));
 }
 
 function closeEditor(key) {

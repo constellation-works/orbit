@@ -11,6 +11,7 @@ fs.mkdirSync(evidence, { recursive: true });
 const test = fileURLToPath(new URL('./dashboard_operations.mjs', import.meta.url));
 const cronZoneTest = fileURLToPath(new URL('./dashboard_operations_cron_zone.mjs', import.meta.url));
 const routineTriggersTest = fileURLToPath(new URL('./dashboard_operations_routine_triggers.mjs', import.meta.url));
+const scheduleStaleTest = fileURLToPath(new URL('./dashboard_operations_schedule_stale.mjs', import.meta.url));
 const relativeTimeTest = fileURLToPath(new URL('./dashboard_operations_relative_time.mjs', import.meta.url));
 const feedbackHarness = `
 globalThis.review = {
@@ -83,6 +84,7 @@ const server = http.createServer((req, res) => {
   const served = name === '/test.mjs' ? { data: fs.readFileSync(test), type: 'text/javascript' }
     : name === '/cron-zone.mjs' ? { data: fs.readFileSync(cronZoneTest), type: 'text/javascript' }
     : name === '/routine-triggers.mjs' ? { data: fs.readFileSync(routineTriggersTest), type: 'text/javascript' }
+    : name === '/schedule-stale.mjs' ? { data: fs.readFileSync(scheduleStaleTest), type: 'text/javascript' }
     : name === '/relative-time.mjs' ? { data: fs.readFileSync(relativeTimeTest), type: 'text/javascript' }
     : name === '/feedback-timer.mjs' ? { data: fs.readFileSync(test) + '\n' + feedbackHarness, type: 'text/javascript' }
     : name === '/dock-feedback.mjs' ? { data: fs.readFileSync(test) + '\n' + dockHarness, type: 'text/javascript' }
@@ -1460,6 +1462,19 @@ try {
   await triggerPage.setViewportSize({ width: 375, height: 812 });
   await triggerPage.locator('.schedule-editor').scrollIntoViewIfNeeded();
   await triggerPage.screenshot({ path: path.join(evidence, 'routine-trigger-editor-dark-375.png'), animations: 'disabled' });
+  // ORB-18356: an open editor keeps its observed schedule/trigger after a
+  // background refresh and opening another editor; a stale save preserves the draft.
+  const stalePage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'UTC' });
+  stalePage.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
+  await stalePage.goto(`http://127.0.0.1:${server.address().port}/#operations/auto-tasks`);
+  await stalePage.addScriptTag({ type: 'module', url: '/schedule-stale.mjs' });
+  await stalePage.waitForFunction(() => globalThis.scheduleStaleTestsPassed, undefined, { timeout: 15000 });
+  await stalePage.evaluate(() => { document.querySelector('.tab-pane[data-tab="operations"]')?.classList.add('active'); let node = document.querySelector('.schedule-editor'); while (node) { node.hidden = false; node = node.parentElement; } document.querySelector('.schedule-editor')?.scrollIntoView(); });
+  await stalePage.screenshot({ path: path.join(evidence, 'schedule-stale-editor-dark-1440.png'), animations: 'disabled' });
+  await stalePage.setViewportSize({ width: 375, height: 812 });
+  await stalePage.evaluate(() => document.querySelector('.schedule-editor')?.scrollIntoView());
+  await stalePage.screenshot({ path: path.join(evidence, 'schedule-stale-editor-dark-375.png'), animations: 'disabled' });
+  await stalePage.close();
   // Relative times carry a minute remainder that rounds to 60 into the hour (ORB-17853).
   const relativePage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'UTC' });
   relativePage.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
