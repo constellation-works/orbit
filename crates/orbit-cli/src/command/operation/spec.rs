@@ -487,7 +487,7 @@ pub(super) fn tool_operation(command: &super::super::tool::ToolCommand) -> Comma
             Some("tool".to_string()),
             Some(args.name.clone()),
             tool_run_actor_role(args),
-            Some(args.pretty),
+            Some(false),
         ),
         ToolSubcommand::List(_) => ("list", None, None, None, "admin".to_string(), None),
         ToolSubcommand::Show(args) => (

@@ -548,7 +548,7 @@ impl Commands {
                         arguments_json: None,
                         job_run_id: None,
                     }),
-                    Some(args.pretty),
+                    Some(false),
                     |command, context| match command {
                         Commands::PluginGroup(invocation) => {
                             (*invocation).execute(context.runtime()?)
