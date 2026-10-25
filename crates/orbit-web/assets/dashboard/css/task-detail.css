@@ -178,6 +178,12 @@
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+.why-stuck-value.clamped .why-stuck-text {
+  max-height: 7.25em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
+  mask-image: linear-gradient(to bottom, #000 55%, transparent);
+}
 .why-stuck-checks {
   display: grid;
   gap: 4px;
@@ -1164,7 +1170,8 @@ input.field-editor-input {
   mask-image: linear-gradient(to bottom, #000 65%, transparent);
 }
 .description-toggle,
-.ac-toggle {
+.ac-toggle,
+.why-stuck-toggle {
   margin-top: 8px;
   min-height: 28px;
   padding: 0;
@@ -1177,10 +1184,14 @@ input.field-editor-input {
   text-underline-offset: 3px;
   cursor: pointer;
 }
+/* The fade already separates the toggle from the clamped note. */
+.why-stuck-toggle { display: block; margin-top: 0; }
 .description-toggle:hover,
-.ac-toggle:hover { color: var(--fg-strong); text-decoration: underline; }
+.ac-toggle:hover,
+.why-stuck-toggle:hover { color: var(--fg-strong); text-decoration: underline; }
 .description-toggle:focus-visible,
-.ac-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.ac-toggle:focus-visible,
+.why-stuck-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 .task-detail[data-editing*="description"] .description-toggle,
 .task-detail[data-editing*="acceptance_criteria"] .ac-toggle { display: none; }
 .row-detail .file-list {
