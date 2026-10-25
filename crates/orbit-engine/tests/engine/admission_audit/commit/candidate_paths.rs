@@ -595,6 +595,39 @@ fn owner_delivery_still_refuses_neighbouring_irregular_paths() {
         let head = git_output(workspace, &["rev-parse", "HEAD"]).unwrap();
         setup(workspace);
         let before = untracked_status(workspace);
+        if !before.contains(needle) {
+            assert_eq!(
+                *label, ".git component",
+                "{label}: Git hid {needle} from status (before {before:?}); only the \
+                 case-variant `.git` case may take the no-delivery path"
+            );
+            let error = git_commit(&owner_host(workspace), &owner_commit_input(workspace))
+                .expect_err(label)
+                .to_string();
+            assert!(
+                error.contains("nothing to commit"),
+                "{label}: macOS Git (case-insensitive APFS, default core.protectHFS) hides \
+                 case-variant `.git` paths from status/ls-files, so {needle} never reaches \
+                 the candidate scan and is never delivered; the commit must error with \
+                 nothing to commit instead of delivering it: {error}"
+            );
+            assert_eq!(
+                git_output(workspace, &["rev-parse", "HEAD"]).unwrap(),
+                head,
+                "{label} does not commit"
+            );
+            assert_eq!(
+                untracked_status(workspace),
+                before,
+                "{label} leaves the worktree"
+            );
+            assert_eq!(
+                fs::read_to_string(workspace.join(needle)).unwrap(),
+                "not a repository\n",
+                "{label}: the hidden case-variant path stays intact and undelivered"
+            );
+            continue;
+        }
         let error = git_commit(&owner_host(workspace), &owner_commit_input(workspace))
             .expect_err(label)
             .to_string();
@@ -626,6 +659,39 @@ fn owner_delivery_still_refuses_neighbouring_irregular_paths() {
         let before = untracked_status(workspace);
         let host = CommitTestHost::new(vec![claimed_task(&["dir:."])], workspace.to_path_buf())
             .with_claim_binding(CLAIMED_TASK_ID);
+        if !before.contains(path) {
+            assert!(
+                path.contains(".GIT"),
+                "{path}: Git hid {path} from status (before {before:?}); only the \
+                 case-variant `.git` path may take the no-delivery path"
+            );
+            let error = git_commit(&host, &claimed_commit_input(workspace))
+                .expect_err(path)
+                .to_string();
+            assert!(
+                error.contains("nothing to commit"),
+                "{path}: macOS Git (case-insensitive APFS, default core.protectHFS) hides \
+                 case-variant `.git` paths from status/ls-files, so {path} never reaches \
+                 the candidate scan and is never delivered; the commit must error with \
+                 nothing to commit instead of delivering it: {error}"
+            );
+            assert_eq!(
+                git_output(workspace, &["rev-parse", "HEAD"]).unwrap(),
+                head,
+                "{path} does not commit"
+            );
+            assert_eq!(
+                untracked_status(workspace),
+                before,
+                "{path} leaves the worktree"
+            );
+            assert_eq!(
+                fs::read_to_string(workspace.join(path)).unwrap(),
+                "secret\n",
+                "{path}: the hidden case-variant path stays intact and undelivered"
+            );
+            continue;
+        }
         let error = git_commit(&host, &claimed_commit_input(workspace))
             .expect_err(path)
             .to_string();
