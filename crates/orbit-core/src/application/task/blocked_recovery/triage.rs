@@ -30,8 +30,9 @@ use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    ArtifactManifestFileV2, FINAL_RECOVERY_DECIDED_EVENT, RecordedFinalRecovery, Task, TaskComment,
-    TaskDecision, TaskHistoryEntry, TaskStatus,
+    ArtifactManifestFileV2, DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest,
+    FINAL_RECOVERY_DECIDED_EVENT, RecordedFinalRecovery, Task, TaskComment, TaskDecision,
+    TaskHistoryEntry, TaskStatus,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -338,6 +339,7 @@ struct TriageWrite {
     comment: String,
     requeue: Option<(usize, FinalRecoveryRequeueBound)>,
     refusal: Option<String>,
+    decision_answers: Option<Vec<DecisionAnswer>>,
 }
 
 impl OrbitRuntime {
@@ -497,6 +499,7 @@ impl OrbitRuntime {
                     ),
                     requeue: None,
                     refusal: Some(reason),
+                    decision_answers: None,
                 };
                 if let Some(reason) = operator_only_requeue(self, task) {
                     return Ok(refused(
@@ -545,6 +548,7 @@ impl OrbitRuntime {
                     ),
                     requeue: Some((recent + 1, bound)),
                     refusal: None,
+                    decision_answers: None,
                 }
             }
             BlockTriageDecision::Propose {
@@ -562,6 +566,7 @@ impl OrbitRuntime {
                 ),
                 requeue: None,
                 refusal: None,
+                decision_answers: Some(proposal_answers(options)),
             },
             BlockTriageDecision::Report { human_action } => TriageWrite {
                 disposition: "human_only",
@@ -572,6 +577,7 @@ impl OrbitRuntime {
                 ),
                 requeue: None,
                 refusal: None,
+                decision_answers: None,
             },
         })
     }
@@ -627,6 +633,22 @@ impl OrbitRuntime {
             history.extend(self.published_owner_preservation(task, run_id)?);
         }
         history.push(marker);
+        if self.decision_channel_enabled()
+            && let Some(answers) = &write.decision_answers
+        {
+            let binding = DecisionBinding::BlockEpisode {
+                episode: episode.key(),
+            };
+            let request = DecisionRequest::new(
+                task.id.clone(),
+                DecisionGate::BlockTriage,
+                answers.clone(),
+                binding,
+                "block_triage".to_string(),
+                now,
+            );
+            history.push(request.history_entry(SYSTEM_ACTOR_LABEL));
+        }
         let status_note = requeued.then(|| match &episode.run_id {
             Some(run_id) => format!(
                 "final recovery (run_id={run_id}): blocked-task triage requeue: {}",
@@ -660,6 +682,26 @@ impl OrbitRuntime {
         })?;
         Ok(())
     }
+}
+
+/// Allowed answers for a decision proposal: the option numbers its
+/// comment prints, plus `dismiss` (leave blocked for this episode).
+fn proposal_answers(options: &[TriageOption]) -> Vec<DecisionAnswer> {
+    let mut answers: Vec<DecisionAnswer> = options
+        .iter()
+        .enumerate()
+        .map(|(index, option)| DecisionAnswer {
+            id: (index + 1).to_string(),
+            label: option.summary.clone(),
+            consequence: option.consequences.clone(),
+        })
+        .collect();
+    answers.push(DecisionAnswer {
+        id: "dismiss".to_string(),
+        label: "Dismiss".to_string(),
+        consequence: "Leave blocked, stop asking for this episode.".to_string(),
+    });
+    answers
 }
 
 /// Why only an operator may requeue `task`, when only one may: a security

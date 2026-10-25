@@ -6,8 +6,9 @@ use orbit_common::OrbitError;
 use orbit_common::governance::authorization::governed_tool;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{
-    HostOs, PILOT_ADMISSION_DECIDED_EVENT, PilotAdmissionVerdict, Task, TaskArtifact, TaskComment,
-    TaskDecision, TaskHistoryEntry, TaskOsRequirement, TaskStatus,
+    DecisionBinding, DecisionGate, DecisionRequest, HostOs, PILOT_ADMISSION_DECIDED_EVENT,
+    PilotAdmissionVerdict, Task, TaskArtifact, TaskComment, TaskDecision, TaskHistoryEntry,
+    TaskOsRequirement, TaskStatus, decision_requests_from_history,
 };
 use orbit_types::tool::McpCapability;
 use serde::{Deserialize, Serialize};
@@ -711,16 +712,69 @@ impl OrbitRuntime {
         for task in
             self.list_tasks_filtered(Some(TaskStatus::Backlog), None, None, None, None, None)?
         {
-            if let Some(
-                hold @ (PilotAdmissionHold::OperatorValidation(_)
-                | PilotAdmissionHold::HostOperational(_)),
-            ) = self.pilot_admission_hold(&task.id)?
-                && !self.pilot_operator_handoff_recorded(&task.id, &hold)?
-            {
-                self.record_pilot_operator_handoff(&task.id, &hold)?;
+            if let Some(hold) = self.pilot_admission_hold(&task.id)? {
+                if matches!(
+                    hold,
+                    PilotAdmissionHold::OperatorValidation(_)
+                        | PilotAdmissionHold::HostOperational(_)
+                ) && !self.pilot_operator_handoff_recorded(&task.id, &hold)?
+                {
+                    self.record_pilot_operator_handoff(&task.id, &hold)?;
+                }
+                self.raise_pilot_decision_request(&task.id)?;
             }
         }
         Ok(())
+    }
+
+    /// Raise the one open decision request for `task_id`'s current pilot
+    /// admission hold, when the decision channel is enabled. A hold whose
+    /// `operation_id` already has a request raises nothing; a newer
+    /// assessment raises a fresh request and the earlier one then reads
+    /// as superseded. Disabled, nothing is written.
+    pub(crate) fn raise_pilot_decision_request(&self, task_id: &str) -> Result<(), OrbitError> {
+        if !self.decision_channel_enabled() {
+            return Ok(());
+        }
+        self.stores()
+            .tasks()
+            .with_task_write_lock(task_id, &mut || {
+                if self.pilot_admission_hold(task_id)?.is_none() {
+                    return Ok(());
+                }
+                let comments = self.get_task_comments(task_id)?;
+                let Some(operation_id) = super::latest_pilot_operation_id(&comments) else {
+                    return Ok(());
+                };
+                let history = self.get_task_history(task_id)?;
+                let binding = DecisionBinding::PilotOperation {
+                    operation_id: operation_id.to_string(),
+                };
+                if decision_requests_from_history(&history, chrono::Utc::now())
+                    .iter()
+                    .any(|request| request.binding == binding)
+                {
+                    return Ok(());
+                }
+                let now = chrono::Utc::now();
+                let request = DecisionRequest::new(
+                    task_id.to_string(),
+                    DecisionGate::PilotAdmission,
+                    PilotAdmissionVerdict::decision_answers(),
+                    binding,
+                    "task_pilot".to_string(),
+                    now,
+                );
+                self.stores().task_records().update(
+                    task_id,
+                    super::super::TaskRecordUpdateParams {
+                        actor: "task-pilot".into(),
+                        append_history: vec![request.history_entry("task-pilot")],
+                        ..Default::default()
+                    },
+                )?;
+                Ok(())
+            })
     }
 
     /// Only the trusted human update path calls this. Agent-authored comment

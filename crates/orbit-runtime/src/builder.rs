@@ -382,6 +382,7 @@ pub(crate) fn build_context_from_roots(
             runtime_config.snapshot.crew_performance_types().to_vec(),
             runtime_config.snapshot.crew_performance(),
             runtime_config.snapshot.crew_performance_window_days(),
+            runtime_config.snapshot.decision_channel_enabled,
         ),
     ))
 }

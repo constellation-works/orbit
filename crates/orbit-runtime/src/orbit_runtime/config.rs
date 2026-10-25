@@ -262,6 +262,12 @@ impl RuntimeKernel {
     pub fn operation_policy(&self) -> &orbit_config::OperationPolicy {
         self.context.settings().operation()
     }
+
+    /// Whether `[decision_channel] enabled` raises decision requests for
+    /// work held on a human decision (default `false`).
+    pub fn decision_channel_enabled(&self) -> bool {
+        self.context.settings().decision_channel_enabled()
+    }
 }
 
 /// The shared wording for pass-listed variables missing from the launching

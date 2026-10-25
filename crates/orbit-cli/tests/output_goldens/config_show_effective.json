@@ -106,6 +106,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "decision_channel.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "execution.agent_stall_minutes": {
       "scope": "built-in",
       "state": "default",
