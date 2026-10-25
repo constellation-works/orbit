@@ -2,7 +2,7 @@
 title: Orbit MCP — Overview
 owner: codex
 last_updated: 2026-10-20
-last_validated: 2026-10-20
+last_validated: 2026-10-24
 status: Draft
 feature: mcp-bridge
 doc_role: overview
@@ -32,11 +32,16 @@ prefix to the host that holds that task. Direct `--mode remote` remains the
 byte-transparent one-host proxy described above.
 
 The remote side is intentionally just direct SSH stdio. The local proxy starts a
-non-interactive SSH process whose remote command is:
+non-interactive SSH process whose remote command is equivalent to:
 
 ```text
-ssh -T <host> orbit mcp serve --remote-caller-machine-id <audit-label>
+ssh -T <host> orbit mcp serve [--operator] \
+    --remote-caller-machine-id <audit-label> [--orchestrator <crew>]
 ```
+
+Orbit includes `--operator` only when the client has operator authority and is not
+running as an agent. It includes `--orchestrator` when the client has that attribution
+default configured.
 
 The proxy inherits stdin, stdout, and stderr. It does not parse MCP frames, open a
 checkout, resolve a workspace, filter tools, make authorization decisions, or

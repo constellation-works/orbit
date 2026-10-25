@@ -4,7 +4,7 @@ type: design
 title: "Host Registry — Vision"
 owner: codex
 last_updated: 2026-10-20
-last_validated: 2026-10-20
+last_validated: 2026-10-24
 status: Accepted
 feature: host-registry
 doc_role: vision
@@ -37,9 +37,9 @@ neither a fleet inventory nor a general routing authority. The host file
 ([specs/host-commands.md](./specs/host-commands.md)) records each registered host's
 name, SSH target, machine identity and task prefix, plus an optional operating-system
 snapshot captured at registration for creation-time crew-pool selection. Reachability,
-version, protocol and workspace details remain live. Its one routing rule is the task-id
-prefix ([specs/host-routing.md](./specs/host-routing.md)). Owner and replica
-checkout roles stay catalog vocabulary, not a fleet control plane.
+version, protocol and workspace details remain live. Its task-ID routing rule maps prefixes
+to the host that holds each task ([specs/host-routing.md](./specs/host-routing.md)). Owner and
+replica checkout roles stay catalog vocabulary, not a fleet control plane.
 
 ## Questions that require evidence
 
