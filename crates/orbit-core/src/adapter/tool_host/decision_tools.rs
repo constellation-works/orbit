@@ -48,6 +48,17 @@ pub(super) fn dispatch(
             })?;
             Ok(decision_request_json(&request))
         }
+        DecisionVerb::Digest => {
+            let caller = submit_caller(runtime, session_context, agent, model)?;
+            let digest =
+                runtime.decision_digest(&input.required_string("channel")?, caller)?;
+            Ok(json!({
+                "requests": digest.requests.iter().map(decision_request_json).collect::<Vec<_>>(),
+                "raised": digest.raised.iter().map(decision_request_json).collect::<Vec<_>>(),
+                "expiring": digest.expiring.iter().map(decision_request_json).collect::<Vec<_>>(),
+                "count": digest.requests.len(),
+            }))
+        }
         DecisionVerb::Submit => {
             let caller = submit_caller(runtime, session_context, agent, model)?;
             let request = runtime.submit_decision_via_channel(DecisionSubmitParams {

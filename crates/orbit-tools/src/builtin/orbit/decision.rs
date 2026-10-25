@@ -2,10 +2,10 @@
 //! refused at the tool entry — the operation is registered inactive, and
 //! this preempt keeps that refusal explicit if it is ever reached: an
 //! agent may see that a human is being asked; it may not answer.
-//! Submitting through a registered channel passes to the host, where core
-//! binds the caller to the registration and verifies the token; the
-//! channel-administration verbs are operator CLI only and refused here
-//! like answering.
+//! Submitting through a registered channel and the digest that raises
+//! approval requests pass to the host, where core binds the caller to
+//! the registration and verifies the token; the channel-administration
+//! verbs are operator CLI only and refused here like answering.
 use super::operation::GuardedModes;
 use crate::ToolContext;
 use orbit_common::{
@@ -17,7 +17,7 @@ use serde_json::Value;
 impl GuardedModes for DecisionVerb {
     fn preempt(self, _ctx: &ToolContext, _input: &Value) -> Option<Result<Value, OrbitError>> {
         match self {
-            Self::List | Self::Show | Self::Submit => None,
+            Self::List | Self::Show | Self::Submit | Self::Digest => None,
             Self::Answer => Some(Err(OrbitError::PolicyDenied(
                 "answering a decision request is the operator's: use `orbit decision answer` or the dashboard".into(),
             ))),
@@ -40,6 +40,7 @@ impl GuardedModes for DecisionVerb {
             | Self::Show
             | Self::Answer
             | Self::Submit
+            | Self::Digest
             | Self::ChannelRegister
             | Self::ChannelList
             | Self::ChannelRevoke
@@ -53,6 +54,7 @@ impl GuardedModes for DecisionVerb {
             | Self::Show
             | Self::Answer
             | Self::Submit
+            | Self::Digest
             | Self::ChannelRegister
             | Self::ChannelList
             | Self::ChannelRevoke
@@ -66,6 +68,7 @@ impl GuardedModes for DecisionVerb {
             | Self::Show
             | Self::Answer
             | Self::Submit
+            | Self::Digest
             | Self::ChannelRegister
             | Self::ChannelList
             | Self::ChannelRevoke

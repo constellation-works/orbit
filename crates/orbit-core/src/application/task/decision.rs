@@ -1,8 +1,10 @@
 //! Listing, showing and answering human decision requests.
 //!
-//! Requests are raised on held work by block triage and pilot admission
-//! (see `orbit_types::task::DecisionRequest`) and live in task history, so
-//! listing scans task histories — the shape the block readout already has.
+//! Requests are raised on held work by block triage and pilot admission,
+//! and on proposed and review tasks by the decision digest in
+//! `decision_channel` (see `orbit_types::task::DecisionRequest`). They
+//! live in task history, so listing scans task histories — the shape the
+//! block readout already has.
 //!
 //! [`OrbitRuntime::answer_decision_request_as_human`] is the core apply
 //! step every answering surface shares: the operator CLI, the dashboard,

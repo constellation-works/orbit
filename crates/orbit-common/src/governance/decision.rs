@@ -9,9 +9,12 @@
 //! human writer. Submitting is a registered channel's: `orbit.decision.submit`
 //! is a governed operation whose handler verifies the channel binding and
 //! the per-request token in core before applying through the same human
-//! funnel; agent sessions and unregistered callers are refused. Registering,
-//! listing, revoking and rotating a channel are operator CLI verbs with no
-//! MCP scope, like answering.
+//! funnel; agent sessions and unregistered callers are refused. The digest
+//! is the same channel's raising call: `orbit.decision.digest` is governed
+//! the same way, raises the approval requests proposed and review tasks
+//! are missing, and returns them beside the requests nearing expiry.
+//! Registering, listing, revoking and rotating a channel are operator CLI
+//! verbs with no MCP scope, like answering.
 use crate::governance::operation::{
     CliArgKind, CliGroup, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec,
     ParamType, ToolOnlyRegistration, UnknownFields, both, free_text, mcp_only, operation_registry,
@@ -34,6 +37,8 @@ operation_registry! {
         Answer => ANSWER,
         /// Submit a human's answer through a registered decision channel.
         Submit => SUBMIT,
+        /// Raise missing approval requests and return the decision digest.
+        Digest => DIGEST,
         /// Register a decision channel on this host (operator CLI only).
         ChannelRegister => CHANNEL_REGISTER,
         /// List this host's decision channels (operator CLI only).
@@ -222,6 +227,29 @@ const SUBMIT: OperationSpec<DecisionVerb> = OperationSpec {
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[REQUEST_ID, SUBMIT_PARAMS, MODEL],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+const DIGEST_PARAMS: &[ParamSpec] = &[required(both(
+    "channel",
+    ParamType::String,
+    "The registered decision channel the digest is for, as `orbit decision channel list` shows it.",
+    CliArgKind::flag("channel"),
+    "The registered decision channel the digest is for",
+))];
+
+const DIGEST: OperationSpec<DecisionVerb> = OperationSpec {
+    verb: DecisionVerb::Digest,
+    cli_path: &["digest"],
+    tool_name: "orbit.decision.digest",
+    tool_description: "Raise the approval decision requests a digest presents and return the whole digest in one call. Governed: callable only by the plugin the named channel is bound to (through its callback session) or by the operator — never by an agent session (caller_not_allowed), and a plugin the channel is not bound to is refused channel_not_registered, as is an unregistered or revoked channel (channel_not_registered, channel_revoked). For every proposed task without an open proposed_approval request, and every review task without an open review_approval request, one open request is raised idempotently per (task, gate, binding) with answers approve/reject and raised_by digest: proposed_approval binds to the task's description and acceptance criteria plus its proposed status, review_approval also to the candidate under review, and either reads superseded once its binding stops matching. The result carries requests (the digest), raised (what this call raised) and expiring (every still-open request expiring within 24 hours). A second call raises nothing new and returns the same request ids. With the decision channel disabled in this workspace the digest raises nothing, writes nothing and returns no requests.",
+    cli_about: "Raise missing approval requests and show the decision digest",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[DIGEST_PARAMS, MODEL],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

@@ -384,3 +384,114 @@ fn decision_channel_cli_registers_submits_and_revokes() {
         .assert()
         .failure();
 }
+
+/// `orbit decision digest` over the real CLI: the operator's call raises
+/// the proposed task's approval request through the governed tool, a
+/// second call raises nothing new, and an agent-declared process is
+/// refused before anything is raised.
+#[test]
+fn decision_digest_cli_raises_and_refuses_agents() {
+    if crate::isolated_test::run_in_child(
+        "decision_cli::decision_digest_cli_raises_and_refuses_agents",
+    ) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let config_path = workspace_root.join("config.toml");
+    let mut config = std::fs::read_to_string(&config_path).unwrap_or_default();
+    config.push_str("\n[decision_channel]\nenabled = true\n");
+    std::fs::write(&config_path, config).unwrap();
+
+    let task_id = {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("decision-fixture"));
+        let task = runtime
+            .add_task(TaskAddParams {
+                title: "Proposed awaiting the digest".into(),
+                description: "decision digest CLI fixture".into(),
+                status: Some(TaskStatus::Proposed),
+                ..Default::default()
+            })
+            .unwrap();
+        runtime
+            .register_decision_channel("email", "human:operator", "decision-mail", vec![])
+            .unwrap();
+        task.id.to_string()
+    };
+
+    // An agent-declared process is refused and raises nothing.
+    fixture
+        .command(&["decision", "digest", "--channel", "email", "--json"])
+        .env("ORBIT_AGENT_NAME", "codex")
+        .env("ORBIT_AGENT_MODEL", "gpt-6.1-sol")
+        .assert()
+        .failure();
+    let listed = fixture.json(&["decision", "list", "--json"]);
+    assert_eq!(
+        listed["count"], 0,
+        "the refused digest raised nothing: {listed}"
+    );
+
+    let output = fixture
+        .command(&["decision", "digest", "--channel", "email", "--json"])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let digest: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    // The fixture workspace may carry its own proposed seed task, so
+    // assert on this task's request rather than a workspace count.
+    let raised = digest["raised"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|request| request["task_id"] == task_id)
+        .expect("the digest raised this task's approval request")
+        .clone();
+    assert_eq!(raised["gate"], "proposed_approval");
+    assert_eq!(raised["raised_by"], "digest");
+    assert_eq!(raised["state"], "open");
+    assert_eq!(raised["answers"][0]["id"], "approve");
+    assert_eq!(raised["answers"][1]["id"], "reject");
+    let request_id = raised["id"].as_str().unwrap().to_string();
+    assert!(
+        digest["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|request| request["id"] == request_id),
+        "the digest carries the raised request: {digest}"
+    );
+
+    let again: serde_json::Value = serde_json::from_slice(
+        &fixture
+            .command(&["decision", "digest", "--channel", "email", "--json"])
+            .env("ORBIT_OPERATOR", "1")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .unwrap();
+    assert_eq!(again["raised"].as_array().unwrap().len(), 0, "{again}");
+    assert!(
+        again["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|request| request["id"] == request_id),
+        "the second digest returns the same request id: {again}"
+    );
+}

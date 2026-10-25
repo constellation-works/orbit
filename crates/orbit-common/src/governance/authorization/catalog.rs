@@ -553,6 +553,16 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator],
         rationale: "submitting a decision applies a human's answer to held work, so only the operator testing a channel — or the registered channel's own plugin callback, which the handler binds to the registration — may call it; an agent session never answers for a human",
     },
+    // The digest half of the same channel: it raises the approval
+    // requests a transport puts in front of a human. Same row shape and
+    // same callback admission as `orbit.decision.submit` — the handler
+    // re-reads the registration and binds the caller to it per call.
+    GovernedOperation {
+        id: "orbit.decision.digest",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "the decision digest raises approval requests for a human to answer, so only the operator — or the registered channel's own plugin callback, which the handler binds to the registration — may call it; an agent session never raises requests for a human",
+    },
     GovernedOperation {
         id: "decision answer",
         surface: OperationSurface::CliCommand,

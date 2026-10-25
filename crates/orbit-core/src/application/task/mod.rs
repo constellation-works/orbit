@@ -82,7 +82,8 @@ pub use context_repair::{
 };
 pub(crate) use decision::decision_request_json;
 pub use decision_channel::{
-    DECISION_CHANNEL_KEY_SECRET, DecisionChannelInfo, DecisionSubmitCaller, DecisionSubmitParams,
+    DECISION_CHANNEL_KEY_SECRET, DecisionChannelInfo, DecisionDigest, DecisionSubmitCaller,
+    DecisionSubmitParams,
 };
 pub(in crate::application) use distributed_port::TaskDistributedPort;
 pub use escalation_triage_steps::{

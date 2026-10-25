@@ -612,6 +612,7 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.auto_task.delete", Placement::Unadvertised),
     ("orbit.auto_task.reset", Placement::Unadvertised),
     ("orbit.command.exec", Placement::Advertised),
+    ("orbit.decision.digest", Placement::Advertised),
     ("orbit.decision.submit", Placement::Advertised),
     ("orbit.drain.claim.bind", Placement::Unadvertised),
     ("orbit.drain.claim.settle", Placement::Unadvertised),

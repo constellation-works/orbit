@@ -479,6 +479,34 @@ token. The refusal codes are:
 | `answer_not_allowed` | The answer id is not one of the request's allowed answers. |
 | `request_not_found` | No decision request has that id. |
 
+The plugin's digest routine raises what it presents through the governed
+`orbit.decision.digest` path, on the same terms as submit: only the plugin
+the channel is bound to, through its callback session, or the operator —
+never an agent session (`caller_not_allowed`), and a plugin the named
+channel is not bound to is refused `channel_not_registered`, as is an
+unregistered channel; a revoked channel is refused `channel_revoked`. The
+CLI form is:
+
+```bash
+orbit decision digest --channel <channel>
+```
+
+One call returns the whole digest. For every proposed task without an open
+`proposed_approval` request, and every review task without an open
+`review_approval` request, it first raises one open request — idempotently
+per task, gate and binding, with answers `approve`/`reject` — then returns
+`requests` (the digest), `raised` (what this call raised) and `expiring`
+(every still-open request expiring within 24 hours, the digest window). A
+second call raises nothing new and returns the same request ids. A
+`proposed_approval` request binds to the task's description and acceptance
+criteria plus its proposed status, and a `review_approval` request also to
+the candidate under review, so either reads superseded once what it was
+raised against changes and the next digest raises a fresh one. With the
+decision channel disabled in the workspace, the digest raises nothing,
+writes nothing and returns no requests. The tool form takes the same
+`channel` field. Mail rendering, batching, quiet hours and parsing a reply
+that answers several digest items stay the plugin's.
+
 Verify a channel without spending a real answer:
 
 1. `orbit decision channel list` shows the channel with the expected human,

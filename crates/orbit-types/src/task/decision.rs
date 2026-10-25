@@ -18,7 +18,7 @@ use serde_json::Value;
 use super::{
     ContextFilesWidening, RegressionRiskMarks, TagsChanged, Task, TaskHistoryEntry, TaskStatus,
 };
-use crate::workflow::{FlakyValidation, HeldCandidate, KnownRedValidation};
+use crate::workflow::{FlakyValidation, HeldCandidate, KnownRedValidation, ReviewGateHistoryNote};
 
 /// History event the final-recovery applier records its decision on.
 pub const FINAL_RECOVERY_DECIDED_EVENT: &str = "final_recovery_decided";
@@ -465,6 +465,9 @@ pub const DECISION_ANSWERED_EVENT: &str = "decision_answered";
 pub const DECISION_TOKEN_CONSUMED_EVENT: &str = "decision_token_consumed";
 /// Default lifetime of a decision request, in hours.
 pub const DEFAULT_DECISION_REQUEST_TTL_HOURS: i64 = 72;
+/// How close to expiry an open request must be for the decision digest
+/// to return it as nearing expiry, in hours.
+pub const DECISION_DIGEST_EXPIRY_WINDOW_HOURS: i64 = 24;
 
 /// The gate a [`DecisionRequest`] waits on.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -500,6 +503,32 @@ impl DecisionGate {
             Self::ProposedApproval => "proposed_approval",
             Self::ReviewApproval => "review_approval",
         }
+    }
+
+    /// The allowed answers of an approval request on this gate:
+    /// `approve` / `reject`, in presentation order. Empty for the
+    /// non-approval gates, whose answers come from the hold that
+    /// raised them.
+    pub fn approval_answers(&self) -> Vec<DecisionAnswer> {
+        let approved = match self {
+            Self::ProposedApproval => {
+                "Approve the proposed task; it goes through task-pilot screening like a CLI approval."
+            }
+            Self::ReviewApproval => "Approve the task in review.",
+            Self::BlockTriage | Self::PilotAdmission => return Vec::new(),
+        };
+        vec![
+            DecisionAnswer {
+                id: "approve".to_string(),
+                label: "Approve".to_string(),
+                consequence: approved.to_string(),
+            },
+            DecisionAnswer {
+                id: "reject".to_string(),
+                label: "Reject".to_string(),
+                consequence: "Reject the task.".to_string(),
+            },
+        ]
     }
 }
 
@@ -558,14 +587,39 @@ pub enum DecisionBinding {
     },
     /// Task revision and status an approval request was raised against.
     TaskRevision {
-        /// The task `updated_at` when the request was raised.
+        /// The task spec digest (description and acceptance criteria, see
+        /// [`Task::spec_digest`]) when the request was raised. Records
+        /// written before the digest form carry the task `updated_at`
+        /// instead; both spellings are compared on read.
         revision: String,
         /// The task status when the request was raised.
         status: TaskStatus,
+        /// Identity of the candidate under review when a
+        /// `review_approval` request was raised (design §5): the latest
+        /// candidate the task history names, when it names one. Absent
+        /// on `proposed_approval` requests and on records written before
+        /// the field existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        candidate: Option<String>,
     },
 }
 
 impl DecisionBinding {
+    /// The approval binding for `task` as it now stands: its spec digest
+    /// and status, plus the candidate under review for a review task.
+    /// The spec digest, not `updated_at`, is the revision: appending the
+    /// raise itself to the task history moves `updated_at`, which would
+    /// supersede every approval request the moment it was raised, while
+    /// the digest changes exactly when the description or acceptance
+    /// criteria the digest rendered change (design §5).
+    pub fn for_task(task: &Task, candidate: Option<String>) -> Self {
+        Self::TaskRevision {
+            revision: task.spec_digest(),
+            status: task.status,
+            candidate,
+        }
+    }
+
     /// The value a newer binding is compared against for supersession.
     pub fn key(&self) -> String {
         match self {
@@ -573,11 +627,41 @@ impl DecisionBinding {
             Self::PilotOperation { operation_id } => {
                 format!("pilot_operation:{operation_id}")
             }
-            Self::TaskRevision { revision, status } => {
+            Self::TaskRevision {
+                revision,
+                status,
+                candidate: None,
+            } => {
                 format!("task_revision:{revision}:{status}")
+            }
+            Self::TaskRevision {
+                revision,
+                status,
+                candidate: Some(candidate),
+            } => {
+                format!("task_revision:{revision}:{status}:{candidate}")
             }
         }
     }
+}
+
+/// The candidate a task's history currently names: the head of the
+/// latest held candidate, or the candidate the latest review-gate note
+/// names, whichever entry is newest. `None` when the history names no
+/// candidate, as for a review task whose candidate lives only in its
+/// pull request.
+pub fn current_candidate_identity(history: &[TaskHistoryEntry]) -> Option<String> {
+    history.iter().rev().find_map(|entry| {
+        if let Some(held) = HeldCandidate::from_entry(entry) {
+            return Some(held.head_sha);
+        }
+        entry
+            .note
+            .as_deref()
+            .and_then(ReviewGateHistoryNote::from_text)
+            .and_then(|note| note.candidate)
+            .filter(|candidate| !candidate.is_empty())
+    })
 }
 
 /// What an applied answer recorded on a [`DecisionRequest`].
@@ -798,6 +882,7 @@ pub fn decision_requests_from_history(
         })
         .flatten()
         .map(|entry| entry.at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true));
+    let current_candidate = current_candidate_identity(history);
     let binding_current = |request: &DecisionRequest| {
         request.task_id == task.id
             && match &request.binding {
@@ -808,10 +893,16 @@ pub fn decision_requests_from_history(
                     task.status == TaskStatus::Backlog
                         && pilot_operation == Some(operation_id.as_str())
                 }
-                DecisionBinding::TaskRevision { revision, status } => {
+                DecisionBinding::TaskRevision {
+                    revision,
+                    status,
+                    candidate,
+                } => {
                     *status == task.status
-                        && chrono::DateTime::parse_from_rfc3339(revision)
-                            .is_ok_and(|revision| revision == task.updated_at)
+                        && (revision == &task.spec_digest()
+                            || chrono::DateTime::parse_from_rfc3339(revision)
+                                .is_ok_and(|revision| revision == task.updated_at))
+                        && candidate.as_deref() == current_candidate.as_deref()
                 }
             }
     };
