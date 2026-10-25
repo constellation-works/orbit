@@ -1261,6 +1261,83 @@ function buildPilotWarningBadge(task) {
   }, [el("span", { text: "⚠", "aria-hidden": "true" }), ` pilot warnings · ${count}`])] : [];
 }
 
+function deliveryAttentionLabel(attention) {
+  if (!attention) return null;
+  if (attention.blocker === "failed_checks") return "CI failed";
+  if (attention.blocker === "conflict") return "conflict";
+  if (attention.blocker) return String(attention.blocker).replaceAll("_", " ");
+  if (attention.run_state) return "run failed";
+  return "delivery stuck";
+}
+
+function deliveryAttentionTitle(task, attention) {
+  const parts = [];
+  if (attention.failed_step_id) parts.push(`failed step ${attention.failed_step_id}`);
+  if (attention.blocker) parts.push(`blocker ${attention.blocker}`);
+  if (attention.head_sha) parts.push(`head ${attention.head_sha}`);
+  if (attention.attempt != null && attention.budget != null) parts.push(`auto-fix attempt ${attention.attempt} of ${attention.budget}`);
+  if (attention.run_state) parts.push(`delivery run ${attention.run_state}`);
+  if (attention.repairing) parts.push("a live run is repairing the pull request");
+  if (attention.as_of) parts.push(`as of ${attention.as_of}`);
+  return parts.length ? `${task.status} · ${deliveryAttentionLabel(attention)}: ${parts.join(", ")}` : `${task.status} · ${deliveryAttentionLabel(attention)}`;
+}
+
+function buildDeliveryAttentionBadge(task) {
+  const attention = task.delivery_attention;
+  if (!attention) return [];
+  const label = deliveryAttentionLabel(attention);
+  return [el("span", {
+    class: "delivery-attention-badge",
+    role: "img",
+    "aria-label": deliveryAttentionTitle(task, attention),
+    title: deliveryAttentionTitle(task, attention),
+    text: `${task.status} · ${label}`,
+  })];
+}
+
+function buildDeliveryAttentionBanner(task) {
+  const attention = task.delivery_attention;
+  if (!attention) return null;
+  const lines = [];
+  if (attention.failed_step_id) lines.push(`Failed step: ${attention.failed_step_id}`);
+  if (attention.blocker) lines.push(`Blocker: ${attention.blocker}`);
+  if (attention.head_sha) lines.push(`Observed head: ${attention.head_sha}`);
+  if (attention.attempt != null && attention.budget != null) lines.push(`Auto-fix attempt ${attention.attempt} of ${attention.budget}`);
+  if (attention.run_state) lines.push(`Delivery run: ${attention.run_state}`);
+  lines.push(attention.repairing ? "A live run is watching or repairing the pull request." : "No live run is repairing the pull request.");
+  if (attention.as_of) lines.push(`As of ${attention.as_of}`);
+  const actions = el("div", { class: "task-attention-actions" });
+  if (attention.run_id) {
+    if (task.job_run_navigable !== false) {
+      const run = el("a", { class: "attention-action", text: "View run" });
+      run.href = runHref(attention.run_id, task.workspace_id ? { workspace: task.workspace_id } : {});
+      run.addEventListener("click", (event) => event.stopPropagation());
+      actions.appendChild(run);
+    } else {
+      actions.appendChild(el("span", { class: "attention-action", text: `Run ${attention.run_id}` }));
+    }
+  }
+  const pullRequest = pullRequestLink(task);
+  if (pullRequest) {
+    const pr = el("a", { class: "attention-action", text: pullRequest.number ? `PR #${pullRequest.number}` : "Pull request" });
+    pr.href = pullRequest.url;
+    pr.rel = "noopener noreferrer";
+    pr.target = "_blank";
+    pr.addEventListener("click", (event) => event.stopPropagation());
+    actions.appendChild(pr);
+  } else if (attention.pr_number) {
+    actions.appendChild(el("span", { class: "attention-action", text: `PR #${attention.pr_number}` }));
+  }
+  return el("section", { class: "task-attention warning delivery-attention", "aria-label": "Delivery needs attention" }, [
+    el("span", { class: "task-attention-icon", "aria-hidden": "true" }),
+    el("div", { class: "task-attention-content" }, [
+      el("h3", { class: "task-attention-title", text: `Delivery needs attention · ${deliveryAttentionLabel(attention)}` }),
+      ...lines.map((line) => el("p", { class: "task-attention-body", text: line })),
+      actions.children.length ? actions : null,
+    ]),
+  ]);
+}
+
 function buildPilotWarnings(task) {
   const findings = pilotWarnings(task);
   if (!findings.length) return null;
@@ -3192,6 +3269,8 @@ function buildTaskDetail(task, context, drain = null) {
   if (blockCallout) band.appendChild(blockCallout);
   const pilotCallout = buildPilotWarnings(task);
   if (pilotCallout) band.appendChild(pilotCallout);
+  const deliveryAttentionBanner = buildDeliveryAttentionBanner(task);
+  if (deliveryAttentionBanner) band.appendChild(deliveryAttentionBanner);
   band.appendChild(attentionSlot);
   band.appendChild(progressSlot);
   band.appendChild(tabStrip);
@@ -5564,7 +5643,7 @@ export function renderTasks(tasks, context) {
       const run = RUN_GROUPS.has(t.status);
       // Basic hash based on row presentation parameters (selection is painted
       // apart, by syncRowSelection)
-      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}`;
+      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
@@ -5585,6 +5664,7 @@ export function renderTasks(tasks, context) {
           ...buildOsBadges(t),
           ...buildReadinessBadge(t),
           ...buildPilotWarningBadge(t),
+          ...buildDeliveryAttentionBadge(t),
           ...prefixes.map((label) => el("span", { class: "title-tag", text: label, title: `[${label}]` })),
         ].filter(Boolean);
         // The title is the row's disclosure: the row holds the copy-id button,

@@ -606,12 +606,30 @@ fn all_tasks_json(
         .unwrap_or_default();
     // Each workspace's runtime carries its own crew registry; build each one
     // once for the page rather than once per row.
+    // One batched delivery-run read per workspace for the page's rows.
+    let mut attention_by_workspace: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
+    for (row, runtime, entry) in &rows {
+        let _ = row;
+        if !attention_by_workspace.contains_key(&entry.id) {
+            let workspace_rows = rows
+                .iter()
+                .filter(|(_, _, other)| other.id == entry.id)
+                .map(|(row, _, _)| row);
+            let map = runtime.delivery_attention_map(workspace_rows)?;
+            attention_by_workspace.insert(entry.id.clone(), map);
+        }
+    }
     let mut projections: BTreeMap<&str, TaskListProjection> = BTreeMap::new();
     let mut values = Vec::with_capacity(rows.len());
     for (row, runtime, entry) in rows {
-        let projection = projections
-            .entry(entry.id.as_str())
-            .or_insert_with(|| TaskListProjection::new(&runtime));
+        let projection = projections.entry(entry.id.as_str()).or_insert_with(|| {
+            TaskListProjection::new(&runtime).with_delivery_attention(
+                attention_by_workspace
+                    .get(&entry.id)
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+        });
         let mut value = projection.row_to_json(&runtime, &row, &statuses)?;
         if let Value::Object(map) = &mut value {
             map.insert("workspace_id".to_string(), json!(entry.id));

@@ -7,6 +7,7 @@ pub(crate) mod catalog;
 pub(crate) mod claimed;
 pub(crate) mod crew_pools;
 pub(crate) mod delivery;
+pub mod delivery_attention;
 mod drain_port;
 mod exec;
 mod explore_analytics;

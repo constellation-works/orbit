@@ -406,5 +406,11 @@ pub fn task_detail_with_dashboard_extras(
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Value, OrbitError> {
     let object = super::record_json::task_show_json(runtime, row, status_by_id)?;
-    with_dashboard_extras(runtime, &row.task, object)
+    let mut value = with_dashboard_extras(runtime, &row.task, object)?;
+    if let Some(attention) = runtime.delivery_attention(row)?
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert("delivery_attention".to_string(), attention);
+    }
+    Ok(value)
 }

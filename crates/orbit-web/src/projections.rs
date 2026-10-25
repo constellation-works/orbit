@@ -81,6 +81,7 @@ pub(crate) struct TaskListProjection {
     registry: ConfiguredCrewRegistryProjection,
     os_readout: Result<TaskOsReadout, String>,
     local_machine_id: Option<String>,
+    delivery_attention: BTreeMap<String, Value>,
     /// Read once, on the page's first proposed or backlog row.
     preparing: OnceCell<BTreeSet<String>>,
     /// Reads the origin remote once, on the page's first unlinked PR ref.
@@ -93,9 +94,15 @@ impl TaskListProjection {
             registry: runtime.configured_crew_registry_projection(),
             os_readout: TaskOsReadout::new(runtime).map_err(|error| error.to_string()),
             local_machine_id: runtime.automation_machine_identity().map(str::to_string),
+            delivery_attention: BTreeMap::new(),
             preparing: OnceCell::new(),
             pull_request_links: PullRequestLinks::new(runtime),
         }
+    }
+
+    pub(crate) fn with_delivery_attention(mut self, map: BTreeMap<String, Value>) -> Self {
+        self.delivery_attention = map;
+        self
     }
 
     /// `runtime` is the one this projection was built from; it is read only
@@ -152,6 +159,9 @@ impl TaskListProjection {
                 task,
             )),
         );
+        if let Some(attention) = self.delivery_attention.get(&task.id) {
+            object.insert("delivery_attention".to_string(), attention.clone());
+        }
         let mut value = Value::Object(object);
         if value.get("readiness").is_some() {
             let preparing = self
