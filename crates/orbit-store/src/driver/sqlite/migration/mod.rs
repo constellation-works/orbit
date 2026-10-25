@@ -18,6 +18,7 @@ mod handoff_settlement;
 mod host_registry;
 mod introspect;
 mod invocation;
+mod job_run_tasks;
 mod job_runs;
 mod learning;
 mod ledger;
@@ -53,6 +54,7 @@ use invocation::{
     apply_invocation_workspace_scope, apply_invocations_ts_index, apply_provider_crew_accounts,
     apply_provider_crew_outages, apply_provider_limit_observations, apply_provider_limit_readings,
 };
+use job_run_tasks::apply_job_run_task_recency;
 use job_runs::{
     apply_execution_provenance, apply_flat_crew_model, apply_job_run_archive_stage,
     apply_job_run_id_allocations, apply_job_run_states, apply_job_run_step_lock_wait,

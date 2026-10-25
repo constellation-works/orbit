@@ -554,12 +554,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_crew_performance_snapshot,
     },
+    // Materialized task ownership, maintained by triggers even for older
+    // writers. Seek each task's recency prefix instead of scanning JSON.
+    Migration {
+        version: 59,
+        name: "job_run_task_recency",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_job_run_task_recency,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 58;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 59;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -145,6 +145,38 @@ pub trait JobRunStoreBackend: Send + Sync {
 
     fn list_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError>;
     fn list_job_runs_filtered(&self, query: &JobRunQuery) -> Result<Vec<JobRun>, OrbitError>;
+    /// Up to `per_task_limit` recent runs of `job_id` for each requested task,
+    /// ordered by recency descending, then run ID ascending, including steps.
+    /// Ownership uses the exact top-level text bindings of `JobRunQuery.task_id`.
+    /// Missing tasks are omitted. Limits apply independently before hydration:
+    /// retries for one task cannot displace another task's evidence. Persistent
+    /// backends should batch indexed ownership seeks and deduplicate step reads;
+    /// a bounded result must not require a history scan per requested task.
+    fn recent_job_runs_for_tasks(
+        &self,
+        job_id: &str,
+        task_ids: &[String],
+        per_task_limit: usize,
+    ) -> Result<std::collections::BTreeMap<String, Vec<JobRun>>, OrbitError> {
+        let mut result = std::collections::BTreeMap::new();
+        for id in task_ids {
+            if result.contains_key(id) {
+                continue;
+            }
+            let runs = self.list_job_runs_filtered(&JobRunQuery {
+                job_id: Some(job_id.to_string()),
+                task_id: Some(id.clone()),
+                order_by: JobRunOrder::Recency,
+                limit: Some(per_task_limit),
+                ..Default::default()
+            })?;
+            if !runs.is_empty() {
+                result.insert(id.clone(), runs);
+            }
+        }
+        Ok(result)
+    }
+
     /// Distinct trimmed, nonblank task IDs carried by the selected runs' top-level
     /// `task_ids` string array or text `task_id`. Run filters and limits apply
     /// before projection; nested fields confer no ownership. Backends may
