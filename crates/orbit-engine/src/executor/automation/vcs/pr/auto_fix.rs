@@ -53,8 +53,8 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
-    PR_AUTO_FIX_CHECK_REPAIR_MARKER, PR_AUTO_FIX_PUSHED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker,
-    PrAutoFixDecision, PrAutoFixPush, pr_auto_fix_attempts, pr_auto_fix_pushes,
+    PR_AUTO_FIX_CHECK_REPAIR_MARKER, PrAutoFixAttempt, PrAutoFixBlocker, PrAutoFixDecision,
+    pr_auto_fix_attempts, pr_auto_fix_pushes,
 };
 use serde_json::{Value, json};
 
@@ -67,7 +67,7 @@ use super::super::git::{
     base_sync_mode_from_input, git_command_success, git_output, resolve_worktree_start_point,
 };
 use super::super::landing::checks::{HeadCheckEvidence, head_check_evidence, unmoved_red_base};
-use super::super::push::push_batch_changes;
+use super::super::push::{push_batch_changes, record_published_pr_head};
 use super::super::retry_lineage::{LineageStep, LineageStop, RetryLineage};
 use super::answers::{CheckState, PullRequestStatus, RequiredChecks, read_required_checks};
 use super::delivery::{BlockedCheckRefusal, DeliveryPin, blocked_checks};
@@ -798,31 +798,14 @@ pub(super) fn record_published_repair<H: RuntimeHost + ?Sized>(
     to_head_sha: &str,
     blocker: PrAutoFixBlocker,
 ) -> Result<(), OrbitError> {
-    let push = PrAutoFixPush {
-        pr_number: pr_number.to_string(),
-        from_head_sha: from_head_sha.to_string(),
-        to_head_sha: to_head_sha.to_string(),
-        blocker,
-        run_id: auto_fix.run_id.clone(),
-    };
-    let note = serde_json::to_string(&push).map_err(|error| {
-        OrbitError::Execution(format!("auto_fix: published head not recorded: {error}"))
-    })?;
-    host.apply_task_automation_update(
+    record_published_pr_head(
+        host,
         auto_fix.primary_task()?,
-        TaskAutomationUpdate {
-            append_history: vec![orbit_types::task::TaskHistoryEntry {
-                at: chrono::Utc::now(),
-                by: "system".to_string(),
-                event: PR_AUTO_FIX_PUSHED_EVENT.to_string(),
-                note: Some(note),
-                from_status: None,
-                to_status: None,
-                operation_id: None,
-                decision: None,
-            }],
-            ..TaskAutomationUpdate::default()
-        },
+        &auto_fix.run_id,
+        pr_number,
+        from_head_sha,
+        to_head_sha,
+        blocker,
     )
 }
 

@@ -28,48 +28,50 @@ impl WorktreeBoundaryGuard {
         host: &dyn RuntimeHost,
         input: &Value,
     ) -> Result<(), DispatchError> {
-        let invalid = || {
-            DispatchError::CliInvocationPermanent(
+        let invalid = |reason: &str| {
+            DispatchError::CliInvocationPermanent(format!(
                 "conflict recovery requires an existing rebase matching the prepared branch, \
-                 original HEAD and pinned target base"
-                    .to_string(),
-            )
+                 original HEAD and pinned target base: {reason}"
+            ))
         };
         if input.get("recovery_kind").and_then(Value::as_str) != Some("vcs_conflict")
             || input.get("operation").and_then(Value::as_str) != Some("git_rebase")
         {
-            return Err(invalid());
+            return Err(invalid(
+                "recovery input does not name a git_rebase vcs_conflict",
+            ));
         }
-        let prepared = input.get("failed_step_input").ok_or_else(invalid)?;
+        let prepared = input
+            .get("failed_step_input")
+            .ok_or_else(|| invalid("missing failed_step_input"))?;
         let branch = prepared
             .get("head")
             .and_then(Value::as_str)
-            .ok_or_else(invalid)?;
+            .ok_or_else(|| invalid("missing prepared branch head"))?;
         let original = prepared
             .get("head_sha")
             .or_else(|| prepared.get("published_head_sha"))
             .and_then(Value::as_str)
-            .ok_or_else(invalid)?;
+            .ok_or_else(|| invalid("missing prepared head_sha or published_head_sha"))?;
         let original_base_sha = input
             .get("original_base_sha")
             .and_then(Value::as_str)
-            .ok_or_else(invalid)?;
+            .ok_or_else(|| invalid("missing original_base_sha"))?;
         let target = input
             .get("target_base_sha")
             .and_then(Value::as_str)
-            .ok_or_else(invalid)?;
+            .ok_or_else(|| invalid("missing target_base_sha"))?;
         let base_ref = prepared
             .get("base_ref")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
             .or_else(|| completion_recovery_base_ref(prepared))
-            .ok_or_else(invalid)?;
+            .ok_or_else(|| invalid("missing prepared base_ref"))?;
         let prepared_target = prepared
             .get("base_sha")
             .and_then(Value::as_str)
             .unwrap_or(target);
-        let step_id =
-            validate_failed_step_identity(input, prepared, original).ok_or_else(invalid)?;
+        let step_id = validate_failed_step_identity(input, prepared, original).map_err(invalid)?;
         // Completion's rendered input retains the initial publication even
         // after its watcher publishes a check repair. Authenticate that input
         // first, then bind Git's original head (and the publication lease) to
@@ -85,15 +87,17 @@ impl WorktreeBoundaryGuard {
                 .and_then(Value::as_array)
                 .and_then(|ids| ids.iter().filter_map(Value::as_str).min())
                 .or_else(|| self.recovery_task_id(input))
-                .ok_or_else(invalid)?;
+                .ok_or_else(|| invalid("missing completion primary task"))?;
             recovery_published_head(
                 host,
                 &self.run_id,
                 primary_task,
-                prepared["pr_number"].as_str().ok_or_else(invalid)?,
+                prepared["pr_number"]
+                    .as_str()
+                    .ok_or_else(|| invalid("missing prepared pr_number"))?,
                 original,
             )
-            .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?
+            .map_err(|error| invalid(&format!("published head lookup failed: {error}")))?
         } else {
             original.to_string()
         };
@@ -105,23 +109,31 @@ impl WorktreeBoundaryGuard {
         // continuation, not refused here. The ref must still resolve so the
         // continuation can read its tip.
         git_stdout(&self.assigned_root, &["rev-parse", "--verify", &base_ref])?;
-        if prepared_target != target
-            || git_stdout(&self.assigned_root, &["merge-base", original, target])?
-                != original_base_sha
-        {
-            return Err(invalid());
+        if prepared_target != target {
+            return Err(invalid("prepared base_sha does not match target_base_sha"));
         }
-        let conflicting_paths = recovery_conflicting_paths(input).ok_or_else(invalid)?;
+        let merge_base = git_stdout(&self.assigned_root, &["merge-base", original, target])?;
+        if merge_base != original_base_sha {
+            return Err(invalid(&format!(
+                "merge-base '{merge_base}' of original HEAD '{original}' and target base \
+                 '{target}' does not match original_base_sha '{original_base_sha}'"
+            )));
+        }
+        let conflicting_paths = recovery_conflicting_paths(input).map_err(invalid)?;
         if unmerged_paths(&self.assigned_root)? != conflicting_paths {
-            return Err(invalid());
+            return Err(invalid(
+                "worktree unmerged paths do not match conflicting_paths",
+            ));
         }
         let expected_ref = format!("refs/heads/{branch}");
-        if git_stdout(
+        let branch_head = git_stdout(
             &self.assigned_root,
             &["rev-parse", "--verify", &expected_ref],
-        )? != original
-        {
-            return Err(invalid());
+        )?;
+        if branch_head != original {
+            return Err(invalid(&format!(
+                "branch '{expected_ref}' is at '{branch_head}', expected original HEAD '{original}'"
+            )));
         }
         for backend in ["rebase-merge", "rebase-apply"] {
             let path = git_stdout(
@@ -133,14 +145,32 @@ impl WorktreeBoundaryGuard {
                 continue;
             }
             let read = |name: &str| {
-                fs::read_to_string(path.join(name)).map(|text| text.trim().to_string())
+                fs::read_to_string(path.join(name))
+                    .map(|text| text.trim().to_string())
+                    .map_err(|_| invalid(&format!("missing rebase metadata '{name}'")))
             };
-            if read("head-name").ok().as_deref() != Some(expected_ref.as_str())
-                || read("orig-head").ok().as_deref() != Some(original)
-                || read("onto").ok().as_deref() != Some(target)
-                || !stopped_head_on_pin(&self.assigned_root, target)?
-            {
-                return Err(invalid());
+            let head_name = read("head-name")?;
+            if head_name != expected_ref {
+                return Err(invalid(&format!(
+                    "rebase head-name '{head_name}' does not match '{expected_ref}'"
+                )));
+            }
+            let orig_head = read("orig-head")?;
+            if orig_head != original {
+                return Err(invalid(&format!(
+                    "rebase orig-head '{orig_head}' does not match original HEAD '{original}'"
+                )));
+            }
+            let onto = read("onto")?;
+            if onto != target {
+                return Err(invalid(&format!(
+                    "rebase onto '{onto}' does not match target base '{target}'"
+                )));
+            }
+            if !stopped_head_on_pin(&self.assigned_root, target)? {
+                return Err(invalid(
+                    "stopped rebase HEAD does not descend from target base",
+                ));
             }
             let metadata = RecoveryMetadata::capture(&self.assigned_root, path)?;
             let task_scope_digest = self
@@ -179,7 +209,9 @@ impl WorktreeBoundaryGuard {
             });
             return Ok(());
         }
-        Err(invalid())
+        Err(invalid(
+            "no rebase-merge or rebase-apply directory in worktree",
+        ))
     }
 
     /// The task this recovery serves: the guard's own, else the recovery

@@ -3541,6 +3541,8 @@ struct LifecycleHost {
     validated_trees: Mutex<BTreeMap<String, orbit_engine::ValidatedTree>>,
     /// `[pr]`, `[commit]` and `[branch]` delivery settings.
     pr_config: Mutex<orbit_engine::PrConfig>,
+    /// Scripted `pr.status` answer for `pr_complete`.
+    pr_status: Mutex<Option<Value>>,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
@@ -3578,10 +3580,16 @@ impl LifecycleHost {
             provider: Some(provider.to_path_buf()),
             tasks: Mutex::new(self.tasks.lock().unwrap().clone()),
             runs: Mutex::new(self.runs.lock().unwrap().clone()),
+            history: Mutex::new(self.history.lock().unwrap().clone()),
+            pr_status: Mutex::new(self.pr_status.lock().unwrap().clone()),
             unlocked_validation: Mutex::new(self.unlocked_validation.lock().unwrap().clone()),
             generated_paths: Mutex::new(self.generated_paths.lock().unwrap().clone()),
             ..Self::default()
         }
+    }
+
+    fn set_pr_status(&self, status: Value) {
+        *self.pr_status.lock().unwrap() = Some(status);
     }
 
     fn add_task(&self, id: &str, status: TaskStatus) {
@@ -3839,7 +3847,23 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
             };
             self.record_history(task_id, entry);
         }
+        for entry in update.append_history {
+            self.record_history(task_id, entry);
+        }
         Ok(())
+    }
+
+    fn run_private_vcs_operation(
+        &self,
+        operation: &str,
+        input: Value,
+    ) -> Result<Value, OrbitError> {
+        if operation == "pr.status"
+            && let Some(status) = self.pr_status.lock().unwrap().clone()
+        {
+            return Ok(status);
+        }
+        orbit_engine::run_private_vcs_operation(operation, &input)
     }
 
     fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {

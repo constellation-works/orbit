@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::TaskComment;
-use orbit_types::workflow::ForgeUnavailableHold;
+use orbit_types::workflow::{
+    ForgeUnavailableHold, PR_AUTO_FIX_PUSHED_EVENT, PrAutoFixBlocker, PrAutoFixPush,
+    pr_auto_fix_pushes,
+};
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -40,7 +43,12 @@ pub(in crate::executor::automation) fn push_batch_changes<H: RuntimeHost + ?Size
     };
 
     match push_batch_changes_inner(host, input, &workspace_path) {
-        Ok(output) => Ok(output),
+        Ok(output) => {
+            if let Some(context) = handoff.as_ref() {
+                record_landing_push(host, context, input, &output)?;
+            }
+            Ok(output)
+        }
         Err(error) => {
             if let Some(context) = handoff.as_ref() {
                 match ForgeUnavailableHold::from_text(&error.to_string()) {
@@ -57,6 +65,81 @@ pub(in crate::executor::automation) fn push_batch_changes<H: RuntimeHost + ?Size
             Err(error)
         }
     }
+}
+
+/// Bind a before-landing reviewer push (`landing_push`) onto the PR's
+/// host-recorded published-head chain so completion conflict recovery and
+/// repair adoption authenticate the post-review head.
+fn record_landing_push<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &HandoffContext,
+    input: &Value,
+    output: &Value,
+) -> Result<(), OrbitError> {
+    let (Some(lease), Some(pr_number), Some(local_sha)) = (
+        input_string_field(input, "lease_remote_sha"),
+        input_string_field(input, "pr_number"),
+        output.get("local_sha").and_then(Value::as_str),
+    ) else {
+        return Ok(());
+    };
+    let Some(primary_task) = context.tasks.iter().map(|task| task.id.as_str()).min() else {
+        return Ok(());
+    };
+    let run_id = input_string_field(input, "run_id").unwrap_or_else(|| context.batch_id.clone());
+    record_published_pr_head(
+        host,
+        primary_task,
+        &run_id,
+        &pr_number,
+        &lease,
+        local_sha,
+        PrAutoFixBlocker::LandingReview,
+    )
+}
+
+/// Record a head this run published on the pull request.
+pub(in crate::executor::automation::vcs) fn record_published_pr_head<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_id: &str,
+    run_id: &str,
+    pr_number: &str,
+    from_head_sha: &str,
+    to_head_sha: &str,
+    blocker: PrAutoFixBlocker,
+) -> Result<(), OrbitError> {
+    if from_head_sha == to_head_sha || host.worker_invocation().is_some() {
+        return Ok(());
+    }
+    let push = PrAutoFixPush {
+        pr_number: pr_number.to_string(),
+        from_head_sha: from_head_sha.to_string(),
+        to_head_sha: to_head_sha.to_string(),
+        blocker,
+        run_id: run_id.to_string(),
+    };
+    if pr_auto_fix_pushes(&host.get_task_history(task_id)?, pr_number).contains(&push) {
+        return Ok(());
+    }
+    let note = serde_json::to_string(&push).map_err(|error| {
+        OrbitError::Execution(format!("auto_fix: published head not recorded: {error}"))
+    })?;
+    host.apply_task_automation_update(
+        task_id,
+        TaskAutomationUpdate {
+            append_history: vec![orbit_types::task::TaskHistoryEntry {
+                at: Utc::now(),
+                by: "system".to_string(),
+                event: PR_AUTO_FIX_PUSHED_EVENT.to_string(),
+                note: Some(note),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            }],
+            ..TaskAutomationUpdate::default()
+        },
+    )
 }
 
 /// Tell the task's readers once per batch that its push is held for the
