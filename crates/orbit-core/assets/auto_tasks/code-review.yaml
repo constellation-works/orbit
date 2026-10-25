@@ -167,7 +167,12 @@ template:
       contributing guide, standards documents and lint configuration;
     - tests that do not test what they claim: assertions that cannot fail,
       fixtures that bypass the code under test, names that promise behavior
-      the body never exercises.
+      the body never exercises;
+    - documentation and skill claims: for each documentation or skill sentence
+      in the reviewed range that states a limit, default, config key, flag,
+      ordering, or error behavior, open the source it describes and confirm
+      the sentence; for each behavior change, search `docs/`, `website/`, and
+      `crates/orbit-core/assets/skills/` for the old claim.
 
     If full reading of a selected module cannot be met, do not record that
     module as reviewed and do not claim a clean no-op for it: return
