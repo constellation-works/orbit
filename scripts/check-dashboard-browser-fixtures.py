@@ -15,7 +15,10 @@ geometry against a changed layout still needs the browser run itself.
 
 This is a lexical guard, not a JavaScript parser: only literal hooks in
 string/template literals (plus ``getElementById`` and ``dataset.*``
-lookups) are extracted. Computed selectors and paths are skipped. An id or
+lookups) are extracted. A ``getElementById`` probe is exempt only when the
+fixture asserts the element absent (compared with null, ``assert.ok(!...)``,
+or a Boolean asserted false); ``Boolean(...)``/``!!`` alone are queries.
+Computed selectors and paths are skipped. An id or
 class the assets build from a template (``id = `detail-${task.id}```,
 ``class: `chip chip-${tone}```) satisfies only a fixture hook of that kind
 that the whole template can produce.
@@ -216,6 +219,39 @@ def camel_to_kebab(name):
 NEGATIVE_COUNT_RE = re.compile(r"\.count\(\)[^\n]*(?:,\s*0\b|===\s*0|==\s*0)")
 
 
+ASSERT_CALL = r"\bassert(?:\.\w+)?\(\s*"
+ASSERT_EQUAL_CALL = r"\bassert\.(?:equal|strictEqual|deepEqual|deepStrictEqual)\(\s*"
+RECEIVER = r"(?:[A-Za-z_$][\w$]*\.)?"
+
+
+def is_asserted_absent(source, match):
+    """True when a getElementById probe is a proven absence check.
+
+    Only a call whose result is asserted missing qualifies: compared
+    with null/undefined, negated once directly under an assert, or
+    wrapped in Boolean(...)/!! and asserted false. A bare Boolean(...),
+    ``!!`` or ``!`` is a positive or property probe
+    (``!document.getElementById('x').disabled`` needs the element), so
+    it stays a query.
+    """
+    before = source[max(0, match.start() - 160):match.start()]
+    closing = re.match(r"\s*\)", source[match.end():])
+    if not closing:
+        return False
+    rest = source[match.end() + closing.end():][:160]
+    if re.match(r"\s*===?\s*(?:null|undefined)\b", rest):
+        return True
+    if re.search(ASSERT_CALL + rf"!\s*{RECEIVER}$", before):
+        return bool(re.match(r"\s*[,)]", rest))
+    if re.search(ASSERT_EQUAL_CALL + rf"{RECEIVER}$", before):
+        return bool(re.match(r"\s*,\s*(?:null|undefined)\b", rest))
+    if re.search(ASSERT_EQUAL_CALL + rf"!!\s*{RECEIVER}$", before):
+        return bool(re.match(r"\s*,\s*false\b", rest))
+    if re.search(ASSERT_EQUAL_CALL + rf"Boolean\(\s*{RECEIVER}$", before):
+        return bool(re.match(r"\s*\)\s*,\s*false\b", rest))
+    return False
+
+
 def extract_hooks(source):
     """Return (singles, selector_groups) queried in one fixture.
 
@@ -235,9 +271,8 @@ def extract_hooks(source):
         token = match.group(1)
         if "$" in token:
             continue  # templated id, not a literal hook
-        before = source[source.rfind("\n", 0, match.start()) + 1:match.start()]
-        if re.search(r"(?:!!|!)\s*(?:[A-Za-z_$][\w$]*\.)?$", before.rstrip()) or "Boolean(" in before:
-            continue  # existence probe asserted absent, not a query for it
+        if is_asserted_absent(source, match):
+            continue  # intentional absence check, not a query for it
         singles.append((line_of(match.start()), "id", token))
     for match in DATASET_RE.finditer(source):
         token = "data-" + camel_to_kebab(match.group(1))

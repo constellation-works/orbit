@@ -109,16 +109,16 @@ try {
     const warnShown = !!(warn && !warn.hidden && warn.getClientRects().length);
     const codex = document.querySelector('#provider-usage-chips .gating-off');
     return {
-      hostChips: !!document.getElementById('host-resource-chips'),
-      hostName: !!document.getElementById('host-resource-name'),
+      hostChipsAbsent: document.getElementById('host-resource-chips') === null,
+      hostNameAbsent: document.getElementById('host-resource-name') === null,
       dividerShown: divider.content !== 'none' && parseFloat(divider.width) > 0,
       warnShown,
       after: warnShown ? usage.left > warn.getBoundingClientRect().right : true,
       dashed: getComputedStyle(codex).borderStyle,
     };
   });
-  assert.equal(layout.hostChips, false, 'host readings are not chips in the top bar');
-  assert.equal(layout.hostName, false, 'the top bar does not name the host');
+  assert.equal(layout.hostChipsAbsent, true, 'host readings are not chips in the top bar');
+  assert.equal(layout.hostNameAbsent, true, 'the top bar does not name the host');
   assert.equal(layout.dividerShown, layout.warnShown, 'a divider sets provider usage apart only while the host warning chip is shown');
   assert.equal(layout.after, true, 'provider usage sits to the right of the host warning chip');
   assert.equal(layout.dashed, 'dashed', 'a gating-off provider has a dashed border');
