@@ -19,6 +19,7 @@ const NON_IMPLEMENTER_ACTIVITIES: &[&str] = &[
     "review_reconciliation_review",
     "step_failure_recovery",
     "task_pilot",
+    "triage_escalation",
     "verify_finding",
 ];
 
