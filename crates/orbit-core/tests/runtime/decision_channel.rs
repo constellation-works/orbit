@@ -964,6 +964,63 @@ fn a_changed_proposal_supersedes_its_request_and_the_digest_raises_a_fresh_one()
     assert_eq!(fx.status(&task), TaskStatus::Proposed);
 }
 
+/// A superseded request stays superseded: restoring the text it was raised
+/// against, or returning to its status, never reopens it.
+#[test]
+fn a_superseded_proposal_request_stays_superseded_after_the_task_is_restored() {
+    let fx = fixture();
+    fx.register();
+    let task = fx.proposed_task("Round-trip proposal");
+    let first = fx.digest(Fixture::plugin_caller()).unwrap().raised[0].clone();
+    let state_of = |id: &str| {
+        fx.requests(&task)
+            .into_iter()
+            .find(|request| request.id == id)
+            .unwrap()
+            .state
+    };
+
+    // Edit the criteria and put them back.
+    fx.update(json!({"id": task, "acceptance_criteria": ["It is decided differently."]}));
+    assert_eq!(state_of(&first.id), DecisionRequestState::Superseded);
+    fx.update(json!({"id": task, "acceptance_criteria": ["It is decided."]}));
+    assert_eq!(state_of(&first.id), DecisionRequestState::Superseded);
+    assert!(
+        fx.requests(&task)
+            .iter()
+            .all(|request| request.state != DecisionRequestState::Open)
+    );
+
+    // Edit the description and put it back.
+    fx.update(json!({"id": task, "description": "A rewritten proposal."}));
+    fx.update(json!({"id": task, "description": "A proposed task awaiting approval."}));
+    assert_eq!(state_of(&first.id), DecisionRequestState::Superseded);
+
+    // The next digest raises a fresh request; a fresh request stays open and
+    // idempotent while nothing changes.
+    let second = fx.digest(Fixture::plugin_caller()).unwrap().raised[0].clone();
+    assert_ne!(second.id, first.id);
+    assert_eq!(state_of(&second.id), DecisionRequestState::Open);
+    assert_eq!(state_of(&first.id), DecisionRequestState::Superseded);
+    assert!(
+        fx.digest(Fixture::plugin_caller())
+            .unwrap()
+            .raised
+            .is_empty()
+    );
+
+    // Leave `proposed` and come back.
+    fx.update(json!({"id": task, "status": "backlog"}));
+    assert_eq!(state_of(&second.id), DecisionRequestState::Superseded);
+    fx.update(json!({"id": task, "status": "proposed"}));
+    assert_eq!(fx.status(&task), TaskStatus::Proposed);
+    assert_eq!(state_of(&second.id), DecisionRequestState::Superseded);
+    assert_eq!(state_of(&first.id), DecisionRequestState::Superseded);
+    let third = fx.digest(Fixture::plugin_caller()).unwrap().raised[0].clone();
+    assert_ne!(third.id, second.id);
+    assert_eq!(state_of(&third.id), DecisionRequestState::Open);
+}
+
 #[test]
 fn a_review_approval_binds_to_the_candidate_and_supersedes_on_replacement() {
     use orbit_types::task::{TaskDecision, TaskHistoryEntry};
@@ -975,6 +1032,7 @@ fn a_review_approval_binds_to_the_candidate_and_supersedes_on_replacement() {
     fx.update(json!({"id": task, "status": "in_progress"}));
     fx.update(json!({"id": task, "status": "review"}));
     assert_eq!(fx.status(&task), TaskStatus::Review);
+    let fx_description = fx.runtime.get_task(&task).unwrap().description;
 
     let hold_candidate = |head: &str| {
         let held = HeldCandidate {
@@ -1056,6 +1114,36 @@ fn a_review_approval_binds_to_the_candidate_and_supersedes_on_replacement() {
         );
     };
     assert_eq!(candidate.as_deref(), Some("candidate-b"));
+
+    // Holding the first candidate again does not revive its request.
+    hold_candidate("candidate-a");
+    let states: Vec<_> = fx
+        .requests(&task)
+        .into_iter()
+        .map(|request| (request.id, request.state))
+        .collect();
+    assert!(states.contains(&(first.id.clone(), DecisionRequestState::Superseded)));
+    assert!(states.contains(&(second.id.clone(), DecisionRequestState::Superseded)));
+
+    // A spec round trip on a review task supersedes its request for good.
+    let third = fx
+        .digest(Fixture::plugin_caller())
+        .unwrap()
+        .raised
+        .into_iter()
+        .find(|request| request.task_id == task)
+        .expect("the digest raises a fresh request for the restored candidate");
+    assert_eq!(third.state, DecisionRequestState::Open);
+    fx.update(json!({"id": task, "description": "Review text changed."}));
+    fx.update(json!({"id": task, "description": fx_description}));
+    assert_eq!(
+        fx.requests(&task)
+            .into_iter()
+            .find(|request| request.id == third.id)
+            .unwrap()
+            .state,
+        DecisionRequestState::Superseded
+    );
 }
 
 #[test]

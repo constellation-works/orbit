@@ -16,7 +16,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    ContextFilesWidening, RegressionRiskMarks, TagsChanged, Task, TaskHistoryEntry, TaskStatus,
+    ACCEPTANCE_CRITERIA_DOCUMENT, ContextFilesWidening, DESCRIPTION_DOCUMENT, RegressionRiskMarks,
+    TASK_FIELDS_UPDATED_EVENT, TagsChanged, Task, TaskHistoryEntry, TaskStatus,
+    task_fields_updated_documents,
 };
 use crate::workflow::{FlakyValidation, HeldCandidate, KnownRedValidation, ReviewGateHistoryNote};
 
@@ -651,17 +653,47 @@ impl DecisionBinding {
 /// candidate, as for a review task whose candidate lives only in its
 /// pull request.
 pub fn current_candidate_identity(history: &[TaskHistoryEntry]) -> Option<String> {
-    history.iter().rev().find_map(|entry| {
-        if let Some(held) = HeldCandidate::from_entry(entry) {
-            return Some(held.head_sha);
-        }
-        entry
-            .note
-            .as_deref()
-            .and_then(ReviewGateHistoryNote::from_text)
-            .and_then(|note| note.candidate)
-            .filter(|candidate| !candidate.is_empty())
-    })
+    history.iter().rev().find_map(entry_candidate_identity)
+}
+
+/// The candidate one history entry names, if it names one.
+fn entry_candidate_identity(entry: &TaskHistoryEntry) -> Option<String> {
+    if let Some(held) = HeldCandidate::from_entry(entry) {
+        return Some(held.head_sha);
+    }
+    entry
+        .note
+        .as_deref()
+        .and_then(ReviewGateHistoryNote::from_text)
+        .and_then(|note| note.candidate)
+        .filter(|candidate| !candidate.is_empty())
+}
+
+/// Whether `history` records a change after `request` was raised that
+/// permanently invalidates its [`DecisionBinding::TaskRevision`]: an edit to
+/// the description or acceptance criteria, a status move, or a different
+/// candidate. Superseded is terminal, so restoring the earlier text, status or
+/// candidate does not revive the request. The request's own raise and
+/// bookkeeping entries (comments, plan or summary writes) change none of these.
+fn task_revision_changed_since(request: &DecisionRequest, history: &[TaskHistoryEntry]) -> bool {
+    let DecisionBinding::TaskRevision { candidate, .. } = &request.binding else {
+        return false;
+    };
+    history
+        .iter()
+        .filter(|entry| entry.at > request.raised_at)
+        .any(|entry| {
+            entry.to_status.is_some()
+                || (entry.event == TASK_FIELDS_UPDATED_EVENT
+                    && entry.note.as_deref().is_some_and(|note| {
+                        task_fields_updated_documents(note).iter().any(|document| {
+                            *document == DESCRIPTION_DOCUMENT
+                                || *document == ACCEPTANCE_CRITERIA_DOCUMENT
+                        })
+                    }))
+                || entry_candidate_identity(entry)
+                    .is_some_and(|identity| candidate.as_deref() != Some(identity.as_str()))
+        })
 }
 
 /// What an applied answer recorded on a [`DecisionRequest`].
@@ -863,6 +895,9 @@ impl PilotAdmissionVerdict {
 /// own resolution) records one, `expired` once its expiry passes, and
 /// `superseded` when its binding is no longer current or a newer request
 /// for the same task follows it. At most one request per task reads as `open`.
+/// An approval ([`DecisionBinding::TaskRevision`]) is superseded for good by a
+/// description or criteria edit, status move or candidate change after its
+/// raise, so restoring the earlier state does not reopen it.
 ///
 /// Supply the current task and its history. `pilot_operation` is the latest
 /// assessment operation id only while its admission hold still applies;
@@ -935,6 +970,7 @@ pub fn decision_requests_from_history(
         } else if request.resolution.is_some() || request.state == DecisionRequestState::Answered {
             request.state = DecisionRequestState::Answered;
         } else if !binding_current(request)
+            || task_revision_changed_since(request, history)
             || task_ids
                 .iter()
                 .skip(index + 1)
