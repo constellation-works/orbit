@@ -388,11 +388,24 @@ spec:
     - **Native OS.** When a criterion needs execution or evidence on a specific
       native OS (a real macOS launch or sandbox-exec result, a Linux Bubblewrap
       result, a native Windows integration check, a Linux-only semantic
-      extraction), add `{"criterion":N,"os":"macos|linux|windows","evidence":"..."}`
-      to `required_os`, even when the task already has the tag. The criterion
+      extraction, or running, listing or discovering an item gated by
+      `#[cfg(target_os = "<os>")]`), add
+      `{"criterion":N,"os":"macos|linux|windows","evidence":"..."}` to
+      `required_os`, even when the task already has the tag. The criterion
       text must name one of mac, macos, darwin, seatbelt, sandbox-exec, linux,
-      bwrap, bubblewrap, windows, launchd, systemd, keychain or cgroup;
-      otherwise leave `required_os` empty. A host requirement stated only in
+      bwrap, bubblewrap, windows, launchd, systemd, keychain or cgroup, or the
+      evidence must cite a cfg gate you verified in the pinned source. A
+      criterion that names none of those tokens still justifies an entry when
+      its evidence cites one `#[cfg(target_os = "<os>")]` at one
+      repository-relative `path:line`, that line in the pinned source is that
+      attribute, the attribute applies to an item the criterion names, and
+      the entry's `os` is that OS. Cite the attribute, the `path:line` and the
+      item, and no other `#[cfg(...)]` attribute. Leave `required_os` empty
+      when the criterion names no OS token and the evidence does not cite
+      such a gate: a portable test or command, a gate on an item the criterion
+      does not name, an `os` that differs from the gate, a path or line the
+      pinned source does not confirm, or a `cfg(unix)` / `cfg(not(windows))`
+      gate that does not determine one OS. A host requirement stated only in
       `utility_warnings` routes nothing. If the task's existing `os:` tag names
       a different OS, also report the conflict in `utility_warnings`, citing the
       criterion. Requirements on several OSes add no tag, since several `os:`

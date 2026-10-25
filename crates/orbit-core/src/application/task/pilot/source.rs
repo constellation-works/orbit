@@ -215,6 +215,49 @@ impl SourceSnapshot {
         Ok(Some(output.stdout.lines().count()))
     }
 
+    /// Text of the blob at repository-relative `path` at the pinned revision.
+    ///
+    /// `None` when the path is not a safe repository-relative blob path or no
+    /// blob is there. A `:` is rejected so the `revision:path` spec cannot
+    /// be split into a different object. Oversized or binary blobs are an
+    /// error: a cfg-gate check must not treat them as missing.
+    pub(crate) fn file_text(
+        &self,
+        action: &str,
+        workspace: &Path,
+        path: &str,
+    ) -> Result<Option<String>, DispatchError> {
+        if git_tree_path(Path::new(path)).as_deref() != Some(path) || path.contains(':') {
+            return Ok(None);
+        }
+        if self.path_kind(action, workspace, Path::new(path))? != GitPathKind::Blob {
+            return Ok(None);
+        }
+        let output = git(
+            action,
+            workspace,
+            &[
+                "cat-file",
+                "blob",
+                &format!("{}:{path}", self.source_revision),
+            ],
+        )?;
+        if !output.success {
+            return Err(DispatchError::action_failed(
+                action,
+                format!("read {path} at the pinned source: {}", output.stderr.trim()),
+            ));
+        }
+        const MAX_BYTES: usize = 2_000_000;
+        if output.stdout.len() > MAX_BYTES || output.stdout.contains('\0') {
+            return Err(DispatchError::action_failed(
+                action,
+                format!("read {path} at the pinned source: file is not a source text file"),
+            ));
+        }
+        Ok(Some(output.stdout))
+    }
+
     pub(crate) fn path_kind(
         &self,
         action: &str,

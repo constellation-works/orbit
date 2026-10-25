@@ -264,8 +264,15 @@ fn assess(
         }
     };
     let criteria = current.acceptance_criteria.len();
-    let native_os = required_os(action, task_id, &assessment, &current.acceptance_criteria)
-        .map_err(refused(task_id, "invalid"))?;
+    let native_os = required_os(
+        action,
+        task_id,
+        &assessment,
+        &current.acceptance_criteria,
+        context.workspace_root,
+        context.source,
+    )
+    .map_err(refused(task_id, "invalid"))?;
     let native_machine = required_machine(
         action,
         task_id,
