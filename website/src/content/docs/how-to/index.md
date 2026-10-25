@@ -21,6 +21,10 @@ agent can do most of them for you with the bundled `orbit-setup` or
     <h3>Use the Claude Code Mod</h3>
     <p>Act on tasks from the prompt band, inspect the board, preflight ships, and track PR runs in Claude Code.</p>
   </a>
+  <a class="orbit-card" href="./desktop/">
+    <h3>Use the Desktop App</h3>
+    <p>Supervise the dashboard server, manage the system tray, and follow fleet notifications in a native window.</p>
+  </a>
   <a class="orbit-card" href="./continuous-delivery/">
     <h3>Run a Delivery Window</h3>
     <p>Prepare the backlog, drain it for a set time, retune or stop the window, and recover failed runs.</p>
