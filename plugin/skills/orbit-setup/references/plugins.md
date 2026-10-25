@@ -388,6 +388,107 @@ orbit plugin secret rm <ns> refresh_token
                                         "expected_version": "<context.secrets.refresh_token.version>"}}}
   ```
 
+## Decision channels
+
+A decision channel lets one plugin submit a human's answer to an open
+decision request on held work. The channel is registered per host and binds
+three things together: a channel name, the human identity the channel speaks
+for, and the plugin namespace allowed to submit through it. When the plugin
+presents the per-request single-use token minted for that request under the
+channel's key, core applies the answer as the registered human and records
+the channel and the token fingerprint as provenance. What a decision request
+is, and how held work raises one, is described in
+[run-debugging.md](../../orbit-orchestrate/references/run-debugging.md#decision-requests-on-held-work);
+this section covers only the channel side: registering, listing, revoking
+and rotating a channel, and the plugin-only submit path.
+
+Channel management is an operator job on this host. `orbit decision channel
+register`, `list`, `revoke` and `rotate-key` are operator CLI commands; the
+matching tools (`orbit.decision.channel_register`, `orbit.decision.channel_list`,
+`orbit.decision.channel_revoke`, `orbit.decision.channel_rotate_key`) are
+inactive with no MCP scope, so they are never reachable from a tool call.
+Agents cannot register channels or submit answers: registering is refused
+from an agent envelope and from any plugin callback, and submitting is never
+callable from an agent session.
+
+```bash
+orbit decision channel register <channel> --human <human> --plugin <plugin>
+orbit decision channel register <channel> --human <human> --plugin <plugin> \
+  --allow-sender <sender> --allow-sender <other-sender>
+orbit decision channel list
+orbit decision channel revoke <channel>
+orbit decision channel rotate-key <channel>
+```
+
+- `register` needs the channel name plus `--human` (the human identity
+  answers are written under) and `--plugin` (the plugin namespace allowed to
+  submit through this channel). `--allow-sender` is optional and repeatable:
+  when any senders are registered, a submission must present one of them.
+  Registration generates the channel key, mirrors it to the bound plugin's
+  `channel_key` secret, and starts key epoch 1.
+- `list` shows each channel's name, human, bound plugin, key epoch and
+  fingerprint, allowed senders, and whether it is revoked. Key material is
+  never shown.
+- `revoke` takes effect immediately: outstanding tokens stop verifying and
+  every submission through the channel is refused `channel_revoked`.
+- `rotate-key` generates a fresh key, mirrors it to the bound plugin's
+  `channel_key` secret, and bumps the key epoch. Every outstanding token is
+  invalidated — a token minted under the previous epoch is refused even while
+  its request is still open — and open requests wait to be re-presented under
+  fresh tokens.
+
+The plugin submits through the governed `orbit.decision.submit` path: only
+the plugin the channel is bound to, through its callback session, or the
+operator testing a channel. The CLI form is:
+
+```bash
+orbit decision submit <request-id> <answer-id> --channel <channel> --token <token>
+orbit decision submit <request-id> <answer-id> --channel <channel> --token <token> \
+  --note "<evidence>" --sender <sender> --auth-results "<header-value>"
+```
+
+`<request-id>` is the id `orbit decision list` prints and `<answer-id>` is
+one of the request's allowed answers. `--note` is evidence kept with the
+answer (a pilot-admission `evaluated` answer is refused without one).
+`--sender` is the transport sender the submission presents as evidence: a
+plugin submission must present one, and it must be on the channel's
+allowlist when the channel has one; the operator's own test submission may
+omit it. `--auth-results` is the forwarded Authentication-Results header: a
+plugin submission must forward one showing `dkim=pass` and `spf=pass`, and is
+refused on `dmarc=fail`; the operator's own test submission may omit it. The
+tool form takes the same fields as `id`, `channel`, `answer`, `token`,
+`note`, `sender` and `auth_results`. Never paste a real token or key into an
+example, a task record or a shell history file; the examples above use
+placeholders only.
+
+Every refusal applies nothing. A parse-level refusal does not consume the
+token. The refusal codes are:
+
+| Code | What it means |
+|---|---|
+| `channel_not_registered` | No channel by that name is registered on this host. |
+| `channel_revoked` | The channel is revoked; its tokens no longer verify. |
+| `caller_not_allowed` | The caller is neither the bound plugin through its callback session nor the operator testing the channel. |
+| `sender_not_allowed` | The presented sender is not on the channel's sender allowlist. |
+| `authentication_failed` | Transport authentication evidence is missing or failing. |
+| `token_invalid` | The token does not verify for this request, channel and key epoch (for example after a rotation). |
+| `token_consumed` | The token was already used; tokens are single-use. |
+| `request_expired` | The request expired while open. |
+| `request_superseded` | The hold changed before the answer arrived. |
+| `answer_not_allowed` | The answer id is not one of the request's allowed answers. |
+| `request_not_found` | No decision request has that id. |
+
+Verify a channel without spending a real answer:
+
+1. `orbit decision channel list` shows the channel with the expected human,
+   bound plugin, key epoch and fingerprint, and (when set) the allowed
+   senders. A revoked channel reads revoked here.
+2. Exercise the refusal path with a bad submit — for example a channel name
+   that is not registered, or a revoked channel — and confirm the matching
+   refusal code above. Because every refusal applies nothing, the open
+   request is untouched; re-list the request to confirm it is still open
+   before the real answer goes through the bound plugin.
+
 ## Backends
 
 | `backend.type` | How Orbit runs it |
