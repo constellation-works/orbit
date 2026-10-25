@@ -2,7 +2,7 @@
 title: Automation Triggers — Vision
 owner: codex
 last_updated: 2026-10-13
-last_validated: 2026-10-20
+last_validated: 2026-10-24
 status: Draft
 feature: automation-triggers
 doc_role: vision
