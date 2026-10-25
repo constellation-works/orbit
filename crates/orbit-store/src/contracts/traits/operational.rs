@@ -90,6 +90,35 @@ pub trait RoutineStoreBackend: Send + Sync {
         routine_name: &str,
         limit: usize,
     ) -> Result<Vec<RoutineFireRecord>, OrbitError>;
+    /// Cursors for `names`, keyed by routine name; absent names are missing.
+    fn routine_cursors_for(
+        &self,
+        names: &[String],
+    ) -> Result<BTreeMap<String, RoutineCursor>, OrbitError> {
+        let mut cursors = BTreeMap::new();
+        for name in names {
+            if let Some(cursor) = self.routine_cursor(name)? {
+                cursors.insert(name.clone(), cursor);
+            }
+        }
+        Ok(cursors)
+    }
+    /// Recent fires for `names` (newest first, at most `limit` per routine),
+    /// keyed by routine name; routines without fires are missing.
+    fn routine_recent_fires_for(
+        &self,
+        names: &[String],
+        limit: usize,
+    ) -> Result<BTreeMap<String, Vec<RoutineFireRecord>>, OrbitError> {
+        let mut fires = BTreeMap::new();
+        for name in names {
+            let recent = self.routine_recent_fires(name, limit)?;
+            if !recent.is_empty() {
+                fires.insert(name.clone(), recent);
+            }
+        }
+        Ok(fires)
+    }
     fn routine_pause(&self, routine_name: &str, actor: &str) -> Result<bool, OrbitError>;
     fn routine_resume(&self, routine_name: &str) -> Result<bool, OrbitError>;
     fn routine_pauses(&self) -> Result<BTreeMap<String, RoutinePauseRecord>, OrbitError>;

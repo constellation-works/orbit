@@ -422,6 +422,19 @@ pub fn routine_statuses_with_providers(
     load_errors.append(&mut collection.errors);
 
     let pauses = store.routine_pauses()?;
+    // One query each for every routine's cursor and fire history, instead of
+    // two store reads per routine on the dashboard's poll path.
+    let routine_names: Vec<String> = collection
+        .routines
+        .iter()
+        .map(|routine| routine.definition.name.clone())
+        .collect();
+    let cursors = store.routine_cursors_for(&routine_names)?;
+    let fires_by_routine = store.routine_recent_fires_for(&routine_names, FIRE_HISTORY_LIMIT)?;
+    tracing::debug!(
+        elapsed_ms = started.elapsed().as_millis(),
+        "routine status fire history and cursors loaded"
+    );
     let now = now_utc.with_timezone(&Local);
 
     let mut statuses = Vec::with_capacity(collection.routines.len());
@@ -434,9 +447,13 @@ pub fn routine_statuses_with_providers(
         .collect();
     for (routine, duplicate_owner) in collection.routines.into_iter().zip(duplicate_owners) {
         let next_due = next_scheduled_occurrence(&routine.definition.trigger.cron, &now);
-        let cron_fires =
-            store.routine_recent_fires(&routine.definition.name, FIRE_HISTORY_LIMIT)?;
-        let cursor = store.routine_cursor(&routine.definition.name)?;
+        // Keyed by name alone, as the per-routine reads were: duplicate
+        // definitions of one name share its cursor and fire history.
+        let cron_fires = fires_by_routine
+            .get(&routine.definition.name)
+            .cloned()
+            .unwrap_or_default();
+        let cursor = cursors.get(&routine.definition.name).cloned();
         let paused_at = pauses
             .get(&routine.definition.name)
             .map(|pause| pause.paused_at.clone());

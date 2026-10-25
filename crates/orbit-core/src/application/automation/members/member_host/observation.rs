@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use orbit_automation::AutomationError;
 use orbit_automation::members::{MemberHost, MemberPage};
 use orbit_store::contracts::TaskListFilter;
-use orbit_types::task::TaskType;
+use orbit_types::task::{TaskStatus, TaskType};
 use orbit_types::workflow::automation::members::{StateMember, StateTriggerKind, bundle_crew};
 use serde_json::json;
 
@@ -25,16 +25,72 @@ impl Host<'_> {
             .transpose()
             .map_err(|e| AutomationError::Evidence(format!("invalid task continuation: {e}")))?;
 
-        let tasks = self.runtime.task_candidates(
-            &TaskListFilter {
-                scan_before,
-                statuses: Some(self.observed_statuses()),
-                task_type: (self.trigger.kind == StateTriggerKind::FindingUnverified)
-                    .then_some(TaskType::Bug),
-                ..Default::default()
-            },
-            50,
-        )?;
+        let filter = TaskListFilter {
+            scan_before,
+            statuses: Some(self.observed_statuses()),
+            task_type: (self.trigger.kind == StateTriggerKind::FindingUnverified)
+                .then_some(TaskType::Bug),
+            ..Default::default()
+        };
+        // With a shared cache, one snapshot of the workspace's observed
+        // statuses serves every routine in the request: each page (statuses,
+        // type, cursor, limit, canonical order) is derived from it in
+        // memory, exactly as the store's in-memory selection derives it.
+        // Every observed status is in the snapshot's status set.
+        const SNAPSHOT_STATUSES: [TaskStatus; 4] = [
+            TaskStatus::Proposed,
+            TaskStatus::Backlog,
+            TaskStatus::Someday,
+            TaskStatus::Blocked,
+        ];
+        let tasks = match self.inspection_cache {
+            Some(cache)
+                if filter
+                    .statuses
+                    .as_ref()
+                    .is_some_and(|values| values.iter().all(|s| SNAPSHOT_STATUSES.contains(s))) =>
+            {
+                let snapshot = cache.task_snapshot(
+                    &self.runtime.shared_root().display().to_string(),
+                    || {
+                        Ok(self
+                            .runtime
+                            .task_candidates(
+                                &TaskListFilter {
+                                    statuses: Some(SNAPSHOT_STATUSES.to_vec()),
+                                    ..Default::default()
+                                },
+                                usize::MAX,
+                            )?
+                            .items)
+                    },
+                )?;
+                let mut items: Vec<_> = snapshot
+                    .into_iter()
+                    .filter(|task| {
+                        filter
+                            .statuses
+                            .as_ref()
+                            .is_none_or(|values| values.contains(&task.status))
+                            && filter.task_type.is_none_or(|value| task.task_type == value)
+                    })
+                    .collect();
+                let total_without_cursor = items.len();
+                if let Some((at, id)) = &filter.scan_before {
+                    items.retain(|task| {
+                        task.created_at < *at || (task.created_at == *at && task.id > *id)
+                    });
+                }
+                let total = items.len();
+                items.truncate(50);
+                orbit_store::contracts::TaskCandidates {
+                    items,
+                    total,
+                    total_without_cursor,
+                }
+            }
+            _ => self.runtime.task_candidates(&filter, 50)?,
+        };
 
         let next = if tasks.total > tasks.items.len() {
             tasks
@@ -54,14 +110,25 @@ impl Host<'_> {
         let mut withheld = BTreeMap::new();
 
         let active_preparations = match self.trigger.kind {
-            StateTriggerKind::PreparationEligible => {
-                preparation::active_task_pilot_preparations(self.runtime)?
-            }
-            StateTriggerKind::FindingUnverified => {
-                preparation::active_finding_verifications(self.runtime)?
-            }
+            StateTriggerKind::PreparationEligible => match self.inspection_cache {
+                Some(cache) => cache.preparations("task_pilot", || {
+                    preparation::active_task_pilot_preparations(self.runtime)
+                })?,
+                None => preparation::active_task_pilot_preparations(self.runtime)?,
+            },
+            StateTriggerKind::FindingUnverified => match self.inspection_cache {
+                Some(cache) => cache.preparations("finding_verification", || {
+                    preparation::active_finding_verifications(self.runtime)
+                })?,
+                None => preparation::active_finding_verifications(self.runtime)?,
+            },
             StateTriggerKind::PilotWarningsHeld | StateTriggerKind::BlockEscalated => {
-                preparation::active_escalation_triages(self.runtime)?
+                match self.inspection_cache {
+                    Some(cache) => cache.preparations("escalation_triage", || {
+                        preparation::active_escalation_triages(self.runtime)
+                    })?,
+                    None => preparation::active_escalation_triages(self.runtime)?,
+                }
             }
             StateTriggerKind::ExecutionFailed => BTreeMap::new(),
         };
@@ -72,7 +139,10 @@ impl Host<'_> {
             .flatten();
 
         for envelope in tasks.items {
-            let task = self.runtime.get_task(&envelope.id)?;
+            let task = match self.inspection_cache {
+                Some(cache) => cache.task(&envelope.id, || self.runtime.get_task(&envelope.id))?,
+                None => self.runtime.get_task(&envelope.id)?,
+            };
 
             match self.trigger.kind {
                 StateTriggerKind::PreparationEligible => {

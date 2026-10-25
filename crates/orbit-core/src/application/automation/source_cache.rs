@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use orbit_automation::{AutomationError, DeferredReason};
+use orbit_common::OrbitError;
+use orbit_types::task::Task;
 use orbit_types::workflow::automation::SourceRevision;
 
 type HeadKey = (PathBuf, String, String);
@@ -18,11 +20,21 @@ type Cached<T> = Result<T, DeferredReason>;
 /// scoped to a checkout and request. Provider responses can be
 /// reused across independent clones of the same provider repository. Failures
 /// are shared too, so an unavailable source is attempted only once per tick.
+type Preparations = std::collections::BTreeMap<String, std::collections::BTreeSet<String>>;
+
 #[derive(Default)]
 pub(crate) struct SourceCache {
     heads: RefCell<BTreeMap<HeadKey, Cached<SourceRevision>>>,
     lookups: RefCell<BTreeMap<LookupKey, Cached<String>>>,
     inspections: RefCell<BTreeMap<InspectionKey, Cached<InspectionHead>>>,
+    // Request-scoped task snapshot shared by the state routines inspected in
+    // one status request: the same workspace population and hydrated tasks
+    // serve every routine instead of one scan and hydration per routine.
+    // Only a status inspection populates it; it lives for one request, so a
+    // later request re-reads the store.
+    task_snapshots: RefCell<BTreeMap<String, Vec<orbit_types::task::TaskEnvelopeV2>>>,
+    tasks: RefCell<BTreeMap<String, Task>>,
+    preparations: RefCell<BTreeMap<&'static str, Preparations>>,
 }
 
 impl SourceCache {
@@ -48,6 +60,51 @@ impl SourceCache {
             (git_dir, repository.into(), branch.into()),
             fetch,
         )
+    }
+
+    /// Task envelopes of one workspace in the observed statuses, fetched once
+    /// per request; each routine's page is derived from this snapshot.
+    pub(super) fn task_snapshot(
+        &self,
+        workspace: &str,
+        fetch: impl FnOnce() -> Result<Vec<orbit_types::task::TaskEnvelopeV2>, OrbitError>,
+    ) -> Result<Vec<orbit_types::task::TaskEnvelopeV2>, OrbitError> {
+        if let Some(snapshot) = self.task_snapshots.borrow().get(workspace) {
+            return Ok(snapshot.clone());
+        }
+        let snapshot = fetch()?;
+        self.task_snapshots
+            .borrow_mut()
+            .insert(workspace.to_string(), snapshot.clone());
+        Ok(snapshot)
+    }
+
+    pub(super) fn task(
+        &self,
+        id: &str,
+        fetch: impl FnOnce() -> Result<Task, OrbitError>,
+    ) -> Result<Task, OrbitError> {
+        if let Some(task) = self.tasks.borrow().get(id) {
+            return Ok(task.clone());
+        }
+        let task = fetch()?;
+        self.tasks.borrow_mut().insert(id.to_string(), task.clone());
+        Ok(task)
+    }
+
+    pub(super) fn preparations(
+        &self,
+        kind: &'static str,
+        fetch: impl FnOnce() -> Result<Preparations, OrbitError>,
+    ) -> Result<Preparations, OrbitError> {
+        if let Some(preparations) = self.preparations.borrow().get(kind) {
+            return Ok(preparations.clone());
+        }
+        let preparations = fetch()?;
+        self.preparations
+            .borrow_mut()
+            .insert(kind, preparations.clone());
+        Ok(preparations)
     }
 
     pub(super) fn lookup(
