@@ -466,13 +466,14 @@ token. The refusal codes are:
 
 | Code | What it means |
 |---|---|
+| `decision_channel_disabled` | The decision channel is not enabled in this workspace; nothing was applied. |
 | `channel_not_registered` | No channel by that name is registered on this host. |
 | `channel_revoked` | The channel is revoked; its tokens no longer verify. |
 | `caller_not_allowed` | The caller is neither the bound plugin through its callback session nor the operator testing the channel. |
 | `sender_not_allowed` | The presented sender is not on the channel's sender allowlist. |
 | `authentication_failed` | Transport authentication evidence is missing or failing. |
-| `token_invalid` | The token does not verify for this request, channel and key epoch (for example after a rotation). |
-| `token_consumed` | The token was already used; tokens are single-use. |
+| `token_invalid` | The token does not verify for this request, channel and key epoch. |
+| `token_consumed` | The token was already used (tokens are single-use), or was minted under the previous key epoch after rotate-key, which rotation invalidated; a previous-epoch token is consumed when refused. |
 | `request_expired` | The request expired while open. |
 | `request_superseded` | The hold changed before the answer arrived. |
 | `answer_not_allowed` | The answer id is not one of the request's allowed answers. |
