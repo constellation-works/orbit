@@ -654,3 +654,108 @@ export async function assertFixPrReadinessRefresh(browser, origin, evidence) {
     await page.close();
   }
 }
+
+// A linked review task can be absent from the current page/filter. Exercise
+// its pinned wrapper, including renders that retain an operator's draft.
+export async function assertPinnedFixPr(browser, origin, evidence) {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('dialog', dialog => dialog.accept());
+  const check = (condition, message) => { if (!condition) throw new Error(message); };
+  const task = { id: 'PINNED-1', title: 'Review pull request outside the current list', status: 'review', priority: 'medium', pr_number: 42 };
+  let releaseRead;
+  let releasePost;
+  let reads = 0;
+  let posts = 0;
+  const fulfill = (route, body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+  const button = page.locator('#task-detail-body .action.fix-pr');
+  const draft = page.locator('#task-detail-body .comment-form textarea');
+  const settle = async () => {
+    await page.evaluate(async () => { await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); });
+  };
+  const open = async () => {
+    await page.goto(`${origin}/?workspace=ws_orbit#tasks?open=PINNED-1`);
+    await page.evaluate(async () => {
+      globalThis.setInterval = () => 0;
+      globalThis.EventSource = class { close() {} };
+      await import('/app.js');
+    });
+    await button.waitFor({ state: 'visible' });
+    check(await button.isDisabled(), 'Linked task must wait for readiness');
+    await page.waitForFunction(() => document.querySelector('.pinned-task-wrap'));
+  };
+  const answer = async body => {
+    check(Boolean(releaseRead), 'A readiness read must be pending');
+    const respond = releaseRead; releaseRead = null;
+    await respond(body);
+    await settle();
+  };
+  try {
+    await page.route('**/api/**', async route => {
+      const pathname = new URL(route.request().url()).pathname.replace(/^\/api\/on\/[^/]+/, '/api');
+      let body = { items: [], total: 0, limit: 50 };
+      if (pathname === '/api/hosts') body = { hosts: [{ name: 'local', local: true, reachable: true }] };
+      else if (pathname === '/api/workspaces') body = [{ id: 'ws_orbit', name: 'orbit', status: 'active', is_default: true }];
+      else if (pathname === '/api/diagnostics/friction') body = [];
+      else if (pathname === '/api/crews') body = { default_crew: null, crews: [] };
+      else if (pathname === '/api/tasks/PINNED-1') body = task;
+      else if (pathname === '/api/tasks/PINNED-1/auto-fix') {
+        if (route.request().method() === 'POST') { posts++; releasePost = (value, status) => fulfill(route, value, status); }
+        else { reads++; releaseRead = value => fulfill(route, value); }
+        return;
+      }
+      await fulfill(route, body);
+    });
+    await open();
+    await answer({ available: true, pr_number: 42, blocker: 'conflict' });
+    await page.screenshot({ path: path.join(evidence, 'pinned-fix-pr-settled-dark-1440.png') });
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.screenshot({ path: path.join(evidence, 'pinned-fix-pr-settled-dark-375.png') });
+    check(await button.isEnabled(), 'Pinned Fix PR must enable after available readiness settles');
+    check(reads === 1, 'Opening a pinned review task reads readiness exactly once');
+    // Reload the task and settle an unavailable answer with a comment open.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await open();
+    await page.getByRole('tab', { name: /^Comments/ }).click();
+    await page.locator('#task-detail-body button.action.comment').click();
+    await draft.fill('Keep this open comment draft');
+    await draft.evaluate(node => { globalThis.pinnedDraft = node; });
+    await answer({ available: false, reason: 'no_blocker', pr_number: 42 });
+    check(await button.isDisabled() && (await button.getAttribute('title')).includes('nothing to repair'), 'Pinned unavailable readiness must replace the checking reason');
+    check(await draft.evaluate(node => node === globalThis.pinnedDraft && document.activeElement === node), 'Readiness must retain the focused comment editor');
+    // Reload with an available answer, keeping the draft through dispatch
+    // refusal, retry, successful start and the ensuing task-list refresh.
+    await open();
+    await page.getByRole('tab', { name: /^Comments/ }).click();
+    await page.locator('#task-detail-body button.action.comment').click();
+    await draft.fill('Preserve my draft through Fix PR feedback');
+    await draft.evaluate(node => { globalThis.pinnedDraft = node; });
+    await answer({ available: true, pr_number: 42, blocker: 'conflict' });
+    check(await button.isEnabled(), 'Readiness must repaint Fix PR while a draft is open');
+    check(await draft.evaluate(node => node === globalThis.pinnedDraft && document.activeElement === node), 'Available readiness must retain the focused editor');
+    await page.getByRole('tab', { name: 'Overview', exact: true }).click();
+    for (const ok of [false, true]) {
+      await button.click();
+      check(Boolean(releasePost), 'Fix PR must submit the repair request');
+      const respond = releasePost; releasePost = null;
+      await respond(ok ? { resumed_run_id: 'repair-fixture' } : { error: 'Fixture repair refused' }, ok ? 200 : 409);
+      const note = page.locator('#task-detail-body').getByText(ok ? 'Repair of pull request #42 started in run repair-fixture' : 'fix PR refused: Fixture repair refused', { exact: true });
+      await note.waitFor({ state: 'visible' });
+      await answer({ available: true, pr_number: 42, blocker: 'conflict' });
+      check(await draft.inputValue() === 'Preserve my draft through Fix PR feedback', 'Fix PR feedback must retain draft text');
+      check(await draft.evaluate(node => node === globalThis.pinnedDraft), 'Fix PR feedback must retain the editor node');
+      check(await page.locator('.comment-form .action.cancel').isEnabled(), 'Fix PR completion must restore draft controls');
+      await page.screenshot({ path: path.join(evidence, `pinned-fix-pr-${ok ? 'started' : 'refused'}-dark-1440.png`) });
+      await page.setViewportSize({ width: 375, height: 812 });
+      await page.screenshot({ path: path.join(evidence, `pinned-fix-pr-${ok ? 'started' : 'refused'}-dark-375.png`) });
+      await page.setViewportSize({ width: 1440, height: 900 });
+    }
+    check(posts === 2 && errors.length === 0, `Expected refusal and start without browser errors: ${errors.join('\n')}`);
+    fs.writeFileSync(path.join(evidence, 'pinned-fix-pr-result.json'), JSON.stringify({ passed: true, reads, posts, available: true, unavailable: true, refusal: true, started: true, draftPreserved: true, widths: [1440, 375] }, null, 2));
+  } finally {
+    if (releaseRead) await releaseRead({ available: false, reason: 'no_blocker' }).catch(() => {});
+    if (releasePost) await releasePost({ error: 'Fixture closed' }, 409).catch(() => {});
+    await page.close();
+  }
+}
