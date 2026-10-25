@@ -415,11 +415,8 @@ pub fn explain_workspace_auto_readiness(
             }
             if let Some(excluded) = excluded_by_id.get(task.id.as_str()) {
                 match excluded.reason {
-                    BacklogTaskExclusionReason::ActivePilotPreparation => {
-                        object.insert("reason".to_string(), json!("active_pilot_preparation"));
-                        object.insert("detail".to_string(), json!(excluded.detail));
-                    }
-                    BacklogTaskExclusionReason::PilotDuplicate
+                    BacklogTaskExclusionReason::ActivePilotPreparation
+                    | BacklogTaskExclusionReason::PilotDuplicate
                     | BacklogTaskExclusionReason::PilotAlreadyLanded
                     | BacklogTaskExclusionReason::OperatorValidationHandoff
                     | BacklogTaskExclusionReason::HostOperationalHandoff
@@ -427,7 +424,33 @@ pub fn explain_workspace_auto_readiness(
                     | BacklogTaskExclusionReason::UnverifiedReviewFinding
                     | BacklogTaskExclusionReason::PrForgeRemoteMissing
                     | BacklogTaskExclusionReason::AwaitingFootprint
-                    | BacklogTaskExclusionReason::AwaitingExclusiveSlot => {
+                    | BacklogTaskExclusionReason::AwaitingExclusiveSlot
+                    | BacklogTaskExclusionReason::DeliveryJobUnavailable
+                    // The one exclusion no later drain clears by itself, so
+                    // readiness repeats the repair the drain recorded rather
+                    // than leaving the reason to be interpreted.
+                    | BacklogTaskExclusionReason::InheritedOnlyEpicRoot
+                    // A verified kit on this host, or a host that has
+                    // one, clears it; the detail names the install.
+                    | BacklogTaskExclusionReason::BrowserKitMissing
+                    // [ORB-14168] The drain records the same snake_case
+                    // reason. The detail names the deciding layer and the
+                    // remedy the admission refusal already uses.
+                    | BacklogTaskExclusionReason::LocalRouteBeforePr
+                    // [ORB-14849] As above, under its own code.
+                    | BacklogTaskExclusionReason::LocalRouteBeforeLanding
+                    // [ORB-14258] Lifts by itself once the command passes
+                    // on a new base tip; the detail names the base and
+                    // the command.
+                    | BacklogTaskExclusionReason::BaselineRedHold
+                    // [ORB-14266] Lifts by itself at the hold's
+                    // `not_before`; the detail names the run, the
+                    // failure, the excluded crews and the time.
+                    | BacklogTaskExclusionReason::ProviderBackoff
+                    // [ORB-14697] Lifts by itself at the reading's reset;
+                    // the detail names the provider, window, used
+                    // percent, threshold, reset and skipped crews.
+                    | BacklogTaskExclusionReason::ProviderLimit => {
                         object.insert("reason".to_string(), json!(excluded.reason));
                         object.insert("detail".to_string(), json!(excluded.detail));
                     }
@@ -437,27 +460,10 @@ pub fn explain_workspace_auto_readiness(
                             Value::String("task_pilot_preparation_required".to_string()),
                         );
                     }
-                    BacklogTaskExclusionReason::DeliveryJobUnavailable => {
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String("delivery_job_unavailable".to_string()),
-                        );
-                        object.insert("detail".to_string(), json!(excluded.detail));
-                    }
-                    BacklogTaskExclusionReason::InheritedOnlyEpicRoot => {
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String("inherited_only_epic_root".to_string()),
-                        );
-                        // The one exclusion no later drain clears by itself, so
-                        // readiness repeats the repair the drain recorded rather
-                        // than leaving the reason to be interpreted.
-                        object.insert("detail".to_string(), json!(excluded.detail));
-                    }
                     BacklogTaskExclusionReason::HostOsMismatch => {
                         // Retagging, or a host of the named OS, clears it; the
                         // detail names which.
-                        object.insert("reason".to_string(), Value::String("host_os_mismatch".to_string()));
+                        object.insert("reason".to_string(), json!(excluded.reason));
                         object.insert("detail".to_string(), json!(excluded.detail));
                         object.insert("host_os".to_string(), json!(runtime.host_os()));
                         // Which registered hosts run the OS it needs, and
@@ -470,65 +476,8 @@ pub fn explain_workspace_auto_readiness(
                             object.insert("host_fleet".to_string(), json!(fleet));
                         }
                     }
-                    BacklogTaskExclusionReason::BrowserKitMissing => {
-                        // A verified kit on this host, or a host that has
-                        // one, clears it; the detail names the install.
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String("browser_kit_missing".to_string()),
-                        );
-                        object.insert("detail".to_string(), json!(excluded.detail));
-                    }
-                    BacklogTaskExclusionReason::LocalRouteBeforePr => {
-                        // [ORB-14168] The drain records the same snake_case
-                        // reason. The detail names the deciding layer and the
-                        // remedy the admission refusal already uses.
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String("local_route_before_pr".to_string()),
-                        );
-                        object.insert("detail".to_string(), json!(excluded.detail));
-                    }
-                    BacklogTaskExclusionReason::LocalRouteBeforeLanding => {
-                        // [ORB-14849] As above, under its own code.
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String("local_route_before_landing".to_string()),
-                        );
-                        object.insert("detail".to_string(), json!(excluded.detail));
-                    }
-                    BacklogTaskExclusionReason::BaselineRedHold => {
-                        // [ORB-14258] Lifts by itself once the command passes
-                        // on a new base tip; the detail names the base and
-                        // the command.
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String("baseline_red_hold".to_string()),
-                        );
-                        object.insert("detail".to_string(), json!(excluded.detail));
-                    }
-                    BacklogTaskExclusionReason::ProviderBackoff => {
-                        // [ORB-14266] Lifts by itself at the hold's
-                        // `not_before`; the detail names the run, the
-                        // failure, the excluded crews and the time.
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String("provider_backoff".to_string()),
-                        );
-                        object.insert("detail".to_string(), json!(excluded.detail));
-                    }
-                    BacklogTaskExclusionReason::ProviderLimit => {
-                        // [ORB-14697] Lifts by itself at the reading's reset;
-                        // the detail names the provider, window, used
-                        // percent, threshold, reset and skipped crews.
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String("provider_limit".to_string()),
-                        );
-                        object.insert("detail".to_string(), json!(excluded.detail));
-                    }
                     BacklogTaskExclusionReason::CrewNotAllowed => {
-                        object.insert("reason".to_string(), Value::String("crew_not_allowed".to_string()));
+                        object.insert("reason".to_string(), json!(excluded.reason));
                         object.insert("crew".to_string(), json!(excluded.crew));
                         object.insert("allowed_crews".to_string(), json!(allowlist.as_ref().map(CrewAllowlist::names)));
                     }
@@ -554,14 +503,7 @@ pub fn explain_workspace_auto_readiness(
                     }
                     BacklogTaskExclusionReason::ContextLockConflict
                     | BacklogTaskExclusionReason::GroupMemberConflict => {
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String(match excluded.reason {
-                                BacklogTaskExclusionReason::ContextLockConflict => "context_lock_conflict",
-                                BacklogTaskExclusionReason::GroupMemberConflict => "group_member_conflict",
-                                _ => unreachable!("lock exclusions are handled above"),
-                            }.to_string()),
-                        );
+                        object.insert("reason".to_string(), json!(excluded.reason));
                         object.insert(
                             "conflicts".to_string(),
                             json!(excluded.conflicts.iter().map(|conflict| json!({
