@@ -110,9 +110,10 @@ template:
     - Command or flag: run the cited command's `--help`, and the subcommand
       help when the citation names one. Absent from that help means stale.
       Quote the help line or state that it is absent.
-    - Path: when `git rev-parse HEAD` equals the pinned SHA, require
-      `git ls-files --error-unmatch -- <path>` to succeed. Otherwise require
-      the path in `git ls-tree -r --name-only <sha>`. A missing path is stale.
+    - Path: require the path in `git ls-tree -r --name-only <sha>`. This
+      checks the pinned commit even when the current index or worktree differs.
+      Do not use `git ls-files` alone to decide whether a path exists at that
+      commit; it reads the index, not the pinned tree. A missing path is stale.
     - Tool name: `orbit tool list` when the citation is an Orbit tool;
       otherwise the registry, manifest, or help the guidance names. Absent
       from that registry means stale.
