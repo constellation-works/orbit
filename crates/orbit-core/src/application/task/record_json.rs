@@ -44,14 +44,28 @@ pub fn task_record_json(
     let task = &row.task;
     let mut object = task_base_json(task, status_by_id);
     TaskOsReadout::new(runtime)?.insert_into(task, &mut object);
+    // Read projections must tolerate corrupt pilot receipts: the CLI contract
+    // keeps malformed task-pilot comments as ordinary text (see orbit-cli
+    // `pilot_comment_rendering`). A strict decode failure therefore means "no
+    // resolvable hold", not a failed record. Other errors still propagate.
+    let resolvable_pilot_admission_hold = if task.status.is_terminal() {
+        false
+    } else {
+        match runtime.pilot_admission_hold_in(task, &row.comments, &|| Ok(row.history.clone())) {
+            Ok(hold) => hold.is_some_and(|hold| hold.is_resolvable()),
+            Err(OrbitError::Execution(message))
+                if message.starts_with("decode ")
+                    || message.contains("pilot receipt")
+                    || message.contains("pilot assessment") =>
+            {
+                false
+            }
+            Err(error) => return Err(error),
+        }
+    };
     object.insert(
         "resolvable_pilot_admission_hold".into(),
-        serde_json::json!(
-            !task.status.is_terminal()
-                && runtime
-                    .pilot_admission_hold_in(task, &row.comments, &|| Ok(row.history.clone()))?
-                    .is_some_and(|hold| hold.is_resolvable())
-        ),
+        serde_json::json!(resolvable_pilot_admission_hold),
     );
     object.insert(
         "pilot_warnings".into(),
