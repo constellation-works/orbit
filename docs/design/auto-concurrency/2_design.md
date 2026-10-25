@@ -1,7 +1,7 @@
 ---
 title: Auto-concurrency — Design
 owner: claude
-last_updated: 2026-10-18
+last_updated: 2026-10-25
 last_validated: 2026-10-19
 status: Draft
 feature: auto-concurrency
@@ -758,6 +758,99 @@ its unrounded JSON output are task artifacts named
 `evaluation/forecast-replay.py` and `evaluation/forecast-replay-output.json`.
 Collect at least 150 paired forecasts with preserved replay inputs, and
 establish the missing phase/key labels, before reconsidering adoption.
+
+#### Evaluation (2026-10-25): variant (b) not adopted under the fixed protocol
+
+The replay was rerun on dk-server-2 over the forecast rows that have kept
+their replay inputs since 2026-10-18, under the protocol above. It read
+`~/.orbit/orbit.db` read-only, with `--report-at 2026-10-25T01:42:00Z` and
+`--since 2026-10-18T00:00:00Z`. The forecasts cover 2026-10-18T00:05:29Z to
+2026-10-25T01:39:03Z. The script is the ORB-16778 replay script with two
+additions: a `--since` filter, and variant (b) scoring as specified above
+(one EWMA of signed CPU error per offset, alpha 0.1, starting at zero; an
+error is eligible only after its target minute has ended before the next
+forecast; corrected CPU is clamped at zero; memory is unchanged).
+
+- **Rows.** 1,824 forecast rows, of which 1,717 have complete inputs; the
+  other 107 are legacy rows without them. All complete rows are in enforce
+  mode on the 32-core host. None is unsupported. 1,695 completed, non-resumed
+  deliveries train the profiles.
+- **Lookups.** 10,997 exact, 782 parent and 4 heaviest-class, across 29
+  distinct keys.
+- **Reconstruction.** Median residual 0 cores and 0 GiB at every offset. The
+  largest absolute residual is 0.21 cores (CPU) and 1.26 GiB (memory).
+  Scoring (b) on the recorded forecasts of the same rows agrees with the
+  table below to within 0.1 in each cell's unit.
+- **Limitation.** As on 2026-10-18, template base classes use the current
+  task index, not a historical tag snapshot. Variants (a) and (c), and their
+  combination, were not scored.
+
+Errors are forecast minus measured, in cores. Each cell is mean error / MAE
+/ under-forecast share.
+
+| Offset | Pairs | Baseline mean / MAE / under | Corrected mean / MAE / under | MAE change | Under change |
+|---|---:|---|---|---:|---:|
+| +5m | 1,559 | +3.24 / 4.78 / 29.4% | +0.18 / 2.83 / 46.2% | −40.7% | +16.8 pp |
+| +10m | 1,642 | +6.74 / 8.73 / 36.9% | +0.27 / 3.22 / 47.1% | −63.1% | +10.2 pp |
+| +20m | 1,485 | +1.77 / 4.70 / 41.3% | +0.35 / 3.71 / 45.2% | −21.1% | +3.8 pp |
+| +30m | 1,407 | −0.84 / 3.37 / 59.6% | +0.24 / 3.69 / 44.2% | +9.5% | −15.4 pp |
+
+The 2026-10-18 adoption criteria, applied to this window:
+
+- At least 150 pairs at every offset: **met** (1,407 to 1,642 pairs).
+- At least 10% lower CPU MAE at both +10m and +20m: **met** (−63.1% and
+  −21.1%).
+- No more than +2 pp CPU under-rate at any offset: **not met** (+16.8, +10.2
+  and +3.8 pp at +5m, +10m and +20m).
+- No increase in memory under-rate: **met** (memory is unchanged).
+
+**Verdict: not adopted under the fixed protocol.**
+
+**Observation.** The mean CPU error changed sign at +10m and +20m. On the
+2026-10-18 recorded context it was −0.26 and −1.74 cores (forecast below
+measured); in this window's replayed baseline it is +6.74 and +1.77 cores. At
++5m (+0.21 to +3.24) and +30m (−2.76 to −0.84) the sign did not change. These
+are different row sets, so the comparison is of signs, not sizes. The 19-pair
+2026-10-18 replayed subset is too small to read a sign from: it gives +1.00 at
++10m and −0.81 at +20m.
+
+**Interpretation.** The +2 pp under-rate guard rules out removing an
+over-forecast bias. A forecast with no bias is under about half the time, so
+any correction that removes an over-forecast raises the under-rate. The guard
+was written when the bias ran the other way.
+
+**Artifacts.** The task artifacts of ORB-18010 are
+`evaluation/2026-10-25/forecast-replay-b.py` (the replay script) and
+`evaluation/2026-10-25/forecast-replay-b-output.json` (the unrounded output).
+
+#### Operator decision (2026-10-25)
+
+Daniel approved this change to the CPU criterion in chat on 2026-10-25. It
+supersedes the +2 pp CPU under-rate guard in the 2026-10-18 text above.
+Nothing is implemented or scored under it yet.
+
+1. **CPU targets zero bias.** The safety margin belongs in
+   `machine.auto_concurrency.admit_cpu_percent`, not in forecast bias. Memory
+   is unchanged and stays conservative (§4.1).
+2. **Tail guards replace the +2 pp guard**, at every offset (+5m, +10m, +20m
+   and +30m):
+   - the 90th percentile of CPU under-forecast size (measured minus forecast,
+     counting only under-forecasts) is no larger than the baseline's;
+   - the share of minutes under-forecast by more than 4 cores (12% of the
+     32-core host) is not increased.
+3. **The error criterion stays:** at least 10% lower CPU MAE at both +10m and
+   +20m. A 9.5% higher MAE at +30m is accepted.
+4. **The new criteria are fixed in advance.** They are scored only on
+   forecasts from 2026-10-25T01:42Z onward, with at least 150 pairs per offset
+   (about a week of drains). The 2026-10-18 to 2026-10-25 cohort cannot confirm
+   them, since they were chosen after seeing it.
+5. **Shadow before enforce.** A future implementation records the corrected
+   CPU beside the current forecast. Before enforcing, check CPU throttle passes
+   and whether `admit_cpu_percent` needs lowering: removing the over-forecast
+   takes away roughly 3–7 cores of margin that nobody set, at short horizons.
+
+Variant (b) is not yet adopted. It stays pending that scoring, and the
+2026-10-25 verdict above stands.
 
 ## 5. Admission
 
