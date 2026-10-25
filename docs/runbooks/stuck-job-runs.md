@@ -390,6 +390,14 @@ page, including the recorded time, next step and a link to the escalation
 comment or run. When no reason or time was recorded, it says so explicitly.
 Long reasons are summarized in the callout; open the evidence for the full text.
 
+The same task page shows a read-only Why stuck card for a blocked task and for
+a task whose latest delivery run is held. The card lists the escalation note,
+the landing-review verdict with its finding count, the latest run's root-cause
+line, whether the pull request is mergeable or conflicting, and each required
+check by name and state. A fact that cannot be read, including a pull request
+with no open request or a forge that cannot answer, says unavailable instead of
+leaving the row out. The card adds no action.
+
 ## Cancel a conclusively stuck run
 
 After verifying that the owner is gone or that the run should no longer continue:

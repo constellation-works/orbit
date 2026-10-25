@@ -44,6 +44,7 @@ use helpers::*;
 pub(crate) use host::host_error_code;
 pub(crate) use origin::{nosniff_json_responses, require_localhost_origin};
 pub(super) use routes::{request_shutdown, router};
+pub(crate) use runs::failure_root_line;
 
 // Keep the API's shared error projection in the helpers module while adding
 // the structured response needed by the dashboard for a live resume conflict.

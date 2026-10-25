@@ -25,6 +25,7 @@ mod runtime_memo;
 mod serve;
 mod ssh_tunnel;
 mod state;
+mod why_stuck;
 
 #[cfg(test)]
 mod tests;

@@ -139,6 +139,65 @@
 .attention-action:hover { border-color: var(--attention-fg); color: var(--fg-strong); }
 .attention-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* Read-only facts for a blocked task or a held delivery run. The block
+   callout above it keeps the actions; this card only answers why. */
+.why-stuck {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+}
+.why-stuck-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--fg-strong);
+}
+.why-stuck-rows { display: grid; gap: 8px; margin: 0; }
+.why-stuck-row {
+  display: grid;
+  grid-template-columns: 8.5rem minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0;
+}
+.why-stuck-label {
+  margin: 0;
+  color: var(--fg-mute);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.why-stuck-value {
+  margin: 0;
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.why-stuck-checks {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.why-stuck-check {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.why-stuck-check-name { min-width: 0; overflow-wrap: anywhere; }
+.why-stuck-state { flex: none; font-variant-numeric: tabular-nums; color: var(--fg-mute); }
+.why-stuck-check[data-state="failed"] .why-stuck-state { color: var(--state-failed); font-weight: 600; }
+.why-stuck-check[data-state="passed"] .why-stuck-state { color: var(--state-success); }
+.why-stuck-check[data-state="pending"] .why-stuck-state { color: var(--warn-fg); }
+
 /* Implemented → Handed off → Approved → Landing → Done, from the claim. */
 .delivery-progress {
   list-style: none;
@@ -231,6 +290,7 @@
   .task-detail-pane .detail-band { margin: -14px -16px 0; padding: 14px 16px 0; }
   .detail-tabs { gap: 2px; margin: 2px -16px 0; padding: 0 8px 1px; }
   .detail-tab { gap: 4px; }
+  .why-stuck-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
 .detail-tab-count { color: var(--fg-mute); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .detail-tab-count:empty { display: none; }

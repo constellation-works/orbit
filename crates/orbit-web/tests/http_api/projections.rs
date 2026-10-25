@@ -1068,8 +1068,8 @@ fn block_with_final_recovery(
 /// `GET /api/tasks/:id` serves the shared show record plus the dashboard extras.
 /// A blocked task's explanation and guidance match `orbit.task.show`, and an
 /// escalated blocked task also carries the dashboard-only `escalation_triage`
-/// readout. List rows and mutation responses omit show-only guidance and the
-/// triage readout.
+/// readout and the `why_stuck` card. List rows and mutation responses omit
+/// show-only guidance and the triage readout.
 #[test]
 fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
     isolated(
@@ -1131,6 +1131,7 @@ fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
                 "status_transitions",
                 "job_run_navigable",
                 "escalation_triage",
+                "why_stuck",
             ] {
                 assert!(stripped.remove(key).is_some(), "dashboard extra `{key}`");
             }
@@ -1146,6 +1147,7 @@ fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
                 "status_transitions",
                 "job_run_navigable",
                 "escalation_triage",
+                "why_stuck",
             ] {
                 assert!(
                     shown.get(extra).is_none(),

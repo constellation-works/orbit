@@ -313,3 +313,60 @@ fn owned(value: Option<&str>) -> Option<String> {
 fn reason_text(reason: Option<&str>) -> String {
     owned(reason).unwrap_or_else(|| NO_REASON_RECORDED.to_string())
 }
+
+/// One line naming why `run` stopped, in the same shape the run page prints.
+///
+/// A failed, timed-out, interrupted, or cancelled run uses the deepest cause
+/// in its dispatch chain. Any other state, including a hold, uses this run's
+/// own recorded step and message. Returns none when neither source recorded
+/// a step or a message, so a caller can say the cause is unavailable.
+pub(crate) fn failure_root_line(runtime: &OrbitRuntime, run: &JobRun) -> Option<String> {
+    let state = read_state(runtime, &run.run_id);
+    if is_chain_failure(run.state) {
+        let value = failure_root_value(runtime, run, state.as_ref());
+        if let Some(line) = format_failure_root(&value) {
+            return Some(line);
+        }
+    }
+    let (step, message) = cause_summary(runtime, run);
+    format_cause_line(
+        &run.run_id,
+        &run.state.to_string(),
+        step.as_deref(),
+        message.as_deref(),
+    )
+}
+
+fn format_failure_root(value: &Value) -> Option<String> {
+    let run_id = value.get("run_id").and_then(Value::as_str)?;
+    let state = value.get("state").and_then(Value::as_str).unwrap_or("");
+    format_cause_line(
+        run_id,
+        state,
+        value.get("step").and_then(Value::as_str),
+        value.get("message").and_then(Value::as_str),
+    )
+}
+
+fn format_cause_line(
+    run_id: &str,
+    state: &str,
+    step: Option<&str>,
+    message: Option<&str>,
+) -> Option<String> {
+    let step = step.map(str::trim).filter(|text| !text.is_empty());
+    let message = message.map(str::trim).filter(|text| !text.is_empty());
+    if step.is_none() && message.is_none() {
+        return None;
+    }
+    let mut line = format!("{run_id} {state}");
+    if let Some(step) = step {
+        line.push_str(" at ");
+        line.push_str(step);
+    }
+    if let Some(message) = message {
+        line.push_str(" - ");
+        line.push_str(message);
+    }
+    Some(line)
+}
