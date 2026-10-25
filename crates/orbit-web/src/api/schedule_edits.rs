@@ -7,7 +7,7 @@
 
 use std::time::Instant;
 
-use axum::extract::{Query, State};
+use axum::extract::{Query, State, rejection::JsonRejection};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_cmd::registry_routines::routine_statuses;
@@ -74,19 +74,32 @@ pub(super) async fn set_routine_trigger(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
     Ws(runtime): Ws,
-    Json(body): Json<RoutineTriggerRequest>,
+    body: Result<Json<RoutineTriggerRequest>, JsonRejection>,
 ) -> Response {
+    let (body, body_rejection) = match body {
+        Ok(Json(body)) => (Some(body), None),
+        Err(rejection) => (None, Some(rejection.into_response())),
+    };
     let workspace = match explicit_workspace(&query) {
         Ok(workspace) => workspace.to_string(),
         Err(rejection) => return rejection.into_response(),
     };
-    let audit_args = json!({"source": body.source, "target": body.target, "trigger": body.trigger});
+    let (name, machine, audit_args) = body.as_ref().map_or_else(
+        || (String::new(), String::new(), json!({})),
+        |body| {
+            (
+                body.name.clone(),
+                body.machine_name.clone(),
+                json!({"source": body.source, "target": body.target, "trigger": body.trigger}),
+            )
+        },
+    );
     let audit = |caller, denial, failure: Option<String>, started| {
         let runtime = runtime.clone();
         let (workspace, name, machine, args) = (
             workspace.clone(),
-            body.name.clone(),
-            body.machine_name.clone(),
+            name.clone(),
+            machine.clone(),
             audit_args.clone(),
         );
         async move {
@@ -111,6 +124,15 @@ pub(super) async fn set_routine_trigger(
             audit(None, Some(&denial), None, Instant::now()).await;
             return authorization_denied(denial);
         }
+    };
+    let Some(body) = body else {
+        return body_rejection.unwrap_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "request body is required"})),
+            )
+                .into_response()
+        });
     };
     let expected = match typed::<RoutineTrigger>(
         &body.expected_trigger,
@@ -209,8 +231,12 @@ pub(super) async fn set_routine_trigger(
 pub(super) async fn set_auto_task_schedule(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
-    Json(body): Json<AutoTaskScheduleRequest>,
+    body: Result<Json<AutoTaskScheduleRequest>, JsonRejection>,
 ) -> Response {
+    let (body, body_rejection) = match body {
+        Ok(Json(body)) => (Some(body), None),
+        Err(rejection) => (None, Some(rejection.into_response())),
+    };
     let workspace = match explicit_workspace(&query) {
         Ok(workspace) => workspace.to_string(),
         Err(rejection) => return rejection.into_response(),
@@ -219,10 +245,13 @@ pub(super) async fn set_auto_task_schedule(
         Ok(runtime) => runtime,
         Err(response) => return *response,
     };
-    let audit_args = json!({"schedule": body.schedule});
+    let (name, audit_args) = body.as_ref().map_or_else(
+        || (String::new(), json!({})),
+        |body| (body.name.clone(), json!({"schedule": body.schedule})),
+    );
     let audit = |caller, denial, failure: Option<String>, started| {
         let runtime = runtime.clone();
-        let (workspace, name, args) = (workspace.clone(), body.name.clone(), audit_args.clone());
+        let (workspace, name, args) = (workspace.clone(), name.clone(), audit_args.clone());
         async move {
             record_operation_audit(
                 &runtime,
@@ -245,6 +274,15 @@ pub(super) async fn set_auto_task_schedule(
             audit(None, Some(&denial), None, Instant::now()).await;
             return authorization_denied(denial);
         }
+    };
+    let Some(body) = body else {
+        return body_rejection.unwrap_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "request body is required"})),
+            )
+                .into_response()
+        });
     };
     let expected = match typed::<AutoTaskSchedule>(
         &body.expected_schedule,
