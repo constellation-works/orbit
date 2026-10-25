@@ -1036,7 +1036,7 @@ effort = "high"
 env = ["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]
 ```
 
-- **`NAME`** passes `NAME` from the launching process (as a [`pass`](#executionenv--the-agent-subprocess-environment) entry does) to this crew's agents only.
+- **`NAME`** passes `NAME` from the launching process to this crew's agents only, whether or not [`pass`](#executionenv--the-agent-subprocess-environment) lists it.
 - **`NAME=SOURCE`** gives this crew's agents `NAME` with the value of `SOURCE` from the launching process, or from `~/.orbit/clock.env` for [clock-started runs](#executionenv--the-agent-subprocess-environment). Keep the source under a name no CLI reads (`ANTHROPIC_CREDITS_API_KEY_1`), so interactive shells and other crews are unaffected and different crews can use different keys. The agent never receives `SOURCE` itself.
 - **Names only, never values.** Both sides must be variable names (letters, digits and `_`, not starting with a digit), and no side may be an `ORBIT_*` name. A malformed entry, or two entries for one `NAME`, fails load naming the crew and entry.
 - **Global config only.** A workspace `config.toml` that sets `crews.<name>.env` fails load naming the crew, and `orbit config set` refuses it without `--global`, so a checkout cannot choose which host secrets its agents read. Set it with `orbit config set --global crews.opus-credits.env '["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]'`.
@@ -1118,7 +1118,7 @@ An explicit selection that cannot run fails with a stable diagnostic and never f
 
 ## Provider CLI notes
 
-For every lane: Orbit passes `--model` from the crew and sends the prompt on **stdin**, never argv (process listings and audit see argv). Muse Code, which cannot read stdin, gets the prompt in a private file instead ([below](#muse-code-cli)). The Orbit OS sandbox is the filesystem boundary, and provider-specific write grants apply only while that provider runs. Credentials reach the agent only through [`[execution.env].pass`](#executionenv--the-agent-subprocess-environment); Orbit never puts a key on argv. A lane without native or Orbit-managed MCP reaches Orbit tools with `orbit tool run <tool> --input '<json>'` through its shell tool, under the same grants.
+For every lane: Orbit passes `--model` from the crew and sends the prompt on **stdin**, never argv (process listings and audit see argv). Muse Code, which cannot read stdin, gets the prompt in a private file instead ([below](#muse-code-cli)). The Orbit OS sandbox is the filesystem boundary, and provider-specific write grants apply only while that provider runs. Credentials reach the agent through [`[execution.env].pass`](#executionenv--the-agent-subprocess-environment), which every crew shares; through a crew's global [`env`](#per-crew-credentials-env) entry, which reaches only that crew's agents; or from the provider's own credential store. Orbit never puts a key on argv. A lane without native or Orbit-managed MCP reaches Orbit tools with `orbit tool run <tool> --input '<json>'` through its shell tool, under the same grants.
 
 `orbit tool run` selects a workspace from any directory with `workspace` in the JSON input or the global `--workspace` flag: a name, `ws_*` ID, absolute local checkout path, or local `hm_*/ws_*` selector from the federated listing. A selector for another host fails locally, naming it; run the command on that owner host. Unparseable JSON or an unreadable `--input-file` is reported before workspace selection, runtime open or migration, so an input typo never migrates the checkout.
 
@@ -1778,8 +1778,9 @@ Every agent subprocess (bare, Bubblewrap or `sandbox-exec`) starts from a **clea
 | `pass` | Names listed in `execution.env.pass`. Default: `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER`, plus `__CF_USER_TEXT_ENCODING` on macOS. |
 | Provider extras | Variables the selected provider runtime declares it needs. |
 | Orbit envelope | Named `ORBIT_*` variables: run, task and session identity (`ORBIT_RUN_ID`, `ORBIT_TASK_ID`, `ORBIT_SESSION_ID`, …), locators (`ORBIT_WORKSPACE`, `ORBIT_WORKTREE_ROOT`, `ORBIT_BIN`, `ORBIT_REGISTRY_ROOT`, …) and activity bindings (`ORBIT_ACTIVITY_*`, `ORBIT_STEP_INDEX`, …). Privilege-bearing names (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`) are not admitted; an inherited `ORBIT_ROOT` is removed. |
+| Crew `env` | The global `[crews.<name>] env` entries of the crew the agent runs as, applied last. Each entry's name takes its source's value from the launching process and replaces the same name from `pass`. Other crews never receive it. An unset source leaves the name out for that crew. See [per-crew credentials](#per-crew-credentials-env). |
 
-This is an allowlist, not a secret filter: a benignly named credential such as `DATABASE_URL` never reaches an agent unless you name it. Agents keep network access, so this is the boundary against accidental exfiltration.
+This is an allowlist, not a secret filter: a benignly named credential such as `DATABASE_URL` never reaches an agent unless you name it in `pass` or in a crew's `env`. Agents keep network access, so this is the boundary against accidental exfiltration.
 
 ```toml
 [execution.env]
@@ -1787,6 +1788,7 @@ pass = ["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "GITHUB_TOKEN"]
 ```
 
 - `pass` replaces the default rather than extending it; restate the baseline names you want.
+- `pass` is shared by every crew. A crew's [`env`](#per-crew-credentials-env) entry adds a name for that crew alone and replaces the same name from `pass` for it.
 - A listed name that is unset is absent, not empty. Names must be valid identifiers.
 - `pass` is a [security key](#where-config-lives): a workspace file that omits it gets the built-in default, not the global value.
 - Inheriting the full environment is not configurable; a stale `execution.env.inherit` is ignored.
@@ -1811,7 +1813,7 @@ The remaining keys, grouped as `orbit config show` groups them.
 |---|---|---|
 | `execution.codex.sandbox` | `workspace-write` | Codex sandbox mode: `read-only`, `workspace-write` or `danger-full-access`. Under `workspace-write`, Codex's extra writable roots are Orbit's runtime stores, never the whole workspace `.orbit` or `~/.orbit`. `orbit init` seeds `danger-full-access` globally. [Security key](#where-config-lives). |
 | `execution.codex.approval_policy` | unset | **Advanced.** `untrusted`, `on-request` or `never`. Security key. |
-| `execution.env.pass` | `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER` (+ `__CF_USER_TEXT_ENCODING` on macOS) | Environment names passed into agent subprocesses. Security key. See [`[execution.env]`](#executionenv--the-agent-subprocess-environment). |
+| `execution.env.pass` | `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER` (+ `__CF_USER_TEXT_ENCODING` on macOS) | Environment names passed into every crew's agent subprocesses; a crew's [`env`](#per-crew-credentials-env) adds names for that crew alone. Security key. See [`[execution.env]`](#executionenv--the-agent-subprocess-environment). |
 | `execution.proc_spawn_max_timeout_minutes` | `45` | **Advanced.** Longest timeout one `proc.spawn` call may use inside a managed activity (1–1440), also capped at the activity's remaining wall-clock budget (passed to the agent as `ORBIT_ACTIVITY_DEADLINE_UNIX_MS`). Outside an activity the ceiling is 60 seconds. The result reports `timeout_ceiling_ms` and its source. |
 | `execution.agent_stall_minutes` | `30` | **Advanced.** Minutes a provider process may produce no stdout or stderr and use no CPU before Orbit ends it and fails the step as stalled, so the usual retry and recovery path runs. `0` disables the check and leaves only the wall-clock timeout. At most 1440. |
 
