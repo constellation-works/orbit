@@ -2419,12 +2419,9 @@ def main():
     # A fixture child that outlives its test can write into this tree while it
     # is removed (observed OSError 66 from host-resource-pressure.json). That
     # cleanup failure must never take the report with it, so ignore it here
-    # and record anything left behind as a warning below instead. Keep the
-    # object alive in scratch_td: once the with block drops the last
-    # reference, its finalizer would remove those leftovers before the walk.
-    scratch_td = tempfile.TemporaryDirectory(prefix="orbit-qa-full-", dir=scratch,
-                                             ignore_cleanup_errors=True)
-    with scratch_td as tmp:
+    # and record anything left behind as a warning below instead.
+    with tempfile.TemporaryDirectory(prefix="orbit-qa-full-", dir=scratch,
+                                     ignore_cleanup_errors=True) as tmp:
         temp = Path(tmp)
         env = isolated_environment(temp)
         browser_env = browser_environment(env, args.playwright_browsers_path,
@@ -2552,12 +2549,12 @@ def main():
         except OSError as error:
             scratch_leftover_error = str(error)
     scratch_cleanup_warning = None
-    if scratch_leftovers or scratch_leftover_error:
-        scratch_cleanup_warning = (
-            f"harness scratch cleanup did not finish; {len(scratch_leftovers)} "
-            "leftover path(s) remain under the scratch temp dir"
-            + (f" (leftover walk failed: {scratch_leftover_error})"
-               if scratch_leftover_error else ""))
+    if scratch_leftover_error:
+        scratch_cleanup_warning = ("harness scratch cleanup did not finish; leftover walk failed: "
+                                   f"{scratch_leftover_error}")
+    elif scratch_leftovers:
+        scratch_cleanup_warning = (f"harness scratch cleanup did not finish; {len(scratch_leftovers)} "
+                                   "leftover path(s) remain under the scratch temp dir")
 
     covered = {result["scenario"] for result in results}
     for scenario in inventory["scenarios"]:

@@ -132,6 +132,7 @@ if _os.environ.get("QA_SWEEP_RACY_CLEANUP") == "1":
         def cleanup(self):
             name = getattr(self, "name", None)
             if name and _os.path.basename(name).startswith("orbit-qa-full-"):
+                self._finalizer.detach()
                 leaf = Path(name) / "tmp/.tmpRACY/home/.orbit/cache/host-resource-pressure.json"
                 leaf.parent.mkdir(parents=True, exist_ok=True)
                 leaf.write_text('{"pressure": 1}')
