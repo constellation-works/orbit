@@ -11,9 +11,10 @@ import { Content as ChangelogContent, getHeadings } from '../../../CHANGELOG.md'
 // sections underneath it are the useful table of contents.
 // Release headings may carry a date ("0.28.0 — 2026-10-07"), but the rendered
 // anchor stays version-only, so the rail must link to that anchor.
-const headings = getHeadings().filter((heading) => heading.depth === 2).map((heading) => {
+const headings = getHeadings().flatMap((heading) => {
+  if (heading.depth !== 2) return [];
   const version = heading.text.match(/^\d+\.\d+\.\d+/)?.[0];
-  return version ? { ...heading, text: version, slug: version.replaceAll('.', '') } : heading;
+  return version ? [{ ...heading, text: version, slug: version.replaceAll('.', '') }] : [];
 });
 ---
 

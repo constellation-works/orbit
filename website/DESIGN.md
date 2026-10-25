@@ -143,14 +143,14 @@ Rules for the page:
 Top-level sections (left nav, in order), following the reader from setup to
 lookup:
 
-1. **Start Here** — what Orbit is, quickstart, install, connect your agent
+1. **Get started** — what Orbit is, quickstart, install, connect your agent
    (MCP), first task, delivery workflows
 2. **Concepts** — tasks, agents and crews, activities and jobs, routines and
    auto-tasks, policies
-3. **Guides** — task-oriented recipes for everyday use
-4. **Operate** — backup and restore, multi-machine drains
-5. **Reference** — CLI, configuration, YAML schemas, policy format, scoping
-6. **Project** — changelog, contributing (collapsed), privacy
+3. **Guides** — task-oriented recipes for everyday use, including backup and
+   restore and multi-machine drains
+4. **Reference** — CLI, configuration, YAML schemas, policy format, scoping
+5. **Project** — changelog, contributing (collapsed), privacy
 
 Sidebar labels match page titles (section indexes read "Overview"). Moving a page between groups never moves
 its URL.
