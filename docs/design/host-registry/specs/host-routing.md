@@ -13,12 +13,13 @@ related_artifacts: [ORB-14449, ORB-14448, ORB-14447]
 
 # Spec: Host routing
 
-A task id's prefix names the host that holds it. Any task call that addresses a single task
-by id, made without an explicit workspace selector, is delivered to that host. If the prefix
-is the local host's, the call runs in-process. If it is a registered remote host's, the call
-goes there over the federated route. Any other prefix fails closed. Separately, `--host`
-names a host for workspace and pull selection, and resolves to the host-qualified selector
-that the host itself lists. Status: implemented in [ORB-14449], on top of
+A task ID's prefix names the host that holds it. Routed CLI calls and federated MCP calls
+that address one task by ID without an explicit workspace selector deliver it to that host.
+If the prefix is the local host's, the call runs in-process. If it is a registered remote
+host's, the call goes there over the federated route. Any other prefix fails closed. Direct
+v1 MCP servers do not relay: an ID-only call for a remote prefix returns `task_prefix_remote`.
+Separately, `--host` names a host for workspace and pull selection, and resolves to the
+host-qualified selector that the host itself lists. Status: implemented in [ORB-14449], on top of
 [host-commands](./host-commands.md) ([ORB-14448]).
 
 ## Why This Exists
@@ -124,7 +125,7 @@ local host is allowed.
 It is accepted:
 
 - with `--workspace` on the routable task commands: `orbit task show`, `update`,
-  `artifact put|get`, `review-reset`, and `reconcile-review …`, and on `orbit tool run`;
+  `artifact put|get`, `review-reset`, `reconcile-review …`, and `requeue`, and on `orbit tool run`;
 - with `--pull` on `orbit run auto`.
 
 To resolve, Orbit reads the host's live workspace list and matches the workspace value by
