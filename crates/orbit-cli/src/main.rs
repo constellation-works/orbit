@@ -746,6 +746,7 @@ fn run() {
         && let Err(error) = command::config::set::preflight_indirect_workspace_write(
             root_override.as_deref(),
             args.global,
+            workspace_selector.is_some(),
         )
     {
         print_error(&error, &sink, json_error_preference);
