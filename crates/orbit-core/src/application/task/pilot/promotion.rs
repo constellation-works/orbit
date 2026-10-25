@@ -7,6 +7,8 @@
 //! honour the filer's `no-auto-approve` opt-out. Reading and validating those
 //! findings lives here once so the two modes cannot drift.
 
+use std::collections::BTreeSet;
+
 use orbit_engine::DispatchError;
 use orbit_types::task::{NO_AUTO_APPROVE_TAG, TaskComment, TaskStatus, is_valid_orb_task_id};
 use orbit_types::workflow::DrainHoldFinding;
@@ -25,6 +27,9 @@ const WARNING_FIELDS: [&str; 5] = [
     "surface_warnings",
     VALIDATION_TOOL_WARNINGS,
 ];
+
+/// Findings whose named prerequisites may already be enforced or completed.
+const PREREQUISITE_FIELDS: [&str; 3] = ["blocked_by", "utility_warnings", "surface_warnings"];
 
 /// Only surface and utility findings may explicitly be advisory. Legacy
 /// strings and malformed findings hold by default; prerequisite, conflict and
@@ -49,14 +54,30 @@ fn task_id_character(character: char) -> bool {
     character.is_alphanumeric() || matches!(character, '-' | '_')
 }
 
-/// Whole task IDs named in one `blocked_by` finding's text.
-fn blocked_by_task_ids(finding: &Value) -> Vec<String> {
+/// Whole task IDs named in one finding's text.
+fn finding_task_ids(finding: &Value) -> Vec<String> {
     let Some(text) = warning_text(finding) else {
         return Vec::new();
     };
     text.split(|character| !task_id_character(character))
         .filter(|id| id.starts_with("ORB-") && is_valid_orb_task_id(id))
         .map(str::to_string)
+        .collect()
+}
+
+/// Named tasks whose completion promotion checks must read under their locks.
+/// Warning IDs do not create dependency edges; only `blocked_by` does that.
+pub(super) fn promotion_task_ids(assessment: &Value) -> BTreeSet<String> {
+    PREREQUISITE_FIELDS
+        .iter()
+        .flat_map(|field| {
+            assessment[*field]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(move |finding| finding_holds_promotion(field, finding))
+                .flat_map(finding_task_ids)
+        })
         .collect()
 }
 
@@ -71,26 +92,24 @@ pub(super) fn blocked_by_holds_promotion(
     dependencies: &[String],
     is_done: &dyn Fn(&str) -> bool,
 ) -> bool {
-    let ids = blocked_by_task_ids(finding);
+    let ids = finding_task_ids(finding);
     ids.is_empty()
         || ids
             .iter()
             .any(|id| !dependencies.iter().any(|dep| dep == id) && !is_done(id))
 }
 
-/// Whether `field`'s `finding` withholds promotion, with `blocked_by`
-/// decided against the task's current `dependencies` and done lookup.
+/// Whether `field`'s `finding` withholds promotion. Prerequisite, utility and
+/// surface findings share the current dependency and completion exemption.
 fn holds_promotion(
     field: &str,
     finding: &Value,
     dependencies: &[String],
     is_done: &dyn Fn(&str) -> bool,
 ) -> bool {
-    if field == "blocked_by" {
-        blocked_by_holds_promotion(finding, dependencies, is_done)
-    } else {
-        finding_holds_promotion(field, finding)
-    }
+    finding_holds_promotion(field, finding)
+        && (!PREREQUISITE_FIELDS.contains(&field)
+            || blocked_by_holds_promotion(finding, dependencies, is_done))
 }
 
 /// Whether the task's filer opted it out of automatic approval. The tag is

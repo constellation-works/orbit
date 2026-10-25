@@ -345,13 +345,17 @@ while a mixed finding retains the other IDs and evidence. Dependency cycles
 between different tasks still refuse the assessment. Human approval cannot release an unfinished
 dependency: readiness reports `unmet_dependency` until the prerequisite is done.
 
-A `blocked_by` finding whose named tasks are all recorded dependencies of
-the task (or already `done` in this workspace) is not a promotion warning:
-the dependency edge already gates admission, so the task promotes to backlog
+A `blocked_by`, utility or surface finding whose named tasks are all recorded
+dependencies of the task (or already `done` in this workspace) is not a promotion
+warning: the dependency edge already gates admission, so the task promotes to backlog
 normally and readiness reports `unmet_dependency` until the prerequisite is
 done. It does not appear in `pilot_warnings` or the dashboard's pilot-warning
-readouts. Prerequisite prose that names no task, a missing or other-workspace
-task, or an unfinished task that is not a recorded dependency remains a
+readouts or warning-triage candidates. Both `dependencies` and `blocked_by`
+relations record the same dependency edges. Pilots should report waiting for
+another task's delivery only in `blocked_by`, and omit holding findings for
+prerequisites already recorded on the task. Utility and surface warnings never
+create dependency edges. Prerequisite prose that names no task, a missing or
+other-workspace task, or an unfinished task that is not a recorded dependency remains a
 promotion warning, because no edge enforces it. The dashboard shows holding
 prerequisites in the pilot comment's **Blocked by** list, and
 `orbit task update --approve` prints the latest assessment's blocker warnings

@@ -86,12 +86,16 @@ pub(in super::super) fn apply_task(
     let mut snapshot = snapshot.clone();
     // Local named targets are locked before their status is read at
     // publication. Missing and other-workspace IDs remain warning text.
-    let mut local_blockers = BTreeSet::new();
-    for id in &named_blockers {
-        if runtime.stores().tasks().get_task(id)?.is_some() {
-            local_blockers.insert(id.clone());
+    let mut local_findings = BTreeSet::new();
+    for id in super::super::promotion::promotion_task_ids(&task.assessment) {
+        if runtime.stores().tasks().get_task(&id)?.is_some() {
+            local_findings.insert(id);
         }
     }
+    let local_blockers = named_blockers
+        .intersection(&local_findings)
+        .cloned()
+        .collect();
     let mut attempt = 0;
     let mut graph_locks = 0;
     loop {
@@ -100,7 +104,7 @@ pub(in super::super) fn apply_task(
         // locks would take a later task's lock out of order and could wait
         // forever on another application doing the same [ORB-15408].
         let graph = runtime
-            .discover_pilot_dependency_graph(&runtime.get_task(&task.task_id)?, &local_blockers)?;
+            .discover_pilot_dependency_graph(&runtime.get_task(&task.task_id)?, &local_findings)?;
         let mut lock_ids = vec![task.task_id.clone()];
         lock_ids.extend(graph.task_ids().cloned());
         lock_ids.sort();
@@ -151,7 +155,7 @@ pub(in super::super) fn apply_task(
             // may approve only dependencies actually stored, never edges the
             // original write skipped or edges it would add on a new apply.
             let Some(graph) =
-                runtime.reread_pilot_dependency_graph(&current, &local_blockers, &graph)?
+                runtime.reread_pilot_dependency_graph(&current, &local_findings, &graph)?
             else {
                 graph_changed = true;
                 return Ok(());
