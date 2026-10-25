@@ -259,7 +259,7 @@ default_crew = "sol"
 `ollama` and `openai_compat` are recognized provider IDs with no shipped
 executor: a crew naming either one loads, then fails at dispatch. See
 [Providers](../../concepts/agents/#providers). `gemini` is the legacy Google
-CLI; `orbit init` prefers `antigravity` when `agy` is installed. For deprecated
+CLI lane; `orbit init` seeds Antigravity's `gemini-flash` and `argon` crews when `agy` is installed. For deprecated
 provider aliases and a starter crew per executor, see
 [Set up an executor](../../concepts/agents/#set-up-an-executor).
 
@@ -300,8 +300,9 @@ enable a crew.
 `orbit init` also seeds the four `workflow.*_complexity_crews` pools from the
 detected providers. Claude only: `haiku` / `sonnet` / `opus` / `opus`. Codex
 only: `luna` / `sol` / `sol` / `astra`. Both: `haiku, luna` / `sol, sonnet` /
-`opus` / `opus, astra`. Grok adds `grok` to `medium`; a Google CLI adds
-`antigravity` (when `agy` is present) or else `gemini` to `low`; with `agy` present, `argon` also joins `hard`. Other
+`opus` / `opus, astra`. Grok adds `grok` to `medium`; a detected `agy` appends
+`gemini-flash` to `low` and `argon` to `hard`; a detected `muse` appends `muse-spark`, `muse-wonder`,
+and `muse-wonder-full` to `low`, `medium`, and `hard`. Other
 providers leave the pools empty, which routes to `default_crew`. Init only
 seeds a new file; an existing config is not rewritten.
 

@@ -741,6 +741,16 @@ fn run() {
     } else {
         false
     };
+    if let command::Commands::Config(config) = &cli.command
+        && let command::config::ConfigSubcommand::Set(args) = &config.command
+        && let Err(error) = command::config::set::preflight_indirect_workspace_write(
+            root_override.as_deref(),
+            args.global,
+        )
+    {
+        print_error(&error, &sink, json_error_preference);
+        orbit_common::observability::logging::exit(1);
+    }
     let bootstrapped = if let RuntimeNeed::UnusableToolInput { message } = &runtime_need {
         Err(orbit_core::OrbitError::InvalidInput(message.clone()))
     } else if claimed_owner_worker {

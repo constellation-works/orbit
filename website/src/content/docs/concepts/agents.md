@@ -361,7 +361,7 @@ model = "gemini-3.8-flash-high"
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
-<div class="ose-note"><p><code>xhigh</code> and <code>max</code> are absent because <code>agy --effort</code> does not define them. Orbit ignores them with a warning instead of downgrading to <code>high</code>.</p><p>Antigravity model ids carry their own effort suffix and must come from <code>agy models</code>. A bare Gemini CLI id such as <code>gemini-3.8-flash</code> is rejected at config load, not rewritten into a suffixed id.</p><p>When <code>agy</code> is detected, <code>orbit init</code> also seeds a built-in <code>argon</code> crew on this lane (<code>gemini-4-argon-high</code>, enabled) and adds it to the <code>hard</code> complexity pool. <code>default_crew</code> stays <code>antigravity</code>.</p></div>
+<div class="ose-note"><p><code>xhigh</code> and <code>max</code> are absent because <code>agy --effort</code> does not define them. Orbit ignores them with a warning instead of downgrading to <code>high</code>.</p><p>Antigravity model ids carry their own effort suffix and must come from <code>agy models</code>. A bare Gemini CLI id such as <code>gemini-3.8-flash</code> is rejected at config load, not rewritten into a suffixed id.</p><p>When <code>agy</code> is detected, <code>orbit init</code> also seeds a built-in <code>argon</code> crew on this lane (<code>gemini-4-argon-high</code>, enabled) and adds it to the <code>hard</code> complexity pool. <code>default_crew</code> stays <code>gemini-flash</code>.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-grok">
 <dl class="ose-facts">

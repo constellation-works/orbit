@@ -8,6 +8,7 @@
 //! `automation` implements it on [`OrbitRuntime`](crate::OrbitRuntime), so
 //! composing the runtime binds it.
 
+use orbit_common::OrbitError;
 use orbit_types::workflow::JobRun;
 use serde_json::Value;
 
@@ -26,4 +27,8 @@ pub(in crate::application) trait JobAutomationPort {
     /// The warning a local drain reports while no enabled, unpaused
     /// task-pilot routine of this workspace is owned by this machine.
     fn pilot_routine_warning(&self) -> Option<String>;
+
+    /// A live task-pilot run that holds `task_id` by its reservation or its
+    /// prepare checkpoint, or `None` when no run does.
+    fn pilot_holder_run(&self, task_id: &str) -> Result<Option<String>, OrbitError>;
 }

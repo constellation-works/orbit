@@ -2250,6 +2250,189 @@ fn canonicalize_or_original(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
+struct ConfigStamp {
+    bytes: Vec<u8>,
+    modified: std::time::SystemTime,
+}
+
+fn config_stamp(path: &Path) -> ConfigStamp {
+    let meta =
+        fs::metadata(path).unwrap_or_else(|error| panic!("metadata {}: {error}", path.display()));
+    ConfigStamp {
+        bytes: fs::read(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display())),
+        modified: meta
+            .modified()
+            .unwrap_or_else(|error| panic!("mtime {}: {error}", path.display())),
+    }
+}
+
+fn assert_config_unchanged(path: &Path, stamp: &ConfigStamp, label: &str) {
+    let now = config_stamp(path);
+    assert_eq!(
+        now.bytes, stamp.bytes,
+        "{label}: live workspace config.toml content changed"
+    );
+    assert_eq!(
+        now.modified, stamp.modified,
+        "{label}: live workspace config.toml mtime changed"
+    );
+}
+
+fn assert_indirect_workspace_refusal(output: &std::process::Output, live_root: &Path, cwd: &Path) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "indirect workspace use must be refused, stderr: {stderr}"
+    );
+    let caller = cwd.join(".orbit");
+    for (label, needle) in [
+        ("resolved workspace", live_root.to_str().expect("live root")),
+        ("caller directory", cwd.to_str().expect("cwd")),
+        ("caller .orbit", caller.to_str().expect("caller orbit")),
+        ("--root escape hatch", "--root"),
+    ] {
+        assert!(
+            stderr.contains(needle),
+            "refusal must name {label} ({needle}): {stderr}"
+        );
+    }
+}
+
+/// An empty `.orbit/` under a linked worktree must not bootstrap or rewrite
+/// the main checkout. A nested directory that already has `config.toml`
+/// resolves to itself, and ordinary reads keep the shared main root.
+#[test]
+fn empty_nested_orbit_in_linked_worktree_does_not_rewrite_main_workspace() {
+    #[cfg(unix)]
+    if crate::isolated_test::run_in_child(
+        "worktree_resolution::empty_nested_orbit_in_linked_worktree_does_not_rewrite_main_workspace",
+    ) {
+        return;
+    }
+
+    let fixture = Fixture::seeded("repo");
+    let main_repo = fixture.repo.as_path();
+    let linked = fixture.init_worktree("repo-worktree", Some("orbit-empty-nested-orbit"));
+    let main_orbit = main_repo.join(".orbit");
+    let main_config = main_orbit.join("config.toml");
+    // Workspace init records identity in config.yaml. The settings file the
+    // incident rewrote is config.toml, so create it with a known value first.
+    fixture.success(
+        main_repo,
+        &[
+            "config",
+            "set",
+            "--fresh",
+            "workflow.base_branch",
+            "agent-main",
+        ],
+    );
+    let stamp = config_stamp(&main_config);
+    let work = linked.join("scratch").join("work");
+    fs::create_dir_all(work.join(".orbit")).expect("empty caller .orbit");
+
+    let init_force = fixture.output(&work, &["workspace", "init", "--force"]);
+    assert_indirect_workspace_refusal(&init_force, &main_orbit, &work);
+    assert_config_unchanged(&main_config, &stamp, "workspace init --force");
+    assert!(
+        !work.join(".orbit/config.toml").exists(),
+        "refused workspace init must not initialize the empty fixture"
+    );
+
+    let config_set = fixture.output(&work, &["config", "set", "workflow.base_branch", "main"]);
+    assert_indirect_workspace_refusal(&config_set, &main_orbit, &work);
+    assert_config_unchanged(&main_config, &stamp, "config set");
+
+    let orbit_init = fixture.output(
+        &work,
+        &[
+            "init",
+            "--non-interactive",
+            "--skip-host-prerequisites",
+            "--machine-name",
+            "empty-nested",
+            "--task-prefix",
+            "ENX",
+        ],
+    );
+    let init_stderr = String::from_utf8_lossy(&orbit_init.stderr);
+    assert!(
+        orbit_init.status.success(),
+        "orbit init targets the global root and must still succeed: {init_stderr}"
+    );
+    assert_config_unchanged(&main_config, &stamp, "orbit init");
+    assert!(
+        !work.join(".orbit/config.toml").exists(),
+        "orbit init must not write the empty fixture config"
+    );
+
+    let from_empty = fixture.json(&work, &["config", "show", "--json"]);
+    assert_root_fields(&from_empty, &main_orbit, &linked.join(".orbit"));
+    assert_config_unchanged(&main_config, &stamp, "config show from empty fixture");
+
+    let with_config = linked.join("scratch").join("with-config");
+    fs::create_dir_all(&with_config).expect("nested initialized fixture");
+    let with_orbit = with_config.join(".orbit");
+    let with_orbit_arg = with_orbit.to_string_lossy().into_owned();
+    fixture.success(
+        &with_config,
+        &["--root", &with_orbit_arg, "workspace", "init"],
+    );
+    assert_config_unchanged(&main_config, &stamp, "explicit --root workspace init");
+    let from_initialized = fixture.json(&with_config, &["config", "show", "--json"]);
+    assert_root_fields(&from_initialized, &with_orbit, &with_orbit);
+    assert_config_unchanged(
+        &main_config,
+        &stamp,
+        "config show from initialized nested fixture",
+    );
+
+    let from_env = fixture.json_with_root(&work, &["config", "show", "--json"], Some(&main_orbit));
+    assert_root_fields(&from_env, &main_orbit, &main_orbit);
+    assert_config_unchanged(&main_config, &stamp, "ORBIT_ROOT config show");
+
+    let bare = fixture.temp.path().join("bare-orbit");
+    fs::create_dir_all(&bare).expect("uninitialized explicit root");
+    let uninitialized = fixture.output_with_root(&work, &["config", "show", "--json"], Some(&bare));
+    let uninitialized_stderr = String::from_utf8_lossy(&uninitialized.stderr);
+    assert!(
+        !uninitialized.status.success(),
+        "uninitialized explicit root must still fail: {uninitialized_stderr}"
+    );
+    assert!(
+        uninitialized_stderr.contains("not an Orbit workspace"),
+        "uninitialized explicit root keeps its existing refusal: {uninitialized_stderr}"
+    );
+    assert_config_unchanged(&main_config, &stamp, "uninitialized explicit root");
+
+    let fresh = fixture.temp.path().join("fresh");
+    Fixture::seed_repo(&fresh);
+    fixture.success(&fresh, &["workspace", "init"]);
+    assert!(
+        fresh.join(".orbit/config.yaml").is_file(),
+        "workspace init in a fresh project must bootstrap that project's .orbit"
+    );
+    assert_config_unchanged(&main_config, &stamp, "fresh project workspace init");
+
+    let from_linked = fixture.json(&linked, &["config", "show", "--json"]);
+    assert_root_fields(&from_linked, &main_orbit, &linked.join(".orbit"));
+    assert_config_unchanged(&main_config, &stamp, "config show from linked worktree");
+
+    fs::create_dir_all(fixture.home.join(".git"))
+        .expect("stop home from walking into another repo");
+    let from_home = fixture.output(&fixture.home, &["workspace", "init"]);
+    let home_stderr = String::from_utf8_lossy(&from_home.stderr);
+    assert!(
+        !from_home.status.success(),
+        "global home must still be refused: {home_stderr}"
+    );
+    assert!(
+        home_stderr.contains("global Orbit root"),
+        "global home keeps its existing refusal: {home_stderr}"
+    );
+    assert_config_unchanged(&main_config, &stamp, "global home workspace init");
+}
+
 // Keep failure output tied to the historical scenario name, including assertions in shared helpers.
 macro_rules! contract_rows {
     ($( $(#[$meta:meta])* $check:ident ),+ $(,)?) => {

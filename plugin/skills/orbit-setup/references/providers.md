@@ -23,7 +23,8 @@ For task dispatch, the first applicable tier wins:
    redraws stale automatic assignments as described in [crew selection](configuration.md#crew-selection-and-actual-execution).
 3. `workflow.default_crew` (workspace config over global config).
 4. `CONSTELLATION_DEFAULT_PROVIDER`: a provider ID or alias; `claude` selects
-   `opus`, `codex` selects `sol` when defined, other IDs select a same-named crew.
+   `opus`, `codex` selects `sol`, `antigravity` selects `gemini-flash` and
+   `muse` selects `muse-spark` when defined, other IDs select a same-named crew.
    This applies even without config files; unset/blank leaves the built-in default.
 5. Built-in default: `opus`, or the legacy `claude` crew.
 
