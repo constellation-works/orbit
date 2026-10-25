@@ -3050,6 +3050,84 @@ function goToLandingRetry(detail, claim) {
   if (target.tagName === "INPUT") target.focus({ preventScroll: true });
 }
 
+// The five facts an operator needs before deciding what to do with a blocked
+// task or a held delivery. Read-only: the block callout keeps the actions.
+function buildWhyStuckCard(task) {
+  const stuck = task.why_stuck;
+  if (!stuck || typeof stuck !== "object") return null;
+  const headingId = `why-stuck-${task.id}`;
+  return el("section", { class: "why-stuck", "aria-labelledby": headingId }, [
+    el("h3", { class: "why-stuck-title", id: headingId, text: "Why stuck" }),
+    el("dl", { class: "why-stuck-rows" }, [
+      whyStuckRow("Escalation", whyStuckNote(stuck.escalation_note)),
+      whyStuckRow("Landing review", whyStuckLanding(stuck.landing_review)),
+      whyStuckRow("Root cause", whyStuckNote(stuck.root_cause)),
+      whyStuckRow("Mergeable", whyStuckMergeable(stuck.pull_request)),
+      whyStuckRow("Required checks", whyStuckChecks(stuck.pull_request)),
+    ]),
+  ]);
+}
+
+function whyStuckRow(label, value) {
+  const body = typeof value === "string"
+    ? el("dd", { class: "why-stuck-value", text: value })
+    : value;
+  if (body && body.classList && !body.classList.contains("why-stuck-value") && body.tagName !== "UL") {
+    body.classList.add("why-stuck-value");
+  }
+  return el("div", { class: "why-stuck-row" }, [
+    el("dt", { class: "why-stuck-label", text: label }),
+    body,
+  ]);
+}
+
+function whyStuckNote(fact) {
+  if (!fact || typeof fact !== "object") return "unavailable";
+  if (fact.availability === "none") return "none";
+  if (fact.availability === "read" && typeof fact.text === "string" && fact.text.trim()) return fact.text;
+  return "unavailable";
+}
+
+function whyStuckLanding(fact) {
+  if (!fact || fact.availability !== "read" || typeof fact.verdict !== "string" || !fact.verdict.trim()) {
+    return "unavailable";
+  }
+  return `${fact.verdict} · ${whyStuckFindings(fact.finding_count)}`;
+}
+
+function whyStuckFindings(count) {
+  if (typeof count !== "number" || !Number.isFinite(count)) return "findings unavailable";
+  const n = Math.trunc(count);
+  return n === 1 ? "1 finding" : `${n} findings`;
+}
+
+function whyStuckMergeable(pull) {
+  if (pull && pull.availability === "read" && (pull.mergeable === "mergeable" || pull.mergeable === "conflicting")) {
+    return pull.mergeable;
+  }
+  const detail = pull && typeof pull.detail === "string" ? pull.detail.trim() : "";
+  return detail ? `unavailable — ${detail}` : "unavailable";
+}
+
+function whyStuckChecks(pull) {
+  if (!pull || pull.availability !== "read" || !Array.isArray(pull.checks)) {
+    return el("dd", { class: "why-stuck-value", text: "unavailable" });
+  }
+  const checks = pull.checks.filter((check) => check && typeof check.name === "string" && check.name.trim());
+  if (!checks.length) return el("dd", { class: "why-stuck-value", text: "none" });
+  return el("ul", { class: "why-stuck-checks" }, checks.map((check) => {
+    const state = check.state === "failed" || check.state === "passed" || check.state === "pending"
+      ? check.state
+      : "pending";
+    const item = el("li", { class: "why-stuck-check" }, [
+      el("span", { class: "why-stuck-check-name", text: check.name }),
+      el("span", { class: "why-stuck-state", text: state }),
+    ]);
+    item.setAttribute("data-state", state);
+    return item;
+  }));
+}
+
 // Core selects the latest block or escalation and supplies readable evidence.
 // Render it as text: diagnoses and operator actions are untrusted task content.
 function buildTaskBlockCallout(task, context, detail) {
@@ -3343,6 +3421,8 @@ function buildTaskDetail(task, context, drain = null) {
   band.appendChild(metaBlock);
   const blockCallout = buildTaskBlockCallout(task, context, detail);
   if (blockCallout) band.appendChild(blockCallout);
+  const whyStuck = buildWhyStuckCard(task);
+  if (whyStuck) band.appendChild(whyStuck);
   const pilotCallout = buildPilotWarnings(task);
   if (pilotCallout) band.appendChild(pilotCallout);
   const deliveryAttentionBanner = buildDeliveryAttentionBanner(task);

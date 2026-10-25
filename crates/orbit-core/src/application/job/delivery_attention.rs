@@ -10,7 +10,7 @@ use orbit_types::workflow::{
     JobRun, JobRunState, PR_AUTO_FIX_ADMITTED_EVENT, PR_AUTO_FIX_PUSHED_EVENT, PrAutoFixAttempt,
     PrAutoFixPush,
 };
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::job::{run_display_steps, run_error_step};
@@ -21,6 +21,9 @@ use crate::runtime::run_input::carried_task_ids;
 mod tests;
 
 const DELIVERY_JOB: &str = "task_pr_pipeline";
+const CLAIMED_DELIVERY_JOB: &str = "task_claimed_pr_pipeline";
+/// YAML step whose output and error carry the landing-review gate settlement.
+pub const LANDING_REVIEW_SETTLE_STEP: &str = "landing_review_gate_settle";
 
 fn eligible(task: &Task) -> bool {
     task.status == TaskStatus::Review
@@ -56,6 +59,90 @@ fn latest_push_at(history: &[TaskHistoryEntry], pr_number: Option<&str>) -> Opti
 
 fn run_at(run: &JobRun) -> DateTime<Utc> {
     run.finished_at.or(run.started_at).unwrap_or(run.created_at)
+}
+
+fn single_task(run: &JobRun, task_id: &str) -> bool {
+    let carried = run.input.as_ref().map(carried_task_ids).unwrap_or_default();
+    carried.len() == 1 && carried.contains(task_id)
+}
+
+/// Verdict and finding count recorded by the landing-review gate step.
+///
+/// `output` is that step's pipeline output. `step_error` is the step's own
+/// error text, which is where a blocked settlement records the verdict and
+/// the finding count. A known gate word (`awaiting_evidence`, and the other
+/// settlements that are not a review verdict) is the displayed outcome when
+/// the step recorded no verdict. The count stays absent when the step did
+/// not record one; callers tell that from a missing verdict.
+pub fn landing_review_gate_facts(output: Option<&Value>, step_error: Option<&str>) -> Value {
+    let object = output.and_then(Value::as_object);
+    let mut verdict = text_field(object, "verdict").map(str::to_string);
+    let gate = text_field(object, "gate");
+    let mut count = object.and_then(|object| finding_count(object.get("findings")));
+    if let Some(message) = step_error.map(str::trim).filter(|text| !text.is_empty()) {
+        if verdict.is_none() {
+            verdict = verdict_from_message(message).map(str::to_string);
+        }
+        if count.is_none() {
+            count = finding_count_from_message(message);
+        }
+    }
+    let Some(shown) = verdict.or_else(|| gate.and_then(known_gate_label).map(str::to_string))
+    else {
+        return json!({ "availability": "unavailable" });
+    };
+    json!({
+        "availability": "read",
+        "verdict": shown,
+        "finding_count": count,
+    })
+}
+
+fn text_field<'a>(object: Option<&'a Map<String, Value>>, key: &str) -> Option<&'a str> {
+    object
+        .and_then(|object| object.get(key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+}
+
+fn finding_count(value: Option<&Value>) -> Option<u64> {
+    let value = value?;
+    if let Some(count) = value.as_u64() {
+        return Some(count);
+    }
+    if let Some(count) = value.as_i64().filter(|count| *count >= 0) {
+        return Some(count as u64);
+    }
+    value.as_array().map(|items| items.len() as u64)
+}
+
+fn verdict_from_message(message: &str) -> Option<&str> {
+    let rest = message.split("verdict ").nth(1)?;
+    let token = rest.split([' ', '(']).next()?.trim();
+    (!token.is_empty()).then_some(token)
+}
+
+fn finding_count_from_message(message: &str) -> Option<u64> {
+    let marker = message
+        .find(" finding(s) recorded")
+        .or_else(|| message.find(" finding recorded"))?;
+    message[..marker]
+        .split_whitespace()
+        .next_back()?
+        .parse()
+        .ok()
+}
+
+fn known_gate_label(gate: &str) -> Option<&'static str> {
+    match gate {
+        "awaiting_evidence" => Some("awaiting evidence"),
+        "forge_unavailable" => Some("forge unavailable"),
+        "not_required" => Some("not required"),
+        "abandoned" => Some("abandoned"),
+        "passed" => Some("passed"),
+        _ => None,
+    }
 }
 
 /// Pure projection from already-read durable state.
@@ -190,10 +277,7 @@ impl OrbitRuntime {
                 .get(&row.task.id)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
-            let newest = runs.iter().find(|run| {
-                let carried = run.input.as_ref().map(carried_task_ids).unwrap_or_default();
-                carried.len() == 1 && carried.contains(&row.task.id)
-            });
+            let newest = runs.iter().find(|run| single_task(run, &row.task.id));
             // Detail has always treated any carried live run, including a
             // multi-task repair, as repairing within this task's window.
             let repairing = runs.iter().any(is_live);
@@ -215,5 +299,39 @@ impl OrbitRuntime {
             }
         }
         Ok(map)
+    }
+
+    /// The newest single-task delivery run for `task_id`.
+    ///
+    /// Owner (`task_pr_pipeline`) and claimed (`task_claimed_pr_pipeline`)
+    /// pipelines both count. Each contributes its newest run that carries
+    /// exactly this task, and the later of the two wins. An equal timestamp
+    /// keeps the owner pipeline, which is read first. This does not change
+    /// which runs [`Self::delivery_attention_map`] treats as delivery attention.
+    pub fn newest_single_task_delivery_run(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<JobRun>, OrbitError> {
+        let ids = [task_id.to_string()];
+        let mut best: Option<JobRun> = None;
+        for job in [DELIVERY_JOB, CLAIMED_DELIVERY_JOB] {
+            let runs = self
+                .stores()
+                .jobs()
+                .recent_job_runs_for_tasks(job, &ids, 8)?;
+            let Some(runs) = runs.get(task_id) else {
+                continue;
+            };
+            let Some(newest) = runs.iter().find(|run| single_task(run, task_id)) else {
+                continue;
+            };
+            if best
+                .as_ref()
+                .is_none_or(|current| run_at(newest) > run_at(current))
+            {
+                best = Some(newest.clone());
+            }
+        }
+        Ok(best)
     }
 }

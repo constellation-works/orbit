@@ -52,17 +52,20 @@ pub(crate) fn task_to_json(
 /// pull requests, the lifecycle transitions with their evidence requirements,
 /// run navigability and `readiness.preparing` — and, for a proposed task
 /// held by pilot warnings or a blocked task, `escalation_triage`: whether
-/// the details panel's Triage action may submit now, and why not.
+/// the details panel's Triage action may submit now, and why not. A blocked
+/// task, or a task whose latest delivery run is held, also carries
+/// `why_stuck`.
 pub(crate) fn task_detail_json(
     runtime: &OrbitRuntime,
     row: &TaskRow,
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Value, OrbitError> {
     let mut value = task_detail_with_dashboard_extras(runtime, row, status_by_id)?;
-    if let Some(triage) = runtime.escalation_triage_eligibility_json(row)?
-        && let Some(object) = value.as_object_mut()
-    {
-        object.insert("escalation_triage".to_string(), triage);
+    if let Some(object) = value.as_object_mut() {
+        if let Some(triage) = runtime.escalation_triage_eligibility_json(row)? {
+            object.insert("escalation_triage".to_string(), triage);
+        }
+        crate::why_stuck::attach_why_stuck(runtime, row, object)?;
     }
     Ok(value)
 }
