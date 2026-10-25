@@ -367,6 +367,8 @@ fn merged_pull_request_from_json(entry: &Value) -> Option<MergedPullRequest> {
 /// Read a GraphQL pull request answer whose mergeability can be judged. The
 /// caller classifies `UNKNOWN` separately; a head the rollup does not describe
 /// or a truncated rollup cannot be judged, so neither is reported as no blocker.
+/// Every context must say whether it is required: an unreadable flag cannot
+/// prove a failed or unfinished check optional.
 fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequestBlockers> {
     let head_sha = pull.get("headRefOid")?.as_str()?.to_string();
     let conflicting = match pull.get("mergeable")?.as_str()? {
@@ -391,7 +393,7 @@ fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequ
             return None;
         }
         for context in contexts.get("nodes")?.as_array()? {
-            if context.get("isRequired").and_then(Value::as_bool) != Some(true) {
+            if !context.get("isRequired")?.as_bool()? {
                 continue;
             }
             let name = context

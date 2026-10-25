@@ -10,7 +10,9 @@
 use super::failed_publication::escalated_completion_fixture;
 use super::handoff_requeue::{assert_next_run_resumes_the_published_candidate, refused, requeue};
 use super::*;
-use orbit_core::runtime::task_pr_forge::{ForgePullRequest, PullRequestBlockers, TaskPrForge};
+use orbit_core::runtime::task_pr_forge::{
+    ForgePullRequest, GhTaskPrForge, PullRequestBlockers, TaskPrForge,
+};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -157,6 +159,94 @@ fn an_escalated_publication_with_green_checks_is_requeued_onto_its_pull_request(
         "written by Orbit, not the operator"
     );
     assert_next_run_resumes_the_published_candidate(&f);
+}
+
+/// A successful required check cannot make an unreadable neighbouring check
+/// optional. Exercise the real forge reader as well as the operator requeue.
+fn escalated_publication_requeue_refuses_unreadable_required_flags() {
+    let (mut f, checkout, _) = escalated_completion_fixture();
+    let rollup = f._root.path().join("rollup.json");
+    std::fs::write(
+        f._root.path().join("bin/gh"),
+        format!(
+            "#!/bin/sh\ncase \"$1 $2 $3\" in\n'pr view 17') cat '{}' ;;\n'api graphql '*) cat '{}' ;;\n'api user '*) echo orbit-bot ;;\n*) exit 99 ;;\nesac\n",
+            f.answer.display(),
+            rollup.display()
+        ),
+    )
+    .unwrap();
+    f.runtime = f
+        .runtime
+        .clone()
+        .with_task_pr_forge(Arc::new(GhTaskPrForge));
+    let answer = json!({"data":{"repository":{"pullRequest":{
+        "number":17, "state":"OPEN", "headRefName":f.branch, "headRefOid":f.head,
+        "author":{"login":"orbit-bot"}, "body":format!("Delivers {}.", f.task),
+        "mergeable":"MERGEABLE", "commits":{"nodes":[{"commit":{
+            "oid":f.head, "statusCheckRollup":{"contexts":{
+                "pageInfo":{"hasNextPage":false}, "nodes":[
+                    {"__typename":"CheckRun", "name":"Check", "status":"COMPLETED",
+                        "conclusion":"SUCCESS", "isRequired":true},
+                    {"__typename":"CheckRun", "name":"Test", "status":"COMPLETED",
+                        "conclusion":"FAILURE"}
+                ]
+            }}
+        }}]}
+    }}}});
+    let node =
+        "/data/repository/pullRequest/commits/nodes/0/commit/statusCheckRollup/contexts/nodes/1";
+    let refs = git(&f.repo, &["ls-remote", "origin"]);
+    for status in ["COMPLETED", "IN_PROGRESS"] {
+        for required in [None, Some(Value::Null), Some(json!("true"))] {
+            let case = format!("{status}, isRequired={required:?}");
+            let mut malformed = answer.clone();
+            let check = malformed.pointer_mut(node).unwrap();
+            check["status"] = json!(status);
+            if let Some(required) = required {
+                check["isRequired"] = required;
+            }
+            std::fs::write(&rollup, malformed.to_string()).unwrap();
+            assert!(
+                GhTaskPrForge.pull_request_blockers(&f.repo, 17).is_err(),
+                "{case}: unreadable rollup was classified as readable"
+            );
+            let error = refused(&f, false, &case);
+            assert!(
+                error.contains("required checks unreadable"),
+                "{case}: {error}"
+            );
+            assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), f.head, "{case}");
+            assert_eq!(git(&f.repo, &["ls-remote", "origin"]), refs, "{case}");
+        }
+    }
+    // A boolean false proves the failed neighbour optional; boolean true
+    // with a successful conclusion proves both required checks green.
+    for required in [false, true] {
+        let mut valid = answer.clone();
+        let check = valid.pointer_mut(node).unwrap();
+        check["isRequired"] = json!(required);
+        if required {
+            check["conclusion"] = json!("SUCCESS");
+        }
+        std::fs::write(&rollup, valid.to_string()).unwrap();
+        let blockers = GhTaskPrForge
+            .pull_request_blockers(&f.repo, 17)
+            .unwrap()
+            .unwrap();
+        assert!(blockers.failed_required_checks.is_empty());
+        assert!(blockers.pending_required_checks.is_empty());
+        assert_eq!(
+            blockers.passed_required_checks,
+            if required {
+                vec!["Check", "Test"]
+            } else {
+                vec!["Check"]
+            }
+        );
+    }
+    let resumed = requeue(&f, false).unwrap();
+    assert_eq!(resumed["status"], "backlog", "{resumed}");
+    assert_eq!(resumed["resumes"]["head_sha"], f.head, "{resumed}");
 }
 
 /// Each neighbouring state is refused with nothing written, and none of the
@@ -319,6 +409,7 @@ fn a_resume_whose_worktree_is_gone_is_refused_before_the_task_moves() {
 crate::scenario_table!(
     escalated_publication_scenarios,
     an_escalated_publication_with_green_checks_is_requeued_onto_its_pull_request,
+    escalated_publication_requeue_refuses_unreadable_required_flags,
     escalated_publication_requeue_keeps_its_neighbouring_refusals,
     escalated_publication_requeue_refuses_a_changed_specification_and_terminal_tasks,
     a_resume_whose_worktree_is_gone_is_refused_before_the_task_moves
