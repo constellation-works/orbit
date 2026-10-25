@@ -281,11 +281,11 @@ function deliveryFields(delivery, onInput) {
   ];
 }
 
-function missedRunField(draft) {
+function missedRunField(draft, changed) {
   return labelled("Missed slots", selectInput(
     [["skip", "Skip — wait for the next slot"], ["catch_up_once", "Catch up once"]],
     draft.missed_run,
-    (value) => { draft.missed_run = value; },
+    (value) => { draft.missed_run = value; changed(); },
   ), "slots that fell while the host was off");
 }
 
@@ -402,7 +402,7 @@ export function routineTriggerEditor({ key, routine, cronPreview, save, onClose 
         return [
           el("div", { class: "schedule-grid" }, [
             labelled("Cron", textInput(draft, "cron", { placeholder: "m h dom mon dow", onInput: changed }), "host-local time"),
-            missedRunField(draft),
+            missedRunField(draft, changed),
           ]),
         ];
       }

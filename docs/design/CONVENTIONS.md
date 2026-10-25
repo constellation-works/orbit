@@ -257,6 +257,7 @@ Retired features are removed from this table along with their folder.
 | Crew Performance | [docs/design/crew-performance/](./crew-performance/) | claude |
 | Distributed Drain | [docs/design/distributed-drain/](./distributed-drain/) | claude |
 | Executors | [docs/design/executors/](./executors/) | claude |
+| Explore Brief | [docs/design/explore-brief/](./explore-brief/) | claude |
 | Federated MCP | [docs/design/federated-mcp/](./federated-mcp/) | grok |
 | Finding Verification | [docs/design/finding-verification/](./finding-verification/) | claude |
 | Hidden Acceptance (archived) | [docs/design/_archived/hidden-acceptance/](./_archived/hidden-acceptance/) | claude |
