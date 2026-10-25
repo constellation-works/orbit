@@ -16,7 +16,7 @@ const pendingOperations = new Set();
 const UNCONDITIONAL_MINT_WARNING = "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.";
 // The Tasks dock's simple Start card. The Drain page's Start a window view is
 // the full composer in drain-start.js; each home renders only its own form.
-const AUTO_DRAIN_DURATION_SECONDS = { "15m": 900, "30m": 1800, "1h": 3600, "2h": 7200, "4h": 14400, "8h": 28800 };
+const AUTO_DRAIN_DURATION_SECONDS = { "1h": 3600, "2h": 7200, "4h": 14400, "8h": 28800, "12h": 43200, "24h": 86400 };
 const AUTO_DRAIN_DURATIONS = Object.keys(AUTO_DRAIN_DURATION_SECONDS);
 const AUTO_DRAIN_APPROVE_WARNING = "The window will approve qualifying proposed tasks, including ones filed while it runs.";
 const AUTO_DRAIN_COMPLETE_WARNING = "Also marks every task this window ships as done (review -> done), not only the ones eligible right now.";
