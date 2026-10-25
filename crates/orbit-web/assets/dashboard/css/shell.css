@@ -218,9 +218,10 @@
 }
 .rail-host .workspace-select { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; }
 
-/* The rail's foot, pinned below the destinations: when the dashboard last
-   refreshed ("refreshed <destination> · <time>"; the host is the scope
-   card's, so it is not repeated), then the UTC | Local clock. */
+/* The rail's foot, pinned below the destinations: the host block, then the
+   last refresh time (the destination rides in its title and accessible
+   name, so the visible line stays on one line), then the UTC | Local
+   clock. No divider above the host block; spacing alone separates it. */
 .rail-foot {
   display: flex;
   flex-direction: column;
@@ -230,7 +231,6 @@
   margin-top: auto;
   padding: 8px 2px 8px;
   margin-bottom: -8px;
-  border-top: 1px solid var(--hair);
   background: var(--bg-rail);
 }
 .rail .tabs { margin-bottom: 10px; }
@@ -249,11 +249,10 @@
 .rail-conn .status-dot { flex: none; }
 .rail-conn .conn-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .rail-conn .conn-host { display: none; }
-/* The fixed-width rail wraps the line rather than cut its time off. */
-@media (min-width: 761px) {
-  .rail-conn { align-items: flex-start; white-space: normal; }
-  .rail-conn .status-dot { margin-top: 0.35em; }
-}
+/* The connection line stays on one line at every width (the base
+   .rail-conn rule is white-space: nowrap); the text ellipsizes inside
+   .conn-text and the full wording rides in the title, so the refresh
+   time is never clipped. */
 /* Specific enough to beat `.scoreboard-window-selector`, concatenated later. */
 .rail-foot .clock-zone {
   display: flex;

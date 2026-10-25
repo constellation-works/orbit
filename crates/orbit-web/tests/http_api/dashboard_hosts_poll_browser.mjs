@@ -68,14 +68,16 @@ try {
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_0#config/hosts`);
   await page.waitForFunction(() => document.querySelector('.host-drain')?.title.includes('Workspace 9:'));
-  await page.waitForFunction(() => document.getElementById('meta-text')?.textContent.startsWith('refreshed'));
+  await page.waitForFunction(() => /^\d{2}:\d{2}:\d{2} |^refreshed/.test(document.getElementById('meta-text')?.textContent || ''));
   const measure = async () => page.evaluate(async () => {
     requests.length = 0;
     document.getElementById('refresh-btn').click();
     // A macrotask lets the full refresh settle, including resource reads that
     // are intentionally independent of the dashboard's completion promise.
+    // The success line shows only the refresh time (the destination rides in
+    // the title), so settle on the bare clock as well as the legacy prefix.
     await new Promise(resolve => { const id = setInterval(() => {
-      if (document.getElementById('meta-text').textContent.startsWith('refreshed')) { clearInterval(id); resolve(); }
+      if (/^\d{2}:\d{2}:\d{2} |^refreshed/.test(document.getElementById('meta-text').textContent)) { clearInterval(id); resolve(); }
     }, 0); });
     return { requests: [...requests], drain: document.querySelector('.host-drain').title,
       workspaces: document.querySelectorAll('.host-row.local .host-workspace').length };
@@ -107,7 +109,7 @@ try {
   await page.clock.runFor(29_000);
   await page.evaluate(() => { requests.length = 0; });
   await page.clock.runFor(1000);
-  await page.waitForFunction(() => document.getElementById('meta-text')?.textContent.startsWith('refreshed'));
+  await page.waitForFunction(() => /^\d{2}:\d{2}:\d{2} |^refreshed/.test(document.getElementById('meta-text')?.textContent || ''));
   const scheduledRequests = await page.evaluate(() => [...requests]);
   assert.ok(scheduledRequests.some(url => url.includes('/hosts?probe=false')), 'the visible 30s timer actually refreshed Hosts');
   if (!baseline) assert.ok(scheduledRequests.length <= 10, JSON.stringify(scheduledRequests));
