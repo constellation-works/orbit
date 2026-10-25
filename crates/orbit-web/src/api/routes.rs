@@ -171,9 +171,17 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         )
         .route("/routines", get(routines::list_routine_health))
         .route("/routines/toggle", post(routines::toggle_routine))
+        .route(
+            "/routines/trigger",
+            post(schedule_edits::set_routine_trigger),
+        )
         .route("/routines/clock", post(routines::control_clock))
         .route("/auto-tasks", get(auto_tasks::list_auto_tasks))
         .route("/auto-tasks/toggle", post(auto_tasks::toggle_auto_task))
+        .route(
+            "/auto-tasks/schedule",
+            post(schedule_edits::set_auto_task_schedule),
+        )
         .route("/auto-tasks/mint", post(auto_tasks::mint_auto_task))
         .route("/cost", get(cost::cost))
         // [ORB-15922] Deprecated alias for /cost; delete after 2026-11-12.

@@ -2,7 +2,7 @@
 //! schedule interpretation, atomic edits and dispatch belong to their domain owners.
 use chrono::Utc;
 use orbit_common::{OrbitError, protocol::tool_input::required_string};
-use orbit_types::workflow::JobRunTrigger;
+use orbit_types::workflow::{JobRunTrigger, RoutineTrigger};
 use serde_json::{Value, json};
 
 use crate::runtime::audit::run_logs::bounded_redacted_text;
@@ -11,8 +11,9 @@ use crate::{
     application::{
         job::JobCatalogFilter,
         routines::{
-            FireField, RoutineField, RoutineToggleOutcome,
+            FireField, RoutineField, RoutineToggleOutcome, RoutineTriggerEditOutcome,
             status::{checkout_routine_statuses, toggle_checkout_routine},
+            trigger_edit::edit_checkout_routine_trigger,
         },
     },
 };
@@ -151,6 +152,14 @@ fn boolean(input: &Value, key: &str) -> Result<bool, OrbitError> {
         .ok_or_else(|| invalid(&format!("{key} must be a boolean")))
 }
 
+fn trigger_field(input: &Value, key: &str) -> Result<RoutineTrigger, OrbitError> {
+    let value = input
+        .get(key)
+        .ok_or_else(|| invalid(&format!("{key} is required")))?;
+    serde_json::from_value(value.clone())
+        .map_err(|error| invalid(&format!("{key} is not a valid routine trigger: {error}")))
+}
+
 pub(in crate::adapter::tool_host) fn control(
     runtime: &OrbitRuntime,
     input: Value,
@@ -159,13 +168,14 @@ pub(in crate::adapter::tool_host) fn control(
     let action = required_string(&input, &["action"], "action")?;
     let kind = required_string(&input, &["kind"], "kind")?;
     let name = required_string(&input, &["name"], "name")?;
-    // A routine toggle carries its own checkout-role authority; every other
+    // A routine edit carries its own checkout-role authority; every other
     // control is a coordination write.
-    if (kind.as_str(), action.as_str()) != ("routine", "toggle") {
+    if kind != "routine" {
         runtime.ensure_coordination_task_write_permitted()?;
     }
     let allowed = match (kind.as_str(), action.as_str()) {
         ("routine", "toggle") => vec!["expected_enabled", "enabled", "target"],
+        ("routine", "set_trigger") => vec!["expected_trigger", "trigger", "target"],
         ("auto_task", "toggle") => vec!["expected_enabled", "enabled"],
         ("auto_task", "mint") => vec!["acknowledge_unconditional"],
         ("job", "run") => vec![],
@@ -176,6 +186,8 @@ pub(in crate::adapter::tool_host) fn control(
         "enabled",
         "target",
         "acknowledge_unconditional",
+        "expected_trigger",
+        "trigger",
     ] {
         if input.get(key).is_some() && !allowed.contains(&key) {
             return Err(invalid(&format!("{key} is not valid for this action")));
@@ -195,6 +207,21 @@ pub(in crate::adapter::tool_host) fn control(
                 }
                 RoutineToggleOutcome::Conflict { .. } => {
                     return Err(invalid("routine changed; refresh before retrying"));
+                }
+            }
+        }
+        ("routine", "set_trigger") => {
+            let expected = trigger_field(&input, "expected_trigger")?;
+            let trigger = trigger_field(&input, "trigger")?;
+            let target = required_string(&input, &["target"], "target")?;
+            match edit_checkout_routine_trigger(runtime, &name, &target, &expected, trigger)? {
+                RoutineTriggerEditOutcome::Changed => json!({"changed":true}),
+                RoutineTriggerEditOutcome::Unchanged => json!({"changed":false}),
+                RoutineTriggerEditOutcome::TargetConflict { .. } => {
+                    return Err(invalid("routine target changed; refresh before retrying"));
+                }
+                RoutineTriggerEditOutcome::Conflict { .. } => {
+                    return Err(invalid("routine trigger changed; refresh before retrying"));
                 }
             }
         }

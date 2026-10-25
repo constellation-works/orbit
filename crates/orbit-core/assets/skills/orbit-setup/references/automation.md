@@ -316,6 +316,21 @@ Use `orbit routine show <name>` for a complete installed example and effective
 state; `orbit routine --help` lists the management commands. Keep the schema
 version and field names from the installed definition when authoring one.
 
+### Changing a routine's trigger
+
+An operator can replace a routine's `trigger:` block without opening the file:
+the dashboard's **Automation › Routines** row has an **edit** link beside the
+cadence, and `orbit.routine.control` takes `action: "set_trigger"` with the
+observed `target` and `expected_trigger` and the replacement `trigger`. Both run
+the same write: it refuses a target or trigger that changed since you read it,
+checks the new trigger as the loader would (exactly one of `cron`, `state` or
+`deliveries_landed`; a cron that parses; a state kind whose job is the routine's
+target; `overlap: forbid` for state and delivery triggers), and rewrites only
+the `trigger:` block. Comments inside that block are not kept; the rest of the
+file is. Name, target, policy and `enabled` are not editable this way. Editing a
+seeded routine makes it a local edit: `orbit workspace sync` keeps your file and
+stops refreshing it from Orbit's template.
+
 ## Routines a plugin seeds
 
 An installed plugin may ship routines. `orbit plugin enable <ns>` seeds each

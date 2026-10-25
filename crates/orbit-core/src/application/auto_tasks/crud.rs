@@ -432,6 +432,29 @@ impl OrbitRuntime {
         })
     }
 
+    /// Compare and replace the schedule while holding the scheduler cursor
+    /// lock: the schedule half of [`Self::auto_task_update`], with the same
+    /// coverage and definition validation, for a caller that must not
+    /// overwrite a schedule it did not observe.
+    pub fn auto_task_set_schedule_checked(
+        &self,
+        name: &str,
+        expected: &AutoTaskSchedule,
+        schedule: AutoTaskSchedule,
+    ) -> Result<AutoTaskDefinition, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        reject_retired_delivery_coverage(&schedule)?;
+        self.try_edit_auto_task(name, |definition| {
+            if &definition.schedule != expected {
+                return Err(OrbitError::InvalidInput(
+                    "auto-task schedule changed; refresh before retrying".into(),
+                ));
+            }
+            definition.schedule = schedule;
+            Ok(())
+        })
+    }
+
     /// Mint one task from a definition on demand — the manual counterpart to a
     /// scheduler fire, so a new or edited definition can be exercised without
     /// waiting for its cron slot [ORB-10439].

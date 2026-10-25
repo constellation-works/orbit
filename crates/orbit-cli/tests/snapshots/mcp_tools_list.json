@@ -1122,7 +1122,7 @@
   },
   {
     "name": "orbit_routine_control",
-    "description": "List workspace routine status or toggle one definition using its observed enabled state and target. Requires trusted operator authority and explicit workspace. Never replay a toggle after a lost reply; observe authoritative state first.",
+    "description": "List workspace routine status, toggle one definition using its observed enabled state and target, or replace its trigger using its observed trigger and target. Requires trusted operator authority and explicit workspace. Never replay a change after a lost reply; observe authoritative state first.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1132,11 +1132,11 @@
         },
         "action": {
           "type": "string",
-          "description": "list or toggle"
+          "description": "list, toggle or set_trigger"
         },
         "name": {
           "type": "string",
-          "description": "Required for toggle: exact routine name"
+          "description": "Required for toggle and set_trigger: exact routine name"
         },
         "expected_enabled": {
           "type": "boolean",
@@ -1148,7 +1148,35 @@
         },
         "target": {
           "type": "string",
-          "description": "Required for toggle: observed routine target"
+          "description": "Required for toggle and set_trigger: observed routine target"
+        },
+        "expected_trigger": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          ],
+          "description": "Required for set_trigger: observed trigger object, as listed"
+        },
+        "trigger": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          ],
+          "description": "Required for set_trigger: replacement trigger, exactly one of `cron` (with optional `missed_run`), `state` or `deliveries_landed`"
         },
         "offset": {
           "type": "integer",

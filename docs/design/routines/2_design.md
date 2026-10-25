@@ -97,9 +97,12 @@ fields they render from it. Core also owns one clock-health classification,
 which each surface names in its own vocabulary: `orbit clock status` reads any
 reported health issue as `unhealthy`, while the dashboard's `health` stays
 `healthy` for an enabled clock with a future trigger and reports an enabled
-clock without one as `missed`. Dashboard and MCP routine toggles run the same
-Core selection (owner-only refusal, name lookup, source workspace, target);
-the dashboard keeps its own authorization, audit rows and error codes.
+clock without one as `missed`. Dashboard and MCP routine toggles and trigger
+edits (`set_trigger`) run the same Core selection (owner-only refusal, name
+lookup, source workspace, target); the dashboard keeps its own authorization,
+audit rows and error codes. A trigger edit compares the observed trigger,
+validates the replacement as the loader does, and rewrites only the file's
+`trigger:` block.
 Next evaluation uses schedule display state (`scheduled`, `disabled`, `paused`,
 `waiting`, `never_observed`, `unavailable`) so a disabled or paused routine
 does not look armed; a theoretical next slot is labeled hypothetical. The time

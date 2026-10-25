@@ -33,13 +33,15 @@ impl Tool for RoutineControlTool {
         ToolExecutionKind::Mutating
     }
     fn schema(&self) -> ToolSchema {
-        ToolSchema { name: "orbit.routine.control".into(), description: "List workspace routine status or toggle one definition using its observed enabled state and target. Requires trusted operator authority and explicit workspace. Never replay a toggle after a lost reply; observe authoritative state first.".into(), builtin: true, parameters: vec![
+        ToolSchema { name: "orbit.routine.control".into(), description: "List workspace routine status, toggle one definition using its observed enabled state and target, or replace its trigger using its observed trigger and target. Requires trusted operator authority and explicit workspace. Never replay a change after a lost reply; observe authoritative state first.".into(), builtin: true, parameters: vec![
             parameter("workspace", "string", true, "Exact workspace selector from discovery"),
-            parameter("action", "string", true, "list or toggle"),
-            parameter("name", "string", false, "Required for toggle: exact routine name"),
+            parameter("action", "string", true, "list, toggle or set_trigger"),
+            parameter("name", "string", false, "Required for toggle and set_trigger: exact routine name"),
             parameter("expected_enabled", "boolean", false, "Required for toggle: observed enabled state"),
             parameter("enabled", "boolean", false, "Required for toggle: desired enabled state"),
-            parameter("target", "string", false, "Required for toggle: observed routine target"),
+            parameter("target", "string", false, "Required for toggle and set_trigger: observed routine target"),
+            parameter("expected_trigger", "object", false, "Required for set_trigger: observed trigger object, as listed"),
+            parameter("trigger", "object", false, "Required for set_trigger: replacement trigger, exactly one of `cron` (with optional `missed_run`), `state` or `deliveries_landed`"),
             parameter("offset", "integer", false, "List offset; default 0"),
             parameter("limit", "integer", false, "List size 1 through 50; default 25"),
             parameter("model", "string", false, "Diagnostic model attribution; never grants authority"),
@@ -77,8 +79,24 @@ impl Tool for RoutineControlTool {
                 input["kind"] = json!("routine");
                 super::execute_host_action(ctx, input, OrbitBuiltinAction::DesktopAutomation)
             }
+            "set_trigger" => {
+                reject_unknown_tool_fields(
+                    &input,
+                    &[
+                        "workspace",
+                        "action",
+                        "name",
+                        "expected_trigger",
+                        "trigger",
+                        "target",
+                        "model",
+                    ],
+                )?;
+                input["kind"] = json!("routine");
+                super::execute_host_action(ctx, input, OrbitBuiltinAction::DesktopAutomation)
+            }
             _ => Err(OrbitError::InvalidInput(
-                "action must be list or toggle".into(),
+                "action must be list, toggle or set_trigger".into(),
             )),
         }
     }

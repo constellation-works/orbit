@@ -289,6 +289,35 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
 .operation-button.drain-stop:hover:not(:disabled) { color: #ffd0ca; border-color: var(--state-failed); background: var(--danger-wash); }
 .operation-button.drain-stop.settle:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); background: var(--bg-control); }
 
+/* Schedule and trigger editor: one form under the row it edits. */
+.operation-cell .schedule-edit { align-self: flex-start; font-size: 11px; }
+.schedule-editor {
+  display: flex; flex-direction: column; gap: 10px; margin-top: 8px; padding: 10px 12px;
+  border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-elev);
+}
+.schedule-editor-head { color: var(--fg); font: 12.5px var(--font-sans); }
+.schedule-editor-head strong { font-weight: 600; }
+.schedule-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px 12px; }
+.schedule-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.schedule-field-label {
+  color: var(--fg-mute); font: 600 9.5px var(--font-sans); text-transform: uppercase; letter-spacing: .08em;
+}
+.schedule-field-hint { color: var(--fg-dim); font: 10.5px/1.35 var(--font-sans); }
+.schedule-input {
+  min-width: 0; max-width: 100%; min-height: 30px; padding: 5px 9px; border: 1px solid var(--border);
+  border-radius: 7px; background: var(--bg); color: var(--fg); font: 12.5px var(--font-sans);
+}
+.schedule-input.mono { font-family: var(--font-mono); }
+.schedule-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.schedule-input:disabled { opacity: .5; cursor: not-allowed; }
+.schedule-note, .schedule-preview { margin: 0; color: var(--fg-dim); font: 11.5px/1.4 var(--font-sans); }
+.schedule-preview { color: var(--fg); }
+.schedule-error {
+  color: var(--state-failed); font: 12px/1.4 var(--font-sans); overflow-wrap: anywhere;
+  border-left: 2px solid var(--state-failed); padding-left: 8px;
+}
+.schedule-editor-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+
 @media (max-width: 900px) {
   .operations-layout { grid-template-columns: 1fr; }
 }

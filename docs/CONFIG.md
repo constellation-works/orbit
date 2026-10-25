@@ -17,6 +17,8 @@ Reference for Orbit's `config.toml`: every fixed key, its default and what it do
 
 Settings inherit per key: workspace overrides global, global fills omissions, built-in defaults fill the rest. Keep a workspace file to genuine overrides.
 
+Routine and auto-task schedules are not config keys: they live in the definitions under `<workspace>/.orbit/routines/` and `<workspace>/.orbit/auto_tasks/`. Change a schedule with `orbit auto-task update`, `orbit.routine.control` `set_trigger`, or the **edit** link on the dashboard's Automation rows, which edits only the schedule or trigger; see [`automation.md`](../crates/orbit-core/assets/skills/orbit-setup/references/automation.md#changing-a-routines-trigger).
+
 `orbit workspace init` seeds missing review keys for the registered ship mode
 (a new registration defaults to `pr`; `--force` retains its mode unless
 `--ship-mode` changes it). A PR workspace gets `review.timing = "before_landing"`,

@@ -212,6 +212,19 @@
   },
   {
     "surface": "dashboard",
+    "operation": "auto_task.set_schedule",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
     "operation": "auto_task.toggle",
     "required_any": [
       "operator"
@@ -369,6 +382,19 @@
   {
     "surface": "dashboard",
     "operation": "plugin.enable",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "routine.set_trigger",
     "required_any": [
       "operator"
     ],
