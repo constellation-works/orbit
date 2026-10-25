@@ -11,7 +11,7 @@ summary: Dynamically-defined recurring task templates minted by the host clock t
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18124, ORB-18125, ORB-18126, ORB-18128]
+related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18124, ORB-18125, ORB-18126, ORB-18127, ORB-18128]
 ---
 
 # Auto-tasks — Overview
@@ -106,7 +106,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These nineteen YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These twenty YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -331,6 +331,22 @@ definition of the same name.
   successful no-op that reports each ranking's below-support counts and files
   nothing.
   The minted chore is tagged `no-diff-expected` and never builds or runs tests.
+- `ci-budget-watch` — disabled-by-default daily measurement of the main
+  hosted test job's elapsed time against the repository's documented CI
+  budget. It discovers the job from the CI workflow files (a gate job that
+  waits on the test jobs, otherwise the job whose steps run the test
+  suite) and the budget (figure, statistic, and population, with its
+  `file:line` source) from the agent guides, contributing guide, and docs;
+  with no documented budget it records the trend and files nothing, and
+  with no hosted CI or unreachable run history it is a successful no-op
+  that states the reason. Each run attaches `ci-budget-watch/report.md`
+  with the last 20 completed runs (SHA, run id, conclusion, elapsed
+  seconds), the trend against the previous report, and the measurement
+  gaps. When over budget it keeps exactly one open `ci-budget` task:
+  an existing open one is updated with the new measurements, otherwise
+  one `proposed` repair task is filed with acceptance criteria,
+  `context_files`, and a `spawned_from` relation. The minted chore is
+  tagged `no-diff-expected` and never edits source, CI, or tests.
 - `structure-sweep` — disabled-by-default weekly scan in one pass over
   source files and test files. It records the thresholds in every run
   summary (a non-test source file over 1,000 lines, a module index file
@@ -462,6 +478,12 @@ encode this repository's branches and gates. Re-init preserves them:
   duplicate or invalid rejections over 30 days in an
   `auto-task-yield.json` artifact diffed against the previous run, with at
   most 3 proposed retuning tasks per run and no definition edits.
+- ORB-18127 — Added the disabled, portable `ci-budget-watch` default
+  (daily cadence): job discovery from the CI workflow files, budget
+  discovery from the repository's documented CI budget, a
+  `ci-budget-watch/report.md` artifact with the last 20 runs and the
+  trend, no-op paths for no hosted CI, no documented budget, and
+  unreachable history, and the one-open-`ci-budget`-task rule.
 - ORB-18128 — Added the disabled `path-risk-review` default (3-day cadence)
   over the codebase analytics rankings: min-support no-op reporting each
   ranking's below-support counts, at most five paths investigated, and fixes capped at 3

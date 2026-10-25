@@ -462,6 +462,9 @@ paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "script
 [workflow.review_skip_tags."auto-task:code-review"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 
+[workflow.review_skip_tags."auto-task:ci-budget-watch"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
 [workflow.review_skip_tags."auto-task:code-health-sweep"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 

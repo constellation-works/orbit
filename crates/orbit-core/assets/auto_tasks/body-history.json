@@ -201,7 +201,39 @@
       }
     }
   ],
-  "code-health-sweep": [],
+  "ci-budget-watch": [],
+  "code-health-sweep": [
+    {
+      "comments": [
+        "## Discover the repository's shape",
+        "## Duplicate and conflict safety",
+        "## Filing",
+        "## Handoff",
+        "## Pass A — dead code, whole repository, every run",
+        "## Pass B — one area, read in full",
+        "## Pass C — compatibility retirement, whole repository, every run",
+        "## Pin and cursor",
+        "## Rules and command surfaces",
+        "## What other work owns"
+      ],
+      "digest": "29ca3bbc99952fc85648e5f4decfb2be37a7c5dc9dcdc4b24ce1af5541be4b04",
+      "revision": "e89c62b5bb1ff838ad8724269c3d21cf258d38b7",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "every_minutes": 4320
+        },
+        "tags": [
+          "code-health-sweep",
+          "no-diff-expected",
+          "tech-debt"
+        ]
+      }
+    }
+  ],
   "code-review": [
     {
       "comments": [
