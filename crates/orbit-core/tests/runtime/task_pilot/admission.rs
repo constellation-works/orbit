@@ -1539,6 +1539,196 @@ fn a_second_pilot_hold_supersedes_the_first() {
     );
 }
 
+fn resolving_one_typed_hold_raises_a_fresh_request_for_the_next_hold() {
+    let workspace = decision_channel_workspace();
+    let task = workspace
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Layered pilot holds work".into(),
+            description: "Repair the README fixture.".into(),
+            acceptance_criteria: vec![
+                "Run the live evaluation with `orbit.pipeline.invoke`.".into(),
+            ],
+            plan: "Inspect README.md.".into(),
+            status: Some(TaskStatus::Backlog),
+            complexity: TaskComplexity::Low,
+            context_files: vec!["file:README.md".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    assess_disposition(&workspace, &task, None, "host_operational");
+    let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
+    let audit: serde_json::Value =
+        serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
+    assert!(
+        !audit["host_operational_hold"].is_null(),
+        "one assessment persists the host-operational hold: {audit}"
+    );
+    assert_eq!(
+        audit["operator_validation_hold"]["requirements"][0]["criterion"], 1,
+        "one assessment persists the operator-validation hold: {audit}"
+    );
+    assert_eq!(
+        audit["operator_validation_hold"]["requirements"][0]["tool"], "orbit.pipeline.invoke",
+        "{audit}"
+    );
+    assert_admission(&workspace, &task, Some("host_operational_handoff"));
+    let first = decision_requests(&workspace, &task).pop().unwrap();
+    assert_eq!(first.state, orbit_types::task::DecisionRequestState::Open);
+
+    let answered_first = workspace
+        .runtime
+        .answer_decision_request_as_human(
+            &first.id,
+            "clear",
+            Some("The operator accepts the owner-side operation.".into()),
+            "human:fixture".into(),
+            Some("dashboard".into()),
+        )
+        .unwrap();
+    assert_eq!(
+        answered_first.state,
+        orbit_types::task::DecisionRequestState::Answered
+    );
+    assert_eq!(answered_first.resolution.unwrap().answer_id, "clear");
+    let history = workspace.runtime.get_task_history(&task.id).unwrap();
+    assert!(
+        history
+            .iter()
+            .any(|entry| entry.event == "host_operational_resolved"),
+        "the first answer resolves only the host-operational hold"
+    );
+    assert!(
+        !history
+            .iter()
+            .any(|entry| entry.event == "operator_validation_resolved"),
+        "the first answer must not resolve the operator-validation hold"
+    );
+
+    // Repeating admission exposes the remaining hold and raises a fresh
+    // request for it, without a new assessment or a raw decision comment.
+    assert_admission(&workspace, &task, Some("operator_validation_handoff"));
+    let requests = decision_requests(&workspace, &task);
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_eq!(requests[0].id, first.id);
+    assert_eq!(
+        requests[0].state,
+        orbit_types::task::DecisionRequestState::Answered
+    );
+    let second = requests[1].clone();
+    assert_ne!(second.id, first.id, "the next hold gets a fresh request");
+    assert_eq!(
+        second.state,
+        orbit_types::task::DecisionRequestState::Open,
+        "the fresh request is usable: {requests:?}"
+    );
+    assert_eq!(
+        second.binding, first.binding,
+        "both requests bind to the same pilot operation"
+    );
+    assert!(
+        second.answers.iter().any(|answer| answer.id == "evaluated"),
+        "the operator-validation request offers evaluated: {second:?}"
+    );
+
+    // Replay of the answered request is refused and changes nothing.
+    let replay = workspace
+        .runtime
+        .answer_decision_request_as_human(
+            &first.id,
+            "clear",
+            Some("A stale replay must not target the next hold.".into()),
+            "human:fixture".into(),
+            Some("dashboard".into()),
+        )
+        .expect_err("an answered request refuses a replay");
+    assert!(
+        replay.to_string().contains("request_superseded")
+            && replay.to_string().contains("nothing was applied"),
+        "{replay}"
+    );
+    let requests = decision_requests(&workspace, &task);
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_eq!(requests[1].id, second.id);
+    assert_eq!(
+        requests[1].state,
+        orbit_types::task::DecisionRequestState::Open
+    );
+    assert!(
+        !workspace
+            .runtime
+            .get_task_history(&task.id)
+            .unwrap()
+            .iter()
+            .any(|entry| entry.event == "operator_validation_resolved"),
+        "the replay must not resolve the remaining hold"
+    );
+    assert_admission(&workspace, &task, Some("operator_validation_handoff"));
+
+    workspace
+        .runtime
+        .update_task_as_human(
+            &task.id,
+            TaskUpdateParams {
+                upsert_artifacts: vec![orbit_types::task::TaskArtifact::from_text(
+                    "operator-evaluation.json",
+                    json!({"criterion": 1, "tool": "orbit.pipeline.invoke", "outcome": "passed"})
+                        .to_string(),
+                )],
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    let answered_second = workspace
+        .runtime
+        .answer_decision_request_as_human(
+            &second.id,
+            "evaluated",
+            Some("Operator reviewed operator-evaluation.json and accepts this validation.".into()),
+            "human:fixture".into(),
+            Some("dashboard".into()),
+        )
+        .unwrap();
+    assert_eq!(
+        answered_second.state,
+        orbit_types::task::DecisionRequestState::Answered
+    );
+    assert_eq!(answered_second.resolution.unwrap().answer_id, "evaluated");
+    let history = workspace.runtime.get_task_history(&task.id).unwrap();
+    for event in ["host_operational_resolved", "operator_validation_resolved"] {
+        assert_eq!(
+            history.iter().filter(|entry| entry.event == event).count(),
+            1,
+            "each typed hold resolves exactly once: {event}"
+        );
+    }
+    let decided = history
+        .into_iter()
+        .filter_map(|entry| match entry.decision {
+            Some(TaskDecision::PilotAdmission { verdict, .. }) => Some(verdict),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        decided,
+        vec![
+            PilotAdmissionVerdict::Clear,
+            PilotAdmissionVerdict::Evaluated
+        ],
+        "successive answers record their own verdicts"
+    );
+    assert_admission(&workspace, &task, None);
+    let requests = decision_requests(&workspace, &task);
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.state == orbit_types::task::DecisionRequestState::Answered),
+        "no request stays open after release: {requests:?}"
+    );
+}
+
 fn submit_pilot_answer(
     workspace: &Workspace,
     request_id: &str,
@@ -1655,7 +1845,8 @@ crate::scenario_table!(
     a_second_pilot_hold_supersedes_the_first,
     a_changed_pilot_hold_supersedes_its_request_without_a_new_request,
     a_registered_channel_submission_releases_the_pilot_hold_as_the_human,
-    agent_and_unregistered_submissions_leave_the_pilot_hold_held
+    agent_and_unregistered_submissions_leave_the_pilot_hold_held,
+    resolving_one_typed_hold_raises_a_fresh_request_for_the_next_hold
 );
 
 crate::scenario_table!(

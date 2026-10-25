@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use orbit_common::governance::authorization::governed_tool;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{
-    DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest, HostOs,
+    DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest, DecisionRequestState, HostOs,
     PILOT_ADMISSION_DECIDED_EVENT, PilotAdmissionVerdict, Task, TaskArtifact, TaskComment,
     TaskDecision, TaskHistoryEntry, TaskOsRequirement, TaskStatus, decision_requests_from_history,
 };
@@ -755,9 +755,12 @@ impl OrbitRuntime {
 
     /// Raise the one open decision request for `task_id`'s current pilot
     /// admission hold, when the decision channel is enabled. A hold whose
-    /// `operation_id` already has a request raises nothing; a newer
-    /// assessment raises a fresh request and the earlier one then reads
-    /// as superseded. Disabled, nothing is written.
+    /// `operation_id` already has an open request raises nothing; an
+    /// answered request for that operation does not suppress a fresh
+    /// request, because one assessment can persist successive holds and
+    /// answering one only resolves the hold admission then reported. A
+    /// newer assessment raises a fresh request and the earlier one then
+    /// reads as superseded. Disabled, nothing is written.
     pub(crate) fn raise_pilot_decision_request(&self, task_id: &str) -> Result<(), OrbitError> {
         if !self.decision_channel_enabled() {
             return Ok(());
@@ -783,8 +786,9 @@ impl OrbitRuntime {
                     chrono::Utc::now(),
                 )
                 .iter()
-                .any(|request| request.binding == binding)
-                {
+                .any(|request| {
+                    request.binding == binding && request.state == DecisionRequestState::Open
+                }) {
                     return Ok(());
                 }
                 let now = chrono::Utc::now();
